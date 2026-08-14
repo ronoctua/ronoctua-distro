@@ -134,11 +134,11 @@ mod tests {
     #[test]
     fn the_chords_label_goes_into_the_key() {
         // The manual is the only place where the chord's key appears written out.
-        // In the nested session it is `ALT`, and not `ALT SPC` — holding Space
+        // In the nested session it is `ALT`, and not `CTRL ALT SPC` — holding Space
         // along is what fires the SEQUENCE, the opposite of the chord.
         let texts = Texts::from_env();
         let m = super::assemble(&texts, "ALT");
         assert!(m.iter().any(|l| l.key.starts_with("ALT + ")));
-        assert!(!m.iter().any(|l| l.key.contains("ALT SPC")));
+        assert!(!m.iter().any(|l| l.key.contains("CTRL ALT SPC")));
     }
 }

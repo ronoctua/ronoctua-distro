@@ -1,4 +1,4 @@
-# Interface texts, en-US. One of the TWO files kept by hand.
+# Interface texts, en-GB. One of the TWO files kept by hand.
 #
 # INVARIANT 8: zero string literals in UI. Every sentence that appears on screen comes
 # from here, and `nix/scripts/gen-i18n.py` generates one Rust constant per key —
@@ -55,7 +55,15 @@ inst-passphrase-help = Unlocks the disk when the TPM refuses. Keep it off the co
 inst-language = Language
 inst-language-help = For the interface and the keyboard.
 inst-keyboard = Keyboard layout
-inst-keyboard-help = The xkb name: br, us, gb. It is what you will type the passphrase on.
+inst-keyboard-help = Pick the one your keyboard is. It is what you will type the passphrase on.
+inst-keyboard-variant = Layout variant
+inst-keyboard-variant-help = Tells apart keyboards of the same country. No variant is a valid answer.
+inst-compose-key = Accent key
+inst-compose-key-help = The Compose key: held with others, it makes accents. Without it, a keyboard with no accent keys cannot reach them.
+inst-system-locale = System formats
+inst-system-locale-help = Date, number and units. Not the interface language, which is already chosen.
+inst-timezone = Time zone
+inst-timezone-help = Where the machine is. It decides the clock and the log's timestamps.
 inst-resume-offset = Swap offset
 inst-resume-offset-help = Computed once the disk exists; not typed.
 

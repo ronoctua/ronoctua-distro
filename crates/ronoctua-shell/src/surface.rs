@@ -144,10 +144,11 @@ struct Footer {
     ///
     /// # Why they have to be discounted
     ///
-    /// In the nested session the leader **is** `Alt+Space`: when the sequence
-    /// starts, Alt is physically pressed, because the hand has just pressed it.
-    /// Demanding that Alt be released before typing `i` is a trap — and it is the
-    /// one the screen fell into, showing `ALT SPC M-n is not bound`.
+    /// In the nested session the leader **is** `Ctrl+Alt+Space`: when the sequence
+    /// starts, Ctrl and Alt are physically pressed, because the hand has just
+    /// pressed them. Demanding that they be released before typing `i` is a trap
+    /// — and it is the one the screen fell into, showing
+    /// `CTRL ALT SPC M-n is not bound`.
     ///
     /// Discounting what was already held gets the other case for free, which is
     /// worse because no gesture undoes it: a modifier stuck in the compositor.
@@ -1039,7 +1040,7 @@ impl Inheritance {
 
     /// The compositor announced the modifiers. The FIRST reading after the focus
     /// is the inheritance — the protocol requires an announcement right after the `enter`.
-    fn ao_anunciar(&mut self, mods: Modifiers) {
+    fn on_announcement(&mut self, mods: Modifiers) {
         if self.0.is_none() {
             self.0 = Some(mods);
         }
@@ -1051,7 +1052,7 @@ impl Inheritance {
     /// the `enter` that comes next zeroes it again, and the following
     /// announcement captures what holds. With focus (the case where the `leave`
     /// was lost), this is what gives the keyboard back.
-    fn ao_comecar(&mut self, mods: Modifiers) {
+    fn on_sequence_start(&mut self, mods: Modifiers) {
         self.0 = Some(mods);
     }
 
@@ -1303,7 +1304,7 @@ pub fn run() -> Result<()> {
                 // It only redraws if the view is OPEN. Copying with the clipboard
                 // closed must not cost a frame.
                 if state.clipboard_open {
-                    state.aplicar_geometria(state.interactivity());
+                    state.apply_geometry(state.interactivity());
                     state.draw_and_paint();
                 }
             }
@@ -1740,7 +1741,7 @@ impl KeyboardHandler for Footer {
         // letters that could never be a command again.
         if self.right_ctrl {
             if self.navigate(key.sym) {
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
                 self.draw_and_paint();
             }
             return;
@@ -1787,7 +1788,7 @@ impl KeyboardHandler for Footer {
                 Sym::Esc => {
                     self.network = None;
                     self.first_page();
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
                 Sym::Down | Sym::Up => {
@@ -1813,7 +1814,7 @@ impl KeyboardHandler for Footer {
                     {
                         self.run_command(id);
                     }
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
             }
@@ -1830,7 +1831,7 @@ impl KeyboardHandler for Footer {
                 Sym::Esc => {
                     self.manual = false;
                     self.first_page();
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
                 // One LINE at a time, and not a page: the manual is read
@@ -1859,7 +1860,7 @@ impl KeyboardHandler for Footer {
                 Action::Changed => {
                     // REDRAW HERE, AND NOT ONLY RE-COMMIT THE SIZE.
                     //
-                    // THE DEFECT THIS WAS: `aplicar_geometria` only asks for the
+                    // THE DEFECT THIS WAS: `apply_geometry` only asks for the
                     // size; whoever paints is the `configure` that comes back — and
                     // the compositor only sends it when the height CHANGES. With the
                     // list at the ceiling, filtering from 172 down to 40 candidates
@@ -1868,28 +1869,28 @@ impl KeyboardHandler for Footer {
                     // did not go down, and everything showed up at once when the
                     // mouse moved — which is the only other thing that painted.
                     self.follow_cursor();
-                    self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
                     self.draw_and_paint();
                 }
                 Action::Closed => {
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
                 Action::Run(id) => {
                     tracing::info!(command = id, "comando executado pelo localizador");
                     self.run_command(&id);
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
                 Action::Selected(id) => {
                     self.select_item(&id);
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
                 Action::RunWith(id, arg) => {
                     tracing::info!(command = id, argument = %arg, "comando com argumento");
                     self.run_with(&id, Some(&arg));
-                    self.aplicar_geometria(self.interactivity());
+                    self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
                 }
             }
@@ -1962,7 +1963,7 @@ impl KeyboardHandler for Footer {
             caps = mods.caps_lock,
             "modificadores anunciados pelo compositor"
         );
-        self.inheritance.ao_anunciar(mods);
+        self.inheritance.on_announcement(mods);
     }
 }
 
@@ -1996,7 +1997,7 @@ impl Footer {
                     "which-key estreitou"
                 );
                 self.echo = None;
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             Effect::Close { other_case } => {
                 // `Esc` is explicit cancellation; any other key that ends it is a
@@ -2138,7 +2139,7 @@ impl PointerHandler for Footer {
                 Navigation::Scroll => LINES_PER_DETENT as i32,
             };
             if self.page_by(inteiros.saturating_mul(step)) {
-                self.aplicar_geometria(self.interactivity());
+                self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
                 return;
             }
@@ -2413,7 +2414,7 @@ impl Footer {
             "notif-dismiss" => {
                 self.notifications
                     .dismiss_current(std::time::Instant::now());
-                self.aplicar_geometria(self.interactivity());
+                self.apply_geometry(self.interactivity());
             }
             // QUITTING IS THE COMPOSITOR'S, not just the footer's. Ending the
             // footer would leave the session standing with no modeline and no
@@ -2437,7 +2438,7 @@ impl Footer {
                 self.clip_image = None;
                 self.decode_preview();
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
                 self.draw_and_paint();
             }
             "clipboard-copy-of-new" => {
@@ -2516,12 +2517,12 @@ impl Footer {
             "help-shortcuts" => {
                 self.manual = true;
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             "mx-open" => {
                 self.mx.open(&self.command_registry);
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             // THE APP FINDER. It opens with the catalogue ALREADY READY: the sweep
             // ran at startup, in a thread, and what happens here is a copy of an
@@ -2548,7 +2549,7 @@ impl Footer {
                 self.picking_file = true;
                 self.mx.open_over(items);
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             "buffer-switch" => {
                 let items = self.buffer_items();
@@ -2562,14 +2563,14 @@ impl Footer {
                 tracing::info!(buffers = items.len(), "seletor de buffer aberto");
                 self.mx.open_over(items);
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             "apps-open" => {
                 self.rescan_if_changed();
                 tracing::info!(apps = self.catalogue.len(), "localizador aberto");
                 self.apps = Some(crate::apps::Finder::fresh(self.catalogue.clone()));
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             // ---------------------------------------------------------
             // NETWORK. The view opens with what NetworkManager ALREADY
@@ -2582,7 +2583,7 @@ impl Footer {
                 self.watch_scans();
                 self.network = Some(crate::network::ViewState::fresh_one());
                 self.first_page();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
             "network-scan" => {
                 self.watch_scans();
@@ -2599,7 +2600,7 @@ impl Footer {
                         v.scan();
                         self.network = Some(v);
                         self.first_page();
-                        self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                        self.apply_geometry(KeyboardInteractivity::Exclusive);
                     }
                 }
             }
@@ -2680,7 +2681,7 @@ impl Footer {
                     // The password comes in through the minibuffer, and comes back
                     // here as an argument of this same command.
                     self.mx.request("network-connect", true);
-                    self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
                     return;
                 }
                 // IT CONNECTS WITHOUT STORING, and asks afterwards.
@@ -3029,7 +3030,7 @@ impl Footer {
         if let Some(l) = self.apps.as_mut() {
             l.recatalogue(self.catalogue.clone());
             self.follow_cursor();
-            self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
             self.draw_and_paint();
         }
     }
@@ -3054,13 +3055,13 @@ impl Footer {
             // Without this, typing would not filter on screen — the same defect the `M-x` had.
             Action::Changed => {
                 self.follow_cursor();
-                self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
                 self.draw_and_paint();
             }
             Action::Closed => {
                 self.apps = None;
                 self.first_page();
-                self.aplicar_geometria(self.interactivity());
+                self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
             }
             Action::Open(e) => {
@@ -3070,7 +3071,7 @@ impl Footer {
                 // from the new window.
                 self.apps = None;
                 self.first_page();
-                self.aplicar_geometria(self.interactivity());
+                self.apply_geometry(self.interactivity());
                 self.open_application(&e);
                 self.draw_and_paint();
             }
@@ -3233,7 +3234,7 @@ impl Footer {
             "fila de notificacoes"
         );
 
-        self.aplicar_geometria(self.interactivity());
+        self.apply_geometry(self.interactivity());
         self.draw_and_paint();
     }
 
@@ -3275,7 +3276,7 @@ impl Footer {
         // THE INHERITANCE IS RECAPTURED HERE, and not only on the `enter`.
         //
         // Whatever is held at the instant the sequence starts is not its — the
-        // leader **is** `Alt+Space`, so Alt is down by construction. While this
+        // leader **is** `Ctrl+Alt+Space`, so Ctrl and Alt are down by construction. While this
         // only happened on gaining focus, a session that never got a `leave`
         // carried the old inheritance forever: the nested compositor has already
         // stopped dispatching altogether, and a `leave` lost in that hole brings
@@ -3284,9 +3285,9 @@ impl Footer {
         // Without focus this makes no difference: `self.mods` is zeroed, the
         // `enter` that comes next zeroes the inheritance, and the following
         // announcement captures it.
-        self.inheritance.ao_comecar(self.mods);
+        self.inheritance.on_sequence_start(self.mods);
         tracing::info!(inputs = self.inputs.len(), "leader ativa");
-        self.aplicar_geometria(KeyboardInteractivity::Exclusive);
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
         // AND IT PAINTS. Asking for the size is not enough: whoever paints is the
         // `configure` coming back, and the compositor only sends it when the
         // height CHANGES. Here it always changes, so this is redundant today —
@@ -3348,7 +3349,7 @@ impl Footer {
                 self.clipboard_open = false;
                 self.clip_qr = None;
                 self.first_page();
-                self.aplicar_geometria(self.interactivity());
+                self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
                 return;
             }
@@ -3388,7 +3389,7 @@ impl Footer {
                 self.run_command(id);
             }
         }
-        self.aplicar_geometria(self.interactivity());
+        self.apply_geometry(self.interactivity());
         self.draw_and_paint();
     }
 
@@ -3423,7 +3424,7 @@ impl Footer {
             self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_NO_STORED)
         };
         self.echo_message(m);
-        self.aplicar_geometria(self.interactivity());
+        self.apply_geometry(self.interactivity());
         self.draw_and_paint();
     }
 
@@ -3441,7 +3442,7 @@ impl Footer {
             pages = self.pages(),
             "historico de notificacoes"
         );
-        self.aplicar_geometria(self.interactivity());
+        self.apply_geometry(self.interactivity());
         self.draw_and_paint();
     }
 
@@ -3482,7 +3483,7 @@ impl Footer {
         // The sequence that OPENS the `M-x` ends here: running the command
         // ends the leader. Giving it back unconditionally took the keyboard
         // away from the prompt that had just asked for it.
-        self.aplicar_geometria(self.interactivity());
+        self.apply_geometry(self.interactivity());
     }
 
     /// Which of the six views is in the expanded region right now.
@@ -3561,10 +3562,10 @@ impl Footer {
     /// third of a 1080 px monitor and more than half of a 600 px one. The
     /// percentage puts the second limit, and the smaller of the two holds —
     /// measured on the SMALLEST screen, because the footer's height is the same
-    /// on all of them (see `aplicar_geometria`).
+    /// on all of them (see `apply_geometry`).
     fn expansion_ceiling(&self) -> usize {
         // The SMALLEST screen is in charge: the footer's height is the same on
-        // all of them (see `aplicar_geometria`), so a ceiling that only fitted
+        // all of them (see `apply_geometry`), so a ceiling that only fitted
         // on the big monitor would leak on the small one.
         let menor = self
             .screens
@@ -4145,7 +4146,7 @@ impl Footer {
                 match self.mx.choose(n, &self.command_registry) {
                     Action::Run(id) => {
                         self.run_command(&id);
-                        self.aplicar_geometria(self.interactivity());
+                        self.apply_geometry(self.interactivity());
                     }
                     // A CLICK ON AN ITEM IS THE SAME AS `Enter` ON IT. The
                     // handling lives in one place on purpose: the mouse and the
@@ -4153,16 +4154,16 @@ impl Footer {
                     // `choose` was written to avoid.
                     Action::Selected(id) => {
                         self.select_item(&id);
-                        self.aplicar_geometria(self.interactivity());
+                        self.apply_geometry(self.interactivity());
                     }
                     Action::RunWith(id, arg) => {
                         self.run_with(&id, Some(&arg));
-                        self.aplicar_geometria(self.interactivity());
+                        self.apply_geometry(self.interactivity());
                     }
                     // `Changed` here is the action that ASKED for an argument: the list
                     // disappears and the line becomes a prompt, with the keyboard still
                     // in the footer.
-                    Action::Changed => self.aplicar_geometria(self.interactivity()),
+                    Action::Changed => self.apply_geometry(self.interactivity()),
                     _ => {}
                 }
                 self.draw_and_paint();
@@ -4296,7 +4297,7 @@ impl Footer {
     ///
     /// The **exclusive zone follows the height**: expanding pushes the buffers
     /// up. See the top of the module.
-    fn aplicar_geometria(&mut self, keyboard: KeyboardInteractivity) {
+    fn apply_geometry(&mut self, keyboard: KeyboardInteractivity) {
         // EVERY screen changes height together.
         //
         // It is not a detail: if only the focused screen grew, the zone would be
@@ -4329,7 +4330,7 @@ impl Footer {
     ///
     /// With it on and without this function, xkb delivers `I` where `i` was
     /// typed, **every** lowercase binding of the keymap dies at once, and the
-    /// only thing on screen is `ALT SPC I is not bound` — which shows the
+    /// only thing on screen is `CTRL ALT SPC I is not bound` — which shows the
     /// consequence and hides the cause. Worse still on the ones that exist in
     /// both cases: `w h` would become `w H`, and the window would MOVE when the
     /// request was to focus. A shortcut that does something else is worse than
@@ -4391,7 +4392,7 @@ impl Footer {
         // key did not arrive" from "it arrived with a stuck modifier and did not
         // match" — and the two are fixed in opposite places. It took four
         // occurrences for this line to exist.
-        tracing::debug!(?key, herdados = ?self.inheritance, "tecla depois do desconto");
+        tracing::debug!(?key, inherited = ?self.inheritance, "tecla depois do desconto");
         Some(key)
     }
 
@@ -5468,12 +5469,12 @@ mod tests {
             ..Modifiers::default()
         };
 
-        // THE CASE FROM THE SCREEN: `ALT SPC M-n is not bound`. In the nested
-        // session the leader is `Alt+Space`, so Alt is held when the sequence
+        // THE CASE FROM THE SCREEN: `CTRL ALT SPC M-n is not bound`. In the nested
+        // session the leader is `Ctrl+Alt+Space`, so Ctrl and Alt are held when the sequence
         // starts. Inherited, it must not show up in the key.
         let mut h = Inheritance::default();
         h.on_focus();
-        h.ao_anunciar(alt);
+        h.on_announcement(alt);
         assert!(
             !h.discount(alt).alt,
             "o Alt que abriu a leader nao pode entrar na sequencia"
@@ -5495,7 +5496,7 @@ mod tests {
             ..Modifiers::default()
         };
         let mut h = Inheritance::default();
-        h.ao_anunciar(ctrl);
+        h.on_announcement(ctrl);
         let m = h.discount(both);
         assert!(!m.ctrl, "o Ctrl herdado sai");
         assert!(m.alt, "o Alt apertado depois FICA");
@@ -5518,17 +5519,17 @@ mod tests {
         // holding forever.
         let mut h = Inheritance::default();
         h.on_focus();
-        h.ao_anunciar(nothing); // the session started with nothing held
+        h.on_announcement(nothing); // the session started with nothing held
         // ... and now an Alt gets STUCK: the compositor announces that it is
         // down, and the release never arrives.
-        h.ao_anunciar(alt); // changes nothing: the inheritance has already been taken
+        h.on_announcement(alt); // changes nothing: the inheritance has already been taken
         assert!(
             h.discount(alt).alt,
             "sem recaptura, o Alt preso entra em toda tecla — e nada casa"
         );
 
         // WITH THE RECAPTURE ON STARTING THE SEQUENCE, it goes away.
-        h.ao_comecar(alt);
+        h.on_sequence_start(alt);
         assert!(
             !h.discount(alt).alt,
             "o que ja estava segurado quando a sequencia comecou nao e dela"
@@ -5546,7 +5547,7 @@ mod tests {
     #[test]
     fn with_caps_lock_the_icon_group_still_opens() {
         // THE CRITERION, and not the function. This is literally the screen the
-        // owner sent: `ALT SPC I is not bound`. With the Lock on xkb delivers
+        // owner sent: `CTRL ALT SPC I is not bound`. With the Lock on xkb delivers
         // `I`, `LEADER I` is bound to nothing, and EVERY lowercase binding of
         // the keymap dies with it.
         use ronoctua_keymap::{Key, Resolution, Sym};

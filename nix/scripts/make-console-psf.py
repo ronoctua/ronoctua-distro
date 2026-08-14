@@ -45,7 +45,7 @@ PSF2_SEPARATOR = 0xFF
 # What goes in, and why:
 #   ASCII            the basics
 #   Latin-1 Sup      pt-BR needs complete accenting
-#   Latin Ext-A      still pt-BR (none here, but there are for other locales) + en-US
+#   Latin Ext-A      still pt-BR (none here, but there are for other locales) + en-GB
 #   box-drawing      section 5.1's aesthetics are made of one-line rules
 #   blocks           the installer's progress bars
 #   arrows & symbols navigation in the installer

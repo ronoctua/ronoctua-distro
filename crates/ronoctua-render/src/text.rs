@@ -227,7 +227,7 @@ impl Text {
         db.set_monospace_family(tokens::font::FAMILY_MONO);
         db.set_sans_serif_family(tokens::font::FAMILY_UI);
         db.set_serif_family(tokens::font::FAMILY_UI);
-        let face = glyphon::FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        let face = glyphon::FontSystem::new_with_locale_and_db("en-GB".to_owned(), db);
 
         // It fails loudly if the embedded face did not load: carrying on from here would
         // only produce invisible text, which is worse to diagnose.

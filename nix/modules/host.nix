@@ -47,12 +47,38 @@ in
     language = lib.mkOption {
       type = lib.types.enum [
         "pt-BR"
-        "en-US"
+        "en-GB"
       ];
-      default = "pt-BR";
+      default = "en-GB";
       description = ''
-        Idioma da interface e da locale. Os dois valores são os mesmos do
-        `ronoctua-i18n` — um terceiro aqui daria uma locale sem tradução.
+        Idioma da INTERFACE. Os dois valores são os mesmos do `ronoctua-i18n` —
+        um terceiro aqui daria uma tela sem tradução.
+
+        Não é a locale, e a separação é deliberada: a locale decide formato de
+        data, número e unidade, e existem centenas dela contra as duas traduções
+        que este sistema tem. Quem quer a interface em português com métricas
+        britânicas escolhe as duas coisas.
+      '';
+    };
+
+    locale = lib.mkOption {
+      type = lib.types.str;
+      default = "en_GB.UTF-8";
+      example = "pt_BR.UTF-8";
+      description = ''
+        A locale do sistema: data, número, papel. O padrão é o inglês britânico,
+        e o instalador oferece a lista que o glibc sabe gerar.
+
+        NÃO é `enum` aqui, e a razão é técnica: a lista verdadeira é o
+        `SUPPORTED` do `glibcLocales`, e lê-lo na avaliação seria
+        import-from-derivation — a avaliação do flake pararia para esperar um
+        build. Uma lista escrita à mão no lugar seria a segunda cópia que
+        envelhece.
+
+        Quem confere é o check `locale-exists`, que roda DENTRO de um build, onde
+        ler o arquivo é de graça. É o mesmo arranjo do layout de teclado, e pela
+        mesma razão: o valor errado não quebra nada na hora, e o sintoma aparece
+        longe da causa.
       '';
     };
 
@@ -82,9 +108,37 @@ in
     # which looks like a typo rather than one level too many.
     inherit (import ../disko/default.nix { device = cfg.disk; }) disko;
 
-    # The locale follows the chosen language: having the interface in pt-BR and
-    # `LC_TIME` in English would be half a choice.
-    i18n.defaultLocale = "${builtins.replaceStrings [ "-" ] [ "_" ] cfg.language}.UTF-8";
+    # THE LOCALE IS ITS OWN ANSWER, and no longer derived from the language.
+    #
+    # It used to be `language` with the dash swapped for an underscore, which
+    # tied two things that are not the same one: `pt-BR` is which of our two
+    # translations to load, and `pt_BR.UTF-8` is how glibc writes a date. Tied,
+    # there was no way to read the interface in Portuguese and keep the metric,
+    # A4, day-month machine the owner actually uses.
+    # A FORMA é conferida aqui, e a EXISTÊNCIA no check.
+    #
+    # A forma pega o engano comum — `pt-BR` no lugar de `pt_BR.UTF-8`, que é o
+    # id da tradução escrito onde vai a locale — e o pega na avaliação, com o
+    # nome da opção junto. Sem isto, o erro sai do gerador de locales do glibc
+    # falando de um arquivo que ninguém escreveu.
+    assertions = [
+      {
+        assertion = builtins.match "[a-z]+_[A-Z]+(@[a-z]+)?\\.UTF-8" cfg.locale != null;
+        message = ''
+          ronoctua.locale = "${cfg.locale}" nao tem a forma de uma locale.
+          Esperado algo como "en_GB.UTF-8" ou "pt_BR.UTF-8" — com underscore e
+          com o charset. O id da traducao da interface (`pt-BR`, com hifen) vai
+          em `ronoctua.language`, que e outra opcao.
+        '';
+      }
+    ];
+
+    i18n.defaultLocale = cfg.locale;
+    i18n.supportedLocales = lib.mkDefault [
+      "${cfg.locale}/UTF-8"
+      "en_GB.UTF-8/UTF-8"
+      "C.UTF-8/UTF-8"
+    ];
 
     # The recovery passphrase is ALWAYS enrolled alongside (section 7.2):
     # with no usable TPM, systemd falls back to the prompt instead of not booting.

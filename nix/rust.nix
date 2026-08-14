@@ -32,6 +32,8 @@
   xwayland-satellite,
   bufferEditor,
   xkeyboard_config,
+  glibcLocales,
+  tzdata,
   bufferGlyphs,
   bufferUnicode,
   bufferLucide,
@@ -182,6 +184,13 @@ let
     # ISO, where there is no current-system yet. Falling back to that path would
     # give an empty list, and validation would refuse everything.
     RONOCTUA_XKB_BASE_LST = "${xkeyboard_config}/share/X11/xkb/rules/base.lst";
+    # THE LOCALE LIST, from glibc's own `SUPPORTED`, for the same reason and by
+    # the same route: the installer offers what the system can generate, and a
+    # list written by hand here would refuse a locale glibc supports.
+    RONOCTUA_LOCALE_SUPPORTED = "${glibcLocales}/share/i18n/SUPPORTED";
+    # THE TIMEZONE LIST, from tzdb's own table. Same route, same reason: the
+    # installer offers what the system has, and never a list kept by hand.
+    RONOCTUA_TZ_TAB = "${tzdata}/share/zoneinfo/zone1970.tab";
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a

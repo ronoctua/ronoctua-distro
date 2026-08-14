@@ -33,7 +33,10 @@
     wget
     aria2 # segmented download; the one that saves a 4 GB ISO on bad wifi
     rsync
-    git-lfs # the fonts repository needs it — see nix/fonts.nix
+    # NOT for this repository — its fonts are Release assets and no file here is
+    # an LFS object. It is here because a machine that clones OTHER people's
+    # repositories meets LFS, and without it the clone silently yields pointers.
+    git-lfs
     gh
 
     # ---- the machine's state ----

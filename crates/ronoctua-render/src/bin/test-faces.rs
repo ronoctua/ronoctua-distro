@@ -106,7 +106,7 @@ fn main() -> Result<()> {
         .collect();
     println!("faces: {familias:?}");
 
-    let mut fs = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+    let mut fs = FontSystem::new_with_locale_and_db("en-GB".to_owned(), db);
 
     // 1. PLAIN TEXT goes to the primary face.
     let (family, _) = who_draws(&mut fs, "A")?;

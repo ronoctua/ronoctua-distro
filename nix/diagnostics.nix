@@ -171,7 +171,7 @@ writeShellApplication {
     # THIS IS THE LINE THAT CLOSES THE CASE, and it took an hour to work out by hand.
     #
     # A modifier stuck in the nested compositor explains on its own
-    # everything one sees: `Alt+Space` stops firing (niri matches a bind by
+    # everything one sees: `Ctrl+Alt+Space` stops firing (niri matches a bind by
     # EXACT mask, and the mask has one bit too many), and the click stops
     # reaching the buffers because in the nested backend niri's `Mod` IS Alt —
     # `Mod+drag` means move window, so every click becomes a drag.
@@ -192,14 +192,15 @@ writeShellApplication {
       echo "  (sem \$RONOCTUA_LOG o rodape nao guarda log: rode pelo 'nix run .#dev')"
     else
       echo "  $last_line"
-      # `alt=true` on its own is NORMAL: in the nested loop the leader is `Alt+Space`,
-      # and Alt is held down by construction when the sequence begins.
+      # `ctrl=true` and `alt=true` together are NORMAL: in the nested loop the
+      # leader is `Ctrl+Alt+Space`, so both are held down by construction when the
+      # sequence begins. What is never legitimate here is `logo`.
       if printf '%s' "$last_line" | grep -q "logo.*true"; then
         echo
         echo "  >>> SUPER PRESO. No aninhado nada segura Super legitimamente:"
         echo "      ele ficou latched quando o compositor do HOST capturou um"
         echo "      atalho 'Super+…' e a soltura nunca chegou aqui."
-        echo "      Efeito: 'Alt+Espaco' nao casa mais (a mascara tem um bit a"
+        echo "      Efeito: 'Ctrl+Alt+Espaco' nao casa mais (a mascara tem um bit a"
         echo "      mais) e o teclado inteiro para."
       fi
     fi

@@ -462,7 +462,7 @@ fn main() -> Result<()> {
     // same fact — the panel says "Setas", the database says `arrows` — and without this
     // criterion they diverge silently: the panel stays pretty and what
     // it promises stops being findable.
-    for (file, language) in [("pt-BR.ftl", "pt-BR"), ("en-US.ftl", "en-US")] {
+    for (file, language) in [("pt-BR.ftl", "pt-BR"), ("en-GB.ftl", "en-GB")] {
         let table = ftl(&format!("{i18n}/{file}"))?;
         for key in &options {
             let label = table

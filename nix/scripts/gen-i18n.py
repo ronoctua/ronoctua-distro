@@ -2,7 +2,7 @@
 """Generates the text key registry from the .ftl files — invariant 8.
 
 The invariant says "zero string literals in UI; everything through a text-key, with pt-BR
-and en-US complete". The way to make that hold is not discipline: it is there being no
+and en-GB complete". The way to make that hold is not discipline: it is there being no
 way to write a key that does not exist.
 
 This generator reads BOTH files, requires them to have exactly the same
@@ -27,7 +27,7 @@ from pathlib import Path
 
 # MANDATORY languages. Adding one here forces the file to exist and to
 # be complete — which is the point.
-LANGUAGES = ("en-US", "pt-BR")
+LANGUAGES = ("en-GB", "pt-BR")
 
 # A Fluent message key in column 0. Attributes (`.attr = …`) and terms
 # (`-term = …`) are left out on purpose: they are not addressable keys.
@@ -71,7 +71,7 @@ def main() -> int:
             return 1
         tabelas[language] = keys(arq)
 
-    # The comparison runs BOTH ways. Only checking "every en-US key
+    # The comparison runs BOTH ways. Only checking "every en-GB key
     # exists in pt-BR" would let an orphan translation through, which is dead
     # translation piling up in the file.
     base, *resto = LANGUAGES

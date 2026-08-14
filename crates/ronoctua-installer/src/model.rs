@@ -61,6 +61,38 @@ pub enum Question {
     /// mute `us`. So the answer is validated against the real list, here, and
     /// not left for the system to notice.
     Keyboard,
+    /// The layout's variant, in xkb's name (`abnt2`, `nodeadkeys`, or none).
+    ///
+    /// A separate question because the variant is what SEPARATES two keyboards
+    /// that share a layout: `br` and `br(abnt2)` are the same country and a
+    /// different key map. Whoever knows their keyboard knows this; nobody knows
+    /// the string that names it, and that is what makes it a list.
+    KeyboardVariant,
+    /// Which key composes accents.
+    ///
+    /// # Why this is asked at all
+    ///
+    /// Because the answer depends on the keyboard AND on the language, and the
+    /// installer already knows both by the time it gets here. A British layout
+    /// writing Portuguese has no accent key: without Compose there is no `ã` and
+    /// no `ç`. A `br(abnt2)` has the accents on the keys and needs no Compose at
+    /// all — and forcing one on it would take a key away from someone who does
+    /// not need it.
+    ComposeKey,
+    /// The machine's timezone.
+    ///
+    /// Asked, and not detected: `nixos-facter` reads hardware, and where a
+    /// person is is not a property of the hardware. Guessing it from the network
+    /// would mean asking the internet where the machine is, during an install,
+    /// before the network is necessarily up.
+    Timezone,
+    /// The system's locale: date, number, paper and units.
+    ///
+    /// NOT the same as `Language`, and the difference is the reason there are
+    /// two: the interface's language is which of OUR translations to load, and
+    /// there are two of those. The locale is glibc's, there are hundreds, and it
+    /// decides whether the date reads `31/12` or `12/31`.
+    SystemLocale,
     /// The swap file's offset, for hibernation.
     ResumeOffset,
     /// Which Wi-Fi network to use. Empty means "I am going by cable".
@@ -72,19 +104,36 @@ pub enum Question {
 impl Question {
     /// All of them, in the order the TUI presents them.
     ///
-    /// A deliberate order: what erases data comes first, so the person does not
-    /// invest five answers before finding out they chose the wrong
-    /// disk.
-    pub const ALL_KEYS: [Self; 9] = [
+    /// # THE LANGUAGE COMES FIRST, and that is not a preference
+    ///
+    /// Every screen after it is drawn in the answer to it. Asking anything else
+    /// first means asking it in whatever language the ISO happened to carry,
+    /// which for half the people is a screen they cannot read — and the first of
+    /// those screens erases a disk.
+    ///
+    /// This reverses the order that used to be here, where the disk came first
+    /// so that nobody would invest five answers before finding out they picked
+    /// the wrong one. That reason survives: the disk is still SECOND, so what is
+    /// invested before it is one screen, and it is the screen that makes the
+    /// rest legible.
+    ///
+    /// The keyboard trio comes right after the disk, and before the passphrase:
+    /// the passphrase is typed blind, is not echoed, and cannot be corrected
+    /// later — typing it on the wrong layout is the one mistake here with no
+    /// recovery.
+    pub const ALL_KEYS: [Self; 13] = [
+        Self::Language,
         Self::Disk,
+        Self::Keyboard,
+        Self::KeyboardVariant,
+        Self::ComposeKey,
+        Self::SystemLocale,
+        Self::Timezone,
         Self::Hostname,
         Self::Password,
         Self::Passphrase,
-        Self::Language,
-        Self::Keyboard,
-        // THE NETWORK comes after the language and before the offset: it is the last
-        // thing the person types, and it comes after the language so the network list
-        // already appears in the chosen language.
+        // THE NETWORK is the last thing the person types, and it comes after the
+        // language so the network list already appears in the chosen language.
         Self::Wifi,
         Self::WifiPassword,
         Self::ResumeOffset,
@@ -105,6 +154,10 @@ impl Question {
             Self::Passphrase => key::INST_PASSPHRASE,
             Self::Language => key::INST_LANGUAGE,
             Self::Keyboard => key::INST_KEYBOARD,
+            Self::KeyboardVariant => key::INST_KEYBOARD_VARIANT,
+            Self::ComposeKey => key::INST_COMPOSE_KEY,
+            Self::SystemLocale => key::INST_SYSTEM_LOCALE,
+            Self::Timezone => key::INST_TIMEZONE,
             Self::ResumeOffset => key::INST_RESUME_OFFSET,
             Self::Wifi => key::INST_WIFI,
             Self::WifiPassword => key::INST_WIFI_PASSWORD,
@@ -121,6 +174,10 @@ impl Question {
             Self::Passphrase => key::INST_PASSPHRASE_HELP,
             Self::Language => key::INST_LANGUAGE_HELP,
             Self::Keyboard => key::INST_KEYBOARD_HELP,
+            Self::KeyboardVariant => key::INST_KEYBOARD_VARIANT_HELP,
+            Self::ComposeKey => key::INST_COMPOSE_KEY_HELP,
+            Self::SystemLocale => key::INST_SYSTEM_LOCALE_HELP,
+            Self::Timezone => key::INST_TIMEZONE_HELP,
             Self::ResumeOffset => key::INST_RESUME_OFFSET_HELP,
             Self::Wifi => key::INST_WIFI_HELP,
             // The network's help line also serves the password: what it
@@ -155,6 +212,30 @@ impl Question {
         matches!(self, Self::ResumeOffset)
     }
 
+    /// The answer that comes already chosen.
+    ///
+    /// It is the same value in both modes, and that is the point: the TUI opens
+    /// the list on it, and the terminal-less mode uses it when the variable is
+    /// unset. Two tables would drift, and the drift would show up as
+    /// `nix flake check` installing a machine nobody could have got by pressing
+    /// Enter through the screens.
+    ///
+    /// `None` where there is no sensible default: a disk, a hostname and a
+    /// password are nobody's to guess.
+    #[must_use]
+    pub const fn default_answer(self) -> Option<&'static str> {
+        match self {
+            Self::Language => Some(DEFAULT_LANGUAGE),
+            Self::Keyboard => Some(DEFAULT_LAYOUT),
+            Self::ComposeKey => Some(DEFAULT_COMPOSE),
+            Self::SystemLocale => Some(DEFAULT_LOCALE),
+            Self::Timezone => Some(DEFAULT_TIMEZONE),
+            // The variant and the network default to empty, which `optional`
+            // already accepts — writing it here too would say the same thing twice.
+            _ => None,
+        }
+    }
+
     /// Whether leaving it blank is a valid answer.
     ///
     /// Only the network: blank there means "I am going by cable", which is a choice
@@ -162,7 +243,11 @@ impl Question {
     /// means nothing.
     #[must_use]
     pub const fn optional(self) -> bool {
-        matches!(self, Self::Wifi)
+        // The variant and the Compose key join the network here, and for the same
+        // reason: empty is a CHOICE. `gb` with no variant is the right answer —
+        // both variants it has put a dead accent on level 1 — and a keyboard whose
+        // layout already carries the accents wants no Compose key stealing one.
+        matches!(self, Self::Wifi | Self::KeyboardVariant | Self::ComposeKey)
     }
 
     /// Whether this screen should be SKIPPED, given the answers so far.
@@ -234,36 +319,251 @@ pub const MINIMO_SENHA_WIFI: usize = 8;
 /// The hostname's mandatory prefix (section 7.1).
 pub const HOSTNAME_PREFIX: &str = "noctua-";
 
-/// The xkb layouts this system actually has.
+/// One entry of `base.lst`: the name xkb wants, and the description a person reads.
 ///
-/// From `base.lst` of `xkeyboard-config`, which is the same file the
-/// `keyboard-layout-exists` check reads. A hand-written list here would go
-/// stale, and the failure would be the installer refusing a layout the system
-/// supports.
+/// The two travel together because neither serves alone: the name is what goes
+/// into the config and means nothing on screen (`gb`, `latam`, `ru(phonetic)`),
+/// and the description is what someone recognises and what xkb refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Choice {
+    /// What goes into the configuration.
+    pub name: String,
+    /// What appears on screen.
+    pub description: String,
+}
+
+impl Choice {
+    /// The line the list shows.
+    #[must_use]
+    pub fn line(&self) -> String {
+        if self.name.is_empty() {
+            self.description.clone()
+        } else {
+            format!("{} — {}", self.name, self.description)
+        }
+    }
+}
+
+/// Where `base.lst` is.
 ///
-/// With no file — a build without the package — it gives back an empty list,
-/// and validation refuses everything. That is deliberate: silently accepting
+/// From the store at build time, and from the running system otherwise. It is the
+/// same file the `keyboard-layout-exists` check reads: a list written by hand
+/// here would go stale when `xkeyboard-config` moves, and the failure would be
+/// the installer refusing a layout the system supports.
+fn base_lst() -> Option<String> {
+    data_file(
+        "RONOCTUA_XKB_BASE_LST",
+        option_env!("RONOCTUA_XKB_BASE_LST"),
+        "/run/current-system/sw/share/X11/xkb/rules/base.lst",
+    )
+}
+
+/// Reads one of the data files, letting the RUNTIME environment win.
+///
+/// Three sources, in order: the variable as it is NOW, the one baked in at
+/// compile time, and the running system's path.
+///
+/// The runtime one comes first because the compile-time one is a trap that cost
+/// an hour here: `option_env!` is resolved when the crate is built, and cargo
+/// does not track environment variables as inputs. A binary compiled before the
+/// devshell exported the path goes on believing the file does not exist, however
+/// many times it is re-run — and the symptom was an installer refusing every
+/// keyboard layout that exists.
+///
+/// The baked one stays because it is what the ISO has: there is no environment
+/// there, and no `/run/current-system` either.
+fn data_file(var: &str, baked: Option<&str>, fallback: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| baked.map(ToOwned::to_owned))
+        .or_else(|| Some(fallback.to_owned()))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+}
+
+/// Reads one section of `base.lst`.
+///
+/// The file is sections opened by `! layout`, `! variant`, `! option`, each line
+/// being `name` then whitespace then the description. `keep` decides which lines
+/// of the section survive — it is what filters the variants of one layout out of
+/// the two thousand that exist, and the `compose:` options out of all the others.
+///
+/// With no file — a build without the package — it gives back an empty list, and
+/// validation refuses everything. That is deliberate: silently accepting
 /// anything is how one ends up typing a passphrase on a mute `us`.
-#[must_use]
-pub fn available_layouts() -> Vec<String> {
-    let lst = option_env!("RONOCTUA_XKB_BASE_LST")
-        .unwrap_or("/run/current-system/sw/share/X11/xkb/rules/base.lst");
-    let Ok(raw_text) = std::fs::read_to_string(lst) else {
+fn section(header: &str, keep: &dyn Fn(&str, &str) -> bool) -> Vec<Choice> {
+    let Some(raw_text) = base_lst() else {
         return Vec::new();
     };
     let mut out = Vec::new();
     let mut inside = false;
     for line in raw_text.lines() {
         if line.starts_with('!') {
-            inside = line.starts_with("! layout");
+            inside = line.starts_with(header);
             continue;
         }
-        if inside && let Some(name) = line.split_whitespace().next() {
-            out.push(name.to_owned());
+        if !inside {
+            continue;
+        }
+        // `trim()` AND NOT `trim_end()`: `base.lst` indents every entry, so
+        // splitting the raw line gives an empty first field and drops the whole
+        // list. The symptom was the installer refusing every layout that
+        // exists, which reads as the file being missing.
+        let mut parts = line.trim().splitn(2, char::is_whitespace);
+        let (Some(name), Some(rest)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let description = rest.trim();
+        if keep(name, description) {
+            out.push(Choice {
+                name: name.to_owned(),
+                description: description.to_owned(),
+            });
         }
     }
     out
 }
+
+/// The xkb layouts this system actually has.
+#[must_use]
+pub fn available_layouts() -> Vec<Choice> {
+    section("! layout", &|_, _| true)
+}
+
+/// Just the names, for whoever only validates.
+#[must_use]
+pub fn layout_names() -> Vec<String> {
+    available_layouts().into_iter().map(|c| c.name).collect()
+}
+
+/// The variants of ONE layout, with "no variant" first.
+///
+/// In `base.lst` a variant line reads `abnt2  br: Brazil ABNT2` — the layout it
+/// belongs to is the first word of the description, before the colon. Filtering
+/// by it is what keeps the list at the handful that apply instead of the two
+/// thousand that exist.
+///
+/// "No variant" is FIRST, and it is not a courtesy: for `gb` it is the right
+/// answer, because both variants it has put a dead accent on level 1 — the key
+/// stops writing a backtick until you press space, which on a keyboard that
+/// types code all day is worse than the problem it solves.
+#[must_use]
+pub fn variants_of(layout: &str) -> Vec<Choice> {
+    let prefix = format!("{layout}:");
+    let mut out = vec![Choice {
+        name: String::new(),
+        description: "—".to_owned(),
+    }];
+    out.extend(section("! variant", &|_, d| d.starts_with(&prefix)));
+    out
+}
+
+/// The xkb options that make a key the Compose key, with "none" first.
+///
+/// Only the `compose:` family: the section also carries level-3 switches, caps
+/// behaviour and terminate-with, and offering those here would be answering a
+/// question nobody asked.
+#[must_use]
+pub fn compose_options() -> Vec<Choice> {
+    let mut out = vec![Choice {
+        name: String::new(),
+        description: "—".to_owned(),
+    }];
+    out.extend(section("! option", &|n, _| n.starts_with("compose:")));
+    out
+}
+
+/// The locales this system can generate, with the British one first.
+///
+/// From glibc's own `SUPPORTED`, whose lines read `pt_BR.UTF-8/UTF-8 \\`. Only the
+/// UTF-8 ones: a terminal-first system has no business offering ISO-8859.
+///
+/// The default sits at the TOP because the top is what someone pressing Enter
+/// gets, and with no file the list is the default alone — refusing to install
+/// because a package moved would be worse than installing in British English.
+#[must_use]
+pub fn available_locales() -> Vec<String> {
+    let mut out = vec![DEFAULT_LOCALE.to_owned()];
+    let Some(raw_text) = data_file(
+        "RONOCTUA_LOCALE_SUPPORTED",
+        option_env!("RONOCTUA_LOCALE_SUPPORTED"),
+        "/run/current-system/sw/share/i18n/SUPPORTED",
+    ) else {
+        return out;
+    };
+    for line in raw_text.lines() {
+        let name = line.trim().trim_end_matches('\\').trim();
+        let Some((locale, charset)) = name.split_once('/') else {
+            continue;
+        };
+        if charset == "UTF-8" && locale.ends_with(".UTF-8") && locale != DEFAULT_LOCALE {
+            out.push(locale.to_owned());
+        }
+    }
+    out
+}
+
+/// The timezones tzdb knows, with the default first.
+///
+/// From `zone1970.tab`, whose lines read
+/// `GB,GG,IM,JE<TAB>+513030-0000731<TAB>Europe/London`. The third field is the
+/// name, and it is the only one that goes anywhere — the coordinates and the
+/// country codes are for a map this installer does not draw.
+#[must_use]
+pub fn available_timezones() -> Vec<String> {
+    let mut out = vec![DEFAULT_TIMEZONE.to_owned()];
+    let Some(raw_text) = data_file(
+        "RONOCTUA_TZ_TAB",
+        option_env!("RONOCTUA_TZ_TAB"),
+        "/etc/zoneinfo/zone1970.tab",
+    ) else {
+        return out;
+    };
+    for line in raw_text.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(name) = line.split('\t').nth(2) else {
+            continue;
+        };
+        let name = name.trim();
+        if !name.is_empty() && name != DEFAULT_TIMEZONE {
+            out.push(name.to_owned());
+        }
+    }
+    out.sort_unstable_by(|a, b| {
+        // The default stays on top; everything else alphabetical, because a list
+        // of three hundred zones in tzdb's file order is a list nobody can scan.
+        (a != DEFAULT_TIMEZONE, a).cmp(&(b != DEFAULT_TIMEZONE, b))
+    });
+    out
+}
+
+/// The timezone when nobody chooses another.
+pub const DEFAULT_TIMEZONE: &str = "Europe/London";
+
+/// The Compose key when nobody chooses another.
+///
+/// AltGr, which is the key a keyboard has and nothing else uses: the right Alt
+/// sits under the hand that is not typing the letter, and no layout here needs
+/// it for a third level that Compose cannot also reach.
+pub const DEFAULT_COMPOSE: &str = "compose:ralt";
+
+/// The keyboard layout when nobody chooses another.
+pub const DEFAULT_LAYOUT: &str = "gb";
+
+/// The interface language when nobody chooses another.
+pub const DEFAULT_LANGUAGE: &str = "en-GB";
+
+/// The system's locale when nobody chooses another.
+///
+/// British English, and metric by consequence: `en_GB` is the only widely
+/// available English locale whose `LC_MEASUREMENT` is metric. Picking `en_US`
+/// here would bring inches and Fahrenheit along with the language.
+pub const DEFAULT_LOCALE: &str = "en_GB.UTF-8";
 
 /// Validates an answer.
 ///
@@ -308,6 +608,16 @@ pub fn validate_it(
                 return Err(Invalid::UnknownLanguage);
             }
         }
+        // THE THREE KEYBOARD ANSWERS AND THE LOCALE need no check here, and that
+        // is a property of the screen and not an omission: they are lists built
+        // from the same file that would validate them, so the only reachable
+        // answers are the valid ones. The layout below is the exception because
+        // the terminal-less mode reads it from the environment, where anything
+        // can arrive.
+        Question::KeyboardVariant
+        | Question::ComposeKey
+        | Question::SystemLocale
+        | Question::Timezone => {}
         // AGAINST THE REAL LIST, and not a shape check: xkb accepts a layout
         // that does not exist and falls back to a mute `us`, so a plausible
         // typo would install a keyboard nobody can type on.
@@ -351,6 +661,14 @@ pub struct Answers {
     pub language: String,
     /// The keyboard layout, in xkb's name.
     pub keyboard: String,
+    /// The layout's variant. Empty means the plain layout, which is a valid answer.
+    pub keyboard_variant: String,
+    /// The xkb option that makes a key the Compose key. Empty means no Compose.
+    pub compose_key: String,
+    /// The system's locale, glibc's name (`en_GB.UTF-8`).
+    pub system_locale: String,
+    /// The timezone, in tzdb's name (`Europe/London`).
+    pub timezone: String,
     /// The swap's offset, computed once the disk exists.
     pub resume_offset: Option<u64>,
     /// The chosen Wi-Fi network. Empty = going by cable.
@@ -370,6 +688,10 @@ impl Answers {
             Question::Passphrase => &self.passphrase,
             Question::Language => &self.language,
             Question::Keyboard => &self.keyboard,
+            Question::KeyboardVariant => &self.keyboard_variant,
+            Question::ComposeKey => &self.compose_key,
+            Question::SystemLocale => &self.system_locale,
+            Question::Timezone => &self.timezone,
             Question::Wifi => &self.wifi_ssid,
             Question::WifiPassword => &self.wifi_password,
             Question::ResumeOffset => "",
@@ -385,6 +707,10 @@ impl Answers {
             Question::Passphrase => self.passphrase = v,
             Question::Language => self.language = v,
             Question::Keyboard => self.keyboard = v,
+            Question::KeyboardVariant => self.keyboard_variant = v,
+            Question::ComposeKey => self.compose_key = v,
+            Question::SystemLocale => self.system_locale = v,
+            Question::Timezone => self.timezone = v,
             Question::Wifi => self.wifi_ssid = v,
             Question::WifiPassword => self.wifi_password = v,
             Question::ResumeOffset => {}
@@ -396,12 +722,12 @@ impl Answers {
 mod tests {
     use super::*;
 
-    const LANGUAGES: &[&str] = &["pt-BR", "en-US"];
+    const LANGUAGES: &[&str] = &["pt-BR", "en-GB"];
     /// Enough to tell an accepted layout from a refused one.
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
 
     #[test]
-    fn there_are_exactly_nine_questions() {
+    fn there_are_exactly_thirteen_questions() {
         // Milestone 8's CRITERION still holds: one asks what ONLY THE PERSON
         // knows, and nothing beyond. One more question is a decision the project
         // handed back to the person after already making it (section 7.1).
@@ -421,11 +747,11 @@ mod tests {
         // So not asking meant installing on someone else's layout, and the
         // moment one finds out is while typing the disk's passphrase: not
         // echoed, and not correctable afterwards.
-        assert_eq!(Question::ALL_KEYS.len(), 9);
+        assert_eq!(Question::ALL_KEYS.len(), 13);
         let mut views: Vec<_> = Question::ALL_KEYS.to_vec();
         views.sort();
         views.dedup();
-        assert_eq!(views.len(), 9, "ha pergunta repetida na lista");
+        assert_eq!(views.len(), 13, "ha pergunta repetida na lista");
     }
 
     #[test]
@@ -471,10 +797,40 @@ mod tests {
     }
 
     #[test]
-    fn the_disk_is_the_first_question() {
-        // It erases data. Asking last would make the person invest
-        // five answers before finding out they chose the wrong disk.
-        assert_eq!(Question::ALL_KEYS[0], Question::Disk);
+    fn the_language_is_first_and_the_disk_is_second() {
+        // THE LANGUAGE FIRST because every screen after it is drawn in the
+        // answer to it — including the one that erases a disk. Asking anything
+        // before it means asking in whatever language the ISO happened to carry.
+        assert_eq!(Question::ALL_KEYS[0], Question::Language);
+        // AND THE DISK SECOND, which is what survives of the older rule: it
+        // erases data, so what is invested before it has to be one screen.
+        assert_eq!(Question::ALL_KEYS[1], Question::Disk);
+    }
+
+    #[test]
+    fn every_question_that_can_be_defaulted_has_a_default() {
+        // The screen opens on an answer that works, and the terminal-less mode
+        // uses the same one. What has no default is what nobody can guess.
+        for q in Question::ALL_KEYS {
+            let guessable = !matches!(
+                q,
+                Question::Disk
+                    | Question::Hostname
+                    | Question::Password
+                    | Question::Passphrase
+                    | Question::WifiPassword
+                    | Question::ResumeOffset
+                    | Question::Wifi
+                    | Question::KeyboardVariant
+            );
+            assert_eq!(
+                q.default_answer().is_some(),
+                guessable,
+                "{q:?} discorda sobre ter resposta padrao"
+            );
+        }
+        assert_eq!(Question::ComposeKey.default_answer(), Some(DEFAULT_COMPOSE));
+        assert_eq!(Question::Timezone.default_answer(), Some(DEFAULT_TIMEZONE));
     }
 
     #[test]

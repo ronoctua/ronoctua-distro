@@ -1,4 +1,4 @@
-# Interface texts, pt-BR. See the header of `en-US.ftl`.
+# Interface texts, pt-BR. See the header of `en-GB.ftl`.
 
 ## Commands — the `M-x` list and the which-key labels
 
@@ -44,7 +44,15 @@ inst-passphrase-help = Destrava o disco quando o TPM se recusar. Guarde fora do 
 inst-language = Idioma
 inst-language-help = Da interface e do teclado.
 inst-keyboard = Layout do teclado
-inst-keyboard-help = O nome do xkb: br, us, gb. E o que voce vai digitar a frase-secreta.
+inst-keyboard-help = Escolha o do seu teclado. E nele que voce vai digitar a frase-secreta.
+inst-keyboard-variant = Variante do layout
+inst-keyboard-variant-help = Separa teclados do mesmo pais. Sem variante e uma resposta valida.
+inst-compose-key = Tecla de acentuacao
+inst-compose-key-help = A tecla Compose: segurada com outras, faz acento. Sem ela, teclado sem acento nao os alcanca.
+inst-system-locale = Formato do sistema
+inst-system-locale-help = Data, numero e unidade. Nao e o idioma da interface, que ja foi escolhido.
+inst-timezone = Fuso horario
+inst-timezone-help = Onde a maquina fica. E o que decide a hora do relogio e do log.
 inst-resume-offset = Deslocamento do swap
 inst-resume-offset-help = Calculado depois que o disco existir; não se digita.
 

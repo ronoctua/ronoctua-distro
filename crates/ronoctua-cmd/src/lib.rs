@@ -15,7 +15,7 @@
 //! # Invariant 8
 //!
 //! A command does not carry UI text, it carries a **text key**. What
-//! appears on screen comes from `ronoctua-i18n`, with `pt-BR` and `en-US` complete.
+//! appears on screen comes from `ronoctua-i18n`, with `pt-BR` and `en-GB` complete.
 //! That is why [`Command::label`] is a key and not a sentence.
 
 #![forbid(unsafe_code)]

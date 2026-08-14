@@ -517,10 +517,10 @@ pkgs.testers.runNixOSTest {
     with subtest("com o Alt SEGURADO a sequencia continua funcionando"):
         # THE DEFECT THIS CATCHES, and that only shows up in real use.
         #
-        # In the nested session the leader IS `Alt+Space`: when the sequence starts,
-        # Alt is pressed because the hand has just pressed it. Every key came out
+        # In the nested session the leader IS `Ctrl+Alt+Space`: when the sequence starts,
+        # Ctrl and Alt are pressed because the hand has just pressed them. Every key came out
         # with the modifier along, nothing matched, and the screen said
-        # `ALT SPC M-n is not bound` — which names the consequence and hides the
+        # `CTRL ALT SPC M-n is not bound` — which names the consequence and hides the
         # cause. The same state happens WITHOUT the hand: leaving for a host shortcut
         # and coming back makes the nested niri miss the Alt release and announce it
         # forever.

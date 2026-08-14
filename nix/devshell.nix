@@ -70,8 +70,9 @@ pkgs.mkShell {
     pkgs.swtpm # emulated TPM2, for the PCR 15 test (milestone 8)
 
     # --- tools -------------------------------------------------------
+    # No `git-lfs` here: it was for the fonts, and they never enter git at all
+    # now — they are Release assets. Nothing in this tree is an LFS object.
     pkgs.git
-    pkgs.git-lfs # the fonts live here: 4.1 GB
     pkgs.jq
     pkgs.ripgrep
     pkgs.fd
@@ -104,6 +105,17 @@ pkgs.mkShell {
   RONOCTUA_FONT_REGULAR = regularFont;
   RONOCTUA_FONT_EMOJI = emojiFont;
   RONOCTUA_FONT_LUCIDE = lucideFont;
+  # THE SAME DATA FILES `nix/rust.nix` GIVES CRANE.
+  #
+  # They were missing here, and the divergence is expensive in a specific way:
+  # `option_env!` is resolved at COMPILE time, so `cargo test` inside the
+  # devshell built binaries that believed the files did not exist. The installer
+  # then found an empty layout list, refused every layout, and the screen never
+  # advanced — a test that spun at full CPU instead of failing, while the same
+  # code passed under `nix flake check`.
+  RONOCTUA_XKB_BASE_LST = "${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst";
+  RONOCTUA_LOCALE_SUPPORTED = "${pkgs.glibcLocales}/share/i18n/SUPPORTED";
+  RONOCTUA_TZ_TAB = "${pkgs.tzdata}/share/zoneinfo/zone1970.tab";
   RONOCTUA_SETSID = "${pkgs.util-linux}/bin/setsid";
   RONOCTUA_XWAYLAND_SATELLITE = "${pkgs.xwayland-satellite}/bin/xwayland-satellite";
   RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
@@ -120,32 +132,22 @@ pkgs.mkShell {
     echo "ronoctua-distro — devshell"
     echo
 
-    # The fonts live in git-lfs. Without `git lfs pull` the build fails much
-    # later with "corrupt font", which is expensive to diagnose. We warn
-    # here, early and cheaply.
-    if [ -d .git ] && [ -f assets/fonts/noctua-iosevka/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf ]; then
-      if head -c 60 assets/fonts/noctua-iosevka/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf \
-         | grep -q 'git-lfs.github.com/spec'; then
-        echo "  AVISO: as fontes sao ponteiros git-lfs, nao arquivos."
-        echo "         Rode:  git lfs install && git lfs pull"
-        echo
-      fi
-    fi
-
     # `target/` must NOT live inside the tree.
     #
-    # This project is not a git repository (invariant 2), and it is git that Nix
-    # uses to filter a flake's source. Without it, `nix flake check` copies
-    # the ENTIRE directory into the store — and since the path is addressed by
-    # content, every edit mints a fresh copy. With `target/` inside,
-    # that is 19 GB per edit; without it, 1.3 MB.
+    # Git is what Nix uses to filter a flake's source, and only tracked files
+    # get in. `target/` is in `.gitignore` and so is already invisible — but the
+    # cost of getting this wrong was measured before the repository existed,
+    # when `nix flake check` copied the ENTIRE directory into the store on every
+    # edit. With `target/` inside, that is 19 GB per edit; without it, 1.3 MB.
     #
     # Measured: 44 copies, 793 GB, 42% of the disk. See docs/ARCHITECTURE.md.
     export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/target"
     mkdir -p "$CARGO_TARGET_DIR"
 
-    # The hooks only get installed if the repository already exists. Invariant 2
-    # forbids creating it, and `git init` is the owner's call — until then this does nothing.
+    # Installed on entering the devshell, and not by an installer step: a hook
+    # lives in `.git/hooks`, which git never clones. Whoever clones this
+    # repository gets the hook the first time they run `nix develop`, and not
+    # from a README instruction nobody reads.
     if [ -d .git ] && [ ! -L .git/hooks/pre-commit ]; then
       mkdir -p .git/hooks
       ln -sf ${gitHooks}/hooks/pre-commit .git/hooks/pre-commit
@@ -164,7 +166,7 @@ pkgs.mkShell {
     fi
 
     echo "  nix flake check    verifica tudo"
-    echo "  nix run .#dev      niri aninhado + rodape (leader = Alt+Space)"
+    echo "  nix run .#dev      niri aninhado + rodape (leader = Ctrl+Alt+Space)"
     echo "  nix run .#vm       sistema completo em VM"
     echo "  nix run .#bench    mede o trabalho de CPU do frame"
     echo "  nix run .#install  instala (ensaia sem --executar)"

@@ -341,9 +341,9 @@ impl Leader {
     ///
     /// Two differences, because those are the two that appeared on the owner's screen:
     ///
-    /// - **a leftover modifier** — `ALT SPC M-n is not bound`, with the Alt
+    /// - **a leftover modifier** — `CTRL ALT SPC M-n is not bound`, with the Alt
     ///   stuck in the compositor after a host shortcut;
-    /// - **swapped case** — `ALT SPC I is not bound`, with Caps Lock or
+    /// - **swapped case** — `CTRL ALT SPC I is not bound`, with Caps Lock or
     ///   Shift.
     ///
     /// This is **not** a fallback: nothing is run through the similar key. `w H`
@@ -1061,7 +1061,7 @@ mod tests {
 
     /// When the CASE is the reason, the message has to say so.
     ///
-    /// `ALT SPC I is not bound` is true and is useless: it shows the
+    /// `CTRL ALT SPC I is not bound` is true and is useless: it shows the
     /// consequence and hides the cause, and sends the person looking for a shortcut
     /// they have just pressed. Whoever pressed Shift by accident only finds out
     /// if the screen tells them that the other case is the one that exists.
@@ -1097,10 +1097,10 @@ mod tests {
         }
     }
 
-    /// `ALT SPC M-n is not bound` — the owner's second screen.
+    /// `CTRL ALT SPC M-n is not bound` — the owner's second screen.
     ///
-    /// The `M-` is Alt. In the nested loop the leader **is** `Alt+Space`, so the Alt
-    /// is held down by construction when the sequence begins; and after
+    /// The `M-` is Alt. In the nested loop the leader **is** `Ctrl+Alt+Space`, so Ctrl
+    /// and Alt are held down by construction when the sequence begins; and after
     /// a host shortcut (`Super+Space`) the nested niri may miss the key's
     /// release and announce it forever. In both cases every binding
     /// stops matching at once.

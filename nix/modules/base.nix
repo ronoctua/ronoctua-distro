@@ -130,19 +130,38 @@ in
     users.users.root.hashedPassword = lib.mkDefault "!"; # root with no login
 
     # -----------------------------------------------------------------
-    # Languages — section 2: pt-BR and en-US, both, always, complete.
+    # Languages and formats
     # -----------------------------------------------------------------
+    #
+    # THE DEFAULT IS BRITISH ENGLISH, and the installer offers another. It is a
+    # default and not a decision about who installs: `lib.mkDefault` means the
+    # generated `host.nix` overrides every line below.
+    #
+    # WHY `en_GB` AND NOT `en_US`
+    #
+    # Because a locale is not only a language: it carries date order, decimal
+    # separator, paper size and units. `en_US` brings inches, Fahrenheit and
+    # Letter along with the English, and this system is used with none of the
+    # three.
     i18n = {
-      defaultLocale = lib.mkDefault "pt_BR.UTF-8";
+      defaultLocale = lib.mkDefault "en_GB.UTF-8";
       supportedLocales = [
+        "en_GB.UTF-8/UTF-8"
         "pt_BR.UTF-8/UTF-8"
         "en_US.UTF-8/UTF-8"
         "C.UTF-8/UTF-8"
       ];
       extraLocaleSettings = {
-        LC_MESSAGES = lib.mkDefault "pt_BR.UTF-8";
-        LC_TIME = lib.mkDefault "pt_BR.UTF-8";
-        LC_NUMERIC = lib.mkDefault "pt_BR.UTF-8";
+        LC_MESSAGES = lib.mkDefault "en_GB.UTF-8";
+        LC_TIME = lib.mkDefault "en_GB.UTF-8";
+        LC_NUMERIC = lib.mkDefault "en_GB.UTF-8";
+        # THE METRIC SYSTEM, WHATEVER THE LANGUAGE. `LC_MEASUREMENT` is the only
+        # key glibc has for this, and it is NOT `mkDefault`: choosing `en_US` in
+        # the installer chooses a language, never inches.
+        LC_MEASUREMENT = "en_GB.UTF-8";
+        # Paper travels with the units, and for the same reason: A4 is what a
+        # printer here takes.
+        LC_PAPER = "en_GB.UTF-8";
       };
     };
 

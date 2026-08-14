@@ -319,7 +319,7 @@ in
       RONOCTUA_LEADER = "SUPER";
       # THE CHORD'S LABEL. In production it is the SAME key as the sequence's —
       # and that is the beauty of keyd: tapping opens the list, holding is the
-      # modifier. In the nested loop the two diverge (`ALT SPC` against `ALT`),
+      # modifier. In the nested loop the two diverge (`CTRL ALT SPC` against `ALT`),
       # and that is why the screen needs both variables instead of deriving one
       # from the other.
       RONOCTUA_LEADER_CHORD = "SUPER";

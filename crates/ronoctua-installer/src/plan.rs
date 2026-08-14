@@ -159,9 +159,24 @@ pub fn host_nix(r: &Answers) -> String {
     let _ = writeln!(s, "  networking.hostName = \"{}\";", r.hostname);
     let _ = writeln!(s, "  ronoctua.disk = \"{}\";", r.disk);
     let _ = writeln!(s, "  ronoctua.language = \"{}\";", r.language);
+    // THE LOCALE IS ITS OWN LINE, and not derived from the language: the two
+    // answer different questions, and the module stopped tying them.
+    let _ = writeln!(s, "  ronoctua.locale = \"{}\";", r.system_locale);
+    let _ = writeln!(s, "  time.timeZone = \"{}\";", r.timezone);
     // THE LAYOUT, overriding `nix/keyboard-xkb.nix`'s default. Without this line
     // the machine comes up on the layout of the computer this was written on.
     let _ = writeln!(s, "  ronoctua.keyboard.layout = \"{}\";", r.keyboard);
+    // THE VARIANT AND THE COMPOSE KEY are written even when EMPTY, and that is
+    // deliberate: empty is an answer here — `gb` wants no variant, and a layout
+    // that already carries the accents wants no Compose key. Writing the line
+    // makes the file say what was chosen; omitting it would leave the module's
+    // default in force and make the answer invisible.
+    let _ = writeln!(
+        s,
+        "  ronoctua.keyboard.variant = \"{}\";",
+        r.keyboard_variant
+    );
+    let _ = writeln!(s, "  ronoctua.keyboard.options = \"{}\";", r.compose_key);
     // THE HARDWARE REPORT, by RELATIVE path.
     //
     // The `nixos-facter` step writes it next to this file, and both end up in
@@ -405,6 +420,10 @@ mod tests {
             passphrase: "Kx9-passphrase-de-teste".into(),
             language: "pt-BR".into(),
             keyboard: "br".into(),
+            keyboard_variant: "abnt2".into(),
+            compose_key: String::new(),
+            system_locale: "en_GB.UTF-8".into(),
+            timezone: "Europe/London".into(),
             resume_offset: Some(123_456),
         }
     }

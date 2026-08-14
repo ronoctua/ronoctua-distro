@@ -1,13 +1,13 @@
 # ronoctua-distro — .gitattributes
 #
-# As FONTES nao vivem aqui: sao o input `fonts` do flake, no repositorio
-# ronoctua-fonts, que tem o proprio .gitattributes com as regras de git-lfs.
-# Este repositorio tem algumas centenas de KB e NAO precisa de LFS.
+# THE FONT FILES ARE NOT HERE, and never were: they are 4.1 GB of build output,
+# published as assets of a Release of this repository and fetched by the flake,
+# pinned by hash. So this repository is a few hundred KB and needs no LFS.
 
-# --- normalizacao de fim de linha -------------------------------------------
+# --- end-of-line normalisation ----------------------------------------------
 * text=auto eol=lf
 
-# --- binarios que nao vao para LFS (pequenos, mas nao sao texto) ------------
+# --- binaries that do not go to LFS (small, but not text) -------------------
 *.png   binary
 *.jpg   binary
 *.webp  binary
@@ -17,18 +17,18 @@
 *.fst   binary
 *.bin   binary
 
-# --- corpus do VT: o CRLF E O TESTE -----------------------------------------
+# --- the VT corpus: THE CRLF IS THE TEST ------------------------------------
 #
-# `* text=auto eol=lf` normalizaria estes arquivos no primeiro `git add`, e
-# `02-crlf.vt` deixaria de conter um CR — o fixture continuaria existindo,
-# passaria a testar outra coisa, e nada acusaria. Cinco dos fixtures dependem
-# disso. `-text` desliga toda normalizacao para eles.
+# `* text=auto eol=lf` would normalise these files on the first `git add`, and
+# `02-crlf.vt` would stop containing a CR — the fixture would go on existing,
+# would start testing something else, and nothing would report it. Five of the
+# fixtures depend on this. `-text` turns off all normalisation for them.
 tests/corpus-vt/*.vt  -text
 
-# --- lockfiles: sem merge automatico, sem diff ruidoso ----------------------
+# --- lockfiles: no auto-merge, no noisy diff --------------------------------
 flake.lock  -diff merge=binary linguist-generated
 Cargo.lock  -diff linguist-generated
 
-# --- gerado: fora das estatisticas de linguagem do host -------------------
+# --- generated: out of the host's language statistics -----------------------
 crates/ronoctua-tokens/src/generated/**  linguist-generated
 crates/ronoctua-glyphdb/data/**          linguist-generated

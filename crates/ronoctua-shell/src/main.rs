@@ -244,7 +244,7 @@ fn repeat_of(kdl: &str) -> &'static str {
 /// # Why it comes from the ENVIRONMENT
 ///
 /// It used to be a fixed `"SPC"`, and that was wrong in both modes: in the nested loop the
-/// key is `Alt+Space` (the `Mod` belongs to the host's compositor) and in
+/// key is `Ctrl+Alt+Space` (the `Mod` belongs to the host's compositor) and in
 /// production it is `Super` ON ITS OWN, tapped. The screen said `SPC` in both — a
 /// label that corresponds to no key does not help, it gets in the way.
 ///
@@ -264,8 +264,8 @@ pub fn leader() -> String {
 ///
 /// In production it is the same key as the sequence's — tapping Super opens the list,
 /// holding Super is the modifier — and it is that coincidence `keyd` buys.
-/// In the nested loop it is **not**: the sequence is `Alt+Space` and the chord is `Alt`
-/// alone. Deriving one from the other would make the screen say one holds `ALT SPC`,
+/// In the nested loop it is **not**: the sequence is `Ctrl+Alt+Space` and the chord is `Alt`
+/// alone. Deriving one from the other would make the screen say one holds `CTRL ALT SPC`,
 /// and holding Space along with it is exactly what fires the sequence — the
 /// opposite of what the chord needs.
 ///

@@ -98,7 +98,7 @@ fn main() -> Result<()> {
 /// [`Question::variable`]. There is no second table to fall out of sync.
 fn from_env(texts: &Texts) -> Result<Answers> {
     let languages: Vec<&str> = ronoctua_i18n::LANGUAGES.to_vec();
-    let owned = ronoctua_installer::model::available_layouts();
+    let owned = ronoctua_installer::model::layout_names();
     let layouts: Vec<&str> = owned.iter().map(String::as_str).collect();
     let mut r = Answers::default();
     for q in Question::ALL_KEYS {
@@ -117,7 +117,16 @@ fn from_env(texts: &Texts) -> Result<Answers> {
             continue;
         }
         let var = q.variable();
-        let v = std::env::var(&var).unwrap_or_default();
+        // THE DEFAULT ANSWERS HERE TOO, and from the same place the TUI reads.
+        //
+        // Without it the terminal-less mode would demand a locale and a timezone
+        // from whoever only wants to test the plan — questions the screen answers
+        // by opening already chosen.
+        let v = std::env::var(&var)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| q.default_answer().map(ToOwned::to_owned))
+            .unwrap_or_default();
         if let Err(e) = validate_it(q, &v, &languages, &layouts) {
             bail!(
                 "{} ({}): {e}\n\

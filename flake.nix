@@ -63,17 +63,33 @@
     # build output, and they go out as assets of a RELEASE of this repository,
     # under a tag of their own (`fonts-v1`) so as not to be confused with the ISO.
     #
-    # READ BEFORE PUBLISHING: the local path below is TRANSIENT STATE — it only
-    # works on this machine. `nix run .#fonts-release` packs the assets and prints
-    # the SRI hashes; swap this for the Release URL with the hash it printed. The
-    # `fonts-input-publishable` check warns on every `nix flake check`.
+    # FOUR inputs and not one, because a Release asset is capped at 2 GB and
+    # `nix run .#fonts-release` therefore packs one tarball per folder. The four
+    # are reassembled into a single `noctua-iosevka/` tree in `nix/fonts.nix`.
     #
-    # It is absolute, not relative, on purpose: a relative `path:` resolves
-    # against the parent flake's STORE PATH (becoming `/nix/store/...-source/..`,
-    # which does not exist), not against the working directory. It cost a build
-    # to find out.
-    fonts = {
-      url = "path:/home/noctua/main/prjs/ronoctua-fonts";
+    # `file+https://` and not plain `https://`: the bare form is inferred as
+    # `type = "tarball"`, and Nix would unpack each asset into the store — 4.1 GB
+    # of loose faces that the very next derivation copies again. `file+` keeps
+    # them as the 1.4 GB of compressed files they are, and the build unpacks them
+    # once, straight into the directory where the naming gets fixed.
+    #
+    # WHAT PINS THEM is `flake.lock`, through the `narHash` of each asset — not a
+    # tag and not a rev. `fonts-v1` is a mutable pointer like any other git tag;
+    # the hash is what makes a re-download either identical or a hard error.
+    fonts-ttf = {
+      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF.tar.zst";
+      flake = false;
+    };
+    fonts-ttf-nerdfonts = {
+      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF-nerdfonts.tar.zst";
+      flake = false;
+    };
+    fonts-woff2 = {
+      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2.tar.zst";
+      flake = false;
+    };
+    fonts-woff2-nerdfonts = {
+      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2-nerdfonts.tar.zst";
       flake = false;
     };
 
@@ -106,7 +122,15 @@
       # Font layer (section 6 of the document, section 1 of the plan)
       # ---------------------------------------------------------------
       fonts = pkgs.callPackage ./nix/fonts.nix {
-        fontSrc = inputs.fonts;
+        # Folder name → the Release asset that carries it. The names are the
+        # ones `fix-font-names.py` and `mkFontPkg` already use; keeping them as
+        # the KEY means the mapping cannot silently go out of step.
+        fontAssets = {
+          "TTF" = inputs.fonts-ttf;
+          "TTF-nerdfonts" = inputs.fonts-ttf-nerdfonts;
+          "WOFF2" = inputs.fonts-woff2;
+          "WOFF2-nerdfonts" = inputs.fonts-woff2-nerdfonts;
+        };
       };
 
       fontconfigConf = pkgs.callPackage ./nix/fontconfig.nix {
@@ -536,12 +560,36 @@
               echo "empacotando em $out"
               echo
 
+              # THE RELEASE NOTES ARE WRITTEN HERE, IN ENGLISH, AND NOT TYPED AT
+              # PUBLISH TIME.
+              #
+              # A Release is the one thing this project publishes to an audience
+              # that is not the owner, so it is in English — while the four
+              # documents stay in Portuguese. Text typed by hand into the GitHub
+              # form is text nobody reviews and nobody can diff; the first
+              # release body was written that way and came out in Portuguese.
+              # Generating it puts the hashes in it for free.
+              notes="$out/RELEASE-NOTES.md"
+              {
+                echo "# noctua-iosevka — font files"
+                echo
+                echo "The built font files: Iosevka SemiExtended with the 27 naming fixes,"
+                echo "plus the Nerd Fonts patch. 4.1 GB uncompressed, across four archives."
+                echo
+                echo "These are build OUTPUT and do not enter git: git keeps every version"
+                echo "forever, and one Iosevka bump would double that with no way back. The"
+                echo "flake fetches them from here, pinned by hash."
+                echo
+                echo "| asset | size | sha256 |"
+                echo "|---|---|---|"
+              } > "$notes"
+
               for dir in TTF TTF-nerdfonts WOFF2 WOFF2-nerdfonts; do
                 [ -d "$root/noctua-iosevka/$dir" ] || continue
                 asset="$out/noctua-iosevka-$dir.tar.zst"
                 # `--sort=name` and a fixed mtime: without them the tarball's
-                # hash changes on every run and the `fetchurl` below would have to
-                # be updated for nothing.
+                # hash changes on every run and the lock would have to be updated
+                # for nothing.
                 tar --sort=name \
                     --mtime='@0' --owner=0 --group=0 --numeric-owner \
                     -C "$root/noctua-iosevka" \
@@ -549,15 +597,34 @@
                   | zstd -19 -T0 -q -o "$asset"
                 size=$(stat -c %s "$asset")
                 hash=$(nix hash file --sri "$asset")
-                printf '%-34s %6.1f MB  %s\n' "$(basename "$asset")" \
-                  "$(awk "BEGIN{print $size/1048576}")" "$hash"
+                mb=$(awk "BEGIN{printf \"%.1f\", $size/1048576}")
+                printf '%-34s %6s MB  %s\n' "$(basename "$asset")" "$mb" "$hash"
+                # Double quotes with escaped backticks, and not single quotes: a
+                # backtick inside single quotes reads as a command substitution
+                # that will not expand (SC2016), and `writeShellApplication`
+                # treats even the info level as an error.
+                #
+                # A comment whose FIRST word is the linter's name is parsed as a
+                # directive, not as prose — which is how this very line first
+                # failed the build with a syntax error.
+                printf "| \`%s\` | %s MB | \`%s\` |\n" \
+                  "$(basename "$asset")" "$mb" "$hash" >> "$notes"
               done
 
+              {
+                echo
+                echo "Licence: SIL Open Font License 1.1 (\`LICENSE-OFL.txt\` at the"
+                echo "repository root). The ronoctua-distro code is MIT; these files are not."
+              } >> "$notes"
+
+              echo
+              echo "notas do release (em ingles, prontas): $notes"
               echo
               echo "Suba os quatro como assets de um Release em"
               echo "  https://github.com/ronoctua/ronoctua-distro/releases/new"
               echo "com uma tag PROPRIA das fontes (fonts-v1), que nao se confunda"
-              echo "com a do ISO, e troque o input \`fonts\` pelo fetchurl com os hashes."
+              echo "com a do ISO, e o corpo vindo do arquivo acima. Depois rode"
+              echo "  nix flake update fonts-ttf fonts-ttf-nerdfonts fonts-woff2 fonts-woff2-nerdfonts"
             '';
 
         # Builds the ISO and says where it is.

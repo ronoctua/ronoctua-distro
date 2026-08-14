@@ -66,17 +66,52 @@
         "type": "github"
       }
     },
-    "fonts": {
+    "fonts-ttf": {
       "flake": false,
       "locked": {
-        "lastModified": 1785574589,
-        "narHash": "sha256-Pb5TnKSYcz+P3CxWIRpHHwuvTDTL0KmjxkkxqPKlQ4k=",
-        "path": "/home/noctua/main/prjs/ronoctua-fonts",
-        "type": "path"
+        "narHash": "sha256-aTKeZZ/+HvJnXxkqn39EFih51Kny6Sr7IxUBgRrPCvc=",
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF.tar.zst"
       },
       "original": {
-        "path": "/home/noctua/main/prjs/ronoctua-fonts",
-        "type": "path"
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF.tar.zst"
+      }
+    },
+    "fonts-ttf-nerdfonts": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-tqNn5MYCuUxIEcEXCQ2i8QaW86rB/BWS0cEzP9NLcG4=",
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF-nerdfonts.tar.zst"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF-nerdfonts.tar.zst"
+      }
+    },
+    "fonts-woff2": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-BnDkZwBZTmsP2C0XnK74nhGJgDFJdlv6zgAjkxmezO8=",
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2.tar.zst"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2.tar.zst"
+      }
+    },
+    "fonts-woff2-nerdfonts": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-uL6TFOIIoJkY2X++2HSZfuSAEQRcBKyaOa3eKXw5hoI=",
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2-nerdfonts.tar.zst"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2-nerdfonts.tar.zst"
       }
     },
     "gitignore": {
@@ -277,7 +312,10 @@
       "inputs": {
         "crane": "crane",
         "disko": "disko",
-        "fonts": "fonts",
+        "fonts-ttf": "fonts-ttf",
+        "fonts-ttf-nerdfonts": "fonts-ttf-nerdfonts",
+        "fonts-woff2": "fonts-woff2",
+        "fonts-woff2-nerdfonts": "fonts-woff2-nerdfonts",
         "home-manager": "home-manager",
         "lanzaboote": "lanzaboote",
         "niri": "niri",

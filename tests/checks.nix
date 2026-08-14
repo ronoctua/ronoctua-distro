@@ -270,6 +270,46 @@ let
     echo "OK: os nove diretorios da secao 2 chegam ao user-dirs.dirs"
   '';
 
+  # THE LOCALE AND THE TIMEZONE EXIST, and the check is where that gets asked.
+  #
+  # `ronoctua.locale` is a free string on purpose: the real list is glibc's
+  # `SUPPORTED`, and reading it during evaluation would be
+  # import-from-derivation — the flake would stop and wait for a build. Here,
+  # inside a build, the file is free to read.
+  #
+  # What goes wrong without this is quiet in the way that costs most: a locale
+  # glibc does not know produces no error at build time, and the installed system
+  # falls back to `C` — dates in American order, no accents in `sort`, and
+  # nothing anywhere saying why.
+  locale-exists = mkCheck "locale-exists" [ ] ''
+    supported=${pkgs.glibcLocales}/share/i18n/SUPPORTED
+    tab=${pkgs.tzdata}/share/zoneinfo/zone1970.tab
+    locale=${self.nixosConfigurations.vm.config.i18n.defaultLocale}
+    zone=${self.nixosConfigurations.vm.config.time.timeZone}
+
+    grep -qE "^$locale/UTF-8" "$supported" || {
+      echo "ERRO: a locale \`$locale\` nao esta no SUPPORTED do glibc." >&2
+      echo "      O sistema cairia no \`C\`: data em ordem americana, sem" >&2
+      echo "      acento na ordenacao, e nada dizendo por que." >&2
+      exit 1; }
+
+    # The measurement key is the one that must NOT follow the language: it is
+    # what keeps the machine metric when someone installs in American English.
+    measurement=${self.nixosConfigurations.vm.config.i18n.extraLocaleSettings.LC_MEASUREMENT or ""}
+    case "$measurement" in
+      en_US*|en_PH*|""|C|C.UTF-8|POSIX)
+        echo "ERRO: LC_MEASUREMENT = \`$measurement\` nao e metrico." >&2
+        echo "      Escolher ingles americano escolhe um idioma, nunca polegada." >&2
+        exit 1 ;;
+    esac
+
+    awk -F'\t' '!/^#/ { print $3 }' "$tab" | grep -qx "$zone" || {
+      echo "ERRO: o fuso \`$zone\` nao existe no tzdb." >&2
+      exit 1; }
+
+    echo "OK: locale \`$locale\`, medida metrica, fuso \`$zone\`"
+  '';
+
   keyboard-layout-exists = mkCheck "keyboard-layout-exists" [ ] ''
     lst=${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst
     layout=${keyboard.layout}
@@ -323,7 +363,7 @@ let
     assert len(key_names) > 100, f"so {len(key_names)} acoes na tabela gerada"
 
     absent = []
-    for language in ("pt-BR", "en-US"):
+    for language in ("pt-BR", "en-GB"):
         ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
         present = set(re.findall(r"^([a-z0-9-]+) *=", ftl, re.M))
         absent += [f"{language}: {c}" for c in key_names if c not in present]
@@ -366,7 +406,7 @@ let
   # Without this fixture, the check above would pass with the generator broken.
   i18n-missing-key-fails = mkCheck "i18n-missing-key-fails" [ pkgs.python3 ] ''
     cp -r ${../assets/i18n} bad && chmod -R +w bad
-    echo 'so-em-ingles = orphan' >> bad/en-US.ftl
+    echo 'so-em-ingles = orphan' >> bad/en-GB.ftl
 
     if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs 2>erro.txt; then
       echo "ERRO: o gerador ACEITOU uma chave que existe em so um idioma" >&2
@@ -1163,7 +1203,7 @@ let
     # `Textos::t` gives back `[api_key]` for a key that does not exist — on purpose,
     # so as not to bring the shell down over a missing text. The side effect is
     # that an unregistered key gets past ALL the other guards: `gen-i18n.py` only
-    # compares `pt-BR` with `en-US`, and the compiler only protects whoever uses
+    # compares `pt-BR` with `en-GB`, and the compiler only protects whoever uses
     # `api_key::*`. The installer used a literal, and printed
     # `[inst-step-partition]` with nothing complaining.
     #
@@ -1200,7 +1240,7 @@ let
     #
     # The sentence comes from the `.ftl`, so matching the TEXT would tie the check
     # to one language — and the sandbox does not define `LANG`, so it would be
-    # `en-US`. What does not change with the language is the mention of
+    # `en-GB`. What does not change with the language is the mention of
     # `--executar`, which is what the line actually promises.
     echo "$out_text" | grep -q -- '--executar' || {
       echo "ERRO: o ensaio nao diz como executar de verdade" >&2; exit 1; }
@@ -1218,7 +1258,7 @@ let
     pt=$(LANG=pt_BR.UTF-8 ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
     en=$(LANG=en_US.UTF-8 ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
     [ "$pt" = "$en" ] || {
-      echo "ERRO: o plano tem $pt passos em pt-BR e $en em en-US" >&2; exit 1; }
+      echo "ERRO: o plano tem $pt passos em pt-BR e $en em en-GB" >&2; exit 1; }
 
     echo "OK: $pt passos nos dois idiomas, quatro PCRs, ensaio por padrao"
   '';
@@ -1836,10 +1876,12 @@ let
     FORBIDDEN = [
          "aberto", "abrir", "acao", "achada", "achados", "achou", "acoes",
          "afinar", "agente", "agulha", "ajuda", "altura", "alvo", "anotacao",
+         "anunciar", "aplicar",
          "anterior", "antes", "antigo", "argumento", "arquivo", "arquivos",
          "arrastar", "arvore", "atribuicao", "avanco", "baixo", "banda",
          "binario", "bloco", "bruto", "busca", "cadeia", "camada", "caminho",
          "capacidade", "captura", "capturando", "capturar", "carimbo", "caso",
+         "comecar",
          "casou", "catalogo", "categoria", "categorias", "celula", "chave",
          "chaves", "cima", "cliente", "cobertura", "cofre", "colado",
          "colisao", "colocado", "coluna", "colunas", "comandar", "comando",
@@ -2204,51 +2246,85 @@ let
   '';
 
   # Section 9 requires the repository to be publishable AS IT IS. A local-path
-  # input only works for whoever has both repositories side by side, so it must
-  # NOT survive publication. This check does not fail today (the local path is
-  # the correct transient state), but it shouts loudly so that carelessness does
-  # not slip through.
+  # input only works for whoever has both trees side by side, so it must not
+  # survive publication — and since the font files went out as a Release, it no
+  # longer WARNS: it fails.
+  #
+  # The four names are spelled out and the set is compared whole. Scanning for a
+  # `fonts-` prefix alone would mean a renamed input empties the loop and the
+  # check passes having verified nothing — which is exactly how the previous
+  # version of this check spent its whole life (see below).
   fonts-input-publishable = mkCheck "fonts-input-publishable" [ pkgs.python3 ] ''
-    # THE URL COMES FROM `flake.lock`, and not from `inputs.fonts.original.url`.
+    python3 - <<'PY'
+    import json, sys
+
+    # THE URLS COME FROM `flake.lock`, and not from `inputs.<name>.original.url`.
     #
     # That attribute DOES NOT EXIST on a `flake = false` input — the value is the
     # fetched tree, with `outPath` and `narHash` and nothing else. The `or`
     # fallback that used to be here therefore answered for every run, and this
     # check spent its whole life reporting on a URL nobody had written. It landed
-    # in the right branch by luck, and would have gone on warning "local path"
-    # after the input became a Release. A silent fallback needs a check; this one
-    # WAS the silent fallback.
-    url=$(python3 -c "
-    import json, sys
-    o = json.load(open('${self}/flake.lock'))['nodes']['fonts']['original']
-    print(o.get('url') or (o['type'] + ':' + o['path']))
-    ")
-    case "$url" in
-      path:*|/*)
-        echo "AVISO: o input 'fonts' aponta para um caminho local:"
-        echo "         $url"
-        echo ""
-        echo "       Isso funciona no seu disco, mas NAO para quem clonar."
-        echo "       As faces sao 4,1 GB e NAO entram em git (nem LFS): elas sao"
-        echo "       asset de um Release deste mesmo repositorio."
-        echo "       Rode  nix run .#fonts-release -- /caminho/com/noctua-iosevka,"
-        echo "       suba os quatro assets numa tag propria (fonts-v1) e troque o"
-        echo "       input por essa URL, com o hash que o comando imprimiu."
-        ;;
-      https://*|http://*)
-        # The Release asset — the publishable form. It is `fetchurl` pinned by
-        # hash, so it does not depend on a repository still existing under that
-        # name, only on the asset still being served.
-        echo "OK: input 'fonts' e um asset remoto e fixado por hash — $url"
-        ;;
-      github:*|git+*)
-        echo "OK: input 'fonts' e remoto e publicavel — $url"
-        ;;
-      *)
-        echo "ERRO: input 'fonts' com forma inesperada: $url" >&2
-        exit 1
-        ;;
-    esac
+    # in the right branch by luck, and would have gone on saying "local path"
+    # after the inputs became a Release. A silent fallback needs a check; this
+    # one WAS the silent fallback.
+    expected = {
+        "fonts-ttf",
+        "fonts-ttf-nerdfonts",
+        "fonts-woff2",
+        "fonts-woff2-nerdfonts",
+    }
+
+    nodes = json.load(open("${self}/flake.lock"))["nodes"]
+    found = {n for n in nodes if n.startswith("fonts-")}
+    if found != expected:
+        print("ERRO: os inputs de fonte do flake.lock nao sao os esperados.",
+              file=sys.stderr)
+        print("      esperados: " + ", ".join(sorted(expected)), file=sys.stderr)
+        print("      achados:   " + ", ".join(sorted(found)), file=sys.stderr)
+        sys.exit(1)
+
+    failed = False
+    for name in sorted(expected):
+        node = nodes[name]
+        original = node["original"]
+        url = original.get("url") or (original["type"] + ":" + original.get("path", ""))
+
+        # `narHash` is what actually pins this. `fonts-v1` is a mutable pointer
+        # like any git tag: GitHub lets an asset be deleted and re-uploaded under
+        # the same name, and without the hash the build would just take the new
+        # bytes.
+        pinned = node.get("locked", {}).get("narHash")
+
+        if url.startswith("https://") or url.startswith("http://"):
+            if not pinned:
+                print("ERRO: input '" + name + "' e remoto mas NAO esta travado "
+                      "por narHash no flake.lock.", file=sys.stderr)
+                failed = True
+            else:
+                print("OK: input '" + name + "' e um asset remoto e fixado por "
+                      "hash — " + url)
+        elif url.startswith("path:") or url.startswith("/"):
+            print("ERRO: o input '" + name + "' aponta para um caminho local:",
+                  file=sys.stderr)
+            print("        " + url, file=sys.stderr)
+            print("      Isso funciona no seu disco, mas NAO para quem clonar.",
+                  file=sys.stderr)
+            print("      Os arquivos de fonte sao 4,1 GB e NAO entram em git (nem",
+                  file=sys.stderr)
+            print("      LFS): sao asset de um Release deste mesmo repositorio. Rode",
+                  file=sys.stderr)
+            print("      nix run .#fonts-release -- /caminho/com/noctua-iosevka,",
+                  file=sys.stderr)
+            print("      suba os quatro na tag fonts-v1 e aponte o input para la.",
+                  file=sys.stderr)
+            failed = True
+        else:
+            print("ERRO: input '" + name + "' com forma inesperada: " + url,
+                  file=sys.stderr)
+            failed = True
+
+    sys.exit(1 if failed else 0)
+    PY
   '';
 
   # The OFL requires redistributing the license text along with the files.
@@ -2286,7 +2362,8 @@ let
   # goes back to hiding an overdue promise in a code comment.
   docs-exist = mkCheck "docs-exist" [ pkgs.coreutils ] ''
     for f in ${../CLAUDE.md} ${../README.md} \
-             ${../docs/ARCHITECTURE.md} ${../docs/PENDING.md}; do
+             ${../docs/ARCHITECTURE.md} ${../docs/PENDING.md} \
+             ${../docs/INSTALL.md} ${../docs/DEVELOPMENT.md}; do
       test -s "$f" || { echo "ERRO: $f ausente ou vazio" >&2; exit 1; }
     done
 
@@ -2308,7 +2385,49 @@ let
       exit 1
     fi
 
-    echo "OK: os quatro documentos existem; CLAUDE.md dentro do teto"
+    echo "OK: os seis documentos existem; CLAUDE.md dentro do teto"
+  '';
+
+  architecture-sections = mkCheck "architecture-sections" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    doc = pathlib.Path("${self}/docs/ARCHITECTURE.md").read_text()
+
+    # EXACT match, and not "contains": the chapter heading `1. Fontes, glifos e
+    # icones` contains the word `Fontes`, so a substring test would go on
+    # accepting a reference to a `Fontes` section that had been renamed away.
+    # That is this check passing while the defect it exists for is present, and
+    # it happened on the first run.
+    titles = set()
+    for m in re.finditer(r"^#{1,5} (.+)$", doc, re.M):
+        t = m.group(1).strip()
+        titles.add(t)
+        titles.add(re.sub(r"^\d+\.\s*", "", t))  # chapters carry a number
+
+    # `section "X"` in a comment, in any tracked source file.
+    ref = re.compile(r'ARCHITECTURE\.md,\s*(?:section|secao|seção)\s*"([^"]+)"')
+    broken, seen = [], 0
+    for f in pathlib.Path("${self}").rglob("*"):
+        if f.suffix not in {".rs", ".nix", ".py", ".md"} or not f.is_file():
+            continue
+        try:
+            content = f.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for m in ref.finditer(content):
+            seen += 1
+            target = m.group(1)
+            if target not in titles:
+                broken.append(f"{f}: secao \"{target}\" nao existe no ARCHITECTURE.md")
+
+    if broken:
+        print("ERRO: remissao a secao inexistente:", file=sys.stderr)
+        for b in broken:
+            print("  " + b, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {seen} remissoes por nome de secao, todas resolvem")
+    PY
   '';
 in
 {
@@ -2352,6 +2471,7 @@ in
     rust-fmt
     shell-binary
     docs-exist
+    architecture-sections
     english-names
     xdg-user-dirs
     browser-has-no-keyring
@@ -2369,7 +2489,12 @@ in
   leader-vm = leaderVm;
   apps-vm = appsVm;
   inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
-  inherit group-mark-outside-translation niri-actions-translated keyboard-layout-exists;
+  inherit
+    group-mark-outside-translation
+    niri-actions-translated
+    keyboard-layout-exists
+    locale-exists
+    ;
   inherit
     niri-config-valid
     fontconfig-nested-finds-font
@@ -2529,7 +2654,7 @@ in
   # check below has to be written — never against what has already been built:
   #
   #   Tokens generated from Nix; the `text-key` sweep fails if a key is
-  #   missing in `pt-BR` or `en-US`; notifications queued **one at a time**; a
+  #   missing in `pt-BR` or `en-GB`; notifications queued **one at a time**; a
   #   critical one does not disappear on its own; a filterable tray; the
   #   3-stage icon chain exercised on all 3; the history opens **below the
   #   minibuffer**, with no second surface.
@@ -2542,6 +2667,7 @@ in
     group-mark-outside-translation
     niri-actions-translated
     keyboard-layout-exists
+    locale-exists
     niri-config-valid
     fontconfig-nested-finds-font
     # A queue one at a time, a critical one that does not disappear, the history
@@ -2689,6 +2815,7 @@ in
     shell-binary
     iso-fits-usb-stick
     docs-exist
+    architecture-sections
     ;
 
   # Nix formatting.

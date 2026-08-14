@@ -161,22 +161,27 @@ let
 
         binds {
             // ONE HAND-WRITTEN BIND — see the comment in nix/modules/niri.nix.
-            // `Alt`, not `Mod`: in the nested loop `Mod` belongs to the host's
-            // compositor.
+            //
+            // NOT `Mod`: in the nested loop `Mod` belongs to the host's
+            // compositor, which sees every key first. And not plain `Alt+Space`
+            // either — that is the window menu in most desktops, so the host
+            // would swallow it before niri ever saw it. `Ctrl+Alt+` is the
+            // family the emergency binds already use.
             //
             // `Alt+Shift+E` is gone: leaving the session is `LEADER q q`, like
             // everything else. An emergency shortcut that exists only in the
             // nested loop would be a third table to remember.
             //
-            // `repeat=false`: without it, HOLDING Alt+Space re-fires the bind at
+            // `repeat=false`: without it, HOLDING the key re-fires the bind at
             // the keyboard's repeat rate, and every fire reopens the sequence.
             // That is what made the list "keep showing up" with the key held.
             // What cannot be fixed here is the list appearing on the FIRST
-            // fire: niri fires on key DOWN, and pressing Space with Alt held IS
-            // the trigger. What tells a tap from a hold in production is keyd,
-            // and it does not exist on the host — see docs/ARCHITECTURE.md. In
-            // the nested loop, the chord is `Alt` ON ITS OWN.
-            Alt+Space repeat=false { spawn "${ronoctua-shell}/bin/ronoctua-shell" "leader"; }
+            // fire: niri fires on key DOWN, and pressing Space with the
+            // modifiers held IS the trigger. What tells a tap from a hold in
+            // production is keyd, and it does not exist on the host — see
+            // docs/ARCHITECTURE.md. In the nested loop, the chord for the
+            // direction keys stays `Alt` ON ITS OWN.
+            Ctrl+Alt+Space repeat=false { spawn "${ronoctua-shell}/bin/ronoctua-shell" "leader"; }
     @CHORDS@
         }
   '';
@@ -231,16 +236,17 @@ let
       export XDG_ICON_THEME=noctua
 
       # THE LEADER'S LABEL comes from the SAME place as the bind, just above: in the
-      # nested loop the key is `Alt+Space`, because `Mod` belongs to the host's
+      # nested loop the key is `Ctrl+Alt+Space`, because `Mod` belongs to the host's
       # compositor. The screen said `SPC` in both modes, and `SPC` is nobody's key
       # here.
-      export RONOCTUA_LEADER="ALT SPC"
+      export RONOCTUA_LEADER="CTRL ALT SPC"
       # AND THE CHORD'S LABEL, which in the nested loop is NOT the same.
       #
-      # The sequence starts with `Alt+Space`; the chord is `Alt` alone, held.
-      # While the screen called both of them "the leader", holding "the leader" looked
-      # like it included Space — and including Space fires the sequence. In production
-      # both are `SUPER` and the distinction disappears; here it has to show.
+      # The sequence is `Ctrl+Alt+Space`; the chord is `Alt` alone, held — it is the
+      # nested niri's `Mod`, and changing the sequence did not change it. While the
+      # screen called both of them "the leader", holding "the leader" looked like it
+      # included Space — and including Space fires the sequence. In production both
+      # are `SUPER` and the distinction disappears; here it has to show.
       export RONOCTUA_LEADER_CHORD="ALT"
 
       # Useful logging by default; `RUST_LOG` from the environment wins.
@@ -251,11 +257,11 @@ let
       # And the compositor gets its own, explicitly, so the log stays useful.
       export RUST_LOG=niri=info
 
-      echo "  Alt+Space      leader (toque: abre a lista)"
-      echo "  Alt+<tecla>    acorde (SEGURADO: o Alt sozinho, sem o Espaco)"
-      echo "  Ctrl+Alt+L     leader alternativa, se a de cima falhar"
-      echo "  Ctrl+Shift+L   restaura o teclado"
-      echo "  Alt+Space q q  sair"
+      echo "  Ctrl+Alt+Space      leader (toque: abre a lista)"
+      echo "  Alt+<tecla>         acorde (SEGURADO: o Alt sozinho, sem o Espaco)"
+      echo "  Ctrl+Alt+L          leader alternativa, se a de cima falhar"
+      echo "  Ctrl+Shift+L        restaura o teclado"
+      echo "  Ctrl+Alt+Space q q  sair"
       echo
       echo "config: $cfg"
       echo

@@ -42,6 +42,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 use ronoctua_i18n::{Texts, key};
 use ronoctua_tokens::{Color, color};
 
+use crate::model;
 use crate::model::{Answers, Question, validate_it};
 use crate::plan::{Step, steps};
 
@@ -186,7 +187,7 @@ impl State {
     /// It starts on the first question.
     #[must_use]
     pub fn fresh(disks: Vec<Disk>, networks: Vec<String>) -> Self {
-        Self {
+        let mut e = Self {
             screen: Screen::Asking(0),
             networks,
             answers: Answers::default(),
@@ -194,10 +195,15 @@ impl State {
             error: None,
             confirmation: String::new(),
             disks,
+            // The FIRST screen is the language, and it opens on the default like
+            // every other list. `State::fresh` cannot call `default_choice`
+            // before the struct exists, so it is set right after.
             choice: 0,
             output: Vec::new(),
             step: None,
-        }
+        };
+        e.choice = e.default_choice();
+        e
     }
 
     /// The current screen's question.
@@ -212,10 +218,53 @@ impl State {
     /// Whether the current question is answered by choosing from a list.
     #[must_use]
     pub fn is_list(&self) -> bool {
+        // A LIST WITH NO OPTIONS IS NOT A LIST, it is a screen with no way out.
+        //
+        // The lists come from files that can be absent — a `base.lst` the build
+        // did not point at, a `SUPPORTED` from a glibc that moved. With no
+        // options the chosen value is the empty string, validation refuses it,
+        // the screen never advances, and the person is trapped on a field that
+        // shows nothing and accepts nothing.
+        //
+        // Falling back to a typed field keeps the way out: validation still
+        // refuses a layout that does not exist, and the error at least names
+        // what is wrong. This is the one place where degrading to the older,
+        // worse interaction is right, because the alternative is no interaction.
+        if self.list_is_empty() {
+            return false;
+        }
         matches!(
             self.question_of(),
-            Some(Question::Disk | Question::Language | Question::Wifi)
+            Some(
+                Question::Disk
+                    | Question::Language
+                    | Question::Wifi
+                    | Question::Keyboard
+                    | Question::KeyboardVariant
+                    | Question::ComposeKey
+                    | Question::SystemLocale
+                    | Question::Timezone
+            )
         )
+    }
+
+    /// Whether the question WOULD be a list, but has nothing to offer.
+    ///
+    /// Split from `is_list` so the two do not call each other: `options` asks
+    /// the question directly, never through `is_list`.
+    #[must_use]
+    fn list_is_empty(&self) -> bool {
+        matches!(
+            self.question_of(),
+            Some(
+                Question::Disk
+                    | Question::Keyboard
+                    | Question::KeyboardVariant
+                    | Question::ComposeKey
+                    | Question::SystemLocale
+                    | Question::Timezone
+            )
+        ) && self.options().is_empty()
     }
 
     /// The current question's list options.
@@ -235,7 +284,78 @@ impl State {
             Some(Question::Wifi) => std::iter::once(String::new())
                 .chain(self.networks.iter().cloned())
                 .collect(),
+            // THE KEYBOARD TRIO reads the same file the validation reads, so a
+            // list can never offer what the next screen refuses.
+            Some(Question::Keyboard) => model::available_layouts()
+                .iter()
+                .map(model::Choice::line)
+                .collect(),
+            // Filtered by the layout ALREADY ANSWERED — which is why the layout
+            // comes first of the three.
+            Some(Question::KeyboardVariant) => model::variants_of(&self.answers.keyboard)
+                .iter()
+                .map(model::Choice::line)
+                .collect(),
+            Some(Question::ComposeKey) => model::compose_options()
+                .iter()
+                .map(model::Choice::line)
+                .collect(),
+            Some(Question::SystemLocale) => model::available_locales(),
+            Some(Question::Timezone) => model::available_timezones(),
             _ => Vec::new(),
+        }
+    }
+
+    /// WHICH OPTION IS ALREADY SELECTED when a list opens.
+    ///
+    /// Every list opens on an answer that works, and it is the one someone
+    /// pressing Enter through the whole install would get. That is the point: a
+    /// list whose cursor starts at index 0 by accident teaches nothing, and the
+    /// first entry of an alphabetical list of three hundred timezones is
+    /// `Africa/Abidjan` — a default nobody chose and everybody has to correct.
+    ///
+    /// It looks the value up by NAME instead of hard-coding an index, because
+    /// the lists come from files that move: a new layout in `xkeyboard-config`
+    /// shifts every index after it, and a hard-coded number would quietly point
+    /// at the neighbour.
+    #[must_use]
+    fn default_choice(&self) -> usize {
+        let at = |list: Vec<String>, wanted: &str| {
+            list.iter().position(|o| o == wanted).unwrap_or_default()
+        };
+        match self.question_of() {
+            Some(Question::Language) => at(
+                ronoctua_i18n::LANGUAGES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+                model::DEFAULT_LANGUAGE,
+            ),
+            Some(Question::Keyboard) => at(
+                model::available_layouts()
+                    .iter()
+                    .map(model::Choice::line)
+                    .collect(),
+                &model::available_layouts()
+                    .iter()
+                    .find(|c| c.name == model::DEFAULT_LAYOUT)
+                    .map(model::Choice::line)
+                    .unwrap_or_default(),
+            ),
+            Some(Question::ComposeKey) => at(
+                model::compose_options()
+                    .iter()
+                    .map(model::Choice::line)
+                    .collect(),
+                &model::compose_options()
+                    .iter()
+                    .find(|c| c.name == model::DEFAULT_COMPOSE)
+                    .map(model::Choice::line)
+                    .unwrap_or_default(),
+            ),
+            // The rest already have the right answer first: no variant, the
+            // British locale, London, no Wi-Fi, and the machine's own disk.
+            _ => 0,
         }
     }
 
@@ -255,6 +375,30 @@ impl State {
             // Index 0 is "no Wi-Fi", and returns an empty string — which is
             // exactly what `Question::optional` accepts and what makes the
             // password screen be skipped.
+            // The list SHOWS `br — Portuguese (Brazil)` and the config wants `br`.
+            // The name comes from the same structure that built the line, never
+            // from splitting the string back apart — a description with an em
+            // dash in it would take the parser with it.
+            Some(Question::Keyboard) => model::available_layouts()
+                .get(self.choice)
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
+            Some(Question::KeyboardVariant) => model::variants_of(&self.answers.keyboard)
+                .get(self.choice)
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
+            Some(Question::ComposeKey) => model::compose_options()
+                .get(self.choice)
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
+            Some(Question::SystemLocale) => model::available_locales()
+                .get(self.choice)
+                .cloned()
+                .unwrap_or_default(),
+            Some(Question::Timezone) => model::available_timezones()
+                .get(self.choice)
+                .cloned()
+                .unwrap_or_default(),
             Some(Question::Wifi) => self
                 .choice
                 .checked_sub(1)
@@ -274,8 +418,10 @@ impl State {
             if !q.computed() && !q.skipped_one(&self.answers) {
                 self.screen = Screen::Asking(i);
                 self.typing.clear();
-                self.choice = 0;
                 self.error = None;
+                // AFTER setting the screen: `default_choice` asks which question
+                // is showing, and the answer is the one just set.
+                self.choice = self.default_choice();
                 return;
             }
             i += 1;
@@ -303,6 +449,16 @@ impl State {
             self.screen = Screen::Asking(i);
             self.typing = self.answers.get(*q).to_owned();
             self.error = None;
+            // GOING BACK lands on what was ANSWERED, not on the default: whoever
+            // presses Esc wants to see what they chose, and finding the cursor
+            // moved would read as the answer having been thrown away.
+            self.choice = self
+                .options()
+                .iter()
+                .position(|o| {
+                    o.starts_with(self.answers.get(*q)) && !self.answers.get(*q).is_empty()
+                })
+                .unwrap_or_else(|| self.default_choice());
             return;
         }
     }
@@ -318,7 +474,7 @@ impl State {
         // A hand-written list would go stale, and the failure would be a layout
         // that exists in the system and that the installer refuses. Reading the
         // real file means the two can never disagree.
-        let layouts = crate::model::available_layouts();
+        let layouts = crate::model::layout_names();
         let layouts: Vec<&str> = layouts.iter().map(String::as_str).collect();
         match self.screen {
             Screen::Asking(n) => {
@@ -594,14 +750,34 @@ impl Drop for Guard {
 /// # Errors
 ///
 /// The terminal did not accept raw mode, or reading a key failed.
-pub fn collect(texts: &Texts) -> Result<Option<Answers>> {
+pub fn collect(initial: &Texts) -> Result<Option<Answers>> {
     enable_raw_mode().context("raw mode")?;
     let mut output = std::io::stdout();
     crossterm::execute!(output, EnterAlternateScreen).context("tela alternativa")?;
     let mut g = Guard(Terminal::new(CrosstermBackend::new(output)).context("terminal")?);
 
     let mut e = State::fresh(disks(), networks());
+    // THE TEXTS FOLLOW THE ANSWER, and that is the whole point of asking the
+    // language first.
+    //
+    // They start as whatever the environment gave — the ISO's language, which is
+    // a guess — and are reloaded the moment the first answer exists. Without
+    // this the reordering would be theatre: the questions would go on appearing
+    // in the language nobody chose.
+    //
+    // A language that fails to load keeps the previous texts rather than
+    // panicking: a half-drawn installer is worse than one in the wrong language,
+    // and `validate_it` has already refused anything that is not in the list.
+    let mut chosen: Option<Texts> = None;
+    let mut showing = String::new();
     loop {
+        if e.answers.language != showing && !e.answers.language.is_empty() {
+            if let Some(t) = Texts::fresh(&e.answers.language) {
+                chosen = Some(t);
+            }
+            showing = e.answers.language.clone();
+        }
+        let texts = chosen.as_ref().unwrap_or(initial);
         g.0.draw(|f| draw(f, &e, texts)).context("desenhar")?;
         if !event::poll(Duration::from_millis(100)).context("poll")? {
             continue;
@@ -684,18 +860,33 @@ mod tests {
         let mut e = with_disks();
         let t = texts();
         let mut views = Vec::new();
+        // BOUNDED, and the bound is the point: a screen that refuses the answer
+        // never advances, `question_of` keeps returning the same question, and
+        // an unbounded loop here spins at full CPU instead of failing. It did,
+        // for over an hour, when an empty list made every answer invalid.
+        let limit = Question::ALL_KEYS.len() * 4;
         while let Some(q) = e.question_of() {
+            assert!(views.len() < limit, "a tela {q:?} nao avanca: {views:?}");
             views.push(q);
             match q {
-                Question::Disk | Question::Language => {
+                // Every list question: `Enter` takes the option under the
+                // cursor, and the first is always a valid answer.
+                Question::Disk
+                | Question::Language
+                | Question::KeyboardVariant
+                | Question::ComposeKey
+                | Question::SystemLocale
+                | Question::Timezone => {
                     e.key(KeyCode::Enter, &t);
                 }
-                // The layout: typed, because the default of the list is not
-                // necessarily the one this machine wants.
+                // THE LAYOUT MOVES OFF THE DEFAULT ON PURPOSE.
+                //
+                // Everything else in this walk takes the pre-selected answer,
+                // which proves the defaults work and proves nothing about the
+                // list. One question has to move, or a list that ignored the
+                // cursor entirely would pass here.
                 Question::Keyboard => {
-                    for c in "br".chars() {
-                        e.key(KeyCode::Char(c), &t);
-                    }
+                    e.key(KeyCode::Down, &t);
                     e.key(KeyCode::Enter, &t);
                 }
                 Question::Hostname => {
@@ -721,10 +912,10 @@ mod tests {
             }
         }
         assert_eq!(e.screen, Screen::Reviewing);
-        // SEVEN screens for whoever goes by cable: the six that existed plus the
-        // keyboard. The offset and the Wi-Fi password are not asked here — the
-        // asserts below are what hold that.
-        assert_eq!(views.len(), 7, "a TUI mostrou {views:?}");
+        // ELEVEN screens for whoever goes by cable: the thirteen questions minus
+        // the offset, which is computed, and the Wi-Fi password, which is skipped
+        // with no network. The asserts below are what hold those two.
+        assert_eq!(views.len(), 11, "a TUI mostrou {views:?}");
         assert!(!views.contains(&Question::ResumeOffset));
         assert!(
             !views.contains(&Question::WifiPassword),
@@ -733,9 +924,19 @@ mod tests {
         assert_eq!(e.answers.disk, "/dev/nvme0n1");
         assert_eq!(e.answers.hostname, "noctua-teste");
         assert_eq!(e.answers.language, ronoctua_i18n::LANGUAGES[0]);
-        // The typed layout reached the answers. Without this the question could
-        // be walked past and the machine would still come up on the default.
-        assert_eq!(e.answers.keyboard, "br");
+        // The CHOSEN layout reached the answers, and it is not the default:
+        // without this the question could be walked past and the machine would
+        // come up on whatever the list happened to have first.
+        // Not an index: the cursor starts on the DEFAULT, so `Down` lands on
+        // whatever follows it in a file whose order is not ours to promise.
+        // What has to hold is that a real layout arrived and that it is not the
+        // one that would have arrived by doing nothing.
+        assert_ne!(e.answers.keyboard, crate::model::DEFAULT_LAYOUT);
+        assert!(
+            crate::model::layout_names().contains(&e.answers.keyboard),
+            "a lista entregou `{}`, que nao e um layout",
+            e.answers.keyboard
+        );
         assert!(e.answers.wifi_ssid.is_empty(), "escolheu rede sem querer");
     }
 
@@ -747,10 +948,23 @@ mod tests {
         let mut e = with_disks();
         let t = texts();
         let mut views = Vec::new();
+        // BOUNDED, and the bound is the point: a screen that refuses the answer
+        // never advances, `question_of` keeps returning the same question, and
+        // an unbounded loop here spins at full CPU instead of failing. It did,
+        // for over an hour, when an empty list made every answer invalid.
+        let limit = Question::ALL_KEYS.len() * 4;
         while let Some(q) = e.question_of() {
+            assert!(views.len() < limit, "a tela {q:?} nao avanca: {views:?}");
             views.push(q);
             match q {
-                Question::Disk | Question::Language => {
+                // Every list question: `Enter` takes the option under the
+                // cursor, and the first is always a valid answer.
+                Question::Disk
+                | Question::Language
+                | Question::KeyboardVariant
+                | Question::ComposeKey
+                | Question::SystemLocale
+                | Question::Timezone => {
                     e.key(KeyCode::Enter, &t);
                 }
                 // The layout: typed, because the default of the list is not
@@ -788,17 +1002,36 @@ mod tests {
         assert_eq!(e.answers.wifi_password, "Zq7-frase-de-teste");
     }
 
+    /// Walks to `wanted`, taking the pre-selected answer on every list before it.
+    ///
+    /// The tests used to count screens (`Asking(1)` was the hostname). With
+    /// thirteen questions and lists in the middle, a number is a promise about
+    /// the ORDER that breaks the moment a question moves — and it breaks as an
+    /// unrelated test failing, which is the expensive kind. This walks by NAME.
+    fn walk_to(e: &mut State, t: &Texts, wanted: Question) {
+        for _ in 0..Question::ALL_KEYS.len() * 2 {
+            match e.question_of() {
+                Some(q) if q == wanted => return,
+                Some(_) => {
+                    e.key(KeyCode::Enter, t);
+                }
+                None => break,
+            }
+        }
+        panic!("nao cheguei em {wanted:?}");
+    }
+
     #[test]
     fn an_invalid_answer_does_not_advance() {
         let mut e = with_disks();
         let t = texts();
-        e.key(KeyCode::Enter, &t); // disk
-        assert_eq!(e.screen, Screen::Asking(1));
+        walk_to(&mut e, &t, Question::Hostname);
+        let stayed = e.screen.clone();
         for c in "semprefixo".chars() {
             e.key(KeyCode::Char(c), &t);
         }
         e.key(KeyCode::Enter, &t);
-        assert_eq!(e.screen, Screen::Asking(1), "avancou com hostname invalido");
+        assert_eq!(e.screen, stayed, "avancou com hostname invalido");
         assert!(e.error.is_some(), "e nem disse por que");
     }
 
@@ -808,14 +1041,15 @@ mod tests {
         // person would stop checking for fear of retyping everything.
         let mut e = with_disks();
         let t = texts();
-        e.key(KeyCode::Enter, &t);
+        walk_to(&mut e, &t, Question::Hostname);
+        let hostname = e.screen.clone();
         for c in "noctua-teste".chars() {
             e.key(KeyCode::Char(c), &t);
         }
         e.key(KeyCode::Enter, &t);
-        assert_eq!(e.screen, Screen::Asking(2));
+        assert_ne!(e.screen, hostname, "nao avancou com hostname valido");
         e.key(KeyCode::Esc, &t);
-        assert_eq!(e.screen, Screen::Asking(1));
+        assert_eq!(e.screen, hostname);
         assert_eq!(e.typing, "noctua-teste");
     }
 
@@ -921,8 +1155,11 @@ mod tests {
         // empty disk and `disko` would fail much later, with a message
         // that does not point back here.
         let mut e = State::fresh(Vec::new(), Vec::new());
-        e.key(KeyCode::Enter, &texts());
-        assert_eq!(e.screen, Screen::Asking(0));
+        let t = texts();
+        walk_to(&mut e, &t, Question::Disk);
+        let disk = e.screen.clone();
+        e.key(KeyCode::Enter, &t);
+        assert_eq!(e.screen, disk, "avancou sem disco escolhido");
         assert!(e.error.is_some());
     }
 }

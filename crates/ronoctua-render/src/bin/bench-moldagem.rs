@@ -71,7 +71,7 @@ fn our_system() -> FontSystem {
     db.set_monospace_family(tokens::font::FAMILY_MONO);
     db.set_sans_serif_family(tokens::font::FAMILY_UI);
     db.set_serif_family(tokens::font::FAMILY_UI);
-    FontSystem::new_with_locale_and_db("en-US".to_owned(), db)
+    FontSystem::new_with_locale_and_db("en-GB".to_owned(), db)
 }
 
 /// Shapes the spans once, in a NEW `FontSystem`.

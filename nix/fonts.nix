@@ -9,7 +9,10 @@
   python3,
   symlinkJoin,
   writeText,
-  fontSrc,
+  zstd,
+  # Folder name → the `.tar.zst` that carries it, one per Release asset. Each
+  # tarball holds a single top-level directory with that same name.
+  fontAssets,
   # The SIL Open Font License, redistributed alongside every face. The faces are
   # a derivative of Iosevka (OFL, Reserved Font Name) — this repository's own
   # code is MIT, and the two boundaries have to stay legible.
@@ -63,6 +66,21 @@ let
     };
   };
 
+  # One asset per variant, and no spare. An asset without a variant would be
+  # downloaded and never fixed; a variant without an asset would send
+  # `fix-font-names.py` at a directory that does not exist, and the message it
+  # prints then talks about faces, not about a missing download.
+  assets =
+    let
+      wanted = lib.attrNames variants;
+      given = lib.attrNames fontAssets;
+    in
+    lib.throwIf (wanted != given) ''
+      nix/fonts.nix: `fontAssets` e `variants` divergem.
+        variants:   ${lib.concatStringsSep ", " wanted}
+        fontAssets: ${lib.concatStringsSep ", " given}
+    '' fontAssets;
+
   # The four normal-width RIBBI faces — the subset that goes on the ISO,
   # in the initrd and in the installer (~62 MB against 2.1 GB).
   coreFaces = [
@@ -91,37 +109,47 @@ let
     pname = "noctua-iosevka-corrected";
     version = "34.7.0+nf3.4.0";
 
-    src = fontSrc;
+    # THE FOUR ASSETS ARE UNPACKED STRAIGHT INTO THE TREE WE FIX.
+    #
+    # Not into a source derivation that this one would then copy: the faces are
+    # 4.1 GB uncompressed, and an intermediate tree would mean carrying that
+    # twice in the store to change nothing. Each tarball already holds one
+    # top-level directory named after the folder, so extracting all four side by
+    # side reassembles `noctua-iosevka/` exactly as the fonts repository had it.
+    srcs = lib.attrValues assets;
 
-    nativeBuildInputs = [ py ];
+    nativeBuildInputs = [
+      py
+      zstd
+    ];
 
     dontConfigure = true;
+
+    # No `sourceRoot`: the `cd` into it lives inside stdenv's DEFAULT
+    # `unpackPhase`, which this one replaces. The build stays in its own
+    # directory, which is where `noctua-iosevka/` was just created.
+    unpackPhase = ''
+      runHook preUnpack
+      mkdir -p noctua-iosevka
+      ${lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (dir: asset: ''
+          echo "--- extraindo ${dir} ---"
+          tar --zstd -xf ${asset} -C noctua-iosevka
+          test -d "noctua-iosevka/${dir}" || {
+            echo "ERRO: ${builtins.baseNameOf asset} nao trouxe o diretorio '${dir}'." >&2
+            echo "      O asset do Release mudou de forma; refaca-o com" >&2
+            echo "      nix run .#fonts-release e atualize o flake.lock." >&2
+            exit 1
+          }
+        '') assets
+      )}
+      runHook postUnpack
+    '';
 
     buildPhase = ''
       runHook preBuild
 
-      # --- guard: unresolved git-lfs pointers ---------------------------
-      # The fonts live in git-lfs. If the clone did not run `git lfs pull`, or
-      # if the flake was fetched straight from GitHub, the files here are
-      # ~130-byte pointers and not fonts. Without this guard the error
-      # would show up much later as "corrupt font", which is expensive to
-      # diagnose.
-      for f in noctua-iosevka/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf \
-               noctua-iosevka/TTF/NoctuaIosevka-Regular.ttf; do
-        if head -c 60 "$f" | grep -q 'git-lfs.github.com/spec'; then
-          echo "ERRO: $f e um ponteiro git-lfs, nao uma fonte." >&2
-          echo "" >&2
-          echo "  As fontes da ronoctua-distro vivem em git-lfs (4,1 GB)." >&2
-          echo "  Resolva com:  git lfs install && git lfs pull" >&2
-          echo "" >&2
-          echo "  Se voce chegou aqui via 'nix build github:...', nao vai" >&2
-          echo "  funcionar: o fetcher de flake nao resolve LFS. Clone o" >&2
-          echo "  repositorio e construa a partir do clone local." >&2
-          exit 1
-        fi
-      done
-
-      # We fix them IN PLACE, in the copy unpackPhase has already made. An extra
+      # We fix them IN PLACE, in the tree unpackPhase just extracted. An extra
       # `cp -r` here would cost another 4.1 GB inside the build directory.
       chmod -R u+w noctua-iosevka
       mkdir -p reports
@@ -148,12 +176,12 @@ let
       # copy without breaking.
       cp -r --reflink=auto noctua-iosevka/* $out/
       cp -r reports $out/reports
-      # The OFL text comes from THIS repository, not from `fontSrc`.
+      # The OFL text comes from THIS repository, not from the assets.
       #
-      # `fontSrc` is 4.1 GB of build output, and once it becomes a Release
-      # tarball it carries faces and nothing else. A licence that has to travel
-      # with the fonts cannot live inside the artefact it licenses — it lives in
-      # git, where it is versioned and where `fonts-license` can see it.
+      # The assets are 4.1 GB of build output: they carry faces and nothing
+      # else. A licence that has to travel with the fonts cannot live inside the
+      # artefact it licenses — it lives in git, where it is versioned and where
+      # `fonts-license` can see it.
       cp ${oflText} $out/LICENSE-OFL.txt
       runHook postInstall
     '';

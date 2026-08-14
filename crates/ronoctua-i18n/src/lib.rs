@@ -8,7 +8,7 @@
 //!
 //! Two guards, neither of them a test:
 //!
-//! 1. **Build.** `nix/scripts/gen-i18n.py` requires `pt-BR` and `en-US` to have
+//! 1. **Build.** `nix/scripts/gen-i18n.py` requires `pt-BR` and `en-GB` to have
 //!    exactly the same set of keys, and none of them empty. A missing translation
 //!    takes the build down before any test runs.
 //! 2. **Compilation.** The same generator emits one constant per key in
@@ -33,10 +33,10 @@ include!(concat!(env!("OUT_DIR"), "/keys.rs"));
 
 /// Default language when the environment says nothing useful.
 ///
-/// `en-US` and not `pt-BR`: a system that fell back probably is not
+/// `en-GB` and not `pt-BR`: a system that fell back probably is not
 /// on a Brazilian machine, and English is the least surprising choice. The
 /// distro owner's preference comes in through `LANG`, as with everything else.
-pub const DEFAULT: &str = "en-US";
+pub const DEFAULT: &str = "en-GB";
 
 /// One language's texts.
 pub struct Texts {
@@ -59,9 +59,9 @@ impl std::fmt::Debug for Texts {
 /// useless. Same reason as the face embedded in the renderer.
 fn face(language: &str) -> Option<&'static str> {
     match language {
-        "en-US" => Some(include_str!(concat!(
+        "en-GB" => Some(include_str!(concat!(
             env!("RONOCTUA_I18N_DIR"),
-            "/en-US.ftl"
+            "/en-GB.ftl"
         ))),
         "pt-BR" => Some(include_str!(concat!(
             env!("RONOCTUA_I18N_DIR"),
@@ -72,7 +72,7 @@ fn face(language: &str) -> Option<&'static str> {
 }
 
 impl Texts {
-    /// Loads a language by name (`pt-BR`, `en-US`).
+    /// Loads a language by name (`pt-BR`, `en-GB`).
     ///
     /// Returns `None` for a language that does not exist — the caller decides whether to fall back
     /// to the default or complain. [`Texts::from_env`] falls back to the default.
@@ -159,7 +159,7 @@ impl Texts {
         // (U+2068/U+2069) for mixed RTL/LTR text. Invisible in a terminal,
         // but it counts as a column in our integer layout and throws the
         // line out of alignment. Since there is no RTL language here (section 2 fixes pt-BR
-        // and en-US), we strip them.
+        // and en-GB), we strip them.
         s.replace(['\u{2068}', '\u{2069}'], "")
     }
 }
@@ -190,7 +190,7 @@ mod tests {
     fn both_languages_say_different_things() {
         // It catches the mistake of copying one language's file over the other,
         // which passes every set check.
-        let en = Texts::fresh("en-US").unwrap();
+        let en = Texts::fresh("en-GB").unwrap();
         let pt = Texts::fresh("pt-BR").unwrap();
         let diferentes = ALL_KEYS.iter().filter(|c| en.t(c) != pt.t(c)).count();
         assert!(
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn an_unknown_key_does_not_bring_it_down() {
-        let t = Texts::fresh("en-US").unwrap();
+        let t = Texts::fresh("en-GB").unwrap();
         assert_eq!(t.t("nao-existe"), "[nao-existe]");
     }
 
