@@ -19,32 +19,51 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
-### 1. Terminal: o motor principal não existe, e a causa é a API · grande · BLOQUEADO no upstream
+### 1. Terminal: o motor principal não existe · grande · decidir antes
 
 **Os papéis estão invertidos.** O motor previsto é a `libghostty-vt`, com o `alacritty_terminal` como
-segunda implementação mantida para o teste diferencial. Existe só o alacritty.
+segunda implementação mantida para o teste diferencial. Existe só o alacritty, e enquanto for assim o
+diferencial degrada para golden-file: pega regressão nossa, não divergência entre implementações.
 
-**A causa foi medida, e não é a que estava anotada aqui.** Não falta a FOD com o cache Zig — o
-upstream tem o alvo `zig build lib-vt` e instala onze headers. Falta a **API**: os grupos que o
-`vt.h` do v1.3.1 declara são `allocator`, `key`, `osc`, `paste`, `sgr` e `wasm` — parsers e
-codificadores de entrada. Não há `screen.h`, `terminal.h` nem `grid.h`.
+## O bloqueio anterior CAIU, e isto foi medido
 
-O trait `Engine` exige `fn grid(&self) -> Grid`. O estado da tela existe em Zig, dentro da
-biblioteca, e **não atravessa a fronteira C**. A prosa do header promete "screen, scrollback" e logo
-acima avisa: *"This is an incomplete, work-in-progress API."*
+Este item dizia que a tela não atravessa a fronteira C. Era verdade na tag pinada e deixou de ser:
 
-O pacote `ghostty` do nixpkgs também não serve: os outputs são `out`, `man`, `shell_integration`,
-`terminfo` e `vim` — nenhum `dev`, nenhuma lib.
+| ref | headers em `include/ghostty/vt` | `screen.h` |
+|---|---|---|
+| `v1.3.1` (última tag) | 9 | ausente |
+| `main` | 31 | presente |
 
-Construir a FOD e escrever o FFI para descobrir isso no fim seria trabalho perdido, e deixaria um
-`Engine` que compila e devolve grade vazia.
+E a API cobre o trait inteiro — conferido função a função, não por analogia:
 
-O que se perde enquanto durar: o diferencial degrada a golden-file — pega regressão nossa, não
-divergência entre implementações. É o risco R1, e ele segue permanente.
+| `Engine` exige | quem atende |
+|---|---|
+| `feed(&[u8])` | `ghostty_terminal_vt_write` |
+| `grid()` | `ghostty_terminal_grid_ref` → `ghostty_grid_ref_row` / `_cell` → `ghostty_cell_get` |
+| `resize(cols, lines)` | `ghostty_terminal_resize` |
+| ciclo de vida | `ghostty_terminal_new` / `ghostty_terminal_free` |
 
-- onde: `crates/ronoctua-term/`; o trait `Engine` em `src/lib.rs:185` é o que torna isso reversível
-- acabou quando: o upstream expõe a tela em C **e** o check `term-differential` compara dois motores
-  com diff de grade zero
+## O que resta é uma DECISÃO, e ela não é técnica
+
+Nada disso está numa tag. Pinar `main` contraria a regra que o `CLAUDE.md` escreve para o niri —
+*pinar tag, nunca `main`* — e a razão vale mais aqui: o próprio header avisa **"incomplete,
+work-in-progress API"**. Um `nix flake update` traz assinatura diferente sem aviso.
+
+- **Esperar a v1.4**: nada a fazer, e o diferencial segue degradado.
+- **Pinar um COMMIT** (não `main`): destrava agora, ao custo de acompanhar upstream instável.
+
+## Se for implementar, o caminho
+
+1. Input novo com o commit fixado, e a FOD do cache de pacotes Zig — é a única parte que não dá para
+   tornar hermética de outro jeito, e é a dependência de rede que este item sempre anotou.
+2. FFI em `crates/ronoctua-term/`, atrás do trait `Engine` (`src/lib.rs:185`), que é o que torna a
+   coisa reversível: o alacritty continua onde está.
+3. O `term-differential` passa a comparar **dois** motores.
+
+**O modo de falha ruim tem nome:** um `Engine` que compila e devolve grade vazia. Se a API não bastar
+para montar a `Grid` canônica, **pare e reporte** em vez de deixar isso na árvore.
+
+- acabou quando: o `term-differential` compara dois motores com diferença de grade zero
 
 ### 2. `ronoctua-design` não existe · decidir antes
 
