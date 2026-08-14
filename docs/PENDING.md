@@ -74,11 +74,38 @@ Quatro coisas custaram um build cada, e nenhuma está escrita em lugar nenhum:
   `lib-vt` do `build.zig` é o `test-lib-vt`. Quem recorta o build é
   `-Demit-lib-vt=true`, opção que o upstream escreveu para este uso.
 
+## As assinaturas, lidas na biblioteca construída
+
+Não há mais incógnita. O ciclo inteiro foi conferido nos headers que a derivação
+instala, e não numa leitura do repositório:
+
+```c
+ghostty_terminal_new(const GhosttyAllocator*, GhosttyTerminal*, uint16_t cols, uint16_t rows)
+ghostty_terminal_vt_write(GhosttyTerminal, const uint8_t* data, size_t len)
+ghostty_terminal_resize(GhosttyTerminal, uint16_t cols, uint16_t rows, uint32_t cw_px, uint32_t ch_px)
+ghostty_terminal_free(GhosttyTerminal)
+```
+
+E ler um caractere numa posição — que era a última dúvida — são três chamadas:
+
+```c
+ghostty_terminal_grid_ref(term, (GhosttyPoint){ACTIVE, x, y}, &ref)
+  → ghostty_grid_ref_cell(&ref, &cell)
+    → ghostty_cell_get(cell, GHOSTTY_CELL_DATA_CODEPOINT, &out)
+```
+
+`GHOSTTY_POINT_TAG_ACTIVE` é a área onde o cursor anda, que é o que a `Grid`
+canônica representa. O `resize` pede tamanho de célula em píxeis, que o
+diferencial não usa: qualquer valor não-zero serve, e vale escrever por que, para
+ninguém procurar de onde tirar um número que não importa.
+
 ## O que falta
 
-1. Expor a derivação no `flake.nix` e passar o caminho ao crate por
-   `nix/rust.nix`, como as outras (`RONOCTUA_*`).
+1. Expor o caminho da biblioteca ao crate por `nix/rust.nix`, como os outros
+   (`RONOCTUA_*`), e linkar.
 2. FFI em `crates/ronoctua-term/`, atrás do trait `Engine` (`src/lib.rs:185`).
+   O primeiro teste que vale: criar um terminal, escrever `hi`, ler os dois
+   codepoints de volta. Se isso passa, o resto é mecânico.
 3. O `term-differential` passa a comparar **dois** motores.
 
 **O modo de falha ruim tem nome:** um `Engine` que compila e devolve grade vazia.
