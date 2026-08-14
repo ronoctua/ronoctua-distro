@@ -52,22 +52,26 @@
     };
 
     # --- fonts ----------------------------------------------------------
-    # The noctua-iosevka family (4.1 GB) lives in a repository of its own, and the
-    # reason is measured, not aesthetic: while the files sat inside this
-    # flake's tree, EVERY edit to any file in the project wrote a
-    # new 4.1 GB path into the store, because Nix copies the whole tree.
-    # As a pinned input, they are fetched once and cached forever — and
-    # `nix flake check` goes back to being instant.
+    # The noctua-iosevka family (4.1 GB) is NOT in this tree, and the reason is
+    # measured, not aesthetic: while the files sat inside the flake's tree, EVERY
+    # edit to any file in the project wrote a new 4.1 GB path into the store,
+    # because Nix copies the whole tree. As a pinned input they are fetched once
+    # and cached forever — and `nix flake check` goes back to being instant.
     #
-    # READ BEFORE PUBLISHING: swap it for
-    #   url = "github:<user>/ronoctua-fonts/<rev>";
-    # The local path below is TRANSIENT STATE: it only works on this machine.
-    # The `fonts-input-publishable` check warns on every `nix flake check`.
+    # Nor are they in git, in any repository: git keeps every version forever, so
+    # one Iosevka bump would add another 4.1 GB that no `gc` takes back. They are
+    # build output, and they go out as assets of a RELEASE of this repository,
+    # under a tag of their own (`fonts-v1`) so as not to be confused with the ISO.
     #
-    # It is absolute, not relative, on purpose: `path:../ronoctua-fonts`
-    # resolves against the parent flake's STORE PATH (becoming
-    # `/nix/store/...-source/../ronoctua-fonts`, which does not exist), not against
-    # the working directory. It cost a build to find out.
+    # READ BEFORE PUBLISHING: the local path below is TRANSIENT STATE — it only
+    # works on this machine. `nix run .#fonts-release` packs the assets and prints
+    # the SRI hashes; swap this for the Release URL with the hash it printed. The
+    # `fonts-input-publishable` check warns on every `nix flake check`.
+    #
+    # It is absolute, not relative, on purpose: a relative `path:` resolves
+    # against the parent flake's STORE PATH (becoming `/nix/store/...-source/..`,
+    # which does not exist), not against the working directory. It cost a build
+    # to find out.
     fonts = {
       url = "path:/home/noctua/main/prjs/ronoctua-fonts";
       flake = false;
@@ -525,7 +529,7 @@
             ''
               root="''${1:-}"
               if [ -z "$root" ] || [ ! -d "$root/noctua-iosevka" ]; then
-                echo "uso: nix run .#fonts-release -- /caminho/do/ronoctua-fonts" >&2
+                echo "uso: nix run .#fonts-release -- /caminho/com/noctua-iosevka" >&2
                 exit 1
               fi
               out=$(mktemp -d -t ronoctua-fonts-release-XXXXXX)
@@ -551,8 +555,9 @@
 
               echo
               echo "Suba os quatro como assets de um Release em"
-              echo "  https://github.com/ronoctua/ronoctua-fonts/releases/new"
-              echo "e troque o input \`fonts\` do flake.nix pelo fetchurl com os hashes acima."
+              echo "  https://github.com/ronoctua/ronoctua-distro/releases/new"
+              echo "com uma tag PROPRIA das fontes (fonts-v1), que nao se confunda"
+              echo "com a do ISO, e troque o input \`fonts\` pelo fetchurl com os hashes."
             '';
 
         # Builds the ISO and says where it is.

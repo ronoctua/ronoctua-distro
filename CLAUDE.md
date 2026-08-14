@@ -7,7 +7,7 @@ em `docs/PENDING.md`.
 ## Invariantes — nunca violar
 
 1. **Escopo é a pasta do projeto.** Nunca vasculhar atrás de código; ler caminho que o dono APONTOU, sim.
-2. **Git existe**: `github.com/ronoctua/{ronoctua-distro,ronoctua-fonts}`. Nada pessoal em commit.
+2. **Um repo**: `github.com/ronoctua/ronoctua-distro`. Nada pessoal em commit. Código MIT, faces OFL.
 3. **Sem fork e sem patch do Niri.** Só IPC e layer-shell.
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo.
 5. **Sem lógica Nix reimplementada em Rust.**
@@ -78,7 +78,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução no REA
 - **Buffers nativos são componentes wasip2.** Devolvem display list (`ronoctua-protocol`); rasteriza
   o `ronoctua-render`, posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11).
   O estado vive na `Instance` — `Runtime::render` avulso cria store novo e **zera o buffer**.
-  Cinco primitivas: texto, régua, grade, seleção e **`svg`** — a de pixel, com PORTÃO de capacidade
+  Cinco primitivas: texto, régua, grade, seleção e **`svg`** — a de pixel, com TRAVA de capacidade
   (`vector`), recusada no load e em todo quadro. Cor entra por token; `currentColor` é preto.
 
 ## Mapa do repositório
@@ -126,8 +126,8 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   **`RUST_LOG` nosso filtra o niri**, que sobe MUDO — ache o display por `niri.<display>.<pid>.sock`.
 - **Quem tem o codepoint primeiro GANHA** — a face pedida por nome vence o fallback. Custou 634 da
   PUA (Lucide → `U+F2000`) e 75 emoji da Iosevka (`Emoji_Presentation`); `FE0F` vira dois glifos.
-- **As fontes vivem em `ronoctua-fonts`, repo separado**; input RELATIVO resolve contra o *store path*
-  do pai, e `nix build github:...` traz ponteiro LFS. **O console não consome TTF**; **`/etc/nixos` e
+- **As fontes são asset de Release, nunca git** — 4,1 GB, e git guarda toda versão para sempre: um bump
+  do Iosevka dobraria isso sem volta. **O console não consome TTF**; **`/etc/nixos` e
   `/etc/fonts/conf.d` são read-only** (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`.
   Nome de glifo **não** leva `nf-` (`fa-folder`); as 27 faces SemiExtended: ver ARCHITECTURE.
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio;

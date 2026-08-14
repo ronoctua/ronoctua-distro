@@ -10,6 +10,10 @@
   symlinkJoin,
   writeText,
   fontSrc,
+  # The SIL Open Font License, redistributed alongside every face. The faces are
+  # a derivative of Iosevka (OFL, Reserved Font Name) — this repository's own
+  # code is MIT, and the two boundaries have to stay legible.
+  oflText ? ../LICENSE-OFL.txt,
 }:
 
 let
@@ -144,7 +148,13 @@ let
       # copy without breaking.
       cp -r --reflink=auto noctua-iosevka/* $out/
       cp -r reports $out/reports
-      cp LICENSE-OFL.txt $out/LICENSE-OFL.txt
+      # The OFL text comes from THIS repository, not from `fontSrc`.
+      #
+      # `fontSrc` is 4.1 GB of build output, and once it becomes a Release
+      # tarball it carries faces and nothing else. A licence that has to travel
+      # with the fonts cannot live inside the artefact it licenses — it lives in
+      # git, where it is versioned and where `fonts-license` can see it.
+      cp ${oflText} $out/LICENSE-OFL.txt
       runHook postInstall
     '';
 
@@ -176,7 +186,7 @@ let
           ${
             if only == null then "$src/${dir}/*" else lib.concatMapStringsSep " " (f: "$src/${dir}/${f}") only
           }
-        install -Dm444 $src/LICENSE-OFL.txt \
+        install -Dm444 ${oflText} \
           $out/share/doc/noctua-iosevka/LICENSE-OFL.txt
         runHook postInstall
       '';

@@ -55,6 +55,18 @@ ISENTOS = re.compile(
     r"user@\d+\.service)"
 )
 
+# THE LICENCE OF A THIRD PARTY IS NOT OURS TO EDIT.
+#
+# `LICENSE-OFL.txt` opens with Iosevka's copyright line, and that line carries
+# the author's e-mail. The OFL REQUIRES the notice to be preserved intact —
+# stripping the address to please this scan would break the very licence that
+# makes redistributing the faces legitimate.
+#
+# The exemption is (file, RULE), and not the file on its own: a private key or a
+# service token planted in `LICENSE-OFL.txt` still has to be caught. Only the
+# e-mail rule is lifted, and only there.
+ISENTOS_POR_ARQUIVO = {"LICENSE-OFL.txt": {"endereco de e-mail"}}
+
 # There is no reason to read these: they are binaries or a build tree.
 IGNORAR_DIR = {".git", "target", "result", ".direnv", "__pycache__"}
 IGNORAR_EXT = {
@@ -74,6 +86,7 @@ def scan(root_dir: Path) -> list[str]:
             continue
         if f.suffix.lower() in IGNORAR_EXT:
             continue
+
         try:
             raw_text = f.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -85,7 +98,10 @@ def scan(root_dir: Path) -> list[str]:
         for n, line in enumerate(raw_text.splitlines(), 1):
             if ISENTOS.search(line):
                 continue
+            isentas = ISENTOS_POR_ARQUIVO.get(f.name, frozenset())
             for name, pattern in PATTERNS:
+                if name in isentas:
+                    continue
                 m = pattern.search(line)
                 if m:
                     # The SNIPPET is not printed: if it is a real secret, the

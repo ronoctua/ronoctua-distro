@@ -39,7 +39,7 @@
   # `nixos-install` does not find `flake.nix` and stops — and DRY RUN mode never
   # showed that, because it prints the command instead of running it.
   #
-  # The tree is small: the fonts live in `ronoctua-fonts`, a separate repo
+  # The tree is small: the fonts are a Release asset and never enter git
   # (see CLAUDE.md), so what goes in here are the `.nix` files, the Rust and the
   # text assets.
   environment.etc."nixos".source = ronoctua.flake;

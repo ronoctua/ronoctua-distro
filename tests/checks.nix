@@ -1350,7 +1350,7 @@ let
     cp ${../.gitignore} .gitignore
 
     # Recreates the real paths as empty files. The fonts are NOT here any more
-    # (they live in ronoctua-fonts), so what has to survive the .gitignore is the
+    # (they are a Release asset), so what has to survive the .gitignore is the
     # hand-kept content and the code.
     while IFS= read -r f; do
       mkdir -p "$(dirname "$f")"
@@ -2208,17 +2208,38 @@ let
   # NOT survive publication. This check does not fail today (the local path is
   # the correct transient state), but it shouts loudly so that carelessness does
   # not slip through.
-  fonts-input-publishable = mkCheck "fonts-input-publishable" [ ] ''
-    url=${lib.escapeShellArg (inputs.fonts.original.url or "path:../ronoctua-fonts")}
+  fonts-input-publishable = mkCheck "fonts-input-publishable" [ pkgs.python3 ] ''
+    # THE URL COMES FROM `flake.lock`, and not from `inputs.fonts.original.url`.
+    #
+    # That attribute DOES NOT EXIST on a `flake = false` input — the value is the
+    # fetched tree, with `outPath` and `narHash` and nothing else. The `or`
+    # fallback that used to be here therefore answered for every run, and this
+    # check spent its whole life reporting on a URL nobody had written. It landed
+    # in the right branch by luck, and would have gone on warning "local path"
+    # after the input became a Release. A silent fallback needs a check; this one
+    # WAS the silent fallback.
+    url=$(python3 -c "
+    import json, sys
+    o = json.load(open('${self}/flake.lock'))['nodes']['fonts']['original']
+    print(o.get('url') or (o['type'] + ':' + o['path']))
+    ")
     case "$url" in
       path:*|/*)
         echo "AVISO: o input 'fonts' aponta para um caminho local:"
         echo "         $url"
         echo ""
         echo "       Isso funciona no seu disco, mas NAO para quem clonar."
-        echo "       Antes de publicar (secao 9), troque em flake.nix por:"
-        echo "         url = \"github:<user_name>/ronoctua-fonts/<rev>\";"
-        echo "       e rode: nix flake lock --update-input fonts"
+        echo "       As faces sao 4,1 GB e NAO entram em git (nem LFS): elas sao"
+        echo "       asset de um Release deste mesmo repositorio."
+        echo "       Rode  nix run .#fonts-release -- /caminho/com/noctua-iosevka,"
+        echo "       suba os quatro assets numa tag propria (fonts-v1) e troque o"
+        echo "       input por essa URL, com o hash que o comando imprimiu."
+        ;;
+      https://*|http://*)
+        # The Release asset — the publishable form. It is `fetchurl` pinned by
+        # hash, so it does not depend on a repository still existing under that
+        # name, only on the asset still being served.
+        echo "OK: input 'fonts' e um asset remoto e fixado por hash — $url"
         ;;
       github:*|git+*)
         echo "OK: input 'fonts' e remoto e publicavel — $url"

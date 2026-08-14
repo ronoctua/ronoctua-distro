@@ -88,8 +88,17 @@ escolhas em codepoints-sonda.
 
 ## Onde as fontes vivem, e por quê
 
-**As fontes não estão no monorepo.** Vivem em `ronoctua-fonts`, repositório próprio, consumido como
-input pinado. Isso contraria "monorepo único" e a decisão foi tomada com número na mão.
+**As fontes não estão no git.** São asset de um Release, consumido como input pinado por hash. Isso
+contraria "monorepo único" e a decisão foi tomada com número na mão.
+
+Houve uma etapa intermediária que vale registrar porque foi desfeita: elas moraram num repositório
+próprio, `ronoctua-fonts`. Ele acabou versionando **quatro arquivos de texto** — a OFL, o README e
+os dois arquivos do git — porque a receita sempre esteve aqui (`nix/fonts.nix`) e os 4,1 GB sempre
+estiveram fora do histórico. Um repositório inteiro para ser dono de um Release é sobrecarga sem
+contrapartida: dois remotos, dois clones, um input a mais e um README explicando o arranjo. O que
+segurava a separação era licença — e isso se resolveu declarando as duas aqui (`LICENSE`, MIT, para
+o código; `LICENSE-OFL.txt` para as faces), que é mais honesto do que deixá-las implícitas em repos
+diferentes.
 
 O Nix copia a árvore inteira do flake para o store a cada avaliação, e o path é endereçado por
 conteúdo: **qualquer edição a qualquer arquivo grava uma cópia nova**. Com 4,1 GB dentro, seis
@@ -1706,7 +1715,7 @@ byte**, antes e depois de mexer no traço. O glifo `Huge` da esquerda fica: um �
 desenha (o que a cópia do *caractere* entrega), o outro é o que o SVG entrega, e vê-los lado a lado é
 informação.
 
-### A display list ganhou a primeira primitiva de pixel — e o portão que faltava
+### A display list ganhou a primeira primitiva de pixel — e a trava que faltava
 
 `command::svg` é a quinta primitiva, ao lado de texto, régua, grade e seleção, e a primeira que
 produz pixel arbitrário. O cabeçalho do WIT diz por que a lista é curta: *"cada capability a mais é
@@ -1715,7 +1724,7 @@ superfície que todo buffer futuro passa a poder usar"*. Ela entra com três lim
 - **Capacidade.** Quem a emitir sem declarar `vector` no descritor é recusado — e o primeiro `render`
   acontece antes de a janela existir, então a recusa é na partida. Até aqui a linha do WIT que diz
   *"o host recusa quem usar sem ter pedido"* era **promessa**: `validate` conferia o prefixo do keymap
-  e mais nada, e nenhuma capacidade era exigida de ninguém. O portão vale em **todo** quadro, não só
+  e mais nada, e nenhuma capacidade era exigida de ninguém. A trava vale em **todo** quadro, não só
   no primeiro: a prévia só existe na ficha, e conferir uma vez seria conferir o quadro sem ela.
 - **A superfície é menor do que "um SVG".** O `resvg` está na árvore sem motor de texto — `<text>`
   não desenha — e sem `resources-dir`, então referência a arquivo externo não carrega.
@@ -2285,7 +2294,7 @@ Traduzir só para o inglês teria apagado metade de um recurso sob o pretexto de
 
 ### Uma chave de texto tem SETE derivados, e só um deles é o `.ftl`
 
-Renomear as 358 chaves para o inglês (invariante 18) custou **dez rodadas do portão**, e cada uma
+Renomear as 358 chaves para o inglês (invariante 18) custou **dez rodadas do `nix flake check`**, e cada uma
 revelou um lugar onde a chave é montada — nunca escrita. Ela só existe inteira em runtime, e por isso
 nenhuma busca no código a enxerga:
 

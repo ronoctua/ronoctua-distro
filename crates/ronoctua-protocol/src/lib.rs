@@ -396,7 +396,7 @@ impl DisplayList {
             if !capabilities.contains(&exigida) {
                 return Err(format!(
                     "o buffer desenha {c:?} sem declarar `{exigida:?}`.\n\
-                     Cada primitiva com portao e superficie que todo buffer \
+                     Cada primitiva com trava e superficie que todo buffer \
                      futuro passa a poder usar (secao 7.6); quem a usa a pede \
                      no descritor, e o host confere antes de desenhar."
                 ));

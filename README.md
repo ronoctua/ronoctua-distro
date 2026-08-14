@@ -24,7 +24,7 @@ echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf
 
 **Nada além disso.** As fontes ocupam 4,1 GB e **não estão no git** — nem como LFS, cuja cota
 gratuita é quatro vezes menor que elas. Elas são saída de build, e vivem como assets de um Release
-do `ronoctua-fonts`, que o flake busca por hash. Você não precisa instalar nada para isso.
+**deste mesmo repositório**, que o flake busca por hash. Você não precisa instalar nada para isso.
 
 ### Passos
 
@@ -135,8 +135,8 @@ mesmo que guarda o repositório.
 
 **Antes de gravar o pendrive**, garanta que estas três coisas existem em outro lugar:
 
-1. **Os dois repositórios, empurrados.** `ronoctua-distro` e `ronoctua-fonts`. Sem o segundo o
-   flake não avalia — as fontes são input dele.
+1. **O repositório, empurrado.** E o Release das fontes publicado: elas são input do flake, e sem
+   ele o flake não avalia numa máquina que não tenha os 4,1 GB no disco.
 2. **`~/.shellrc.local` e `~/.config/doom/local.el`.** Eles nunca são versionados de propósito
    (invariante 13, guardam token e identidade) — e é exatamente por isso que ninguém lembra deles.
 3. **`host.nix` e `facter.json`**, se já existirem. São desta máquina e também ficam fora do git.
