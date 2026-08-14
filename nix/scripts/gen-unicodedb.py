@@ -1,0 +1,711 @@
+#!/usr/bin/env python3
+"""Generator of the Unicode symbol browser's database.
+
+THE TWO AUTHORITIES
+-------------------
+    UnicodeData.txt  -> authority on the NAMES and the properties
+    the .ttf file    -> authority on what actually EXISTS
+
+The database is the INTERSECTION of the two, and that is not thrift: the renderer embeds
+ONE face and has no fallback chain (section 6.4, deliberate). A character
+the font does not draw would show up as tofu — silent fallback in
+different clothes. Showing only what can be seen is the only honest form.
+
+The font read here is the UNPATCHED one: the codepoints Nerd Fonts adds
+are in the PUA, already have their own browser (`gen-glyphdb.py`), and have no
+Unicode name. Whatever is left of the Iosevka's own PUA also goes, because
+`UnicodeData.txt` does not name private-use characters.
+
+OUTPUTS
+-------
+    unicode.json    the browser's database
+    coverage.md    report: translation coverage, work queue
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import re
+import sys
+import tomllib
+from collections import Counter, defaultdict
+
+import xml.etree.ElementTree as ET
+
+import uharfbuzz as hb
+from fontTools.ttLib import TTFont
+
+# THE LEXICON'S CONTRACT IS SHARED with the glyph generator.
+from lexicon import search_forms, palavras, translate
+
+# The base a combining mark is drawn on top of.
+#
+# # Why it comes from here, and not from the component
+#
+# Because 312 characters of the font have ZERO advance: drawn on their own in a
+# grid they take up no room — they vanish, or paint over their neighbour. The
+# Unicode convention is to show them over a dotted circle.
+#
+# The component cannot write that codepoint: invariant 9 forbids a
+# codepoint outside the tokens, and 11 does not let the buffer receive a token value.
+# So what assembles the display string is the GENERATOR, and the buffer only draws
+# what it was given.
+DOTTED_CIRCLE = "◌"
+
+# General category -> family, with the name the filter panel shows.
+#
+# THESE NAMES ARE THE SAME ONES THE `.ftl` SHOWS. There they are keys (because they
+# get translated); here they become search TAGS. They are two representations of the same
+# fact, and what keeps the two from diverging is the `symbols-filters` check: the
+# label the panel shows has to find, when typed into the search, the whole
+# family.
+#
+# Unicode's 25 general categories become SEVEN families because nobody
+# searches for "Sk" or for "Modifier Symbol" — one searches for "simbolo". The
+# separator and the control fall into "other": that is 27 characters in all, and a
+# panel option for each would be more lines than information.
+# The FIRST element is the ID — it becomes `unicode-family-<id>`, and that is why it is
+# English (invariant 18). The SECOND is the Portuguese search tag: whoever types
+# `family:simbolo` still finds it, because a search tag is interface text
+# and not a name. The third is the label.
+FAMILIAS = {
+    "L": ("letter", "letra", "Letra"),
+    "N": ("number", "numero", "Número"),
+    "S": ("symbol", "simbolo", "Símbolo"),
+    "P": ("punctuation", "pontuacao", "Pontuação"),
+    "M": ("mark", "marca", "Marca"),
+    "Z": ("other", "outro", "Outro"),
+    "C": ("other", "outro", "Outro"),
+}
+
+
+def seguro(s: str) -> str:
+    """Strips from a value the punctuation that would break the component's parser.
+
+    The buffer has no JSON parser (invariant 11): it finds the end of a value
+    by looking for the next quote, splits records on `},` and list items
+    on `,`. The CLDR keywords carry commas and quotes — `bandeira:
+    Brasil` is harmless (the `:` separates nothing), but a comma inside a
+    tag would become two tags and a quote would cut the value in half.
+
+    It removes rather than escapes: the component's parser does not understand escaping, and one
+    tag more in the search does no harm at all.
+    """
+    return "".join(" " if c in '"[]{},' else c for c in s).strip()
+
+
+def die(msg: str) -> None:
+    print(f"ERRO: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Version guard
+# ---------------------------------------------------------------------------
+def check_version(ucd: pathlib.Path, expected: str) -> None:
+    """The UCD version has to be the one the flake declares.
+
+    The header of every UCD file carries the version (`# Blocks-17.0.0.txt`).
+    Without this guard, a nixpkgs update would swap the whole database in
+    silence: new characters would come in, names would change, and the only clue
+    would be the browser showing something different from what it showed yesterday.
+
+    It is the same guard the glyph generator applies to Nerd Fonts, for the same
+    reason and with the same severity.
+    """
+    cabecalho = (ucd / "Blocks.txt").read_text(encoding="utf-8").splitlines()[0]
+    m = re.search(r"Blocks-(\d+\.\d+\.\d+)\.txt", cabecalho)
+    if not m:
+        die(f"o cabecalho do Blocks.txt nao declara versao: {cabecalho!r}")
+    found_one = m.group(1)
+    if found_one != expected:
+        print("ERRO: a versao do Unicode Character Database divergiu.", file=sys.stderr)
+        print(f"       esperada (flake):  {expected}", file=sys.stderr)
+        print(f"       encontrada (UCD):  {found_one}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A base do navegador de simbolos sai daqui. Subir a versao", file=sys.stderr)
+        print("       muda quais caracteres existem e como eles se chamam —", file=sys.stderr)
+        print("       atualize a constante em nix/unicodegen.nix de proposito,", file=sys.stderr)
+        print("       e confira a cobertura de traducao depois.", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: Unicode {expected} — o UCD e o flake concordam")
+
+
+# ---------------------------------------------------------------------------
+# Reading the UCD
+# ---------------------------------------------------------------------------
+def read_blocks(ucd: pathlib.Path) -> list[tuple[int, int, str]]:
+    not_in = []
+    for line in (ucd / "Blocks.txt").read_text(encoding="utf-8").splitlines():
+        m = re.match(r"([0-9A-Fa-f]+)\.\.([0-9A-Fa-f]+);\s*(.+)", line)
+        if m:
+            not_in.append((int(m.group(1), 16), int(m.group(2), 16), m.group(3).strip()))
+    return not_in
+
+
+def ler_apelidos(ucd: pathlib.Path) -> dict[int, list[str]]:
+    """The ALTERNATIVE names from `NameAliases.txt`.
+
+    There are few (16 land in our database), but they are the answer to "I could have sworn
+    that character was called something else" — the same role the aliases play in the
+    glyph browser. `LINE FEED` finds `U+000A`, which is called
+    `<control-000A>`.
+    """
+    not_in: dict[int, list[str]] = defaultdict(list)
+    for line in (ucd / "NameAliases.txt").read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(";")
+        if len(fields) >= 2:
+            not_in[int(fields[0], 16)].append(fields[1].strip())
+    return not_in
+
+
+def block_of(cp: int, block_list: list[tuple[int, int, str]]) -> str:
+    for a, z, name in block_list:
+        if a <= cp <= z:
+            return name
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Emoji
+# ---------------------------------------------------------------------------
+def ler_emoji(path: pathlib.Path) -> list[dict]:
+    """The `fully-qualified` emoji from `emoji-test.txt`, with group and subgroup.
+
+    Only the `fully-qualified` ones: the `minimally-qualified` and the `unqualified` are the
+    SAME sequence without the presentation selector, and showing them would be showing the
+    same emoji twice with identical drawings.
+    """
+    not_in, group, subgrupo = [], "", ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# group:"):
+            group = line.split(":", 1)[1].strip()
+        elif line.startswith("# subgroup:"):
+            subgrupo = line.split(":", 1)[1].strip()
+        elif ";" in line and not line.startswith("#"):
+            cps, resto = line.split(";", 1)
+            if resto.split("#")[0].strip() != "fully-qualified":
+                continue
+            # The name comes after the `#` and after the emoji itself: `# 😀 E1.0 grinning face`
+            after = resto.split("#", 1)[1].strip() if "#" in resto else ""
+            parts = after.split(" ", 2)
+            name = parts[2].strip() if len(parts) > 2 else ""
+            not_in.append(
+                {
+                    "seq": [int(x, 16) for x in cps.split()],
+                    "group": group,
+                    "subgroup": subgrupo,
+                    "name": name,
+                }
+            )
+    return not_in
+
+
+def ler_cldr(cldr: pathlib.Path, language: str) -> dict[str, dict]:
+    """Emoji name and keywords, from the CLDR.
+
+    # Why the CLDR and not the lexicon
+
+    Because it is the OFFICIAL source, covers 100% of the emoji in both languages, and already
+    carries the vocabulary people search with — `rosto risonho` has
+    `engracado`, `feliz`, `lol`, `rindo`. Putting `grinning face` through the lexicon
+    would give `rosto` and `sorridente` and nothing more.
+
+    The two directories: `annotations` carries what was written by hand, and
+    `annotationsDerived` carries what is derived from the sequences (skin tone, ZWJ) —
+    without the second, 👩‍💻 would have no name.
+    """
+    not_in: dict[str, dict] = {}
+    for sub in ("annotations", "annotationsDerived"):
+        arq = cldr / sub / f"{language}.xml"
+        if not arq.exists():
+            continue
+        for an in ET.parse(arq).getroot().iter("annotation"):
+            cp = an.get("cp") or ""
+            d = not_in.setdefault(cp, {"name": "", "keys": []})
+            if an.get("type") == "tts":
+                d["name"] = (an.text or "").strip()
+            else:
+                d["keys"] = [x.strip() for x in (an.text or "").split("|") if x.strip()]
+    return not_in
+
+
+def annotation(tab: dict[str, dict], raw_text: str) -> dict:
+    """The CLDR keys it WITHOUT the presentation selector (`U+FE0F`)."""
+    return tab.get(raw_text) or tab.get(raw_text.replace("\ufe0f", "")) or {}
+
+
+def shape_to_one_glyph(font_file: pathlib.Path, emojis: list[dict]) -> list[str]:
+    """Which sequences do NOT become a single glyph. Returns the list of defects.
+
+    # Why this guard exists
+
+    Because `cmap` does not answer the question. A ZWJ sequence has all its
+    codepoints in the cmap and still comes out DECOMPOSED if the font lacks the
+    ligature — 👩💻 instead of 👩‍💻. Measured: the monochrome Noto shapes 66% of the
+    3,944 and decomposes 1,258; the colour one shapes 100%.
+
+    Without really shaping, the database would promise 3,944 and the screen would deliver pieces.
+    """
+    font = hb.Font(hb.Face(font_file.read_bytes()))
+    bads = []
+    for e in emojis:
+        raw_text = "".join(chr(c) for c in e["seq"])
+        buf = hb.Buffer()
+        buf.add_str(raw_text)
+        buf.guess_segment_properties()
+        hb.shape(font, buf)
+        ids = [g.codepoint for g in buf.glyph_infos]
+        if len(ids) != 1 or ids[0] == 0:
+            bads.append(f"U+{' U+'.join(f'{c:04X}' for c in e['seq'])}  {e['name']}")
+    return bads
+
+
+# The nine groups of `emoji-test.txt` -> (id, en name, pt name).
+#
+# THESE NAMES ARE THE SAME ONES THE `.ftl` SHOWS in the panel, and here they become
+# search TAGS. They are two representations of the same fact, and what keeps the two from
+# diverging is the `symbols-filters` check: the label one reads has to find,
+# when typed into the search, the whole group.
+# The FIRST element is the ID — it builds `unicode-group-<id>` and that is why it is
+# English (invariant 18). The other two are SEARCH: English tags and the Portuguese
+# label, and both still find the whole group.
+GRUPOS_EMOJI = {
+    "Smileys & Emotion": ("faces", "smileys emotion carinhas", "Carinhas e emoções"),
+    "People & Body": ("people", "people body pessoas", "Pessoas e corpo"),
+    "Animals & Nature": ("nature", "animals nature natureza", "Animais e natureza"),
+    "Food & Drink": ("food", "food drink comida", "Comida e bebida"),
+    "Travel & Places": ("travel", "travel places viagem", "Viagem e lugares"),
+    "Activities": ("activities", "activities atividades", "Atividades"),
+    "Objects": ("objects", "objects objetos", "Objetos"),
+    "Symbols": ("symbols", "symbols simbolos", "Símbolos"),
+    "Flags": ("flags", "flags bandeiras", "Bandeiras"),
+}
+
+
+# The five skin tone modifiers (Fitzpatrick) -> (id, en name, pt name).
+#
+# The tone does NOT come from the name: in English it arrives as "light skin tone" at the
+# end, but in Portuguese the CLDR writes "pele clara", and there are emoji whose name mentions
+# skin without having a modifier. What answers is the SEQUENCE — the modifier's codepoint is
+# there, or it is not.
+#
+# Like the families and the groups, these ids are the same ones the `.ftl` shows: the
+# label one reads has to find, when typed into the search, the whole tone.
+# The FIRST element is the ID (it builds `unicode-tone-<id>`, hence English); the second
+# is the Portuguese search form; the third, the label.
+TONS = {
+    0x1F3FB: ("light", "claro", "Clara"),
+    0x1F3FC: ("medium-light", "medio-claro", "Clara média"),
+    0x1F3FD: ("medium", "medio", "Média"),
+    0x1F3FE: ("medium-dark", "medio-escuro", "Escura média"),
+    0x1F3FF: ("dark", "escuro", "Escura"),
+}
+
+
+def tom_de(seq: list[int]) -> str:
+    """A sequence's skin tone, or empty.
+
+    The FIRST modifier rules. There are sequences with two — the handshake between
+    two people of different tones — and for those the filter returns the first:
+    whoever searches for a tone wants to see the emoji that uses it, and it does.
+    """
+    for cp in seq:
+        if cp in TONS:
+            return TONS[cp][0]
+    return ""
+
+
+def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
+    """One record per emoji, with the tags coming from the CLDR.
+
+    `seq` is what gets COPIED and `mostra` is what gets DRAWN — here the two are
+    the whole sequence, but they part company on combining marks (where the
+    drawing carries the dotted circle and the copy does not), and that is why they are
+    different fields.
+    """
+    not_in = []
+    for e in emojis:
+        raw_text = "".join(chr(c) for c in e["seq"])
+        a_pt, a_en = annotation(pt, raw_text), annotation(en, raw_text)
+        gid, g_en, g_pt = GRUPOS_EMOJI.get(e["group"], ("other", "other outro", "Outro"))
+
+        name = seguro(a_en.get("name") or e["name"])
+        # The tags: the name and the CLDR keywords in both languages, plus the
+        # group's name. The phrases go in WHOLE — the buffer matches a word prefix
+        # inside the tag, so `risonho` finds `rosto risonho`.
+        # The FAMILY also goes in as a tag, as with the others: the `Emoji` label
+        # the panel shows has to find, when typed into the search, the whole
+        # family — and it is the `symbols-filters` check that ties the two together.
+        tags_en = {name.lower(), g_en, "emoji"} | {
+            seguro(k).lower() for k in a_en.get("keys", [])
+        }
+        tags_pt = {g_pt.lower(), "emoji"} | {
+            seguro(k).lower() for k in a_pt.get("keys", [])
+        }
+        if a_pt.get("name"):
+            tags_pt.add(seguro(a_pt["name"]).lower())
+        # The TONE goes in as a TAG, for the same reason as the family and the group: the label
+        # the panel shows has to find, when typed into the search, the whole tone.
+        # The CLDR already writes "pele clara" in the name, but not in every language
+        # nor in every sequence — relying on that would be relying on luck.
+        tom = tom_de(e["seq"])
+        if tom:
+            # The id is ALREADY the English form; the two Portuguese ones — label and unaccented
+            # form — go in together, for the same reason as the families.
+            t_id, t_pt, t_rotulo = next(v for v in TONS.values() if v[0] == tom)
+            tags_en |= {t_id, "skin", "tone"}
+            tags_pt |= {t_rotulo.lower(), t_pt, "pele", "tom"}
+        tags_en |= {w for k in tags_en for w in palavras(k)}
+        tags_pt |= {w for k in tags_pt for w in palavras(k)}
+
+        not_in.append(
+            {
+                "cp": e["seq"][0],
+                "seq": e["seq"],
+                "shows": e["seq"],
+                "name": name,
+                "aliases": [],
+                "cat": "",
+                "family": "emoji",
+                "group": gid,
+                "subgroup": seguro(e["subgroup"]),
+                # The TONE, only when there is one. Present in every record it would mean writing
+                # "nenhum" 2,048 times in a database that is already 2.4 MB.
+                "tone": tom,
+                "block": "",
+                "decomp": "",
+                "width": 2,
+                "tags_en": sorted(t for t in tags_en if t),
+                "tags_pt": sorted(t for t in tags_pt if t),
+                "search": sorted(search_forms(tags_pt)),
+            }
+        )
+    return not_in
+
+
+# ---------------------------------------------------------------------------
+# The index
+# ---------------------------------------------------------------------------
+def build_index(
+    ucd: pathlib.Path,
+    cmap: dict,
+    advance: dict,
+    lexicon: dict,
+    cmap_emoji: set,
+    ja_e_emoji: set,
+) -> tuple[list, dict]:
+    block_list = read_blocks(ucd)
+    apelidos = ler_apelidos(ucd)
+
+    no_translation: Counter = Counter()
+    # Characters that did not get ONE word in Portuguese. They are the lexicon's work
+    # queue, and the reason the build stops (see `main`).
+    without_pt: list[str] = []
+    lines = []
+
+    for line in (ucd / "UnicodeData.txt").read_text(encoding="utf-8").splitlines():
+        fields = line.split(";")
+        if len(fields) < 6:
+            continue
+        name = fields[1]
+        # A NAME BETWEEN `<>` IS NOT A NAME: it is a marker of the format (`<control>`,
+        # `<Private Use, First>`). A character with no proper name has nothing to
+        # be searched for, and the ranges marked by `First`/`Last` are not even
+        # a single character.
+        if not name or name.startswith("<"):
+            continue
+        cp = int(fields[0], 16)
+        # THE DATABASE IS THE UNION OF THE TWO FACES. While the renderer had a single
+        # face, `cmap` was enough; with the emoji face it draws more than the
+        # Iosevka, and keeping the old intersection would make the database lie by
+        # OMISSION — it would hide characters that show up perfectly.
+        if cp not in cmap and cp not in cmap_emoji:
+            continue
+        # WHATEVER IS ALREADY AN EMOJI DOES NOT GO IN TWICE. `U+1F600` has a name in the UCD and
+        # is in the emoji face's cmap, so it would land here TOO — and the
+        # emoji record is the better of the two: it has group, subgroup and the
+        # CLDR keywords in both languages.
+        if cp in ja_e_emoji:
+            continue
+
+        category = fields[2]
+        family, fam_pt, fam_rotulo = FAMILIAS.get(category[0], ("other", "outro", "Outro"))
+        block = block_of(cp, block_list)
+        other_names = apelidos.get(cp, [])
+
+        # THE WIDTH COMES FROM `hmtx`, and not from the category.
+        #
+        # There are 312 codepoints with zero advance and only 283 with category `Mn`: what
+        # decides whether the character takes up room in the grid is the real advance, and
+        # inferring it from the category would get 29 of them wrong.
+        if cp in cmap:
+            av = advance[cmap[cp]]
+            width = 0 if av == 0 else (2 if av > 900 else 1)
+        else:
+            # It came from the emoji face: advance 2550/2048 = 1.245 em against the
+            # cell's 0.600, that is, two columns with 3.7% overflow —
+            # which the grid's three-column gap absorbs.
+            width = 2
+
+        # The words that find this character: those of the NAME and those of the aliases.
+        #
+        # The BLOCK's are left out, and the measurement is the reason: they cost
+        # 700 KB in the database and are nearly all redundant — the 256 characters of the
+        # `Arrows` block are already called `… ARROW …`, so "seta" finds them by
+        # name. Whoever wants the whole block has the `block:` filter, which matches the
+        # real field instead of hoping the word happened to land in the tag.
+        tokens = palavras(name)
+        for outro in other_names:
+            tokens += palavras(outro)
+        tags_en, tags_pt, has_pt = translate(tokens, lexicon, no_translation)
+        tags_en.add(family)
+        # THE TWO PORTUGUESE FORMS: the accented LABEL, which is what the panel
+        # shows and what the `symbols-filters` check types, and the unaccented form,
+        # which is what one writes in a `family:simbolo` filter. Sending only one
+        # breaks the other — the first version of this line sent only the label, and
+        # inverting the tuple swapped it for the unaccented form with nothing
+        # warning beyond the check.
+        tags_pt.add(fam_rotulo.lower())
+        tags_pt.add(fam_pt)
+
+        # WHAT THE GRID DRAWS, in CODEPOINTS and not in text.
+        #
+        # NO STRING FIELD CARRIES AN ARBITRARY CHARACTER, and this is not
+        # taste: the buffer has no JSON parser (invariant 11) and finds the end
+        # of a value by looking for the next quote. For `U+0022`, `json.dumps`
+        # writes `"\""`, and the search for the quote stops at the escape — the buffer would read
+        # `\` instead of `"`. For `U+005C`, `\\`. Two wrong characters, in
+        # silence, and only on those two.
+        #
+        # With a list of numbers no escaping is possible. `cp` is already the
+        # truth; this list exists only for the combining marks, which
+        # need the dotted circle in front.
+        mostra = [ord(DOTTED_CIRCLE), cp] if width == 0 else [cp]
+
+        lines.append(
+            {
+                "cp": cp,
+                "shows": mostra,
+                "name": name,
+                "aliases": other_names,
+                "cat": category,
+                "family": family,
+                "block": block,
+                # The canonical decomposition, in hexadecimal. `<compat>` and other
+                # markers are left out: they say HOW to decompose, and what the
+                # sheet answers is "what parts is this made of".
+                "decomp": "" if fields[5].startswith("<") else fields[5],
+                "tags_en": sorted(tags_en),
+                "tags_pt": sorted(tags_pt),
+                "search": sorted(search_forms(tags_pt)),
+            }
+        )
+        # OMITTED WHEN IT IS 1, which is the case for 96% of them: always writing it
+        # would cost 86 KB to say "the normal one". Absent, the buffer reads 1.
+        if width != 1:
+            lines[-1]["width"] = width
+
+        if not has_pt:
+            without_pt.append(f"U+{cp:04X} {name}")
+
+    estatisticas = {
+        "total": len(lines),
+        "untranslated": no_translation,
+        "no_pt": without_pt,
+        "blocks": len({r["block"] for r in lines if r["block"]}),
+        "families": Counter(r["family"] for r in lines),
+        "combining": sum(1 for r in lines if r.get("width", 1) == 0),
+        "wide": sum(1 for r in lines if r.get("width", 1) == 2),
+    }
+    return lines, estatisticas
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ucd", type=pathlib.Path, required=True, help="share/unicode do UCD")
+    ap.add_argument("--font", type=pathlib.Path, required=True, help="a fonte NAO patcheada")
+    ap.add_argument("--lexicon", type=pathlib.Path, required=True)
+    ap.add_argument("--emoji-test", type=pathlib.Path, required=True)
+    ap.add_argument("--cldr", type=pathlib.Path, required=True, help="common/ do CLDR")
+    ap.add_argument("--font-emoji", type=pathlib.Path, required=True)
+    ap.add_argument("--ucd-version", required=True)
+    # THE TWO FLOORS COME FROM OUTSIDE so the negative fixture can exercise the
+    # guards without editing the real lexicon — see `nix/unicodegen.nix`.
+    ap.add_argument("--min-coverage", type=float, default=94.0)
+        # ZERO, as in the glyph generator. An exception for "the 69 left over"
+    # would be an exception forever: the next version of the UCD brings characters
+    # that fall into it with nobody seeing. It is 81 words to empty the list.
+    ap.add_argument("--cap-no-pt", type=int, default=0)
+    ap.add_argument("--out", type=pathlib.Path, required=True)
+    args = ap.parse_args()
+
+    check_version(args.ucd, args.ucd_version)
+
+    font_file = TTFont(args.font, lazy=True)
+    cmap = font_file.getBestCmap()
+    hmtx = font_file["hmtx"]
+    advance = {name: hmtx[name][0] for name in set(cmap.values())}
+
+    # THE EMOJI FACE'S CMAP. The database is the UNION of the two: the renderer draws
+    # both, and hiding what the second covers would be lying by omission.
+    cmap_emoji = set(TTFont(args.font_emoji, lazy=True).getBestCmap())
+
+    # --- THE EMOJI -------------------------------------------------------
+    emojis = ler_emoji(args.emoji_test)
+    ja_e_emoji = {e["seq"][0] for e in emojis if len(e["seq"]) == 1}
+
+    lexicon = tomllib.loads(args.lexicon.read_text(encoding="utf-8"))
+    lines, st = build_index(args.ucd, cmap, advance, lexicon, cmap_emoji, ja_e_emoji)
+    if not emojis:
+        die("o emoji-test.txt nao rendeu nenhum emoji fully-qualified")
+
+    # THE SHAPING GUARD, before anything else: a sequence that does not become
+    # ONE glyph appears decomposed on screen, and `cmap` does not answer that.
+    bads = shape_to_one_glyph(args.font_emoji, emojis)
+    if bads:
+        print("", file=sys.stderr)
+        print(f"ERRO: {len(bads)} emoji nao moldam em UM glifo nesta fonte.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for r in bads[:12]:
+            print(f"       {r}", file=sys.stderr)
+        if len(bads) > 12:
+            print(f"       … e mais {len(bads) - 12}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Eles apareceriam DECOMPOSTOS — 👩💻 em vez de 👩‍💻 — porque a", file=sys.stderr)
+        print("       fonte nao tem a ligadura. O `cmap` nao responde isso: os", file=sys.stderr)
+        print("       codepoints estao todos la.", file=sys.stderr)
+        sys.exit(1)
+
+    pt = ler_cldr(args.cldr, "pt")
+    en = ler_cldr(args.cldr, "en")
+    no_cldr = [
+        "".join(chr(c) for c in e["seq"])
+        for e in emojis
+        if not annotation(pt, "".join(chr(c) for c in e["seq"])).get("keys")
+    ]
+    if no_cldr:
+        die(
+            f"{len(no_cldr)} emoji sem palavras-chave em portugues no CLDR "
+            f"(ex.: {no_cldr[:5]}). Quem procura em portugues nao os acha."
+        )
+    lines.extend(emoji_lines(emojis, pt, en))
+    st["emoji"] = len(emojis)
+    st["total"] = len(lines)
+
+    if not lines:
+        die("a base saiu VAZIA — a fonte e o UnicodeData.txt nao se cruzaram")
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    # COMPACT `separators`, and not the default. The default puts `", "` between the
+    # objects, and the buffer — which has no JSON parser (invariant 11) —
+    # splits the database on punctuation. With the space, it finds ONE record of 2 MB
+    # instead of thousands. That is what happened with the glyph database.
+    (args.out / "unicode.json").write_text(
+        json.dumps(lines, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+    )
+
+    # --- coverage.md ------------------------------------------------------
+    hits_without = sum(st["untranslated"].values())
+    traduzidas = sum(
+        1 for r in lines for t in r["tags_en"] if t in lexicon
+    )
+    total = traduzidas + hits_without
+    coverage = 100.0 * traduzidas / total if total else 0.0
+
+    raw_text = [
+        "# Cobertura da base de simbolos Unicode",
+        "",
+        "Gerado por `nix/scripts/gen-unicodedb.py`. Nao editar a mao.",
+        "",
+        f"- Unicode: **{args.ucd_version}**",
+        f"- Caracteres na base: **{st['total']}**",
+        f"- Emoji: **{st.get('emoji', 0)}**",
+        f"- Blocos representados: **{st['blocks']}**",
+        f"- Marcas combinantes (avanco zero): **{st['combining']}**",
+        f"- Largura dupla: **{st['wide']}**",
+        f"- Sem NENHUMA palavra em portugues: **{len(st['no_pt'])}**",
+        "",
+        "## Por familia",
+        "",
+        "| familia | caracteres |",
+        "|---|---:|",
+    ]
+    for fam, n in st["families"].most_common():
+        raw_text.append(f"| `{fam}` | {n} |")
+    raw_text += [
+        "",
+        f"## Traducao de tags: {coverage:.1f}%",
+        "",
+        f"Piso exigido: **>= {args.min_coverage}%**.",
+        "",
+        "## Palavras sem traducao, por frequencia",
+        "",
+        "Esta e a fila para crescer `assets/lexicon/tags.en-pt.toml`.",
+        "Traduzir nesta ordem, nao na ordem que vier — o mesmo lexico serve",
+        "os dois navegadores.",
+        "",
+        "| palavra | ocorrencias |",
+        "|---|---:|",
+    ]
+    for palavra, n in st["untranslated"].most_common(80):
+        raw_text.append(f"| `{palavra}` | {n} |")
+    if len(st["untranslated"]) > 80:
+        raw_text.append(f"| … | mais {len(st['untranslated']) - 80} palavras |")
+    (args.out / "coverage.md").write_text("\n".join(raw_text) + "\n", encoding="utf-8")
+
+    print(
+        f"OK: {st['total']} caracteres indexados "
+        f"({st.get('emoji', 0)} emoji, {st['blocks']} blocos, "
+        f"{st['combining']} combinantes, {st['wide']} largos)"
+    )
+
+    # --- THE TWO GUARDS ----------------------------------------------------
+    #
+    # They live in the GENERATOR, and not in a check that reads the JSON afterwards, for the same
+    # reason as the glyph generator: what knows which character was left untranslated
+    # is what built the table. The output does NOT say — an untranslated word goes into
+    # `tags_pt` untranslated.
+    if len(st["no_pt"]) > args.cap_no_pt:
+        print("", file=sys.stderr)
+        print(
+            f"ERRO: {len(st['no_pt'])} caracteres sem NENHUMA tag em portugues, "
+            f"e o teto e {args.cap_no_pt}.",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+        for g in st["no_pt"][:12]:
+            print(f"       {g}", file=sys.stderr)
+        if len(st["no_pt"]) > 12:
+            print(f"       … e mais {len(st['no_pt']) - 12}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Quem procura em portugues NAO acha estes caracteres.", file=sys.stderr)
+        print("       Traduza as palavras deles em assets/lexicon/tags.en-pt.toml", file=sys.stderr)
+        print("       — a fila, por frequencia, esta no coverage.md que este", file=sys.stderr)
+        print("       mesmo build gera.", file=sys.stderr)
+        sys.exit(1)
+
+    if coverage < args.min_coverage:
+        print("", file=sys.stderr)
+        print(
+            f"ERRO: cobertura de traducao em {coverage:.1f}%, "
+            f"abaixo do piso de {args.min_coverage}%.",
+            file=sys.stderr,
+        )
+        print("       A fila de trabalho, por frequencia, esta no coverage.md.", file=sys.stderr)
+        sys.exit(1)
+
+    print(
+        f"OK: traducao de tags em {coverage:.1f}% "
+        f"({len(st['untranslated'])} palavras distintas sem traducao, "
+        f"{len(st['no_pt'])} caracteres sem portugues)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

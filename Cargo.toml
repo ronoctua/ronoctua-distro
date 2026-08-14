@@ -1,0 +1,162 @@
+[workspace]
+resolver = "3"
+
+# `buffers/` stays OUTSIDE, and not for tidiness.
+#
+# A `wasm32-wasip2` component exports symbols with the world's name inside
+# (`ronoctua:buffer/view@0.1.0#render`). If it were a member of this workspace,
+# cargo would try to compile it for the host too, and `rust-lld` rejects the
+# version script: `:` and `/` are not valid there. The error talks about
+# "; expected, but got :" and mentions wasm nowhere.
+#
+# Each buffer is a workspace of its own, with its own lock: a different target,
+# a different dependency set.
+exclude = [ "buffers" ]
+members = [
+  "crates/ronoctua-tokens",
+  "crates/ronoctua-protocol",
+  "crates/ronoctua-runtime",
+  "crates/ronoctua-cmd",
+  "crates/ronoctua-i18n",
+  "crates/ronoctua-installer",
+  "crates/ronoctua-notify",
+  "crates/ronoctua-clipboard",
+  "crates/ronoctua-apps",
+  "crates/ronoctua-term",
+  "crates/ronoctua-keymap",
+  "crates/ronoctua-render",
+  "crates/ronoctua-niri",
+  "crates/ronoctua-network",
+  "crates/ronoctua-shell",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+# --- Wayland -----------------------------------------------------------
+# Integration with Niri is EXCLUSIVELY through IPC and wlr-layer-shell
+# (invariant 3). Nothing here talks to the compositor any other way.
+# The `system` feature swaps the pure-Rust backend for the libwayland one (FFI).
+# It is NOT optional: only it exposes `display_ptr` and `as_ptr`, the C pointers
+# wgpu needs to create the Surface. With the default backend those
+# pointers do not exist — there is no C underneath at all.
+smithay-client-toolkit = { version = "0.21", features = [ "system" ] }
+wayland-client = { version = "0.31", features = [ "system" ] }
+wayland-protocols-wlr = "0.3"
+raw-window-handle = "0.6"
+
+# --- renderer (section 7.7: wgpu + cosmic-text + glyphon, NO vello) -----
+# The workload is glyphs, rectangles and one-line rules. UI icons are glyphs
+# (6.3), so there is no vector pipeline that would justify vello.
+#
+# glyphon 0.12 requires wgpu ^30 and cosmic-text ^0.19 — the three versions move
+# together and one cannot be bumped on its own.
+wgpu = "30.0"
+glyphon = "0.12"
+cosmic-text = "0.19"
+
+# --- niri IPC (invariant 3: IPC and layer-shell only) ------------------
+# The types on niri's side are OURS, narrow, in `ronoctua-niri`. See why
+# in `crates/ronoctua-niri/src/lib.rs`: depending on the published `niri-ipc`
+# crate would hollow out the contract test against `niri-next`.
+# The QR code of the copied content. Just the MATRIX: what draws it is the quad
+# pipeline the footer already has — one quad per module. No image, no font, no
+# new pipeline.
+qrcode = { version = "0.14", default-features = false }
+
+# The preview of the copied image. ONLY png and jpeg: they are what comes out of a
+# screenshot and out of a browser, and the whole crate brings a dozen decoders
+# that nobody pastes onto the clipboard.
+image = { version = "0.25", default-features = false, features = [ "png", "jpeg" ] }
+
+# THE SVG RASTERISER for the pixmap step of section 4.2's icon chain.
+#
+# There is no choice: the superpackage is **335,031 SVGs against 53 PNGs**. Without it, the
+# pixmap step would reach half a percent of what exists, and the owner decided to
+# pay the cost — the list never waits for it, and the icon arrives afterwards.
+#
+# `default-features = false` leaves out the TEXT engine (fontdb, rustybuzz
+# and system font lookup): an application icon has no text, and the
+# renderer already embeds its faces by Nix path (section 6.4) — a
+# second font machinery searching the system would be the boundary that
+# invariant exists to avoid.
+resvg = { version = "0.48", default-features = false }
+
+serde = { version = "1", features = [ "derive" ] }
+serde_json = "1"
+
+# --- WASM runtime (sections 5.2, 7.8 and 7.9) -------------------------
+# `memory_init_cow` and `pooling-allocator` are NOT optional optimisations: without
+# them the glyphdb's ~1.5 MB become a memcpy per instance and blow the 5 ms
+# budget on their own. See the trap in CLAUDE.md.
+wasmtime = { version = "38", default-features = false, features = [
+  "runtime", "component-model", "cranelift", "pooling-allocator", "std",
+] }
+wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ] }
+# A `wasm32-wasip2` component with `std` IMPORTS wasi:io, wasi:cli and the like —
+# there is no way not to import them. The host has to offer them, otherwise instantiation
+# fails with "matching implementation was not found in the linker".
+#
+# WASI does not loosen invariant 11: it gives no Wayland, no token and no
+# translation. It gives a clock, randomness and stdio, which is the target's floor.
+wasmtime-wasi = "38"
+
+# --- terminal (section 7.10, risk R1) ---------------------------------
+# `alacritty_terminal` is the implementation milestone 7 closes with. The
+# `libghostty-vt` comes in later behind the SAME trait — and it is the trait that makes the
+# order irrelevant, which is R1's recorded mitigation.
+alacritty_terminal = "0.26"
+# The PTY. `rustix` and not `libc`/`nix` because its API is SAFE: the terminal
+# crate is `forbid(unsafe_code)`, and opening a pty with libc would require `unsafe`
+# in four calls. It is already in the tree underneath wasmtime — as a
+# direct dependency it brings nothing new.
+rustix = { version = "1.1", features = [ "pty", "termios", "process", "stdio" ] }
+
+# --- D-Bus: notifications and tray ------------------------------------
+# zbus's BLOCKING API (`blocking-api`), on a thread of its own.
+#
+# It is a SHELL over the async one — `async-io` gets into the closure either
+# way, and turning the default features off only breaks the build. What one gains is
+# that OUR code does not become async: the shell is a calloop loop with one thread
+# per event source, and a second concurrency model inside it
+# would cost more than the thread it already has.
+zbus = { version = "5", features = [ "blocking-api" ] }
+
+# --- i18n (section 22 of the summary: Fluent, not gettext) -------------
+# Plural, gender and argument order belong to the LANGUAGE. In Fluent those rules
+# live in the `.ftl`, where the translator works; in gettext they would become `ngettext` with
+# a numeric rule inside the Rust.
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+
+# --- utilities ---------------------------------------------------------
+anyhow = "1"
+# Reinterpreting a `struct` as bytes for wgpu's instance buffer.
+# It is already in the tree underneath wgpu; as a direct dependency it brings nothing
+# new, and it avoids a transmute `unsafe` in `ronoctua-render`.
+bytemuck = { version = "1", features = [ "derive" ] }
+pollster = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Section 5.2 puts "no allocation on the hot path" as a requirement. These
+# lints do not prove that, but they catch the obvious before the benchmark.
+needless_collect = "warn"
+redundant_clone = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# The first-frame target is 200 ms (section 5.2); symbols do not help with that,
+# but they help diagnose when it is missed.
+debug = 1

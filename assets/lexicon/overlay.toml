@@ -1,0 +1,143 @@
+# Curated overlay of semantic tags — section 6.5.
+#
+# The second (and last) file kept by hand. Here go the tags the glyph's NAME
+# does not deliver: the floppy disk is also "salvar", the gear is also
+# "configuracoes".
+#
+# The key is the GLYPH NAME, never the codepoint. The name is stable across versions
+# of Nerd Fonts; the PUA codepoint is not (section 6.3) — using a codepoint here
+# would make the file rot silently on the next update.
+#
+# These tags ADD to the ones derived from the name; they do not replace them.
+#
+# It starts small (~50 entries) and grows through use: when an obvious search does not
+# find the obvious glyph, the correction comes here.
+
+[fa-floppy_o]
+en = ["save", "disk", "storage", "legacy"]
+pt = ["salvar", "disquete", "armazenamento"]
+
+[md-content_save]
+en = ["save", "floppy", "disk"]
+pt = ["salvar", "gravar", "disquete"]
+
+[md-cog]
+en = ["settings", "preferences", "config", "options"]
+pt = ["configuracoes", "preferencias", "ajustes", "opcoes"]
+
+[fa-cogs]
+en = ["settings", "preferences", "system", "machinery"]
+pt = ["configuracoes", "sistema", "engrenagens"]
+
+[md-magnify]
+en = ["search", "find", "zoom", "lens"]
+pt = ["buscar", "procurar", "lupa", "ampliar"]
+
+[md-home]
+en = ["home", "house", "start", "index"]
+pt = ["inicio", "casa", "principal"]
+
+[fa-trash]
+en = ["delete", "remove", "discard", "bin"]
+pt = ["excluir", "apagar", "descartar", "lixeira"]
+
+[md-power]
+en = ["shutdown", "poweroff", "turn off", "standby"]
+pt = ["desligar", "energia", "espera"]
+
+[md-lock]
+en = ["locked", "secure", "private", "encrypted"]
+pt = ["trancado", "seguro", "privado", "criptografado"]
+
+[md-key_variant]
+en = ["password", "credential", "secret", "auth"]
+pt = ["senha", "credencial", "segredo", "autenticacao"]
+
+[md-bell]
+en = ["notification", "alert", "reminder"]
+pt = ["notificacao", "alerta", "lembrete"]
+
+[md-hammer_wrench]
+en = ["tools", "build", "maintenance", "repair"]
+pt = ["ferramentas", "construir", "manutencao", "reparo"]
+
+[oct-git_branch]
+en = ["branch", "version control", "fork"]
+pt = ["ramo", "controle de versao", "bifurcacao"]
+
+[oct-git_commit]
+en = ["commit", "revision", "snapshot"]
+pt = ["commit", "revisao", "instantaneo"]
+
+[md-console]
+en = ["terminal", "shell", "command line", "tty"]
+pt = ["terminal", "linha de comando", "console"]
+
+[md-language_rust]
+en = ["rust", "language", "programming"]
+pt = ["rust", "linguagem", "programacao"]
+
+[md-nix]
+en = ["nix", "nixos", "package manager", "reproducible"]
+pt = ["nix", "nixos", "gerenciador de pacotes", "reprodutivel"]
+
+[md-harddisk]
+en = ["disk", "drive", "storage", "hdd"]
+pt = ["disco", "unidade", "armazenamento"]
+
+[md-memory]
+en = ["ram", "memory", "hardware"]
+pt = ["memoria", "ram", "hardware"]
+
+[md-chip]
+en = ["cpu", "processor", "silicon"]
+pt = ["processador", "chip", "cpu"]
+
+[md-monitor]
+en = ["display", "screen", "output", "monitor"]
+pt = ["monitor", "tela", "saida", "display"]
+
+[md-keyboard]
+en = ["input", "typing", "keys", "keymap"]
+pt = ["teclado", "entrada", "digitacao", "teclas"]
+
+[md-battery]
+en = ["power", "charge", "energy", "laptop"]
+pt = ["bateria", "carga", "energia", "notebook"]
+
+[md-wifi]
+en = ["wireless", "network", "connection", "internet"]
+pt = ["sem fio", "rede", "conexao", "internet"]
+
+[md-volume_high]
+en = ["sound", "audio", "loud", "speaker"]
+pt = ["som", "audio", "alto", "alto-falante"]
+
+[md-format_list_bulleted]
+en = ["list", "items", "bullets", "menu"]
+pt = ["lista", "itens", "marcadores"]
+
+[md-check_circle]
+en = ["done", "success", "complete", "ok", "valid"]
+pt = ["concluido", "sucesso", "completo", "valido"]
+
+[md-alert_circle]
+en = ["warning", "caution", "attention", "problem"]
+pt = ["aviso", "cuidado", "atencao", "problema"]
+
+[md-close_circle]
+en = ["error", "failure", "invalid", "rejected"]
+pt = ["erro", "falha", "invalido", "rejeitado"]
+
+[md-information]
+en = ["info", "about", "detail", "note"]
+pt = ["informacao", "sobre", "detalhe", "nota"]
+
+# The Octicons `x` IS the CLOSE symbol, and not the letter x.
+#
+# It comes through here, and not through the lexicon: translating the token `x` globally would put
+# "fechar" on `fa-x_ray` and on every `md-alpha_x`. This file exists for
+# exactly that — the tag the glyph's NAME does not deliver.
+[oct-x]
+en = ["close", "cancel", "dismiss", "remove"]
+pt = ["fechar", "cancelar", "dispensar", "sair"]

@@ -1,0 +1,2435 @@
+# Arquitetura — o porquê
+
+Este documento existe para impedir que uma decisão já tomada seja refeita. Cada seção diz o que foi
+decidido e **por quê**, e o que foi descartado no caminho.
+
+Junto de `CLAUDE.md` (o contrato do agente) e `README.md` (rodar e instalar), ele deve bastar para
+alguém continuar o projeto sem nenhum histórico de conversa. O que ainda **falta** está em
+`PENDING.md`, não aqui.
+
+Não há relato de depuração aqui. Quando um bug ensinou algo que se repete, o ensinamento virou uma
+armadilha no `CLAUDE.md`; a história de como ele foi encontrado não sobreviveu de propósito.
+
+---
+
+## Sumário das decisões
+
+| Área | Decisão | Alternativa descartada |
+|---|---|---|
+| Sistema | NixOS mínimo, tudo por flakes | qualquer coisa imperativa |
+| Compositor | Niri upstream, sem fork nem patch | fork com integração direta |
+| Chrome | rodapé de duas linhas, só | barra, dock, popup de canto |
+| Sistema de arquivos | btrfs | ZFS (out-of-tree), bcachefs (fora do mainline na 6.18) |
+| Boot | systemd-boot + lanzaboote | GRUB |
+| Renderer | wgpu + cosmic-text + glyphon | vello (não há carga vetorial) |
+| Buffers nativos | WASM Component Model, display list retida | pixels, ou plugins nativos |
+| i18n | Fluent | gettext |
+| Fontes | repositório próprio, consumido como input | dentro do monorepo |
+
+---
+
+## Fontes
+
+### A célula é 0,600 em, exata
+
+Monoespaçamento exato, **inclusive nos 10.473 glifos Nerd Fonts** (variante Mono = ícone de uma
+célula). Na largura normal o avanço é 600 de 1000 `unitsPerEm`.
+
+**Isto é a fundação do layout do rodapé.** Com a célula exata, posicionar segmentos é aritmética de
+inteiros — não é preciso medir texto, e é o que compra o orçamento de "um frame" para which-key e
+completude. Se a fonte for trocada por uma build com outras métricas, o check `fonts-metrics`
+falha e obriga a revisar isto antes de o rodapé desalinhar em silêncio.
+
+### O defeito das 27 faces, e por que o conserto óbvio quebra
+
+O patcher do Nerd Fonts engoliu o "Semi" de "SemiExtended" para dentro do nome de família, jogando
+27 das 135 faces patcheadas em **nove famílias inventadas**. Efeito: pedir
+`NoctuaIosevka Nerd Font Mono` nunca devolvia SemiExtended.
+
+A armadilha está em consertar do jeito óbvio. As 27 SemiExtended têm `nameID 17` ∈ {`Extended`,
+`Extended Italic`, `Extended Oblique`}; as 27 **Extended verdadeiras** têm exatamente os mesmos três.
+Hoje não colidem só porque estão em famílias diferentes — ao unificar a família, colidem.
+
+Por isso `nix/scripts/fix-font-names.py` **não remenda os 27 arquivos**: recomputa a nomenclatura
+das 135 como função pura das métricas (`usWeightClass`, `usWidthClass`, `fsSelection`), e termina
+afirmando 1 família e 135 pares (família, subfamília) distintos.
+
+### Cinco derivações, não uma
+
+Um pacote único de 4,1 GB entraria no closure de toda máquina **e do ISO**, e um ISO instalável não
+fecha com 2,1 GB de fonte.
+
+| derivação | conteúdo | tamanho | onde |
+|---|---|---:|---|
+| `noctua-iosevka-core` | 4 faces RIBBI, largura normal | ~62 MB | **ISO, initrd, TTY, instalador** |
+| `noctua-iosevka-ttf-nerdfonts` | 135 TTF patcheados | 2,1 GB | sistema instalado |
+| `noctua-iosevka-ttf` | 135 TTF sem patch | 1,4 GB | sistema instalado |
+| `noctua-iosevka-woff2{,-nerdfonts}` | 270 WOFF2 | 626 MB | sistema instalado |
+| `noctua-iosevka` | meta, junta os quatro | 4,1 GB | `fonts.packages` |
+
+"Nada é descartado" vale para o **sistema instalado**. A mídia leva o subconjunto porque tem de
+caber — o check `iso-fits-usb-stick` põe teto de 4 GiB.
+
+### O TTY não consome TTF
+
+O console do Linux quer PSF/PSFU, bitmap, máximo de 512 glifos. Instalar uma fonte de console alheia
+faria o TTY parecer com outra coisa — o oposto do que a regra queria. `make-console-psf.py`
+rasteriza um PSF2 **do arquivo real** com FreeType: 498 codepoints, com folga sob o limite.
+
+### Duas cadeias de fallback, uma fonte
+
+O renderer **não usa fontconfig** — se usasse, quebraria no instalador e em ambiente mínimo. Ele
+resolve por caminho absoluto via `fontdb`, com `noctua-iosevka-core` embutida no binário. Mas as
+duas cadeias precisam **concordar**, senão o mesmo texto renderiza diferente dentro e fora dos
+nossos buffers; por isso `nix/fontconfig.nix` gera as duas de uma lista só, e um check compara as
+escolhas em codepoints-sonda.
+
+---
+
+## Onde as fontes vivem, e por quê
+
+**As fontes não estão no monorepo.** Vivem em `ronoctua-fonts`, repositório próprio, consumido como
+input pinado. Isso contraria "monorepo único" e a decisão foi tomada com número na mão.
+
+O Nix copia a árvore inteira do flake para o store a cada avaliação, e o path é endereçado por
+conteúdo: **qualquer edição a qualquer arquivo grava uma cópia nova**. Com 4,1 GB dentro, seis
+edições enchiam dezenas de GB.
+
+| | fontes na árvore | fontes como input |
+|---|---:|---:|
+| tamanho do repo | 8,1 GB | **1,4 MB** |
+| `nix flake check` após uma edição | minutos | **~10 s** |
+
+**O que NÃO era o problema:** não é o custo de hashear (4,1 GB custam 4 s). O que justifica a
+separação é a **gravação** por edição.
+
+### A mesma classe voltou, com o `target/`
+
+Tirar as fontes resolveu *aquele* caso, não a *classe*. Depois o disco chegou a 44 cópias da árvore
+somando **793 GB** — 42% do disco — cada uma carregando um `target/` de 18 GB.
+
+O detalhe cruel: `nix/rust.nix` **já filtrava** via `lib.fileset`, e filtrava bem. Mas aquele filtro
+roda sobre `src`, e `src = ./.` **já é** o store path com os GB dentro. Filtrar depois economiza
+recompilação, não disco.
+
+A correção é manter build fora da árvore (`CARGO_TARGET_DIR`). A guarda é o check `lean-tree`,
+que mede `self` e falha acima de 20 MB — e tem fixture negativo. Sem o check, a correção se perderia
+no primeiro `cargo build` fora do devshell, e o custo é invisível até o disco encher.
+
+---
+
+## Atlas de glifos
+
+A premissa "dezenas de milhares de glifos não cabem no atlas" estava errada por uma ordem de
+grandeza: **são 10.473**. A 32 px de célula, um atlas R8 de 4096² comporta 16.384 — o repertório
+inteiro caberia. Não estamos contra um limite duro; estamos escolhendo custo.
+
+Decisão: **dois `TextAtlas`**, com políticas diferentes.
+
+1. **Fixo** — repertório previsível (ASCII, Latin-1, box-drawing, ícones em uso como token, glifos
+   de app id). Populado no startup, **nunca sofre `trim()`**: a garantia de desempenho fica intacta
+   porque o navegador não encosta nele.
+2. **Transitório** — só o navegador de glifos. `trim()` por frame, LRU.
+
+Com a lista virtualizada o navegador rasteriza só as linhas visíveis (~50 glifos), e cada uma custa
+dezenas de microssegundos no `swash`.
+
+---
+
+## Xwayland
+
+**Sim**, via `xwayland-satellite` (o caminho upstream do Niri). Recusar custaria Steam, Java legado
+e uma cauda de apps que não vão migrar — a regra proíbe *chrome* de desktop tradicional, não
+aplicativos.
+
+**A restrição que isso impõe não é a óbvia.** Buffer estrangeiro é correlacionado por **PID →
+cgroup**, e o satellite cria as superfícies **em nome dele mesmo**: o `pid` reportado seria o dele,
+igual para todas as janelas X11, e a correlação quebraria **em silêncio**.
+
+Decisão: **um satellite por scope systemd de buffer**, com `$DISPLAY` próprio. Custo: um processo de
+poucos MB por buffer X11 — e já se paga um scope por buffer de qualquer forma.
+
+---
+
+## Multi-monitor
+
+**Duas linhas em todo output; minibuffer ativo só no de foco.** A analogia do Emacs resolve:
+modeline é por janela, minibuffer é por frame, e output ≈ frame. Dois minibuffers simultâneos
+criariam a pergunta "qual deles tem o prompt?", que não tem resposta boa.
+
+Todo output mantém exatamente duas linhas, então o exclusive zone fica uniforme e **o conteúdo não
+reflowa quando o foco troca de tela**.
+
+**Consequência a respeitar:** o estado do minibuffer vive **no daemon, não na superfície**. Se o
+output em foco desaparecer no meio de um prompt, o estado migra sem perder o que foi digitado.
+
+---
+
+## GPU nos testes
+
+Dividido em dois, porque uma resposta só seria desonesta.
+
+- **Correção, layout e screenshot → `lavapipe`** dentro do `runNixOSTest`. Hermético, roda no
+  sandbox e em CI sem GPU; screenshots e OCR estáveis entre execuções.
+- **Desempenho → nunca sob lavapipe.** Cravar 16 ms sobre rasterização por software mede o software.
+  O CI gateia **métricas independentes de GPU** (`layout-fast`, `shaping-fast`,
+  `instance-fast`); os números de frame saem de `nix run .#bench`, em hardware real.
+
+`virtio-gpu` acelerado fica fora: exige passthrough e quebra a pureza do sandbox — caro exatamente
+onde o valor do teste está.
+
+**O niri não roda no TTY de uma VM sem GPU.** O backend DRM rejeita renderizadores EGL por software,
+e numa VM o único EGL é o llvmpipe. Ele então sobe, cria o socket e fica com **zero output** — não
+falha, não avisa — e uma superfície layer-shell precisa de output. Por isso os testes usam o backend
+**winit** sobre `Xvfb`.
+
+---
+
+## A fronteira com o niri
+
+`ronoctua-niri` é o **único** crate que fala com o compositor.
+
+**Tipos próprios, não a crate `niri-ipc`.** O contrato tem de passar contra a tag pinada **e** contra
+`niri-next`; depender da crate publicada tornaria isso vazio, porque o Cargo fixaria uma versão dos
+tipos e o teste compararia tipos velhos com binário novo. Com tipos nossos — estreitos, só o que a
+modeline usa — o mesmo código é exercitado contra os dois binários de verdade.
+
+**Evento desconhecido não é erro.** Eventos são lidos como `Value` e só então mapeados; o que não
+reconhecemos vira `Event::Ignored`. O niri versiona por calendário e acrescenta variantes com
+frequência — um enum estrito quebraria a distro num upgrade por causa de um evento que não usamos.
+O que o contrato prova é o contrário: que os eventos que **usamos** continuam existindo.
+
+---
+
+## Invariante 8: por que ele não depende de disciplina
+
+"Zero string literal em UI" é uma regra que ninguém cumpre por vontade. O que a faz valer são duas
+guardas, nenhuma delas um teste:
+
+1. **Build.** `gen-i18n.py` exige o mesmo conjunto de chaves nos dois `.ftl`, **nos dois sentidos**
+   (tradução faltando e tradução órfã são os dois erro) e recusa valor vazio.
+2. **Compilação.** O mesmo gerador emite uma constante por chave. `key::CMD_ARQUIVO_ABRIR` não tem
+   como estar errada; uma chave inventada não compila.
+
+**O vão entre as duas, que já custou caro.** A guarda 1 vê o que *está* nos arquivos, nunca o que o
+código *pede*. A guarda 2 protege quem escreve `key::X`; quem escreve `"x"` compila igual. E
+`Texts::t` devolve `[x]` para chave desconhecida, de propósito, para não derrubar o shell.
+Junte os três e há um caminho sem nenhum alarme — foi assim que o instalador imprimiu
+`[inst-step-partition]` com o CI verde.
+
+A lição generalizada: **um fallback que não derruba nada precisa de alguém procurando por ele.** Onde
+houver, tem de haver um check que o busque.
+
+**Fluent, e não gettext:** plural, gênero e ordem de argumento são do IDIOMA. Em gettext viram regra
+numérica dentro do Rust; em Fluent ficam no `.ftl`, onde quem traduz mexe.
+
+---
+
+## O rodapé: onde cada linha fica, e o que aparece nelas
+
+**Modeline e minibuffer ficam coladas, e a expansão cresce abaixo delas.** De cima para baixo:
+o nome do buffer, a linha do que se digita, e então a lista — which-key, candidatos do localizador,
+histórico, manual.
+
+Esta é a **terceira** posição que a expansão ocupa neste projeto, e vale registrar as duas anteriores
+porque cada uma caiu por um defeito diferente:
+
+1. **Acima da modeline.** O nome do buffer descia junto com a lista, e a única linha que diz *onde
+   você está* saltava de lugar a cada tecla.
+2. **Entre as duas.** Resolveu o salto da modeline e criou outro: as duas linhas que se leem juntas
+   ficavam separadas por vinte de lista.
+3. **Abaixo das duas** (hoje). O par que se lê como uma coisa só aparece como uma coisa só, e o que
+   cresce cresce longe dele. Decisão do dono.
+
+A superfície continua ancorada embaixo, então o par sobe conforme a lista cresce — e é por isso que
+a lista tem **teto**. A modeline mantém fundo um tom acima: coladas como estão, a diferença de cor é
+a única coisa que ainda as distingue, e ela basta (invariante 15).
+
+**A expansão para de crescer.** O teto sai de dois tokens (`space.expansion`): um absoluto em linhas
+e um percentual da tela, valendo o menor. Nenhum dos dois serve sozinho — doze linhas são um terço
+de um monitor de 1080 px e mais da metade de um de 600, e um percentual sem teto daria trinta e três
+linhas numa tela 4K. O que passa do teto vira **página**.
+
+**A página vira com o `CtrlRight`.** Ele é a tecla que **não se soma à leader**: com ele segurado, a
+tecla vai para a navegação da região em vez de entrar na sequência. Sem uma tecla assim, paginar
+custaria duas letras do keymap que nunca mais poderiam ser comando. O `Modifiers` do Wayland não
+distingue Ctrl esquerdo de direito — o xkb já juntou os dois num bit —, então o rodapé rastreia o
+keysym `Control_R` na descida e na subida, com ressincronização quando nenhum Ctrl está pressionado:
+sem ela, perder o foco com a tecla segurada deixaria toda tecla indo para a navegação.
+
+**A lista mostra o COMANDO, e a descrição vai para o cursor.** Ela mostrava o rótulo traduzido, e
+isso respondia à pergunta errada: quem olha a lista quer saber *o que vai rodar*, e o nome do comando
+é o que se digita depois no localizador. A frase inteira não sumiu — ela aparece na linha de mensagem
+**quando o ponteiro passa por cima do item**. É a divisão do Doom: a lista é para varrer com o olho,
+a frase só quando se pergunta por ela, e apontar com o mouse é a pergunta.
+
+**A barra de rolagem se arrasta, e arrastar não executa.** Apertar o botão sobre ela entra em modo
+de arraste em vez de clicar no item que está atrás — a barra fica justamente por cima da ponta
+direita das linhas, e quem quer arrastar não quer rodar nada. É o pior tipo de surpresa: a pessoa
+queria olhar e o sistema fez.
+
+**Clicar numa linha é apertar a tecla dela.** Num grupo, desce um nível; num comando, executa. As
+duas coisas saem de graça da mesma definição, e o que se ganha é não haver um segundo caminho: nada
+fica alcançável só pelo mouse, e o que o mouse faz é sempre algo que o teclado também faz. No
+localizador, clicar é escolher e confirmar — e passa pelo mesmo `Enter`, senão uma ação que exige
+argumento seria disparada sem ele pelo mouse enquanto o teclado pergunta.
+
+**Duas navegações, e a diferença não é de gosto.** A região expandida serve a dois tipos de
+conteúdo, e misturá-los dá o pior dos dois — barra que salta e contador que mente:
+
+| | rola | pagina |
+|---|---|---|
+| quem | manual, localizador, histórico | lista de atalhos |
+| barra de rolagem | sim | não |
+| contador `1/2` | não | sim, com a tecla que vira |
+| arranjo | uma coluna, lista | colunas lado a lado |
+
+Um manual é texto mais longo que a tela: ele rola, e o que diz onde você está é a barra — "página 2
+de 5" não responde isso. Uma lista de atalhos é o contrário: mostra **o que cabe** e o resto é outra
+página; barra ali seria um controle contínuo para conteúdo que anda em saltos, e o que falta dizer é
+quantas páginas há e **qual tecla vira**. O contador vem com a tecla ao lado esquerdo justamente
+porque um `1/2` sozinho diz que existe outra página e não diz como chegar nela.
+
+**A lista de atalhos usa a largura antes da altura.** É o arranjo do Doom: dez atalhos numa região de
+doze linhas caberiam em coluna única — uma tira estreita com a tela inteira vazia ao lado, e ainda
+paginando ao passar de doze. Preenchendo as colunas que cabem, os mesmos dez viram poucas linhas e o
+olho varre um bloco. O preenchimento é **por coluna** (desce a primeira, depois passa à seguinte),
+que é o que mantém a ordem alfabética legível de cima para baixo.
+
+Isso trouxe uma consequência no ponteiro: com colunas lado a lado, a linha sozinha não identifica o
+item — a linha 2 existe em todas. Ignorar o `x` faria o cursor descrever, e o clique **executar**, o
+item da primeira coluna sempre.
+
+**O localizador rola atrás do cursor, e não pagina.** A seta desce o item em foco e a lista o
+acompanha, começando a rolar **duas linhas antes** da borda — o `scrolloff` do vi. Paginar ali
+contava a história errada: numa busca o que importa é o que casou, não em que fatia da lista se está.
+O indicador `3/15` some quando o localizador está aberto; a barra de rolagem diz a posição para quem
+quiser.
+
+**As letras que casaram acendem.** Com busca por subsequência, `jme` filtrando
+`window-move-left` parece arbitrário até as três letras aparecerem em outra cor. O casamento é
+**guloso à esquerda**: preferir início de palavra leria melhor em kebab-case, mas pode escolher uma
+posição que impede o resto de casar — e aí um candidato válido sumiria da busca. Um realce numa letra
+vizinha é barato; um item que some, não.
+
+**Um defeito que essa lista expôs: pedir tamanho não é pintar.** `aplicar_geometria` só comita o
+tamanho novo; quem pinta é o `configure` que volta, e o compositor **só o manda quando a altura
+muda**. Com a lista no teto, filtrar de 172 para 40 candidatos não muda altura nenhuma, e mover o
+cursor também não — então digitar não filtrava na tela e a seta não descia. Tudo aparecia de uma vez
+ao mexer o mouse, que era a única outra coisa que pintava. Toda mudança de estado agora pinta
+explicitamente.
+
+**Os dois-pontos alinham a lista.** `RET : abrir terminal` e `  a : ajuda` — a tecla encostada à
+direita da própria coluna, os dois-pontos de todas as linhas na mesma coluna, uma célula de respiro
+de cada lado. Era um vão fixo de doze células, herdado de quando a coluna precisava caber
+`C-M-S-s-X`: com a tecla curta, o olho atravessava o vazio para achar o que ela faz. No localizador o
+alinhamento se inverte — cento e setenta nomes de comando encostados à direita dariam uma margem
+esquerda serrilhada.
+
+**O `+` do submenu é posto no desenho.** Ele morava dentro da tradução (`group-window = +janela`), e
+por isso três dos seis grupos não o tinham — nada obrigava, e o esquecimento não aparecia em lugar
+nenhum. Agora ele sai do `is_group` que a árvore já sabe, e um check recusa `+` no `.ftl`. O rótulo de
+grupo tem tom próprio (`text.group`), porque um submenu não *faz* nada: ele leva a outro nível.
+
+**A expansão empurra os buffers, não os cobre.** O `exclusive zone` cresce junto com a superfície,
+então abrir a lista redimensiona o que está atrás. Esta é a segunda metade da reversão da §4.3, que
+queria a lista "POR CIMA, sem mexer no que já está na tela". Mesma razão da primeira: no Emacs, abrir
+a janela do which-key **redimensiona** as outras. Cobrir o conteúdo esconde justamente a linha que se
+estava lendo — e num sistema sem popup (invariante 14), a superfície do rodapé é a única coisa capaz
+de cobrir algo. O custo é o reflow: os buffers recebem `configure` a cada expansão, que é o mesmo
+custo que o Emacs paga e pelo mesmo motivo.
+
+O que **saiu** da modeline, e por quê:
+
+- **O indicador de modo (`NORMAL`).** Vinha do evil-mode do Doom; este sistema não tem edição modal,
+  então não havia estado a indicar. E enquanto a leader está ativa, o que há para mostrar é a
+  sequência — que aparecia **também** no minibuffer. A mesma informação em dois lugares, um deles um
+  segmento que elide.
+- **O rótulo de ausência (`fundamental`).** Sem janela em foco não há modo. Escrever um nome de modo
+  inventado ocupa coluna afirmando algo falso: quem lê procura um buffer que não existe.
+- **O `*scratch*`.** Pior que os dois: ele vinha do Emacs, onde o scratch é um buffer **de verdade** —
+  existe, aceita texto, pode ser salvo. Aqui não havia nada por trás dele, então a modeline anunciava
+  um buffer aberto que nunca foi implementado. Sem janela, o segmento some e a modeline fica só com o
+  contador de notificações; assim que algo abre, o nome aparece.
+
+A sequência pendente aparece como `LEADER g-`, na notação do Doom. O `-` no fim custa duas colunas a
+menos que ` …` dizendo a mesma coisa, e num rodapé onde tudo elide, espaço é o recurso.
+
+**O rótulo da leader vem do ambiente**, posto por quem define o bind, e são **dois**:
+`RONOCTUA_LEADER` (a sequência) e `RONOCTUA_LEADER_CHORD` (o que se segura). Em produção os dois são
+`SUPER` — e essa coincidência é o que o keyd compra. No aninhado eles divergem: a sequência é
+`ALT SPC` e o acorde é o `ALT` sozinho. Enquanto a tela chamava os dois de "a leader", segurar "a
+leader" parecia incluir o Espaço — e incluir o Espaço **dispara a sequência**, que é o oposto do
+acorde. Deduzir um do outro seria a tela ensinando o gesto errado.
+
+---
+
+## Um keymap, e um bind só no compositor
+
+Fechar janela, trocar de foco, mudar de espaço, capturar tela — tudo isso era bind do niri. Agora é
+comando do shell, e chega ao compositor por ação de IPC. O niri tem **um** bind: o que acorda o
+daemon.
+
+A §7.4 pede um keymap. Enquanto havia dois, havia duas notações, dois lugares onde uma tecla podia
+colidir, e o which-key conhecia metade dos atalhos do sistema — quem apertasse a leader via uma lista
+que não era a verdade.
+
+O risco novo é de outra natureza: o nome da ação viaja como **string**. `MoveColumnLeft` errado por
+uma letra compila, roda, e o niri responde `"error parsing request"` — que vira um `warn` no log e
+nada na tela. É a mesma classe do fallback silencioso, e o `match` do Rust não protege: ele confere o
+id do comando, não o nome do outro lado.
+
+Por isso a tabela vive em **um** lugar (`crates/ronoctua-shell/src/actions.rs`), e o binário
+`ronoctua-niri-actions` a percorre inteira contra um niri de verdade dentro do `niri-contract`. Ele já
+pagou por si: `Screenshot` e `MoveWindowToWorkspaceDown` exigem argumento, e `{}` dá o **mesmo erro**
+de um nome inexistente. Numa sonda à mão a resposta se perdeu num timeout de socket e eu concluí que
+passava; o check não deixou.
+
+### A roda: um evento, dois significados, e três jeitos de o Wayland dizê-lo
+
+A região expandida tem dois modos (ver "Duas navegações"), e a roda respeita o modo em vez de
+inventar um terceiro: onde há **barra de rolagem** o entalhe anda três linhas — o que todo
+visualizador de texto faz —, e onde há **contador de página** ele vira a página. Quem decide é
+`navigation()`, e não a roda; a roda só diz quanto e para que lado.
+
+O Wayland tem três jeitos de dizer a mesma coisa, e um cliente que lê só um funciona em metade dos
+aparelhos: `value120` (o de hoje, em 120-avos de entalhe), `discrete` (o antigo, um inteiro por
+entalhe) e `absolute` (o contínuo, em pixels de dedo — o único que o touchpad manda).
+
+O contínuo se converte pela **altura da linha**, e não por um número de pixels escolhido a dedo:
+assim o dedo anda o conteúdo na mesma proporção em que anda na tela, e a conta se recalibra sozinha
+se a fonte mudar. Um "15 px por entalhe" seria mais um valor visual fora dos tokens (invariante 9).
+
+E o acumulador não é zelo: cada evento de touchpad vale uma fração de entalhe, e truncar evento a
+evento daria zero para sempre — o touchpad simplesmente não rolaria. Guardando o resto, os pedaços
+somam. O `stop` de um gesto zera o que sobrou, senão o resto de um gesto entraria no começo do
+próximo.
+
+### O clique no buffer chega como CÉLULA, e o buffer resolve o resto
+
+O invariante 11 não é sobre unidade, é sobre fronteira: pixel é coisa de Wayland e de escala de tela,
+e o buffer não conhece nenhuma das duas. O host converte pixel em célula (descontando a margem da
+janela) e manda `input::click(posicao)` — exatamente como ele já converte tecla em `character`.
+
+Quem resolve **qual item** está naquela célula é o buffer, porque só ele conhece o próprio layout: a
+grade de glifos começa na linha 2, anda de duas em duas linhas e tem uma linha de nome embaixo. O
+host mandar "o item número N" seria o host reimplementando o layout do buffer, e as duas contas
+divergiriam no dia em que o cabeçalho ganhasse uma linha. Por isso o teste também não repete a
+geometria: ele clica **onde o `render` disse que pôs o glifo**.
+
+Uma diferença deliberada em relação ao rodapé: lá o clique numa linha **executa**, porque cada linha
+é uma ação e clicar nela é apertar a tecla dela. No navegador de glifos o clique **seleciona**, e o
+`Enter` continua sendo quem copia — ali a lista é dado que se navega, e copiar no clique trocaria a
+área de transferência a cada glifo olhado.
+
+### O modificador que abriu a leader não conta na sequência
+
+No aninhado a leader **é** `Alt+Espaço`. Quando a sequência começa, o Alt está pressionado por
+construção — a mão acabou de apertá-lo. Cada tecla saía com o modificador junto, nada casava, e a
+tela dizia `ALT SPC M-n is not bound`. Exigir que se solte o Alt antes de digitar `i` é uma
+armadilha, e não há nada na tela que a ensine.
+
+O mesmo estado acontece **sem** a mão, e aí é pior porque não há gesto que o desfaça: sair para um
+atalho do host (`Super+Espaço`, no Omarchy) e voltar faz o niri aninhado perder a soltura da tecla.
+A partir daí ele anuncia o modificador para sempre, toda ligação passa a não casar, e o sintoma é
+"os atalhos pararam de funcionar" sem nada mudar no keymap.
+
+A regra é: **desconta-se o que já estava segurado quando o rodapé ganhou o teclado**
+(`Footer::descontar`, sobre o campo `herdados`). A herança é tirada no primeiro evento de modificador
+depois do `enter` — que é quando o compositor conta o que está valendo. Um modificador apertado
+**depois**, no meio da sequência, continua contando: é o que preserva a possibilidade de uma ligação
+`C-…` existir um dia sem nascer quebrada.
+
+E `leave()` zera os modificadores junto com o `CtrlRight`, pelo mesmo motivo e com mais razão: um
+estado que só se atualiza com foco não pode continuar valendo sem foco.
+
+O teste de VM segura o Alt com `xdotool keydown` durante a sequência inteira — o `xdotool key` solta
+a tecla entre uma e outra, e por isso o caminho passava verde com o defeito presente.
+
+### A caixa é Shift, e nunca Caps Lock
+
+O keymap distingue caixa de propósito: `w h` foca a janela da esquerda, `w H` a **move** para lá.
+Essa distinção é **Shift** — um gesto a mais, deliberado, na hora.
+
+O Caps Lock não é isso. Ele é um estado que fica ligado, que se liga sem querer, e que a pessoa
+esqueceu que ligou. Com ele ligado o xkb entrega `I` onde se digitou `i`, e **toda** ligação
+minúscula do keymap morre de uma vez. A tela mostrava `ALT SPC I is not bound`: verdade, e inútil —
+ela nomeia a consequência e esconde a causa. Pior nas ligações que existem nas duas caixas, onde
+`w h` viraria `w H` e a janela se **moveria** quando se pediu para focar. Um atalho que faz outra
+coisa é pior do que um que não faz nada.
+
+Por isso o Lock é desfeito antes de a tecla virar `KeyPress` (`Footer::sem_caps_lock`), nos dois
+sentidos — com Shift junto o xkb já devolveu a minúscula, e desfazer só num sentido apagaria o
+`w H`. O Shift continua decidindo a caixa, que é o desenho.
+
+E quando a caixa **é** o motivo de nada casar, a mensagem passa a dizer isso: `Leader::a_outra_caixa`
+procura a mesma sequência com a caixa trocada e, se for ela que existe, a área de eco mostra
+`… não está ligado — … está`. Isso **não** é fallback: nada é executado pela outra caixa, justamente
+porque `w H` e `w h` fazem coisas diferentes. É só a diferença entre a pessoa descobrir sozinha e ter
+de mandar um screenshot.
+
+### A leader é a tecla Super sozinha, e isso custou um daemon
+
+Em produção, **tocar** Super abre a sequência; **segurar** Super é o modificador dos acordes. A mesma
+tecla física faz as duas coisas, e nenhuma delas é possível só com o compositor: o niri recusa bind em
+modificador sozinho (`invalid key: Mod`) e não tem disparo na soltura — as propriedades de bind são
+`allow-when-locked`, `allow-inhibiting`, `cooldown-ms`, `repeat` e `hotkey-overlay-title`.
+
+Isso não é limitação a contornar. Um modificador **é** um modificador; distinguir toque de pressão
+acontece abaixo do compositor, no fluxo de eventos do kernel. Quem faz isso é o **keyd**
+(`nix/modules/keyboard.nix`): `leftmeta = overload(meta, f13)` — segurada, ela é Meta e os acordes
+chegam ao niri como `Mod+…`; solta sem outra tecla, emite `F13`, que o niri liga à leader.
+
+**É a peça mais perigosa do sistema por linha de código**, e vale dizer por quê: o keyd fica entre o
+teclado e tudo o mais, e um erro nele é um teclado que não digita. O que limita o estrago é remapear
+**uma** tecla — o teste de VM afirma que a seção `[main]` tem exatamente uma linha — e o serviço não
+bloquear o boot: se ele não subir, perde-se a leader, não o teclado.
+
+Uma armadilha já paga: o keyd avisa `failed to set effective group to keyd`, e o conserto óbvio
+(`users.groups.keyd = { }`) **derruba o serviço** — a unidade do NixOS roda sem `CAP_SETGID`, então
+com o grupo existindo o `setgid` falha e o processo sai com 255. O aviso é o caminho previsto.
+
+No modo aninhado nada disso existe: a leader continua `Alt+Space`. O `Mod` pertence ao compositor do
+host, e pôr um remapeador global no caminho para desenvolver seria trocar o teclado da máquina inteira
+por causa de um loop de teste.
+
+**E por isso o aninhado não consegue ser inerte ao segurar.** O niri dispara bind na *descida* da
+tecla: apertar Espaço com Alt segurado **é** o gatilho. A inércia em produção não vem do compositor,
+vem do keyd. O que dá para consertar — e está consertado — é o `repeat=false`: sem ele, segurar
+`Alt+Space` re-dispara o `spawn` na taxa de repetição do teclado e a lista reabre sozinha várias
+vezes. No aninhado, o acorde é o **`Alt` sozinho**, e a tela passou a dizer isso
+(`RONOCTUA_LEADER_CHORD`). Para exercitar o comportamento de produção, o caminho é `nix run .#vm`,
+onde o keyd existe.
+
+**A rede de segurança, e por que ela não pode depender da leader.** Se o keyd cair, tocar Super não
+emite mais `F13` e some o caminho para *todo comando por nome*. Dois binds vivem **fora** da leader
+por isso: `Ctrl+Alt+L` abre a sequência sem passar pelo `F13`, e `Ctrl+Shift+L` roda
+`keyboard-restore`, que reinicia o serviço e **diz na tela** se conseguiu — restaurar em silêncio é
+indistinguível de não restaurar. Reiniciar unidade do sistema de dentro da sessão precisa de polkit;
+a regra libera **um** verbo, **uma** unidade e **um** usuário, porque um `manage-units` aberto ao
+`wheel` deixaria qualquer processo da sessão parar qualquer serviço. Os dois binds são gerados da
+mesma tabela dos acordes, e o gerador **recusa** que eles saiam com o prefixo da leader: seria a
+chave trancada dentro do cofre.
+
+**O rodapé não subia em produção.** O binário não estava em `systemPackages` e o bind da leader
+spawnava o *nome* `ronoctua-shell`, que o `PATH` de uma unidade não resolve. O sistema instalado
+ficava sem modeline, sem minibuffer e sem leader, e nenhum check acusava — nenhum deles subia a
+sessão de verdade. Agora o rodapé é unidade de usuário do `graphical-session.target`, todo `spawn` do
+config carrega caminho do store, e o `keyboard-vm` afirma as duas coisas.
+
+**Segurar a leader é inerte.** O gatilho da sequência é `LEADER+Space`, um acorde como os outros —
+não a leader sozinha. Segurá-la não abre a lista e não tira o foco da janela, e há uma guarda no
+build que recusa um bind na leader sozinha: seria o único jeito de esse comportamento voltar.
+
+`LEADER w h` é **sequência**: a leader é apertada e solta, o compositor avisa o daemon, e o rodapé
+passa a receber teclado. `LEADER+←` é **acorde**: a leader fica segurada, e o rodapé nunca vê essa
+tecla — quando ele ganha o teclado, o acorde já terminou. Quem resolve acorde é o compositor, sempre.
+
+Isso poderia trazer de volta as duas tabelas. Não traz, porque **o bind do niri é gerado**: a tabela
+de acordes vive em `actions.rs`, ao lado do que cada comando faz, e o `export-niri-binds` emite o KDL
+a partir dela. Some um id da tabela, some o bind. É o mesmo padrão dos tokens, do i18n e do WIT —
+gerar, em vez de manter duas cópias sincronizadas à mão.
+
+O nome da ação existe em duas grafias — `FocusColumnLeft` no IPC, `focus-column-left` no config — e a
+segunda é **derivada** da primeira, para não haver uma terceira tabela. Um erro aí não é silencioso: o
+niri recusa o config na partida.
+
+**Os acordes saíram da lista do toque.** Eles apareciam ali em tom apagado, e não eram escolhas do
+que se está fazendo: a leader já está solta, e apertar `←` naquele momento não faz nada. Vinte e
+cinco linhas para dizer o que existe em *outro* modo de uso — a lista encolheu pela metade quando
+saíram. O que saiu foi para o **manual** (`LEADER h s`), que ocupa a mesma região expandida e é
+gerado da tabela: mudar um atalho muda o manual, sem passo intermediário. Um manual escrito à mão
+seria a segunda cópia da tabela de atalhos, e o dia em que ela mente é o dia em que alguém confia
+nela.
+
+O `+` que os prefixava virou a marca de **submenu**, e só dela.
+
+O config do niri passou a ser uma **derivação**, e não uma string. Interpolar a saída de uma derivação
+numa string de avaliação seria import-from-derivation: a avaliação do flake pararia para esperar um
+build.
+
+**`Esc` não mata buffer.** Ele cancela o que está em curso — a busca — e para aí. Destruir trabalho é
+comando nomeado (`LEADER b k`), porque não pode depender de uma tecla que se aperta por reflexo ao sair
+de qualquer coisa.
+
+### As 141 ações do compositor viram comandos
+
+A §13 pede que **toda funcionalidade seja um comando nomeado**, e do sistema faz parte o que o
+compositor sabe fazer. As 141 ações do niri entram no registro como `niri-<nome>`, alcançáveis pelo
+localizador (`LEADER :`).
+
+**A lista é gerada do binário pinado.** `niri msg action --help` dá nome, descrição e — por
+subcomando — se a ação exige argumento. Escrita à mão, ela envelheceria em silêncio: uma ação
+removida vira comando que responde `"error parsing request"`, que é um `warn` no log e nada na tela.
+O gerador **para o build** se extrair menos de 100 — um parser que degrada em silêncio devolveria
+tabela vazia, e as ações simplesmente sumiriam da lista.
+
+**Elas executam pelo cliente do próprio niri**, e não pelo nosso JSON. Não é preguiça: `Screenshot`
+exige `show_pointer` e `MoveWindowToWorkspaceDown` exige `focus`, com padrões que existem no clap do
+niri e em lugar nenhum que a gente possa ler — mandar `{}` dá o **mesmo erro** de um nome
+inexistente. Com `niri msg action <nome>`, os padrões são os dele, o erro é o dele (e vai para a área
+de eco, não para o log), e não há conversão nossa para errar. Os ~25 comandos do keymap continuam no
+caminho direto por IPC, que é o quente e é provado ação por ação pelo `niri-contract`.
+
+**Elas não ganham tecla**, e é a única exceção à regra de que todo comando tem atalho: 141 atalhos
+seriam 141 teclas a menos para o que se usa. A exceção é reconhecível pelo prefixo `niri-`, então ela
+não cresce sem alguém escrevê-lo.
+
+**Ação com argumento pergunta.** Escolhida no localizador, `focus-workspace` vira um prompt
+(`focus-workspace: `) e o que se digita vai como argumento. Uma sequência de teclas não tem como
+carregar um número — ela é um caminho até um id, não uma chamada com parâmetro.
+
+**As 141 descrições estão nos dois idiomas**, e um check recusa ação sem chave. Subir a tag do niri
+**para o build** até o que apareceu ser traduzido. É barulhento de propósito: a alternativa é o
+inglês do upstream aparecendo no meio de uma lista em português, que é o fallback silencioso com
+outra roupa.
+
+---
+
+## Workspaces: `TAB`, nove fixos, e o número na tecla
+
+O grupo saiu de `e` para **`TAB`** — a tecla do alternador de janelas de todo sistema —, e `TAB TAB`
+mostra o panorama. Cada ação tem várias teclas de propósito: `j`/`k` do vi, `[`/`]` de quem vem do
+navegador, setas para quem não decorou nenhum dos dois, e `.`/`,`. Redundância aqui custa uma linha
+de tabela e poupa uma decisão por uso.
+
+**São nove espaços declarados no config**, e não os dinâmicos do niri. Ele cria e destrói espaço
+conforme o uso: `LEADER TAB 7` num sistema com três espaços não teria para onde ir, e a mesma tecla
+levaria a lugares diferentes conforme quantas janelas estivessem abertas. Declarados, o número na
+tecla **é** o número do espaço. O `0` vai para o último, que é a convenção do teclado — o zero fecha
+a fileira depois do nove.
+
+`TAB m` repete o submenu inteiro para **levar a janela**: quem aprendeu `TAB 3` ganha `TAB m 3` de
+graça.
+
+**E a ligação passou a carregar argumento.** `TAB 3` e `TAB 7` são o mesmo comando com números
+diferentes; sem isso, a alternativa seria `workspace-ir-1`…`-9` — nove nomes no localizador dizendo a
+mesma coisa e nove chaves de texto para traduzir, só para carregar um dígito. O acorde já fazia isso
+(`LEADER+3` leva o `3` no KDL); agora a sequência também. Os dois vão pelo cliente do compositor,
+porque a forma do argumento no JSON é dele.
+
+---
+
+## Nada vaza da janela, e isso é garantia do HOST
+
+Uma foto da tela mostrou o convite do navegador de glifos passando **por cima**
+do contador. Texto sobre texto é o pior resultado possível: nenhum dos dois fica
+legível, e não há erro em lugar nenhum.
+
+São **dois** limites, e cada um sozinho deixa passar um caso:
+
+- **O orçamento** (`comando-texto.largura-max`) é o que o buffer reservou para
+  aquele trecho. Sem ele, dois textos da mesma linha colidem.
+- **A borda** é a garantia do host: nada sai da janela, tenha o buffer pedido o
+  que tiver. Sem ela, um buffer distraído escreve fora da tela — e o compositor
+  não recorta.
+
+**O buffer declara o orçamento; quem corta é o host.** Não é divisão arbitrária:
+um buffer não pode elidir uma `key`, porque quem a traduz é o host e o
+comprimento da frase muda com o idioma — "Type to search for a Nerd Fonts glyph"
+e "Digite para buscar um glifo das Nerd Fonts" não têm o mesmo tamanho. O que o
+buffer sabe é quanto espaço há.
+
+E quando nem o orçamento resolve, o buffer **esconde o que importa menos**: numa
+janela estreita o contador some, porque sem ele ainda se busca e sem o campo de
+busca não.
+
+---
+
+## O buffer diz "grande", o host diz quantos pixels
+
+O navegador de glifos precisava de ícones maiores, e o tamanho é decidido pelo host — o invariante 11
+não deixa valor de token atravessar a fronteira. A saída é a mesma que a cor já usava: o buffer
+**nomeia**, o host resolve. `large` vale `font.size.xlarge`.
+
+**Por TRECHO, e não por buffer.** Começou no descritor, e o resultado foi o cabeçalho e o rodapé do
+navegador crescendo junto com os ícones: texto de interface em corpo 32, desconfortável de ler e
+estourando a linha. O que precisa ser grande ali é o **glifo**; o texto em volta é texto. A grade de
+células continua sendo a do tamanho normal — um trecho grande ocupa mais de uma célula, e quem o
+espaça é quem desenha, porque o host não sabe o que é grade e o que é texto corrido.
+
+No renderizador isso custou uma linha: cada trecho já tinha o próprio `Buffer` do glyphon, então a
+métrica passou a sair dele. A alternativa — um segundo renderizador — daria um segundo atlas e uma
+segunda cópia da fonte para desenhar dois tamanhos.
+
+Pelo mesmo caminho entrou `text::icon`: um buffer que quisesse uma lupa teria de escrever o
+codepoint da PUA à mão — um número que muda entre versões das Nerd Fonts, embutido num componente que
+não tem como saber disso. Nomeando o token, quem resolve é quem tem a tabela (invariantes 9, 10 e
+11). Um nome que não resolva vira `?` **visível**: chegar até ali significa que a tabela e o WIT
+divergiram, e isso tem de aparecer.
+
+---
+
+## Config gerado que ninguém valida é config quebrado
+
+Dois defeitos passaram pelo `nix flake check` inteiro e só apareceram na tela:
+
+1. **`duplicate keybind`** — `Alt+Ctrl+L` dos padrões do niri contra o `Ctrl+Alt+L` de emergência: a
+   mesma tecla escrita em outra ordem. A deduplicação comparava **strings**.
+2. **Dois blocos `layout {}`** no config de produção, desde sempre. O niri recusa nó duplicado.
+
+Um config recusado não é um atalho quebrado: é o compositor caindo no **config padrão dele** — sem
+nenhum atalho nosso e sem a leader. E o único sinal era uma caixa vermelha na tela.
+
+O que faltava era perguntar a quem tem a resposta. O `niri-binds.nix` grepava por uma palavra e o
+módulo grepava por outra; nenhum dos dois perguntava ao compositor se o arquivo **inteiro** fecha.
+Agora o `niri-config-valid` roda `niri validate` nos dois configs.
+
+Para isso o config do aninhado teve de virar **derivação**. Ele era montado por `sed` dentro do
+script, em tempo de execução — nada tinha como alcançá-lo. É o mesmo movimento que o config de
+produção já tinha feito, e pelo mesmo motivo.
+
+E a comparação de teclas passou a ser **canônica**: modificadores ordenados, tudo minúsculo. Os binds
+de emergência entram como reservados, porque eles saem sem o prefixo da leader — um acorde que caia
+na mesma tecla não "perde para o nosso", ele quebra o arquivo.
+
+---
+
+## A mensagem de erro tem de ser legível — e não era
+
+O niri avisou que o config estava quebrado, e o aviso saiu em **tofu**: uma caixinha por caractere. É
+o modo de falha mais cruel possível, porque apaga a informação de que se precisa exatamente quando se
+precisa dela.
+
+A causa: `FONTCONFIG_FILE` substitui a configuração **inteira** do fontconfig, e o `nix/dev.nix`
+apontava para o **fragmento** — só as regras de alias, sem um `<dir>` sequer. Sem diretório de fonte,
+o fontconfig não acha fonte nenhuma. Medido: `fc-list` devolvia zero.
+
+O nosso renderizador não passa por ali (§6.4: ele resolve por caminho absoluto), e é por isso que o
+rodapé aparecia normal enquanto o aviso do compositor era ilegível. Duas cadeias de fonte, e só uma
+quebrada — e nenhum check olhava a segunda.
+
+O arquivo completo é **autossuficiente**, e não um `<include>` da base do sistema: incluir o
+`fonts.conf` do nixpkgs traz junto o `/etc/fonts/conf.d` do host, e as regras de lá vencem as nossas
+— no teste, `fc-match sans-serif` devolvia "Liberation Sans". O aninhado existe para mostrar o que a
+distro vai mostrar.
+
+---
+
+## O teto de textura não é um detalhe do wgpu, é o tamanho do monitor suportado
+
+`Limits::downlevel_defaults()` foi escolhido para "ampliar onde a distro roda": ela desenha glifo e
+quad, e não precisa de GPU moderna. Só que ele fixa `max_texture_dimension_2d` em **2048**, e a
+superfície de apresentação **é uma textura**. O limite de compatibilidade virou, sem ninguém decidir
+isso, o maior monitor que a distro atende.
+
+Duas caras do mesmo defeito, e nenhuma delas apontava para os limites:
+
+- **A janela fechava sozinha.** `Alt+=` cresce a coluna em 10% da tela; num monitor de 1920 o
+  primeiro passo já pede 2112 px. `Surface::configure` **não devolve erro** — ele devolve `()`, e a
+  dimensão inválida é erro de validação fatal. O processo morre, a janela some, e não há uma linha
+  de log em lugar nenhum, porque o niri manda a saída do que ele spawna para `/dev/null`.
+- **Monitor grande nunca teve rodapé.** Ele ocupa a largura da tela: num 2560 ou num 4K ele morreria
+  na primeira configuração, antes do primeiro pixel.
+
+A correção é `using_resolution(adapter.limits())`: troca só as três dimensões de textura pelas do
+adaptador e mantém todo o resto downlevel — compatibilidade ampla sem um teto de resolução
+inventado. E `gpu::fits` prende a dimensão ao que a GPU aceita, porque a alternativa a cortar o
+conteúdo é matar o processo.
+
+O check (`large-monitor-surface`) pede um dispositivo com os limites **de produção** e tenta a
+textura de um 4K. Comparar números de `Limits` seria conferir a nossa aritmética contra ela mesma;
+quem responde ali é o driver.
+
+---
+
+## Um rodapé por sessão — garantido, e não afirmado
+
+O socket de controle tem o display no nome, e o código dizia em comentário que outro rodapé "estaria
+errado em existir". Nada tornava isso verdade: o novo removia o arquivo, abria o dele por cima, e o
+anterior continuava vivo — com a layer surface na tela e o `wl_keyboard` no seat.
+
+O estrago não é cosmético. Substituído **com a leader aberta**, o anterior fica com
+`keyboard-interactivity: exclusive` para sempre: nenhuma ordem chega mais nele para encerrar. Daí em
+diante o rodapé novo **desenha** a lista de atalhos e o velho **recebe** as teclas. Na tela isso
+aparece como "a lista abre e nenhuma tecla funciona, nem para abrir submenu" — sem erro em lugar
+nenhum, e sem jeito de reproduzir, porque depende de o anterior estar no meio de uma sequência.
+
+Agora o novo manda `quit` pelo socket e **espera o anterior largá-lo** (`leader::ceder_o_lugar`).
+Meio segundo: é uma saída limpa de quem já está no laço de eventos, não um desligamento.
+
+### "Nenhum atalho funciona" tem três causas com a mesma tela
+
+Quatro ocorrências, e nas quatro a mesma conversa: os atalhos param, o dono descreve o sintoma, e não
+há mais nada. O sintoma não distingue as três causas possíveis — e elas se consertam em lugares
+opostos:
+
+1. **a tecla não chega ao rodapé**, porque o compositor parou de despachar;
+2. **a tecla chega com um modificador preso** e não casa com ligação nenhuma;
+3. **o rodapé não tem o foco de teclado**, porque a exclusividade não foi concedida.
+
+Na quarta vez o dono deixou a sessão de pé, e a medição fechou o caso — mas só depois de eu errar o
+diagnóstico uma vez, e o erro vale tanto quanto o acerto.
+
+**O que parecia:** o niri aninhado não respondia a `wl_display.sync`, tinha sete conexões de IPC sem
+`accept`, 1536 bytes do rodapé parados na fila de escrita e consumia 1 tick de CPU em 20 segundos.
+Conclusão óbvia e errada: travado.
+
+**O que era:** o niri aninhado é **cliente do compositor do host**. Com a janela dele numa workspace
+oculta, o host para de alimentá-lo e ele dorme — e dormindo não serve os próprios clientes nem o IPC.
+Com a janela visível ele respondeu ao mesmo `sync` em **0,00 s**. Nada estava travado.
+
+**A causa, medida:** com ninguém tocando no teclado, o compositor anunciava
+`ctrl=false alt=true logo=true caps=false`. **Dois modificadores presos** — o `logo` é a impressão
+digital do atalho do host: `Super+…` é capturado pelo Hyprland, o niri aninhado vê a descida e nunca
+a subida.
+
+Um fato explica os três sintomas:
+
+- **`Alt+Espaço` para de disparar** — o niri casa bind por máscara EXATA, e o que chega é
+  `Alt+Super+Espaço`.
+- **O clique não chega aos buffers, mas arrasta a janela** — no backend aninhado o `Mod` do niri
+  **é o Alt**, e `Mod+arrastar` é mover janela. Com o Alt preso, todo clique vira arrasto. Foi esta
+  observação do dono que fechou o caso.
+- **O foco ainda muda no clique** — normal, e é o que fazia parecer que "o mouse funciona".
+
+Nem `switch-layout` nem `load-config-file` limpam o latch; ele está no estado xkb do compositor, e o
+invariante 3 proíbe consertá-lo lá dentro. O que sobra é reconhecê-lo depressa.
+
+Disso saíram três coisas, e a mais importante não é o conserto:
+
+**O log do rodapé vai para arquivo.** Ele ia para o terminal e mais nada, e o do niri tinha as quatro
+linhas da partida — por isso as três primeiras ocorrências não deixaram rastro. Agora `nix run .#dev`
+escreve `RONOCTUA_LOG`, o `tail -f` continua pondo na tela, e os logs **não** são apagados no `trap`
+de saída: quem encerra depois de algo dar errado é quem mais precisa deles. O check
+`footer-logs-to-file` prova as duas metades, inclusive que o pidfile continua apontando para o
+rodapé — resolver o log com um `tee` no meio faria o `$!` ser o do tee, que é o defeito que o
+`footer-is-single` existe para não ter.
+
+**`nix run .#diagnostics`** roda o mesmo roteiro num comando: o `sync`, as filas, o CPU numa janela de
+tempo, a interatividade de teclado da layer surface, **os últimos modificadores que o compositor
+anunciou** e o fim dos dois logs. Só leitura — um diagnóstico que manda comando ou muda foco destrói a
+evidência que veio buscar. Ele avisa nas duas armadilhas por onde eu passei: um `sync` sem resposta
+pode ser só a janela oculta, e `alt=true` sozinho é normal (a leader **é** `Alt+Espaço`) — o que
+denuncia é o `logo`.
+
+E o conserto **do lado de cá**: a herança de modificadores passou a ser recapturada **quando a
+sequência começa**, e não só ao ganhar o foco. Ela cobre o caso em que a leader ainda abre e as teclas
+seguintes chegam com um modificador preso — que foi a segunda e a terceira ocorrências. Não cobre esta
+quarta: aqui a leader nem abre, porque quem recusa a tecla é o compositor, antes de qualquer coisa
+nossa. **Esse pedaço não tem conserto do nosso lado** (invariante 3), e o que se pode fazer é
+reconhecê-lo em um comando em vez de em uma hora.
+
+### O hot reload nunca reiniciou o rodapé, e matava o watcher
+
+A outra metade do mesmo problema. Reiniciar o rodapé era uma **função** dentro do `nix/dev.nix`, e o
+`reconstruir` do hot reload roda no processo do **watcher**. A função chegava lá por `export -f`,
+mas o `rodapepid` que ela lia é variável de shell — e variável de shell não atravessa processo.
+
+Sob o `set -u` do watcher isso não vira um `if` falso: vira `unbound variable`, que **derruba o shell
+inteiro**, e o `|| true` do laço não salva. Em ordem: o rodapé antigo não morria, o novo não subia, e
+o watcher morria. Na tela, "compilando…" e mais nada, para sempre.
+
+Por isso o supervisor virou pacote (`nix/footer-single.nix`), pela mesma razão do `reload.nix`:
+separado, o mecanismo é uma função de (pidfile, binário) para "há exatamente um vivo, e é o novo",
+que um check prova em segundos. E o estado mora num **arquivo**, porque quem inicia e quem reinicia
+são processos diferentes por construção.
+
+O `reload-reloads` não pegava isso, e não é falha dele: ele prova que o comando **dispara**.
+Disparar e reiniciar são coisas diferentes — a segunda só se descobre quando dois rodapés disputam o
+teclado.
+
+---
+
+## O teclado: layout num lugar, e o AltGr como Compose
+
+O layout vive em `nix/keyboard-xkb.nix` e é lido pelo config de produção, pelo aninhado e pelo console
+do TTY. Escrito nos três, um dia divergiriam — e o sintoma seria a mesma tecla dando caractere
+diferente conforme onde se digita.
+
+Hoje ele é `gb`, porque o teclado em uso é britânico. É decisão temporária e o instalador vai
+perguntar isso um dia; até lá, muda em um lugar.
+
+**O AltGr é a tecla Compose**, e não o nível 3. O teclado britânico não tem tecla de acento, e o `gb`
+puro só alcança `^` e `` ` `` mortos — falta o agudo, o til e o cedilha, que é metade do português.
+Com `compose:ralt`, `AltGr ' a` dá `á`, `AltGr ~ a` dá `ã`, `AltGr , c` dá `ç`: uma regra só para
+toda acentuação, e **nada muda na digitação normal**.
+
+As alternativas foram descartadas com motivo: `gb(intl)` e `gb(extd)` põem acento **morto no nível
+1**, e a tecla `` ` `` deixa de escrever crase até você apertar espaço — num teclado que digita código
+o dia inteiro, isso é pior do que o problema que resolve. O custo do Compose é que os símbolos de
+nível 3 (`€`, `½`, `æ`) passam a exigir dois toques em vez de um; o próprio Compose os alcança.
+
+Isso funciona **dentro dos nossos buffers também**: o SCTK monta uma `xkb::compose::State` e o texto
+que chega ao rodapé e ao terminal já vem composto. Não é suposição — está no `init_compose` da versão
+que o `Cargo.lock` fixa.
+
+E há um check para o nome: **o xkb não recusa um layout que não conhece**, ele cai no `us` e segue. O
+sintoma seria o teclado inteiro digitando outra coisa sem uma linha de erro — a mesma classe do
+fallback silencioso, e a mais cara delas, porque o jeito de investigar é digitando. O
+`keyboard-layout-exists` confere layout, variante e opção contra o registro do `xkeyboard-config` que
+a sessão vai usar, e o keymap do console contra o banco do `kbd`, que é outro.
+
+---
+
+## O id do comando é kebab puro, e a chave sai dele
+
+O id era `dominio.acao` e a chave de texto era `cmd-dominio-acao`: a mesma informação em duas
+grafias, com nada ligando uma à outra. Uma linha copiada com o id trocado e a chave esquecida
+compilava — as duas constantes existem — e a lista mostrava o rótulo do comando vizinho.
+
+Com o id em kebab (`window-left`), a chave é o id com prefixo, e o registro **confere**. O
+`Registro` recusa id com ponto, recusa chave que não seja a do próprio comando, e a ligação do keymap
+não carrega mais rótulo: ele sai do registro, pelo id. Uma informação, um lugar.
+
+---
+
+## Preto puro, e o foco visível
+
+O fundo do sistema é **`#000000`**. Numa tela OLED o preto é pixel desligado: contraste máximo e
+menos bateria, que é o alvo da §2 (laptops). O cinza-azulado anterior existia por hábito de tema de
+editor. Superfícies — rodapé e buffers — são cinza escuro, e a separação entre conteúdo e chrome
+passa a ser a diferença entre preto e cinza, sem régua nem caixa.
+
+**A borda de foco de 2 px é do compositor, não nossa.** Com `border` e `focus-ring` desligados, duas
+janelas abertas eram indistinguíveis: nada na tela dizia qual recebia tecla. Uma linha não é card,
+sombra nem elevação (invariante 15) — é a mesma classe da régua de uma linha que o desenho já admite
+como única separação além do espaço em branco. Quem a desenha é o niri (invariante 4).
+
+**A borda inativa é vermelho escuro, e isso é o pedido possível.** O pedido foi: ao apertar a
+leader, o contorno azul deveria **mudar de cor** em vez de sumir. A parte impossível é manter o
+azul só na janela que estava em foco — nenhuma janela está em foco enquanto o rodapé tem o teclado, e
+não há como pedir o contrário ao compositor: uma janela sem teclado não está ativa, e é isso que a
+borda conta. O que dá para escolher é a cor que fica no lugar. Com `border.inactive` em vermelho
+escuro, apertar a leader muda a cor do contorno — que é o efeito pedido. O preço, dito claramente:
+janela sem foco também fica vermelho escuro em vez de cinza.
+
+**E o acento muda de lugar quando o rodapé pega o teclado.** Enquanto a leader, o localizador ou o
+manual estão abertos, *nenhuma* janela está em foco para o compositor — e não há como pedir o
+contrário: uma janela sem teclado não está ativa, e é isso que a borda conta. A cor inativa era
+`surface.buffer`, a mesma do fundo da janela, então as duas ficavam sem contorno nenhum e a tela
+perdia toda indicação de limite. Agora ela é `rule.default` (visível), e o **azul sai da janela e
+entra no nome do buffer na modeline**. Continua havendo exatamente uma coisa azul na tela, e ela
+continua dizendo qual buffer recebe o que vier depois.
+
+As três cores do config do niri — acento, borda inativa e fundo — vinham escritas à mão, iguais por
+coincidência aos tokens de mesmo nome. Coincidência mantida à mão é o que o invariante 9 proíbe:
+mudar `state.accent` mudava o rodapé e deixava a borda na cor velha. Agora elas são derivadas de
+`assets/tokens/colors.nix`.
+
+O corpo do texto subiu de 14 px para **18 px no rodapé e 20 px nos buffers**, e a entrelinha de 1,25
+para 1,45. O buffer é maior que o rodapé de propósito: o rodapé é referência periférica, o buffer é o
+que se lê. E o conteúdo dos buffers ganhou margem — sem ela o primeiro caractere encosta no limite da
+janela e parece corte.
+
+---
+
+## O navegador de glifos é uma GRADE
+
+Uma lista mostrava ~20 ícones por tela em 10.473, e cada linha gastava a largura inteira com um
+**nome** que ninguém lê quando está procurando uma **forma**. Em grade cabem centenas, e o olho varre
+por desenho — que é como se escolhe ícone.
+
+O nome continua existindo: aparece embaixo, só o do glifo em foco. É a mesma economia do vertico —
+detalhe do item atual, não de todos.
+
+A grade obrigou duas coisas: `input` ganhou `left`/`right` no WIT (com dois sentidos, andar
+para o lado só acontece por transbordo, e o cursor pula de uma ponta à outra da tela), e o componente
+passou a guardar o último `context` que o `render` recebeu — o `event` não recebe contexto, e sem
+ele `Down` não sabe quantas colunas pular. Havia ali um `80x24` chutado.
+
+**E o host de buffers passou a mandar tecla.** Ele chamava `render` uma vez e parava: nenhuma tecla
+chegava ao componente, e o navegador era uma imagem — não dava para buscar, rolar nem escolher. Agora
+ele guarda a `Instance` viva, traduz tecla em `Input` e executa os `Effect` que voltam.
+
+---
+
+## O segmento de contexto: o ramo, e de quem
+
+A §4.2 põe "estado do buffer em foco" à esquerda da modeline. O segmento de contexto nasceu com o
+ícone de branch e o texto `marco 4` fixo — andaime que vazou para a interface, e uma **string
+literal na UI**, que o invariante 8 proíbe. As guardas não pegaram porque ela era montada com
+`format!` no shell e não passava pelo `t()`: mais uma ocorrência do fallback silencioso.
+
+O ramo vem do `cwd` do processo da janela em foco, lido pelo pid que o event stream do niri já
+entrega. **E dos filhos dele**, e essa é a parte que importa: o `cwd` de um cliente Wayland é onde
+ele foi *lançado*, e num terminal quem navega é o shell de dentro. Medido no teste de VM — `foot`
+lançado com `cwd = /`, o shell dentro do repositório. Olhando só o cliente, o segmento acertaria o
+caso raro e erraria o principal, que num desktop de teclado é justamente o terminal.
+
+A busca é em largura, com teto de dois níveis e 32 processos: o mais raso vence, então um `git`
+rodando dentro do terminal não muda o que a modeline mostra. Fora de qualquer repositório o segmento
+**não existe** — um rótulo tipo "sem git" seria o mesmo defeito com outra roupa.
+
+Ler `.git/HEAD` à mão, e não uma biblioteca de git: precisamos de uma linha de um arquivo, e uma
+biblioteca traria resolução de objeto, index e rede para dentro do caminho de partida do rodapé, que
+tem orçamento de 200 ms (§5.2).
+
+---
+
+## O histórico de clipboard
+
+`LEADER c` abre, na região abaixo do minibuffer, o histórico à esquerda e — separado por uma régua,
+que é a única divisão que o projeto usa (invariante 15) — o conteúdo do item, o que ele é, o estado
+do ClipCascade e as ações à direita. É o **quinto** modo da mesma superfície, ao lado do which-key,
+do `M-x`, do manual e do histórico de notificações: nenhuma janela nova, nenhum popup
+(invariante 14).
+
+### O protocolo é `zwlr_data_control`, e não `wl_data_device`
+
+A primeira versão usou o `wl_data_device` do SCTK. Ela **compilou, não deu erro, e nunca viu uma
+cópia** — porque `wl_data_device.selection` só chega ao cliente que tem **foco de teclado** naquele
+seat, e o rodapé em repouso não captura teclado (se capturasse, nenhum buffer receberia tecla, §7.4).
+O dispositivo era criado, o log dizia que estava pronto, e o histórico ficava vazio para sempre.
+
+`zwlr_data_control_unstable_v1` existe exatamente para isto — a descrição dele diz "take the role of a
+clipboard manager" —, entrega a seleção sem exigir foco, e é o que o `wl-paste --watch` e os
+gerenciadores de clipboard usam por baixo.
+
+### Conexão própria, numa thread
+
+Duas razões, e cada uma bastaria. **Ler uma oferta bloqueia**: quem escreve do outro lado é o programa
+que copiou, e ele escreve quando quiser — um `read` no laço congelaria o rodapé, a mesma classe do
+`wait_with_output` que travou o buffer ao copiar. E **o `Dispatch` do `Footer` é genérico**: o
+`delegate_dispatch2!` do SCTK implementa `Dispatch<I, U>` para todo proxy cujo `U` fale `Dispatch2`, e
+enfiar um protocolo nosso ali brigaria com essa impl.
+
+É a mesma forma de `ronoctua_notify::dbus`: uma thread que escuta e manda pelo canal do `calloop` —
+a quinta fonte de evento do daemon.
+
+### O histórico não toca o disco, e a senha não entra
+
+Em memória ele morre com a sessão. Em arquivo sobreviveria a um reboot, entraria em backup, e viraria
+um alvo que ninguém lembra que existe — guardando token, chave privada e senha.
+
+E o que vem marcado como senha **nem entra**: `x-kde-passwordManagerHint` é o tipo que 1Password,
+Bitwarden e KeePassXC anunciam, e é o único sinal padronizado que existe para "isto é segredo". A
+comparação é sem caixa, porque o tipo aparece escrito de mais de um jeito entre aplicativos — um
+histórico que guarda a senha porque o `H` veio maiúsculo não protege nada.
+
+As duas decisões se sustentam mutuamente, e por isso são testadas juntas: sem a promessa de não
+persistir, pular a senha seria meia proteção.
+
+### O QR é desenhado em quads
+
+`qrcode` devolve a matriz; quem desenha é o pipeline de quads que o rodapé **já tem** — um quad por
+módulo escuro, mais um quad claro embaixo pela zona de silêncio, que faz parte do código: sem ela a
+câmera não acha as bordas.
+
+O tamanho do módulo sai da altura disponível, e não de um número fixo: a região tem teto
+(invariante 14) e a tela muda. Ilegível é o mesmo que ausente — ninguém consegue apontar a câmera.
+
+### Quantas células uma escala ocupa é o HOST quem diz
+
+O glifo da ficha saía **cortado por baixo, encostado na régua**. A causa: o buffer reservava quatro
+células para a escala `huge`, e a caixa de linha dela pede seis — 116 px de fonte com entrelinha
+1,45 contra 29 px de célula. O `ALTURA: 2` da grade sofria do mesmo mal e só funcionava por
+**coincidência**: 40 × 1,45 dá exatamente duas células.
+
+O buffer não tem como acertar isso sozinho: tamanho de fonte e entrelinha são token, e ele não os vê
+(invariante 11). Mas "quantas células" **não é** valor de token — é contagem de célula, a mesma
+unidade em que ele já conta linha e coluna. Por isso o `context` passou a trazer `heights`, com o
+número de células de cada escala, calculado pelo host a partir dos mesmos tokens que decidem o
+tamanho em píxeis. As duas contas divergirem era o defeito; agora elas têm uma origem só.
+
+E o glifo ganhou **uma célula de respiro** antes do que vem embaixo: um traço colado na base de um
+desenho parece parte do desenho.
+
+A decisão de escala e de espaço é **uma função só** (`sheet_glyph`), usada pelo desenho e pela
+conta do clique — as duas já divergiram uma vez neste mesmo arquivo, e o sintoma foi o clique acertar
+um item e a tela mostrar outro.
+
+### A prévia de imagem, e a terceira coisa que o renderer desenha
+
+Até aqui o renderer sabia **glifo** e **retângulo de cor chapada**. Uma captura de tela colada
+aparecia como `copia de tipo nao suportado ignorada` no log e nada na tela. Agora há um pipeline de
+**quad texturizado** (`ronoctua_render::image`) — mesma economia do quad: sem buffer de vértices, os
+quatro cantos saem do `vertex_index`, e a diferença é um bind group com a textura e o amostrador.
+
+Isto não viola o invariante 15: uma imagem numa área não tem borda, raio nem sombra, e não sugere que
+algo está *acima* de outra coisa. É o mesmo papel do quad.
+
+Quatro decisões que valem o registro:
+
+- **Encaixa, nunca estica.** Uma captura deformada faz quem olha duvidar do que copiou.
+- **`Rgba8UnormSrgb`, e não `Unorm`.** Os bytes do PNG são sRGB e é a GPU que desfaz a curva; `Unorm`
+  clarearia tudo — a mesma armadilha do `to_linear` do `CLAUDE.md`, vista do outro lado.
+- **A textura só sobe quando muda, e a mudança é medida por VERSÃO.** Comparar dimensões não bastaria:
+  duas capturas do mesmo monitor têm o mesmo tamanho e são imagens diferentes.
+- **Os bytes ficam comprimidos no histórico.** Uma captura 4K são ~2 MB de PNG contra 33 MB de RGBA;
+  guardar decodificado custaria isso **por entrada**. Quem decodifica é quem vai desenhar, e só o
+  item em foco.
+
+E o filtro de tamanho é uma guarda, não zelo: o cabeçalho de um PNG *declara* as dimensões, e um
+arquivo malformado pode declarar 60000×60000 — 14 GB de RGBA alocados antes de qualquer verificação.
+As dimensões são lidas do cabeçalho **antes** dos pixels, exatamente para poder recusar.
+
+### O realce de sintaxe é nosso, e reconhece quatro coisas
+
+`syntect` traria um motor de regex e ~1 MB de definições para o processo que precisa desenhar em um
+frame; `tree-sitter` pediria uma dependência Nix **por linguagem**. O que se cola é um punhado de
+coisas — um comando de shell, um trecho de `.nix`, um pedaço de JSON, uma linha de Rust —, e para
+isso um tokenizador de duzentas linhas acerta o suficiente por zero dependências.
+
+Ele reconhece **comentário, texto entre aspas, número e palavra reservada**, porque são as quatro que
+fazem um bloco deixar de ser um paredão cinza. Não é um parser: não conhece gramática e não valida
+nada. Errar ali é barato — o pior caso é uma palavra colorida como se fosse outra, numa prévia que
+existe para se reconhecer o que se copiou.
+
+Duas regras que os testes trancam: **o comentário vence as aspas** (sem essa ordem, `# "isto"` abriria
+um texto que nunca fecha e pintaria o resto do bloco de uma cor só), e **a palavra é comparada
+inteira** (por prefixo, `iffy` viraria `if` colorido pela metade). E quando nada aponta para uma
+linguagem, **não há realce**: colorir prosa é pior do que não colorir, porque quem lê passa a procurar
+sentido numa cor que não quer dizer nada.
+
+O realçador devolve **papel**, e não cor — quem traduz papel em token é o host, a mesma fronteira que
+a cor dos buffers já respeita. E o realce é aplicado **por linha já quebrada**: as faixas são
+deslocamentos em bytes do texto original, e o quebrador reescreve o texto; casar os dois exigiria ele
+devolver um mapeamento, o que atravessaria a responsabilidade dele.
+
+### O ClipCascade diz a verdade
+
+O painel mostra `ClipCascade: não integrado`, e o comando de configurar existe dizendo o mesmo. A
+integração está no `PENDING.md`. Um indicador que fingisse "conectado" seria a fachada que este
+projeto passou meses desfazendo — e a legenda das ações sai da **mesma tabela** que o check de órfão
+lê (`leader::DA_VISTA_DO_CLIPBOARD`), porque uma legenda escrita à mão é a segunda cópia que mente no
+dia em que uma tecla mudar.
+
+---
+
+## Notificações
+
+Não há popup de canto nem card. Isso não é restrição estética; determina o desenho inteiro:
+
+- **Uma de cada vez.** A modeline tem uma região de mensagem. Empilhar exigiria contêiner, e
+  contêiner é card. Ou a notificação está na linha, ou está na fila.
+- **O histórico usa A superfície**, crescendo abaixo do minibuffer — a mesma área do which-key, e
+  nunca as duas ao mesmo tempo. Com a leader ativa o which-key vence.
+- **O tray é lista de PERMISSÃO**, não de bloqueio. Um tray que mostra tudo come a linha no dia em
+  que se instala mais um aplicativo, e ninguém ligaria os pontos. O único furo é o estado de
+  atenção, porque a alternativa — um app pedindo atenção que ninguém vê — é pior.
+- **Crítica nunca expira sozinha**, mesmo que o aplicativo peça. A especificação permite ao cliente
+  cravar timeout; aqui a decisão vence. Um aviso de bateria crítica que some sozinho é um aviso que
+  não foi dado.
+
+---
+
+## Buffers nativos
+
+Um buffer é um componente `wasm32-wasip2` que **não desenha**: produz uma `DisplayList` que o host
+rasteriza. É o que o torna testável sem GPU, sem Wayland e sem compositor.
+
+O invariante 11 virou propriedade dos **tipos**, não regra que alguém lembra:
+
+- `Color` carrega o **nome** do token. Não existe construtor que aceite `0xRRGGBB`.
+- `Text` separa `Data` de `Key`. O dado sai literal; o rótulo sai como chave e o host traduz. Um
+  buffer não consegue escrever uma frase de UI em português.
+- O `world` do WIT não oferece filesystem, relógio de parede nem socket além do que o WASI dá.
+
+A lista de comandos é curta de propósito: texto, régua de uma linha, seleção. **Não há retângulo
+preenchido, borda, sombra nem raio** — um comando de retângulo seria a porta de entrada para o card.
+
+**`xdg_toplevel`, e não uma região nossa:** quem posiciona a janela é o niri. O shell nunca
+reimplementa layout de janelas, e é o que mantém o invariante 3 possível.
+
+---
+
+## Terminal: um motor, e o trait que torna isso suficiente
+
+`libghostty-vt` é pre-1.0, vem de commit pinado e precisa de uma FOD com o cache de pacotes Zig.
+O trait `Engine` torna isso não-bloqueante: hoje roda `alacritty_terminal`, e o Ghostty entra depois
+por trás do mesmo trait sem tocar em mais nada.
+
+**O que se perde, dito claramente:** com um motor só, o teste diferencial degrada para golden-file —
+pega **regressão** (mudei algo e a saída mudou), não **divergência** (dois motores discordam da
+mesma sequência). O próprio binário imprime isso na saída.
+
+A `Grid` tem forma **canônica** porque sem ela dois motores nunca seriam comparáveis: espaço no fim
+da linha é removido e TAB vira espaço. Tab é movimento, nunca conteúdo — um motor guarda `\t` na
+célula de origem, outro preenche com espaço, e os dois estão no mesmo estado visual.
+
+---
+
+## Impermanência: renomear, não apagar
+
+A tentação é `btrfs subvolume delete @root`. Não fazemos isso.
+
+Se faltar um caminho em `directories`, apagar perde o estado sem recurso e a pessoa só descobre no
+boot seguinte. Renomear para `@antigos/@root-<data>-<epoch>` deixa uma janela de recuperação, e os
+antigos são coletados depois de `manterDias`.
+
+O teste prova as três coisas juntas, porque cada uma sozinha passaria com o wipe quebrado: o que
+estava em `/` sumiu, o que estava em `/persist` ficou, e o `@root` velho continua montável.
+
+Duas armadilhas: **`boot.initrd.postDeviceCommands` é ignorado com initrd do systemd** (que o
+lanzaboote exige), e **`mv origem destino` com destino existindo move a origem para dentro dele** —
+dois wipes no mesmo segundo davam `@root` aninhado, sem erro.
+
+---
+
+## Instalador: seis perguntas, e o "só" é o critério
+
+A TUI coleta **só** disco, hostname, senha, passphrase, idioma e `resume_offset`. O "só" é a parte
+difícil, e por isso a lista é um enum fechado com um teste que conta os casos.
+
+O que **não** se pergunta — teclado, fuso, vídeo, rede, sistema de arquivos, tamanho de partição,
+gerenciador de boot — ou o `nixos-facter` detecta, ou a distro já decidiu.
+
+- **O disco é a primeira pergunta.** Ela apaga dados; perguntar por último faria a pessoa investir
+  cinco respostas antes de descobrir que escolheu errado.
+- **A passphrase conta CARACTERES, não bytes.** Doze com acento passam de doze bytes, e recusar
+  puniria quem escreve no próprio idioma. O mínimo é 12 porque o disco **não tem limite de
+  tentativas** — a única defesa é o custo do argon2 vezes o comprimento.
+- **`--executar` não é o padrão.** Um comando que apaga um disco por omissão é um comando perigoso.
+- **A confirmação pede o caminho do disco**, não "sim". Copiar o caminho obriga a lê-lo.
+
+**Nenhum segredo passa por `argv`** — `/proc/<pid>/cmdline` é legível por qualquer processo. A
+passphrase vai para um arquivo 0600 (**sem `\n` final**: o `cryptsetup` usa o arquivo inteiro como
+chave, e a quebra entraria na frase), e a senha entra no `mkpasswd` por `stdin`.
+
+O `host.nix` gerado **não leva segredo**: descreve a máquina e vai para backup. E o hash da senha é
+escrito **antes** do `nixos-install` — com `mutableUsers = false` o ativador o lê durante a
+instalação, e depois seria tarde.
+
+### Por que existe um diretório de trabalho
+
+O `disko` precisa saber **qual disco apagar**, e esse valor mora no `host.nix`, dentro do flake. No
+momento em que ele roda, os dois lugares óbvios para o flake são impossíveis: `/mnt/etc/nixos` ainda
+não existe — é o `disko` que vai montá-lo — e o `/etc/nixos` do ISO é link do store, somente-leitura.
+
+Daí a sequência: o flake é copiado para `/tmp/ronoctua-flake`, o `host.nix` é escrito ali, o `disko`
+avalia **esse** diretório, e só depois de montar o alvo é que tudo vai para `/mnt/etc/nixos` — agora
+com o `resume_offset`, que só existe depois do swapfile.
+
+O disco poderia chegar ao `disko` por linha de comando, e chegava. Mas o `nixos-install` seguinte
+precisa do **mesmo** valor e não aceita um: ele lê o flake. Ter as duas fontes é ter duas verdades.
+
+Isto não é refinamento: sem ele o caminho `--executar` nunca poderia ter rodado. O `nixosConfigurations.noctua`
+que os dois comandos citam **não existia**, e o modo ENSAIO não acusava nada — ele *imprime* os
+comandos em vez de executá-los. É a mesma classe do check escrito contra o código, e não contra o
+critério.
+
+---
+
+## Secure Boot e TPM2
+
+```
+chaves → UKI assinada → firmware mede (PCR 7 e 11) → measured-uki
+       → tpm2-measure-pcr passa a valer → PCR 15 estendido com a chave do volume
+```
+
+Nenhum elo pode ser pulado, e cada um custou uma descoberta:
+
+- **`pkiBundle` não pode estar no store** — chave privada no store é chave pública. Vai para um
+  `/etc/secureboot` real, criado na ativação.
+- **O `sbctl` escreve nesse mesmo diretório**; com links para o store ele para em "permission
+  denied", numa mensagem que fala de root e não de permissão de arquivo.
+- **O `GUID` não pode ter quebra de linha:** `invalid UUID length: 37` são os 36 mais o `\n`.
+- **O OVMF padrão não mede.** `bootctl` diz "Secure Boot: enabled" e todos os PCRs ficam zerados —
+  precisa de `OVMF.override { tpmSupport = true; }`.
+
+**O que o PCR 15 protege, de fato.** Copiar o header LUKS é *clonar*, não forjar: o clone tem a mesma
+chave de volume, o PCR 15 mede idêntico e destrava corretamente. O PCR 15 não impede clonagem — ele
+amarra o estado **pós-destrave** ao volume que foi realmente aberto.
+
+---
+
+## Grafo de crates
+
+`tokens`, `i18n`, `protocol` e `cmd` não dependem de nada e são dependência de todo o resto.
+`runtime` **não conhece** `render` — produz display list, não rasteriza, e é o que permite testar
+buffers headless. `niri` é folha: só o `shell` a toca. `term` isola todo o `unsafe` e todo o FFI.
+
+Duas adições ao grafo original, cada uma por um problema real:
+
+- **`ronoctua-glyphgen`** (hoje `nix/glyphgen.nix`). O consumidor da base compila para wasip2 e
+  **não tem filesystem**: não pode ler o TTF em tempo de build. Sem gerador separado, ou ele deixa
+  de ser wasip2, ou a tabela de ícones volta a ser hard-coded.
+- **`ronoctua-cmd`.** Toda funcionalidade tem de ser um comando nomeado. `keymap` resolve a árvore de
+  teclas; o **registro de comandos** é outra coisa, e sem crate próprio os ids nascem espalhados
+  dentro do `shell`.
+
+---
+
+## Camada de glifos gerada
+
+Um só gerador produz a tabela de tokens de ícone **e** a base do navegador, do mesmo arquivo de
+fonte. Uma fonte da verdade.
+
+**Três guardas contra a deriva da PUA:** a versão do Nerd Fonts no `nameID 5` tem de casar com a
+esperada; o `METADATA.version` do `glyphnames.json` também; e todo token de ícone tem de resolver num
+codepoint que **existe no cmap**. O fixture negativo `icons-unknown-token-fails` prova a
+terceira — sem ele, "o build falha se o codepoint não existir" seria afirmação não testada.
+
+Medido: 10.764 nomes no `glyphnames.json`, 10.473 codepoints na fonte, **0 que não resolvem**.
+
+### As tags são bilíngues, e isso é uma garantia — não um esforço
+
+Um terço dos glifos (3.307 de 10.347 nomeados) não tinha **uma palavra em português sequer**. Não era
+falta de mecanismo: token sem entrada no léxico passava sem traduzir, virando uma tag inglesa fingindo
+de tag pt. Quem procurava em português simplesmente não achava — e nada acusava, porque `tags_pt`
+nunca ficava vazia.
+
+Três coisas mudaram, e cada uma resolve um buraco distinto:
+
+**Sinônimo em inglês passou a caber no léxico.** Ele era `token = ["pt", …]` — só traduzia. Não havia
+como dizer que `location` também se acha por `locale` e `map`; isso só existia no `overlay.toml`, que
+é **por glifo** e tem 31 entradas para 10.473 glifos. Agora a entrada aceita
+`{ en = […], pt = […] }`, e a forma de lista continua valendo — reescrever as 390 entradas antigas
+seriam 390 chances de errar sem ganho nenhum.
+
+**O acento se resolve no gerador.** As tags pt são escritas **acentuadas**, que é como se escreve e é
+o que vai para a tela; o gerador emite, num campo `search`, a forma sem acento de cada uma que difere.
+Assim `localização` e `localizacao` acham o mesmo glifo sem o componente normalizar nada — normalizar
+em runtime custaria percorrer 10.473 glifos × ~8 tags a cada tecla digitada.
+
+**Nome próprio ganha CATEGORIA, nunca tradução.** `pytorch` continua `pytorch` — já é tag por si
+mesmo, e é igual nos dois idiomas. O que entra é o que ele **é**. A categoria vem do conjunto de
+origem, porque é o que o conjunto significa: as 100 logos de `linux-` são "software livre", as 324 de
+`dev-` são "desenvolvimento". Sem isso, esses glifos só eram alcançáveis por quem já sabia o nome
+exato. Traduzir marca (`elementary` → "elementar") produziria busca errada com cara de certa.
+
+**E duas guardas no gerador, não num check posterior.** Nenhum glifo nomeado pode ficar sem tag pt, e
+a cobertura ponderada não pode cair abaixo de 90%. Elas moram ali porque quem sabe qual glifo ficou
+sem tradução é quem montou a tabela — a saída **não** diz, justamente porque o token sem tradução
+entra em `tags_pt` sem traduzir. Barulhento de propósito: subir a versão do Nerd Fonts passa a falhar
+até os glifos novos serem traduzidos.
+
+Resultado medido: léxico de 390 → **2.565** entradas, **0 glifos sem tag pt**, cobertura de 63,3% →
+**92,0%**. O custo temido não veio: a base foi de 2,66 para 2,70 MB e o `.wasm` de 2,51 para 2,74 MB,
+com instanciação em **0,011 ms** de p99 contra um teto de 5 ms.
+
+### A ficha do glifo, e uma área de transferência que não existia
+
+`Enter` num glifo trocava a tela por nada: ele "copiava". Agora ele abre a **ficha** — a mesma
+superfície, o conteúdo inteiro substituído (invariante 14: não há janela nova nem popup). O estado da
+listagem não é tocado, então `Esc` devolve a tela como ela estava; voltar é uma volta, e não um
+recomeço.
+
+Dentro dela: o glifo em `Scale::Huge` (token `xxlarge`, 116 px = exatamente quatro alturas de
+célula, para o que vem embaixo não cair por cima dele), nome e apelidos, identidade técnica, uso no
+sistema, tags nos dois idiomas, e as nove opções de cópia — **com o valor de verdade ao lado do
+rótulo**, porque ver `nf nf-cod-folder` antes de copiar é metade da utilidade. `↑↓` andam nas opções,
+`←→` trocam de glifo sem sair da ficha, `Enter` copia a selecionada.
+
+**Copiar não existia.** `Effect::Copy` chegava ao host e virava `tracing::info!("copiar pedido pelo
+buffer")` — os nove formatos nunca puseram nada em lugar nenhum, desde o marco 7. Não estava no
+`PENDING.md`; o próprio ARCHITECTURE falava de "copiar" como se funcionasse. É o fallback
+silencioso na forma mais cara: a funcionalidade **parece** pronta.
+
+Agora é `wl-copy`, e a razão não é preguiça: quem é **dono** da seleção precisa continuar vivo para
+servi-la quando alguém colar, e a janela do buffer morre quando se fecha o navegador — copiar um
+glifo **para** fechar e colar é o uso. Dono que morre junto entregaria uma área de transferência
+vazia, que é pior do que não copiar. É a mesma escolha do `niri msg action`: o cliente que já existe,
+em vez de reimplementar o outro lado do protocolo.
+
+**O feedback é do HOST, e volta ao buffer.** Copiar sem dizer nada é
+indistinguível de não copiar — foi assim que a cópia passou meses quebrada. Mas quem sabe se deu
+certo é o host, não o componente: um "copiado!" que o buffer mostrasse por conta própria seria
+otimista, e mentiria exatamente quando importa. Por isso existe `input::copied(bool)` — o veredito
+volta, a ficha o mostra na linha da ajuda, e a tecla seguinte o apaga (aviso que fica deixa de ser
+resposta e vira decoração).
+
+`Ctrl+V` fecha o par: o host lê a área de transferência e entrega `input::paste(string)`. O buffer
+não lê clipboard como não lê arquivo (invariante 11). Antes, `Ctrl+V` caía na guarda de `Ctrl` do
+host e não fazia nada — sem log, sem tela, indistinguível de "não havia nada copiado".
+
+**Colar o próprio glifo acha o glifo.** É o gesto mais natural do navegador — pegar um ícone que se
+vê num CSS, num commit, numa mensagem, e perguntar *qual é este* — e era o que a tela não respondia:
+a busca olhava nome, conjunto e tag, e o caractere não é nenhum dos três. Agora ele é o **primeiro**
+critério: identidade vence tudo, e não há o que ordenar depois dela.
+
+Isso fechou o círculo com a cópia: copiar o glifo na ficha e colar de volta na busca devolve
+exatamente ele. E a mesma passagem tirou uma duplicação — o filtro por prefixo (`fa:folder`) e a
+pontuação da lista faziam a mesma pergunta com código próprio, e nada impedia um de ganhar um critério
+que o outro não tivesse. Hoje é uma função só (`Glyph::match_score`), e a nota que ela devolve **é** a
+ordem da lista.
+
+**Rótulo traduzido não cabe por acaso.** A ficha alinha os valores numa coluna fixa, e o rótulo é uma
+**chave**: o buffer nunca vê o texto traduzido nem o comprimento dele. "Token do design system" (22
+células) saía como `Design system …` em qualquer tamanho de janela, porque o corte vinha do orçamento
+declarado e não do espaço na tela. A coluna passou a caber o mais longo — e quem garante que continue
+cabendo é o teste, que tem os dois lados: o orçamento que o buffer declarou na display list, e o
+`.ftl` de verdade, nos dois idiomas.
+
+**Três armadilhas que só o teste de VM encontrou**, e as três são de spawn:
+
+1. `wl-copy` faz `exec cat` para servir a seleção. Sob uma unidade do systemd o `PATH` é mínimo e o
+   `cat` não está lá — `exec cat: No such file or directory`. É a armadilha do `CLAUDE.md` um nível
+   mais fundo: quem spawna **por nome** é o programa que nós spawnamos por caminho. Daí o
+   `RONOCTUA_WL_COPY_PATH`.
+2. `wait_with_output()` lê os canos até EOF, e o filho que o `wl-copy` deixa servindo herda esses
+   canos — o EOF só viria quando ele morresse. O laço de eventos do buffer travava ali, e na tela
+   isso apareceria como "o buffer parou de responder depois de copiar". `wait()` e `stderr`
+   herdado: o erro do `wl-copy` cai no nosso journal, que é onde ele serve.
+3. O `wl-paste` do `Ctrl+V` precisa do **mesmo** `PATH`, e sem ele voltava vazio — que o código
+   tratava como "não havia nada copiado", porque área vazia não é erro. Duas causas com o mesmo
+   sintoma: a correção foi dar o `PATH` **e** pôr o motivo no log, para as duas deixarem de ser a
+   mesma linha.
+
+O critério do check é a **área de transferência do sistema** (`wl-paste` dentro da VM), e não "o
+`wl-copy` foi chamado" — essa segunda forma repetiria o defeito de hoje um nível acima.
+
+### As tags do glifo em foco, no que sobra do rodapé
+
+Elas são as palavras que **acham** aquele glifo, e até agora eram invisíveis: dava para procurar por
+"mapa", cair no `cod-location` e nunca descobrir por quê.
+
+Ordem fixa **pt primeiro, en depois** — é o que faz a elisão cortar o inglês antes do português numa
+tela estreita, sem o componente saber de idioma (invariante 11). O inglês que já está em português
+não repete: ver a mesma palavra duas vezes na mesma linha parece defeito.
+
+Discretas por construção, e não por ajuste: `TextDim` é a cor de menor prioridade da paleta, e
+`Scale::Small` é o token `font.size.small` (15 px) contra os 20 px do corpo do buffer. **O nome
+nunca cede espaço** — quem procura pelo nome está lendo o nome; abaixo de doze células livres as tags
+não são emitidas, porque ali não se mostra uma palavra, mostra-se um toco elidido que ocupa a linha
+para não dizer nada.
+
+### Três papéis, três corpos — e uma célula de distância entre tudo
+
+O navegador tinha um corpo só para quase tudo (`Scale::Normal`, 20 px): o convite da busca, o
+contador, a lupa. O resultado é uma tela sem hierarquia, onde o que se lê de relance tem o mesmo peso
+do que se lê com atenção, e onde um ícone — que é um **desenho** — sai com o corpo de uma letra e
+fica fino ao lado dela.
+
+A regra passou a ser por **papel**, e não por trecho:
+
+| papel | escala | px | onde |
+|---|---|---|---|
+| glifo mostrado como ícone | `Large` | 40 | a lupa, o filtro, a grade e o glifo em foco no rodapé |
+| conteúdo do buffer | `Normal` | 20 | o nome do glifo, as opções do painel, os valores da ficha |
+| interface | `Base` | 18 | o campo de busca |
+| acessório | `Small` | 15 | o contador, as tags, os rótulos da ficha |
+
+`Scale::Base` é nova, e o que ela expõe já existia: `font.size.base`, o corpo do rodapé e do
+minibuffer. **Um campo de busca é um minibuffer** — mesma função, mesma pergunta —, e ver os dois em
+corpos diferentes na mesma tela é o tipo de detalhe que faz o sistema parecer montado de peças de
+origens diferentes. O convite e o que se digita compartilham a escala de propósito: se só o convite
+mudasse, o campo pularia de tamanho na primeira tecla.
+
+#### O espaço entre blocos JÁ VEM na caixa da linha
+
+Esta é a medida que muda tudo, e que eu não tinha feito: a caixa da fonte é **1,25 em** (ascendente
+0,965 + descendente 0,285, em de 1000) e a entrelinha é **1,45** — então todo trecho já carrega
+`0,10 em` de ar em cima e `0,10 em` embaixo, e a tinta de um ícone Nerd ocupa só `0,60 em` da caixa.
+Somar uma célula vazia entre dois blocos é folga sobre folga: rendeu linha em branco em cima e
+embaixo do cabeçalho, linha em branco entre as fileiras de ícones, e **um terço dos glifos fora da
+tela**.
+
+A regra é a inversa: **os blocos são adjacentes**, e o único branco que sobra é o que não completa
+uma fileira. Pela mesma razão a margem do buffer é assimétrica — `marginX = 2`, `marginY = 0`. Na
+horizontal a tinta ocupa o avanço inteiro (os glifos Nerd vão de 0 a 600 unidades num avanço de 600,
+sem folga lateral) e sem margem o primeiro caractere encosta na janela; na vertical a folga já está
+na caixa.
+
+O mesmo vale para o vão da grade, que o dono pediu igual em todas as direções. Ele **não** é ajustável
+nas duas: na vertical é o que sobra da caixa (`1,45 − 0,60 = 0,85 em`, a 40 px dá **34 px**) e não há
+como encurtar sem sobrepor; na horizontal ele anda de doze em doze pixels (`0,600 × 20`). Três
+colunas dão **36 px** — dois de diferença, o mais perto que a grade de células permite. Duas colunas
+dariam 24 px, dez a menos, mas caberiam mais ícones por linha: é uma troca entre densidade e
+regularidade, e o passo é uma constante só (`HORIZONTAL_GAP`).
+
+**O rodapé é ancorado no fundo da janela.** Grudado na grade, a sobra da divisão ia toda para *baixo*
+dele: uma faixa vazia no fim da tela. Ancorado, ela vira o vão acima do rodapé, e o check exige que
+seja **menor que uma fileira** — se coubesse mais uma fileira de ícones ali, ela tinha de ter sido
+usada. E o glifo em foco saiu para trecho próprio: junto do nome, ele herdava o corpo do texto.
+
+#### Uma linha é o que compartilha um MEIO
+
+Misturar corpos numa linha só funciona se eles se alinharem por algum lugar, e o lugar é o **meio** —
+é o que o olho lê como "estão na mesma linha". Enquanto tudo tinha um tamanho isso não aparecia:
+topo, meio e base andavam juntos, e o renderer punha cada trecho em `linha × entrelinha`. Bastou o
+ícone de 40 px ao lado do texto de 18 px para o texto subir para o topo do ícone.
+
+O renderer centraliza a **caixa**, e isso acerta a tinta por construção: a entrelinha é simétrica, o
+meio da caixa da linha é o meio da caixa da fonte, e o meio da caixa da fonte fica `0,34 em` acima da
+base — exatamente o meio da tinta de um ícone Nerd, que vai de `0,04` a `0,64 em`. Centralizar a
+caixa, medir a tinta e centralizar a tinta dão o mesmo número, e a caixa é a única das três que o
+renderer sabe sem abrir a fonte.
+
+Numa linha de um corpo só a conta devolve `linha × entrelinha`, que é o que havia antes — é o que faz
+o rodapé do sistema e a modeline não mudarem um pixel, já que eles nunca misturam tamanhos. Isso tem
+uma consequência na ficha: o nome **não** pode dividir a linha do glifo `huge`, senão desceria para
+o meio dele e os apelidos, que vêm depois, apareceriam acima. Ele tem linha própria.
+
+#### Negrito de ícone não existe, e o build prova
+
+O pedido de ícones "em bold" não tem como ser atendido, e vale registrar por que para não ser tentado
+de novo. As 27 faces são patcheadas com os **mesmos** contornos de ícone: em `cod-search`,
+`cod-filter`, `md-wifi`, `fa-folder` e `cod-flame`, a caixa e a contagem de contornos são idênticas
+byte a byte entre a Regular e a Bold — só as letras latinas engordam (`A` vai de `(88…512)` para
+`(81…519)`). Embutir a face Bold para pedir peso nos ícones custaria uma segunda cópia da fonte no
+binário e não mudaria um pixel: seria o fallback silencioso com outra roupa. Ícone fica mais pesado
+**crescendo**, ou trocando por uma variante preenchida que o conjunto de origem tenha desenhado
+(`cod-filter_filled`) — as duas são decisões de token, não de renderer.
+
+---
+
+### O painel de conjuntos: um ícone, e o filtro que se acha sem saber o nome
+
+Os cinco filtros da §6.5 sempre existiram como **prefixo na busca** (`md:`, `bloco:f0`, `tag:seta`).
+Isso é rápido e é invisível: para digitar `md:` é preciso já saber que o conjunto se chama `md`, e
+nada na tela contava. Quem não sabia tinha 10.473 glifos e nenhuma forma de recortá-los por origem.
+
+O painel é a descoberta que faltava, e **não** um segundo mecanismo de filtro: escolher "Material
+Design" escreve `md:` na busca, que continua editável. Ele desenha no **conteúdo do próprio buffer**,
+entre a busca e a régua — nenhuma superfície nova, nenhum popup (invariante 14) —, e o que ele ocupa
+sai da grade. O termo livre sobrevive à troca: quem digitou `folder` e escolheu Material Design fica
+com `md:folder`.
+
+**A lista sai da BASE, não de uma lista escrita no código.** A próxima versão das Nerd Fonts pode
+trazer um conjunto novo, e uma lista à mão ficaria para trás em silêncio — o painel simplesmente não
+o ofereceria. A ordem é por tamanho, e não alfabética, porque alfabética seria a ordem do nome
+**traduzido**, que o buffer não vê (invariante 11): ordenar pelo prefixo daria uma ordem que não é a
+que está na tela.
+
+**Os nomes dos conjuntos existem em dois lugares, e um check os amarra.** No `.ftl` porque são texto
+de interface e alguns se traduzem ("Clima", "Personalizados", "Logos de distribuições"); no `SETS` do
+`gen-glyphdb.py` porque de lá viram **tag de busca**. Nada obriga os dois a concordarem, e "Clima" no
+painel com "weather" na busca seria uma tela que ensina uma palavra que não funciona. Por isso o
+`browser-filters` exige que o rótulo que se lê ache, digitado na busca, o conjunto inteiro — e por
+isso o `SETS` passou a ser acentuado, já que a forma sem acento sai de graça do `sem_acento`.
+
+A chave é **montada em tempo de execução** (`glifos-conjunto-` mais o prefixo), então o compilador
+não protege nada aqui: um conjunto novo sem tradução sairia como `[glifos-conjunto-xyz]`, que é o
+fallback silencioso de sempre. O mesmo check confere existência nos dois idiomas e o orçamento de 24
+células, como já fazia com os rótulos da ficha.
+
+O ícone fica à direita do contador e **acende** quando há filtro em uso. Sem isso, uma lista restrita
+e a base inteira teriam a mesma cara, e "sumiu metade dos glifos" viraria um mistério.
+
+---
+
+## O navegador de símbolos Unicode — `LEADER i u`
+
+O grupo `i` nasceu dizendo que o navegador de Nerd Fonts "é a primeira coleção, e vão entrar outras".
+Esta é a segunda, e é a outra metade da mesma pergunta: aquele acha o **ícone** certo entre 10.473,
+este acha o **caractere** certo — a seta, o operador, o bloco de desenho, a letra grega.
+
+### A base é a interseção da fonte com o UCD, e o número é o argumento
+
+O renderizador embute **uma face** e não tem cadeia de fallback (§6.4, deliberado). Um caractere que a
+Iosevka não desenha apareceria como tofu — o fallback silencioso com outra roupa. Então a base não é
+"todo o Unicode": é `cmap ∩ UnicodeData.txt`, medida em **7.529 caracteres**. Dois geradores, o mesmo
+princípio das duas autoridades: lá `cmap − base_cmap` dá os glifos Nerd; aqui o `base_cmap` cruzado
+com o UCD dá os caracteres com nome.
+
+O `unicode-character-database` do nixpkgs entra pinado, e a versão é escrita **à mão** no
+`unicodegen.nix`. Tirá-la de `lib.getVersion` seria uma guarda que não guarda: ela seguiria o pacote,
+e um `nix flake update` trocaria a base inteira sem nada acusar. O gerador confere a constante contra
+o cabeçalho do próprio `Blocks.txt` (`# Blocks-17.0.0.txt`), e um `assert` de eval pega o caso comum
+antes do build.
+
+### O léxico serve os dois navegadores
+
+Os nomes Unicode são em inglês, e o mesmo `tags.en-pt.toml` que traduz `arrow` e `folder` traduz
+`LEFTWARDS` e `MATHEMATICAL`. Ele já cobria **45,9%** das palavras; ~420 entradas depois cobre
+**95,3%**, e **nenhum** dos 7.529 fica sem uma palavra em português. Dois léxicos significariam
+traduzir `arrow` duas vezes e vê-los divergir — o vocabulário é do português, não do buffer. O trato
+do arquivo virou `nix/scripts/lexicon.py`, importado pelos dois geradores, pela mesma razão.
+
+### Três armadilhas que o molde do navegador de glifos não cobre
+
+**`}` está dentro desta base.** O componente não tem parser de JSON e divide os registros por `"},"`;
+o navegador de glifos pode se dar a esse luxo porque a base dele começa em `U+E000`. Aqui `U+007D`
+existe, e `"`, `,`, `[`, `]` e `:` também. O que salva **não é o parser**: é o gerador não emitir
+nenhum campo de string com caractere arbitrário — o caractere viaja como número em `cp` e em
+`shows`. Provado nos dois lados: um check conta os campos de string com pontuação de JSON, e o teste
+do componente exige o total exato de 7.529. Com o campo `char` de volta, o primeiro acusa **7 campos**.
+
+**302 caracteres têm avanço zero.** Desenhados sozinhos numa grade eles somem ou pintam sobre a
+célula vizinha. A convenção é mostrá-los sobre `U+25CC`, e quem compõe é o **gerador** — o componente
+não pode escrever codepoint (invariantes 9 e 11). Daí o campo `shows`, uma lista de codepoints. E a
+regra que separa as duas coisas: **o desenho nunca é o que se copia**. Colar `◌́` no documento de quem
+usa é o pior defeito que esta funcionalidade pode ter, e o único que sobrevive a qualquer inspeção
+visual — por isso o teste afirma que a cópia devolve **um** caractere e que ele não é o círculo.
+
+**23 caracteres têm avanço dobrado** (as setas longas). O orçamento do trecho acompanha a tinta,
+senão o host elide um caractere só em `…`. O passo da grade (5) absorve as 4 colunas de tinta, e o
+teste afirma a **relação** — quem apertar o vão horizontal amanhã faz os 23 pintarem sobre o vizinho,
+e nada mais na tela diria isso.
+
+### Abre filtrado, e o `Esc` tem duas camadas
+
+O buffer nasce com `simbolos:` **escrito no campo**, e não com um sinalizador escondido: quem abre vê
+3.899 de 7.529 e vê por quê. Um filtro invisível na abertura seria a pior variante de estado oculto.
+
+Por isso o `Esc` ganhou uma camada: `simbolos:seta` → `simbolos:` → `` (os 7.529) → nada. Uma camada
+só derrubaria o filtro no primeiro toque, de surpresa; nenhuma prenderia quem quer chegar às letras.
+Cada toque muda o campo e o contador, então não existe aqui a tecla que parece não fazer nada.
+
+O painel oferece **sete famílias**, e não os 73 blocos: o nome de bloco mais longo tem 39 células
+contra as 24 que o painel reserva, e 73 blocos × 2 idiomas seriam 146 chaves de nome próprio. Os
+blocos continuam alcançáveis pelo prefixo `bloco:`, **por nome** e não por faixa hexadecimal — as
+fronteiras dos blocos do Unicode não caem em múltiplos redondos, e o atalho do outro navegador
+responderia errado em todas elas.
+
+### Os emoji, e a segunda face que eles obrigaram
+
+A Iosevka desenha **75 dos 1.184** emoji de codepoint único (6%) e **nenhuma** das 2.760 sequências.
+Emoji de verdade exigiram embutir uma segunda face — e é a primeira vez que o renderizador tem mais
+de uma.
+
+**Isso não contradiz a §6.4.** O que ela proíbe é o renderizador *consultar* o fontconfig; a cadeia
+aqui é **declarada** em duas linhas de código, não descoberta em tempo de execução. "Qual face
+desenhou isto" continua tendo resposta fixa, e o check `renderer-carrega-as-duas-faces` a fixa: a
+guarda de faces deixou de ser `> 0` e passou a ser o número **exato**. Com `> 0`, a face de emoji
+podia sumir do build e o único sintoma seria o tofu voltando na tela de quem procura um emoji.
+
+A escolhida é a **colorida**. Medi as duas moldando os 3.944 com harfbuzz: a monocromática acerta
+2.612 (66%), decompõe 1.258 — 👩💻 em vez de 👩‍💻 — e dá tofu em 74; a colorida acerta **3.944
+(100%)**. Emoji são conteúdo, como a prévia de imagem do clipboard, não chrome — a paleta própria
+deles não briga com o invariante 9. Custou 10,2 MB no binário e **nada** na moldagem: o alvo continua
+em 0,1 ms.
+
+**A base virou a UNIÃO das duas faces.** Enquanto havia uma face, `cmap ∩ UCD` era a verdade; com
+duas, a interseção antiga passaria a esconder caracteres que aparecem perfeitamente. São 11.614
+registros, dos quais 3.944 emoji.
+
+**As tags de emoji vêm do CLDR, não do léxico.** `cldr-annotations` dá nome e palavras-chave oficiais
+em pt e en para **100%** dos 3.944, incluindo sequências (👩‍💻 → *tecnóloga*) e bandeiras
+(🇧🇷 → *bandeira: Brasil*). Passar `grinning face` pelo léxico daria "rosto" e "sorridente" e mais
+nada; o CLDR dá *engraçado*, *feliz*, *lol*, *rindo*. O léxico continua servindo o resto da base.
+
+**A guarda que o `cmap` não dá.** Uma sequência ZWJ tem todos os codepoints no cmap e mesmo assim sai
+decomposta se a fonte não tiver a ligadura. Por isso o gerador **molda cada sequência com harfbuzz** e
+derruba o build se alguma não virar um glifo só — é o que impede a base de prometer 3.944 e a tela
+entregar pedaços. Trocando pela fonte monocromática, ele acusa **1.332**.
+
+#### Os grupos são subfiltros, e por isso condicionais
+
+O painel mostra os **nove grupos** do `emoji-test.txt` apenas quando o emoji está selecionado. Um
+subfiltro que aparece sempre não é subfiltro: em `familia:letra`, `grupo:comida` recortaria zero, e
+oferecer na tela um recorte que não recorta nada é pior do que não oferecer.
+
+Isso obrigou as cinco funções que definiam "o que é a opção n" a virarem **uma lista derivada**,
+função pura da busca e da base — porque agora o número de opções **muda** com o filtro em uso. O
+`Panel` não mudou uma linha: ele só conta células sobre um total. E a seleção passou a ser clampada,
+porque a lista cresce ao escolher o emoji e encolhe ao sair dele.
+
+Os 98 subgrupos ficam fora do painel e alcançáveis por `subgrupo:`, pela mesma razão dos 73 blocos.
+
+#### Abrir num filtro obrigou a gramática a ceder
+
+Com `familia:emoji` na abertura, digitar era impossível: `familia:` consumia todo o resto, e a
+primeira letra virava `familia:emojir` — o valor deixava de existir e a tela esvaziava sem dizer por
+quê. Os filtros de **enumeração** (`familia:`, `cat:`, `grupo:`) passaram a tomar uma palavra e deixar
+o resto como termo livre; os de **texto livre** (`bloco:`, `subgrupo:`, `nome:`) continuam tomando o
+resto inteiro, porque `bloco:box drawing` tem espaço dentro do valor.
+
+### A busca casava substring, e isso dava duas respostas erradas
+
+As capturas de tela mostraram os dois sintomas ao mesmo tempo: `seta para cima` devolvia **zero**, e
+`seta` punha **PESETA SIGN** em primeiro.
+
+Três causas, e uma regra que resolve as três. `has_tag` casava o termo **inteiro** contra cada tag, e
+as tags são palavras soltas — nenhuma contém uma frase. `match_score` dava nota 2 a "o nome contém" e
+4 a "tem tag", então `pe·seta·` vencia a tag `seta`. E `filter_by` **descartava a pontuação sempre que
+havia prefixo ativo** — como o buffer abre com um, a relevância estava desligada justamente na postura
+de abertura, e a lista saía em ordem alfabética do nome em inglês.
+
+A regra agora é **prefixo de palavra**, e a consulta é partida em palavras que precisam casar
+**todas**, com a nota sendo a pior delas. Prefixo e não palavra inteira porque a busca é incremental:
+quem digitou `arr` ainda não terminou de escrever `arrow`. A consulta e o texto são partidos pela
+**mesma** fronteira — sem isso `seti-ui` seria um token só e não acharia a tag que o texto parte em
+duas. E a fronteira é a pontuação ASCII, não "tudo que não é alfanumérico": um caractere colado não é
+alfanumérico, e parti-lo por aí deixaria a consulta vazia — o gesto de colar um caractere para saber
+qual é mostraria a base inteira.
+
+O mesmo conserto foi para o navegador de Nerd Fonts, que tinha os dois defeitos idênticos.
+
+---
+
+### Um defeito que só esta base tem
+
+A nota de identidade da busca (`is_this`) era "o termo **contém** este caractere". No navegador de
+glifos isso é seguro: os glifos são todos da PUA e ninguém os digita por acaso. Aqui a base tem o
+alfabeto — digitar `LONG LEFTWARDS ARROW` dava nota de identidade ao `a`, e a **letra a** aparecia em
+primeiro na busca por uma seta. Aconteceu, e o teste da largura dupla foi quem pegou. Agora a
+identidade exige que o termo, aparado, seja **um** caractere; o gesto que ela atende é colar um
+caractere para saber qual é, e esse gesto derruba até o filtro de abertura.
+
+---
+
+## O navegador de ícones Lucide — `LEADER i l`
+
+O terceiro da família, e o primeiro em que a fonte não **delimita** a base: ela é **reescrita**.
+
+### 634 codepoints já eram de outra pessoa
+
+A Lucide publica os 1.668 ícones em `U+E038..U+E6BB`. A Iosevka daqui é patcheada com Nerd Fonts, e
+o Nerd Fonts ocupa **634 daqueles mesmos codepoints** — Powerline, Font Awesome Extension, Weather,
+Seti-UI. A face primária é a pedida por nome, e por isso ela **vence a cadeia de fallback**.
+
+Sem tratar isso, 38% dos ícones apareceriam desenhados como outro símbolo. **Não como tofu** — tofu
+se vê. Como um ícone bonito e errado, que nenhuma inspeção visual pega, porque não há nada de
+estranho na tela: há a coisa errada, com toda a confiança da coisa certa.
+
+O gerador reescreve o `cmap` para `U+F2000..U+F2683`, no plano 15, e **confere que a faixa inteira
+está livre nas outras duas faces** antes de gravar. O fixture negativo é a faixa de origem: ele
+derruba o build dizendo os 634. Sai o `GSUB` junto — a fonte original casa o nome do ícone por
+ligadura, e uma ligadura viva faria a palavra `home` escrita em qualquer lugar virar um desenho.
+
+**A sonda que decidiu o desenho.** Antes de escrever qualquer coisa, perguntei ao `cosmic-text` qual
+face desenha um codepoint que só a terceira tem. Ele acha por **codepoint**, sem precisar do nome da
+família — e é por isso que o WIT **não mudou uma linha**: os ícones viajam como dado, como os emoji,
+e nenhum buffer futuro ganhou superfície nova. Se a resposta tivesse sido outra, teria sido preciso
+pôr um seletor de face no protocolo.
+
+### Dois codepoints por ícone, e eles não são cópias um do outro
+
+Cada registro traz `cp` e `lcp`. O `cp` é o que a **tela desenha**, na face remapeada; o `lcp` é o
+que a **Lucide publica**, e é o que serve a quem cola numa página com a fonte deles.
+
+Isso parece a armadilha de sempre — duas representações do mesmo fato — e não é: são fatos de
+**fontes diferentes**, sobre **fontes diferentes**. A ficha mostra o `lcp`, a cópia do caractere
+devolve o `lcp`, e o critério que amarra isso está escrito no driver de testes: `house` é `U+E0F5`.
+
+Um caso obrigou uma regra: a ferramenta que gera a fonte **funde desenhos idênticos num glifo só**.
+No 0.563.0, `clock` e `clock-4` têm o mesmo traço e a fonte guarda só `clock-4`. A regra sai do
+desenho, não de uma lista de exceções: quem ficou sem glifo procura o ícone de nós idênticos aos
+seus. Uma versão que funda outro par continua funcionando; uma que perca um ícone de verdade para o
+build.
+
+### A personalização é do artefato — e a prévia é o artefato
+
+O site da Lucide oferece cor, tamanho, espessura e traço absoluto. O que ela muda é o **texto
+copiado**, e aí ela é exata, inclusive a conta do traço absoluto (`espessura × 24 ÷ tamanho`, a mesma
+da lucide.dev). São **19 formas de cópia**: as oito abas do site (SVG, JSX, HTML, React, Vue, Svelte,
+Preact, Solid, Angular), mais o que ele não tem e este sistema usa — o caractere da fonte, o
+codepoint, o traçado cru, o data URI, o base64, a regra de CSS e o sprite. O desenho sai do **SVG de
+origem**, não do contorno do glifo: um contorno seria um preenchido que não responde a
+`stroke-width` nenhum.
+
+O `Tab` restaura os cinco ajustes de uma vez. Desfazer cinco linhas uma a uma é o tipo de trabalho
+que faz ninguém experimentar.
+
+**Um glifo continua não podendo honrar a espessura** — ele tem o traço assado dentro dele, a Lucide
+publica uma espessura só, e nenhuma fonte faria isso variar. Durante dois marcos a conclusão foi que
+a tela então não mostra, e que *fingir que varia seria mentir*. A premissa estava certa; a conclusão,
+não — ela só valia enquanto a única coisa que a tela sabia desenhar fosse **glifo**.
+
+O que a ficha mostra hoje, no canto superior direito, é o **SVG rasterizado** — literalmente o
+documento que a cópia entrega, pela mesma chamada a `svg()`. Não há um segundo construtor, e é isso
+que faz a prévia ser o artefato em vez de uma aproximação dele: um critério compara os dois **byte a
+byte**, antes e depois de mexer no traço. O glifo `Huge` da esquerda fica: um é o que a fonte
+desenha (o que a cópia do *caractere* entrega), o outro é o que o SVG entrega, e vê-los lado a lado é
+informação.
+
+### A display list ganhou a primeira primitiva de pixel — e o portão que faltava
+
+`command::svg` é a quinta primitiva, ao lado de texto, régua, grade e seleção, e a primeira que
+produz pixel arbitrário. O cabeçalho do WIT diz por que a lista é curta: *"cada capability a mais é
+superfície que todo buffer futuro passa a poder usar"*. Ela entra com três limites:
+
+- **Capacidade.** Quem a emitir sem declarar `vector` no descritor é recusado — e o primeiro `render`
+  acontece antes de a janela existir, então a recusa é na partida. Até aqui a linha do WIT que diz
+  *"o host recusa quem usar sem ter pedido"* era **promessa**: `validate` conferia o prefixo do keymap
+  e mais nada, e nenhuma capacidade era exigida de ninguém. O portão vale em **todo** quadro, não só
+  no primeiro: a prévia só existe na ficha, e conferir uma vez seria conferir o quadro sem ela.
+- **A superfície é menor do que "um SVG".** O `resvg` está na árvore sem motor de texto — `<text>`
+  não desenha — e sem `resources-dir`, então referência a arquivo externo não carrega.
+- **A cor não atravessa como valor** (invariante 11): o buffer manda o token, e o host o substitui
+  onde o documento diz `currentColor`. Sem isso a prévia sairia **preta sobre fundo preto**, que é
+  indistinguível de "esta primitiva ainda não está implementada". Quando a pessoa digita a cor dela,
+  não há `currentColor` para substituir e o desenho sai como o artefato sairia — ali é conteúdo, não
+  chrome, a mesma fronteira da prévia de imagem do clipboard.
+
+O custo é por **tecla**, não por quadro: `render` só roda quando o componente pede, e o cache é
+indexado pela string do SVG — que já codifica o ícone e os cinco ajustes, então a chave é exata. Um
+documento que não rasterize deixa a área vazia, e é o que se vê ao digitar uma cor pela metade
+(`#8ab`): a prévia some e volta. Inventar um desenho no lugar seria pior.
+
+### Preencher a caixa apagava o ajuste de tamanho
+
+O retângulo que o buffer pede é o **teto**, não o alvo. Rasterizando para *preencher*, um
+`width="24"` e um `width="512"` produzem a mesma imagem — o SVG da Lucide tem `viewBox` fixo de 24, e
+o que muda entre os dois é só a escala, que o preenchimento desfaz. A prévia mostrava com confiança
+um tamanho que não era o escolhido, e o ajuste que a pessoa acabara de mexer não tinha efeito nenhum.
+
+`Fit::Natural` é a resposta: o desenho sai no tamanho que o **documento declara**, e só encolhe
+quando não cabe — como qualquer visualizador. Acima do que a caixa comporta ele para de crescer, e o
+número da linha continua dizendo o tamanho real.
+
+A escolha oposta continua certa para **ícone de aplicativo** (`Fit::Fill`): ali o tamanho
+intrínseco do arquivo não quer dizer nada — o mesmo tema publica `.svg` de 16 e de 512 — e o que
+importa é ocupar a célula que a linha reservou. É por isso que ela é um parâmetro com nome, e não um
+padrão: as duas respostas certas são opostas, e confundi-las foi exatamente o que aconteceu.
+
+O mesmo cuidado vale um passo adiante, na `Area`: `encaixar` cresce até a borda e desfaria a
+rasterização natural. Quem desenha a prévia usa `centrar`, que **não amplia**.
+
+### A marca diz o que a tecla faz, e ela sai da mesma tabela que a tecla lê
+
+As 24 linhas da ficha tinham exatamente a mesma cara, e a seta lateral fazia **três** coisas
+conforme a linha: mudava o valor, trocava de ícone, ou — na da cor — **nada**, em silêncio. Era tecla
+morta, e o `typing` (que decide se o próximo dígito substitui ou acrescenta) não tinha
+representação nenhuma na tela.
+
+O defeito de fundo era que **quem desenha não sabia o que a tecla faz**: a afordância estava
+espalhada por `step_by`, `type_in`, `delete` e o despacho de `Paste`, e o desenho não consultava
+nenhum deles. Desenhar a marca a partir de uma segunda lista só adiaria o problema — ela divergiria
+no primeiro ajuste novo, e uma marca que promete uma tecla que não faz nada é pior do que marca
+nenhuma. Agora há uma `affordance(n)`, e **quem age pergunta a ela antes de agir**.
+
+Duas células reservadas antes do valor, em toda linha — inclusive nas sem marca. É a regra que o
+navegador de símbolos já escreveu para o marcador dele: reservar só onde há marca faria a coluna do
+valor andar de lugar de linha para linha. E a linha da cor passou a trocar de ícone como as de
+cópia, para *"sem marca de seta"* querer dizer uma coisa só.
+
+### 24 linhas acionáveis não cabem, e por isso a ficha rola
+
+A ficha do navegador de símbolos tem 9 linhas de ação; esta tem **24** (5 ajustes + 19 cópias). Numa
+janela baixa elas não cabem, e sem rolagem as últimas seriam inalcançáveis: a tecla anda, o realce
+some da tela, e nada denuncia. O critério correspondente percorre as 24 numa janela de 20 linhas e
+exige que a seleção esteja visível em **todas**, e que a última copie de verdade — chegar lá e ver não
+é a mesma coisa que agir.
+
+### O rótulo do painel tem de achar a própria categoria
+
+São 43 categorias, e o rótulo é lido na tela **e** digitado na busca: o painel diz "Setas", a base
+diz `arrows`. Duas representações do mesmo fato, e sem amarrá-las elas divergem em silêncio — o
+painel continua bonito e o que ele promete deixa de ser achável.
+
+O critério exige que cada rótulo, nos **dois idiomas**, ache a categoria inteira. Ele já pegou uma:
+`medical` estava traduzido no léxico como `medico`, sem acento, e o rótulo `Médico` achava 4 de 42.
+
+### O check que era só um comentário
+
+Desde a segunda face o `text.rs` prometia um check chamado `renderer-carrega-as-duas-faces`. **Ele
+nunca existiu.** Foi escrito agora, para as três, e faz mais do que contar: afirma qual face desenha
+texto, qual desenha emoji e qual desenha ícone — e **testemunha a colisão**, exigindo que a Iosevka
+ainda responda por `U+E0A0`. No dia em que ela deixar de responder, o check falha e alguém relê a
+decisão do remapeamento, em vez de redescobri-la pela tela.
+
+
+### A segunda face invalidou uma premissa, e ninguém percebeu por dois marcos
+
+`layout::width` contava **codepoints**, e o comentário dela dizia por quê: *"vale porque a fonte é
+monoespaçada de verdade — cada codepoint ocupa uma célula"*. Era verdade enquanto havia uma face.
+
+Com a face de emoji, deixou de ser: `👩‍❤️‍👨` são **seis** codepoints e **um** glifo. Uma bandeira são
+dois; um tom de pele, dois; uma marca sobre o círculo pontilhado, dois.
+
+O sintoma não foi "texto cortado curto demais" — foi **outro desenho**. Com orçamento de 4 células, o
+casal virava `👩‍❤` + `…`, que remolda como uma mulher, um coração e reticências. Apareceu em centenas
+de células de uma vez, e nenhuma delas parecia um erro de corte: pareciam emoji errados. Foi o dono
+quem viu, numa captura de tela.
+
+O corte passou a operar sobre **clusters** (`unicode-segmentation`, que já estava na árvore via
+`cosmic-text`). Um cluster é o que o renderizador desenha como uma coisa, e é a única unidade em que
+cortar não inventa conteúdo. Três testes fixam os quatro casos que esta base tem: ZWJ, bandeira, tom
+de pele e marca combinante.
+
+**A lição não é sobre emoji.** É que a premissa estava escrita — em maiúsculas, no comentário certo —
+e mesmo assim sobreviveu à mudança que a invalidou, porque nada a *verificava*. Um comentário que
+explica uma premissa não a defende.
+
+### Onde está a seleção, quando a cor não obedece
+
+Num buffer monocromático o token de cor resolve: o item em foco vira `state-accent`. Emoji **não
+obedecem** — a cor deles está dentro do glifo (bitmap CBDT), e `state-accent` não muda um pixel. Em
+3.944 das 11.614 células a seleção era invisível, e justamente nas que o buffer abre mostrando.
+
+O marcador é um **ícone de token** (`selection` → `cod-triangle_up`) na linha **abaixo** da célula em
+foco, apontando para ela. Embaixo, e não em volta: a fileira tem três células de altura para uma
+caixa de duas e pouco, e essa sobra estava sem uso. Um contorno exigiria pintar fundo, que o
+protocolo não tem e o invariante 15 não quer.
+
+### Os subfiltros de emoji passaram a aparecer sempre
+
+A decisão anterior — mostrá-los só com a família `emoji` escolhida — tinha um argumento bom: em
+`familia:letra`, `grupo:comida` recorta zero, e oferecer na tela um recorte que não recorta nada é
+pior do que não oferecer.
+
+O que ele não previa era o custo do contrário: um painel que **muda de tamanho embaixo da mão**, com
+as opções andando de lugar entre um `Tab` e o seguinte, e sem nenhum jeito de descobrir que os
+subfiltros existem. A resposta à objeção não é esconder, é **separar**: uma régua, um rótulo pequeno
+e apagado (*só emoji*), e eles ficam. Escolher um já põe a busca em `grupo:` ou `tom:`, que só os
+emoji têm.
+
+Isso obrigou o painel a deixar de ser um retângulo. Com seções, a conta "índice n vai na linha
+n / colunas" para de valer — ela não sabe das linhas que não têm opção nenhuma. `Panel` passou a
+montar uma **lista explícita de linhas** (régua, rótulo, opções), e `cell`/`at` viraram duas
+leituras da mesma lista em vez de duas contas que precisam concordar. E ele passou a **rolar** em vez
+de paginar: paginar exigia dividir por "quantas opções cabem numa página", e com seções de tamanhos
+diferentes isso deixou de ser uma divisão.
+
+### Tom de pele: cinco filtros que saem da sequência, não do nome
+
+`tom:claro` … `tom:escuro`, 406 emoji cada. O tom vem do **codepoint modificador** (`U+1F3FB..FF`) na
+sequência, e não do nome: em inglês o CLDR escreve *"light skin tone"* no fim, em português *"pele
+clara"*, e há emoji cujo nome cita pele sem ter modificador nenhum. O codepoint está lá, ou não está.
+
+Vale um filtro por consulta, como todos os outros — `tom:escuro grupo:pessoas` não cruza os dois. O
+que convive com ele é o **termo livre**, e é ele que atende o gesto real: `tom:escuro mao` → 79.
+
+
+### A face primária vencia o fallback, e 75 emoji saíam em monocromático
+
+`UP!` aparecia como uma caixinha branca de letras pretas ao lado de `ATM` e
+`SOON` coloridos. A causa é a mesma que obrigou o remapeamento da Lucide, do
+outro lado da fronteira: **quem tem o codepoint primeiro, ganha**. A face
+primária é a pedida por nome (`Family::Name`), e a Iosevka traz **75** dos emoji
+de presença padrão desenhados como texto.
+
+Não era tofu — tofu se vê. Era o emoji **errado**, e a tela não tinha como
+denunciar: os dois existem e os dois aparecem. Foi o dono quem viu, numa
+captura.
+
+**O seletor de variação não resolve.** Medido: `U+1F199 U+FE0F` continua na
+Iosevka e vira **dois** glifos, porque a primária tem os dois codepoints e o
+`cosmic-text` não implementa a regra de "prefira a fonte colorida quando houver
+`FE0F`". Sair um glifo a mais é pior do que sair o glifo errado.
+
+O corte é na cópia que o renderizador embute, e a regra é do Unicode, não nossa:
+**`Emoji_Presentation=Yes`** quer dizer "a forma padrão deste caractere é o
+emoji". Medido no 17.0.0: 154 codepoints nas duas faces, dos quais **75** de
+presença de emoji (saem) e **79** de presença de texto (ficam) — `#`, os
+dígitos, `©`, `®`, `™`, as setas. Esses são bases de sequência, e desenhá-los
+coloridos por padrão quebraria texto comum.
+
+Duas autoridades independentes dão o mesmo conjunto, e conferi que concordam: a
+propriedade `Emoji_Presentation` do `emoji-data.txt`, e as linhas
+`fully-qualified` de um codepoint sem `FE0F` do `emoji-test.txt`.
+
+Só a cópia do renderizador é cortada. As outras duas leituras da fonte são
+autoridades sobre outra coisa — o `glyphgen` pergunta "que glifos o Nerd Fonts
+acrescentou", o `unicodegen` pergunta "que caracteres existem" —, e a base
+continua cobrindo os 75, agora pela face certa.
+
+**Esta é a terceira vez que a mesma pergunta aparece com outra roupa:** qual
+face desenha o quê. Por isso o check `renderer-loads-three-faces` deixou de
+contar faces e passou a nomear casos: os 75 na face de emoji, `#` e `©` na
+primária, e `U+E0A0` ainda na Iosevka (que é a premissa do remapeamento da
+Lucide).
+
+---
+
+## O localizador de aplicativos — `LEADER a`
+
+É a **sexta** vista da região expandida, ao lado do which-key, do `M-x`, do histórico, do clipboard e
+do manual. Não é menu iniciar (invariante 14): mesma superfície, mesmo gesto de digitar-e-estreitar,
+mesma tecla de sair. O que ele acrescenta é a fonte da lista.
+
+### A lista não espera por nada
+
+O requisito do dono foi literal: *"todos os nomes e descrições devem aparecer em tela muito rápido e
+antes mesmo dos ícones serem carregados"*. Ele decide a estrutura inteira.
+
+**A varredura é da partida, não da tecla.** Medido: **128 entradas em 68 ms** — quatro orçamentos de
+frame. Varrer ao apertar `LEADER a` daria um congelamento visível toda vez, justo no gesto que tem de
+ser instantâneo. Ela roda numa thread enquanto o rodapé já está de pé, e o catálogo chega por
+`calloop::channel`. Ao abrir, um `stat` por diretório diz se o catálogo envelheceu; se sim, a
+revarredura vai para a thread e a lista **troca embaixo** sem perder o que foi digitado.
+
+**O ícone tem duas velocidades.** O glifo sai por tabela, em memória, no mesmo quadro. O pixmap do
+app vem por outra thread — `icon::procurar` + `resvg` no tamanho final — e substitui o glifo quando
+chega. Só as linhas **visíveis** são pedidas (doze), e o cache guarda inclusive o `None`: sem
+distinguir "não perguntei" de "perguntei e não existe", um nome sem arquivo seria procurado num
+superpacote de 335 031 arquivos a cada quadro.
+
+### O que decide a ordem da busca
+
+Duas chaves por item, nesta ordem: o **nome dobrado** e o **id do desktop**. O id costuma ser o
+binário — digitar `nvim` para achar "Neovim", ou `nautilus` para achar "Arquivos", é o gesto de quem
+conhece o sistema. A chave secundária leva um degrau de `+3` na pontuação, que é uma a mais que a pior
+possível: **qualquer** casamento no nome vence **qualquer** casamento no id, senão um item que casa
+por um texto que não está na tela apareceria na frente do que a pessoa está lendo.
+
+A **descrição fica fora da busca**. `Comment` é prosa, subsequência sobre prosa casa metade da lista,
+e o realce não teria onde acender — a linha entraria no resultado sem nada dizendo por quê.
+
+### A cadeia de ícone, e o invariante 10
+
+`tray-glyphs.nix` pelo id **e** pelo `Icon=` → `category-glyphs.nix` pela primeira categoria que casar
+→ pixmap do superpacote (assíncrono) → `icon.generic`. A tabela de categorias é uma **lista**, não um
+attrset: um navegador declara `Network;WebBrowser` e as duas casam, e um attrset é ordenado pela
+chave — `Network` venceria e todo navegador viraria o globo de rede.
+
+A categoria vem antes do genérico porque o genérico é **indistinguível de "não resolvi"**: uma lista
+inteira do mesmo quadradinho parece proposital, e é exatamente o sintoma de a tabela não ter chegado
+ao Rust — que foi o estado real até aqui (a `Chain` existia com o campo `glyphs` e ninguém o
+construía).
+
+Quem consulta o superpacote é o **host**, para app **estrangeiro**, que é o caso para o qual a
+`Chain` foi escrita. Nenhum buffer WASM o alcança, e nem poderia: o `world` do WIT não tem sistema de
+arquivos.
+
+### A linha do minibuffer não tem rótulo, e o ponteiro tem fundo
+
+O `M-x` leva `M-x ` na frente porque isso é a **notação da própria tecla** — é o que distingue o
+localizador de comandos da lista de atalhos, que dividem a mesma região. O de aplicativos **não leva
+nada**: um rótulo que não muda com a seta nem com o que se digita ocupa a linha sem responder a
+pergunta nenhuma, e a lista logo abaixo já diz o que é. Sem nada digitado e sem ponteiro na lista, a
+linha fica vazia.
+
+O que ela mostra, quando o ponteiro está sobre uma linha, é o **binário que vai rodar** — e ele é o
+caminho resolvido, sempre. Antes metade dos aplicativos mostrava `/nix/store/…/bin/x` e a outra
+metade só `x`, conforme o que o fornecedor escreveu no `Exec=`. A resolução acontece **na varredura**,
+onde ainda se tem o `PATH` da sessão; dentro do `systemd-run --scope` ele é mínimo, e um nome nu ali
+falha longe da causa — a armadilha que o `CLAUDE.md` registra.
+
+O **fundo** (`surface.selection`) marca a linha sob o ponteiro. O token existia desde o começo,
+descrito como "fundo da linha em foco dentro de uma lista expandida", e nunca havia chegado ao
+rodapé: só a TUI do instalador o usava, e a lista não dava sinal nenhum de onde o mouse estava —
+clicar era um ato de fé. Ele é dado ao **ponteiro** e não ao foco de propósito: o foco já se
+distingue por cor do texto (invariante 15), e marcar os dois deixaria "qual está selecionado?" sem
+resposta no instante em que o ponteiro repousa sobre outra linha. E só onde há clique: no manual, que
+só se lê, uma linha acesa prometeria uma ação que não existe.
+
+### A precedência das vistas passou a existir uma vez
+
+Ela estava escrita em quatro lugares — altura, navegação, desenho e captura de teclado —, e o que
+mantinha o rodapé de pé era as quatro concordarem. Divergiram uma vez, e o sintoma foi a superfície
+pedir vinte e duas linhas para desenhar seis. Agora há `Footer::view()`, **derivada** das flags e
+não guardada: guardá-la criaria a segunda verdade que ela existe para não ter.
+
+### Nada na expansão elidia
+
+Descoberto ao pôr descrição na terceira coluna: uma linha de duzentas células passava por cima da
+barra de rolagem e saía pela borda — e o compositor **não recorta**, ela simplesmente não aparecia.
+As duas colunas agora elidem, e o teto de metade da tela que morava no desenho passou para
+`grid_for`, junto com a coluna do ícone: altura, paginação, clique e pintura leem **o mesmo número**.
+
+A elisão é pelo **fim**, nunca pelo meio: as posições do realce são do começo do texto, e cortar o
+meio faria o grifo acender letra que não está mais ali.
+
+### `systemd-run --scope` é síncrono
+
+Achado ao ligar o lançamento: do manual, *"execution in this case is synchronous, and will return only
+when the command finishes"*. O comentário no código afirmava o contrário — verdade no modo serviço,
+falso com `--scope`. Com o `calloop` numa thread só, abrir **qualquer** app estrangeiro congelava
+teclado, pintura e eventos do niri pela vida inteira do aplicativo. Escondia-se atrás de quatro
+chamadores fixos; o localizador faria dele o caminho principal. A espera foi para uma thread nomeada,
+e o veredito volta pelo canal — o `apps-vm` abre um app que dorme dois minutos e exige o rodapé
+respondendo enquanto ele vive.
+
+---
+
+## Rede e Syncthing — `LEADER r`
+
+### A rede saiu da lista do "não se pergunta", e por quê
+
+A §7.1 dizia que o instalador coleta **só** disco, hostname, senha, passphrase, idioma e
+`resume_offset`, e listava a **rede** entre o que não se pergunta — junto de teclado, fuso e placa
+de vídeo. A justificativa era boa: *"instalador que pergunta demais é instalador que não decidiu"*.
+
+Ela não cobria este caso, e por duas razões que nenhum dos outros itens da lista tem:
+
+1. **Não há o que detectar.** O `nixos-facter` acha a placa de rede, mas a senha do Wi-Fi não é
+   propriedade do hardware nem decisão do projeto: é um segredo por pessoa.
+2. **Sem ela a instalação não roda.** O passo `inst-step-install` baixa o sistema inteiro da rede.
+   Numa máquina sem porta Ethernet — e o laptop deste projeto é uma delas — não perguntar significa
+   não instalar.
+
+O critério continua valendo com a mesma força: **pergunta-se o que só a pessoa sabe, e nada além.**
+A rede passou a caber nisso. São oito entradas no enum: seis telas sempre, uma calculada
+(`resume_offset`) e uma **condicional** — a senha só aparece quando há rede escolhida, e quem vai de
+cabo responde as mesmas seis de antes.
+
+O SSID **não** entra no `host.nix`, e a senha não passa por `argv`: o perfil é escrito pelo
+instalador (o mesmo mecanismo `ESCREVER` da passphrase, porque `/proc/<pid>/cmdline` é legível por
+qualquer processo) em `/persist/etc/NetworkManager/system-connections`, que o `persist.nix` já
+listava.
+
+### O nome de um token de ícone quebrou um buffer WASM
+
+`wifi-0` parecia um nome. O enum `icon` do WIT é gerado dos tokens, e em WIT **cada segmento de um
+identificador começa por letra** — o `wit_bindgen` recusou com `invalid character in identifier '0'`,
+apontando para a linha do enum gerado, dentro da compilação de `ronoctua-buffer-unicode`. Um arquivo
+que não tem nada a ver com ícones, três derivações adiante da causa.
+
+Os nomes viraram palavras (`wifi-fraco`, `wifi-otimo`), mas o que resolve de verdade é o
+`gen-tokens.py` **recusar na origem**, citando o token. É a quinta vez que este projeto paga para
+aprender a mesma coisa: fronteira que aceita o que o outro lado recusa transforma um erro de
+digitação num mistério.
+
+### A vista lê o cache do NetworkManager, e não espera o rádio
+
+O localizador de aplicativos varre o XDG numa thread porque ler centenas de `.desktop` custa dezenas
+de milissegundos. Aqui não há disco: o NetworkManager mantém em memória os pontos de acesso que o
+rádio já viu, e devolvê-los é uma ida ao barramento.
+
+O que demora é a **varredura**, e essa não é esperada: `RequestScan` volta na hora e o resultado
+aparece na leitura seguinte. Bloquear até o rádio responder congelaria o rodapé por segundos — a
+mesma armadilha do `systemd-run --scope`.
+
+Rádio desligado lista **zero** redes, e não as da última varredura: oferecer uma conexão que não
+pode acontecer faria a tecla falhar parecendo defeito.
+
+### Três vazios diferentes, e não um "sem redes"
+
+Sem barramento, sem rádio e rádio desligado têm conserto diferente — o terceiro é uma tecla, os
+outros dois não. Um texto genérico para os três mandaria a pessoa procurar no lugar errado.
+
+### Por que `overrideFolders = false` é a linha mais perigosa do módulo do Syncthing
+
+Ela vale `true` no nixpkgs, e `true` significa *"o que não está declarado no Nix é apagado na
+ativação"*. Este módulo não declara pasta nenhuma — caminho de pasta é dado pessoal (invariante 13) —
+então o padrão **apagaria todas as pastas a cada `nixos-rebuild`**, inclusive as recém-adicionadas
+pela interface, sem aviso e sem desfazer. Não há sintoma antes do estrago; por isso há check.
+
+### Os valores de rede saíram de uma medição, não de um blog
+
+Uma transferência real de 592 GB entre duas máquinas deste projeto foi medida do começo ao fim. A
+banda de 2,4 GHz rendia **2,9 MB/s**; a mesma transferência em 5 GHz rendeu **42 MB/s** — 16×, sem
+mudar uma linha de configuração. Do que sobrou depois disso:
+
+- `wifi.powersave = false` — o rádio dormia entre quadros;
+- `tcp_slow_start_after_idle = 0` — o Syncthing pausa entre arquivos, e cada arquivo recomeçava em
+  partida lenta; numa pasta de milhares de arquivos isso é a maior parte do tempo;
+- BBR **com** `fq` — sob carga a latência até o roteador saía de 1,3 ms e chegava a 105 ms, que é
+  enfileiramento puro; o cubic responde a isso enchendo a fila. BBR sem `fq` funciona pior que o
+  cubic, e é por isso que os dois são conferidos juntos no check;
+- `numConnections = 3` — o padrão é uma conexão TCP por dispositivo, e um fluxo só não mantém janela
+  em voo suficiente num enlace cuja latência sob carga vai a 150 ms.
+
+### A senha do Wi-Fi saiu do arquivo e foi para o TPM
+
+O jeito de todo mundo é `psk=<senha>` dentro do keyfile do NetworkManager, modo `0600`. Aqui isso já
+vivia num volume LUKS, então não era bem "senha em texto plano no disco" — o que sobrava de exposição
+era estreito e concreto: **cópia que sai do volume cifrado**. `/etc/NetworkManager/system-connections`
+está na lista do `persist.nix`, e qualquer backup de `/persist` levaria as senhas junto.
+
+O NetworkManager tem o mecanismo para isso e quase ninguém o usa fora do GNOME Keyring: **`psk-flags`**
+mais um **agente de segredo** no D-Bus. O keyfile deixa de conter a senha; quem a entrega, quando o NM
+pede, é o `ronoctua-network-agent`, abrindo um blob selado no TPM2.
+
+**A simplificação que fez isto caber:** o agente não recebe a senha de ninguém. O
+`AddAndActivateConnection` aceita a senha na própria chamada, e as `psk-flags` decidem apenas o que é
+**persistido**. Então o rodapé continua entregando a senha ao NM na hora de conectar, e o daemon só
+entra no boot seguinte — quando não há mais ninguém digitando. Sem isso, a senha teria de atravessar
+mais um canal, e cada canal é uma superfície a mais.
+
+**Escolha por rede, e não política global.** Depois de conectar, uma tecla: lembrar grava
+`psk-flags=1` e sela; qualquer outra resposta deixa `psk-flags=2`, e nada persiste em lugar nenhum. A
+conexão acontece **antes** da pergunta, com `psk-flags=2` — guardar primeiro e apagar se a pessoa
+recusar deixaria a senha em disco no intervalo.
+
+**Sem política de PCR, deliberadamente.** Prender o blob ao PCR 11 — que mede a UKI — faria **toda
+atualização de kernel quebrar o Wi-Fi em silêncio**, e não compraria quase nada: o blob já vive dentro
+de um volume que os mesmos PCRs protegem. Sem política, ele continua inútil em qualquer outra máquina,
+que é o alvo, e sobrevive a atualização. É também o que permite ao instalador selar **de dentro do
+ISO**: o TPM é o mesmo, e nenhum PCR do sistema final precisa existir ainda. O check de VM reinicia a
+máquina exatamente para trancar isso — se alguém acrescentar `--tpm2-pcrs=` sem pensar, é ali que
+aparece.
+
+`--with-key=tpm2` e não `auto`: o `auto` mistura a chave de host, que no alvo ainda não existe quando
+o instalador sela.
+
+**O modo de falha é o fluxo normal.** Sem blob, sem TPM ou com o TPM recusando, o agente responde
+`NoSecrets` — e para o NetworkManager isso significa "peça à pessoa", que é exatamente o que acontece
+com quem nunca conectou naquela rede. Se o daemon estiver fora do ar, o NM não acha agente nenhum e
+faz a mesma coisa. A rede não fica presa ao daemon estar vivo; fica presa a **alguém** poder responder.
+
+**Quem autoriza é o barramento, não o daemon.** A política em `nix/modules/network.nix` decide que só o
+root levanta o agente e só o usuário da distro pede selagem. Um `if usuario == "noctua"` dentro do
+Rust seria uma segunda verdade — e a que erra em silêncio, porque um daemon que se autoriza sozinho
+parece funcionar até não parecer.
+
+**O que isto não protege:** root numa máquina ligada. A senha chega ao `wpa_supplicant` em RAM de
+qualquer jeito, e não há desenho que evite isso.
+
+### Renomear identificador: a prova óbvia não serve
+
+A passada dos 18 078 comentários provava-se sozinha: extrair só as faixas de comentário, traduzir,
+recolocar, e exigir que as 44 747 linhas de código ficassem **byte a byte idênticas**. Sem git
+(invariante 2), era a única rede.
+
+Para os identificadores essa prova não existe — o código *é* o que muda. A ida-e-volta pelo mapa
+inverso parece o análogo e **está errada**, medido: como os comentários já estavam em inglês,
+`name`, `line` e `key` já ocorriam na árvore, e a volta traduzia de novo os que já estavam certos —
+1 581 trocas na ida contra 3 742 na volta.
+
+O que substituiu:
+
+1. **`conflicts` antes de aplicar.** Para cada `velho → novo`, onde `novo` **já existe** como
+   identificador? É o perigo real: um rename que cai sobre um nome ocupado o sombreia, e sombreamento
+   dentro de uma função **compila**. Foi assim que `ponta → cap` ia colidir com uma variável `cap` na
+   mesma função, e `casa → matches` com a macro `matches!`.
+2. **O diário.** Cada `apply` grava `(arquivo, offset, velho, novo)`, e o `undo` reverte exatamente
+   aqueles trechos. Voltar byte a byte prova que a aplicação foi posicional e completa.
+3. **O compilador**, que cobre o significado — e a `cargo fmt` logo atrás, porque renomear muda a
+   ordem alfabética dos `use` e o `rust-fmt` reprova.
+
+**O reescritor tem de saber onde cada byte está.** `nome` é ao mesmo tempo identificador, campo do
+JSON gerado (`"nome"`), palavra dentro de um valor `.ftl` em pt-BR e palavra num comentário. Um `sed`
+troca os quatro, e os dois que **não** podem mudar são justamente os que nenhum compilador defende.
+O que custou descobrir: comentário de bloco **aninhado**, raw string `r#"…"#`, char literal contra
+lifetime, e a **captura de format** — `{nome}` dentro de string É referência a código, e são 667
+delas.
+
+### A SUPERFÍCIE do check importa mais que a lista dele
+
+O `english-names` nasceu lendo nome de arquivo e chave `.ftl`. Cada vez que a superfície dele foi
+ampliada, ele achou uma safra inteira que a anterior não via — e não porque a lista de negação
+tivesse melhorado, mas porque passou a **olhar outro lugar**:
+
+| superfície acrescentada | o que apareceu |
+|---|---|
+| declaração Rust (`fn`, `struct`, `enum`, …) | 1 921 identificadores |
+| definição Nix e Python | 274 nomes na camada de build |
+| **variante de enum** | **63**, com enums meio traduzidos (`Gesture::Inserir` ao lado de `Confirm`) |
+| **campo de struct** | **3**, entre eles `Minibuffer.segredo` |
+| **subcomando da CLI** | **4** (`comando`, `satelite`, `verificar-keymap`, `exportar-binds-niri`) |
+
+O padrão é sempre o mesmo: **a linha que nomeia essas coisas não tem palavra-chave.** Uma variante é
+uma palavra maiúscula indentada; um campo é uma palavra minúscula e dois-pontos; um subcomando é uma
+string num braço de `match`. Toda regra escrita em cima de "procure a palavra-chave X" é cega para
+elas, e ficam invisíveis exatamente porque parecem prosa para o verificador.
+
+Ao suspeitar de uma lacuna, a pergunta útil não é "que radical falta na lista?" — é **"que forma
+sintática eu ainda não estou lendo?"**
+
+### Lista de negação acha o que você lembrou; ausência acha o que você esqueceu
+
+O `english-names` recusa uma lista de radicais portugueses, e essa escolha está
+justificada no próprio check: detectar "isto é português" em geral é impossível, recusar exatamente
+as palavras que já estiveram aqui é possível.
+
+O limite disso ficou medido. Com a lista passando limpa, uma varredura por **ausência** — segmento
+que não aparece num vocabulário inglês de ~900 palavras — encontrou **231 nomes** que a lista não
+cobria: `BUFFER_GLIFOS`, `MARGEM_DE_ROLAGEM`, `envolver`, `realcar`, `TETO_DO_HISTORICO`, `vigiar`,
+`ceder_o_lugar`, `topos_alinhados`. Nenhum deles estava na lista porque ninguém tinha lembrado dele.
+
+As duas convivem, com papéis diferentes: **a lista é o check** — roda em segundos, dá mensagem com
+arquivo e linha, e impede a regressão; **a ausência é como se alimenta a lista**, e é o que se roda
+depois de uma passada grande. Uma terceira, por morfologia (`-cao`, `-mento`, `-ivel`, `-dade`),
+serve de conferência cruzada: as três concordarem é o que permite dizer "zero" sem apostar.
+
+### O que atravessa a fronteira não tem compilador
+
+Três camadas viajam como **string** e por isso não quebram o build quando divergem — cada uma tem de
+mudar nos dois lados na mesma passada:
+
+- **O WIT.** O host carrega o componente por `Val` dinâmico (`ronoctua-runtime`), então os nomes dos
+  casos são literais: 61 strings, mais o nome qualificado `ronoctua:buffer/view@0.1.0`. Renomear o
+  `.wit` sem elas dá "o componente nao exporta", longe da causa.
+- **Os campos do JSON gerado.** Mudam em três lugares juntos: o gerador Python, o parser escrito à
+  mão do buffer (que não tem parser de JSON, invariante 11) e o `jq` dos checks. E dentro do próprio
+  gerador o campo é escrito com aspas duplas e **lido** com simples — `stats['sem_pt']` sobreviveu à
+  primeira passada e explodiu no build.
+- **Os campos de `tracing`.** Os testes de VM fazem `grep` neles (`command=`, `engine=alacritty`,
+  `text=foot`). O log e o `grep` mudam juntos, senão o teste passa a falhar por outro motivo.
+- **O nome do subcomando e a flag de CLI.** `Some("comando")` é um braço de `match`, e
+  `--teto-sem-pt` é uma string que o Nix passa ao Python. Nenhuma regra de declaração os alcança:
+  os quatro subcomandos atravessaram a refatoração inteira intactos, e renomear `teto`→`cap` só do
+  lado do chamador deu `unrecognized arguments` no build. O `english-names` passou a ler os braços
+  de `match` do `main.rs`; a paridade das flags se confere comparando o `add_argument` de cada
+  gerador com o que os `.nix` passam.
+
+### O `''` do Nix é uma linguagem dentro da outra, e o classificador tem de saber disso
+
+Reescrever `.nix` com consciência de região custou três defeitos, todos da mesma família — **dentro
+da fence há um segundo idioma, e as regras dos dois valem ao mesmo tempo**:
+
+- **A fence não termina no primeiro `''`.** `'''`, `''$` e `''\` são escapes. Lendo `''${1:-6}` como
+  fim de string, o `nix/bench-frames.nix` virou dois fragmentos e 90% do script saiu da análise —
+  em silêncio, que é o pior jeito de uma varredura falhar.
+- **O `#` da fence é do script, não do Nix.** Numa linha comentada do shell, `${prefixo}` continua
+  sendo antiquotação VIVA. Pular essa linha renomeia a ligação e não o uso, e o arquivo para de
+  avaliar com `undefined variable` — a única das três que falhou alto.
+- **O comentário do KDL é `//`, não `#`.** Classificar a prosa de `nix/dev.nix` como código fez o
+  mapa renomear palavras dentro dela: "um `tree_size` que mostre o `footer_proc` de duas `lines`".
+
+E mais duas, que não são do Nix:
+
+- **Uma aspa desemparelhada apaga o arquivo inteiro da reescrita.** Uma fence de um caractere que
+  procura o par sem limite atravessa o fim da linha e marca o resto do arquivo como string; o
+  `nix/scripts/scan-secrets.py` atravessou uma passada inteira sem uma troca e sem um erro. Em
+  Python, shell e Nix, `"` e `'` **nunca cruzam a quebra de linha** — é esse limite que fecha a
+  classe. O primo disso é a **aspa aninhada do shell**: em `[ "$(grep -c "footer-mark" …)" ]` a
+  segunda aspa FECHA a primeira, então o token ficou fora de string em uma das cinco ocorrências —
+  e só nela foi renomeado.
+- **O hífen não é fronteira de palavra.** `binds-padrao.rs` virou `binds-sleepPattern.rs` do lado do
+  Nix enquanto o `include!` do Rust seguia no nome velho. Nome de arquivo, id kebab e unidade do
+  systemd casam no meio; depois de qualquer passada, varra alvo colado a `-` ou a `.`.
+
+### 4,1 GB não cabem no git, nem na cota do LFS — e Release é a resposta certa
+
+As 540 faces do `noctua-iosevka` são 4,1 GB. Em git puro o GitHub recusa; em LFS são **quatro vezes**
+a cota gratuita de 1 GB, e a única saída oferecida é um data pack pago.
+
+O reflexo é achar que falta espaço. Não falta: **falta enquadrar o que essas fontes são.** Elas não
+são fonte — são SAÍDA de build, geradas do Iosevka upstream com um plano e um patch. Versionar saída
+de build em git é o que o LFS existe para adiar, e aqui nem ele alcança.
+
+Um asset de Release não tem cota, aceita 2 GB por arquivo, é ilimitado para repositório público e é
+de graça. E `fetchurl` com hash é tão reprodutível quanto um rev — o hash prende o byte, que é
+exatamente o que se quer de um artefato.
+
+Duas medidas que decidiram o formato: **zstd -19 leva um TTF a 24%** do tamanho (15,5 MB → 3,8 MB),
+e o maior asset fica em ~510 MB, folgado dentro do limite. O `tar` vai com `--sort=name` e mtime
+fixo, senão o hash muda a cada empacotamento e o `fetchurl` teria de ser atualizado à toa.
+
+O que não dá para automatizar é a ordem: **o Release existe antes de o input apontar para ele**,
+senão o `nix flake check` quebra num 404.
+
+### Caminho que guarda estado não é identificador
+
+`/btrfs_tmp/@antigos` guarda os `@root` salvos pelo wipe. A passada trocou o `mkdir -p` e não a
+string com o caminho completo, e o `impermanence-vm` reprovou — mas o conserto não era completar a
+troca: era **desfazê-la**. Renomear um caminho de estado abandona o dado da máquina já instalada, e
+o custo aparece no pior momento, que é quando alguém foi procurar um arquivo perdido. O mesmo vale
+para `/persist/etc/ronoctua/wifi` e para o socket em `$XDG_RUNTIME_DIR`.
+
+### Captura de format órfã: o defeito que só existe na linha que executa
+
+`f"{faixa}"` com o `faixa = …` renomeado duas linhas acima não é erro de sintaxe, não é erro de
+importação e não aparece em revisão: o Python só levanta `NameError` quando **aquela linha roda**.
+Três estavam vivas ao mesmo tempo — uma no caminho "não medido" do `nix run .#bench`, uma na linha
+de resumo que o bench imprime SEMPRE, e uma no `modeline-vm`, que o type check do driver do NixOS
+pegou. As duas primeiras nenhum check pegava.
+
+O `format-captures-resolve` fecha isso, e o que ele precisa saber é o mesmo de cima: isolar o script
+embutido do Nix ao redor (senão um atributo `name = …` do Nix conta como definição Python e esconde
+justamente o órfão) e respeitar os escapes da fence.
+
+### A DSL de busca é interface, não nome
+
+`familia:letra`, `bloco:f0`, `categoria:arrows` são o que a **pessoa digita**. O navegador Unicode já
+aceitava os dois idiomas por desenho (`assets/lexicon/tags.en-pt.toml` existe para isso); os de
+glifos e Lucide, só português. A passada uniformizou pelo que já existia — os três aceitam **ambos**.
+Traduzir só para o inglês teria apagado metade de um recurso sob o pretexto de renomear.
+
+### Uma chave de texto tem SETE derivados, e só um deles é o `.ftl`
+
+Renomear as 358 chaves para o inglês (invariante 18) custou **dez rodadas do portão**, e cada uma
+revelou um lugar onde a chave é montada — nunca escrita. Ela só existe inteira em runtime, e por isso
+nenhuma busca no código a enxerga:
+
+1. o **prefixo** constante no buffer (`unicode-family-`);
+2. a **constante sentinela** (`FAMILIA_TODOS = "todos"`), que vira o sufixo da opção "todas";
+3. o **valor de dado** vindo do banco gerado;
+4. a **tabela do gerador** (`gen-unicodedb.py`), onde o id nasce;
+5. o **`.ftl`**, o único lugar visível;
+6. a **lista esperada no arnês de teste**, que confere 1–4 contra 5;
+7. o **nome da variável de ambiente** do instalador, derivado do rótulo por
+   `format!("RONOCTUA_{}", rotulo.replace('-', "_").to_uppercase())`.
+
+Quem renomear uma chave mexe nos sete. O compilador cobre zero deles.
+
+### `id`, `search` e `rótulo` são três papéis do mesmo dado
+
+As tabelas do `gen-unicodedb.py` guardam `("symbol", "simbolo", "Símbolo")`, e a tentação é ler os
+três como sinônimos. Não são:
+
+- o **id** monta a chave (`unicode-family-symbol`) — é NOME, e por isso é inglês;
+- a **busca** é o que a pessoa digita — é INTERFACE, e o projeto tem léxico bilíngue por desenho;
+- o **rótulo** é o que o painel mostra, acentuado, e o check exige que digitá-lo ache a família
+  inteira.
+
+Traduzir o id sem olhar os outros dois quebrou a busca em português três vezes seguidas. A saída foi
+**normalizar a entrada, não afrouxar a comparação**: `familia:` e `family:` aceitam as duas línguas,
+uma tabela só (`translate_value`) converte para o id, e a comparação segue exata.
+
+Afrouxar custou caro numa das tentativas: casar contra `tags_pt` inteiro fez `familia:emoji` devolver
+3953 em vez de 3944. **Filtro que devolve a mais é pior que filtro que devolve a menos** — ninguém
+confere o que não pediu.
+
+### O `[[bin]] name` do Cargo sobrepõe o nome do arquivo
+
+Renomear `contrato-niri.rs` para `niri-contract.rs` **não** renomeia o binário: quem manda é o
+`[[bin]] name` do `Cargo.toml`. O teste continuou chamando `bin/contrato-niri` e falhou com exit 127
+— erro de shell, não de Rust, e portanto invisível ao `cargo check`.
+
+### Verificar por AUSÊNCIA, não por execução
+
+Em todas as etapas em que declarei conclusão cedo demais, o que eu tinha verificado era *"o script
+rodou"*. As duas verificações que de fato fecharam assunto foram outras:
+
+- varrer o **dicionário inteiro** contra todos os literais e justificar cada falso positivo — foi
+  assim que apareceram cinco arquivos e um `.wgsl` que a lista de extensões não cobria;
+- cruzar **todo `bin/<algo>` citado** contra o que existe — foi assim que apareceram treze binários.
+
+Uma busca construída a partir do que se espera achar devolve o que se espera achar.
+
+## Superpacote de ícones
+
+Prioridade `Zafiro` → `Adwaita` → `MoreWaita` → `Papirus`, mais `kdePackages.breeze-icons` (única
+cobertura decente de app KDE/Qt) e `hicolor-icon-theme` (herança final obrigatória pelo spec —
+requisito, não escolha). Atenção: `breeze-icons` **não** é top-level.
+
+**Nada mais por palpite.** O propósito é fallback de pixmap por `IconName` para apps estrangeiros, e
+o que importa é cobertura de nomes de aplicativo. O `coverage.md` gerado decide se sobra buraco.
+
+**Licenças:** as origens misturam GPL-3.0, CC-BY-SA-4.0 e MIT. A derivação declara `meta.license`
+como a **lista** (não colapsa para uma), grava cada texto, e o manifesto carrega a licença **por nome
+vencedor** — que é o único jeito de responder "de onde veio este ícone e sob que termos".
+
+---
+
+## Desempenho medido
+
+Medido em ThinkPad Z16 Gen 2, Radeon 760M (RDNA3, RADV), 1920x1200@60 Hz — um frame são 16,7 ms.
+`nix run .#bench` remede tudo isto e **falha se algum alvo estourar**; se estes números divergirem
+do comando, o comando está certo e a tabela está velha.
+
+| medida | valor | alvo |
+|---|---:|---:|
+| primeiro frame | 29,0 ms (p99 52,9) | 200 ms |
+| which-key | 4,4 ms (p99 6,2) | 16,7 ms |
+| resolver do layout | 0,0003 ms (p99) | — |
+| primeira moldagem de texto | 0,1 ms | — |
+| instanciação de componente | 0,011 ms (p99) | 5 ms |
+
+Os marcos foram cronometrados até `Queue::present`, que no Wayland faz `attach` + `commit`: é o
+instante em que o frame sai das **nossas** mãos, não em que vira luz. Medir a fronteira do nosso
+código é a escolha honesta; um número "até o pixel" mediria o compositor junto.
+
+Duas correções que esses números carregam, ambas de ordem de grandeza:
+
+- **A família genérica custava 26×.** Pedir `Family::Monospace` ao cosmic-text resolve para
+  `Noto Sans Mono`, que não está no nosso banco; a busca falhava para dentro do fallback e a primeira
+  moldagem custava 4 447 ms. E não era só desempenho: **qual face desenhava o rodapé dependia do
+  fallback**, o que contraria "o renderer não usa fontconfig" pelo mesmo motivo.
+- **Um driver de hardware ausente custava 650 ms.** O loader Vulkan carrega com sucesso um ICD cuja
+  biblioteca existe, procura dispositivo, não acha, e demora. Filtrar por existência não distingue
+  nada — o critério é o vendor PCI dos dispositivos DRM presentes.
+
+---
+
+## Riscos conhecidos
+
+| # | risco | mitigação |
+|---|---|---|
+| R1 | **Build Zig/Nix do `libghostty-vt`.** API pre-1.0; a FOD quebra a cada bump. | O trait torna isso não-bloqueante. Commit pinado. Sem ele, o diferencial degrada para golden-file. |
+| R2 | **Deriva do IPC do Niri** contra "sem fork". | `ronoctua-niri` é folha com superfície estreita; o contrato roda contra a tag pinada **e** contra `niri-next`, dando aviso antes de a release virar obrigatória. Se a capability sumir: **parar e reportar**. |
+| R3 | **Instanciação de 5 ms** contra os dados do `glyphdb`. | `memory_init_cow` + AOT `.cwasm`, com gate de CI que mede e falha acima de 5 ms. |
+| R4 | **Xwayland quebrando PID → cgroup.** | Um satellite por scope. |
+| R5 | **Closure de fonte de ~10 GB.** | Cinco derivações; o ISO leva 62 MB; `noto-fonts-extra` isolado e removível por opção de host. |
+
+## A primeira tecla de um keymap de buffer é um ACORDE
+
+O descritor de um buffer declara ligações — o editor declara `m s` para salvar. O host do buffer as
+resolve **no processo dele**, porque é ele que segura o teclado enquanto tem o foco (invariante 4:
+um buffer é janela própria).
+
+A primeira versão deixava qualquer letra abrir uma sequência, e o resultado foi pior do que a
+funcionalidade faltando: **o editor engolia todo `m` digitado no arquivo.** `advance_sequence`
+segurava a letra esperando a próxima; se a próxima não completasse `m s`, as duas eram descartadas —
+de propósito, porque reinjetá-las digitaria um `m` no arquivo um toque depois de a pessoa ter
+seguido em frente. O efeito prático: nenhuma palavra com `m` podia ser escrita.
+
+A regra é uma linha, e está isolada em `opens_sequence` para poder ser testada sem compositor:
+
+```rust
+const fn opens_sequence(ctrl: bool, logo: bool, idle: bool) -> bool {
+    ctrl && !logo && idle
+}
+```
+
+**Um acorde não é texto; uma letra é.** A primeira tecla vem com `Ctrl` — `Ctrl+m`, depois `s` — e
+da segunda em diante são letras simples, como em `SPC m s`. `logo` fica de fora e não é ignorado:
+`Super` é do compositor, e um buffer que respondesse a ele roubaria uma ligação do niri.
+
+O que sobra é o which-key não listar essas ligações sob `SPC m`. O obstáculo de tipo saiu —
+`ronoctua_keymap::Entry` passou a guardar `String` justamente por isso —, mas o que ficou é maior e
+só apareceu depois: **o rodapé não tem como saber o descritor de um buffer em execução.** Ele conhece
+as janelas por IPC do niri (id, título, `app_id`) e nada mais.
+
+## Quem espera o rádio é uma thread, não o quadro
+
+`RequestScan` volta na hora; o rádio responde alguns segundos depois. Esperar no `calloop` congelaria
+teclado, pintura e eventos do niri por esses segundos — a mesma armadilha do `systemd-run --scope`.
+E um timer gastaria quadro repintando uma lista parada.
+
+`LastScan` da `org.freedesktop.NetworkManager.Device.Wireless` muda exatamente quando há coisa nova
+para ler. `ronoctua_network::watch_scan` sobe uma thread bloqueada no fluxo de mudança dessa
+propriedade e avisa por `calloop::channel`; `Footer::rescanned` relê — e só se a vista estiver
+aberta, porque preencher um estado que ninguém olha custa uma ida ao barramento à toa.
+
+A thread é **preguiçosa**: sobe no primeiro `LEADER r`, não na partida. Numa máquina sem rádio ela
+falharia toda vez, e tentar de novo a cada tecla daria uma ida ao barramento e um aviso por toque —
+por isso a marca de "já tentei" é posta *antes* de saber se deu certo.

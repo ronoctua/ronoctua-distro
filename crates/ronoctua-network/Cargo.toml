@@ -1,0 +1,31 @@
+[package]
+name = "ronoctua-network"
+description = "A unica fronteira com o NetworkManager: Wi-Fi, Ethernet e o enlace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# zbus only enters `nm.rs`. The rules — band from frequency, what
+# counts as secured, how the networks are grouped and ordered — live in
+# `lib.rs` and do not import it: that is what makes it possible to test the grouping of a
+# dual-band router without bringing up any bus at all.
+[dependencies]
+zbus.workspace = true
+anyhow.workspace = true
+# The agent is a daemon: when it refuses to hand over the password, the reason has to
+# go to the system log — not to the bus, where the one asking is a
+# service and not a person.
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# The daemon that answers NetworkManager. A binary of its own, and not a mode of the
+# footer: it is a SYSTEM daemon and starts before any session — the network has to
+# come up before anyone logs in.
+[[bin]]
+name = "ronoctua-network-agent"
+path = "src/bin/network-agent.rs"
+
+[lints]
+workspace = true

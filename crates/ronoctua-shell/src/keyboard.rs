@@ -1,0 +1,103 @@
+//! The keyboard's safety net — §7.4.
+//!
+//! # Why this exists
+//!
+//! The leader is the Super key on its own, and whoever tells **tapping** from
+//! **holding** is `keyd`, a daemon below the compositor
+//! (`nix/modules/keyboard.nix`). If it goes down, Super goes back to being only
+//! a modifier: tapping it no longer emits `F13`, and with that the command
+//! list, the `M-x` and every sequence shortcut disappear.
+//!
+//! The system does not become unusable — the chords carry on, because they use
+//! Super as a actual modifier — but the path to *every command by name* closes.
+//! It is exactly when it is needed.
+//!
+//! # How one gets out of there
+//!
+//! Two binds outside the leader (`actions::emergency`), and this module is the
+//! second one: `Ctrl+Shift+L` runs `keyboard-restore`, which restarts the
+//! service. It **reports** what happened, always — restoring silently is
+//! indistinguishable from not restoring, and whoever is left with a
+//! half-broken keyboard has no patience for guessing.
+
+use std::process::Command;
+
+/// The `systemctl`, by path and not by name.
+///
+/// The footer runs as a user unit, and a unit's `PATH` is minimal — a bare
+/// name would fail with "Node such file or directory" somewhere far from the
+/// cause. Outside Nix (`cargo run`), it falls back to the name and the shell's
+/// `PATH` resolves it.
+const SYSTEMCTL_PATH: &str = match option_env!("RONOCTUA_SYSTEMCTL") {
+    Some(c) => c,
+    None => "systemctl",
+};
+
+/// The unit `nix/modules/keyboard.nix` defines.
+///
+/// The polkit rule allows **this** unit and no other; changing the name here
+/// without changing it there gives a password prompt on a screen with no
+/// trustworthy keyboard.
+const UNIT: &str = "keyd.service";
+
+/// Restarts the keyboard daemon and says what happened.
+///
+/// # Errors
+///
+/// The `systemctl` could not be run, polkit refused, or the service did not
+/// stay active after the restart. All three come back with the text systemd
+/// gave — inventing a message of our own here would wipe the only clue.
+pub fn restore_it() -> Result<(), String> {
+    let output = Command::new(SYSTEMCTL_PATH)
+        .args(["restart", UNIT])
+        .output()
+        .map_err(|e| format!("{SYSTEMCTL_PATH}: {e}"))?;
+
+    if !output.status.success() {
+        // systemctl's stderr is where polkit says it refused. Without it, the
+        // message would be "it failed" and nothing else.
+        let reason = String::from_utf8_lossy(&output.stderr);
+        let reason = reason.trim();
+        return Err(if reason.is_empty() {
+            format!("{SYSTEMCTL_PATH} restart {UNIT} saiu com {}", output.status)
+        } else {
+            reason.to_owned()
+        });
+    }
+
+    // RESTARTING IS NOT STANDING. A `restart` of a unit that dies right after
+    // gives back success, and the keyboard would still be without a leader — with
+    // a message saying it worked, which is worse than having no message.
+    if !active() {
+        return Err(format!("{UNIT} reiniciou e nao ficou ativo"));
+    }
+    Ok(())
+}
+
+/// Is the unit active right now?
+fn active() -> bool {
+    Command::new(SYSTEMCTL_PATH)
+        .args(["is-active", "--quiet", UNIT])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_unit_is_the_same_as_the_polkit_rules() {
+        // The name travels to Nix as a literal in the polkit rule and to here as a
+        // constant. They are two files, and a divergence between them is silent:
+        // the `systemctl` would ask for a password instead of refusing. This assert
+        // does not close the hole on its own — whoever closes it is the
+        // `keyboard-vm`, which really restarts as the user —, but it anchors the name.
+        assert_eq!(super::UNIT, "keyd.service");
+    }
+
+    #[test]
+    fn the_systemctl_path_is_not_empty() {
+        // An `option_env!` giving back `Some("")` would give a `Command::new("")`,
+        // which fails with "Node such file or directory" without saying what.
+        assert!(!super::SYSTEMCTL_PATH.is_empty());
+    }
+}

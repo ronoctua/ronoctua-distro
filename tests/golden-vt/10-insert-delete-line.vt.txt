@@ -1,0 +1,7 @@
+ novo
+a
+b
+c
+
+
+cursor: 0,5

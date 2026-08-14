@@ -1,0 +1,115 @@
+# ronoctua-distro — .gitignore
+#
+# Regra que rege este arquivo: ele NAO pode excluir por acidente nenhuma fonte
+# versionada — o lexico e o overlay mantidos a mao, a tabela de tray, os
+# tokens, o codigo. As negacoes no fim existem para isso e vem por ultimo de
+# proposito: no git, a ultima regra que casa vence.
+#
+# Validado pelo check `gitignore-nao-engole-fontes` do `nix flake check`.
+#
+# As FONTES (4,1 GB) nao vivem aqui: sao o input `fonts` do flake, no
+# repositorio ronoctua-fonts. Ver docs/ARCHITECTURE.md.
+
+# --- rascunho ---------------------------------------------------------------
+/.TEMP/
+
+# --- Nix --------------------------------------------------------------------
+result
+result-*
+/.direnv/
+.envrc.local
+
+# --- Python (os dois geradores de fonte) -----------------------------------
+__pycache__/
+*.pyc
+
+# --- Rust -------------------------------------------------------------------
+/target/
+**/target/
+*.rs.bk
+
+# --- WASM pre-compilado (gerado em build, nunca versionado) ------------------
+*.cwasm
+/buffers/**/pkg/
+
+# --- gerado pelo build a partir do arquivo de fonte real ---------------------
+# Nada disto e fonte: tudo sai do ronoctua-glyphgen. Ver docs/ARCHITECTURE.md.
+/crates/ronoctua-tokens/src/generated/
+/crates/ronoctua-glyphdb/data/
+/crates/ronoctua-i18n/src/generated/
+*.fst
+glyphs.bin
+/crates/ronoctua-protocol/wit/deps/
+icons.rs
+coverage.md
+manifest.json
+
+# --- especifico de maquina, gerado na instalacao (secao 9) ------------------
+#
+# `**/host.nix` ERA O PADRAO AQUI, e engolia `nix/modules/host.nix` junto — o
+# MODULO que declara as opcoes, que e codigo versionado. Enquanto nao havia git
+# isso nao custava nada; no primeiro `nix flake check` com o repositorio
+# inicializado, o Nix filtra a fonte pelo git e o modulo simplesmente sumiu do
+# flake: "Path 'nix/modules/host.nix' is not tracked by Git".
+#
+# O que e gerado e o host.nix da RAIZ e o de nix/hosts/. O modulo fica.
+/host.nix
+/nix/hosts/host.nix
+*.facter.json
+/facter.json
+
+# --- segredos: nada disto entra no repositorio (secao 9) --------------------
+*.key
+*.pem
+*.p12
+*.pfx
+*.age
+*.gpg
+*.kbx
+/secrets/
+.secrets/
+secrets.yaml
+!secrets.example.yaml
+/keys/
+**/lanzaboote/keys/
+**/secureboot/keys/
+.sops.local.yaml
+*_ed25519
+*_rsa
+*_ecdsa
+id_*
+!id_*.pub
+.age-key
+age.key
+
+# --- artefatos pesados de teste ---------------------------------------------
+*.qcow2
+*.img
+*.iso
+*.vdi
+/vm-state/
+*.log
+!/tests/**/*.log.expected
+
+# --- editor e SO ------------------------------------------------------------
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.claude/
+
+# ============================================================================
+# NAO IGNORAR — fonte versionada.
+# Estas regras vem por ultimo de proposito: no git a ultima regra que casa
+# vence, entao qualquer glob amplo acima e revertido aqui.
+# ============================================================================
+!/assets/
+!/assets/**
+!/assets/lexicon/**
+!/assets/icons/**
+!/assets/tokens/**
+!/docs/**
+!/nix/installer/**
+!/tests/**/*.nix

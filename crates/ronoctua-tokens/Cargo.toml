@@ -1,0 +1,16 @@
+[package]
+name = "ronoctua-tokens"
+description = "Tokens do design system, gerados do Nix. Zero dependencias."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO DEPENDENCIES, on purpose (section 10): this crate is a dependency of
+# everything else, including of those that compile to wasm32-wasip2. Any
+# dependency here becomes a dependency of everything.
+[dependencies]
+
+[lints]
+workspace = true

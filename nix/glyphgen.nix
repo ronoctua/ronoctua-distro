@@ -1,0 +1,154 @@
+# Generated glyph layer — sections 6.3 and 6.5.
+#
+# WHY fetchurl AND NOT A FLAKE INPUT
+# ----------------------------------
+# The ryanoasis/nerd-fonts repository is several GB: it versions every
+# patched font. We need ONE file, `glyphnames.json`, at
+# 524 KB. Pinning the whole repository as an input would cost minutes and gigabytes
+# on every lock resolution, and the cost would repeat on every machine that
+# built the distro.
+#
+# THE TWO AUTHORITIES
+# -------------------
+#   glyphnames.json  -> authority on the NAMES  (fa-folder, md-cog)
+#   the .ttf file    -> authority on what EXISTS (the real codepoints)
+#
+# They have to come from the SAME version of Nerd Fonts, otherwise the PUA
+# codepoints shift silently on an update — the trap section 6.3 names.
+{
+  lib,
+  stdenvNoCC,
+  python3,
+  fetchurl,
+  writeText,
+  fonts,
+  # Explicit files, NOT directories: `import "${dir}/x.nix"` interpolates the
+  # path, copies the whole directory into the store and fails with "path is not
+  # valid" when the store is collected. A file path is direct and stable.
+  iconTokensFile,
+  trayTableFile,
+  lexiconFile,
+  overlayFile,
+}:
+
+let
+  # It has to match the font's `nameID 5` AND the JSON's own METADATA.version.
+  # The generator checks all three and fails if they diverge.
+  version = "3.4.0";
+
+  glyphnames = fetchurl {
+    url = "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/v${version}/glyphnames.json";
+    hash = "sha256-4tENI/W/8L1vBnbpsB2XifzcZW3ntJiilVwncW6kQ5w=";
+  };
+
+  py = python3.withPackages (ps: [ ps.fonttools ]);
+
+  # The tokens live in Nix (source of truth, section 7.6) but the generator is
+  # Python. The bridge is JSON, generated here — there is no Nix parser in Python, and
+  # writing one would be reimplementing Nix logic (invariant 5).
+  iconTokensJson = writeText "icon-tokens.json" (builtins.toJSON (import iconTokensFile));
+  trayJson = writeText "tray-glyphs.json" (builtins.toJSON (import trayTableFile));
+
+  mkGen =
+    {
+      name,
+      tokens,
+      expectFailure ? false,
+    }:
+    stdenvNoCC.mkDerivation {
+      inherit name;
+      nativeBuildInputs = [ py ];
+      dontUnpack = true;
+      dontConfigure = true;
+
+      buildPhase =
+        let
+          # A shell FUNCTION, not a command string. Interpolating a
+          # multi-line string and then appending `> file` puts the redirection
+          # on a SEPARATE line — it does not apply to the command, and `$?` ends up
+          # capturing the empty line instead of the python. It cost a build.
+          cmd = ''
+            gen() {
+              # The DIRECTORY, and not the file: the generator imports `lexicon.py`,
+              # the sibling module the two generators share. With the
+              # bare file path, `sys.path[0]` would be the store's root
+              # and the import would fail.
+              python3 ${./scripts}/gen-glyphdb.py \
+                --font ${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf \
+                --font-unpatched ${fonts.corrected}/TTF/NoctuaIosevka-Regular.ttf \
+                --glyphnames ${glyphnames} \
+                --tokens ${tokens} \
+                --tray ${trayJson} \
+                --lexicon ${lexiconFile} \
+                --overlay ${overlayFile} \
+                --nf-version ${version} \
+                --out "$1"
+            }
+          '';
+        in
+        if expectFailure then
+          ''
+            runHook preBuild
+            mkdir -p $out
+            echo "### fixture negativo: o gerador DEVE falhar ###"
+
+            # NO pipe here, on purpose. In `cmd | tee`, the pipeline's exit
+            # code is `tee`'s, which is always 0 — so the test
+            # reported success even when the generator failed correctly.
+            ${cmd}
+            set +e
+            gen "$out" > $out/out_text.txt 2>&1
+            rc=$?
+            set -e
+            cat $out/out_text.txt
+
+            if [ $rc -eq 0 ]; then
+              echo "" >&2
+              echo "ERRO: o gerador ACEITOU um token de icone inexistente." >&2
+              echo "      A guarda da secao 6.3 nao esta funcionando, e um" >&2
+              echo "      codepoint errado passaria despercebido." >&2
+              exit 1
+            fi
+            grep -q "tokens de icone que nao resolvem" $out/out_text.txt \
+              || { echo "ERRO: falhou, mas nao pela razao esperada" >&2; exit 1; }
+            echo "OK: token inexistente derruba o build, como deve"
+            runHook postBuild
+          ''
+        else
+          ''
+            runHook preBuild
+            ${cmd}
+            gen "$out"
+            runHook postBuild
+          '';
+
+      dontInstall = true;
+
+      meta = {
+        description = "Tabela de tokens de icone e base de glifos, geradas do arquivo de fonte real";
+        platforms = lib.platforms.all;
+      };
+    };
+
+  # A token that exists nowhere — section 6.3's negative fixture.
+  badTokens = writeText "icon-tokens-bad.json" (
+    builtins.toJSON ((import iconTokensFile) // { fixture-negativo = "md-este-glifo-nao-existe"; })
+  );
+in
+{
+  inherit version glyphnames;
+
+  # The real output: icons.json, glyphs.json, coverage.md.
+  db = mkGen {
+    name = "ronoctua-glyphdb";
+    tokens = iconTokensJson;
+  };
+
+  # Proves the guard works. Without this, "the build fails if the codepoint does
+  # not exist" is an untested claim.
+  negativeFixture = mkGen {
+    name = "ronoctua-glyphdb-fixture-negativo";
+    tokens = badTokens;
+    expectFailure = true;
+  };
+}

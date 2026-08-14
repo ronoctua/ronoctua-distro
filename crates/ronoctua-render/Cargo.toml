@@ -1,0 +1,57 @@
+[package]
+name = "ronoctua-render"
+description = "Renderer: wgpu + cosmic-text + glyphon. Glifos, quads e reguas de uma linha."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+# It measures the frame's CPU work — what section 9.3 allows CI to gate on.
+name = "ronoctua-bench-layout"
+path = "src/bin/bench-layout.rs"
+
+[[bin]]
+# It isolates the cost of the FIRST shaping — 4.4 s measured in the actual footer.
+name = "ronoctua-bench-shaping"
+path = "src/bin/bench-moldagem.rs"
+
+[[bin]]
+# `downlevel_defaults`'s 2048 ceiling closed the window and forbade a large
+# monitor. Correctness, not performance — it runs under lavapipe.
+name = "ronoctua-test-large-surface"
+path = "src/bin/test-large-surface.rs"
+
+[[bin]]
+# WHICH face draws what. The chain is DECLARED (§6.4 forbids consulting
+# fontconfig), and a declared chain does not verify itself: the face can disappear from the
+# build, or stop being reached by the fallback. The case only this binary
+# catches is Lucide going back to the source codepoints — there it does not produce tofu,
+# it produces the WRONG icon.
+name = "ronoctua-test-faces"
+path = "src/bin/test-faces.rs"
+
+[dependencies]
+# Clusters, so the text cut does not separate what the renderer draws
+# together. It is NOT a new dependency in the tree: `cosmic-text` already brings it — see the
+# comment on `layout::units`.
+unicode-segmentation = "1"
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+
+# Section 7.7: wgpu + cosmic-text + glyphon, NO vello. The workload is glyphs,
+# rectangles and one-line rules; UI icons are glyphs (6.3), so there is no
+# vector pipeline that would justify vello.
+wgpu.workspace = true
+glyphon.workspace = true
+cosmic-text.workspace = true
+
+raw-window-handle.workspace = true
+pollster.workspace = true
+
+anyhow.workspace = true
+bytemuck.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

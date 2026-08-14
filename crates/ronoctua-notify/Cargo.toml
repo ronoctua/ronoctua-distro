@@ -1,0 +1,29 @@
+[package]
+name = "ronoctua-notify"
+description = "Fila de notificacoes, tray filtravel e cadeia de icone (secao 4.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# zbus only enters `dbus.rs`. The queue, the filter and the icon chain — which is
+# where the business rules live — do not import it, and that is what makes it possible to test
+# "a critical one never disappears on its own" without bringing up a bus.
+[dependencies]
+zbus.workspace = true
+tracing.workspace = true
+# Step 2 of the chain finds the FILE; these two turn it into pixels. The
+# superpackage is 335,031 SVGs against 53 PNGs, so the vector rasteriser is not
+# optional — see `icon::rasterize`.
+resvg.workspace = true
+image.workspace = true
+
+# The probe that exercises the chain against the REAL superpackage. It is a binary,
+# and not a `#[test]`, because the Nix check has to pass the store path in.
+[[bin]]
+name = "ronoctua-test-icons"
+path = "src/bin/test-icons.rs"
+
+[lints]
+workspace = true

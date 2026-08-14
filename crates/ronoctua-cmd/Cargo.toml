@@ -1,0 +1,16 @@
+[package]
+name = "ronoctua-cmd"
+description = "Registro de comandos nomeados e enderecaveis (secao 13)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO dependencies, on purpose: this crate is consumed by the keymap, by the
+# minibuffer and by the future IPC surface. A dependency here would become
+# a dependency of all of them.
+[dependencies]
+
+[lints]
+workspace = true

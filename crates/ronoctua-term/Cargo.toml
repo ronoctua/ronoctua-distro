@@ -1,0 +1,21 @@
+[package]
+name = "ronoctua-term"
+description = "Trait do motor VT e a implementacao alacritty (secao 7.10)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ronoctua-term-diff"
+path = "src/bin/differential.rs"
+
+[dependencies]
+alacritty_terminal.workspace = true
+anyhow.workspace = true
+rustix.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

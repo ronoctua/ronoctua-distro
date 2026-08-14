@@ -1,0 +1,26 @@
+# OWN workspace: it only exists for `wasm32-wasip2`. See the `exclude` at the root.
+[workspace]
+
+[package]
+name = "ronoctua-buffer-glyphs"
+description = "Navegador de glifos (secao 6.5)."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = [ "cdylib" ]
+
+[dependencies]
+wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ] }
+
+[lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

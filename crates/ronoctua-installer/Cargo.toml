@@ -1,0 +1,29 @@
+[package]
+name = "ronoctua-installer"
+description = "As seis perguntas e o plano de instalacao (secao 7.1)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ronoctua-install"
+path = "src/bin/install.rs"
+
+# The core — questions, validation and plan — does not depend on the TUI, and it is where
+# milestone 8's criteria live. The TUI's `State` does not either: it applies a
+# key and does not draw, so `nix flake check` exercises the six questions
+# with no terminal at all.
+[dependencies]
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# The seventh question's network scan. The same boundary the footer uses:
+# nobody talks to NetworkManager outside this crate.
+ronoctua-network = { path = "../ronoctua-network" }
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+anyhow.workspace = true
+ratatui = { version = "0.29", default-features = false, features = [ "crossterm" ] }
+crossterm = "0.28"
+
+[lints]
+workspace = true

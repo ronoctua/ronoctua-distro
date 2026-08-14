@@ -1,0 +1,32 @@
+# A workspace of its OWN, like every buffer: a wasip2 component cannot be a
+# member of the host's workspace — `rust-lld` rejects the component
+# model's symbols. See the `exclude` in the root `Cargo.toml`.
+[workspace]
+
+[package]
+name = "ronoctua-buffer-unicode"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+description = "Navegador de simbolos Unicode — buffer nativo"
+
+[lib]
+crate-type = ["cdylib"]
+
+# A SINGLE dependency. Every extra crate enters the component, and the component is
+# instantiated on every buffer opening (a 5 ms budget, section 5.2).
+[dependencies]
+wit-bindgen = { version = "0.46", default-features = false, features = [
+  "macros",
+] }
+
+[lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+
+# The size counts against the instantiation budget.
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

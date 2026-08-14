@@ -1,0 +1,34 @@
+# ronoctua-distro — .gitattributes
+#
+# As FONTES nao vivem aqui: sao o input `fonts` do flake, no repositorio
+# ronoctua-fonts, que tem o proprio .gitattributes com as regras de git-lfs.
+# Este repositorio tem algumas centenas de KB e NAO precisa de LFS.
+
+# --- normalizacao de fim de linha -------------------------------------------
+* text=auto eol=lf
+
+# --- binarios que nao vao para LFS (pequenos, mas nao sao texto) ------------
+*.png   binary
+*.jpg   binary
+*.webp  binary
+*.ico   binary
+*.wasm  binary
+*.cwasm binary
+*.fst   binary
+*.bin   binary
+
+# --- corpus do VT: o CRLF E O TESTE -----------------------------------------
+#
+# `* text=auto eol=lf` normalizaria estes arquivos no primeiro `git add`, e
+# `02-crlf.vt` deixaria de conter um CR — o fixture continuaria existindo,
+# passaria a testar outra coisa, e nada acusaria. Cinco dos fixtures dependem
+# disso. `-text` desliga toda normalizacao para eles.
+tests/corpus-vt/*.vt  -text
+
+# --- lockfiles: sem merge automatico, sem diff ruidoso ----------------------
+flake.lock  -diff merge=binary linguist-generated
+Cargo.lock  -diff linguist-generated
+
+# --- gerado: fora das estatisticas de linguagem do host -------------------
+crates/ronoctua-tokens/src/generated/**  linguist-generated
+crates/ronoctua-glyphdb/data/**          linguist-generated

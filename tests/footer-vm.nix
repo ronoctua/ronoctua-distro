@@ -1,0 +1,122 @@
+# VM test: the footer comes up, creates a graphics context and DRAWS.
+#
+# WHAT THIS PROVES THAT `cargo build` DOES NOT
+# --------------------------------------------
+# That the layer-shell surface is accepted by a real compositor, that
+# Wayland's pointers reach wgpu, that the embedded face loads, and that a
+# frame is drawn with no error. Compiling proves none of that: all four are
+# runtime things.
+#
+# niri runs on the winit backend over an Xvfb. The why — the DRM backend
+# rejects software EGL and is left with zero outputs — is in
+# `tests/niri-xvfb.nix`, along with the arrangement itself.
+#
+# GPU: `lavapipe`, Mesa's software Vulkan rasterizer.
+# Section 9.3 of the plan decided that — hermetic, deterministic, runs in CI
+# with no GPU. And it made the other side explicit: **the performance targets
+# of section 5.2 are NEVER measured here**. Nailing down 16 ms over software
+# rasterization would measure the software, not the system.
+{
+  pkgs,
+  lib,
+  niri,
+  ronoctua-shell,
+  fonts,
+}:
+
+let
+  xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+in
+pkgs.testers.runNixOSTest {
+  name = "ronoctua-footer";
+
+  nodes.machine = {
+    virtualisation.memorySize = 2048;
+    virtualisation.cores = 2;
+
+    environment.systemPackages = [
+      niri
+      ronoctua-shell
+      pkgs.wayland-utils
+    ]
+    ++ xvfb.packages;
+
+    fonts.enableDefaultPackages = false;
+    fonts.packages = [ fonts.noctua-iosevka-core ];
+
+    hardware.graphics.enable = true;
+    services.dbus.enable = true;
+  };
+
+  testScript = ''
+    ${xvfb.prelude}
+
+
+    machine.start()
+    machine.wait_for_unit("multi-user.target")
+
+    with subtest("o niri sobe no backend winit sobre Xvfb"):
+        start_xvfb()
+        start_niri("niri", "${niri}")
+
+    with subtest("o rodape cria contexto grafico e desenha"):
+        machine.succeed(
+            "systemd-run --unit=footer ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_render=debug "
+            "${ronoctua-shell}/bin/ronoctua-shell"
+        )
+
+        # The three proofs, in order: the surface was created, wgpu assembled a
+        # context over it, and the layout was resolved for the real width.
+        #
+        # The `try` exists because `wait_until_succeeds` raises on timeout, and
+        # then no print after it runs — without that the failure shows up as a
+        # bare timeout, with not one log line from either side.
+        # When whoever closes the surface is the COMPOSITOR, the reason is in ITS
+        # log, not in the footer's.
+        try:
+            for marker in [
+                "superficie layer-shell criada",
+                "contexto grafico e desenhador prontos",
+                "layout do rodape resolvido",
+            ]:
+                machine.wait_until_succeeds(
+                    f"journalctl -u footer --no-pager | grep -q '{marker}'", timeout=60
+                )
+        except Exception:
+            print("--- journal do rodape ---")
+            print(machine.execute("journalctl -u footer --no-pager")[1])
+            print("--- journal do niri ---")
+            print(machine.execute("journalctl -u niri --no-pager")[1])
+            raise
+
+        # Do NOT call it `log`: that name is already the NixOS test driver's
+        # logger object, and overwriting it with a string breaks the type check
+        # with a message that does not say so.
+        out_text = machine.succeed("journalctl -u footer --no-pager")
+        print(out_text)
+
+        # The adapter has to be the software one: if one day this starts saying
+        # something else, the test has stopped being hermetic (section 9.3 of the
+        # plan) and performance numbers taken from it would not be worth anything.
+        assert "llvmpipe" in out_text or "lavapipe" in out_text, (
+            f"o rodape nao usou rasterizador por software; log:\n{out_text}"
+        )
+
+        # And NO drawing error. Without this, the footer could be failing every
+        # frame and the test would pass on the messages above.
+        for bad in [
+            "desenhar o frame falhou",
+            "preparar texto falhou",
+            "sem contexto grafico",
+            "panicked",
+        ]:
+            assert bad not in out_text, f"o rodape reportou: {bad}"
+
+    with subtest("o rodape continua vivo depois de desenhar"):
+        # A crash right after the first frame would go unnoticed by the asserts
+        # above, which only look at the log.
+        machine.succeed("systemctl is-active footer")
+  '';
+}

@@ -1,0 +1,290 @@
+# Font layer — section 6 of the bootstrap document.
+#
+# Five public derivations, not one. A single 4.1 GB package would enter the
+# closure of every machine AND of the ISO, and an ISO does not close with 2.1 GB
+# of font. See docs/ARCHITECTURE.md, section "Fontes".
+{
+  lib,
+  stdenvNoCC,
+  python3,
+  symlinkJoin,
+  writeText,
+  fontSrc,
+}:
+
+let
+  # fonttools to rewrite name tables; brotli to read/write WOFF2;
+  # freetype-py to rasterise the console's PSF.
+  py = python3.withPackages (ps: [
+    ps.fonttools
+    ps.brotli
+    ps.zopfli
+    ps.freetype-py
+  ]);
+
+  familyNF = "NoctuaIosevka Nerd Font Mono";
+  familyPlain = "Noctua Iosevka";
+
+  # The four folders. `fix` = normalises the naming; `inventory` = only
+  # checks and reports, without touching the bytes.
+  #
+  # WHY THE WOFF2 FILES ARE NOT FIXED
+  # ---------------------------------
+  # The 27-face defect (see scripts/fix-font-names.py) gets in the way of
+  # MATCHING by family name — fontconfig and fontdb. None of that consumes
+  # WOFF2: fontconfig does not index .woff2, and a browser loads through
+  # `@font-face { src: url(...) }` with the `font-family` declared by the CSS
+  # author. The internal name table is inert there.
+  #
+  # Rewriting a WOFF2 costs ~49 s, because fontTools recompresses the whole
+  # font with brotli (there are 57 thousand glyphs). The 270 files would take 3.7
+  # hours to change no behaviour at all. So they pass through untouched, which
+  # has the extra advantage of preserving the source bytes.
+  variants = {
+    "TTF" = {
+      family = familyPlain;
+      mode = "fix";
+    };
+    "TTF-nerdfonts" = {
+      family = familyNF;
+      mode = "fix";
+    };
+    "WOFF2" = {
+      family = familyPlain;
+      mode = "inventory";
+    };
+    "WOFF2-nerdfonts" = {
+      family = familyNF;
+      mode = "inventory";
+    };
+  };
+
+  # The four normal-width RIBBI faces — the subset that goes on the ISO,
+  # in the initrd and in the installer (~62 MB against 2.1 GB).
+  coreFaces = [
+    "NoctuaIosevkaNerdFontMono-Regular.ttf"
+    "NoctuaIosevkaNerdFontMono-Bold.ttf"
+    "NoctuaIosevkaNerdFontMono-Italic.ttf"
+    "NoctuaIosevkaNerdFontMono-BoldItalic.ttf"
+  ];
+
+  meta = {
+    description = "Iosevka customizada da ronoctua-distro";
+    homepage = "https://github.com/be5invis/Iosevka";
+    license = lib.licenses.ofl;
+    platforms = lib.platforms.all;
+  };
+
+  # ---------------------------------------------------------------------
+  # Internal derivation: normalises the naming of the 540 faces.
+  #
+  # The Nerd Fonts patcher throws 27 of the 135 patched faces into nine
+  # invented typographic families. See nix/scripts/fix-font-names.py
+  # for the full diagnostics and for the second failure that fixing this
+  # naively would create.
+  # ---------------------------------------------------------------------
+  corrected = stdenvNoCC.mkDerivation {
+    pname = "noctua-iosevka-corrected";
+    version = "34.7.0+nf3.4.0";
+
+    src = fontSrc;
+
+    nativeBuildInputs = [ py ];
+
+    dontConfigure = true;
+
+    buildPhase = ''
+      runHook preBuild
+
+      # --- guard: unresolved git-lfs pointers ---------------------------
+      # The fonts live in git-lfs. If the clone did not run `git lfs pull`, or
+      # if the flake was fetched straight from GitHub, the files here are
+      # ~130-byte pointers and not fonts. Without this guard the error
+      # would show up much later as "corrupt font", which is expensive to
+      # diagnose.
+      for f in noctua-iosevka/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf \
+               noctua-iosevka/TTF/NoctuaIosevka-Regular.ttf; do
+        if head -c 60 "$f" | grep -q 'git-lfs.github.com/spec'; then
+          echo "ERRO: $f e um ponteiro git-lfs, nao uma fonte." >&2
+          echo "" >&2
+          echo "  As fontes da ronoctua-distro vivem em git-lfs (4,1 GB)." >&2
+          echo "  Resolva com:  git lfs install && git lfs pull" >&2
+          echo "" >&2
+          echo "  Se voce chegou aqui via 'nix build github:...', nao vai" >&2
+          echo "  funcionar: o fetcher de flake nao resolve LFS. Clone o" >&2
+          echo "  repositorio e construa a partir do clone local." >&2
+          exit 1
+        fi
+      done
+
+      # We fix them IN PLACE, in the copy unpackPhase has already made. An extra
+      # `cp -r` here would cost another 4.1 GB inside the build directory.
+      chmod -R u+w noctua-iosevka
+      mkdir -p reports
+
+      ${lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (dir: v: ''
+          echo "--- ${dir} (${v.mode}) ---"
+          python3 ${./scripts/fix-font-names.py} "noctua-iosevka/${dir}" \
+            --family ${lib.escapeShellArg v.family} \
+            --expect-count 135 \
+            ${lib.optionalString (v.mode == "inventory") "--inventory"} \
+            --report "reports/${dir}.json"
+        '') variants
+      )}
+
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      mkdir -p $out
+      # --reflink=auto: with the build dir on the same btrfs as the store, the copy
+      # comes out almost free. On another filesystem it degrades to a normal
+      # copy without breaking.
+      cp -r --reflink=auto noctua-iosevka/* $out/
+      cp -r reports $out/reports
+      cp LICENSE-OFL.txt $out/LICENSE-OFL.txt
+      runHook postInstall
+    '';
+
+    inherit meta;
+  };
+
+  # ---------------------------------------------------------------------
+  # Generic installer for a subset of faces.
+  # ---------------------------------------------------------------------
+  mkFontPkg =
+    {
+      pname,
+      dir,
+      # where fontconfig looks: truetype/ or woff2/
+      target,
+      # if null, installs the whole folder
+      only ? null,
+      description,
+    }:
+    stdenvNoCC.mkDerivation {
+      inherit pname;
+      version = "34.7.0+nf3.4.0";
+      src = corrected;
+      dontConfigure = true;
+      dontBuild = true;
+      installPhase = ''
+        runHook preInstall
+        install -Dm444 -t $out/share/fonts/${target}/noctua-iosevka \
+          ${
+            if only == null then "$src/${dir}/*" else lib.concatMapStringsSep " " (f: "$src/${dir}/${f}") only
+          }
+        install -Dm444 $src/LICENSE-OFL.txt \
+          $out/share/doc/noctua-iosevka/LICENSE-OFL.txt
+        runHook postInstall
+      '';
+      meta = meta // {
+        inherit description;
+      };
+    };
+
+  noctua-iosevka-ttf-nerdfonts = mkFontPkg {
+    pname = "noctua-iosevka-ttf-nerdfonts";
+    dir = "TTF-nerdfonts";
+    target = "truetype";
+    description = "noctua-iosevka, 135 faces TTF com patch do Nerd Fonts — a fonte do sistema";
+  };
+
+  noctua-iosevka-ttf = mkFontPkg {
+    pname = "noctua-iosevka-ttf";
+    dir = "TTF";
+    target = "truetype";
+    description = "noctua-iosevka, 135 faces TTF sem patch";
+  };
+
+  noctua-iosevka-woff2-nerdfonts = mkFontPkg {
+    pname = "noctua-iosevka-woff2-nerdfonts";
+    dir = "WOFF2-nerdfonts";
+    target = "woff2";
+    description = "noctua-iosevka, 135 faces WOFF2 com patch — conteudo web local";
+  };
+
+  noctua-iosevka-woff2 = mkFontPkg {
+    pname = "noctua-iosevka-woff2";
+    dir = "WOFF2";
+    target = "woff2";
+    description = "noctua-iosevka, 135 faces WOFF2 sem patch";
+  };
+
+  # The ISO's subset. Section 6.2 says "nothing is discarded", and that holds
+  # for the installed system; an installable ISO does not close with 2.1 GB of
+  # font. See docs/ARCHITECTURE.md.
+  noctua-iosevka-core = mkFontPkg {
+    pname = "noctua-iosevka-core";
+    dir = "TTF-nerdfonts";
+    target = "truetype";
+    only = coreFaces;
+    description = "noctua-iosevka, 4 faces RIBBI — ISO, initrd, TTY e instalador";
+  };
+
+  # ---------------------------------------------------------------------
+  # Console font. Section 6.2 demands TTF-nerdfonts be the default "everywhere...
+  # TTY", but the Linux console does NOT consume TTF: it needs
+  # PSF/PSFU with at most 512 glyphs. We generate a PSF2 from the real file,
+  # which is what preserves the intent of the rule.
+  # ---------------------------------------------------------------------
+  noctua-console-psf = stdenvNoCC.mkDerivation {
+    pname = "noctua-console-psf";
+    version = "34.7.0+nf3.4.0";
+    src = corrected;
+    nativeBuildInputs = [ py ];
+    dontConfigure = true;
+    buildPhase = ''
+      runHook preBuild
+      mkdir -p $out/share/consolefonts
+      for size in 16 32; do
+        python3 ${./scripts/make-console-psf.py} \
+          "$src/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf" \
+          --height "$size" \
+          --output "$out/share/consolefonts/noctua-iosevka-$size.psf"
+      done
+      runHook postBuild
+    '';
+    dontInstall = true;
+    meta = meta // {
+      description = "Fonte de console PSF2 gerada da noctua-iosevka real";
+    };
+  };
+
+  noctua-iosevka = symlinkJoin {
+    name = "noctua-iosevka";
+    paths = [
+      noctua-iosevka-ttf-nerdfonts
+      noctua-iosevka-ttf
+      noctua-iosevka-woff2-nerdfonts
+      noctua-iosevka-woff2
+    ];
+    meta = meta // {
+      description = "noctua-iosevka completa — 540 faces, as quatro variantes";
+    };
+  };
+in
+{
+  inherit
+    corrected
+    noctua-iosevka
+    noctua-iosevka-core
+    noctua-iosevka-ttf
+    noctua-iosevka-ttf-nerdfonts
+    noctua-iosevka-woff2
+    noctua-iosevka-woff2-nerdfonts
+    noctua-console-psf
+    ;
+
+  # Consumed by nix/fontconfig.nix and by the modules. No crate names the
+  # font directly (section 6.2): always through a token.
+  families = {
+    mono = familyNF;
+    ui = familyNF;
+    plain = familyPlain;
+  };
+
+  inherit coreFaces;
+}

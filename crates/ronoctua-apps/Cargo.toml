@@ -1,0 +1,20 @@
+[package]
+name = "ronoctua-apps"
+description = "Entradas de aplicativo do freedesktop: parser, Exec e varredura (secao 4.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO dependencies. It is specification logic over `&str` and `Path` — the same
+# nature as `estrangeiro::scope_from_cgroup`, which parses cgroups by hand, and as
+# `ronoctua-niri`, which defines the types instead of depending on `niri-ipc`.
+#
+# A desktop entry crate would bring locale negotiation we do not need
+# (we have ONE language, chosen at startup) and would leave `Exec` to us.
+[dependencies]
+tracing.workspace = true
+
+[lints]
+workspace = true

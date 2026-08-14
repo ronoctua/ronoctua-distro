@@ -1,0 +1,364 @@
+// A native buffer's interface — sections 7.8 and 7.9.
+//
+// ONE interface, small on purpose. Every extra capability is surface
+// that every future buffer gets to use, and invariant 11 lives
+// precisely off what is NOT here: there is no Wayland import, no access to
+// tokens by value, no translation.
+package ronoctua:buffer@0.1.0;
+
+interface types {
+    // THE COLOUR ENUM IS GENERATED, and comes from `assets/tokens/colors.nix`.
+    //
+    // This used to be `record color { token: string }`, and a free string
+    // means `color.inexistente` compiles and fails silently on screen.
+    // With the enum, `wit-bindgen` generates a Rust enum in the guest: the wrong name
+    // does not exist, and the error comes from the compiler.
+    //
+    // Section 7.6 asks for exactly this: "the build generates (a) the shell's Rust table
+    // and (b) a WIT enum of valid names. A non-existent token becomes a compile
+    // error in the guest."
+    use ronoctua:tokens/tokens@0.1.0.{color, icon};
+
+    // Data comes out literal; a label comes out as a key and the host translates; an icon is a
+    // TOKEN, and what knows its codepoint is the host.
+    //
+    // `icon` came in for the same reason `color` is an enum: without it, a buffer
+    // that wanted a magnifying glass would have to write the PUA character by hand — a
+    // codepoint that changes between Nerd Fonts versions, embedded in a
+    // component that has no way of knowing that. By naming the token, what resolves it
+    // is whoever has the table (invariants 9, 10 and 11).
+    variant text {
+        data(string),
+        key(string),
+        icon(icon),
+    }
+
+    // TEXT SIZE, by NAME and never in pixels.
+    //
+    // Invariant 11 is explicit: a buffer does not receive a token value. It says
+    // "large" and the host decides how many pixels that is worth — exactly as it does
+    // with colour.
+    //
+    // Per RUN and not per buffer: it used to be a field of the descriptor, and that is why
+    // the glyph browser's header and footer grew along with the
+    // icons. What has to be large there is the GLYPH; the surrounding text is
+    // text, and reading it at 32 point is uncomfortable.
+    //
+    // THE CELL GRID is still the normal size's. A large run
+    // occupies more than one cell, and what spaces it is whatever draws — that is how
+    // the browser's grid came to move two rows at a time.
+    enum scale {
+        // Smaller than the buffer's body. For whatever ACCOMPANIES the content without
+        // competing with it — today the focused glyph's tags and the counter.
+        small,
+        // THE SYSTEM'S SIZE: the same as the footer's and the minibuffer's.
+        //
+        // For whatever is INTERFACE inside a buffer, and not its content —
+        // today the browser's search field. A search field is the same
+        // thing as the minibuffer, and seeing the two at different sizes on the
+        // same screen is the kind of detail that makes a system look assembled
+        // out of parts of different origins.
+        base,
+        // The buffer's content. LARGER than the system's on purpose: the
+        // footer is peripheral reference, the buffer is what one reads.
+        normal,
+        large,
+        // The screen's subject. Today only the glyph on the browser's sheet.
+        huge,
+    }
+
+    record text-command {
+        line: u16,
+        column: u16,
+        content: text,
+        color: color,
+        scale: scale,
+        // How many cells this run may occupy. `0` = to the edge.
+        //
+        // # Why the BUDGET, and not the already-cut text
+        //
+        // A buffer cannot elide a `key`: what translates is the host, and the
+        // sentence's length changes with the language — "Type to search for a Nerd
+        // Fonts glyph" and "Digite para buscar um glyph das Nerd Fonts" are not
+        // the same length. What the buffer knows is how much SPACE there is; whoever has
+        // the string is whoever cuts.
+        //
+        // Without this, the invitation ran over the counter in a narrow
+        // window: text over text, the worst possible result because
+        // neither of the two stays legible.
+        max-width: u16,
+    }
+
+    record line-command {
+        line: u16,
+        color: color,
+    }
+
+    // THE GRID IS A FIRST-CLASS NODE, and not a `raw-surface` (section 7.10).
+    //
+    // `raw-surface` would mean a second text rasteriser in the system,
+    // with its own font resolution, metrics and theme — exactly what the
+    // display list decision exists to prevent, and in the most-used buffer.
+    //
+    // The content arrives as already-formed lines; the host draws with the SAME font
+    // and the SAME tokens as everything else.
+    record grid-command {
+        line: u16,
+        column: u16,
+        // One string per grid row, in order.
+        lines: list<string>,
+        color: color,
+    }
+
+    // A VECTOR DRAWING, in the given rectangle of cells.
+    //
+    // # The FIRST pixel primitive in this list, and why it exists
+    //
+    // Lucide's customisation changes the stroke's width, cap and colour, and a
+    // GLYPH honours none of that: the width is baked into the drawing, and
+    // Lucide publishes only one. Until now the only honest way out was to say the
+    // screen does not show it — and the owner asked for it to be shown.
+    //
+    // The buffer sends the SAME document the copy would deliver. There is no
+    // second builder, and that is what makes the preview the artefact instead of
+    // an approximation of it.
+    //
+    // # What it does NOT open
+    //
+    // The host rasterises with `resvg` compiled WITHOUT a text engine: `<text>`
+    // does not draw. And with no `resources-dir`: a reference to an external file does not
+    // load. The surface is "a vector drawing", and not "a document".
+    //
+    // # Why it requires a capability
+    //
+    // Because it is the only primitive that produces arbitrary pixels, and this file's
+    // header says that every extra surface is surface that EVERY
+    // future buffer gets to use. Whoever emits this without declaring
+    // `capability::vector` is refused at load time.
+    record svg-command {
+        line: u16,
+        column: u16,
+        // The rectangle, in CELLS. The host fits the drawing inside it without
+        // stretching — the buffer knows neither pixels nor screen aspect ratio.
+        lines: u16,
+        columns: u16,
+        // The document, as the copy would deliver it.
+        svg: string,
+        // The token that replaces `currentColor`.
+        //
+        // THE COLOUR DOES NOT CROSS AS A VALUE (invariant 11). Lucide's SVG comes
+        // out with `currentColor` by default, and `currentColor` with no context is
+        // BLACK: over the buffer's background, an invisible drawing — which is
+        // indistinguishable from "not implemented yet". What resolves the value is
+        // whoever has the table.
+        //
+        // When the person types a colour of their own, there is no `currentColor` to
+        // replace and the drawing comes out in their colour. There it is CONTENT, not chrome.
+        color: color,
+    }
+
+    variant command {
+        text(text-command),
+        rule(line-command),
+        selection(line-command),
+        grid(grid-command),
+        svg(svg-command),
+    }
+
+    // What the buffer ASKS to happen. `tecla` used to return `bool` — the
+    // buffer said "I changed", never what should happen, and that is why it could
+    // not ask for a copy nor fire a command (sections 6.5 and 7.6).
+    variant effect {
+        // Redraw: the internal state changed.
+        redraw,
+        // Put this on the clipboard.
+        copy(string),
+        // Run the named command. It is the registry's id, not a function —
+        // section 13 requires everything to be addressable by name.
+        command(string),
+        // Close this buffer.
+        close,
+        // Write this text to the file the buffer was opened with.
+        //
+        // WHY IT IS NOT `copy`: `copy` goes to the clipboard, and saving goes to
+        // disk. Reusing it would put the file's whole content on the clipboard
+        // as a side effect of saving — a surprise nobody would connect to the
+        // key they pressed.
+        //
+        // The buffer STILL has no filesystem (invariant 11): it hands the text
+        // over and the HOST writes, the same way `paste` is how text gets in.
+        // That is what keeps a file editor from needing a new capability.
+        save(string),
+    }
+
+    // Capabilities a buffer may ASK for in the descriptor. The host refuses whoever
+    // uses one without asking, and the list is short on purpose: each is
+    // surface that every future buffer gets to use.
+    enum capability {
+        // Access to the PTY and the VT state machine, which live in the host.
+        terminal,
+        // An offscreen texture for whoever needs pixels: an image viewer,
+        // video. "Rare and auditable" (section 7.6).
+        raw-surface,
+        // Emitting `command::svg` — a vector drawing rasterised by the host.
+        //
+        // Less than `raw-surface`: there is no texture, no pixel coming from the
+        // guest, and what can be drawn is a vector the host interprets and
+        // clips. It is the difference between "the buffer sends pixels" and "the buffer
+        // sends a figure".
+        vector,
+    }
+
+    // A key binding, declared as DATA (section 7.9). The buffer never
+    // captures a key imperatively.
+    record binding {
+        // The sequence, like `m f s`. Only under `SPC m`: the host REFUSES at load time
+        // whoever tries to bind under a global prefix.
+        keys: string,
+        // The command's id, from the registry.
+        command: string,
+    }
+
+    // What the buffer contributes to the modeline.
+    record segment {
+        id: string,
+        content: text,
+    }
+
+    // What the buffer says about itself in `init` (section 7.6).
+    record descriptor {
+        name: string,
+        mode: string,
+        keymap: list<binding>,
+        commands: list<string>,
+        segments: list<segment>,
+        capabilities: list<capability>,
+    }
+
+    // How many CELLS of height each scale occupies.
+    //
+    // This is NOT a token value (invariant 11): it is a cell count, the
+    // same unit the buffer already counts rows and columns in. What computes it is
+    // the host, which knows the font size and the line height.
+    //
+    // Without this, the buffer had to GUESS how many rows a large run
+    // occupies — and it guessed wrong: the sheet's `huge` glyph came out clipped
+    // at the bottom, touching the rule, because four cells were 116 px and its
+    // line box is 168.
+    record heights {
+        small: u16,
+        base: u16,
+        normal: u16,
+        large: u16,
+        huge: u16,
+    }
+
+    record context {
+        columns: u16,
+        lines: u16,
+        heights: heights,
+    }
+
+    // Where the pointer touched, in CELLS of the buffer's grid — never in pixels.
+    //
+    // Invariant 11 is not about units, it is about the boundary: a pixel is
+    // a Wayland and screen-scale thing, and the buffer knows neither
+    // of the two. What converts (and what subtracts the window's margin) is the host,
+    // exactly as it already converts a key into `character`.
+    //
+    // The origin is the same as `text-command`'s: the buffer's (0,0) cell, and not
+    // the window's corner.
+    record position {
+        column: u16,
+        line: u16,
+    }
+
+    variant input {
+        // A NAMED command, dispatched by the host when the buffer's keymap
+        // key sequence completes. It is the other side of the descriptor's
+        // `binding`: the buffer declares, the host resolves the key, and the
+        // command comes back through here — the buffer never captures a key.
+        command(string),
+        // `character`, and not `char`: `char` is a WIT built-in type and cannot
+        // name a case. The parser complains with "failed to resolve directory",
+        // which points at the directory and not at the word.
+        character(char),
+        up,
+        down,
+        // A GRID buffer needs all four directions: with two, moving sideways
+        // only happens by line overflow, and the cursor jumps
+        // from one end of the screen to the other.
+        left,
+        right,
+        confirm,
+        cancel,
+        delete,
+        // What `Tab` means: TOGGLE whatever is toggleable on
+        // screen — in the glyph browser, the filter panel.
+        //
+        // # Why it is a case, and not a character
+        //
+        // Because without this `Tab` falls into the host's `_` and arrives as
+        // `character('\t')`. The buffer pushes it into the search like any
+        // letter, and the result is an INVISIBLE tab in the field, which does
+        // not match any glyph and cannot be seen. A key that
+        // looks like it does nothing is worse than one that is not bound: there is no
+        // way to find out what it did.
+        //
+        // The name is the INTENT, like the rest: `up` and not `Up`, `confirm` and
+        // not `Enter`. What decides what to toggle is each buffer.
+        toggle,
+        // The RESULT of an `effect::copy` asked for earlier.
+        //
+        // What knows whether the copy worked is the HOST — it is what talks to the
+        // clipboard. Without this way back, the buffer could only show
+        // an optimistic "copied!", which lies exactly when it matters.
+        copied(bool),
+        // Text coming from the clipboard (`Ctrl+V`).
+        //
+        // Already resolved by the host: the buffer does not read the clipboard, just as it does not read a
+        // file (invariant 11). It only receives the text.
+        paste(string),
+        // A left-button click on a cell.
+        //
+        // What resolves WHICH item is there is the buffer, because only it knows its
+        // own layout — the glyph grid moves two rows at a time and
+        // has its own header and footer. The host sending "item number N"
+        // would be the host reimplementing the buffer's layout.
+        click(position),
+    }
+}
+
+// The world exports an INTERFACE, not loose functions. With loose functions
+// `wit-bindgen` generates a `Guest` at the root scope and the name collides as soon as
+// there is a second world; with an interface, each has its own module.
+interface view {
+    // ALL the types named, not only those in the signatures: `wit-bindgen` generates
+    // in the interface's module only what it declares it uses, and a record
+    // reachable only from inside a `variant` ends up out of scope.
+    use types.{
+        capability, command, grid-command, line-command, text-command,
+        heights, context, color, descriptor, effect, input, binding, position, segment,
+        text
+    };
+
+    // Who the buffer is: name, mode, keymap, commands and modeline segments.
+    //
+    // Called ONCE, at load. This is where the keymap arrives as data, and it is why
+    // the host can refuse whoever binds outside `SPC m` before the
+    // buffer runs anything at all.
+    init: func() -> descriptor;
+
+    // Draws. It does NOT rasterise: it returns the list, and the host draws.
+    render: func(ctx: context) -> list<command>;
+
+    // Receives an already-normalised key and returns what should happen.
+    //
+    // An empty list = nothing changed, do not redraw. This used to be `-> bool`, and the
+    // buffer had no way to ask for a copy nor to fire a command.
+    event: func(e: input) -> list<effect>;
+}
+
+world buffer {
+    export view;
+}

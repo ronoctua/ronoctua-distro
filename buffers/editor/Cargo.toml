@@ -1,0 +1,32 @@
+# OWN workspace: this crate only exists for `wasm32-wasip2`. See the comment
+# on the `exclude` in the root Cargo.toml.
+[workspace]
+
+[package]
+name = "ronoctua-buffer-editor"
+description = "Editor de texto: abre e salva arquivo, sem tocar no disco."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[lib]
+# `cdylib` is what `wasm32-wasip2` needs in order to become a component.
+crate-type = [ "cdylib" ]
+
+[dependencies]
+wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ] }
+
+[lints.rust]
+# The same ones as the host's workspace, repeated because this is another
+# workspace. The `allow` for the generated code is in `lib.rs` itself, with the reason.
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[profile.release]
+# A small component instantiates fast: the size counts towards the
+# deserialization time of the `.cwasm` (section 5.2).
+opt-level = "s"
+lto = true
+strip = true

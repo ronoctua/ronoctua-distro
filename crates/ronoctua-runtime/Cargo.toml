@@ -1,0 +1,48 @@
+[package]
+name = "ronoctua-runtime"
+description = "wasmtime, ciclo de vida de buffer e o orcamento de 5 ms (secoes 5.2 e 7.9)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+# It measures instantiation and FAILS above the ceiling. It is a binary, and not a `#[bench]`,
+# because the Nix check needs a command that exits non-zero.
+name = "ronoctua-bench-instance"
+path = "src/bin/bench.rs"
+
+[[bin]]
+# It drives the glyph browser the way the host drives it — `event` and `render`
+# on the SAME instantiated component — and fails if any of section 6.5's five
+# filters stops restricting.
+name = "ronoctua-test-browser"
+path = "src/bin/browser.rs"
+
+[[bin]]
+# The sibling, for the Unicode symbol browser. It asserts what the other does not
+# need to assert: that the database survives the `}` inside it, that the combining
+# mark appears over the dotted circle AND copies without it, and that the 23
+# double-width ones do not come out elided by their own budget.
+name = "ronoctua-test-symbols"
+path = "src/bin/symbols.rs"
+
+[[bin]]
+# The third, for the Lucide icon browser. The criterion only it has: the
+# RANGE the icons are drawn in. Lucide's source range collides with
+# 634 Nerd Fonts codepoints inside the Iosevka, and the primary face wins the
+# fallback — a regression there does not produce tofu, it produces the WRONG icon drawn
+# with confidence, which no visual inspection catches.
+name = "ronoctua-test-lucide"
+path = "src/bin/lucide.rs"
+
+[dependencies]
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

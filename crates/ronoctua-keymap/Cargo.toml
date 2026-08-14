@@ -1,0 +1,16 @@
+[package]
+name = "ronoctua-keymap"
+description = "Arvore de teclas, merge, resolucao e which-key (secao 7.4)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Node dependency at all, not even on `ronoctua-cmd`: a binding references a
+# command by ID, as text. That keeps the tree testable on its own and lets
+# the keymap check run without assembling the system's whole registry.
+[dependencies]
+
+[lints]
+workspace = true
