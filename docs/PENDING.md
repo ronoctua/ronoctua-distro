@@ -99,13 +99,47 @@ canônica representa. O `resize` pede tamanho de célula em píxeis, que o
 diferencial não usa: qualquer valor não-zero serve, e vale escrever por que, para
 ninguém procurar de onde tirar um número que não importa.
 
+## O FFI foi TENTADO e revertido — leia isto antes de tentar de novo
+
+A ligação foi escrita, compilou, linkou e **não leu**: a grade volta em branco.
+Foi revertida em vez de ficar na árvore, porque um `Engine` que devolve grade
+vazia é exatamente o que faz o `term-differential` dizer que dois motores
+concordam quando um deles não está lendo nada.
+
+Três armadilhas de ABI foram encontradas no caminho, e nenhuma dá erro de
+compilação — as três compilam, linkam e mentem:
+
+1. **`GhosttyGridRef` é uma *sized struct*.** O CHAMADOR preenche o campo `size`
+   com o `sizeof` antes da chamada; é como o upstream versiona o layout. Passar a
+   struct zerada diz "tenho zero bytes", e a biblioteca acredita — `SIGSEGV` sem
+   mensagem. O layout real é `{ size_t size; void *node; uint16_t x, y; }`.
+2. **`GhosttyCell` é `uint64_t`, não ponteiro.** Declarar como ponteiro não custa
+   nada numa ABI de 64 bits (mesma largura, mesmo registrador), então nada
+   quebra e nada avisa; o que chega do outro lado é um número lido como
+   endereço.
+3. **`GhosttyTerminal` É ponteiro** (`struct GhosttyTerminalImpl*`), e o
+   `allocator` aceita `NULL` para usar o padrão — isto o header diz, e está
+   certo.
+
+E o que foi conferido e estava CERTO, para não ser reinvestigado:
+`GHOSTTY_POINT_TAG_ACTIVE = 0` e `GHOSTTY_CELL_DATA_CODEPOINT = 1`, lidos na
+ordem de declaração e não num `grep` ordenado.
+
+**O que resta descobrir é por que a leitura volta vazia** depois de
+`ghostty_terminal_vt_write`. As hipóteses ainda não testadas, em ordem de custo:
+o write pode precisar de `ghostty_terminal_vt_write_until_ground` para fechar o
+estado do parser; ou a célula pode exigir que se consulte `CONTENT_TAG` ou
+`HAS_TEXT` antes de o codepoint valer.
+
 ## O que falta
 
-1. Expor o caminho da biblioteca ao crate por `nix/rust.nix`, como os outros
-   (`RONOCTUA_*`), e linkar.
+1. Expor o caminho da biblioteca ao crate por `nix/rust.nix`, e linkar por um
+   `build.rs` que emita `cfg(ghostty_vt)` — a ausência da biblioteca tem de
+   compilar sem o motor, e não falhar no link de quem usar o crate.
 2. FFI em `crates/ronoctua-term/`, atrás do trait `Engine` (`src/lib.rs:185`).
-   O primeiro teste que vale: criar um terminal, escrever `hi`, ler os dois
-   codepoints de volta. Se isso passa, o resto é mecânico.
+   **O crate tem `#![forbid(unsafe_code)]`**, e `forbid` não se afrouxa por
+   módulo: vira `deny` na raiz mais um `allow` no único arquivo do FFI, e aí
+   "todo o unsafe mora num lugar" passa a ser um `grep`, não uma esperança.
 3. O `term-differential` passa a comparar **dois** motores.
 
 **O modo de falha ruim tem nome:** um `Engine` que compila e devolve grade vazia.
