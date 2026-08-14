@@ -52,16 +52,37 @@ work-in-progress API"**. Um `nix flake update` traz assinatura diferente sem avi
 - **Esperar a v1.4**: nada a fazer, e o diferencial segue degradado.
 - **Pinar um COMMIT** (não `main`): destrava agora, ao custo de acompanhar upstream instável.
 
-## Se for implementar, o caminho
+## A biblioteca JÁ CONSTRÓI — `nix/ghostty-vt.nix`
 
-1. Input novo com o commit fixado, e a FOD do cache de pacotes Zig — é a única parte que não dá para
-   tornar hermética de outro jeito, e é a dependência de rede que este item sempre anotou.
-2. FFI em `crates/ronoctua-term/`, atrás do trait `Engine` (`src/lib.rs:185`), que é o que torna a
-   coisa reversível: o alacritty continua onde está.
+Feito e verificado: a derivação existe, constrói do commit `53be7d03` e entrega
+`.so`, `.a`, headers e `pkgconfig` em 17 MB. Os sete símbolos que o trait precisa
+foram conferidos com `nm` **na biblioteca**, não nos headers.
+
+Quatro coisas custaram um build cada, e nenhuma está escrita em lugar nenhum:
+
+- **Zig 0.16**, não o `zig_0_15` que o nixpkgs usa para o Ghostty: o commit
+  declara `minimum_zig_version = "0.16.0"` e o Zig recusa o `.zon` antes de
+  compilar.
+- **`--fetch=all`**, não `--fetch`: o simples resolve só as dependências não
+  lazy, e `oniguruma`, `glslang` e `spirv-cross` são lazy. Sem isso o build tenta
+  buscá-las dentro do sandbox e falha com `NameServerFailure` — erro de DNS num
+  build que não devia precisar de DNS.
+- **O alvo é a tripla do ZIG**: `stdenv.hostPlatform.config` dá
+  `x86_64-unknown-linux-gnu`, e o Zig lê o campo do meio como o SO, respondendo
+  `unknown OS: 'unknown'` — que soa como toolchain quebrada e é só grafia.
+- **Não existe passo `lib-vt`.** A biblioteca sai do passo PADRÃO; o único
+  `lib-vt` do `build.zig` é o `test-lib-vt`. Quem recorta o build é
+  `-Demit-lib-vt=true`, opção que o upstream escreveu para este uso.
+
+## O que falta
+
+1. Expor a derivação no `flake.nix` e passar o caminho ao crate por
+   `nix/rust.nix`, como as outras (`RONOCTUA_*`).
+2. FFI em `crates/ronoctua-term/`, atrás do trait `Engine` (`src/lib.rs:185`).
 3. O `term-differential` passa a comparar **dois** motores.
 
-**O modo de falha ruim tem nome:** um `Engine` que compila e devolve grade vazia. Se a API não bastar
-para montar a `Grid` canônica, **pare e reporte** em vez de deixar isso na árvore.
+**O modo de falha ruim tem nome:** um `Engine` que compila e devolve grade vazia.
+Se a API não bastar para montar a `Grid` canônica, **pare e reporte**.
 
 - acabou quando: o `term-differential` compara dois motores com diferença de grade zero
 

@@ -394,6 +394,15 @@
         # Generated glyph layer: icons.json, glyphs.json, coverage.md.
         glyphdb = glyphdb.db;
 
+        # THE TERMINAL ENGINE, built from a pinned Ghostty commit.
+        #
+        # Exposed by name so it is reachable and buildable, and NOT yet wired
+        # into any crate: nothing links it, so nothing can pretend to use it. The
+        # step that makes `nix flake check` build it is the FFI, which is where a
+        # half-written engine would start returning an empty grid — see
+        # `docs/PENDING.md`, item 1.
+        ghostty-vt = pkgs.callPackage ./nix/ghostty-vt.nix { };
+
         # Merged icon theme, with manifest and coverage report.
         noctua-icon-theme = iconSuperpack;
 
