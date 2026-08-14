@@ -61,27 +61,59 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 - acabou quando: ou existe `ronoctua-design` compilando para wasip2, ou o invariante 12 foi reescrito
 
-### 3. Input `fonts` é caminho local, e as fontes precisam de um Release · médio
+### 3. Input `fonts` ainda é caminho local — o Release já existe · médio
 
-Aponta para um caminho absoluto desta máquina; funciona aqui e em nenhuma outra.
+O Release existe: <https://github.com/ronoctua/ronoctua-distro/releases/tag/fonts-v1>,
+quatro assets, 1,4 GB. O input ainda é `path:/home/noctua/main/prjs/ronoctua-fonts`,
+e é a última coisa entre "compila neste disco" e "compila para quem clonar".
 
-**Publicar não é só trocar a URL.** As 540 faces são 4,1 GB: em git puro o GitHub recusa o
-repositório, e em LFS são quatro vezes a cota gratuita de 1 GB — a única saída oferecida é um data
-pack pago, que está descartado.
+## Os hashes, já medidos
 
-A saída é **GitHub Releases**: sem cota, 2 GB por asset, ilimitado para repositório público, de
-graça. E `fetchurl` com hash é tão reprodutível quanto um rev de git — mais honesto, aliás, porque
-estes arquivos são SAÍDA de build e não fonte. Medido: zstd -19 leva os 4,1 GB a ~1,4 GB, e o maior
-asset (TTF-nerdfonts) fica em ~510 MB.
+```
+noctua-iosevka-TTF.tar.zst              sha256-osypDML0dwl8yg+oJu8jfu7JwUNg7Liphtg15K0VFfE=
+noctua-iosevka-TTF-nerdfonts.tar.zst    sha256-YMc7DXeL1N5t4CA1+yeAfO1bO3XqAo7OAH+f64DKGbI=
+noctua-iosevka-WOFF2.tar.zst            sha256-A5S4F4e5NdkfHV4Pd7cFtfYnWShRXFZGeCrfheKD02A=
+noctua-iosevka-WOFF2-nerdfonts.tar.zst  sha256-VeWizQwXYlqBrzK3ZlUXk0CYwGIErGBLxhGveYKaH+s=
+```
 
-`nix run .#fonts-release -- <caminho>` empacota os quatro diretórios de forma determinística
-(`--sort=name`, mtime fixo) e imprime os hashes prontos.
+## O `reports/` NÃO é problema — conferido
 
-A ordem importa, e é a única parte que não dá para automatizar: o Release tem de **existir antes**
-de o input apontar para ele, senão o `nix flake check` quebra num 404.
+Parecia ser: `nix/fonts.nix` faz `cp -r reports $out/reports` e os tarballs não
+trazem `reports/`. Mas ele é **gerado no próprio build** (`mkdir -p reports`, e
+`--report "reports/<dir>.json"` na correção das faces), não lido do `fontSrc`.
+Nada a decidir e nada a mudar.
 
-- acabou quando: o input `fonts` é um `fetchurl` dos assets do Release e o check
-  `fonts-input-publishable` para de avisar
+## Duas formas de buscar, e qual escolher
+
+**`pkgs.fetchurl` dentro de `nix/fonts.nix`** é mais simples — sem input, sem
+`flake.lock`, e o `.tar.zst` é descompactado por você no `unpackPhase`. MAS
+quebra o `fonts-input-publishable`, que lê `flake.lock` e deixaria de encontrar
+o nó `fonts`. Se for por aqui, o check tem de ser reescrito para olhar o
+`fonts.nix`, e a mensagem dele muda de sentido.
+
+**Quatro inputs de flake** mantém o check como está e o `flake.lock` como fonte
+da verdade. Cuidado: `type = "tarball"` do Nix **não descompacta `.zst`** — use
+`flake = false` e trate como arquivo, descompactando na derivação.
+
+A segunda é a que preserva o que já existe. Comece por ela.
+
+## O passo a passo
+
+1. Meça `reports/` e decida.
+2. `flake.nix`: quatro inputs `flake = false` com as URLs do Release.
+3. `nix/fonts.nix`: uma derivação que monta
+   `noctua-iosevka/{TTF,TTF-nerdfonts,WOFF2,WOFF2-nerdfonts}` a partir dos
+   quatro, e passa isso como `fontSrc`. O `oflText` já vem do git — não mexa.
+4. `nix flake check --keep-going -L`. **Nada mais rodando em paralelo**: duas
+   verificações concorrentes se derrubam com SIGTERM e o log culpa o compilador.
+5. Commit assinado. O toque na YubiKey vem **depois** do `pre-commit: ok`, não
+   no começo — ver a memória `commit-exige-o-dono`.
+
+## Como saber que acabou
+
+`fonts-input-publishable` imprime `OK: input 'fonts' e um asset remoto e fixado
+por hash`. Ele lê o `flake.lock` de verdade desde a fusão — antes disso respondia
+por um fallback e teria dito "caminho local" para sempre.
 
 ### 4. Desempenho medido só em host não-NixOS · pequeno
 
