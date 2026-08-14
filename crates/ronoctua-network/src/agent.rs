@@ -90,13 +90,13 @@ impl Agent {
         &self,
         connection: HashMap<String, HashMap<String, OwnedValue>>,
         _path: zbus::zvariant::OwnedObjectPath,
-        secao: String,
+        section: String,
         _dicas: Vec<String>,
         flags: u32,
     ) -> Result<HashMap<String, HashMap<String, OwnedValue>>, Failure> {
-        if secao != SECURITY_SECTION {
+        if section != SECURITY_SECTION {
             return Err(Failure::NotSupported(format!(
-                "este agente só sabe de `{SECURITY_SECTION}`, e pediram `{secao}`"
+                "este agente só sabe de `{SECURITY_SECTION}`, e pediram `{section}`"
             )));
         }
 
@@ -122,13 +122,13 @@ impl Agent {
             Failure::NoSecrets("não há senha guardada para esta rede".into())
         })?;
 
-        let mut seguranca = HashMap::new();
-        seguranca.insert(
+        let mut security = HashMap::new();
+        security.insert(
             "psk".to_owned(),
             OwnedValue::try_from(Value::from(password))
                 .map_err(|e| Failure::NoSecrets(format!("empacotar a senha: {e}")))?,
         );
-        Ok(HashMap::from([(SECURITY_SECTION.to_owned(), seguranca)]))
+        Ok(HashMap::from([(SECURITY_SECTION.to_owned(), security)]))
     }
 
     /// Request cancelled. There is nothing to undo: the read is synchronous and short.

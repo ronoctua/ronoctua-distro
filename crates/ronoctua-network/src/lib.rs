@@ -249,7 +249,7 @@ fn profile_ssid(cfg: &Configuration) -> Option<String> {
 /// times, and the person picks the wrong row — which is the weakest, because the
 /// order came from the bus.
 #[must_use]
-pub fn agrupar(mut networks: Vec<Network>) -> Vec<Network> {
+pub fn group_by_ssid(mut networks: Vec<Network>) -> Vec<Network> {
     // Strongest first, so `dedup_by` keeps it.
     networks.sort_by(|a, b| {
         b.active_one
@@ -428,7 +428,7 @@ impl Manager {
                 });
             }
         }
-        Ok(agrupar(output))
+        Ok(group_by_ssid(output))
     }
 
     /// The state of each device, cable and radio.
@@ -825,7 +825,7 @@ mod tests {
                 max_rate_kbps: 1_200_000,
             },
         ];
-        let output = agrupar(networks);
+        let output = group_by_ssid(networks);
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].signal, 85, "ficou com o ponto mais fraco");
         assert_eq!(output[0].band, Band::Ghz5);
@@ -865,7 +865,10 @@ mod tests {
                 max_rate_kbps: 0,
             },
         ];
-        let names: Vec<_> = agrupar(networks).into_iter().map(|r| r.ssid).collect();
+        let names: Vec<_> = group_by_ssid(networks)
+            .into_iter()
+            .map(|r| r.ssid)
+            .collect();
         assert_eq!(names, ["atual", "salva", "vizinho"]);
     }
 

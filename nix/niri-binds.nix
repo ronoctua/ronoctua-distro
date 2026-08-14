@@ -10,7 +10,7 @@
 # Writing those binds by hand would bring back exactly what this work has just
 # eliminated: two shortcut tables, two notations, and a which-key
 # that knows only half. Here the KDL comes out of the SAME `actions.rs` that
-# `executar` uses — remove an id there, the bind disappears from here.
+# `run_command` uses — remove an id there, the bind disappears from here.
 #
 # # Why a derivation, and not `builtins.readFile`
 #

@@ -66,19 +66,32 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
-### 4. `--executar` do instalador: falta o teste ponta a ponta · médio
+### 4. O caminho `--execute` do instalador nunca rodou · médio
 
-O caminho destrutivo agora **existe de verdade**: `nixosConfigurations.noctua` foi definido, o ISO
-carrega o flake em `/etc/nixos`, e a sequência passou a copiar o flake para um diretório de trabalho
-gravável, escrever o `host.nix` ali, rodar o `disko` contra ele e só então copiar tudo para `/mnt`.
-Antes disso nada disso existia — o `#noctua` era um atributo inexistente, o `disko` avaliava um
-caminho que só passaria a existir depois dele, e ninguém punha o flake no alvo. O modo ENSAIO não
-via nada: ele **imprime** os comandos.
+O caminho destrutivo **existe de verdade**: `nixosConfigurations.noctua` está definido, o ISO carrega
+o flake em `/etc/nixos`, e a sequência copia o flake para um diretório gravável, escreve o `host.nix`
+ali, roda o `disko` contra ele e só então copia tudo para `/mnt`. O modo ENSAIO não prova nada disso:
+ele **imprime** os comandos.
 
-O que falta é rodar. Um teste de VM precisa da closure do sistema alvo dentro da VM (o
-`nixos-install` não tem rede lá), e é isso que ainda não foi montado.
+A flag em português já saiu — era violação do invariante 18, e o `english-names` passou a ler flag de
+CLI para ela não voltar. O que falta é o teste.
 
-- acabou quando: um teste de VM roda `--executar` num disco virtual e boota o sistema resultante
+**O obstáculo tem duas metades, e só uma estava anotada.** A conhecida: o `nixos-install` não tem
+rede dentro da VM, então a closure do sistema alvo precisa estar no store dela
+(`system.extraDependencies`). A outra apareceu ao procurar como fazer: **bootar o resultado é outro
+harness.** O `tests/disko-vm.nix` já boota o que instalou, mas pelo `makeDiskoTest` do próprio disko,
+que roda o script DELE — não o nosso instalador. Um `runNixOSTest` comum instala e não boota.
+
+Duas saídas, e a escolha é de desenho:
+
+1. **Dois testes.** Um `runNixOSTest` roda `--execute` e afirma o que só o nosso orquestrador faz —
+   o diretório de trabalho, o `host.nix` gerado no lugar certo, a ordem dos passos, o `resume_offset`
+   depois do swapfile. O boot continua provado pelo `disko-vm`, que já existe. Mais barato, e cada
+   teste falha por um motivo só.
+2. **Um teste só**, ensinando o harness do disko a chamar o nosso instalador no lugar do script dele.
+   Prova a coisa inteira de uma vez e custa entender um harness de terceiro.
+
+- acabou quando: `--execute` roda contra um disco virtual num teste, e o sistema que ele instala boota
 
 ### 5. O which-key não mostra o keymap do buffer em foco · médio
 
@@ -114,15 +127,3 @@ argv não deve atravessar a rede. Um clipboard carrega senha colada com a mesma 
 
 - decidir: se sim, o item vira empacotar o ClipCascade e guardar a credencial como os outros
   segredos; se não, o lugar reservado no painel sai e o comando some do keymap
-
-### 7. Boot sem sessão gráfica não pede a senha do Wi-Fi · pequeno
-
-Se não houver blob selado — rede nova, ou TPM recusando —, o agente responde `NoSecrets` e o
-NetworkManager pergunta a quem estiver olhando. Num boot sem sessão gráfica não há ninguém: a máquina
-fica sem Wi-Fi até o login.
-
-Quem sofre: um boot remoto, ou o primeiro boot depois de trocar a senha do roteador.
-
-O que falta: decidir se vale um caminho de console (o instalador tem TUI e poderia ser reusada) ou se
-o comportamento está certo como está — não guardar a senha tem esse preço, e ele é o mesmo do
-`psk-flags=2`.

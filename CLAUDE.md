@@ -112,9 +112,9 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o
   CÓDIGO, não o CRITÉRIO,** fecha marco vazio. **`nix fmt` IGNORA Rust** — esse é `cargo fmt`.
 - **`nix flake check` SEM `-L` não mostra log**: silêncio não é sintoma; o `secureboot-vm` leva ~2 h calado.
-- **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, e `rustc` está no `--prefer`): ele dispara a
-  10% de memória livre do SISTEMA, então `--max-jobs` não salva. Confira em `journalctl -u earlyoom`; construa
-  `.#packages.x86_64-linux.ronoctua-shell` sozinho e repita o gate. **`pkill`/`pgrep` casa o PRÓPRIO comando.**
+- **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`): dispara a 10% de
+  livre do SISTEMA, e `--max-jobs` não salva — veja `journalctl -u earlyoom`. São TRÊS compilações pesadas (`rust-tests`,
+  `rust-clippy`, o pacote): construa as três sozinhas antes. **`pkill`/`pgrep` casa o PRÓPRIO comando.**
 - **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já
   estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo.
 - **"Nenhum atalho funciona" tem três causas com a MESMA tela** — tecla que não chega, modificador

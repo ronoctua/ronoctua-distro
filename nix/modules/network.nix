@@ -237,6 +237,48 @@ in
     # -------------------------------------------------------------------
     services.dbus.packages = lib.mkIf cfg.nmAgent [ dbusPolicy ];
 
+    # -------------------------------------------------------------------
+    # The console question, for the boot where nobody is logged in.
+    #
+    # NOT part of the agent, and the reason is the specification: NetworkManager
+    # only lets an agent interact when it passes `ALLOW_INTERACTION`, and at
+    # boot-time autoconnect it does not. So this is a separate service that
+    # behaves like a PERSON — it waits, notices the network did not come up, and
+    # asks on the console through the same mechanism that asks for the disk's
+    # passphrase.
+    #
+    # `Type = "oneshot"` and no `Restart`: it asks once. A service that kept
+    # coming back would put a password prompt on a console every minute of a
+    # machine that is simply out of range.
+    # -------------------------------------------------------------------
+    systemd.services.ronoctua-network-console = lib.mkIf cfg.nmAgent {
+      description = "Pergunta a senha do Wi-Fi no console quando ninguem esta logado";
+      after = [
+        "NetworkManager.service"
+        "ronoctua-network-agent.service"
+        "systemd-user-sessions.service"
+      ];
+      wants = [ "NetworkManager.service" ];
+      # `multi-user.target`, and NOT `graphical.target`: this exists precisely
+      # for the boot that does not reach a graphical session.
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${ronoctua.shell}/bin/ronoctua-network-console";
+        # It waits before asking, and the ask itself has a timeout. The margin
+        # is what keeps a hung prompt from holding the boot forever.
+        TimeoutStartSec = 300;
+        # It reads logind's session directory, talks to NM on the system bus,
+        # and seals through the TPM — the same surface as the agent.
+        ProtectSystem = "strict";
+        ReadWritePaths = [ "/persist/etc/ronoctua/wifi" ];
+        DeviceAllow = [ "/dev/tpmrm0 rw" ];
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = true;
+      };
+    };
+
     systemd.services.ronoctua-network-agent = lib.mkIf cfg.nmAgent {
       description = "Agente de segredo do NetworkManager (senha selada no TPM2)";
       # AFTER NetworkManager: registering with `AgentManager` fails if it is

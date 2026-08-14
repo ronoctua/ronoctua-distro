@@ -169,7 +169,7 @@ pkgs.mkShell {
     echo "  nix run .#dev      niri aninhado + rodape (leader = Ctrl+Alt+Space)"
     echo "  nix run .#vm       sistema completo em VM"
     echo "  nix run .#bench    mede o trabalho de CPU do frame"
-    echo "  nix run .#install  instala (ensaia sem --executar)"
+    echo "  nix run .#install  instala (ensaia sem --execute)"
     echo "  nix build .#iso    gera o ISO"
     echo
   '';

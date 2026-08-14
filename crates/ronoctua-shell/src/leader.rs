@@ -1454,7 +1454,7 @@ mod tests {
             }
             assert!(
                 WITH_ACTION.contains(&id),
-                "`{id}` tem tecla e o `surface::executar` nao o trata: \
+                "`{id}` tem tecla e o `surface::run_command` nao o trata: \
                  ele apareceria na lista e nao faria nada"
             );
         }

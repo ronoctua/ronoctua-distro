@@ -281,6 +281,42 @@ let
   # glibc does not know produces no error at build time, and the installed system
   # falls back to `C` — dates in American order, no accents in `sort`, and
   # nothing anywhere saying why.
+  # THE CONSOLE QUESTION EXISTS, AND ASKS ONCE.
+  #
+  # Three things that are cheap to get wrong and expensive to notice:
+  #
+  #   - it must be wanted by `multi-user.target`, because it exists for the boot
+  #     that never reaches a graphical one. Under `graphical.target` it would run
+  #     exactly when it is not needed and never when it is;
+  #   - it must be `oneshot` with no `Restart`, or a machine out of range gets a
+  #     password prompt on its console every minute, forever;
+  #   - the binary must be a store path. A unit's PATH is minimal, and the
+  #     failure of a bare name shows up as a service that exits with nothing to
+  #     say about Wi-Fi.
+  wifi-console-asks-once = mkCheck "wifi-console-asks-once" [ ] ''
+    unit=${self.nixosConfigurations.vm.config.systemd.services.ronoctua-network-console.serviceConfig.Type}
+    test "$unit" = "oneshot" || {
+      echo "ERRO: o servico do console e \`$unit\`, e nao oneshot." >&2
+      echo "      Com Restart ele perguntaria a senha em laco." >&2
+      exit 1; }
+
+    exec_start=${self.nixosConfigurations.vm.config.systemd.services.ronoctua-network-console.serviceConfig.ExecStart}
+    case "$exec_start" in
+      /nix/store/*) ;;
+      *) echo "ERRO: ExecStart nao e caminho do store: $exec_start" >&2; exit 1 ;;
+    esac
+
+    wanted="${lib.concatStringsSep " " self.nixosConfigurations.vm.config.systemd.services.ronoctua-network-console.wantedBy}"
+    case " $wanted " in
+      *" multi-user.target "*) ;;
+      *) echo "ERRO: o servico nao e puxado por multi-user.target: $wanted" >&2
+         echo "      Ele existe para o boot que NAO chega ao grafico." >&2
+         exit 1 ;;
+    esac
+
+    echo "OK: a pergunta de console e oneshot, por caminho, no multi-user"
+  '';
+
   locale-exists = mkCheck "locale-exists" [ ] ''
     supported=${pkgs.glibcLocales}/share/i18n/SUPPORTED
     tab=${pkgs.tzdata}/share/zoneinfo/zone1970.tab
@@ -1894,13 +1930,13 @@ let
          "encerrar", "encolhe", "enrolar", "entalhes", "entrada", "escala",
          "escrita", "escutar", "esperada", "esperado", "esquecer", "esquerda",
          "estado", "estatico", "estrangeiro", "eventos", "executar",
-         "expandido", "expansao", "fabrica", "falhou", "falta", "faltando",
+         "executar", "expandido", "expansao", "fabrica", "falhou", "falta", "faltando",
          "familia", "fechar", "ficha", "fila", "filhos", "filtro", "fluxo",
          "fonte", "fontes", "fora", "fragmento", "frase", "frequencia",
          "fundo", "gesto", "glifo", "glifos", "grade", "grafico", "gravada",
          "grupo", "guarda", "guardar", "heranca", "hospedeiro", "icone",
          "icones", "idioma", "imagens", "impermanencia", "instalador",
-         "instanciar", "interatividade", "janela", "juntos", "lado",
+         "instanciar", "interatividade", "interativo", "janela", "juntos", "lado",
          "lancamento", "largo", "largura", "legivel", "levar", "lido",
          "ligacao", "limite", "limites", "limpar", "linha", "linhas",
          "localizador", "marca", "meio", "modelo", "modo", "morreu", "morto",
@@ -1919,7 +1955,7 @@ let
          "superficie", "surdo", "tabela", "tam", "tamanho", "teclado", "tela",
          "tema", "teto", "texto", "textos", "tipografia", "topo", "trecho",
          "trechos", "ultima", "ultimo", "unidade", "urgencia", "usuario",
-         "valor", "variante", "variavel", "varrer", "vazia", "vazio", "versao",
+         "valido", "valor", "variante", "variavel", "varrer", "vazia", "vazio", "versao",
          "vetorial", "vigia", "visao", "vista", "visto", "vivo", "volta",
          "voltou",
     ]
@@ -2038,6 +2074,22 @@ let
                 if RX.search(m.group(1)):
                     gaps.append(f"subcomando: {rs.relative_to(root_dir)}:{n}: {m.group(1)}")
 
+    # 6) THE CLI'S FLAGS
+    #
+    # A flag is a NAME — it is what a person types and what a script writes —
+    # and no rule above sees it: it lives as a bare string compared with `==`,
+    # in any file, not only `main.rs`. `--executar` survived the whole refactor
+    # in the installer AND in three places that documented it, while the very
+    # docstring of the file that defined it already said `--run_command`. The
+    # code and its own documentation disagreed, and nothing could say so.
+    for rs in (root_dir / "crates").rglob("*.rs"):
+        if "target" in rs.parts:
+            continue
+        for n, line in enumerate(rs.read_text().splitlines(), 1):
+            for m in re.finditer(r'"--([a-z][a-z0-9-]*)"', line):
+                if RX.search(m.group(1)):
+                    gaps.append(f"flag: {rs.relative_to(root_dir)}:{n}: --{m.group(1)}")
+
     if gaps:
         print("ERRO: nome em portugues (invariante 18).", file=sys.stderr)
         print("", file=sys.stderr)
@@ -2049,7 +2101,7 @@ let
         print("       Todo NOME e todo COMENTARIO sao ingles.", file=sys.stderr)
         print("       Em pt-BR so os 4 docs, o VALOR de chave e a tag de busca.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: nenhum nome em portugues — arquivo, chave, Rust, Nix, Python, subcomando")
+    print("OK: nenhum nome em portugues — arquivo, chave, Rust, Nix, Python, subcomando, flag")
     FIM
   '';
 
@@ -2494,6 +2546,7 @@ in
     niri-actions-translated
     keyboard-layout-exists
     locale-exists
+    wifi-console-asks-once
     ;
   inherit
     niri-config-valid
@@ -2668,6 +2721,7 @@ in
     niri-actions-translated
     keyboard-layout-exists
     locale-exists
+    wifi-console-asks-once
     niri-config-valid
     fontconfig-nested-finds-font
     # A queue one at a time, a critical one that does not disappear, the history

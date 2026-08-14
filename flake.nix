@@ -1,5 +1,5 @@
 {
-  description = "ronoctua-distro — distribuicao NixOS cujo desktop se comporta como o Doom Emacs";
+  description = "ronoctua-distro — distribuicao NixOS sem barra, dock ou menu iniciar: so o conteudo e um rodape de duas linhas";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -634,7 +634,7 @@
           find "$out/iso" -name '*.iso' -printf '  %p  (%s bytes)\n'
         '';
 
-        # The real installer. Without `--executar` it does a DRY RUN: it shows the
+        # The real installer. Without `--execute` it does a DRY RUN: it shows the
         # `host.nix` it would generate and the steps it would run, and exits. That is the default
         # on purpose — the first step erases an entire disk.
         install = mkScriptApp "ronoctua-install" "instala a versao de producao" ''

@@ -159,10 +159,10 @@
 
     ronoctua-distro
 
-    Para instalar:      ronoctua-install --executar
+    Para instalar:      ronoctua-install --execute
     Para so ver o que aconteceria:  ronoctua-install
 
-    To install:         ronoctua-install --executar
+    To install:         ronoctua-install --execute
     To preview only:    ronoctua-install
 
   '';

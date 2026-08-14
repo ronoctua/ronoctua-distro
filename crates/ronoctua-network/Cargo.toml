@@ -27,5 +27,9 @@ tracing-subscriber.workspace = true
 name = "ronoctua-network-agent"
 path = "src/bin/network-agent.rs"
 
+[[bin]]
+name = "ronoctua-network-console"
+path = "src/bin/network-console.rs"
+
 [lints]
 workspace = true

@@ -270,11 +270,11 @@ pub enum Invalid {
     /// Empty.
     Blank,
     /// A hostname outside RFC 1123.
-    HostnameMalFormado,
+    HostnameMalformed,
     /// A hostname without the prefix section 7.1 requires.
     HostnameWithoutPrefix,
     /// A passphrase that is too short.
-    PassphraseCurta,
+    PassphraseTooShort,
     /// A disk that does not exist, or that is not a disk.
     InvalidDisk,
     /// A language that is not in `assets/i18n`.
@@ -289,11 +289,13 @@ impl std::fmt::Display for Invalid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Blank => "nao pode ficar vazio",
-            Self::HostnameMalFormado => {
+            Self::HostnameMalformed => {
                 "so letras minusculas, digitos e hifen; nao pode comecar nem terminar com hifen"
             }
             Self::HostnameWithoutPrefix => "o nome da maquina comeca com `noctua-`",
-            Self::PassphraseCurta => "a frase-secreta do disco precisa de ao menos 12 caracteres",
+            Self::PassphraseTooShort => {
+                "a frase-secreta do disco precisa de ao menos 12 caracteres"
+            }
             Self::InvalidDisk => "esse caminho nao e um disco",
             Self::UnknownLanguage => "idioma nao disponivel",
             Self::UnknownLayout => "layout de teclado nao existe no xkeyboard-config",
@@ -308,7 +310,7 @@ impl std::fmt::Display for Invalid {
 /// Twelve, and not eight: it protects the whole disk and has **no** attempt
 /// limit — there is no lockout after N mistakes, as on an online account.
 /// The only defence is argon2's derivation cost times the length.
-pub const MINIMO_PASSPHRASE: usize = 12;
+pub const MINIMUM_PASSPHRASE: usize = 12;
 
 /// The smallest password accepted on a WPA network.
 ///
@@ -585,22 +587,22 @@ pub fn validate_it(
                 return Err(Invalid::HostnameWithoutPrefix);
             }
             let body = answer;
-            let valido = body.len() <= 63
+            let valid = body.len() <= 63
                 && !body.starts_with('-')
                 && !body.ends_with('-')
                 && body
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-            if !valido {
-                return Err(Invalid::HostnameMalFormado);
+            if !valid {
+                return Err(Invalid::HostnameMalformed);
             }
         }
         Question::Passphrase => {
             // It counts CHARACTERS, not bytes: a Portuguese phrase with accents
             // has more bytes than characters, and refusing it for that would be
             // punishing whoever writes in their own language.
-            if answer.chars().count() < MINIMO_PASSPHRASE {
-                return Err(Invalid::PassphraseCurta);
+            if answer.chars().count() < MINIMUM_PASSPHRASE {
+                return Err(Invalid::PassphraseTooShort);
             }
         }
         Question::Language => {

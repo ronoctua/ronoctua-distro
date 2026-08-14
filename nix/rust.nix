@@ -143,7 +143,7 @@ let
     RONOCTUA_SYSTEMD_CREDS = "${systemd}/bin/systemd-creds";
     # THE COMPOSITOR'S OWN CLIENT, which runs the 141 mirrored actions.
     # It fills in arguments with defaults our JSON has no way of
-    # knowing — see `ronoctua_niri::executar_pelo_cliente`.
+    # knowing — see `ronoctua_niri::run_through_client`.
     RONOCTUA_NIRI = "${niri}/bin/niri";
     RONOCTUA_XWAYLAND_SATELLITE = "${xwayland-satellite}/bin/xwayland-satellite";
     # WHAT COPIES. `Efeito::Copiar` was a `tracing::info!` and nothing more: the
@@ -191,6 +191,9 @@ let
     # THE TIMEZONE LIST, from tzdb's own table. Same route, same reason: the
     # installer offers what the system has, and never a list kept by hand.
     RONOCTUA_TZ_TAB = "${tzdata}/share/zoneinfo/zone1970.tab";
+    # The console prompt, for the boot with nobody logged in. By PATH: a unit's
+    # `PATH` is minimal and a bare name fails far from the cause.
+    RONOCTUA_ASK_PASSWORD = "${systemd}/bin/systemd-ask-password";
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a

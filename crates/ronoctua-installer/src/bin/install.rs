@@ -10,13 +10,13 @@
 //! no terminal at all. An installer that only runs with a TTY is not testable, and an
 //! untested installer is the part of the system where that is least acceptable.
 //!
-//! # Nothing happens without `--run_command`
+//! # Nothing happens without `--execute`
 //!
 //! The default is a DRY RUN: it shows the `host.nix` it would generate and every command it
 //! would run, and exits without touching a disk. A command whose first step erases
 //! a whole disk cannot be the default behaviour.
 //!
-//! In the TUI, `--run_command` enables the confirmation screen; without it the TUI collects
+//! In the TUI, `--execute` enables the confirmation screen; without it the TUI collects
 //! the answers, shows the plan and stops there.
 
 use std::io::IsTerminal as _;
@@ -33,7 +33,7 @@ const FLAKE: &str = "/mnt/etc/nixos";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let executar_de_verdade = args.iter().any(|a| a == "--executar");
+    let run_for_real = args.iter().any(|a| a == "--execute");
 
     let texts = Texts::from_env();
 
@@ -41,9 +41,9 @@ fn main() -> Result<()> {
     // keys, and with no stdout the drawing goes into a file as escape
     // rubbish. `nix run .#install > log` falls into the environment mode, and that is
     // right.
-    let interativo = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
 
-    let answers = if interativo {
+    let answers = if interactive {
         match tui::collect(&texts)? {
             Some(r) => r,
             // They gave up. Nothing was touched, and there is nothing to say beyond that.
@@ -56,24 +56,24 @@ fn main() -> Result<()> {
     // The TUI has already shown the plan and already asked for confirmation; repeating it here would be
     // noise. In the environment mode, printing is the ONLY way for the person to see
     // what is going to happen.
-    if !interativo {
+    if !interactive {
         print_plan(&answers, &texts);
     }
 
-    if !executar_de_verdade {
+    if !run_for_real {
         println!("\n{}", texts.t(key::INST_DRYRUN));
         println!("{}", texts.t(key::INST_TO_APPLY));
         return Ok(());
     }
 
-    let mut passo_atual: Option<&'static str> = None;
+    let mut current_step: Option<&'static str> = None;
     let r = run_command(&answers, FLAKE, &mut |e| match e {
         Event::Started {
             index,
             total,
             label,
         } => {
-            passo_atual = Some(label);
+            current_step = Some(label);
             println!("\n[{}/{total}] {}", index + 1, texts.t(label));
         }
         Event::Line(l) => println!("  {l}"),
@@ -86,8 +86,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            let onde = passo_atual.map(|c| texts.t(c)).unwrap_or_default();
-            bail!("{}: {onde}\n\n{e:#}", texts.t(key::INST_FAILED))
+            let where_it_was = current_step.map(|c| texts.t(c)).unwrap_or_default();
+            bail!("{}: {where_it_was}\n\n{e:#}", texts.t(key::INST_FAILED))
         }
     }
 }
