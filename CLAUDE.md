@@ -107,10 +107,9 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. Idem o que cruza a fronteira como STRING — WIT, campo de log, flag de gerador, subcomando.
   **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
-- **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura:
-  `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run
-  --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o
-  CÓDIGO, não o CRITÉRIO,** fecha marco vazio. **`nix fmt` IGNORA Rust** — esse é `cargo fmt`.
+- **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure`
+  devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop`
+  de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
 - **`nix flake check` SEM `-L` não mostra log**: silêncio não é sintoma; o `secureboot-vm` leva ~2 h calado.
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`): dispara a 10% de
   livre do SISTEMA, e `--max-jobs` não salva — veja `journalctl -u earlyoom`. São TRÊS compilações pesadas (`rust-tests`,
@@ -131,6 +130,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   infere tarball e descompacta os 4,1 GB no store. **O console não consome TTF**; **`/etc/nixos` e `/etc/fonts/conf.d` são read-only**
   (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`. Glifo **não** leva `nf-`; 27 variantes SemiExtended: ARCHITECTURE.
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio; hibernação depende do NOCOW (`lsattr` → `C`). **PCR 15 exige UKI medida.**
+- **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`.
 - **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script
   mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
   **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`;

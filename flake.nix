@@ -230,6 +230,12 @@
         inherit rustToolchain glyphdb;
       };
 
+      # THE TERMINAL ENGINE, from a pinned Ghostty commit. In the `let` and not
+      # only under `packages` because `nix/rust.nix` needs the PATH: the crate
+      # that links it has to be told where it is, like every other data file this
+      # project hands the Rust.
+      ghosttyVt = pkgs.callPackage ./nix/ghostty-vt.nix { };
+
       rust = pkgs.callPackage ./nix/rust.nix {
         inherit (inputs) crane;
         inherit
@@ -245,7 +251,7 @@
         bufferGlyphs = buffers.glyphs;
         bufferUnicode = buffers.unicode;
         bufferLucide = buffers.lucide;
-        inherit iconSuperpack;
+        inherit iconSuperpack ghosttyVt;
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
         lucideFontFile = "${lucidedb.db}/NoctuaLucide.ttf";
@@ -401,7 +407,7 @@
         # step that makes `nix flake check` build it is the FFI, which is where a
         # half-written engine would start returning an empty grid — see
         # `docs/PENDING.md`, item 1.
-        ghostty-vt = pkgs.callPackage ./nix/ghostty-vt.nix { };
+        ghostty-vt = ghosttyVt;
 
         # Merged icon theme, with manifest and coverage report.
         noctua-icon-theme = iconSuperpack;
@@ -694,7 +700,7 @@
         bufferGlyphs = buffers.glyphs;
         bufferUnicode = buffers.unicode;
         bufferLucide = buffers.lucide;
-        inherit iconSuperpack;
+        inherit iconSuperpack ghosttyVt;
       };
 
       formatter.${system} = pkgs.nixfmt;

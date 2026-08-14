@@ -33,6 +33,7 @@
   bufferEditor,
   xkeyboard_config,
   glibcLocales,
+  ghosttyVt,
   tzdata,
   bufferGlyphs,
   bufferUnicode,
@@ -194,6 +195,10 @@ let
     # The console prompt, for the boot with nobody logged in. By PATH: a unit's
     # `PATH` is minimal and a bare name fails far from the cause.
     RONOCTUA_ASK_PASSWORD = "${systemd}/bin/systemd-ask-password";
+    # The terminal engine. `ronoctua-term`'s `build.rs` reads this to find the
+    # library; without it the crate compiles with the alacritty engine alone,
+    # and the differential degrades to a golden file — which it says out loud.
+    RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a

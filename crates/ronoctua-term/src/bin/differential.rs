@@ -33,10 +33,24 @@ const ROWS: u16 = 6;
 
 /// The available engines.
 ///
-/// A list of ONE today. Adding Ghostty here is the only step for the actual
-/// differential mode to come back.
+/// TWO when `libghostty-vt` was built, one otherwise — and the count is printed,
+/// because "the differential passed" means something different in each case. The
+/// `cfg` comes from `build.rs`: outside the Nix build the library is absent, and
+/// a crate that failed to compile over it would take the whole workspace with it
+/// for a test harness.
+///
+/// A Ghostty that refuses to start is a WARNING and not a failure. It is a
+/// second opinion: without it the comparison degrades to the golden file, which
+/// is exactly the documented single-engine mode. Taking the run down would turn
+/// a lost opinion into no result at all.
 fn engines() -> Vec<Box<dyn Engine>> {
-    vec![Box::new(Alacritty::fresh(COLUMNS, ROWS))]
+    let mut out: Vec<Box<dyn Engine>> = vec![Box::new(Alacritty::fresh(COLUMNS, ROWS))];
+    #[cfg(ghostty_vt)]
+    match ronoctua_term::ghostty::Ghostty::fresh(COLUMNS, ROWS) {
+        Ok(engine) => out.push(Box::new(engine)),
+        Err(e) => eprintln!("AVISO: motor ghostty indisponivel ({e}); comparando com o golden"),
+    }
+    out
 }
 
 fn main() -> Result<()> {

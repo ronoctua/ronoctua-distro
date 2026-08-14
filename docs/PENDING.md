@@ -19,135 +19,7 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
-### 1. Terminal: o motor principal não existe · grande · decidir antes
-
-**Os papéis estão invertidos.** O motor previsto é a `libghostty-vt`, com o `alacritty_terminal` como
-segunda implementação mantida para o teste diferencial. Existe só o alacritty, e enquanto for assim o
-diferencial degrada para golden-file: pega regressão nossa, não divergência entre implementações.
-
-## O bloqueio anterior CAIU, e isto foi medido
-
-Este item dizia que a tela não atravessa a fronteira C. Era verdade na tag pinada e deixou de ser:
-
-| ref | headers em `include/ghostty/vt` | `screen.h` |
-|---|---|---|
-| `v1.3.1` (última tag) | 9 | ausente |
-| `main` | 31 | presente |
-
-E a API cobre o trait inteiro — conferido função a função, não por analogia:
-
-| `Engine` exige | quem atende |
-|---|---|
-| `feed(&[u8])` | `ghostty_terminal_vt_write` |
-| `grid()` | `ghostty_terminal_grid_ref` → `ghostty_grid_ref_row` / `_cell` → `ghostty_cell_get` |
-| `resize(cols, lines)` | `ghostty_terminal_resize` |
-| ciclo de vida | `ghostty_terminal_new` / `ghostty_terminal_free` |
-
-## O que resta é uma DECISÃO, e ela não é técnica
-
-Nada disso está numa tag. Pinar `main` contraria a regra que o `CLAUDE.md` escreve para o niri —
-*pinar tag, nunca `main`* — e a razão vale mais aqui: o próprio header avisa **"incomplete,
-work-in-progress API"**. Um `nix flake update` traz assinatura diferente sem aviso.
-
-- **Esperar a v1.4**: nada a fazer, e o diferencial segue degradado.
-- **Pinar um COMMIT** (não `main`): destrava agora, ao custo de acompanhar upstream instável.
-
-## A biblioteca JÁ CONSTRÓI — `nix/ghostty-vt.nix`
-
-Feito e verificado: a derivação existe, constrói do commit `53be7d03` e entrega
-`.so`, `.a`, headers e `pkgconfig` em 17 MB. Os sete símbolos que o trait precisa
-foram conferidos com `nm` **na biblioteca**, não nos headers.
-
-Quatro coisas custaram um build cada, e nenhuma está escrita em lugar nenhum:
-
-- **Zig 0.16**, não o `zig_0_15` que o nixpkgs usa para o Ghostty: o commit
-  declara `minimum_zig_version = "0.16.0"` e o Zig recusa o `.zon` antes de
-  compilar.
-- **`--fetch=all`**, não `--fetch`: o simples resolve só as dependências não
-  lazy, e `oniguruma`, `glslang` e `spirv-cross` são lazy. Sem isso o build tenta
-  buscá-las dentro do sandbox e falha com `NameServerFailure` — erro de DNS num
-  build que não devia precisar de DNS.
-- **O alvo é a tripla do ZIG**: `stdenv.hostPlatform.config` dá
-  `x86_64-unknown-linux-gnu`, e o Zig lê o campo do meio como o SO, respondendo
-  `unknown OS: 'unknown'` — que soa como toolchain quebrada e é só grafia.
-- **Não existe passo `lib-vt`.** A biblioteca sai do passo PADRÃO; o único
-  `lib-vt` do `build.zig` é o `test-lib-vt`. Quem recorta o build é
-  `-Demit-lib-vt=true`, opção que o upstream escreveu para este uso.
-
-## As assinaturas, lidas na biblioteca construída
-
-Não há mais incógnita. O ciclo inteiro foi conferido nos headers que a derivação
-instala, e não numa leitura do repositório:
-
-```c
-ghostty_terminal_new(const GhosttyAllocator*, GhosttyTerminal*, uint16_t cols, uint16_t rows)
-ghostty_terminal_vt_write(GhosttyTerminal, const uint8_t* data, size_t len)
-ghostty_terminal_resize(GhosttyTerminal, uint16_t cols, uint16_t rows, uint32_t cw_px, uint32_t ch_px)
-ghostty_terminal_free(GhosttyTerminal)
-```
-
-E ler um caractere numa posição — que era a última dúvida — são três chamadas:
-
-```c
-ghostty_terminal_grid_ref(term, (GhosttyPoint){ACTIVE, x, y}, &ref)
-  → ghostty_grid_ref_cell(&ref, &cell)
-    → ghostty_cell_get(cell, GHOSTTY_CELL_DATA_CODEPOINT, &out)
-```
-
-`GHOSTTY_POINT_TAG_ACTIVE` é a área onde o cursor anda, que é o que a `Grid`
-canônica representa. O `resize` pede tamanho de célula em píxeis, que o
-diferencial não usa: qualquer valor não-zero serve, e vale escrever por que, para
-ninguém procurar de onde tirar um número que não importa.
-
-## O FFI foi TENTADO e revertido — leia isto antes de tentar de novo
-
-A ligação foi escrita, compilou, linkou e **não leu**: a grade volta em branco.
-Foi revertida em vez de ficar na árvore, porque um `Engine` que devolve grade
-vazia é exatamente o que faz o `term-differential` dizer que dois motores
-concordam quando um deles não está lendo nada.
-
-Três armadilhas de ABI foram encontradas no caminho, e nenhuma dá erro de
-compilação — as três compilam, linkam e mentem:
-
-1. **`GhosttyGridRef` é uma *sized struct*.** O CHAMADOR preenche o campo `size`
-   com o `sizeof` antes da chamada; é como o upstream versiona o layout. Passar a
-   struct zerada diz "tenho zero bytes", e a biblioteca acredita — `SIGSEGV` sem
-   mensagem. O layout real é `{ size_t size; void *node; uint16_t x, y; }`.
-2. **`GhosttyCell` é `uint64_t`, não ponteiro.** Declarar como ponteiro não custa
-   nada numa ABI de 64 bits (mesma largura, mesmo registrador), então nada
-   quebra e nada avisa; o que chega do outro lado é um número lido como
-   endereço.
-3. **`GhosttyTerminal` É ponteiro** (`struct GhosttyTerminalImpl*`), e o
-   `allocator` aceita `NULL` para usar o padrão — isto o header diz, e está
-   certo.
-
-E o que foi conferido e estava CERTO, para não ser reinvestigado:
-`GHOSTTY_POINT_TAG_ACTIVE = 0` e `GHOSTTY_CELL_DATA_CODEPOINT = 1`, lidos na
-ordem de declaração e não num `grep` ordenado.
-
-**O que resta descobrir é por que a leitura volta vazia** depois de
-`ghostty_terminal_vt_write`. As hipóteses ainda não testadas, em ordem de custo:
-o write pode precisar de `ghostty_terminal_vt_write_until_ground` para fechar o
-estado do parser; ou a célula pode exigir que se consulte `CONTENT_TAG` ou
-`HAS_TEXT` antes de o codepoint valer.
-
-## O que falta
-
-1. Expor o caminho da biblioteca ao crate por `nix/rust.nix`, e linkar por um
-   `build.rs` que emita `cfg(ghostty_vt)` — a ausência da biblioteca tem de
-   compilar sem o motor, e não falhar no link de quem usar o crate.
-2. FFI em `crates/ronoctua-term/`, atrás do trait `Engine` (`src/lib.rs:185`).
-   **O crate tem `#![forbid(unsafe_code)]`**, e `forbid` não se afrouxa por
-   módulo: vira `deny` na raiz mais um `allow` no único arquivo do FFI, e aí
-   "todo o unsafe mora num lugar" passa a ser um `grep`, não uma esperança.
-3. O `term-differential` passa a comparar **dois** motores.
-
-**O modo de falha ruim tem nome:** um `Engine` que compila e devolve grade vazia.
-Se a API não bastar para montar a `Grid` canônica, **pare e reporte**.
-
-- acabou quando: o `term-differential` compara dois motores com diferença de grade zero
-
-### 2. `ronoctua-design` não existe · decidir antes
+### 1. `ronoctua-design` não existe · decidir antes
 
 O invariante 12 nomeia `ronoctua-design` e `ronoctua-glyphdb` como componentes `wasm32-wasip2`. O
 `glyphdb` virou dados gerados por `nix/glyphgen.nix` e consumidos por `buffers/glyphs` — efeito
@@ -160,14 +32,14 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 - acabou quando: ou existe `ronoctua-design` compilando para wasip2, ou o invariante 12 foi reescrito
 
-### 3. Desempenho medido só em host não-NixOS · pequeno
+### 2. Desempenho medido só em host não-NixOS · pequeno
 
 `nix run .#bench` mede num niri **aninhado** dentro de outro compositor, com o contorno de driver de
 `nix/graphics-host.nix`. O caminho gráfico da distro instalada é mais curto.
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
-### 4. O caminho `--execute` do instalador nunca rodou · médio
+### 3. O caminho `--execute` do instalador nunca rodou · médio
 
 O caminho destrutivo **existe de verdade**: `nixosConfigurations.noctua` está definido, o ISO carrega
 o flake em `/etc/nixos`, e a sequência copia o flake para um diretório gravável, escreve o `host.nix`
@@ -194,7 +66,7 @@ Duas saídas, e a escolha é de desenho:
 
 - acabou quando: `--execute` roda contra um disco virtual num teste, e o sistema que ele instala boota
 
-### 5. O which-key não mostra o keymap do buffer em foco · médio
+### 4. O which-key não mostra o keymap do buffer em foco · médio
 
 O host do buffer resolve o keymap do PRÓPRIO descritor: `Ctrl+<primeira tecla>` abre a sequência, as
 seguintes são letras simples, e o que completa vira `Input::Command`. É o que torna o editor
@@ -212,7 +84,7 @@ caminho de volta que entregue o `Input::Command` ao processo certo.
 
 - acabou quando: com um buffer em foco, `SPC m` LISTA as ligações dele **e** a tecla seguinte as roda
 
-### 6. Clipboard: o ClipCascade não está empacotado · decidir antes
+### 5. Clipboard: o ClipCascade não está empacotado · decidir antes
 
 O painel mostra `ClipCascade: não integrado` e o comando de configurar diz o mesmo — honesto, e
 reservando o lugar.

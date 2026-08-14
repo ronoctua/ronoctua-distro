@@ -1264,19 +1264,38 @@ reimplementa layout de janelas, e é o que mantém o invariante 3 possível.
 
 ---
 
-### Terminal: um motor, e o trait que torna isso suficiente
+### Terminal: dois motores, e o trait que os torna intercambiáveis
 
-`libghostty-vt` é pre-1.0, vem de commit pinado e precisa de uma FOD com o cache de pacotes Zig.
-O trait `Engine` torna isso não-bloqueante: hoje roda `alacritty_terminal`, e o Ghostty entra depois
-por trás do mesmo trait sem tocar em mais nada.
-
-**O que se perde, dito claramente:** com um motor só, o teste diferencial degrada para golden-file —
-pega **regressão** (mudei algo e a saída mudou), não **divergência** (dois motores discordam da
-mesma sequência). O próprio binário imprime isso na saída.
+`alacritty_terminal` e a `libghostty-vt`, atrás do mesmo trait `Engine`. O diferencial compara os
+dois e exige diff de grade **zero** nos quinze casos do corpus. Com um motor só ele degradaria para
+golden-file, que pega **regressão** (mudei algo e a saída mudou) e não **divergência** (dois motores
+discordam da mesma sequência) — e o binário imprime quantos motores tem, porque as duas coisas se
+chamam "o diferencial passou" e significam coisas diferentes.
 
 A `Grid` tem forma **canônica** porque sem ela dois motores nunca seriam comparáveis: espaço no fim
 da linha é removido e TAB vira espaço. Tab é movimento, nunca conteúdo — um motor guarda `\t` na
 célula de origem, outro preenche com espaço, e os dois estão no mesmo estado visual.
+
+#### `#[repr(C)]` promete arranjar, não conferir
+
+O binding do Ghostty foi escrito uma vez a partir dos headers, compilou, linkou e devolveu grade
+vazia. **Três dos seus layouts estavam errados, e nenhum deles produz diagnóstico** — numa ABI de 64
+bits, largura errada e tamanho errado são só registradores com conteúdo errado:
+
+- `GhosttyPoint` tem uma **união de 16 bytes**; declarado como `{ tag, x, y }` dá 12 onde a
+  biblioteca espera 24, e todo campo depois da tag chega deslocado. Sintoma: grade em branco.
+- `GhosttyGridRef` é uma **sized struct** — o chamador preenche `size` com o `sizeof`, e é como o
+  upstream versiona o layout. Zerada, ela diz ter zero bytes e a biblioteca acredita: `SIGSEGV` mudo.
+- `GhosttyCell` é `uint64_t`, não ponteiro. Mesma largura, mesmo registrador, nenhum aviso.
+
+**Quem achou os três foi um programa de vinte linhas em C.** O compilador C confere essas formas de
+graça; o `#[repr(C)]` só promete arranjar o que lhe mandaram arranjar. Seis iterações de tentativa e
+erro no Rust não responderam o que um `sizeof` respondeu de primeira. Os quatro tamanhos estão
+trancados num teste, para a próxima mudança de upstream falhar com número em vez de com tela vazia.
+
+E o cursor **não sai da grade**: pergunta-se ao terminal (`ghostty_terminal_get`), porque ele não é
+conteúdo de célula. Deixá-lo na origem fazia os dois motores divergirem em quinze de quinze casos —
+o que se lê como "eles não concordam em nada", e não como "um deles nunca foi perguntado".
 
 ---
 

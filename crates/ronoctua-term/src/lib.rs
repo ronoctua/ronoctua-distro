@@ -21,7 +21,17 @@
 //! recorded grid plays the part of the second. It is weaker and it is said so: what it catches
 //! is regression, not divergence of interpretation.
 
-#![forbid(unsafe_code)]
+// `deny` AND NOT `forbid`, and the difference is this crate's whole design.
+//
+// `docs/ARCHITECTURE.md` says this crate isolates all the `unsafe` and all the
+// FFI. That was easy to promise while there was no FFI, and `forbid` was the
+// promise: it cannot be relaxed anywhere, not even by a module that means it.
+//
+// The Ghostty engine needs one. With `deny`, unsafe is refused everywhere EXCEPT
+// where a module says otherwise in writing — and today that is exactly one file,
+// `ghostty.rs`, which is the FFI. The isolation stops being a hope and becomes a
+// grep for `allow(unsafe_code)`.
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 use std::fmt::Write as _;
@@ -197,6 +207,8 @@ pub trait Engine {
 }
 
 pub mod alacritty;
+// The second engine, present only when `libghostty-vt` is (see `build.rs`).
+pub mod ghostty;
 pub mod pty;
 pub mod terminal;
 

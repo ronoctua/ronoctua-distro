@@ -17,6 +17,7 @@
   bufferUnicode,
   bufferLucide,
   iconSuperpack,
+  ghosttyVt,
 }:
 
 let
@@ -116,6 +117,7 @@ pkgs.mkShell {
   RONOCTUA_XKB_BASE_LST = "${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst";
   RONOCTUA_LOCALE_SUPPORTED = "${pkgs.glibcLocales}/share/i18n/SUPPORTED";
   RONOCTUA_TZ_TAB = "${pkgs.tzdata}/share/zoneinfo/zone1970.tab";
+  RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
   RONOCTUA_SETSID = "${pkgs.util-linux}/bin/setsid";
   RONOCTUA_XWAYLAND_SATELLITE = "${pkgs.xwayland-satellite}/bin/xwayland-satellite";
   RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
