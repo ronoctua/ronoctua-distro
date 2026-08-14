@@ -41,28 +41,38 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 ### 3. O caminho `--execute` do instalador nunca rodou · médio
 
-O caminho destrutivo **existe de verdade**: `nixosConfigurations.noctua` está definido, o ISO carrega
-o flake em `/etc/nixos`, e a sequência copia o flake para um diretório gravável, escreve o `host.nix`
-ali, roda o `disko` contra ele e só então copia tudo para `/mnt`. O modo ENSAIO não prova nada disso:
-ele **imprime** os comandos.
+O caminho destrutivo **existe de verdade**, e o modo ENSAIO não prova nada dele: ele **imprime** os
+comandos. O que falta é rodar.
 
-A flag em português já saiu — era violação do invariante 18, e o `english-names` passou a ler flag de
-CLI para ela não voltar. O que falta é o teste.
+## O que esta tentativa resolveu, e não precisa ser refeito
 
-**O obstáculo tem duas metades, e só uma estava anotada.** A conhecida: o `nixos-install` não tem
-rede dentro da VM, então a closure do sistema alvo precisa estar no store dela
-(`system.extraDependencies`). A outra apareceu ao procurar como fazer: **bootar o resultado é outro
-harness.** O `tests/disko-vm.nix` já boota o que instalou, mas pelo `makeDiskoTest` do próprio disko,
-que roda o script DELE — não o nosso instalador. Um `runNixOSTest` comum instala e não boota.
+- **O alvo entrou no gate.** `nixosConfigurations.noctua` nunca era construído por nada — o gate
+  construía o `vm` e o ISO, que são derivações diferentes. Está no m8 agora, e o `ARCHITECTURE`
+  registra por quê.
+- **O `installer-dryrun` voltou a detectar vazamento de frase-secreta.** Ele exportava
+  `frase-secret_one-de-teste` e procurava `frase-secreta-de-teste`: durante marcos, a frase podia
+  vazar no `host.nix` com o check verde. Os dois lados leem a mesma variável agora.
+- **A mensagem ao usuário deixou de ensinar `--executar`**, nos dois idiomas.
 
-Duas saídas, e a escolha é de desenho:
+## O teste de VM foi TENTADO e removido — o que se sabe
 
-1. **Dois testes.** Um `runNixOSTest` roda `--execute` e afirma o que só o nosso orquestrador faz —
-   o diretório de trabalho, o `host.nix` gerado no lugar certo, a ordem dos passos, o `resume_offset`
-   depois do swapfile. O boot continua provado pelo `disko-vm`, que já existe. Mais barato, e cada
-   teste falha por um motivo só.
-2. **Um teste só**, ensinando o harness do disko a chamar o nosso instalador no lugar do script dele.
-   Prova a coisa inteira de uma vez e custa entender um harness de terceiro.
+O harness certo **não** é o do disko nem um `runNixOSTest` comum: é o padrão do próprio nixpkgs em
+`nixos/tests/installer.nix` — um segundo nó com `virtualisation.useBootLoader`, ligado DEPOIS, que
+boota do disco que o primeiro escreveu.
+
+O teste chegou a rodar. A closure do alvo entra por `system.extraDependencies` e isso funciona (a
+falha inicial do `android-studio` era mirror, e passa na segunda tentativa). **Onde ele parou:** o
+`ronoctua-install --execute` roda por 900 s e sai com 124 (timeout) **sem imprimir uma linha** — nem
+o plano, que o modo sem terminal imprime ANTES de qualquer passo. Isso não é lentidão; é não chegar
+ao começo.
+
+A próxima tentativa começa por aí, e a pergunta é: por que o binário não produz saída dentro do
+`succeed()` do driver? Hipóteses não testadas: o `>&2` não chegar ao log do jeito que se espera; ou
+o processo bloquear antes do `print_plan` por algo que só existe naquele ambiente.
+
+**Cada iteração custa ~15 min**, então vale instrumentar antes de tentar de novo: rodar o binário
+redirecionando para um arquivo dentro da VM e ler o arquivo, em vez de depender do que o driver
+mostra.
 
 - acabou quando: `--execute` roda contra um disco virtual num teste, e o sistema que ele instala boota
 

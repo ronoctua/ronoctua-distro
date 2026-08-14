@@ -2370,7 +2370,20 @@ O `host.nix` gerado **não leva segredo**: descreve a máquina e vai para backup
 escrito **antes** do `nixos-install` — com `mutableUsers = false` o ativador o lê durante a
 instalação, e depois seria tarde.
 
-#### Por que existe um diretório de trabalho
+#### O sistema que o instalador instala nunca era construído
+
+O gate construía `nixosConfigurations.vm` e o ISO. Nenhum dos dois é o `noctua` — os `drvPath` são
+diferentes, e o alvo real ficava de fora. "A closure do sistema fecha" era suposição, e o momento em
+que ela seria desmentida é durante o `nixos-install`, **com o disco já apagado e nada para onde
+voltar**.
+
+Não é duplicata do VM: aquele existe para um teste bootar e deixa de fora o que uma máquina de
+verdade carrega — o Android Studio, o SDK, o Flutter. É justamente essa parte que falta no outro.
+
+O custo é honesto: o gate passa a construir a closure de desenvolvimento inteira. É caro uma vez por
+mudança no sistema, contra um `nixos-install` que falha no meio pela primeira vez na vida de alguém.
+
+### Por que existe um diretório de trabalho
 
 O `disko` precisa saber **qual disco apagar**, e esse valor mora no `host.nix`, dentro do flake. No
 momento em que ele roda, os dois lugares óbvios para o flake são impossíveis: `/mnt/etc/nixos` ainda

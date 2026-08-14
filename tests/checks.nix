@@ -1215,10 +1215,20 @@ let
   '';
 
   installer-dryrun = mkCheck "installer-dryrun" [ ] ''
+    # THE SECRETS ARE NAMED ONCE, and the grep below reads the same variables.
+    #
+    # They used to be typed twice — once in the `export` and once in the `grep`
+    # — and a rename touched only one side: the check exported
+    # `frase-secret_one-de-teste` and searched for `frase-secreta-de-teste`. It
+    # went on passing while unable to detect a leaked passphrase at all, which is
+    # the leak it exists for and the more damaging of the two.
+    password=senha-de-teste
+    passphrase=frase-secreta-de-teste
+
     export RONOCTUA_INST_DISK=/dev/nvme0n1
     export RONOCTUA_INST_HOSTNAME=noctua-teste
-    export RONOCTUA_INST_PASSWORD=senha-de-teste
-    export RONOCTUA_INST_PASSPHRASE=frase-secret_one-de-teste
+    export RONOCTUA_INST_PASSWORD="$password"
+    export RONOCTUA_INST_PASSPHRASE="$passphrase"
     export RONOCTUA_INST_LANGUAGE=pt-BR
     # The sixth question. `br` and not the default: the dry run has to prove the
     # ANSWER reaches `host.nix`, and a value equal to the default would pass
@@ -1229,7 +1239,7 @@ let
     echo "$out_text"
 
     # The `host.nix` must NOT carry a secret (section 9): it goes to backup.
-    if echo "$out_text" | grep -q 'senha-de-teste\|frase-secreta-de-teste'; then
+    if echo "$out_text" | grep -qF -e "$password" -e "$passphrase"; then
       echo "ERRO: o host.nix gerado contem segredo" >&2
       exit 1
     fi
@@ -1271,14 +1281,14 @@ let
     echo "$out_text" | grep -q 'tpm2-pcrs=7+11+12+15' || {
       echo "ERRO: o plano nao sela nos quatro PCRs" >&2; exit 1; }
 
-    # And without `--executar` nothing runs. An installer that wipes a disk by
+    # And without `--execute` nothing runs. An installer that wipes a disk by
     # default is a dangerous command.
     #
     # The sentence comes from the `.ftl`, so matching the TEXT would tie the check
     # to one language — and the sandbox does not define `LANG`, so it would be
     # `en-GB`. What does not change with the language is the mention of
-    # `--executar`, which is what the line actually promises.
-    echo "$out_text" | grep -q -- '--executar' || {
+    # `--execute`, which is what the line actually promises.
+    echo "$out_text" | grep -q -- '--execute' || {
       echo "ERRO: o ensaio nao diz como executar de verdade" >&2; exit 1; }
 
     # And it proves it was a dry run: no step may have run. `nixos-facter` does not
@@ -2621,6 +2631,17 @@ in
     icons-superpack
     # system: the full VM evaluates and builds, with Ghostty and the superpack
     self.nixosConfigurations.vm.config.system.build.toplevel
+    # AND THE SYSTEM THE INSTALLER ACTUALLY INSTALLS.
+    #
+    # It was never built by anything here. The gate built the VM configuration
+    # and the ISO — neither of which is `noctua` — so "the target system closes"
+    # was an assumption, and the moment it would have been found false is during
+    # `nixos-install`, with the disk already erased and nothing to go back to.
+    #
+    # It is not a duplicate of the VM: that one exists to be booted by a test and
+    # leaves out what a real machine carries. This is the closure of the machine
+    # somebody installs.
+    self.nixosConfigurations.noctua.config.system.build.toplevel
   ];
 
   # ===================================================================
