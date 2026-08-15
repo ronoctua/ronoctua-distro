@@ -105,8 +105,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   `nix why-depends`, não confie no `mkIf`.
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
-- **Dentro de `''…''` valem DOIS idiomas**: o `#`/`//` é do script embutido, mas o `${...}` é do Nix
-  e vive até em linha comentada; e a fence não fecha no primeiro `''` (`'''`, `''$`, `''\` escapam).
+- **Dentro de `''…''` valem DOIS idiomas**: o `#`/`//` é do script embutido, mas o `${...}` é do Nix e vive até em linha comentada; e a fence não fecha no primeiro `''` (`'''`, `''$`, `''\` escapam).
 - **Chave de texto tem SETE derivados**, só um é o `.ftl` (ARCHITECTURE); **pergunta do instalador
   tem 13** — enum, `ALL_KEYS`, rótulo, ajuda, padrão, `get`/`set`, validação, `is_list`, `options`,
   valor escolhido, dois testes e o `.ftl`. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 ×
@@ -114,9 +113,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust; idem o que cruza a fronteira como STRING. **Cortar por CODEPOINT inventa desenho**: elide por
   CLUSTER. **Cor de token não alcança emoji**.
-- **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure`
-  devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop`
-  de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
+- **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
 - **`nix flake check` SEM `-L` não mostra log**: silêncio não é sintoma; o `secureboot-vm` leva ~2 h calado. **`nix fmt` só cuida do Nix** — Rust é `cargo fmt --all`, e o `check-fmt` cobre os dois.
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`), e `--max-jobs` não salva: o que estoura é jobs × cores. Por isso o gate é `nix run .#gate`, que mede, limita o produto e acusa o culpado. **`pkill`/`pgrep` casa o PRÓPRIO comando.**
 - **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já
@@ -128,6 +125,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **As fontes são asset de Release, nunca git** — 4,1 GB que git guardaria para sempre; o input é **`file+https://`**, senão o Nix
   infere tarball e descompacta os 4,1 GB no store. **O console não consome TTF**; **`/etc/nixos` e `/etc/fonts/conf.d` são read-only**
   (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`. Glifo **não** leva `nf-`; 27 variantes SemiExtended: ARCHITECTURE.
+- **`systemd.oomd.enable` JÁ é `true` e não vigia nada** — arma é `ManagedOOMMemoryPressure=kill` numa slice. `session.slice` é IRMÃ da `app.slice`: vigiar só a segunda tira o desktop do conjunto por construção, e `enableRootSlice`/`enableUserSlices` desfazem isso. **`memory.min` é limitado por TODOS os ancestrais** — quatro drop-ins ou vale zero. Porcentagem o systemd resolve na MÁQUINA. **`OOMScoreAdjust` em unidade de usuário é ignorado em silêncio**: suba o app com `choom`. **`grep -r` não segue symlink**, e todo `/etc` do NixOS é symlink: `-R`.
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio; hibernação depende do NOCOW (`lsattr` → `C`). **PCR 15 exige UKI medida.**
 - **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`.
 - **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**

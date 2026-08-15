@@ -73,7 +73,6 @@ inst-resume-offset-help = Computed once the disk exists; not typed.
 
 inst-step-key = Hand the passphrase to disko
 inst-step-partition = Partition and encrypt the disk
-inst-step-swap = Create the swap file for hibernation
 inst-step-flake = Copy the flake to the target system
 inst-step-host-nix = Write this machine's description
 inst-step-facter = Detect the hardware
@@ -625,3 +624,9 @@ network-no-tpm = in TPM
 echo-network-stored = Password for { $rede } sealed in the TPM
 echo-network-no-stored = Connected. The password was not stored.
 echo-network-store-failed = Connected, but I could not store the password: { $motivo }
+## Out of memory
+notif-oom-app = system
+notif-oom-summary = Closed to free memory
+notif-oom-pressure = { $app } was stalling the machine for want of memory.
+notif-oom-used = { $app } filled memory and swap.
+notif-oom-orphan = Something outside your buffers was closed: { $cgroup }

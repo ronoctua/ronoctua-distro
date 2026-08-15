@@ -2327,7 +2327,84 @@ dia em que uma tecla mudar.
 
 ---
 
-## 7. Disco, boot e instalação
+## 7. Memória, disco, boot e instalação
+
+### A máquina não trava por falta de memória — e o desktop não é a vítima
+
+O sintoma que se quis eliminar não é o processo morto: é a **máquina sumindo por minutos** enquanto o
+kernel recicla, com o OOM killer chegando depois do ponto em que ainda dava para fazer algo. Quem
+remove isso é um matador em espaço de usuário agindo por **pressão** — por travamento — e não por
+quantos bytes sobraram.
+
+Três coisas eram verdade antes, e cada uma é pior do que nada:
+
+1. **O `systemd-oomd` já rodava vigiando coisa nenhuma.** `systemd.oomd.enable` é `true` por padrão
+   neste nixpkgs e os três interruptores de slice são `false`: a lista de cgroups monitorados nasce
+   vazia. Escrever `enable = true` "conserta" e não muda nada — o que arma é
+   `ManagedOOMMemoryPressure=kill` numa slice, e nada mais.
+2. **O `user@.service` traz `OOMScoreAdjust=100`**, herdado por tudo na sessão: o kernel preferia
+   matar o compositor e o rodapé a matar um daemon.
+3. **Compositor, rodapé e aplicativos dividiam uma slice só**, sem reserva para os dois primeiros nem
+   teto para os últimos.
+
+#### O desktop sobrevive por CONSTRUÇÃO
+
+A `session.slice` é **irmã** da `app.slice`, não descendente, e o `systemd-oomd` só considera
+descendentes do que vigia. Com a `app.slice` monitorada e mais nada dentro da sessão, o compositor e
+o rodapé **não estão no conjunto de candidatos**. Não é xattr, não é preferência, não é heurística de
+ranking — é topologia.
+
+Por isso `enableRootSlice` e `enableUserSlices` ficam `false` **por decisão**. O primeiro vigia a
+`-.slice`, cujos candidatos incluem os dois; e ali o `ManagedOOMPreference=avoid` deles seria
+**ignorado**, porque o systemd só honra esse atributo quando o dono do cgroup e o dono do ancestral
+vigiado coincidem — a `-.slice` é do root e a sessão é do usuário. O segundo instala um drop-in por
+TIPO, que arma a `session.slice` junto.
+
+#### A reserva precisa dos quatro níveis, ou vale zero
+
+`memory.min` é limitado por **todos** os ancestrais: o valor efetivo é o mínimo do caminho. Posto só
+na `session.slice`, ele vale zero — e o arquivo de unidade parece certo. São quatro drop-ins
+(`user.slice`, `user-.slice`, `user@.service` e a `session.slice` do usuário) ou não é nada. O check
+`memory-policy-shape` quebra um nível e falha; o teste de VM lê o `memory.min` **efetivo** na folha,
+que é o único número que responde.
+
+#### Tudo em porcentagem, e é isso que adapta à máquina
+
+O systemd resolve `3%` contra a memória física **ao carregar a unidade, na máquina**. O flake guarda a
+string; a mesma closure dá 245 MiB numa de 8 GiB e 491 MiB numa de 16. Nada é calculado em Nix.
+
+Provado com **dois nós de RAM diferente**: um só nó mostra que o número existe, e um número que
+existe é indistinguível de um que não adapta. O dobro de RAM tem de dar o dobro de reserva.
+
+**`ManagedOOMMemoryPressureLimit` não é dessa família.** É fração de TEMPO — quanto de uma janela de
+dez segundos a slice inteira passou esperando memória. `MemoryHigh=70%` e um limite de `50%` são
+grandezas sem relação que por acaso compartilham o sinal.
+
+#### A ordem de morrer se faz subindo os aplicativos
+
+`OOMScoreAdjust` numa unidade de **usuário** é ignorado em silêncio: o kernel devolve `EACCES` abaixo
+do valor herdado e o systemd engole em nível *debug*. A configuração compilaria, subiria e não faria
+nada. A ordem se cria pelo outro lado, com `choom` elevando cada aplicativo estrangeiro — apps 500,
+niri e rodapé 100, daemons 0.
+
+#### E a morte não é silenciosa
+
+`org.freedesktop.oom1.Manager.Killed` é sinal do barramento de **sistema**, e a política do systemd já
+deixa qualquer usuário local recebê-lo. O rodapé abre uma segunda conexão e o transforma numa
+notificação crítica — que já nunca expira e já abre o histórico. Zero pacote novo, zero unidade nova,
+zero ponte de root para a sessão. Reporta morte por oomd; morte pelo kernel, não.
+
+### Um arquivo de swap, e o offset dele
+
+O `disko` cria e ativa `/swap/swapfile`. O instalador criava um **segundo**, media o `resume_offset`
+dele e o escrevia no `host.nix`: 16 GiB de disco desperdiçados e um offset apontando para o arquivo
+que o kernel não usa — uma hibernação que falha em uso, não no boot. O passo saiu; o offset vem do
+arquivo do disko.
+
+E faltava `boot.resumeDevice`. Com `boot.initrd.systemd.enable`, o nixpkgs só emite `resume=` quando
+essa opção existe: a linha de comando levava `resume_offset=` sozinho, que é meio caminho.
+
+
 
 ### Impermanência: renomear, não apagar
 

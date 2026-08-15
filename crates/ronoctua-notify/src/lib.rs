@@ -17,10 +17,12 @@
 
 pub mod dbus;
 pub mod icon;
+pub mod oom;
 pub mod queue;
 pub mod tray;
 
 pub use dbus::Event;
 pub use icon::{Chain, Icon};
+pub use oom::Reason;
 pub use queue::{Notification, Queue, Urgency};
 pub use tray::{FilterOf, Item};

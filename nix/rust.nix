@@ -132,6 +132,9 @@ let
     # display" in the app, "failed to execute" on the terminal's SCREEN. With the
     # store path, the binary carries the reference and Nix guarantees it exists.
     RONOCTUA_SETSID = "${util-linux}/bin/setsid";
+    # `choom` raises a foreign application's `oom_score_adj` so the kernel
+    # reaches for it before it reaches for the compositor — see `foreign.rs`.
+    RONOCTUA_CHOOM = "${util-linux}/bin/choom";
     # `keyboard-restore`'s `systemctl`. It runs from inside a user unit, where
     # PATH is minimal — see `crates/.../keyboard.rs`.
     RONOCTUA_SYSTEMCTL = "${systemd}/bin/systemctl";

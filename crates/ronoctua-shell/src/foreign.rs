@@ -69,6 +69,27 @@ pub fn scope_name() -> Result<String> {
 /// dies**, with nothing on screen, and its error goes to the scope's log.
 ///
 /// `systemd-run` has the option; it only had to be given.
+/// Where a foreign buffer's scope goes, said out loud.
+///
+/// The memory policy (`nix/modules/memory.nix`) monitors this slice and nothing
+/// else inside the session, which is what keeps the compositor and the footer
+/// out of the candidate set — they live in `session.slice`, a SIBLING.
+pub const APP_SLICE: &str = "app.slice";
+
+/// How much worse than the desktop a foreign application is, for the kernel.
+///
+/// The desktop sits at the 100 it inherits from `user@.service`; this is the
+/// distance from it. Any positive distance would do — 500 leaves room for a
+/// future "this one first" without renumbering.
+pub const APP_OOM_SCORE_ADJUST: i32 = 500;
+
+/// `choom`, by STORE PATH and not by name: inside a systemd scope the `PATH` is
+/// minimal, and the failure would look like an application that does not open.
+const CHOOM: &str = match option_env!("RONOCTUA_CHOOM") {
+    Some(p) => p,
+    None => "choom",
+};
+
 #[must_use]
 pub fn scope_command(
     scope: &str,
@@ -82,12 +103,43 @@ pub fn scope_command(
         "--scope".to_owned(),
         "--quiet".to_owned(),
         format!("--unit={scope}"),
+        // THE SLICE IS NAMED, and not left to the default.
+        //
+        // `systemd-run(1)` still documents the `--user` default as "the root
+        // slice"; the user manager has actually put units in `app.slice` since
+        // systemd v247 (`systemd.special(7)`). The memory policy in
+        // `nix/modules/memory.nix` monitors `app.slice` and nothing else in the
+        // session — leaving this to a default the manual contradicts is how the
+        // whole policy would end up applying to an empty set.
+        format!("--slice={APP_SLICE}"),
         // Hardening: a foreign buffer does not need new privileges.
         "--property=NoNewPrivileges=yes".to_owned(),
+        // THE SCOPE DIES WHOLE. Two effects, both wanted: the kernel does not
+        // leave half an application running, and a scope that spawns
+        // sub-cgroups stays an eligible candidate — `systemd-oomd(8)` considers
+        // "only leaf cgroups and cgroups with memory.oom.group set to 1".
+        //
+        // `OOMPolicy=` is a real `[Scope]` key. `OOMScoreAdjust=` is NOT: a
+        // scope has no execution context, so systemd refuses the property.
+        // Hence `choom` below.
+        "--property=OOMPolicy=kill".to_owned(),
     ];
     if let Some(dir) = working_directory {
         c.push(format!("--working-directory={dir}"));
     }
+    // FIRST IN LINE TO DIE, for the kernel's own OOM killer.
+    //
+    // `user@.service` sets `OOMScoreAdjust=100` for everything in the session,
+    // and a user unit cannot go BELOW its inherited value — the kernel returns
+    // `EACCES` and systemd swallows the failure at debug level. So the desktop
+    // stays at 100 and the applications are RAISED, which needs no privilege.
+    //
+    // The `--` matters: without it `choom` would read the application's own
+    // arguments as its own.
+    c.push(CHOOM.to_owned());
+    c.push("-n".to_owned());
+    c.push(APP_OOM_SCORE_ADJUST.to_string());
+    c.push("--".to_owned());
     c.push(program.to_owned());
     c.extend_from_slice(args);
     c
@@ -414,7 +466,8 @@ pub fn origin_at(procfs: &Path, pid: i32) -> Origin {
 #[cfg(test)]
 mod tests {
     use super::{
-        Launch, Origin, SCOPE_PREFIX, launch, origin_at, scope_command, scope_from_cgroup,
+        APP_OOM_SCORE_ADJUST, APP_SLICE, Launch, Origin, SCOPE_PREFIX, launch, origin_at,
+        scope_command, scope_from_cgroup,
     };
 
     #[test]
@@ -549,6 +602,43 @@ mod tests {
         // display number.
         let i = c.iter().position(|x| x == "3").unwrap();
         assert_eq!(c[i + 1], "xterm");
+    }
+
+    /// THE APPLICATION IS FIRST IN LINE TO DIE, and the desktop is not.
+    ///
+    /// Three separate mechanisms, asserted together because each is silent on
+    /// its own: a slice left to a default the manual documents WRONGLY would
+    /// make the whole memory policy apply to an empty set; a missing
+    /// `OOMPolicy=kill` would leave half an application alive; and a `choom`
+    /// in the wrong place would either not run or eat the program's arguments.
+    #[test]
+    fn the_application_dies_before_the_desktop_does() {
+        let c = scope_command("ronoctua-buffer-x", None, "alacritty", &["-e".into()]);
+
+        assert!(
+            c.contains(&format!("--slice={APP_SLICE}")),
+            "a slice tem de ser DITA: o padrao do --user esta documentado errado"
+        );
+        assert!(
+            c.contains(&"--property=OOMPolicy=kill".to_owned()),
+            "sem isso o escopo morre pela metade"
+        );
+
+        let choom = c
+            .iter()
+            .position(|a| a.ends_with("choom"))
+            .expect("sem choom o app fica no mesmo nivel do compositor");
+        assert_eq!(c[choom + 1], "-n");
+        assert_eq!(c[choom + 2], APP_OOM_SCORE_ADJUST.to_string());
+        // The `--` is what stops `choom` from reading `-e` as its own.
+        assert_eq!(c[choom + 3], "--");
+        assert_eq!(c[choom + 4], "alacritty");
+
+        // And it is POSITIVE: the desktop inherits 100 from `user@.service` and
+        // cannot go below it, so the ordering only exists if this one is above.
+        // A `const` block, so a future edit that lowers it fails to COMPILE
+        // rather than failing a test somebody might be tempted to adjust.
+        const { assert!(APP_OOM_SCORE_ADJUST > 100) };
     }
 
     #[test]

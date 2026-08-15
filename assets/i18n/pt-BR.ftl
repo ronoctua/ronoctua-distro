@@ -62,7 +62,6 @@ inst-resume-offset-help = Calculado depois que o disco existir; não se digita.
 
 inst-step-key = Guardar a frase-secreta para o disko
 inst-step-partition = Particionar e criptografar o disco
-inst-step-swap = Criar o arquivo de swap para hibernação
 inst-step-flake = Copiar o flake para o sistema alvo
 inst-step-host-nix = Gravar a descrição desta máquina
 inst-step-facter = Detectar o hardware
@@ -625,3 +624,9 @@ network-no-tpm = no TPM
 echo-network-stored = Senha de { $rede } selada no TPM
 echo-network-no-stored = Conectado. A senha não ficou guardada.
 echo-network-store-failed = Conectado, mas não consegui guardar a senha: { $motivo }
+## Falta de memoria
+notif-oom-app = sistema
+notif-oom-summary = Fechado para liberar memoria
+notif-oom-pressure = O { $app } estava deixando a maquina travada por falta de memoria.
+notif-oom-used = O { $app } encheu a memoria e a area de troca.
+notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }

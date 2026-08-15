@@ -144,6 +144,23 @@ in
     # with no usable TPM, systemd falls back to the prompt instead of not booting.
     boot.initrd.systemd.enable = lib.mkDefault true;
 
+    # WHERE HIBERNATION RESUMES FROM, and without this line it resumes from
+    # nowhere.
+    #
+    # The installer writes `resume_offset=` into `boot.kernelParams`, which is
+    # the offset of the swapfile INSIDE its filesystem. The kernel also needs the
+    # device that filesystem is on — and with `boot.initrd.systemd.enable`,
+    # nixpkgs only puts `resume=` on the command line when `boot.resumeDevice` is
+    # set. It never was: the machine booted with half a resume path, and the
+    # failure would appear the first time somebody closed the lid expecting to
+    # come back.
+    #
+    # The mapper's name comes from `nix/disko/default.nix`, where the LUKS
+    # container is `name = "cryptroot"`. By that path and not by UUID because the
+    # UUID is created during the installation and this file is evaluated before
+    # it exists.
+    boot.resumeDevice = "/dev/mapper/cryptroot";
+
     # The report drives the hardware side when it exists.
     facter.reportPath = lib.mkIf (cfg.facterReport != null) cfg.facterReport;
   };

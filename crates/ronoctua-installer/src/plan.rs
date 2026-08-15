@@ -59,6 +59,19 @@ pub const FLAKE_ORIGIN: &str = "/etc/nixos";
 /// passphrase exists only in the TPM and in the head of whoever installed.
 pub const LUKS_KEY_PATH: &str = "/tmp/disko-luks.key";
 
+/// The swapfile `disko` creates, on the target system.
+///
+/// **`disko`'s and not ours.** `nix/disko/default.nix` declares
+/// `swap.swapfile` under the `@swap` subvolume, and that attribute name is the
+/// file name — it is the path that reaches `swapDevices`, and therefore the only
+/// one the kernel ever resumes from.
+///
+/// The installer used to create a SECOND file beside it, measure the
+/// `resume_offset` from that one, and write it into `host.nix`: two 16 GiB files
+/// on the disk, and an offset into the one nothing uses. The failure shows up
+/// the first time somebody hibernates, which is far from here.
+pub const SWAPFILE_PATH: &str = "/mnt/swap/swapfile";
+
 /// Where the user's password hash is written, on the target system.
 ///
 /// `nix/modules/base.nix` points `hashedPasswordFile` at
@@ -289,20 +302,20 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             ],
             destructive: true,
         },
-        Step {
-            label: key::INST_STEP_SWAP,
-            // The file's NOCOW is what guarantees hibernation on btrfs — the
-            // subvolume's `mountOptions` does nothing. See CLAUDE.md.
-            command: vec![
-                "btrfs".into(),
-                "filesystem".into(),
-                "mkswapfile".into(),
-                "--size".into(),
-                "16G".into(),
-                "/mnt/swap/arquivo".into(),
-            ],
-            destructive: true,
-        },
+        // THERE IS NO SWAPFILE STEP, AND ITS ABSENCE IS THE FIX.
+        //
+        // There used to be one: `btrfs filesystem mkswapfile --size 16G
+        // /mnt/swap/arquivo`, and the `resume_offset` was measured from THAT
+        // file. Meanwhile `disko` had already created and activated
+        // `/swap/swapfile` from `nix/disko/default.nix`, which is the one that
+        // reaches `swapDevices`.
+        //
+        // So the machine got TWO 16 GiB swapfiles — 16 of them wasted — and the
+        // offset in `host.nix` pointed at the one the kernel does not use, which
+        // is a hibernation that fails in use rather than at boot.
+        //
+        // The offset is now taken from `disko`'s own file, right after the
+        // `disko` step. See `executor::run_command`.
         Step {
             // Now with the `resume_offset`, which only exists after the swap.
             label: key::INST_STEP_HOST_NIX,

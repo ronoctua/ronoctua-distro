@@ -1316,6 +1316,14 @@ pub fn run() -> Result<()> {
     // and sends through the same kind of channel as niri and the control socket.
     let (envio_notif, notifications) = channel::channel::<ronoctua_notify::Event>();
     let (bruto_tx, bruto_rx) = std::sync::mpsc::channel::<ronoctua_notify::Event>();
+    // FIFTH SOURCE, THE SAME CHANNEL: what `systemd-oomd` closed to keep the
+    // machine alive. It is the SYSTEM bus and not the session one, and it shares
+    // the bridge below on purpose — one destination, one path to keep in step.
+    //
+    // It is started BEFORE the session daemon so that a boot in which the footer
+    // comes up first still registers the match: the rule is filed with the bus,
+    // and the signal arrives whenever `systemd-oomd` takes the name.
+    ronoctua_notify::oom::listen(bruto_tx.clone());
     if ronoctua_notify::dbus::listen(bruto_tx) {
         // A bridge between zbus's `mpsc` and calloop's channel. They are two kinds
         // of channel because zbus does not know calloop and vice versa; the bridge
@@ -3206,6 +3214,47 @@ impl Footer {
     }
 
     /// Takes an event from the bus and redraws if something changed.
+    /// Turns a killed cgroup into something a person can read.
+    ///
+    /// The cgroup is resolved through [`crate::foreign::scope_from_cgroup`],
+    /// which is the same parser the modeline already uses to tell which buffer a
+    /// window belongs to — so the name comes from code that exists and is
+    /// tested, not from a second guess at systemd's path format.
+    ///
+    /// When it resolves to nothing the notification says so instead of inventing
+    /// a name: something outside the person's buffers was closed, and the raw
+    /// cgroup is the only honest thing to show.
+    fn oom_notification(
+        &self,
+        cgroup: &str,
+        reason: &ronoctua_notify::Reason,
+    ) -> ronoctua_notify::Notification {
+        let scope = crate::foreign::scope_from_cgroup(cgroup);
+        let body = match (&scope, reason) {
+            (Some(app), ronoctua_notify::Reason::MemoryUsed) => self
+                .texts
+                .t_with(ronoctua_i18n::key::NOTIF_OOM_USED, &[("app", app)]),
+            (Some(app), _) => self
+                .texts
+                .t_with(ronoctua_i18n::key::NOTIF_OOM_PRESSURE, &[("app", app)]),
+            (None, _) => self
+                .texts
+                .t_with(ronoctua_i18n::key::NOTIF_OOM_ORPHAN, &[("cgroup", cgroup)]),
+        };
+        ronoctua_notify::Notification {
+            id: 0,
+            app: self.texts.t(ronoctua_i18n::key::NOTIF_OOM_APP),
+            summary: self.texts.t(ronoctua_i18n::key::NOTIF_OOM_SUMMARY),
+            body,
+            urgency: ronoctua_notify::Urgency::Critical,
+            icon: None,
+            // NEVER EXPIRES. The queue already refuses to expire a critical one,
+            // and this says the same thing at the source: a message explaining
+            // why an application disappeared has to survive until it is read.
+            expires: None,
+        }
+    }
+
     fn notification_of(&mut self, e: ronoctua_notify::Event) {
         let now = std::time::Instant::now();
         match e {
@@ -3222,6 +3271,18 @@ impl Footer {
             }
             ronoctua_notify::Event::Close(id) => {
                 self.notifications.dismiss(id, now);
+            }
+            // THE MACHINE CLOSED AN APPLICATION SO IT WOULD NOT FREEZE.
+            //
+            // Always critical, and that is the whole point of routing it here:
+            // a critical notification never expires and forces the history open,
+            // so what would otherwise be a window vanishing without explanation
+            // becomes a sentence the person can read at their own pace.
+            ronoctua_notify::Event::OomKilled { cgroup, reason } => {
+                let n = self.oom_notification(&cgroup, &reason);
+                self.notifications.enqueue(n, now);
+                self.history_open = true;
+                self.first_page();
             }
         }
         // The queue's state on ONE greppable line. The modeline's segment also

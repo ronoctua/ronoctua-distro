@@ -78,6 +78,19 @@ let
     ronoctua-shell = rust.workspace;
   };
 
+  # The machine does not freeze when memory runs out, and the desktop is not the
+  # victim. Two nodes with different RAM, because a percentage that is merely
+  # present looks exactly like one that does not adapt.
+  oomVm = import ./oom-vm.nix {
+    inherit pkgs lib;
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit (inputs) niri;
+      shell = rust.workspace;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
+  };
+
   # The modeline reflects the focused buffer, proved ON SCREEN (milestone 4).
   modelineVm = import ./modeline-vm.nix {
     inherit pkgs lib fonts;
@@ -2411,6 +2424,80 @@ let
     echo "OK: texto da OFL redistribuido junto dos arquivos"
   '';
 
+  # THE MEMORY POLICY HAS THE SHAPE IT CLAIMS, on the GENERATED units.
+  #
+  # Every line here failed against a plausible wrong version before it was
+  # accepted, because every one of them is a way for this policy to look
+  # configured and do nothing:
+  #
+  # - `systemd.oomd.enable` is ALREADY `true` in this nixpkgs, with every slice
+  #   switch `false`. The daemon runs and its monitored list is empty. What arms
+  #   it is `ManagedOOMMemoryPressure=kill` on a slice, and nothing else.
+  # - `MemoryMin=` is capped by EVERY ancestor cgroup. Set on `session.slice`
+  #   alone its effective value is ZERO — and the unit file looks right.
+  # - `enableUserSlices` would install a drop-in that applies to every slice of
+  #   that type, arming `session.slice`, whose only candidates are the compositor
+  #   and the footer.
+  # - `OOMScoreAdjust=` on a user unit is refused by the kernel and swallowed by
+  #   systemd at debug level. Written here, it would build and do nothing.
+  memory-policy-shape =
+    let
+      system = self.nixosConfigurations.vm.config.system.build.toplevel;
+    in
+    mkCheck "memory-policy-shape" [ pkgs.gnugrep pkgs.coreutils ] ''
+      etc=$(readlink -f ${system}/etc)
+
+      # `-R` AND NEVER `-r`. The whole of NixOS's `/etc` is symlinks into the
+      # store, and `grep -r` does not follow a symlink it meets while recursing —
+      # it skips it, silently, and reports nothing found. Every assertion below
+      # would then be answered by the same wrong "no": the four missing ones
+      # would fail correctly by accident, and the two that assert an ABSENCE
+      # would pass without ever having looked.
+      failed=0
+
+      # THE CHAIN. Four levels, or the reservation is zero.
+      for level in system/user.slice.d system/user-.slice.d \
+                   system/user@.service.d user/session.slice.d; do
+        grep -qR "MemoryMin=" "$etc/systemd/$level" 2>/dev/null || {
+          echo "ERRO: sem MemoryMin em $level — a corrente quebra e o valor efetivo e zero" >&2
+          failed=1
+        }
+      done
+
+      # The daemon is armed, and against the applications.
+      grep -qR "ManagedOOMMemoryPressure=kill" "$etc/systemd/user/app.slice.d" 2>/dev/null || {
+        echo "ERRO: a app.slice nao esta armada — o oomd roda vigiando nada" >&2; failed=1; }
+
+      # And NOT against the desktop. Both of these would put the compositor and
+      # the footer in the candidate set.
+      [ ! -d "$etc/systemd/user/slice.d" ] || {
+        echo "ERRO: drop-in por TIPO de slice — arma a session.slice junto" >&2; failed=1; }
+      [ ! -e "$etc/systemd/system/-.slice.d/overrides.conf" ] || {
+        echo "ERRO: a -.slice esta armada; os candidatos dela incluem o desktop" >&2; failed=1; }
+
+      # The upstream `session.slice` survived: a full-file override would have
+      # discarded its CPUWeight without a word.
+      grep -q "CPUWeight=100" "$etc/systemd/user/session.slice" 2>/dev/null || {
+        echo "ERRO: a session.slice virou arquivo inteiro e perdeu o de upstream" >&2; failed=1; }
+
+      # The setting that would be a no-op is absent.
+      if grep -qR "OOMScoreAdjust=" "$etc/systemd/user/" 2>/dev/null; then
+        echo "ERRO: OOMScoreAdjust numa unidade de usuario e ignorado em silencio" >&2
+        failed=1
+      fi
+
+      # The two units that must never give up.
+      for unit in niri.service ronoctua-footer.service; do
+        grep -q "StartLimitIntervalSec=0" "$etc/systemd/user/$unit" || {
+          echo "ERRO: $unit desiste depois de 5 mortes, e ai a tela fica vazia" >&2
+          failed=1
+        }
+      done
+
+      [ "$failed" = 0 ] || exit 1
+      echo "OK: corrente de quatro niveis, app.slice armada, desktop fora do alcance"
+    '';
+
   # THE ISO CARRIES WHAT THE TARGET MACHINE WOULD OTHERWISE COMPILE.
   #
   # Everything a NixOS closure inherits from nixpkgs comes prebuilt from the
@@ -2706,6 +2793,8 @@ in
     iso-has-no-toolchain
     iso-carries-the-seed
     profile-minimal-closes
+    memory-policy-shape
+    oomVm
     self.packages.${system}.iso
     self.nixosConfigurations.vm.config.system.build.toplevel
   ];
@@ -2740,6 +2829,7 @@ in
   tpm-vm = tpmVm;
   secureboot-vm = secureBootVm;
   inherit installer-dryrun;
+  oom-vm = oomVm;
   inherit
     invalid-token-fails-build
     secrets-out-of-repo
@@ -3058,6 +3148,7 @@ in
     iso-has-no-toolchain
     iso-carries-the-seed
     profile-minimal-closes
+    memory-policy-shape
     docs-exist
     architecture-sections
     ;

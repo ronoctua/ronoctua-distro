@@ -31,8 +31,8 @@ use anyhow::{Context as _, Result, bail};
 use crate::model::Answers;
 use crate::plan::SEAL;
 use crate::plan::{
-    HOST_NIX_PATH, HOST_NIX_WORK_PATH, LUKS_KEY_PATH, PASSWORD_HASH_PATH, Step, WIFI_PROFILE_PATH,
-    WRITE, host_nix, steps, wifi_profile,
+    HOST_NIX_PATH, HOST_NIX_WORK_PATH, LUKS_KEY_PATH, PASSWORD_HASH_PATH, SWAPFILE_PATH, Step,
+    WIFI_PROFILE_PATH, WRITE, host_nix, steps, wifi_profile,
 };
 
 /// What happens during execution.
@@ -286,15 +286,17 @@ pub fn run_command(r: &Answers, flake: &str, ver: &mut dyn FnMut(Event)) -> Resu
             run(&step.command, ver).with_context(|| format!("passo `{}`", step.label))?;
         }
 
-        // Right after the swap, and before the `host.nix` is written.
-        if step.command.first().map(String::as_str) == Some("btrfs") {
+        // RIGHT AFTER `disko`, which is what creates the swapfile, and before
+        // the `host.nix` that carries the offset is written.
+        //
+        // The file is `disko`'s own — `nix/disko/default.nix` declares
+        // `swap.swapfile` under the `@swap` subvolume, and that is the path that
+        // reaches `swapDevices`. The installer used to create a SECOND file
+        // beside it and measure that one, which is an offset into a file the
+        // kernel never resumes from.
+        if step.command.first().map(String::as_str) == Some("disko") {
             let output = Command::new("btrfs")
-                .args([
-                    "inspect-internal",
-                    "map-swapfile",
-                    "-r",
-                    "/mnt/swap/arquivo",
-                ])
+                .args(["inspect-internal", "map-swapfile", "-r", SWAPFILE_PATH])
                 .output()
                 .context("mapear o arquivo de swap")?;
             r.resume_offset = offset_from(&String::from_utf8_lossy(&output.stdout));

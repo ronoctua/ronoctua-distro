@@ -350,6 +350,9 @@
         # comes right after `base.nix` because that is where the option it reads
         # is declared, and before every module whose default it sets.
         ./nix/modules/profile.nix
+        # The cgroup, oomd and zram policy. It comes early because what it
+        # protects — the compositor and the footer — is declared later.
+        ./nix/modules/memory.nix
         ./nix/modules/fonts.nix
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix

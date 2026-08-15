@@ -35,6 +35,22 @@ pub enum Event {
     New(Box<Notification>),
     /// A request to close by id.
     Close(u32),
+    /// `systemd-oomd` closed a cgroup to keep the machine alive.
+    ///
+    /// It does not come from THIS bus — see [`crate::oom`], which listens on the
+    /// system one. It shares the enum because what the footer does with it is
+    /// the same: it becomes a notification. A second channel and a second bridge
+    /// would be two paths to keep in step for one destination.
+    ///
+    /// The cgroup path arrives RAW. This crate does not know what a buffer is
+    /// and does not translate; the shell resolves both.
+    OomKilled {
+        /// The cgroup path systemd killed, e.g.
+        /// `/user.slice/…/app.slice/ronoctua-buffer-ab.scope`.
+        cgroup: String,
+        /// Why.
+        reason: crate::oom::Reason,
+    },
 }
 
 /// The object exported on the bus.

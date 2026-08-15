@@ -255,7 +255,23 @@ in
     security.polkit.enable = true;
     hardware.graphics.enable = true;
 
+    # NEITHER OF THE TWO UNITS BELOW CARRIES `OOMScoreAdjust`, and that is not an
+    # oversight.
+    #
+    # `user@.service` ships `OOMScoreAdjust=100`, which everything in the session
+    # inherits. A user unit cannot go BELOW its inherited value: the kernel
+    # returns `EACCES` without `CAP_SYS_RESOURCE`, and systemd swallows it —
+    # "Failed to adjust OOM setting, assuming containerized execution, ignoring",
+    # at DEBUG level. The setting would build, deploy, and do nothing.
+    #
+    # The ordering is made the other way round, by raising the APPLICATIONS,
+    # which needs no privilege: see `choom` in
+    # `crates/ronoctua-shell/src/foreign.rs`. Apps 500, these two 100.
     systemd.user.services.niri = {
+      # NO CEILING ON RESTARTS. systemd's default gives up after 5 starts in
+      # 10 s, and giving up here means a machine with no compositor — there is
+      # no outcome worse than that, so there is no ceiling.
+      startLimitIntervalSec = 0;
       description = "niri — compositor Wayland (upstream, sem patch)";
       bindsTo = [ "graphical-session.target" ];
       before = [ "graphical-session.target" ];
@@ -266,6 +282,10 @@ in
         ExecStart = "${niriPkg}/bin/niri --session";
         Restart = "on-failure";
         Slice = "session.slice";
+        # Written out although it is the default: it is what makes `Restart=`
+        # apply after an OOM kill. The unit ends in the `oom-kill` failed state,
+        # "after which Restart= may apply" (`systemd.service(5)`).
+        OOMPolicy = "stop";
       };
     };
 
@@ -284,6 +304,11 @@ in
     # `niri --session` has already put `WAYLAND_DISPLAY` and `NIRI_SOCKET`
     # into the user systemd's environment, which is where the footer reads them.
     systemd.user.services.ronoctua-footer = {
+      # Same reason, and one worse consequence: the footer is the system's ONLY
+      # chrome (invariant 14) AND the notification daemon. Five kills in ten
+      # seconds and the person is left with a bare screen and no way to be told
+      # why.
+      startLimitIntervalSec = 0;
       description = "ronoctua — o rodapé de duas linhas";
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
@@ -293,6 +318,7 @@ in
         Restart = "on-failure";
         RestartSec = 1;
         Slice = "session.slice";
+        OOMPolicy = "stop";
       };
     };
 
