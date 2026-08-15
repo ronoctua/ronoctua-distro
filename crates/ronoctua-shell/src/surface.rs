@@ -170,6 +170,25 @@ struct Footer {
     /// The which-key lines on display. Empty when the leader is not running.
     inputs: Vec<ronoctua_keymap::Entry>,
 
+    // --- the focused buffer's own keymap (section 7.9) ---
+    /// What the focused buffer publishes: `(sequence, command id)`.
+    ///
+    /// Read ONCE, when the leader opens, and not on every key: asking a second
+    /// process mid-sequence would put a socket round trip between a keystroke
+    /// and the screen. Empty when the focused window is not one of our buffers,
+    /// and THAT is what makes `SPC m` absent rather than empty — a submenu that
+    /// opens onto nothing is the same lie as a list with no way back.
+    buffer_bindings: Vec<(String, String)>,
+    /// Whose. It is the pid `ronoctua_niri::Window` already carries.
+    buffer_pid: Option<u32>,
+    /// The keys typed since `SPC m`, the `m` itself included.
+    ///
+    /// The buffer's bindings are resolved HERE and not by `ronoctua_keymap`:
+    /// that crate's `Binding` holds `&'static str`, and these arrive at runtime.
+    /// The sequences are two or three keys deep, so what would be a tree is a
+    /// filter over a list.
+    buffer_pending: Vec<String>,
+
     // --- notifications (section 4.2) ---
     /// One at a time, the rest waiting. It lives in the daemon, like the niri
     /// state and for the same reason of section 9.2.
@@ -1134,6 +1153,9 @@ pub fn run() -> Result<()> {
         texts: ronoctua_i18n::Texts::from_env(),
         tree,
         inputs: Vec::new(),
+        buffer_bindings: Vec::new(),
+        buffer_pid: None,
+        buffer_pending: Vec::new(),
         notifications: ronoctua_notify::Queue::fresh_one(),
         history_open: false,
         leader_label: crate::leader(),
@@ -1913,6 +1935,17 @@ impl KeyboardHandler for Footer {
             self.leader.raw_prefix(&self.leader_label),
             ronoctua_keymap::notation(&[key])
         );
+        // THE FOCUSED BUFFER'S OWN KEYMAP, before the tree gets the key.
+        //
+        // It cannot go through `ronoctua_keymap::Tree`: that crate's bindings
+        // are `&'static str` and these arrive over a socket at runtime. What it
+        // would be as a tree is a filter over a list, because the sequences are
+        // two or three keys deep.
+        if self.buffer_key(key) {
+            self.draw_and_paint();
+            return;
+        }
+
         let effect = self.leader.key(&self.tree, key);
         self.apply_leader_effect_with(effect, Some(&attempt), key.sym);
         self.draw_and_paint();
@@ -3214,6 +3247,105 @@ impl Footer {
     }
 
     /// Takes an event from the bus and redraws if something changed.
+    /// Asks the FOCUSED window's process what keys it answers to.
+    ///
+    /// Called when the leader opens, and only then. The alternative — asking on
+    /// every key — would put a socket round trip between a keystroke and the
+    /// screen, and "which-key in one frame" is a measured target.
+    ///
+    /// A window that is not one of our buffers answers nothing, and the empty
+    /// list is what removes `SPC m` from the tree. That is deliberate: an entry
+    /// that opens onto an empty screen teaches that there was something there.
+    fn refresh_buffer_keymap(&mut self) {
+        self.buffer_pending.clear();
+        self.buffer_bindings.clear();
+        self.buffer_pid = None;
+
+        let Some(pid) = self.niri.focused().and_then(|w| w.pid) else {
+            return;
+        };
+        let Ok(pid) = u32::try_from(pid) else { return };
+        match crate::leader::buffer_keymap(pid) {
+            Ok(bindings) if !bindings.is_empty() => {
+                tracing::debug!(pid, bindings = bindings.len(), "keymap do buffer em foco");
+                self.buffer_pid = Some(pid);
+                self.buffer_bindings = bindings;
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "nao consegui ler o keymap do buffer"),
+        }
+    }
+
+    /// The which-key rows for the buffer's keymap at the current depth.
+    fn buffer_inputs(&self) -> Vec<ronoctua_keymap::Entry> {
+        narrow_buffer_keymap(&self.buffer_bindings, &self.buffer_pending_refs())
+    }
+
+    /// Handles a key inside `SPC m`, and says whether it did.
+    ///
+    /// `false` means "not mine": the key goes on to the tree exactly as before,
+    /// and nothing about the rest of the keymap changes.
+    fn buffer_key(&mut self, key: ronoctua_keymap::Key) -> bool {
+        let typed = ronoctua_keymap::notation(&[key]);
+
+        if self.buffer_pending.is_empty() {
+            // Opening it. Only at the ROOT of the sequence, and only when the
+            // focused window actually published something — `m` after `w` is
+            // `w m`, which belongs to the tree, and a window that is not one of
+            // our buffers has no `SPC m` at all.
+            if !(self.leader.at_root()
+                && typed == ronoctua_protocol::LOCAL_PREFIX
+                && !self.buffer_bindings.is_empty())
+            {
+                return false;
+            }
+        } else if typed == "ESC" {
+            self.buffer_pending.clear();
+            self.close_leader();
+            return true;
+        }
+
+        self.buffer_pending.push(typed);
+
+        // A COMPLETE SEQUENCE RUNS, in the buffer's own process. Listing without
+        // running would teach keys that do nothing, which is worse than not
+        // listing at all — it is the whole reason this went in with both halves.
+        let done = self.buffer_bindings.iter().find(|(sequence, _)| {
+            sequence.split_whitespace().collect::<Vec<_>>() == self.buffer_pending_refs()
+        });
+        if let Some((_, id)) = done {
+            let id = id.clone();
+            let pid = self.buffer_pid;
+            self.buffer_pending.clear();
+            self.close_leader();
+            match pid.map(|p| crate::leader::buffer_command(p, &id)) {
+                Some(Ok(())) => tracing::info!(command = %id, "comando do buffer em foco"),
+                Some(Err(e)) => tracing::warn!(error = %e, command = %id, "o buffer recusou"),
+                None => tracing::warn!(command = %id, "sem buffer para receber o comando"),
+            }
+            return true;
+        }
+
+        let narrowed = self.buffer_inputs();
+        if narrowed.is_empty() {
+            // A key the buffer does not answer to ends the sequence, like any
+            // other key that leads nowhere.
+            self.buffer_pending.clear();
+            self.close_leader();
+            return true;
+        }
+
+        self.inputs = narrowed;
+        self.first_page();
+        self.echo = None;
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        true
+    }
+
+    fn buffer_pending_refs(&self) -> Vec<&str> {
+        self.buffer_pending.iter().map(String::as_str).collect()
+    }
+
     /// Turns a killed cgroup into something a person can read.
     ///
     /// The cgroup is resolved through [`crate::foreign::scope_from_cgroup`],
@@ -3325,6 +3457,14 @@ impl Footer {
         }
         self.leader.ativar();
         self.first_page();
+        // WHAT THE FOCUSED BUFFER ANSWERS TO, asked once, here.
+        //
+        // The row only appears when it published something: a window that is not
+        // one of our buffers leaves `SPC m` out of the list entirely, which is
+        // the honest shape. A submenu that opens onto an empty screen teaches
+        // that there was something there.
+        self.refresh_buffer_keymap();
+
         self.inputs = match self.tree.resolve(&[]) {
             ronoctua_keymap::Resolution::Prefix(e) => e,
             // A keymap with no binding at all: there is nothing to show, and
@@ -3334,6 +3474,18 @@ impl Footer {
                 return;
             }
         };
+        // The buffer's row goes in only when there IS a buffer answering.
+        if !self.buffer_bindings.is_empty()
+            && let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX)
+        {
+            self.inputs.push(ronoctua_keymap::Entry {
+                key: ronoctua_protocol::LOCAL_PREFIX.to_owned(),
+                sym: key,
+                label: ronoctua_i18n::key::WHICH_BUFFER.to_owned(),
+                command: None,
+                is_group: true,
+            });
+        }
         // THE INHERITANCE IS RECAPTURED HERE, and not only on the `enter`.
         //
         // Whatever is held at the instant the sequence starts is not its — the
@@ -5443,8 +5595,112 @@ fn segment_color(id: &str, rodape_com_teclado: bool) -> tokens::Color {
     }
 }
 
+/// One which-key row per DISTINCT next key of a buffer's keymap.
+///
+/// # Why this is not `ronoctua_keymap::Tree`
+///
+/// That crate's `Binding` holds `&'static str`, and a buffer's bindings arrive
+/// over a socket at runtime. What would be a tree is a filter over a list here,
+/// because the sequences the buffers publish are two or three keys deep.
+///
+/// A sequence that ENDS at this depth is a command; one that continues is a
+/// group, marked the same way the rest of the keymap marks its groups.
+fn narrow_buffer_keymap(
+    bindings: &[(String, String)],
+    pending: &[&str],
+) -> Vec<ronoctua_keymap::Entry> {
+    let depth = pending.len();
+    let mut out: Vec<ronoctua_keymap::Entry> = Vec::new();
+    for (sequence, id) in bindings {
+        let keys: Vec<&str> = sequence.split_whitespace().collect();
+        if keys.len() <= depth || !keys.starts_with(pending) {
+            continue;
+        }
+        let next = keys[depth];
+        if out.iter().any(|e| e.key == next) {
+            continue;
+        }
+        // `Key::parse` and not a lookup of our own: the buffer's notation has to
+        // be the SAME one the rest of the keymap uses, or two spellings of one
+        // key would drift apart.
+        let Ok(sym) = ronoctua_keymap::Key::parse(next) else {
+            tracing::warn!(key = next, "o buffer publicou uma tecla que nao existe");
+            continue;
+        };
+        let complete = keys.len() == depth + 1;
+        out.push(ronoctua_keymap::Entry {
+            key: next.to_owned(),
+            sym,
+            // `cmd-<id>` is the label's key, as section 7.9 says. A buffer
+            // command with no text of ours shows its id, which is its own
+            // vocabulary and readable — never a blank row.
+            label: format!("cmd-{id}"),
+            command: complete.then(|| id.clone()),
+            is_group: !complete,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    /// The focused buffer's keymap narrows like the rest of the which-key does.
+    ///
+    /// One row per distinct next key, a group when the sequence continues, a
+    /// command when it ends — and NOTHING when the prefix does not match, which
+    /// is what makes a key the buffer does not answer to end the sequence
+    /// instead of opening an empty screen.
+    #[test]
+    fn the_buffer_keymap_narrows_by_prefix() {
+        let bindings = vec![
+            ("m f s".to_owned(), "editor-save".to_owned()),
+            ("m f r".to_owned(), "editor-reload".to_owned()),
+            ("m q".to_owned(), "editor-quit".to_owned()),
+        ];
+
+        let root = super::narrow_buffer_keymap(&bindings, &["m"]);
+        assert_eq!(
+            root.len(),
+            2,
+            "duas teclas distintas depois de `m`: {root:?}"
+        );
+        let f = root.iter().find(|e| e.key == "f").expect("sem `f`");
+        assert!(f.is_group, "`m f` continua, entao e grupo");
+        assert!(f.command.is_none(), "grupo nao roda nada");
+        let q = root.iter().find(|e| e.key == "q").expect("sem `q`");
+        assert!(!q.is_group);
+        assert_eq!(q.command.as_deref(), Some("editor-quit"));
+        assert_eq!(
+            q.label, "cmd-editor-quit",
+            "o rotulo e `cmd-<id>` (secao 7.9)"
+        );
+
+        let under_f = super::narrow_buffer_keymap(&bindings, &["m", "f"]);
+        assert_eq!(under_f.len(), 2);
+        assert!(
+            under_f.iter().all(|e| !e.is_group),
+            "`m f s` e `m f r` terminam"
+        );
+
+        assert!(
+            super::narrow_buffer_keymap(&bindings, &["m", "z"]).is_empty(),
+            "uma tecla que o buffer nao responde nao pode abrir tela nenhuma"
+        );
+    }
+
+    /// A key the buffer publishes and this keymap cannot spell is DROPPED, and
+    /// does not take the rest of the list with it.
+    #[test]
+    fn an_unspellable_key_does_not_lose_the_others() {
+        let bindings = vec![
+            ("m nao-existe-essa-tecla".to_owned(), "x".to_owned()),
+            ("m s".to_owned(), "editor-save".to_owned()),
+        ];
+        let rows = super::narrow_buffer_keymap(&bindings, &["m"]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "s");
+    }
+
     use super::{
         FIRST_OF_EXPANSION, Footer, Grid, Inheritance, Measure, expansion_ceiling, grid_for,
         item_at, last_offset, navigation_step, row_at_height, runs_of, screen_difference,

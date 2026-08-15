@@ -2424,6 +2424,39 @@ let
     echo "OK: texto da OFL redistribuido junto dos arquivos"
   '';
 
+  # EVERY COMMAND A BUFFER PUBLISHES HAS A LABEL THE HOST CAN DRAW.
+  #
+  # `SPC m` lists the focused buffer's keymap, and each row's description comes
+  # from `cmd-<id>` — the buffer declares the id, the HOST owns the text
+  # (invariant 11: a buffer does not translate). When the key is missing,
+  # `Texts::t` returns `[cmd-<id>]` and does not fail, so the defect reaches the
+  # screen as brackets and nothing before that says a word. It is the same hole
+  # `installer-dryrun` closes for the installer's own labels.
+  #
+  # The literals are read from the buffers' SOURCE. The ids built at runtime
+  # (`lucide`'s formats and filters) are already covered by the panels that draw
+  # them, and a check that ran the components would cost a wasm instantiation to
+  # learn what a grep can see.
+  buffer-commands-have-labels = mkCheck "buffer-commands-have-labels" [ pkgs.gnugrep ] ''
+    ids=$(grep -rhoE 'command: "[a-z0-9-]+"' ${../buffers} | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+    [ -n "$ids" ] || { echo "ERRO: nenhum comando de buffer encontrado — o grep mudou?" >&2; exit 1; }
+
+    failed=0
+    for id in $ids; do
+      for language in ${../assets/i18n/pt-BR.ftl} ${../assets/i18n/en-GB.ftl}; do
+        grep -q "^cmd-$id = " "$language" || {
+          # NO BACKTICKS. Inside a Nix indented string they are still the
+          # shell's command substitution: the first version of this line ran
+          # cmd-<id> as a program and printed "falta  em", naming nothing.
+          echo "ERRO: falta cmd-$id em $(basename "$language") — o SPC m mostraria [cmd-$id]" >&2
+          failed=1
+        }
+      done
+    done
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: $(echo "$ids" | wc -l) comandos de buffer, todos com rotulo nos dois idiomas"
+  '';
+
   # THE MEMORY POLICY HAS THE SHAPE IT CLAIMS, on the GENERATED units.
   #
   # Every line here failed against a plausible wrong version before it was
@@ -2794,6 +2827,7 @@ in
     iso-carries-the-seed
     profile-minimal-closes
     memory-policy-shape
+    buffer-commands-have-labels
     oomVm
     self.packages.${system}.iso
     self.nixosConfigurations.vm.config.system.build.toplevel
@@ -3149,6 +3183,7 @@ in
     iso-carries-the-seed
     profile-minimal-closes
     memory-policy-shape
+    buffer-commands-have-labels
     docs-exist
     architecture-sections
     ;

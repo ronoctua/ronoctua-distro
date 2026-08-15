@@ -630,3 +630,8 @@ notif-oom-summary = Fechado para liberar memoria
 notif-oom-pressure = O { $app } estava deixando a maquina travada por falta de memoria.
 notif-oom-used = O { $app } encheu a memoria e a area de troca.
 notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }
+
+## O keymap do buffer em foco
+which-buffer = Buffer em foco
+cmd-editor-save = Salvar o arquivo
+cmd-exemplo-reiniciar = Reiniciar o exemplo

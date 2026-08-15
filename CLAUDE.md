@@ -105,7 +105,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   `nix why-depends`, não confie no `mkIf`.
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
-- **Dentro de `''…''` valem DOIS idiomas**: o `#`/`//` é do script embutido, mas o `${...}` é do Nix e vive até em linha comentada; e a fence não fecha no primeiro `''` (`'''`, `''$`, `''\` escapam).
+- **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
 - **Chave de texto tem SETE derivados**, só um é o `.ftl` (ARCHITECTURE); **pergunta do instalador
   tem 13** — enum, `ALL_KEYS`, rótulo, ajuda, padrão, `get`/`set`, validação, `is_list`, `options`,
   valor escolhido, dois testes e o `.ftl`. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 ×

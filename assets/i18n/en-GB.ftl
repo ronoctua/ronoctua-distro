@@ -630,3 +630,8 @@ notif-oom-summary = Closed to free memory
 notif-oom-pressure = { $app } was stalling the machine for want of memory.
 notif-oom-used = { $app } filled memory and swap.
 notif-oom-orphan = Something outside your buffers was closed: { $cgroup }
+
+## The focused buffer's keymap
+which-buffer = Focused buffer
+cmd-editor-save = Save the file
+cmd-exemplo-reiniciar = Restart the example

@@ -338,6 +338,17 @@ pub struct Leader {
     active_one: bool,
 }
 
+impl Leader {
+    /// Whether no key has been typed since the leader opened.
+    ///
+    /// The focused buffer's submenu hangs off the ROOT of the sequence, and
+    /// only there: `m` after `w` is `w m`, which belongs to the tree.
+    #[must_use]
+    pub fn at_root(&self) -> bool {
+        self.sequence.is_empty()
+    }
+}
+
 /// What the shell should do after a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {

@@ -105,28 +105,7 @@ ambiente em tempo de EXECUÇÃO primeiro, `option_env!` como reserva do `nix run
 - acabou quando: com `superpack = false`, `noctua-icon-theme` não aparece em `nix path-info -r` do
   sistema, e o `apps-icon-from-superpack` continua passando com ele ligado
 
-### 5. O `SPC m` ainda não existe no rodapé · pequeno
-
-**A fronteira já está de pé, e testada.** O processo do buffer publica o keymap
-em `$XDG_RUNTIME_DIR/ronoctua-buffer-<pid>.sock` (`buffer.rs`, `publish_keymap`) e aceita
-`command <id>` de volta; o comando chega ao componente pelo canal do calloop, na mesma thread de
-todo outro input. O rodapé tem o cliente (`leader.rs`, `buffer_keymap` e `buffer_command`), e os dois
-subcomandos `ronoctua-shell buffer-keymap <pid>` / `buffer-command <pid> <id>` o tornam alcançável à
-mão — que é como se distingue "o buffer não publica" de "o rodapé não pergunta".
-
-O buffer recusa id que ele não declarou: o socket fica num diretório alcançável por qualquer processo
-do usuário, e encaminhar id arbitrário faria dele um jeito de dirigir o componente de fora.
-
-**Falta a vista.** `SPC m` tem de aparecer no which-key **só quando há buffer em foco** (o pid vem de
-`ronoctua_niri::Window::pid`), listar o que o socket devolve, e a tecla seguinte tem de chamar
-`buffer_command`. A precedência das vistas vive num lugar só, `Footer::view()` em `surface.rs`.
-
-**Sem buffer em foco, `SPC m` não existe** — não uma tela vazia dizendo "nenhum buffer": submenu que
-abre para nada é a mesma mentira que a lista sem caminho de volta.
-
-- acabou quando: com um buffer em foco, `SPC m` LISTA as ligações dele **e** a tecla seguinte as roda
-
-### 6. Clipboard: o ClipCascade não está empacotado · decidir antes
+### 5. Clipboard: o ClipCascade não está empacotado · decidir antes
 
 O painel mostra `ClipCascade: não integrado` e o comando de configurar diz o mesmo — honesto, e
 reservando o lugar.
