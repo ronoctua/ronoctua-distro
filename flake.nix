@@ -297,7 +297,8 @@
           niriActions
           ;
         niri = inputs.niri.packages.${system}.niri;
-        ronoctua-shell = rust.workspace;
+        ronoctua-shell = rust.shell;
+        inherit (rust) bufferComponents;
         inherit fonts fontconfigConf iconSuperpack;
         lucideFontFile = "${lucidedb.db}/NoctuaLucide.ttf";
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
@@ -307,7 +308,7 @@
       # section 9.3 forbids measuring them under lavapipe, and a check has no GPU.
       benchFrames = pkgs.callPackage ./nix/bench-frames.nix {
         niri = inputs.niri.packages.${system}.niri;
-        ronoctua-shell = rust.workspace;
+        ronoctua-shell = rust.shell;
         inherit graphicsHost;
       };
 
@@ -380,7 +381,11 @@
               inherit (inputs) niri;
               # The shell's binary: the niri module generates the chord
               # binds from its command table.
-              shell = rust.workspace;
+              #
+              # `rust.shell` and not `rust.workspace`: it is the wrapped one that
+              # knows where the five components are, and the unit's `ExecStart`
+              # comes from here. See `nix/rust.nix`.
+              shell = rust.shell;
             };
           };
         }
@@ -433,7 +438,7 @@
         i18n-rs = i18nRs;
 
         # The shell: the two-line footer.
-        ronoctua-shell = rust.workspace;
+        ronoctua-shell = rust.shell;
 
         iso = self.nixosConfigurations.installer.config.system.build.isoImage;
       };
@@ -474,10 +479,17 @@
                 # only this repository can produce, and the target downloads the
                 # rest instead of compiling it.
                 seed = [
-                  # The workspace, and with it — all by baked store path —
-                  # the icon superpack, `libghostty-vt`, the five wasm buffers
-                  # and niri itself. 1,97 GiB of closure that no cache has.
-                  rust.workspace
+                  # The workspace, and with it — by baked store path —
+                  # `libghostty-vt` and niri itself. 1,97 GiB of closure that no
+                  # cache has.
+                  #
+                  # `rust.shell` and NOT `rust.workspace`: the five wasm buffers
+                  # used to arrive by carriage, exactly as the superpack below
+                  # did, and cutting that reference is what stopped a buffer
+                  # edit from recompiling everything (`nix/rust.nix`). What
+                  # carries them now is the wrapper — and if it ever stops,
+                  # `iso-carries-the-seed` names the five one by one.
+                  rust.shell
                   # NOT in the workspace's closure: the binary embeds only the
                   # primary face. This is the family the system installs, it
                   # comes from a GitHub Release rather than from a cache, and
@@ -841,11 +853,12 @@
           niriActions
           ;
         inherit pkgs inputs;
-        inherit (rust) regularFont emojiFont lucideFont;
-        bufferGlyphs = buffers.glyphs;
-        bufferUnicode = buffers.unicode;
-        bufferLucide = buffers.lucide;
-        bufferMemory = buffers.memory;
+        inherit (rust)
+          regularFont
+          emojiFont
+          lucideFont
+          bufferComponents
+          ;
         inherit iconSuperpack ghosttyVt;
       };
 

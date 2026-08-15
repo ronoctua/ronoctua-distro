@@ -17,6 +17,7 @@
   niri,
   xwayland-satellite,
   ronoctua-shell,
+  bufferComponents,
   fonts,
   noto-fonts-color-emoji,
   lucideFontFile,
@@ -33,6 +34,22 @@
 }:
 
 let
+  # THE FIVE COMPONENTS, as `export` lines for the hot reload's script.
+  #
+  # The store's binary gets them from the wrapper (`nix/rust.nix`); the one this
+  # loop compiles has no wrapper, and had nothing at all — so `i n` opened a
+  # window before the first edit and answered "could not open" after it. It is
+  # the same defect as the superpack's, four lines further down, and the table
+  # comes from the same place the wrapper reads, so a sixth buffer gets here on
+  # its own.
+  #
+  # Two spaces between lines: what strips a `''` string is the indentation of
+  # the SOURCE lines, and interpolated content goes in as it is — with no
+  # separator the second `export` would land in column zero.
+  bufferExports = lib.concatStringsSep "\n  " (
+    lib.mapAttrsToList (name: path: ''export ${name}="${path}"'') bufferComponents
+  );
+
   # The chords, generated from the shell's command table — the same ones as in
   # production, only with a different prefix.
   binds = callPackage ./niri-binds.nix { inherit ronoctua-shell; };
@@ -414,6 +431,9 @@ let
         # category glyphs and they were NEVER replaced by the app's icon.
         # Nothing in the log, nothing on screen — the list looks fine and is wrong.
         export RONOCTUA_ICONS="${iconSuperpack}/share/icons/noctua"
+        # And the five components, for the same reason one level over — see
+        # `bufferExports` in this file's `let`.
+        ${bufferExports}
 
         # THIS FUNCTION RUNS IN ANOTHER PROCESS — the watcher's. It can only read
         # what is EXPORTED; a shell variable does not cross a process boundary, and

@@ -198,6 +198,19 @@ fn main() -> Result<()> {
     }
 
     // ---- THE SURVEY CROSSES ----
+    //
+    // AND THIS IS THE ONLY PLACE IT IS LOWERED FOR REAL. `wasmtime` lowers a
+    // record by zipping it POSITIONALLY against the WIT and checks the names
+    // afterwards, so a field out of order fails when the guest is CALLED — an
+    // error at run time and nothing at all at compile time. `ronoctua-runtime`'s
+    // unit tests compare `val_of_survey` against a list written by hand; only
+    // here is it compared against the WIT itself, through a component that was
+    // built from it.
+    //
+    // It used to be a `#[test]` over there as well, reading the component from
+    // `option_env!("RONOCTUA_BUFFER_MEMORY")`. That variable is what made every
+    // buffer edit recompile the workspace, and the test was a copy of these
+    // three lines — so it left, and the reason it existed lives here.
     let effects = inst.event(&Input::Survey(survey()))?;
     if effects != vec![Effect::Redraw] {
         bail!("a primeira amostra tinha de pedir um quadro; veio {effects:?}");

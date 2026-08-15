@@ -156,6 +156,59 @@ cada roteiro de VM 18–51 s. O gate longo é o resto — quatro sistemas NixOS,
 e é por isso que existe `nix run .#quick`: os checks que não sobem VM, ~1 min, e que **não fecham
 nada** (invariante 7 continua sendo o gate).
 
+#### E a quarta foi pela REFERÊNCIA — que quem compila não devia pagar
+
+A separação acima consertou a camada de dependências e deixou o resto de pé. Editar um **comentário**
+em `buffers/memory/src/lib.rs` continuava reconstruindo o workspace, o clippy e os testes — três
+derivações que não leem uma linha de buffer. Medido com `nix eval` nos `.drv`, antes e depois. Duas
+causas, invisíveis pelo mesmo motivo: nenhuma das duas é lida em tempo de compilação.
+
+1. **`option_env!` com caminho de store é referência**, e ela estava no `env` de quem COMPILA. O
+   `.wasm` não entra em nada que o `rustc` leia — vai por argv ao processo filho —, mas está na
+   ENTRADA da derivação, e é por entrada que o Nix endereça.
+2. **`rustFont` levava `buffers/**/*.rs` no `src`**, com o comentário "são membros do workspace".
+   Não são: o `Cargo.toml` da raiz tem `exclude = [ "buffers" ]` e lista cada membro à mão, então o
+   cargo nunca olha lá dentro. Eram cinco pastas de fonte na compilação, para nada.
+
+A correção da primeira **não é apagar a referência**. Ela precisa existir: sem ela o ISO deixa de
+levar os componentes e a máquina alvo COMPILA cinco wasm — foi exatamente o que aconteceu com o
+superpacote de ícones, e quem disse foi o `iso-carries-the-seed`. Ela **sobe uma derivação**:
+`rust.shell` é o workspace embrulhado por `makeBinaryWrapper` com os cinco caminhos, e é ele que o
+`ExecStart` do módulo, o laço aninhado e os roteiros de VM executam. Quem compila não conhece buffer
+nenhum; quem executa conhece os cinco. Medido no fecho: o workspace passou a citar **zero** buffers e
+o embrulho cita os cinco — 1,41 GiB contra 1,42.
+
+Um embrulho e não uma variável em cada lançador porque são **nove lançadores** — a unidade de
+usuário, os binds do niri, o laço aninhado, seis VMs —, e variável que um deles esquece não dá erro:
+dá uma tecla que para de abrir janela. `--inherit-argv0` não é enfeite: o `nix run .#diagnostics` acha
+o rodapé com `pgrep -f "bin/ronoctua-shell$"`, e sem ele todo processo apareceria como
+`.ronoctua-shell-wrapped` — o diagnóstico cegaria justamente quando é ele que se está rodando.
+
+**Medido, editando um comentário num buffer:**
+
+| derivação | antes | depois |
+|---|---|---|
+| `ronoctua-0.1.0` (workspace) | reconstruía, 2m15–5m46 | **idêntica** |
+| `ronoctua-clippy`, `ronoctua-tests` | reconstruíam o workspace de novo | **idênticas** |
+| `ronoctua-shell` (o embrulho) | — | reconstrói, e é o que tem de reconstruir |
+| o buffer | reconstruía | reconstrói |
+
+E o que se perdeu foi a garantia que o `option_env!` dava de graça: se o build tinha a variável, o
+binário tinha o caminho. É por isso que existe `shell-finds-its-buffers`, e ele compara os **dois
+lados vindos de artefato real** — os nomes que os `.rs` do shell leem, e as strings que o embrulho
+compilado carrega. Nome de um lado só reprova, nas duas direções: o buffer que ninguém ligou, e a
+variável que parou de ser posta. Provado REPROVANDO: tirar `_LUCIDE` da tabela faz o check nomear a
+que falta. `profile-minimal-closes` passou a nomear os cinco pela mesma razão que já nomeava o
+superpacote.
+
+De brinde, um defeito que estava lá desde sempre: **o binário do hot reload nunca teve os buffers**.
+`nix run .#dev` compila com `cargo`, e as cinco variáveis não estavam exportadas ali — `i n` abria
+janela antes da primeira edição e respondia "não consegui abrir" depois dela. Ele se escondia atrás
+de quem roda `nix run .#dev` de DENTRO do `nix develop`, porque ali quatro delas existiam por acaso;
+é o mesmo defeito que o comentário dos ícones descreve seis linhas acima, no mesmo arquivo. Hoje a
+tabela é uma só (`rust.bufferComponents`), lida pelo embrulho, pelo devshell e pelo laço — e o
+devshell escrevia quatro dos cinco à mão, faltando justamente o do editor.
+
 #### O formatador era a armadilha que ele mesmo documentava
 
 `formatter` era o `nixfmt` cru. `nix fmt` sem argumento virava um `nixfmt` lendo stdin e **travava** —

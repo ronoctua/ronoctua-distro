@@ -68,35 +68,38 @@ use wayland_client::{
 
 use crate::leader::{Effect, Leader, Order};
 
-/// The glyph browser's component, put here by `nix/rust.nix`.
+/// Where a native buffer's component is — read from the ENVIRONMENT, by the
+/// name of the variable that carries it.
 ///
-/// `option_env!` and not `env!`: that way `cargo build` outside Nix keeps
-/// compiling, and the command warns on screen instead of the build breaking
-/// for whoever only wants to iterate on the footer.
-const BUFFER_GLYPHS: Option<&str> = option_env!("RONOCTUA_BUFFER_GLYPHS");
-/// The file editor's component, which `LEADER f f` opens.
-const BUFFER_EDITOR: Option<&str> = option_env!("RONOCTUA_BUFFER_EDITOR");
-
-/// The Unicode symbol browser's component (`LEADER i u`).
+/// The five that exist: `RONOCTUA_BUFFER_GLYPHS` (`LEADER i n`), `_EDITOR`
+/// (`LEADER f f`), `_UNICODE` (`i u`), `_LUCIDE` and `_MEMORY`. The last two
+/// carry something the others do not: Lucide (`i l`) also depends on a FACE —
+/// the `RONOCTUA_FONT_LUCIDE` embedded in the renderer, and the two come out of
+/// the same derivation, without which the 1,668 icons would be tofu —, and the
+/// memory panel (`LEADER s m`) is the only one that embeds no database at all:
+/// everything it draws is read by its host at that moment and pushed in, which
+/// is what `capability::system` exists for.
 ///
-/// Same contract as the glyph one, and `option_env!` for the same reason:
-/// `cargo build` outside Nix keeps compiling, and the command warns on screen
-/// instead of the build breaking.
-const BUFFER_UNICODE: Option<&str> = option_env!("RONOCTUA_BUFFER_UNICODE");
-
-/// The memory panel's component (`LEADER s m`).
+/// # Why not `option_env!`, which is what this was
 ///
-/// The only one that embeds no database: everything it draws is read by its
-/// host at that moment and pushed in. What it carries instead is
-/// `capability::system`, which is what makes the host sample at all.
-const BUFFER_MEMORY: Option<&str> = option_env!("RONOCTUA_BUFFER_MEMORY");
-
-/// The Lucide icon browser's component (`LEADER i l`).
+/// Baked in, a store path is a REFERENCE, and the reference is charged for at
+/// the wrong end: the workspace's derivation was handed the five `.wasm` in its
+/// `env`, so editing one COMMENT in any buffer changed its hash and recompiled
+/// everything — the whole workspace, clippy and the tests, minutes of Rust for
+/// a value that is pure data and that no `.rs` here reads at compile time.
 ///
-/// Same contract as the other two. This is the only one that also depends on a
-/// FACE — the `RONOCTUA_FONT_LUCIDE`, embedded in the renderer —, and the two
-/// come out of the same derivation: without it, the 1,668 icons would be tofu.
-const BUFFER_LUCIDE: Option<&str> = option_env!("RONOCTUA_BUFFER_LUCIDE");
+/// It is the icon superpack's lesson (`nix/rust.nix`) reached from the other
+/// side: there the baked path kept a switch from switching, here it kept the
+/// loop from being a loop.
+///
+/// What supplies it is a WRAPPER around this binary, built by `nix/rust.nix`:
+/// the reference lives one derivation above the compilation, so the closure
+/// still carries the five and no launcher has to remember anything. Absent —
+/// `cargo build` outside Nix, which is the case this keeps compiling — the
+/// command says so on screen instead of the build breaking.
+fn buffer_component(variable: &str) -> Option<String> {
+    std::env::var(variable).ok().filter(|v| !v.is_empty())
+}
 
 /// The system's URL opener, for the Syncthing interface.
 ///
@@ -2347,8 +2350,11 @@ impl Footer {
     /// asks to write with `Effect::Save`, and never learns a path
     /// (invariant 11).
     fn open_editor(&mut self, file: &std::path::Path) {
-        let (Ok(me), Some(wasm)) = (std::env::current_exe(), BUFFER_EDITOR) else {
-            tracing::error!("RONOCTUA_BUFFER_EDITOR nao foi definida no build");
+        let (Ok(me), Some(wasm)) = (
+            std::env::current_exe(),
+            buffer_component("RONOCTUA_BUFFER_EDITOR"),
+        ) else {
+            tracing::error!("RONOCTUA_BUFFER_EDITOR nao esta no ambiente");
             let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
             self.echo_message(m);
             return;
@@ -2358,7 +2364,7 @@ impl Footer {
             &me.to_string_lossy(),
             &[
                 "buffer".to_owned(),
-                wasm.to_owned(),
+                wasm,
                 file.to_string_lossy().into_owned(),
             ],
             None,
@@ -2880,27 +2886,13 @@ impl Footer {
             // component's path comes from Nix, and not from the PATH: a
             // `.wasm` resolved by PATH does not exist, and a relative path
             // would depend on where the shell was launched from.
-            "glyphs-nerd-fonts" => match (std::env::current_exe(), BUFFER_GLYPHS) {
-                (Ok(me), Some(wasm)) => self.open_foreign(
-                    &me.to_string_lossy(),
-                    &["buffer".to_owned(), wasm.to_owned()],
-                    None,
-                ),
-                (_, None) => {
-                    tracing::error!("RONOCTUA_BUFFER_GLYPHS nao foi definida no build");
-                    let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
-                    self.echo_message(m);
-                }
-                (Err(e), _) => {
-                    tracing::error!(error = %e, "nao sei qual e o meu proprio binario")
-                }
-            },
-            // THE SECOND BROWSER, and the same path. One more `if` here instead
-            // of a function would be two copies of the same sequence — and the
-            // third native buffer would make three.
-            "unicode-symbols" => self.open_buffer(BUFFER_UNICODE, "RONOCTUA_BUFFER_UNICODE"),
-            "lucide-icons" => self.open_buffer(BUFFER_LUCIDE, "RONOCTUA_BUFFER_LUCIDE"),
-            "memory-open" => self.open_buffer(BUFFER_MEMORY, "RONOCTUA_BUFFER_MEMORY"),
+            //
+            // The four below take the SAME route — this one used to have its
+            // own copy of the sequence, from back when it was the only buffer.
+            "glyphs-nerd-fonts" => self.open_buffer("RONOCTUA_BUFFER_GLYPHS"),
+            "unicode-symbols" => self.open_buffer("RONOCTUA_BUFFER_UNICODE"),
+            "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
+            "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
             // The two WINDOW actions are the compositor's (invariant 4). The
             // shell does not reimplement them: it asks over IPC, which is the
             // only border it has with niri (invariant 3).
@@ -4644,23 +4636,18 @@ impl Footer {
     ///
     /// # Why it exists
     ///
-    /// Because there are TWO browsers now, and there will be more — the `i`
+    /// Because there are FOUR of them now, and there will be more — the `i`
     /// group was born saying so. The sequence (find our own executable, pass
-    /// the component's path, warn on screen when the build did not define the
-    /// variable) is the same for all of them, and copying it per buffer would
-    /// give copies that diverge the day one of them gains a step.
-    fn open_buffer(&mut self, wasm: Option<&str>, variable: &str) {
-        match (std::env::current_exe(), wasm) {
-            (Ok(me), Some(w)) => self.open_foreign(
-                &me.to_string_lossy(),
-                &["buffer".to_owned(), w.to_owned()],
-                None,
-            ),
+    /// the component's path, warn on screen when the variable is not in the
+    /// environment) is the same for all of them, and copying it per buffer
+    /// would give copies that diverge the day one of them gains a step.
+    fn open_buffer(&mut self, variable: &str) {
+        match (std::env::current_exe(), buffer_component(variable)) {
+            (Ok(me), Some(w)) => {
+                self.open_foreign(&me.to_string_lossy(), &["buffer".to_owned(), w], None)
+            }
             (_, None) => {
-                tracing::error!(
-                    variable,
-                    "a variavel do componente nao foi definida no build"
-                );
+                tracing::error!(variable, "a variavel do componente nao esta no ambiente");
                 let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
                 self.echo_message(m);
             }

@@ -79,7 +79,7 @@ let
   footerVm = import ./footer-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The machine does not freeze when memory runs out, and the desktop is not the
@@ -99,7 +99,7 @@ let
   modelineVm = import ./modeline-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The default keymap closes: no collision and every shortcut pointing at a
@@ -633,7 +633,7 @@ let
   notifyVm = import ./notify-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # THE 5 MS BUDGET of section 5.2, measured on the heaviest component.
@@ -1378,7 +1378,7 @@ let
   bufferVm = import ./buffer-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
     bufferExample = buffers.example;
     bufferGlyphs = buffers.glyphs;
   };
@@ -1390,7 +1390,7 @@ let
   memoryVm = import ./memory-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
     bufferMemory = buffers.memory;
   };
 
@@ -1398,14 +1398,14 @@ let
   clipboardVm = import ./clipboard-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The terminal wired to the shell, with what is typed coming back to the screen (7.10).
   terminalVm = import ./terminal-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The leader as the Super key on its own: keyd standing and niri listening (7.4).
@@ -1425,7 +1425,7 @@ let
   x11Vm = import ./x11-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The root's wipe, proved between two boots (milestone 7).
@@ -1435,14 +1435,14 @@ let
   leaderVm = import ./leader-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The app finder, and the footer that must not freeze when opening one.
   appsVm = import ./apps-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # The IPC contract against the pinned tag AND against `niri-next` (milestone 4).
@@ -1450,7 +1450,7 @@ let
     inherit pkgs lib;
     niri = inputs.niri.packages.${system}.niri;
     niriNext = inputs.niri-next.packages.${system}.niri;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   # -------------------------------------------------------------------
@@ -1879,7 +1879,7 @@ let
   # eliminates.
   wifiTpmVm = import ./wifi-tpm-vm.nix {
     inherit pkgs lib;
-    ronoctua-shell = rust.workspace;
+    ronoctua-shell = rust.shell;
   };
 
   network-tuned = mkCheck "network-tuned" [ ] ''
@@ -2409,6 +2409,77 @@ let
     echo "OK: o rodape existe e falha de forma legivel sem compositor"
   '';
 
+  # THE FIVE COMPONENTS REACH THE SHELL THAT RUNS — the two sides, compared.
+  #
+  # # The defect this exists for
+  #
+  # The components used to be baked in by `option_env!`, and that made a whole
+  # class of failure impossible: if the build had the variable, the binary had
+  # the path. Taking them out of the compilation (`nix/rust.nix`, and the reason
+  # is written there) trades that guarantee for minutes of iteration — and a
+  # trade with nothing watching it is how `LEADER i n` becomes a key that opens
+  # no window, with one line in a journal nobody is reading.
+  #
+  # So the two sides are compared against each other, and both come from real
+  # artifacts rather than from a list kept by hand here:
+  #
+  #   - what the RUST reads: every `RONOCTUA_BUFFER_*` named in the shell's
+  #     sources. A sixth buffer shows up here the moment its command is written;
+  #   - what the WRAPPER carries: the strings `makeBinaryWrapper` compiled into
+  #     the binary the module, the nested loop and the VMs all run.
+  #
+  # A name on one side and not on the other fails. That covers both directions:
+  # the buffer nobody wired up, and the variable that stopped being set.
+  shell-finds-its-buffers =
+    mkCheck "shell-finds-its-buffers"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        failed=0
+
+        # ---- WHAT THE RUST READS ----
+        lidas=$(grep -oh 'RONOCTUA_BUFFER_[A-Z_]*' \
+          ${../crates/ronoctua-shell/src}/*.rs | sort -u)
+        [ -n "$lidas" ] || {
+          echo "ERRO: nenhum RONOCTUA_BUFFER_* no codigo do shell — o grep casa o que?" >&2
+          exit 1
+        }
+        echo "o shell le: $(echo "$lidas" | tr '\n' ' ')"
+
+        # ---- WHAT THE WRAPPER CARRIES ----
+        # `grep -a`: the wrapper is an ELF, and both the name and the store path
+        # are string literals inside it.
+        for v in $lidas; do
+          grep -qa "$v" ${rust.shell}/bin/ronoctua-shell || {
+            echo "ERRO: o shell le $v e o embrulho nao a define — a tecla nao abriria nada" >&2
+            failed=1
+          }
+        done
+
+        # ---- AND EACH ONE POINTS AT A COMPONENT THAT EXISTS ----
+        #
+        # A variable set to a path that is not there fails at the far end, when
+        # the window does not open, and the message blames the buffer.
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (name: path: ''
+            grep -qa "${path}" ${rust.shell}/bin/ronoctua-shell || {
+              echo "ERRO: ${name} nao aponta para ${path} no embrulho" >&2; failed=1; }
+            case "${path}" in
+              *.wasm) [ -s "${path}" ] || {
+                echo "ERRO: ${path} nao existe ou esta vazio" >&2; failed=1; } ;;
+              *) echo "ERRO: ${name} nao termina em .wasm" >&2; failed=1 ;;
+            esac
+            echo "$lidas" | grep -qx "${name}" || {
+              echo "ERRO: o embrulho define ${name} e nenhum .rs do shell a le" >&2; failed=1; }
+          '') rust.bufferComponents
+        )}
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: os dois lados batem, e os cinco componentes estao la"
+      '';
+
   # Section 9 requires the repository to be publishable AS IT IS. A local-path
   # input only works for whoever has both trees side by side, so it must not
   # survive publication — and since the font files went out as a Release, it no
@@ -2766,8 +2837,18 @@ let
 
       # And what the reduced profile may NEVER lose, or it stops being this
       # system rather than becoming a smaller one.
+      #
+      # THE FIVE COMPONENTS ARE ON THAT LIST for the same reason the superpack
+      # is on the one above, and by the same mechanism: they no longer arrive by
+      # carriage inside the binary (`nix/rust.nix`), they arrive through the
+      # wrapper. If the module ever points at the unwrapped workspace again, the
+      # system installs a shell whose every buffer key opens nothing — and it
+      # installs FASTER, with nothing else giving it away.
       for kept in -niri- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
-                  -networkmanager- -systemd-; do
+                  -networkmanager- -systemd- \
+                  -ronoctua-buffer-glyphs- -ronoctua-buffer-editor- \
+                  -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
+                  -ronoctua-buffer-memory-; do
         grep -q -i -e "$kept" ${minimal}/store-paths || {
           echo "ERRO: o perfil reduzido perdeu $kept, que faz parte da distro" >&2
           failed=1
@@ -2961,6 +3042,7 @@ in
     rust-clippy
     rust-fmt
     shell-binary
+    shell-finds-its-buffers
     docs-exist
     architecture-sections
     english-names
@@ -2987,6 +3069,7 @@ in
   leader-vm = leaderVm;
   apps-vm = appsVm;
   inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
+  inherit shell-finds-its-buffers;
   inherit
     group-mark-outside-translation
     niri-actions-translated

@@ -13,10 +13,7 @@
   regularFont,
   emojiFont,
   lucideFont,
-  bufferGlyphs,
-  bufferUnicode,
-  bufferLucide,
-  bufferMemory,
+  bufferComponents,
   iconSuperpack,
   ghosttyVt,
 }:
@@ -129,10 +126,16 @@ pkgs.mkShell {
   RONOCTUA_BOTTOM = "${pkgs.bottom}/bin/btm";
   RONOCTUA_TERMINFO_DIRS = "${pkgs.ncurses}/share/terminfo";
   RONOCTUA_XWAYLAND_SATELLITE = "${pkgs.xwayland-satellite}/bin/xwayland-satellite";
-  RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
-  RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
-  RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
-  RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
+  # THE FIVE COMPONENTS AS A TABLE, and not one variable at a time.
+  #
+  # What the devshell runs is a binary `cargo` built, and a `cargo` binary has
+  # no wrapper — so what `nix/rust.nix` hands the installed shell has to be
+  # handed over here. By hand it had already drifted: four of the five were
+  # written out and `RONOCTUA_BUFFER_EDITOR` was not, so `LEADER f f` answered
+  # "could not open" in the devshell and worked in production. Through the
+  # table, the sixth buffer arrives on its own.
+  env = bufferComponents;
+
   RONOCTUA_JOURNALCTL = "${pkgs.systemd}/bin/journalctl";
   RONOCTUA_NIX = "${pkgs.nix}/bin/nix";
   # The icon superpackage, for the PIXMAP step of the app

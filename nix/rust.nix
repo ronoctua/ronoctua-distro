@@ -14,6 +14,8 @@
   crane,
   rustToolchain,
   pkg-config,
+  symlinkJoin,
+  makeBinaryWrapper,
   wayland,
   libxkbcommon,
   vulkan-loader,
@@ -89,11 +91,13 @@ let
       (src + "/Cargo.lock")
       (lib.fileset.fileFilter (f: f.hasExt "rs") (src + "/crates"))
       (lib.fileset.fileFilter (f: f.name == "Cargo.toml") (src + "/crates"))
-      # `buffers/` too: they are workspace members, and without them `cargo`
-      # fails to resolve the root `Cargo.toml` — with a USAGE message, not a
-      # missing-file one, which does not point at the cause.
-      (lib.fileset.fileFilter (f: f.hasExt "rs") (src + "/buffers"))
-      (lib.fileset.fileFilter (f: f.name == "Cargo.toml") (src + "/buffers"))
+      # `buffers/` IS NOT HERE, and it used to be — with the comment "they are
+      # workspace members". They are not: the root `Cargo.toml` `exclude`s them
+      # and lists every member by hand, so `cargo` never looks inside. What the
+      # line did was put five directories of sources into the compilation's
+      # `src`, and one edited comment in any of them recompiled the workspace,
+      # clippy and the tests. `nix/buffers.nix` builds them, from their own
+      # filtered source.
       # The `.wit` is invariant 11's boundary; without it `wit-bindgen` does not
       # generate and the buffer does not compile.
       (lib.fileset.fileFilter (f: f.hasExt "wit") (src + "/crates"))
@@ -220,13 +224,9 @@ let
     # What READS the clipboard, for `Ctrl+V`. Same package as
     # `wl-copy`, and the same reason for coming in by path.
     RONOCTUA_WL_PASTE = "${wl-clipboard}/bin/wl-paste";
-    # The glyph browser's component, which the `glyphs.navigate` command
-    # opens. A store path for the same reason as the two above — and a `.wasm`
-    # is in no PATH at all.
-    RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
-    # The file editor, which `LEADER f f` opens. Same reasoning: a `.wasm` is in
-    # no PATH, so the store path is what the binary carries.
-    RONOCTUA_BUFFER_EDITOR = "${bufferEditor}/lib/ronoctua_buffer_editor.wasm";
+    # THE FIVE `RONOCTUA_BUFFER_*` ARE NOT HERE, and their absence is the point —
+    # see `bufferComponents` below.
+    #
     # THE LIST OF xkb LAYOUTS, by store path.
     #
     # The installer validates the sixth answer against it, and it is the SAME
@@ -251,9 +251,6 @@ let
     # library; without it the crate compiles with the alacritty engine alone,
     # and the differential degrades to a golden file — which it says out loud.
     RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
-    RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
-    RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
-    RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
     # WHAT THE MEMORY PANEL SPAWNS, all by store path and for the usual reason:
     # a user unit's `PATH` is minimal. `journalctl` counts how many times the
     # protection acted, and `nix` answers what the store weighs — a question
@@ -283,6 +280,40 @@ let
   # What compiles OUR code needs both halves.
   commonArgs = buildBase // generated;
 
+  # THE FIVE COMPONENTS — and they are not in `generated` on purpose.
+  #
+  # # The measurement that took them out
+  #
+  # `option_env!` with a store path is a REFERENCE, and it is charged for where
+  # the compilation happens: with the five here, editing one COMMENT in any
+  # buffer changed the hash of the whole workspace. Measured, on the four
+  # derivations a person waits for:
+  #
+  #   ronoctua-0.1.0 (the workspace)   rebuilt      2m15 – 5m46
+  #   ronoctua-tests                   rebuilt      the workspace again, in test mode
+  #   ronoctua-clippy                  rebuilt      idem
+  #   memory-instance-fast             re-ran       and this one is correct: it
+  #                                                 measures the component
+  #
+  # None of them reads a `.wasm` at compile time. It is the icon superpack's
+  # lesson (further down) reached from the other side: there a baked path kept a
+  # switch from switching, here it kept the loop from being a loop.
+  #
+  # # And why the reference does not simply disappear
+  #
+  # Because it must not. Whoever installs this has to get the five components
+  # WITHOUT compiling them — that is the whole point of the ISO's seed. So the
+  # reference moves one derivation UP: `shell` below is what carries it, and
+  # what the system, the VMs and the nested loop all run. `iso-carries-the-seed`
+  # and `profile-minimal-closes` name the five, and would say so if they left.
+  bufferComponents = {
+    RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
+    RONOCTUA_BUFFER_EDITOR = "${bufferEditor}/lib/ronoctua_buffer_editor.wasm";
+    RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
+    RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
+    RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
+  };
+
   # The dependencies, compiled once.
   #
   # `buildBase` and NOT `commonArgs`: see the comment on the split. Editing our
@@ -299,6 +330,10 @@ rec {
   # Exposed so the devshell can offer the SAME environment as crane — see the
   # comment over there.
   inherit regularFont emojiFont lucideFont;
+  # THE ONE TRUTH about where the components are. The wrapper below reads it;
+  # so do the devshell and the nested loop, which run a binary `cargo` built and
+  # that therefore has no wrapper. Three readers, one table.
+  inherit bufferComponents;
 
   # The built workspace.
   workspace = craneLib.buildPackage (
@@ -325,6 +360,45 @@ rec {
       nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ stdenv.cc.bintools ];
     }
   );
+
+  # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the five components.
+  #
+  # This is what the module's `ExecStart`, `nix run .#dev` and every VM test
+  # point at; `workspace` is what the driven tests and the benchmarks call by
+  # binary name, and it no longer knows a buffer exists.
+  #
+  # # Why a wrapper and not a variable in each launcher
+  #
+  # Because there are NINE launchers — the user unit, niri's binds, the nested
+  # loop, six VM tests — and a variable one of them forgets is not a failure: it
+  # is a key that stops opening a window, with a line in a journal nobody is
+  # reading. Here there is one place, and no launcher has to know anything.
+  #
+  # `symlinkJoin` and not a package of its own: `niri-contract`, the benchmarks
+  # and the driven tests are all in `bin/` and the tests call them through THIS
+  # path. `makeBinaryWrapper` and not `makeWrapper`: the second one puts a bash
+  # in the closure of what the ISO carries.
+  #
+  # `--inherit-argv0` is not decoration: `nix run .#diagnostics` finds the
+  # footer with `pgrep -f "bin/ronoctua-shell$"`, and without it every process
+  # would show up as `.ronoctua-shell-wrapped` — the diagnostic would go blind
+  # exactly when it is the thing being run.
+  #
+  # `--set-default` and not `--set`: the point of taking the paths out of the
+  # compilation is being able to swap a component without recompiling anything,
+  # and `--set` would have the wrapper win over whoever exported one by hand.
+  shell = symlinkJoin {
+    name = "ronoctua-shell";
+    paths = [ workspace ];
+    nativeBuildInputs = [ makeBinaryWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/ronoctua-shell --inherit-argv0 ${
+        lib.concatStringsSep " " (
+          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") bufferComponents
+        )
+      }
+    '';
+  };
 
   # ONLY `ronoctua-install`, and it is the ISO that wants it.
   #
