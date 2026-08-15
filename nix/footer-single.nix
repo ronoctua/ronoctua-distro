@@ -3,7 +3,7 @@
 # # Why this is a package, and not a function inside `dev.nix`
 #
 # Because it was a function inside `dev.nix`, and it **did not work**. Hot
-# reload's `reconstruir` runs inside the watcher's process, which is another
+# reload's `rebuild` runs inside the watcher's process, which is another
 # process; the function got there through `export -f`, but the `rodapepid` it
 # read is a shell variable, and a shell variable does not cross a process
 # boundary. Under the watcher's `set -u` that is not an `if` evaluating to

@@ -292,16 +292,14 @@
           reloadApp
           singleFooter
           rustToolchain
-          tokensRs
-          i18nRs
-          niriActions
           ;
         niri = inputs.niri.packages.${system}.niri;
         ronoctua-shell = rust.shell;
-        inherit (rust) bufferComponents;
+        # THE WHOLE TABLE THE COMPILATION GETS, and not six values copied out of
+        # it: the loop compiles the binary itself, so what it does not export the
+        # binary does not have. See `nix/dev.nix`'s `bakedExports`.
+        inherit (rust) bufferComponents generated;
         inherit fonts fontconfigConf iconSuperpack;
-        lucideFontFile = "${lucidedb.db}/NoctuaLucide.ttf";
-        primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
       };
 
       # Section 5.2's FRAME targets. Outside `nix flake check` on purpose:
@@ -432,9 +430,18 @@
         # Rust token table, generated from the .nix files.
         tokens-rs = tokensRs;
         niri-actions = niriActions;
+        # THE SIX COMPONENTS, each buildable on its own.
+        #
+        # Three of them used to be missing here, and it showed the day the
+        # nested loop learned to rebuild a buffer: `nix build .#buffer-memory`
+        # did not exist, so the newest buffers were the ones the loop could not
+        # reload. What names them now is `nix/buffers.nix`'s own table.
         buffer-example = buffers.example;
+        buffer-editor = buffers.editor;
         buffer-glyphs = buffers.glyphs;
         buffer-unicode = buffers.unicode;
+        buffer-lucide = buffers.lucide;
+        buffer-memory = buffers.memory;
         i18n-rs = i18nRs;
 
         # The shell: the two-line footer.

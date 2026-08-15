@@ -85,6 +85,14 @@ writeShellApplication {
         while read -r -t 0.3 _; do :; done
 
         echo "reload: ''${file##*/}"
+        # WHAT CHANGED, BY NAME AND EXPORTED.
+        #
+        # `eval` runs in this shell, so `$file` would already be in scope — and
+        # that is precisely the problem: an accident of scope is not a contract.
+        # `shellcheck` says so out loud on the other side ("referenced but not
+        # assigned"), and it is right. Exported, the command can also hand it to
+        # a child, and a caller that ignores it goes on working.
+        export RONOCTUA_RELOAD_FILE="$file"
         # `|| true`: a compile error is the NORMAL case in a development
         # loop. Taking the watcher down at the first syntax error would
         # force restarting the whole desktop to fix a typo.

@@ -209,6 +209,49 @@ de quem roda `nix run .#dev` de DENTRO do `nix develop`, porque ali quatro delas
 tabela é uma só (`rust.bufferComponents`), lida pelo embrulho, pelo devshell e pelo laço — e o
 devshell escrevia quatro dos cinco à mão, faltando justamente o do editor.
 
+#### E o hot reload nunca disparou — desde o primeiro commit
+
+Tirar os buffers da compilação deixou o laço aninhado num estado esquisito: construir um buffer ficou
+barato, e o observador do `nix run .#dev` observa `buffers/` — mas só sabia rodar `cargo build -p
+ronoctua-shell`, que não reconstrói componente nenhum. Ao abrir isso, o defeito era outro e maior.
+
+```
+RONOCTUA_RELOAD_CMD='reconstruir'   # o que o dev.nix mandava
+rebuild() { … }                     # o nome da função que ele define e exporta
+```
+
+O observador faz `eval` na string, recebe `reconstruir: command not found`, e engole com `|| true` —
+**e o `|| true` está certo**: erro de compilação é o caso normal de um laço, e derrubar o observador
+no primeiro `;` faltando obrigaria a reiniciar o desktop inteiro. Só que, com o nome errado, ele
+engolia o único caminho que existia. **O hot reload não disparou uma vez desde o primeiro commit**, e
+o que escondeu isso é que o rodapé que fica na tela é o do store, e funciona perfeitamente.
+
+O `reload-reloads` não viu porque prova o **mecanismo** com um comando de fabricação própria. Faltava
+prova da **fiação**, e é `reload-command-is-defined`: extrai o nome do script construído e exige que
+ele seja função definida E exportada ali. Provado reprovando — com `reconstruir` de volta, acusa.
+
+**E a segunda metade tinha de cair junto.** Consertar só a fiação seria uma regressão: o `dev.nix`
+exportava seis variáveis e o build assa **trinta e uma**. O binário do `cargo` teria ficado sem
+`btop`, sem área de transferência, sem `ghostty-vt`, sem terminfo — e ele SUBSTITUI o do store na
+primeira edição. Os dois defeitos se escondiam: um deixava o outro sem consequência.
+
+Hoje a tabela é uma só (`rust.generated // rust.bufferComponents`, interpolada), e
+`dev-exports-what-the-build-bakes` lê os nomes dela — não uma lista escrita no check. A classe morre:
+foi ela que produziu o superpacote de ícones (a lista abria com o glifo da categoria e nunca com o
+ícone do app) e os cinco componentes.
+
+Com as duas de pé, o `rebuild` passou a ter dois ramos, e quem decide é o caminho que mudou:
+`buffers/` vai para `nix build .#buffer-<nome>` — não `cargo`, porque cada buffer é um workspace
+próprio para `wasm32-wasip2`, com lock vendorizado e, em três deles, uma base gerada; um segundo jeito
+de construir o mesmo artefato divergiria. O caminho chega por `RONOCTUA_RELOAD_FILE`, **exportada** e
+não herdada por acidente de escopo — o `shellcheck` reclamou disso, e tinha razão.
+
+Três detalhes que só aparecem em uso: o rodapé reinicia com `RONOCTUA_FOOTER_BIN` (o do store até a
+primeira compilação, o do `cargo` depois), porque editar buffer reinicia sem compilar Rust nenhum; o
+`--set-default` do embrulho deixa de ser teórico, já que é ele que permite ao caminho novo vencer o
+assado; e se o `.wasm` sair idêntico, o laço diz que **arquivo novo precisa de `git add -N`**, em vez
+de anunciar sucesso e não mudar nada na tela.
+
 #### O formatador era a armadilha que ele mesmo documentava
 
 `formatter` era o `nixfmt` cru. `nix fmt` sem argumento virava um `nixfmt` lendo stdin e **travava** —

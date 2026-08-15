@@ -21,6 +21,12 @@
 # never against what you have just built. `m3` verified that `nix run .#dev`
 # "exists and is executable" — and the criterion asked for hot reload, which
 # did not exist. See `reload-reloads`.
+#
+# And the third, which cost the same lesson a second time: a check on the
+# MECHANISM is not a check on the WIRING. `reload-reloads` proved the watcher
+# fires, with a command of its own making, while the loop handed it the name of
+# a function that had never existed — so hot reload did not fire once, for as
+# long as the repository has existed. See `reload-command-is-defined`.
 {
   pkgs,
   lib,
@@ -993,6 +999,87 @@ let
     echo "OK: encerrar a sessao sai limpo, e uma vez so"
   '';
 
+  # THE NESTED LOOP CALLS A COMMAND THAT EXISTS.
+  #
+  # # The defect this exists for, and it lasted from the first commit
+  #
+  # `nix/dev.nix` handed the watcher `RONOCTUA_RELOAD_CMD='reconstruir'`, and
+  # the function it defines and exports is called `rebuild`. The watcher `eval`s
+  # the string, gets "command not found", and swallows it with `|| true` — which
+  # is correct, because a compile error is the normal case in a loop. So HOT
+  # RELOAD NEVER FIRED, not once, and nothing said so: the footer that stays on
+  # screen is the store's, and it works perfectly.
+  #
+  # `reload-reloads`, just below, did not see it: it proves the MECHANISM with a
+  # command of its own making. What was missing was a check on the WIRING.
+  #
+  # Both sides come from the built script, which is the artifact that runs.
+  reload-command-is-defined =
+    mkCheck "reload-command-is-defined"
+      [
+        pkgs.gnugrep
+        pkgs.gnused
+      ]
+      ''
+        script=${devApp}/bin/ronoctua-dev
+
+        cmd=$(sed -n "s/.*RONOCTUA_RELOAD_CMD='\([a-z_]*\)'.*/\1/p" "$script" | head -1)
+        [ -n "$cmd" ] || {
+          echo "ERRO: nao achei o RONOCTUA_RELOAD_CMD no script do laco" >&2
+          exit 1
+        }
+        echo "o laco manda rodar: $cmd"
+
+        grep -q "^  $cmd() {" "$script" || {
+          echo "ERRO: '$cmd' nao e uma funcao definida no script — o watcher vai" >&2
+          echo "      receber 'command not found', engolir com '|| true', e o hot" >&2
+          echo "      reload nao vai disparar NUNCA, sem uma linha de aviso." >&2
+          exit 1
+        }
+        # And exported: the watcher is ANOTHER process, and a function that is
+        # not exported does not cross into it — same symptom, same silence.
+        grep -qE "^  export -f .*\b$cmd\b" "$script" || {
+          echo "ERRO: '$cmd' nao e exportada; o watcher roda noutro processo" >&2
+          exit 1
+        }
+
+        echo "OK: o laco chama '$cmd', que existe e atravessa para o watcher"
+      '';
+
+  # AND IT COMPILES THE SAME BINARY THE BUILD WOULD.
+  #
+  # # The defect this exists for
+  #
+  # Everything in `nix/rust.nix`'s `generated` reaches the Rust through
+  # `option_env!`, which resolves at COMPILE time. Hot reload compiles the binary
+  # HERE, so a variable this script does not export is a variable that binary
+  # does not have — and the failure is always the same shape: a feature that
+  # works in production and answers "could not open" in the loop.
+  #
+  # It had already happened twice, and both were found by accident: the icon
+  # superpack (the list drew category glyphs and never the app's icon) and the
+  # five wasm components. Twenty-five more were waiting, `btop` and the
+  # clipboard and `ghostty-vt` among them; what hid them was that the reload was
+  # wired to a command that did not exist, so no edit ever replaced the store's
+  # binary.
+  #
+  # The list is not written here: it is read from the table the compilation gets.
+  dev-exports-what-the-build-bakes = mkCheck "dev-exports-what-the-build-bakes" [ pkgs.gnugrep ] ''
+    script=${devApp}/bin/ronoctua-dev
+    failed=0
+
+    for v in ${lib.concatStringsSep " " (lib.attrNames (rust.generated // rust.bufferComponents))}; do
+      grep -q "^  export $v=" "$script" || {
+        echo "ERRO: o build assa $v e o laco nao a exporta — o binario do hot" >&2
+        echo "      reload vai sem ela, e a falha aparece longe daqui." >&2
+        failed=1
+      }
+    done
+
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: as $(grep -c '^  export RONOCTUA_' "$script") variaveis do laco cobrem o que o build assa"
+  '';
+
   # HOT RELOAD RELOADS — behavior, not existence.
   #
   # The criterion of milestone 3 says "brings up niri + shell WITH HOT RELOAD".
@@ -1015,7 +1102,12 @@ let
         mkdir -p obs
         : > obs/inicial.rs
 
-        RONOCTUA_RELOAD_CMD="echo disparou >> $PWD/marcador" \
+        # The command records WHAT changed, and not just that it fired: the
+        # nested loop branches on that path — a `.rs` under `buffers/` is a
+        # component and is built by nix, everything else is the workspace and is
+        # built by cargo. If the variable stopped arriving, the loop would go on
+        # reloading and would silently take the wrong branch every time.
+        RONOCTUA_RELOAD_CMD="echo \"disparou \$RONOCTUA_RELOAD_FILE\" >> $PWD/marcador" \
           ronoctua-reload "$PWD/obs" &
         watcher=$!
         trap 'kill $watcher 2>/dev/null || true' EXIT
@@ -1039,6 +1131,13 @@ let
         [ "$ok" = sim ] || {
           echo "ERRO: mudar um .rs NAO disparou o comando." >&2
           echo "O hot reload do marco 3 nao esta funcionando." >&2
+          exit 1
+        }
+        grep -q "disparou .*obs/mudou.rs" marcador || {
+          echo "ERRO: disparou sem dizer QUAL arquivo mudou." >&2
+          echo "      O laco aninhado escolhe entre nix e cargo por esse caminho;" >&2
+          echo "      sem ele, todo buffer editado cairia no ramo da workspace." >&2
+          cat marcador >&2
           exit 1
         }
 
@@ -1095,7 +1194,7 @@ let
   # # The defect this catches
   #
   # Restarting the footer was a FUNCTION inside `nix/dev.nix`, and the hot
-  # reload's `reconstruir` runs in the WATCHER's process. The function got there
+  # reload's `rebuild` runs in the WATCHER's process. The function got there
   # through `export -f`, but the `rodapepid` it read is a shell variable, and a
   # shell variable does not cross a process. Under the watcher's `set -u` that
   # does not become a false `if`: it becomes `unbound variable`, which brings the
@@ -3117,6 +3216,8 @@ in
     shaping-fast
     large-monitor-surface
     reload-reloads
+    reload-command-is-defined
+    dev-exports-what-the-build-bakes
     footer-is-single
     footer-logs-to-file
     dev-exits-clean
@@ -3189,6 +3290,11 @@ in
     # The nested loop, and the proof that it RELOADS — not only that it exists.
     devApp
     reload-reloads
+    # And that what it calls EXISTS, and that the binary it compiles gets the
+    # same environment the build bakes. Those two are the wiring; the one above
+    # is the mechanism, and the mechanism worked for months with no wiring.
+    reload-command-is-defined
+    dev-exports-what-the-build-bakes
     # And that restarting RESTARTS: `reload-reloads` proves that the command
     # fires, this one proves that exactly one footer is left.
     footer-is-single

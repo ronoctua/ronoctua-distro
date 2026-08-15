@@ -334,6 +334,21 @@ rec {
   # so do the devshell and the nested loop, which run a binary `cargo` built and
   # that therefore has no wrapper. Three readers, one table.
   inherit bufferComponents;
+  # AND THE WHOLE TABLE OF WHAT THE BUILD BAKES, for the same readers and one
+  # sharper reason.
+  #
+  # Everything in here reaches the Rust through `option_env!`, which resolves at
+  # COMPILE time — so a binary that `cargo` built outside Nix has whatever the
+  # environment held at that moment, and nothing else. `nix/dev.nix` was writing
+  # six of these out by hand and missing twenty-five; the hot reload's binary
+  # therefore had no `btop`, no clipboard, no `ghostty-vt` and no terminfo. It
+  # went unnoticed because the reload was wired to a command that did not exist,
+  # so no edit ever replaced the store's binary.
+  #
+  # Exported whole, the list stops being copied — and
+  # `dev-exports-what-the-build-bakes` fails if a new one is added here and not
+  # picked up over there.
+  inherit generated;
 
   # The built workspace.
   workspace = craneLib.buildPackage (

@@ -67,8 +67,14 @@ nix run .#dev
 
 Abre uma janela com o compositor rodando dentro dela e o rodapé embaixo.
 
-Editar um `.rs` em `crates/` recompila e reinicia o rodapé sozinho, com o compositor de pé. Ele
+Editar um `.rs` em `crates/` recompila e reinicia o rodapé sozinho, com o compositor de pé. Editar um
+`.rs` em `buffers/` reconstrói **aquele componente** e reinicia o rodapé apontando para ele — são
+caminhos diferentes porque um buffer é um componente wasm, e quem constrói componente é o flake. Ele
 imprime `hot reload ligado` na partida — se não imprimir, você não está na raiz do projeto.
+
+> **Arquivo novo precisa de `git add -N`.** O flake enxerga a árvore do **git**, e um arquivo que
+> nunca foi adicionado é invisível para ele: a construção passa, sai idêntica, e a sua edição
+> simplesmente não está lá. O laço percebe e diz isso em vez de anunciar sucesso.
 
 ## A única tecla que você precisa saber
 
