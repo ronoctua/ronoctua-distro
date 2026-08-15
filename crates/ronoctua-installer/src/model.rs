@@ -572,10 +572,18 @@ pub const DEFAULT_TIMEZONE: &str = "Europe/London";
 
 /// The Compose key when nobody chooses another.
 ///
-/// AltGr, which is the key a keyboard has and nothing else uses: the right Alt
-/// sits under the hand that is not typing the letter, and no layout here needs
-/// it for a third level that Compose cannot also reach.
-pub const DEFAULT_COMPOSE: &str = "compose:ralt";
+/// Caps Lock: the largest key on the home row, under the left little finger,
+/// and what it does by default — shouting — is something nobody asked for. It
+/// does not stop existing (the two Shifts together toggle it, and that comes
+/// from the system rather than from this answer), and AltGr goes back to being
+/// AltGr with the level-3 symbols it always had.
+///
+/// It has to be the same value as `nix/keyboard-xkb.nix`'s `compose`, and
+/// `installer-defaults-match-the-keyboard` is what says so: this is the default
+/// of a QUESTION, and that is the default of the SYSTEM — a machine installed
+/// by pressing Enter and one built by `nix build` would otherwise type
+/// differently.
+pub const DEFAULT_COMPOSE: &str = "compose:caps";
 
 /// The keyboard layout when nobody chooses another.
 pub const DEFAULT_LAYOUT: &str = "gb";

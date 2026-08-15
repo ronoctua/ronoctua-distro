@@ -1309,7 +1309,7 @@ porque a forma do argumento no JSON é dele.
 
 ---
 
-### O teclado: layout num lugar, e o AltGr como Compose
+### O teclado: layout num lugar, e o Caps Lock como Compose
 
 O layout vive em `nix/keyboard-xkb.nix` e é lido pelo config de produção, pelo aninhado e pelo console
 do TTY. Escrito nos três, um dia divergiriam — e o sintoma seria a mesma tecla dando caractere
@@ -1318,15 +1318,33 @@ diferente conforme onde se digita.
 Hoje ele é `gb`, porque o teclado em uso é britânico. É decisão temporária e o instalador vai
 perguntar isso um dia; até lá, muda em um lugar.
 
-**O AltGr é a tecla Compose**, e não o nível 3. O teclado britânico não tem tecla de acento, e o `gb`
-puro só alcança `^` e `` ` `` mortos — falta o agudo, o til e o cedilha, que é metade do português.
-Com `compose:ralt`, `AltGr ' a` dá `á`, `AltGr ~ a` dá `ã`, `AltGr , c` dá `ç`: uma regra só para
-toda acentuação, e **nada muda na digitação normal**.
+**O Caps Lock é a tecla Compose.** O teclado britânico não tem tecla de acento, e o `gb` puro só
+alcança `^` e `` ` `` mortos — falta o agudo, o til e o cedilha, que é metade do português. Com
+`compose:caps`, `CAPS ' a` dá `á`, `CAPS ~ a` dá `ã`, `CAPS , c` dá `ç`: uma regra só para toda
+acentuação, e **nada muda na digitação normal**.
+
+Era o AltGr (`compose:ralt`), e a troca é decisão do dono. Também é a melhor tecla pelo mérito: o Caps
+Lock é a maior tecla da fileira de descanso, sob o mindinho esquerdo, e o que ele faz por padrão —
+gritar — ninguém pediu. O AltGr volta a ser AltGr, e com ele os símbolos de nível 3 (`€`, `½`, `æ`)
+voltam a ser um toque em vez de uma sequência de Compose.
+
+**Compose não é modificador**, e a diferença aparece mais aqui do que aparecia no AltGr: não se
+segura. Aperta e solta o Caps, depois `'`, depois `a`. É também por isso que ele não colide com a
+leader nem com acorde nenhum — tecla que não levanta modificador não fica presa embaixo de um.
+
+**E o Caps Lock não deixou de existir**: `shift:both_capslock` põe os dois Shifts juntos como o
+interruptor dele. Não custa nada — ninguém aperta os dois sem querer — e mantém a função ao alcance de
+quem escreve uma sigla.
 
 As alternativas foram descartadas com motivo: `gb(intl)` e `gb(extd)` põem acento **morto no nível
 1**, e a tecla `` ` `` deixa de escrever crase até você apertar espaço — num teclado que digita código
-o dia inteiro, isso é pior do que o problema que resolve. O custo do Compose é que os símbolos de
-nível 3 (`€`, `½`, `æ`) passam a exigir dois toques em vez de um; o próprio Compose os alcança.
+o dia inteiro, isso é pior do que o problema que resolve. E `lv3:caps_switch` faria do Caps um
+seletor de nível 3 em vez de Compose: dá `ê` e `è`, e não dá `á`, `ã` nem `ç`.
+
+**A resposta do instalador é `compose`, e não `options`.** A sétima pergunta escolhe a tecla de
+acento; o que o xkb recebe é ela mais o que o sistema acrescenta de qualquer jeito. Eram um campo só,
+e então responder sobre acento levava junto, calado, o interruptor do Caps Lock — resposta a uma
+pergunta tirando algo que ninguém perguntou.
 
 Isso funciona **dentro dos nossos buffers também**: o SCTK monta uma `xkb::compose::State` e o texto
 que chega ao rodapé e ao terminal já vem composto. Não é suposição — está no `init_compose` da versão
@@ -1335,8 +1353,17 @@ que o `Cargo.lock` fixa.
 E há um check para o nome: **o xkb não recusa um layout que não conhece**, ele cai no `us` e segue. O
 sintoma seria o teclado inteiro digitando outra coisa sem uma linha de erro — a mesma classe do
 fallback silencioso, e a mais cara delas, porque o jeito de investigar é digitando. O
-`keyboard-layout-exists` confere layout, variante e opção contra o registro do `xkeyboard-config` que
-a sessão vai usar, e o keymap do console contra o banco do `kbd`, que é outro.
+`keyboard-layout-exists` confere layout, variante e **cada** opção contra o registro do
+`xkeyboard-config` que a sessão vai usar, e o keymap do console contra o banco do `kbd`, que é outro.
+
+E existir não basta: **opção que o xkb não conhece ele IGNORA, com status zero** — medido, com
+`compose:naoexiste` compilando limpo e só uma linha em `stderr`. Por isso o
+`keyboard-options-do-what-they-say` compila o keymap de verdade e lê os símbolos de volta: exige
+`Multi_key` em alguma tecla e `Caps_Lock` no segundo nível dos dois Shifts. Sem o primeiro não há
+acento; sem o segundo o Caps Lock deixou de existir e ninguém foi avisado. Provado reprovando nos
+dois. E como o instalador carrega os padrões em constantes de Rust — ele roda num TTY do ISO, sem
+flake para avaliar —, o `installer-defaults-match-the-keyboard` compara as duas cópias: divergindo,
+a máquina instalada apertando Enter e a construída por `nix build` digitariam diferente.
 
 ---
 
@@ -2670,6 +2697,75 @@ E faltava `boot.resumeDevice`. Com `boot.initrd.systemd.enable`, o nixpkgs só e
 essa opção existe: a linha de comando levava `resume_offset=` sozinho, que é meio caminho.
 
 
+
+### O console de resgate — `Ctrl+Alt+Del`, e duas portas para a mesma tela
+
+O rodapé é a **única** chrome (inv. 14): morto, não há modeline, minibuffer nem leader. Os três binds
+fora da leader cobriam três casos e todos pedem `spawn` ao **compositor** — ou seja, os três somem
+exatamente quando o compositor é o que quebrou. Faltava a porta que funciona quando nada funciona.
+
+**O pedido tinha um conflito interno, e ele decidiu a arquitetura.** "Independente do niri e das
+ferramentas gráficas" e "matar janela com um clique do mouse" não cabem na mesma tela: o console do
+kernel não tem ponteiro. A saída é **um binário, duas portas**:
+
+| | com o niri vivo | sem ele |
+|---|---|---|
+| quem abre | bind do niri → janela flutuante | kernel → `ctrl-alt-del.target` → VT 8 |
+| o que existe | mouse e teclado | teclado |
+| do que depende | Wayland, wgpu, atlas de fontes | nada disso |
+
+É a mesma tela, o mesmo binário. Por isso o resgate é uma **aplicação de terminal** e não um cliente
+Wayland: uma janela de resgate que precisa do compositor vivo é a chave trancada dentro do cofre.
+
+**Não é chrome** (inv. 14). A porta de cima é um `xdg_toplevel` que o niri flutua por `window-rule`
+gerada — exatamente o que o `Ctrl+Alt+Esc` já faz com o btop, com um terceiro `app_id`
+(`br.ronoctua.rescue`) porque a regra dele pede janela maior. A porta de baixo não está no desktop.
+
+#### Tomar o `Ctrl+Alt+Del` é assumir o que ele fazia
+
+O systemd entrega `ctrl-alt-del.target` como apelido de `reboot.target`. Uma unidade de mesmo nome em
+`/etc/systemd/system` — que é o que `systemd.targets` escreve — substitui o apelido. Um toque deixa de
+reiniciar.
+
+Isso é perda real, e é paga duas vezes: **reiniciar é uma linha dentro do console** (que pergunta
+antes), e a saída dura do systemd continua intacta — **sete toques em dois segundos** ainda reiniciam
+à força, sem passar por nada nosso. O `ctrl-alt-del-is-ours` afirma as duas metades, e a segunda é a
+que ninguém pensaria em conferir: se o *burst* também tivesse saído, uma máquina totalmente travada
+ficaria sem saída nenhuma, e nada diria isso até o dia.
+
+#### Uma ação é DADO
+
+Cada conserto de um toque é uma linha de tabela: id, chave de texto, o que roda, e se pede senha.
+Nada sobre *o que* rodar mora no código que desenha — e é isso que torna a lista auditável do Nix:
+`rescue-actions-have-text` lê os ids do Rust e exige a chave nos dois idiomas;
+`rescue-polkit-is-narrow` exige que as unidades das linhas privilegiadas sejam **exatamente** as que a
+regra de polkit permite, nos dois sentidos. Foi esse segundo sentido que achou, sozinho, que a
+unidade do editor morava noutro arquivo.
+
+**Duas faixas, e a linha é a do dono:** ver é livre, agir prova quem é. Reiniciar rodapé, niri ou a
+sessão inteira não passa por polkit nenhum — não há display manager aqui, e essas são unidades **de
+usuário**. O que toca o sistema, dá shell ou não se desfaz vai para `auth_self_keep`: a senha da
+própria pessoa, uma vez, lembrada pela sessão. Quem pergunta é o polkit, com `pkttyagent` no VT — este
+crate nunca vê senha, e um console de resgate é o pior lugar possível para errar autenticação.
+
+#### O que ele não faz, e por quê
+
+**Não edita o config do niri.** `/etc/niri/config.kdl` é link para o store e é gerado
+(`nix/modules/niri.nix`): editar seria imperativo (inv. 6) e sumiria no rebuild. Ele **abre em
+leitura**, dizendo de qual arquivo do flake nasceu — o que a pessoa procura é o arquivo cujo nome ela
+sabe, e encontrá-lo junto com a origem é a diferença entre resposta e beco sem saída. O único
+arquivo que a máquina de fato possui é o `host.nix`, e esse abre para editar.
+
+**Não tem painéis de terminal lado a lado.** Um terminal é a tela inteira: o app sai da tela
+alternada, entrega o terminal ao shell e o retoma quando ele fecha. Isso evita PTY nosso, parser de
+VT e um segundo jeito de desenhar terminal — que é justamente a bagagem que um console de resgate não
+deveria carregar. O `rescue-has-no-toolchain` cobra: linkar `ronoctua-term` traria `libghostty-vt`, e
+com ele Zig, clang e LLVM. Medido: **89 caminhos no closure, nenhum compilador**.
+
+**E não roda como root.** `Ctrl+Alt+Del` não pede login: um console de root a uma tecla de qualquer
+máquina bloqueada seria buraco maior do que o que este arquivo fecha.
+
+---
 
 ### Impermanência: renomear, não apagar
 

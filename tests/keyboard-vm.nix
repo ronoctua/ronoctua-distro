@@ -135,6 +135,17 @@ pkgs.testers.runNixOSTest {
           # And a HELD Super goes on being a modifier in the chords.
           assert "Mod+Left { focus-column-left; }" in kdl, kdl
 
+      with subtest("as opcoes de xkb chegam ao compositor da SESSAO"):
+          # `keyboard-options-do-what-they-say` compiles that same string and
+          # reads the symbols back — what is missing there, and only a booted
+          # system answers, is whether the string SURVIVES the module: it is
+          # built from `ronoctua.keyboard.compose` plus what the system adds,
+          # and an option that never reaches the config is an accent key that
+          # does not accent, with the keymap perfectly correct one layer below.
+          assert 'options "${nodes.machine.ronoctua.keyboard.options}"' in kdl, (
+              "as opcoes de xkb nao chegaram ao config do niri:\n" + kdl
+          )
+
       with subtest("o rodape sobe como servico da sessao, por caminho do store"):
           # IT DID NOT COME UP. The binary was not even installed, and the leader's
           # bind spawned the NAME `ronoctua-shell` — in production the whole system
@@ -159,7 +170,7 @@ pkgs.testers.runNixOSTest {
       with subtest("os binds de emergencia existem, e FORA da leader"):
           # They only serve for when the leader does not answer. With `Mod+` in
           # front, they would be the key locked inside the safe.
-          for press_key in ["Ctrl+Alt+L", "Ctrl+Shift+L"]:
+          for press_key in ["Ctrl+Alt+L", "Ctrl+Shift+L", "Ctrl+Alt+Delete"]:
               assert f"\n    {press_key} " in kdl, f"falta o bind {press_key}:\n{kdl}"
               assert f"Mod+{press_key}" not in kdl, f"{press_key} saiu com o prefixo da leader"
           assert "keyboard-restore" in kdl, kdl

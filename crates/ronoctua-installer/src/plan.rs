@@ -199,7 +199,13 @@ pub fn host_nix(r: &Answers) -> String {
         "  ronoctua.keyboard.variant = \"{}\";",
         r.keyboard_variant
     );
-    let _ = writeln!(s, "  ronoctua.keyboard.options = \"{}\";", r.compose_key);
+    // `compose` AND NOT `options`: the second is the whole xkb string, and the
+    // module builds it from this answer plus what the system adds regardless
+    // (today, the two Shifts that toggle Caps Lock). Writing `options` here —
+    // which is what this line used to do — meant that answering the accent
+    // question replaced the whole string, and whoever chose a Compose key other
+    // than the default silently lost a key they were never asked about.
+    let _ = writeln!(s, "  ronoctua.keyboard.compose = \"{}\";", r.compose_key);
     // THE HARDWARE REPORT, by RELATIVE path.
     //
     // The `nixos-facter` step writes it next to this file, and both end up in

@@ -92,9 +92,17 @@ ambiente já usar essa combinação, ele a captura antes, e a tecla não chega a
 "nenhum atalho funciona", que tem três causas com a mesma tela — rode `nix run .#diagnostics` antes
 de supor qual delas é.
 
-Três atalhos ficam fora da lista de propósito, para quando a máquina para de responder:
-`Ctrl+Alt+L` abre a lista quando a leader falha, `Ctrl+Shift+L` restaura o teclado e
-`Ctrl+Alt+Esc` abre o monitor de processos.
+Quatro atalhos ficam fora da lista de propósito, para quando a máquina para de responder:
+`Ctrl+Alt+L` abre a lista quando a leader falha, `Ctrl+Shift+L` restaura o teclado,
+`Ctrl+Alt+Esc` abre o monitor de processos e **`Ctrl+Alt+Del` abre o console de resgate**.
+
+> **O `Ctrl+Alt+Del` deixou de reiniciar.** Ele abre o console de resgate, e reiniciar é uma linha lá
+> dentro. Se a máquina estiver travada a ponto de nem isso responder, **sete toques em dois segundos**
+> ainda reiniciam à força — essa saída é do systemd e não passa por nada nosso.
+>
+> Com o compositor vivo, o console abre numa janela flutuante e o mouse funciona. Sem ele — compositor
+> travado, sessão que não subiu —, o systemd abre o mesmo programa num console virtual próprio, e aí é
+> só teclado. `Alt+F1` volta para onde você estava; sair do console também.
 
 O comando imprime as teclas certas ao subir. Elas valem mais do que este texto.
 

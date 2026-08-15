@@ -76,7 +76,23 @@ in
       {
         layout = field "layout" base.layout;
         variant = field "variant" base.variant;
-        options = field "options" base.options;
+        # THE COMPOSE KEY IS THE ANSWER; `options` IS WHAT XKB GETS.
+        #
+        # The installer fills in this one, and the other is built from it plus
+        # what the system adds either way (`always`, in that same file). They
+        # were a single option, and then the seventh question — which asks only
+        # about accents — would have quietly taken the Caps Lock toggle away
+        # from whoever answered it.
+        compose = field "compose" base.compose;
+        options = lib.mkOption {
+          type = lib.types.str;
+          default = builtins.concatStringsSep "," (
+            (if config.ronoctua.keyboard.compose == "" then [ ] else [ config.ronoctua.keyboard.compose ])
+            ++ base.always
+          );
+          defaultText = lib.literalMD "a tecla de acentos escolhida, mais `nix/keyboard-xkb.nix`";
+          description = "xkb `options`, completo. Padrao: derivado de `compose`.";
+        };
         console = field "console" base.console;
       };
 

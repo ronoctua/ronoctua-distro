@@ -2889,6 +2889,10 @@ impl Footer {
             //
             // The four below take the SAME route — this one used to have its
             // own copy of the sequence, from back when it was the only buffer.
+            // THE RESCUE CONSOLE — `Ctrl+Alt+Del`, and the only command here
+            // that has a second way in. When this one cannot run, because the
+            // compositor is what broke, systemd opens the same program on a VT.
+            "rescue-open" => self.open_rescue(),
             "glyphs-nerd-fonts" => self.open_buffer("RONOCTUA_BUFFER_GLYPHS"),
             "unicode-symbols" => self.open_buffer("RONOCTUA_BUFFER_UNICODE"),
             "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
@@ -4648,6 +4652,35 @@ impl Footer {
             }
             (_, None) => {
                 tracing::error!(variable, "a variavel do componente nao esta no ambiente");
+                let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
+                self.echo_message(m);
+            }
+            (Err(e), _) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),
+        }
+    }
+
+    /// Opens the rescue console in a floating terminal window.
+    ///
+    /// # Why the binary comes from NEXT DOOR and not from a variable
+    ///
+    /// `ronoctua-rescue` and this binary are built by the same derivation —
+    /// there is one workspace (`nix/rust.nix`). A `RONOCTUA_RESCUE` holding its
+    /// store path would be this derivation referencing itself, which Nix cannot
+    /// express. What ships them together is that they are the same `bin/`, and
+    /// asking the filesystem is the honest way to say so.
+    fn open_rescue(&mut self) {
+        let beside = std::env::current_exe()
+            .ok()
+            .and_then(|me| Some(me.parent()?.join("ronoctua-rescue")))
+            .filter(|p| p.exists());
+        match (std::env::current_exe(), beside) {
+            (Ok(me), Some(rescue)) => self.open_foreign(
+                &me.to_string_lossy(),
+                &["rescue".to_owned(), rescue.to_string_lossy().into_owned()],
+                None,
+            ),
+            (_, None) => {
+                tracing::error!("o binario do resgate nao esta ao lado deste");
                 let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
                 self.echo_message(m);
             }

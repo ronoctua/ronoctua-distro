@@ -2597,6 +2597,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-rescue"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ratatui",
+ "ronoctua-i18n",
+ "ronoctua-memory",
+ "ronoctua-niri",
+ "ronoctua-protocol",
+ "ronoctua-tokens",
+]
+
+[[package]]
 name = "ronoctua-runtime"
 version = "0.1.0"
 dependencies = [

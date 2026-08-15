@@ -96,7 +96,7 @@ let
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit (inputs) niri;
-      shell = rust.workspace;
+      shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
   };
@@ -185,11 +185,11 @@ let
     for cfg in "${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}" \
                "${devApp.config}"; do
       echo "validando $cfg"
-      if ! niri validate --config "$cfg" 2>erro.txt; then
+      if ! niri validate --config "$cfg" 2>errors.txt; then
         echo "ERRO: o niri RECUSOU o config gerado." >&2
         echo "      Um config recusado nao e um atalho quebrado: e o" >&2
         echo "      compositor caindo no padrao dele, sem nada nosso." >&2
-        cat erro.txt >&2
+        cat errors.txt >&2
         exit 1
       fi
     done
@@ -381,10 +381,20 @@ let
       echo "      passa a digitar outra coisa, sem erro nenhum." >&2
       exit 1; }
 
-    grep -qE "^ +$optionName +" "$lst" || {
-      echo "ERRO: a opcao \`$optionName\` nao existe no xkeyboard-config." >&2
-      echo "      Sem ela o AltGr volta a ser nivel 3 e some a acentuacao." >&2
-      exit 1; }
+    # ONE BY ONE, and there is more than one now.
+    #
+    # `options` is a comma-separated LIST, and this used to grep the whole
+    # string as if it were a single name — which worked only for as long as
+    # there was exactly one option. The day a second was added, the check would
+    # have failed on a correct config, which is the other half of the same
+    # defect: a check that cannot see is as bad as no check.
+    for o in $(echo "$optionName" | tr ',' ' '); do
+      grep -qE "^ +$o +" "$lst" || {
+        echo "ERRO: a opcao \`$o\` nao existe no xkeyboard-config." >&2
+        echo "      O xkb NAO recusa: ele IGNORA a opcao e segue em frente," >&2
+        echo "      entao a acentuacao simplesmente nao acontece, sem erro." >&2
+        exit 1; }
+    done
 
     if [ -n "$variantName" ]; then
       grep -qE "^ +$variantName +$layout:" "$lst" || {
@@ -401,6 +411,102 @@ let
 
     echo "OK: layout $layout, opcao $optionName, console ${keyboard.console}"
   '';
+
+  # AND THE OPTIONS DO WHAT THEIR NAMES PROMISE — the keymap, compiled.
+  #
+  # # Why existing is not enough
+  #
+  # The check above proves the names are in the database. It does not prove they
+  # produce anything: an option xkb does not recognise is **ignored, and the
+  # exit status is zero** — measured, with `compose:naoexiste`, which compiles
+  # fine and merely writes "Unrecognized RMLVO option ... was ignored" to
+  # stderr. The symptom is the accent key that types nothing, on a keyboard that
+  # is otherwise perfect.
+  #
+  # So this compiles the real keymap out of the real database and reads the
+  # symbols back:
+  #
+  #   - `<CAPS>` has to carry `Multi_key`, which IS Compose. Without it, the
+  #     British layout reaches dead `^` and `` ` `` and nothing else — no `á`,
+  #     no `ã`, no `ç`, which is half of Portuguese;
+  #   - both Shifts have to carry `Caps_Lock` on their second level. That is
+  #     where Caps Lock went when Compose took its place, and it is the only way
+  #     back to it.
+  #
+  # `xkbcli` and not `setxkbmap`: the second one needs an X server, and this
+  # is a check.
+  keyboard-options-do-what-they-say =
+    mkCheck "keyboard-options-do-what-they-say"
+      [
+        pkgs.libxkbcommon
+        pkgs.gnugrep
+      ]
+      ''
+        export XKB_CONFIG_ROOT=${pkgs.xkeyboard_config}/share/X11/xkb
+
+        xkbcli compile-keymap \
+          --layout ${keyboard.layout} \
+          ${lib.optionalString (keyboard.variant != "") "--variant ${keyboard.variant} "}\
+          --options "${keyboard.options}" > keymap.xkb 2> errors.txt || {
+            echo "ERRO: o keymap nem compilou:" >&2; cat errors.txt >&2; exit 1; }
+
+        # The ignored-option message, which is the silent failure by name.
+        if grep -q "was ignored" errors.txt; then
+          echo "ERRO: o xkb IGNOROU uma opcao e seguiu em frente:" >&2
+          cat errors.txt >&2
+          exit 1
+        fi
+
+        # Compose, wherever the answer put it — the symbol is what matters, and
+        # not which key carries it.
+        grep -q "Multi_key" keymap.xkb || {
+          echo "ERRO: nenhuma tecla virou Compose (\`Multi_key\`) no keymap." >&2
+          echo "      Sem ela nao existe \`a\`, \`a~\` nem \`c,\` neste teclado." >&2
+          exit 1; }
+
+        # And Caps Lock, which left the Caps Lock key and has to be somewhere.
+        for side in LFSH RTSH; do
+          grep -A 3 "key <$side>" keymap.xkb | grep -q "Caps_Lock" || {
+            echo "ERRO: o Shift <$side> nao alterna o Caps Lock." >&2
+            echo "      A tecla Caps virou Compose; sem os dois Shifts, o Caps" >&2
+            echo "      Lock deixou de existir e ninguem foi avisado." >&2
+            grep -A 3 "key <$side>" keymap.xkb >&2
+            exit 1; }
+        done
+
+        echo "OK: Compose existe no keymap e os dois Shifts alternam o Caps Lock"
+      '';
+
+  # THE INSTALLER'S DEFAULTS ARE THE SYSTEM'S DEFAULTS.
+  #
+  # `ronoctua-installer` carries `DEFAULT_LAYOUT` and `DEFAULT_COMPOSE` as Rust
+  # constants — it has to, because it runs from a TTY on the ISO with no flake
+  # to evaluate. That makes them a SECOND copy of `nix/keyboard-xkb.nix`, and
+  # the two agreeing has been a matter of whoever edited remembering the other.
+  #
+  # What divergence looks like: a machine installed by pressing Enter through
+  # the questions and a machine built by `nix build .#noctua` type differently.
+  # Nothing fails; the person just finds out the day they need an accent.
+  installer-defaults-match-the-keyboard =
+    mkCheck "installer-defaults-match-the-keyboard" [ pkgs.gnugrep ]
+      ''
+        src=${../crates/ronoctua-installer/src}/model.rs
+        failed=0
+
+        agree() {
+          wanted="$2"
+          found=$(grep -oP "pub const $1: &str = \"\K[^\"]*" "$src" | head -1)
+          [ "$found" = "$wanted" ] || {
+            echo "ERRO: $1 e \`$found\` no instalador e \`$wanted\` no Nix." >&2
+            failed=1
+          }
+        }
+        agree DEFAULT_LAYOUT "${keyboard.layout}"
+        agree DEFAULT_COMPOSE "${keyboard.compose}"
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: o instalador e o nix/keyboard-xkb.nix concordam"
+      '';
 
   # EVERY COMPOSITOR ACTION HAS A TRANSLATION IN BOTH LANGUAGES.
   #
@@ -467,13 +573,13 @@ let
     cp -r ${../assets/i18n} bad && chmod -R +w bad
     echo 'so-em-ingles = orphan' >> bad/en-GB.ftl
 
-    if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs 2>erro.txt; then
+    if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs 2>errors.txt; then
       echo "ERRO: o gerador ACEITOU uma chave que existe em so um idioma" >&2
       exit 1
     fi
-    grep -q 'so-em-ingles' erro.txt || {
+    grep -q 'so-em-ingles' errors.txt || {
       echo "ERRO: falhou, mas a mensagem nao diz qual chave" >&2
-      cat erro.txt >&2
+      cat errors.txt >&2
       exit 1
     }
     echo "OK: chave em so um idioma derruba o build, dizendo qual"
@@ -611,7 +717,7 @@ let
     printf 'psk%s"SenhaDoWifi12345"\n' '=' > tree_out/sub/wifi.conf
     printf 'maintainer = "fulano.real%sprovedor.com"\n' '@' > tree_out/sub/meta.nix
 
-    if python3 ${../nix/scripts/scan-secrets.py} tree_out 2>erro.txt; then
+    if python3 ${../nix/scripts/scan-secrets.py} tree_out 2>errors.txt; then
       echo "ERRO: a varredura NAO acusou os segredos plantados." >&2
       exit 1
     fi
@@ -619,15 +725,15 @@ let
     # Every form has to show up: one regex can break without the others.
     for forma in "chave privada" "hash de senha" "chave age" \
                  "token de servico" "PSK de wifi" "e-mail"; do
-      grep -q "$forma" erro.txt || {
+      grep -q "$forma" errors.txt || {
         echo "ERRO: a varredura nao acusou: $forma" >&2
-        cat erro.txt >&2
+        cat errors.txt >&2
         exit 1
       }
     done
 
     # And the secret must NOT show up in the output: the CI log would publish it.
-    if grep -qE 'A1b2C3d4|QQPQZRHW4|SenhaDoWifi' erro.txt; then
+    if grep -qE 'A1b2C3d4|QQPQZRHW4|SenhaDoWifi' errors.txt; then
       echo "ERRO: a varredura imprimiu o proprio segredo." >&2
       exit 1
     fi
@@ -965,11 +1071,11 @@ let
     export WAYLAND_DISPLAY=nao-existe-1
     # It exits non-zero on purpose (niri does not come up here); what is measured
     # is what it PRINTS on ending.
-    timeout 300 ronoctua-dev > out_text.txt 2> erro.txt || true
+    timeout 300 ronoctua-dev > out_text.txt 2> errors.txt || true
 
-    if grep -qE "cannot remove|Permission denied" erro.txt; then
+    if grep -qE "cannot remove|Permission denied" errors.txt; then
       echo "ERRO: encerrar a sessao imprimiu erro de remocao:" >&2
-      grep -E "cannot remove|Permission denied" erro.txt >&2
+      grep -E "cannot remove|Permission denied" errors.txt >&2
       echo "      Caminho do store nao se apaga, e o '-f' nao cala isso." >&2
       exit 1
     fi
@@ -987,12 +1093,12 @@ let
     # The `|| true` is around the `grep -c`: with no match at all it exits 1, and
     # under `pipefail` that would bring the check down before it counted — which is
     # the same trap `pgrep` has already set twice in this file.
-    n=$( { cat out_text.txt erro.txt | grep -c "logs desta sessao:"; } || true )
+    n=$( { cat out_text.txt errors.txt | grep -c "logs desta sessao:"; } || true )
     [ "$n" = 1 ] || {
       echo "ERRO: o encerrar rodou $n vezes; esperava 1." >&2
       echo "      'trap … EXIT INT TERM' limpa pelo INT e de novo pelo EXIT." >&2
       echo "--- saida:" >&2; tail -20 out_text.txt >&2
-      echo "--- erro:" >&2; tail -20 erro.txt >&2
+      echo "--- erro:" >&2; tail -20 errors.txt >&2
       exit 1
     }
 
@@ -1078,6 +1184,232 @@ let
 
     [ "$failed" = 0 ] || exit 1
     echo "OK: as $(grep -c '^  export RONOCTUA_' "$script") variaveis do laco cobrem o que o build assa"
+  '';
+
+  # ===================================================================
+  # THE RESCUE CONSOLE — `Ctrl+Alt+Del`
+  # ===================================================================
+
+  # EVERY ROW OF THE CONSOLE HAS A SENTENCE, IN BOTH LANGUAGES.
+  #
+  # Invariant 8, on the one screen where breaking it would hurt most: a rescue
+  # console that draws `[rescue-reboot]` is a console whose rows nobody can
+  # read, opened by somebody whose machine is already broken.
+  #
+  # The ids come out of the Rust and not out of a list written here — a list
+  # here would be a third copy, and the one that goes stale is always the copy.
+  rescue-actions-have-text =
+    mkCheck "rescue-actions-have-text"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        src=${../crates/ronoctua-rescue/src}
+        failed=0
+
+        keys=$(grep -ohE '"rescue-[a-z0-9-]+"' "$src"/lib.rs | tr -d '"' | sort -u)
+        [ -n "$keys" ] || {
+          echo "ERRO: nenhuma chave 'rescue-*' no registro — o grep casa o que?" >&2
+          exit 1
+        }
+
+        for k in $keys; do
+          for language in pt-BR en-GB; do
+            grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
+              echo "ERRO: falta '$k' em $language.ftl — a tela mostraria [$k]" >&2
+              failed=1
+            }
+          done
+        done
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(echo "$keys" | wc -l) chaves do resgate, nos dois idiomas"
+      '';
+
+  # NOTHING THE CONSOLE SPAWNS COMES BY NAME.
+  #
+  # It runs from a unit on a VT, where `PATH` is minimal, and it is opened
+  # BECAUSE something is already broken — a name that does not resolve fails on
+  # the one screen that exists to explain failures.
+  #
+  # Two sides, both from real artifacts: the variables the crate reads, and the
+  # table `nix/rust.nix` sets. It is `shell-finds-its-buffers` again, on the
+  # other application.
+  rescue-runs-by-path = mkCheck "rescue-runs-by-path" [ pkgs.gnugrep ] ''
+    src=${../crates/ronoctua-rescue/src}
+    failed=0
+
+    read_it=$(grep -ohE 'option_env!\("RONOCTUA_[A-Z_]+"\)' "$src"/*.rs \
+      | grep -oE 'RONOCTUA_[A-Z_]+' | sort -u)
+    [ -n "$read_it" ] || {
+      echo "ERRO: o console nao le variavel nenhuma — ele spawna por nome?" >&2
+      exit 1
+    }
+    echo "o console le: $(echo "$read_it" | tr '\n' ' ')"
+
+    baked="${lib.concatStringsSep " " (lib.attrNames rust.generated)}"
+    for v in $read_it; do
+      case " $baked " in
+        *" $v "*) ;;
+        *)
+          echo "ERRO: o console le $v e o build nao a assa — ele cairia" >&2
+          echo "      no 'PATH' minimo de uma unidade e falharia longe daqui." >&2
+          failed=1
+          ;;
+      esac
+    done
+
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: todo programa do resgate vem por caminho de store"
+  '';
+
+  # THE POLKIT RULE ALLOWS EXACTLY WHAT THE CONSOLE ASKS FOR.
+  #
+  # Two directions, and the second is the one that rots: a row without its unit
+  # fails in front of the person, which is loud; a unit left in the rule after
+  # its row went away is privilege granted to nobody, which is silent and stays.
+  #
+  # The exemption list is spelled out with its reason. `keyd.service` is reached
+  # by a FREE row and is not this rule's business — `nix/modules/keyboard.nix`
+  # already allows exactly it, and `Ctrl+Shift+L` already fires it.
+  rescue-polkit-is-narrow =
+    let
+      rule = self.nixosConfigurations.noctua.config.security.polkit.extraConfig;
+    in
+    mkCheck "rescue-polkit-is-narrow"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        cat > rule.js <<'FIM'
+        ${rule}
+        FIM
+        # THE WHOLE CRATE, and not just the registry. The unit that installs an
+        # edited `host.nix` is named in `edit.rs` — this check found that by
+        # refusing, which is what a two-way comparison is for.
+        src=${../crates/ronoctua-rescue/src}
+        failed=0
+
+        # What the console names, minus what the session owns. A user unit does
+        # not reach polkit at all: there is no display manager here, and the
+        # compositor and the footer are the person's own units.
+        wanted=$(grep -rohE '"[A-Za-z@.-]+\.(service|target)"' "$src" | tr -d '"' | sort -u)
+        for u in $wanted; do
+          case "$u" in
+            # The session's own, and the keyboard's — see above.
+            ronoctua-footer.service|niri.service|graphical-session.target) continue ;;
+            pipewire.service|pipewire-pulse.service|wireplumber.service) continue ;;
+            keyd.service) continue ;;
+          esac
+          grep -qF "\"$u\"" rule.js || {
+            echo "ERRO: o console pede '$u' e a regra de polkit nao a permite;" >&2
+            echo "      a linha falharia na frente da pessoa." >&2
+            failed=1
+          }
+        done
+
+        # And back: every unit the rule names has to be one the console asks for.
+        for u in $(grep -ohE '"ronoctua-rescue[A-Za-z@.-]*\.service"' rule.js | tr -d '"' | sort -u); do
+          grep -rqF "\"$u\"" "$src" || {
+            echo "ERRO: a regra permite '$u' e nenhuma linha do console a pede —" >&2
+            echo "      privilegio concedido a ninguem, que e o que ninguem audita." >&2
+            failed=1
+          }
+        done
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: a regra permite exatamente o que o console pede"
+      '';
+
+  # `Ctrl+Alt+Del` É NOSSO — e a saida dura continua sendo do systemd.
+  #
+  # Two halves, and the check exists because the second is the one a person
+  # would not think to look for. Taking the key over means taking what it did:
+  # if the burst stopped rebooting too, a machine whose everything is frozen
+  # would have no way out at all, and nothing would say so until that day.
+  ctrl-alt-del-is-ours =
+    let
+      # `ctrl-alt-del.target` is a SYMLINK to whatever `ctrlAltDelUnit` names —
+      # that is the option NixOS gives for this, and the two roads that look
+      # more obvious are documented in `nix/modules/rescue.nix` as the failures
+      # they are.
+      aimed = self.nixosConfigurations.noctua.config.systemd.ctrlAltDelUnit;
+      target = self.nixosConfigurations.noctua.config.systemd.targets.ronoctua-rescue;
+      burst =
+        self.nixosConfigurations.noctua.config.systemd.settings.Manager.CtrlAltDelBurstAction
+          or "reboot-force";
+    in
+    mkCheck "ctrl-alt-del-is-ours" [ ] ''
+      [ "${aimed}" = "ronoctua-rescue.target" ] || {
+        echo "ERRO: o Ctrl+Alt+Del aponta para '${aimed}', que nao e o resgate." >&2
+        exit 1
+      }
+      wants="${lib.concatStringsSep " " target.wants}"
+      case "$wants" in
+        *ronoctua-rescue.service*) ;;
+        *)
+          echo "ERRO: o ctrl-alt-del.target nao abre o resgate; ele quer: $wants" >&2
+          echo "      Uma tecla tomada que nao abre nada e uma tecla perdida." >&2
+          exit 1
+          ;;
+      esac
+
+      # The way out that does not pass through us.
+      [ "${burst}" = "reboot-force" ] || {
+        echo "ERRO: CtrlAltDelBurstAction e '${burst}'; os sete toques em dois" >&2
+        echo "      segundos eram a unica saida com tudo travado." >&2
+        exit 1
+      }
+
+      echo "OK: um toque abre o resgate, sete ainda reiniciam a forca"
+    '';
+
+  # O CONSOLE DE RESGATE NÃO CARREGA COMPILADOR.
+  #
+  # He exists for a machine that is broken, and the cheapest way to make him
+  # useless is to link something that drags a toolchain: `ronoctua-term` cites
+  # `libghostty-vt` (Zig, clang, LLVM — 1,70 GiB) and `ronoctua-render` cites
+  # mesa. Neither would FAIL anything; both would quietly make the rescue
+  # console the heaviest thing in the system.
+  #
+  # `nix/rust.nix`'s `rescue` exists to be measured: a derivation references
+  # what its own bytes cite.
+  rescue-has-no-toolchain =
+    let
+      closure = pkgs.closureInfo { rootPaths = [ rust.rescue ]; };
+    in
+    mkCheck "rescue-has-no-toolchain"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        failed=0
+        for unwanted in -zig- -clang- -llvm- -mesa- -vulkan-loader-; do
+          if found=$(grep -e "$unwanted" ${closure}/store-paths); then
+            echo "ERRO: o console de resgate arrasta $unwanted:" >&2
+            echo "$found" >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(wc -l < ${closure}/store-paths) caminhos, e nenhum compilador"
+      '';
+
+  # O EDITOR GRAVA ONDE A UNIDADE LÊ.
+  #
+  # The path crosses the border as a STRING: the crate writes to it and a root
+  # oneshot reads from it. Divergent, saving would report success and install
+  # nothing — the exact silence `CLAUDE.md` says needs a check.
+  rescue-staging-agrees = mkCheck "rescue-staging-agrees" [ pkgs.gnugrep ] ''
+    grep -q 'staged = "/run/ronoctua-rescue/staged"' ${../nix/modules}/rescue.nix || {
+      echo "ERRO: o modulo mudou o caminho onde le o arquivo editado." >&2; exit 1; }
+    grep -q 'pub const STAGED: &str = "/run/ronoctua-rescue/staged"' \
+      ${../crates/ronoctua-rescue/src}/edit.rs || {
+      echo "ERRO: o editor mudou o caminho onde grava; salvar nao instalaria nada." >&2; exit 1; }
+    echo "OK: o editor grava onde a unidade le"
   '';
 
   # HOT RELOAD RELOADS — behavior, not existence.
@@ -1511,12 +1843,22 @@ let
   #
   # The niri module goes along because the test checks BOTH ends of the contract
   # — the key keyd emits and the one niri listens for.
+  # The rescue console's second door: `Ctrl+Alt+Del` with no compositor at all.
+  rescueVm = import ./rescue-vm.nix {
+    inherit pkgs lib;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      niri = inputs.niri;
+      shell = rust.shell;
+    };
+  };
+
   keyboardVm = import ./keyboard-vm.nix {
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       niri = inputs.niri;
-      shell = rust.workspace;
+      shell = rust.shell;
     };
   };
 
@@ -3142,6 +3484,10 @@ in
     rust-fmt
     shell-binary
     shell-finds-its-buffers
+    rescue-actions-have-text
+    rescue-runs-by-path
+    rescue-staging-agrees
+    rescue-has-no-toolchain
     docs-exist
     architecture-sections
     english-names
@@ -3157,6 +3503,11 @@ in
     buffer-commands-have-labels
     buffer-keys-have-text
     oomVm
+    # The rescue console's two doors: the VT is its own machine, the window is
+    # asserted next to the monitor's in `terminal-vm`.
+    rescueVm
+    ctrl-alt-del-is-ours
+    rescue-polkit-is-narrow
     self.packages.${system}.iso
     self.nixosConfigurations.vm.config.system.build.toplevel
   ];
@@ -3170,9 +3521,19 @@ in
   inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
   inherit shell-finds-its-buffers;
   inherit
+    rescue-actions-have-text
+    rescue-runs-by-path
+    rescue-polkit-is-narrow
+    ctrl-alt-del-is-ours
+    rescue-has-no-toolchain
+    rescue-staging-agrees
+    ;
+  inherit
     group-mark-outside-translation
     niri-actions-translated
     keyboard-layout-exists
+    keyboard-options-do-what-they-say
+    installer-defaults-match-the-keyboard
     locale-exists
     wifi-console-asks-once
     ;
@@ -3190,6 +3551,7 @@ in
   terminal-vm = terminalVm;
   x11-vm = x11Vm;
   keyboard-vm = keyboardVm;
+  rescue-vm = rescueVm;
   tpm-vm = tpmVm;
   secureboot-vm = secureBootVm;
   inherit installer-dryrun;

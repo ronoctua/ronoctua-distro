@@ -226,6 +226,20 @@ fn main() -> Result<()> {
                 .context("uso: ronoctua-shell monitor <programa> [args]")?;
             return terminal::host_monitor(program, rest).context("hospedar o monitor");
         }
+        // THE RESCUE CONSOLE, and a third identity for the same terminal.
+        //
+        // `Ctrl+Alt+Del` reaches this, and so does the VT unit — the difference
+        // is that over there nobody goes through the shell at all. That is the
+        // whole point of the console being a terminal application: this
+        // subcommand is a convenience for the door that has a compositor, not
+        // the way in.
+        Some("rescue") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let (program, rest) = args
+                .split_first()
+                .context("uso: ronoctua-shell rescue <programa> [args]")?;
+            return terminal::host_rescue(program, rest).context("hospedar o resgate");
+        }
         // It checks the keymap without bringing anything up. It exists so whoever edits their own
         // keymap gets the same verdict `nix flake check` gives.
         Some("check-keymap") => {

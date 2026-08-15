@@ -50,7 +50,7 @@ inst-keyboard-help = Escolha o do seu teclado. E nele que voce vai digitar a fra
 inst-keyboard-variant = Variante do layout
 inst-keyboard-variant-help = Separa teclados do mesmo pais. Sem variante e uma resposta valida.
 inst-compose-key = Tecla de acentuacao
-inst-compose-key-help = A tecla Compose: segurada com outras, faz acento. Sem ela, teclado sem acento nao os alcanca.
+inst-compose-key-help = A tecla Compose: aperta e solta, depois duas teclas, e sai o acento. Sem ela, teclado sem acento nao os alcanca. O padrao e o Caps Lock, que os dois Shifts juntos assumem.
 inst-system-locale = Formato do sistema
 inst-system-locale-help = Data, numero e unidade. Nao e o idioma da interface, que ja foi escolhido.
 inst-timezone = Fuso horario
@@ -700,3 +700,53 @@ memory-confirm-persist = Gravar este perfil no host.nix? A mesma tecla de novo c
 
 group-system = sistema
 memory-vram = Vídeo
+
+## Rescue console — Ctrl+Alt+Del
+
+rescue-title = Resgate
+rescue-section-state = Estado
+rescue-section-actions = Ações
+rescue-section-windows = Janelas
+rescue-section-terminals = Terminal
+rescue-section-config = Configuração
+rescue-section-log = Registro
+rescue-section-system = Sistema
+
+## Rescue console — the actions
+
+rescue-restart-footer = Reiniciar o rodapé
+rescue-restart-niri = Reiniciar o compositor
+rescue-restart-session = Reiniciar a sessão gráfica
+rescue-restart-audio = Reiniciar o áudio
+rescue-restore-keyboard = Restaurar o teclado
+rescue-close-window = Fechar a janela em foco
+rescue-refresh-fonts = Reconstruir o cache de fontes
+rescue-open-terminal = Abrir um terminal
+rescue-kill-window = Matar a janela escolhida
+rescue-kill-hog = Matar quem mais come memória
+rescue-edit-host = Editar a configuração desta máquina
+rescue-rebuild-switch = Aplicar a configuração
+rescue-rollback-now = Voltar para a geração anterior
+rescue-rollback-boot = Geração anterior no próximo boot
+rescue-restart-network = Reiniciar a rede
+rescue-reboot = Reiniciar a máquina
+rescue-poweroff = Desligar a máquina
+
+## Rescue console — what it says
+
+rescue-keys = ↑↓ escolhe · Enter roda · Tab troca de seção · Esc sai
+rescue-running = rodando…
+rescue-ran = pronto
+rescue-failed = falhou
+rescue-confirm = A mesma tecla de novo confirma; Esc cancela.
+rescue-needs-password = pede a sua senha
+rescue-read-only = leitura
+rescue-generated-by = Gerado por { $origem }. Editar aqui some no próximo rebuild.
+rescue-no-windows = O compositor não respondeu — ou não há janela nenhuma.
+rescue-empty = nada a mostrar
+rescue-back = Sair do terminal devolve esta tela.
+rescue-generation = geração { $numero }
+rescue-door-console = console
+rescue-door-window = janela
+
+cmd-rescue-open = Console de resgate

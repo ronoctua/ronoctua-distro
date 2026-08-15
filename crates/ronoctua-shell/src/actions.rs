@@ -345,7 +345,7 @@ pub fn acordes_completos() -> Vec<Chord> {
 /// tapping it no longer emits `F13`. A recovery shortcut that depended on the
 /// leader would be the lock inside the safe.
 ///
-/// # Why only three
+/// # Why only four
 ///
 /// Every bind here is a key the buffers stop receiving, and §7.4 wants
 /// **one** keymap. Two of them close the loop: one to reach the command
@@ -382,12 +382,34 @@ pub fn emergency() -> Vec<(&'static str, String, &'static str)> {
             "keyboard-restore",
         ),
         // THE PROCESS MONITOR, without the leader. `Escape` and not `Delete`:
-        // `Ctrl+Alt+Delete` is systemd's reboot on the console, and binding the
-        // monitor next to it is asking for the wrong finger to end the session.
+        // `Delete` is the rescue console's, one line below, and the two are
+        // neighbours on purpose — what one reaches for first is "what is eating
+        // the machine", and what one reaches for when that is not enough is the
+        // console that can restart or roll back.
         (
             "Ctrl+Alt+Escape",
             format!("spawn \"{shell}\" \"command\" \"monitor-btop\""),
             "monitor-btop",
+        ),
+        // THE RESCUE CONSOLE, and the fourth is different from the other three.
+        //
+        // `Ctrl+Alt+Delete` USED TO BE systemd's reboot on the console, and this
+        // file said so where this comment now is. It is ours because we took it:
+        // `nix/modules/rescue.nix` redefines `ctrl-alt-del.target`, so one press
+        // opens this instead of ending the session mid-sentence — and the reboot
+        // it used to do is a row inside the console, which asks first.
+        //
+        // The hard way out stays: seven presses in two seconds still reboot by
+        // force, and that one does not pass through anything of ours.
+        //
+        // What makes this bind unlike the other three is that it is not the only
+        // way in. The other three ask the COMPOSITOR to spawn, so all three are
+        // gone exactly when the compositor is what broke. This key has a second
+        // door — systemd's — and the two open the same program.
+        (
+            "Ctrl+Alt+Delete",
+            format!("spawn \"{shell}\" \"command\" \"rescue-open\""),
+            "rescue-open",
         ),
     ]
 }

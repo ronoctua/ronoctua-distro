@@ -79,6 +79,14 @@ pub const APP_ID: &str = "br.ronoctua.terminal";
 /// terminal, including `LEADER b t`.
 pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
 
+/// The RESCUE console's `app_id` — the third identity of the same terminal.
+///
+/// A third one and not the monitor's, for the reason the second exists: the
+/// rule that floats it asks for a bigger window. What `Ctrl+Alt+Del` opens is
+/// meant to be read while something is wrong, and 70% of the screen is a list
+/// with the log cut off.
+pub const APP_ID_RESCUE: &str = "br.ronoctua.rescue";
+
 /// The `window-rule` that makes the monitor window float, in niri's KDL.
 ///
 /// # Why it is generated from here, and not written in the two configs
@@ -98,16 +106,24 @@ pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
 /// no component of it draws this window.
 #[must_use]
 pub fn floating_rules() -> String {
-    let regex = APP_ID_MONITOR.replace('.', r"\.");
-    format!(
-        "window-rule {{\n\
-         \x20   match app-id=r#\"^{regex}$\"#\n\
-         \x20   open-floating true\n\
-         \x20   open-focused true\n\
-         \x20   default-column-width {{ proportion 0.7; }}\n\
-         \x20   default-window-height {{ proportion 0.7; }}\n\
-         }}\n"
-    )
+    // The rescue console is WIDER, and that is the only difference: it is read
+    // while something is wrong, and a list with the log cut off is a diagnosis
+    // one has to scroll for.
+    [(APP_ID_MONITOR, "0.7"), (APP_ID_RESCUE, "0.9")]
+        .into_iter()
+        .map(|(app_id, size)| {
+            let regex = app_id.replace('.', r"\.");
+            format!(
+                "window-rule {{\n\
+                 \x20   match app-id=r#\"^{regex}$\"#\n\
+                 \x20   open-floating true\n\
+                 \x20   open-focused true\n\
+                 \x20   default-column-width {{ proportion {size}; }}\n\
+                 \x20   default-window-height {{ proportion {size}; }}\n\
+                 }}\n"
+            )
+        })
+        .collect()
 }
 
 /// It builds the engine INSIDE the VT thread — see `ronoctua_term::terminal`.
@@ -133,6 +149,15 @@ pub fn host_it(program: Option<&str>, args: &[String]) -> Result<()> {
 /// The same as [`host_it`].
 pub fn host_monitor(program: &str, args: &[String]) -> Result<()> {
     host_as(APP_ID_MONITOR, "ronoctua: monitor", Some(program), args)
+}
+
+/// The same terminal again, under the rescue console's `app_id`.
+///
+/// # Errors
+///
+/// The same as [`host_it`].
+pub fn host_rescue(program: &str, args: &[String]) -> Result<()> {
+    host_as(APP_ID_RESCUE, "ronoctua: resgate", Some(program), args)
 }
 
 /// The body of both: everything is the same but the window's identity.

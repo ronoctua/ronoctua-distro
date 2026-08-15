@@ -7,15 +7,9 @@
   inputs,
   gitHooks,
   wit,
-  tokensRs,
-  i18nRs,
-  niriActions,
-  regularFont,
-  emojiFont,
-  lucideFont,
   bufferComponents,
+  generated,
   iconSuperpack,
-  ghosttyVt,
 }:
 
 let
@@ -91,53 +85,20 @@ pkgs.mkShell {
   # expensive to diagnose. Fixed here, in one place.
   RONOCTUA_WIT_VERSION = "0.2.0";
 
-  # THE SAME GENERATED FILES `nix/rust.nix` PASSES TO CRANE.
+  # EVERYTHING THE BUILD BAKES, AS A TABLE — the same one crane gets.
   #
-  # Without them, `cargo build` inside the devshell fails in
-  # `ronoctua-tokens`'s `build.rs` — and section 8 promises there is nothing to
-  # fill in by hand. Failing loudly there is right (masking it with a fallback
-  # would be worse); what was missing was the devshell offering what crane already offers.
-  RONOCTUA_TOKENS_RS = "${tokensRs}/tokens.rs";
-  RONOCTUA_I18N_DIR = "${i18nRs}";
-  # The pinned niri's action table — see nix/niri-actions.nix.
-  RONOCTUA_NIRI_ACTIONS = "${niriActions}/niri-actions.rs";
-  RONOCTUA_FONT_REGULAR = regularFont;
-  RONOCTUA_FONT_EMOJI = emojiFont;
-  RONOCTUA_FONT_LUCIDE = lucideFont;
-  # THE SAME DATA FILES `nix/rust.nix` GIVES CRANE.
+  # `option_env!` is resolved at COMPILE time, so a binary `cargo` built inside
+  # the devshell has exactly what this attrset holds and nothing else. Written
+  # out one at a time, eighteen of them were, this list drifted from
+  # `nix/rust.nix` twice: the buffer of the editor was missing (and `LEADER f f`
+  # answered "could not open" here and worked in production), and
+  # `RONOCTUA_SYSTEMCTL` was never here at all — so `cargo test` built code that
+  # believed `systemctl` did not exist.
   #
-  # They were missing here, and the divergence is expensive in a specific way:
-  # `option_env!` is resolved at COMPILE time, so `cargo test` inside the
-  # devshell built binaries that believed the files did not exist. The installer
-  # then found an empty layout list, refused every layout, and the screen never
-  # advanced — a test that spun at full CPU instead of failing, while the same
-  # code passed under `nix flake check`.
-  RONOCTUA_XKB_BASE_LST = "${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst";
-  RONOCTUA_LOCALE_SUPPORTED = "${pkgs.glibcLocales}/share/i18n/SUPPORTED";
-  RONOCTUA_TZ_TAB = "${pkgs.tzdata}/share/zoneinfo/zone1970.tab";
-  RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
-  RONOCTUA_SETSID = "${pkgs.util-linux}/bin/setsid";
-  # The two process monitors and where ncurses finds its entry. Same reason as
-  # everything else in this block: `option_env!` is resolved at COMPILE time, so
-  # a devshell without them builds a footer that believes they do not exist —
-  # `Ctrl+Alt+Esc` would answer "could not open" in the nested loop and work in
-  # production, which is the divergence this block exists to close.
-  RONOCTUA_BTOP = "${pkgs.btop}/bin/btop";
-  RONOCTUA_BOTTOM = "${pkgs.bottom}/bin/btm";
-  RONOCTUA_TERMINFO_DIRS = "${pkgs.ncurses}/share/terminfo";
-  RONOCTUA_XWAYLAND_SATELLITE = "${pkgs.xwayland-satellite}/bin/xwayland-satellite";
-  # THE FIVE COMPONENTS AS A TABLE, and not one variable at a time.
-  #
-  # What the devshell runs is a binary `cargo` built, and a `cargo` binary has
-  # no wrapper — so what `nix/rust.nix` hands the installed shell has to be
-  # handed over here. By hand it had already drifted: four of the five were
-  # written out and `RONOCTUA_BUFFER_EDITOR` was not, so `LEADER f f` answered
-  # "could not open" in the devshell and worked in production. Through the
-  # table, the sixth buffer arrives on its own.
-  env = bufferComponents;
-
-  RONOCTUA_JOURNALCTL = "${pkgs.systemd}/bin/journalctl";
-  RONOCTUA_NIX = "${pkgs.nix}/bin/nix";
+  # Splatted, the nineteenth arrives on its own. `nix/dev.nix` reads the same
+  # table for the same reason, and `dev-exports-what-the-build-bakes` is the
+  # guard on that side.
+  env = generated // bufferComponents;
   # The icon superpackage, for the PIXMAP step of the app
   # launcher. Without it `nix run .#dev` would show only the glyphs, and half
   # of the path that depends most on the screen would never be seen here.

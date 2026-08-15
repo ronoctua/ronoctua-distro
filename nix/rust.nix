@@ -32,6 +32,9 @@
   btop,
   bottom,
   ncurses,
+  fontconfig,
+  zsh,
+  polkit,
   nix,
   niri,
   wl-clipboard,
@@ -257,6 +260,18 @@ let
     # only its own database can answer without walking the disk for minutes.
     RONOCTUA_JOURNALCTL = "${systemd}/bin/journalctl";
     RONOCTUA_NIX = "${nix}/bin/nix";
+    # WHAT THE RESCUE CONSOLE SPAWNS, and the reason is sharper here than
+    # anywhere else: it runs from a unit on a VT, where `PATH` is minimal, and
+    # it is opened BECAUSE something is already broken. A name that does not
+    # resolve would fail on the one screen that exists to explain failures.
+    #
+    # `fc-cache` answers the screen full of boxes; the shell is what the
+    # terminal row hands the screen to; and `pkttyagent` is how a console with
+    # no desktop can ask polkit anything at all — without it, every privileged
+    # row would answer "Interactive authentication required" and stop there.
+    RONOCTUA_FC_CACHE = "${fontconfig}/bin/fc-cache";
+    RONOCTUA_RESCUE_SHELL = "${zsh}/bin/zsh";
+    RONOCTUA_PKTTYAGENT = "${polkit}/bin/pkttyagent";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a
     # FOREIGN application that brings its own `Icon=`. It had existed since the
     # icons milestone and never had a path into the Rust: `Cadeia` has the field
@@ -443,6 +458,27 @@ rec {
     # the installer draws no graphics. Left in place it would reference the
     # Vulkan loader and mesa for a program that runs on a TTY.
     patchelf --shrink-rpath $out/bin/ronoctua-install
+  '';
+
+  # THE RESCUE CONSOLE, extracted for the same reason and to answer one question.
+  #
+  # It is not what the system installs — `ronoctua.shell` already carries
+  # `bin/ronoctua-rescue`, since there is one workspace. What this derivation is
+  # for is MEASURING: a derivation references what its own bytes cite, so the
+  # closure of this one is the closure of the rescue console alone.
+  #
+  # The question it answers is `rescue-has-no-toolchain`. The console exists for
+  # when the machine is broken, and the day someone reaches for `ronoctua-term`
+  # in it — for terminal panes, say — the answer is `libghostty-vt`, and with it
+  # Zig, clang and LLVM. That would not fail anything; it would just quietly make
+  # the rescue console the heaviest thing in the system.
+  rescue = pkgs.runCommand "ronoctua-rescue" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-rescue $out/bin/
+    chmod +w $out/bin/ronoctua-rescue
+    # Same as above: the graphics rpath belongs to the footer, and this program
+    # draws on a terminal.
+    patchelf --shrink-rpath $out/bin/ronoctua-rescue
   '';
 
   # Tests. A separate derivation so it can say WHAT broke.

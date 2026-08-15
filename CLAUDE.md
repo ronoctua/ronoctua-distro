@@ -38,9 +38,8 @@ nix develop           entra no ambiente (direnv é atalho opcional, e do HOST)
 nix run .#dev         niri aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
 nix run .#quick       os checks que não sobem VM (~1 min); NÃO fecha nada, só adianta
 nix run .#gate        verifica TUDO — dimensiona pela RAM e acusa o earlyoom; USE ESTE
-nix flake check       o mesmo cru;  nix run .#bench  falha se um alvo estourar
 nix run .#diagnostics instantâneo de quando os atalhos travam (só leitura)
-nix run .#vm          VM completa;  nix build .#iso  gera o ISO
+nix run .#vm          VM completa;  .#iso gera o ISO;  .#bench falha se um alvo estourar
 nix run .#install     instala (ensaia sem --execute);  ronoctua.profile: full ou minimal
 ```
 
@@ -55,7 +54,9 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   tecla. Quem a vê é o niri, que roda `ronoctua-shell leader`; ele escreve no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`) e só então a superfície expande e pede
   `keyboard-interactivity: exclusive`. `ronoctua-shell command <id> [arg]` roda qualquer id — é por
-  onde entram os três binds SEM leader (`Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Esc`: o monitor).
+  onde entram os QUATRO binds SEM leader (`Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Esc` o monitor).
+- **`Ctrl+Alt+Del` é o RESGATE, não reinicia mais** (7 toques em 2 s ainda forçam): binário de
+  TERMINAL, duas portas — janela flutuante, ou VT 8 sem niri. Ver é livre, agir é polkit.
 - **Todo comando é `kebab-case`, e a chave de texto é `cmd-<id>`**; o registro recusa as duas
   divergirem. As 141 ações do niri entram como `niri-<nome>`, GERADAS do binário pinado, e são a
   exceção a "todo comando tem tecla" — alcançam-se por nome (`LEADER :`).
@@ -103,12 +104,11 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 
 - **NADA de build na árvore — 793 GB.** `CARGO_TARGET_DIR` fora (`lean-tree`); **nunca `${../.}`**.
   **Uma derivação referencia o que os BYTES dela citam**: `rust.workspace` tem todo binário, e punha
-  Zig+clang+LLVM (1,70 GiB) e os ícones no ISO — extraia o binário (`rust.installer`). O `.a` do
-  ghostty-vt era o único a citar o Zig, e nós linkamos o `.so`. **Interruptor que não interrompe**:
-  `notoExtra` e `icons.superpack` desligavam e o pacote entrava por outra porta — meça com
-  `nix why-depends`, não confie no `mkIf`. **`option_env!` com caminho de store é referência, e quem
-  COMPILA a paga**: ícones e os 5 buffers vêm do AMBIENTE — senão o interruptor não interrompe, e
-  editar buffer reconstrói o workspace. Ela sobe uma derivação (`rust.shell`) e nunca some.
+  Zig+clang+LLVM (1,70 GiB) e os ícones no ISO — extraia o binário (`rust.installer`, `rust.rescue`).
+  **Interruptor que não interrompe**: `notoExtra` e `icons.superpack` desligavam e o pacote entrava
+  por outra porta — meça com `nix why-depends`, não confie no `mkIf`. **`option_env!` com caminho de
+  store é referência, e quem COMPILA a paga**: ícones e os 5 buffers vêm do AMBIENTE, senão editar
+  buffer reconstrói o workspace; ela sobe uma derivação (`rust.shell`) e nunca some.
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
@@ -146,5 +146,5 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   progresso, changelog nem narrativa. `docs/ARCHITECTURE.md` — o porquê do que não se deve refazer.
 - `docs/PENDING.md` — o que falta. **Ao concluir, remova de lá**: se mudar como o sistema funciona,
   escreva uma linha aqui ou no ARCHITECTURE; se não, só apague. `README.md` é placeholder, por decisão.
-- `INSTALL.md` (disco) e `DEVELOPMENT.md` (ambiente): NÃO liste atalho — a leader os mostra, e markdown
-  vira a 2ª verdade. **Release publicada é em INGLÊS**; o `fonts-release` grava o corpo pronto.
+- `INSTALL.md` (disco) e `DEVELOPMENT.md` (ambiente): NÃO liste atalho — a leader os mostra. **Release
+  publicada é em INGLÊS**; o `fonts-release` grava o corpo pronto.

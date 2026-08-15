@@ -213,6 +213,45 @@ pkgs.testers.runNixOSTest {
             "a regra pegou o terminal comum tambem"
         )
 
+    with subtest("o resgate abre FLUTUANTE, com identidade propria"):
+        # THE FIRST DOOR of `Ctrl+Alt+Del`. The second — the VT — is in
+        # `tests/rescue-vm.nix`, where there is no compositor at all; this one
+        # belongs here because it is the SAME mechanism as the monitor's, and
+        # what would break it is the same thing: a rule that matched one app_id
+        # and not the other.
+        #
+        # A third identity and not the monitor's: the rule asks for a bigger
+        # window, because what one reads during a failure is a list with a log
+        # under it.
+        machine.succeed(
+            "systemd-run --unit=resgate ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=LANG=C.UTF-8 "
+            "--setenv=RUST_LOG=ronoctua_shell=debug "
+            "${ronoctua-shell}/bin/ronoctua-shell rescue "
+            "${ronoctua-shell}/bin/ronoctua-rescue"
+        )
+        try:
+            machine.wait_until_succeeds(
+                f"NIRI_SOCKET={sock} ${niri}/bin/niri msg --json windows "
+                "| grep -q br.ronoctua.rescue",
+                timeout=60,
+            )
+        except Exception:
+            print(machine.execute("journalctl -u resgate --no-pager")[1])
+            raise
+        with_rescue = windows()
+        assert with_rescue["br.ronoctua.rescue"]["is_floating"], (
+            "a regra gerada nao fez o resgate flutuar; ele abriu lado a lado"
+        )
+        # AND IT IS STILL THERE. A console that draws once and dies is
+        # indistinguishable from one that works, in a screenshot.
+        machine.sleep(5)
+        assert "br.ronoctua.rescue" in windows(), (
+            "a janela do resgate sumiu: o programa dentro dela morreu.\n"
+            + machine.execute("journalctl -u resgate --no-pager")[1]
+        )
+
         # AND THE PROGRAM STAYS UP. When the child exits the pty closes and the
         # window goes with it (see the `ping` at the end of the pty's thread), so
         # a window still there is a btop still running — which is what proves

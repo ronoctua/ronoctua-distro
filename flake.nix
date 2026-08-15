@@ -353,6 +353,7 @@
         # The cgroup, oomd and zram policy. It comes early because what it
         # protects — the compositor and the footer — is declared later.
         ./nix/modules/memory.nix
+        ./nix/modules/rescue.nix
         ./nix/modules/fonts.nix
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix
@@ -852,21 +853,12 @@
       # devShell — section 8: `direnv allow` and never again.
       # =================================================================
       devShells.${system}.default = import ./nix/devshell.nix {
-        inherit
-          gitHooks
-          wit
-          tokensRs
-          i18nRs
-          niriActions
-          ;
+        inherit gitHooks wit;
         inherit pkgs inputs;
-        inherit (rust)
-          regularFont
-          emojiFont
-          lucideFont
-          bufferComponents
-          ;
-        inherit iconSuperpack ghosttyVt;
+        # THE WHOLE TABLE, and not values copied out of it — see the comment on
+        # `env` over there.
+        inherit (rust) bufferComponents generated;
+        inherit iconSuperpack;
       };
 
       # THE FORMATTER FORMATS THE TREE — Nix and Rust, in one command.

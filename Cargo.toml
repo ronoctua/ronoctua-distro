@@ -28,6 +28,7 @@ members = [
   "crates/ronoctua-niri",
   "crates/ronoctua-network",
   "crates/ronoctua-memory",
+  "crates/ronoctua-rescue",
   "crates/ronoctua-shell",
 ]
 

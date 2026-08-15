@@ -598,6 +598,16 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "monitor-btop",
             label: key::CMD_MONITOR_BTOP,
         },
+        // THE RESCUE CONSOLE — `Ctrl+Alt+Del`, outside the leader.
+        //
+        // It has no sequence, and that is deliberate: the leader depends on
+        // keyd telling a tap from a hold, on the daemon being scheduled and on
+        // this footer being alive to expand. Every one of those is something
+        // the rescue console exists to repair.
+        Command {
+            id: "rescue-open",
+            label: key::CMD_RESCUE_OPEN,
+        },
         // `LEADER s m`. The panel's own commands are NOT here: they live in the
         // buffer's descriptor, under `SPC m`, and are resolved by the buffer's
         // own host while it holds the keyboard.
@@ -1612,6 +1622,7 @@ mod tests {
             "buffer-terminal",
             "buffer-terminal-external",
             "monitor-btop",
+            "rescue-open",
             "monitor-bottom",
             "memory-open",
             "glyphs-nerd-fonts",

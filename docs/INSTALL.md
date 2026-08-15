@@ -52,7 +52,7 @@ opção escolhida; passar por todas apertando Enter dá uma máquina que funcion
 | instalação | `full` ou `minimal` — veja a seção abaixo |
 | layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta |
 | variante do teclado | `abnt2`, `nodeadkeys`, ou nenhuma |
-| tecla de acentos | qual tecla compõe acentos. O padrão é o `AltGr` |
+| tecla de acentos | qual tecla compõe acentos. O padrão é o `Caps Lock` — e os dois Shifts juntos passam a ser o Caps Lock |
 | locale do sistema | data, número, papel e unidades. O padrão é `en_GB.UTF-8`, que é métrico |
 | fuso horário | o padrão é `Europe/London` |
 | nome da máquina | começa com `noctua-`. Ex.: `noctua-thinkpad` |
