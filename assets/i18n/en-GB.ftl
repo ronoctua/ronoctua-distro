@@ -22,6 +22,8 @@ cmd-glyphs-nerd-fonts = Browse glyphs
 cmd-mx-open = Run command…
 cmd-buffer-terminal = Open terminal
 cmd-buffer-terminal-external = Open external terminal
+cmd-monitor-btop = Process monitor (btop)
+cmd-monitor-bottom = Process monitor (bottom)
 cmd-session-quit = Quit session
 
 ## which-key prefix groups

@@ -149,14 +149,20 @@ rec {
         machine.succeed("rm -f /run/user/0/wayland-* /run/user/0/niri.*.sock")
 
 
-    def start_niri(unit, package, display="wayland-1"):
-        """Bring a niri up on the winit backend over Xvfb and await the socket."""
+    def start_niri(unit, package, display="wayland-1", config="${configNiri}"):
+        """Bring a niri up on the winit backend over Xvfb and await the socket.
+
+        `config` defaults to the minimal one above. A test passes its own when
+        what it is proving IS a piece of the configuration — `terminal-vm` adds
+        the generated `window-rule`s, because a rule that is not loaded proves
+        nothing about a window floating.
+        """
         machine.succeed(
             f"systemd-run --unit={unit} ${env} "
             "--setenv=DISPLAY=:99 "
             "--setenv=LD_LIBRARY_PATH=${libsX} "
             "--setenv=RUST_LOG=niri=debug "
-            f"{package}/bin/niri --config ${configNiri}"
+            f"{package}/bin/niri --config {config}"
         )
         try:
             machine.wait_until_succeeds(f"test -S /run/user/0/{display}", timeout=90)

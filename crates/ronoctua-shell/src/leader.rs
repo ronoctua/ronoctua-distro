@@ -588,6 +588,20 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "buffer-terminal-external",
             label: key::CMD_BUFFER_TERMINAL_EXTERNAL,
         },
+        // THE TWO MONITORS. They have no key in this tree, and that is not an
+        // oversight: they are reached by CHORD (`LEADER+Esc`, `LEADER+S-Esc`)
+        // and, the first one, by `Ctrl+Alt+Esc` with no leader at all —
+        // `reachable` counts all three, so neither is an orphan. They are in the
+        // registry because `LEADER :` addresses every command by name, and
+        // because the chord's label comes from `cmd-<id>`.
+        Command {
+            id: "monitor-btop",
+            label: key::CMD_MONITOR_BTOP,
+        },
+        Command {
+            id: "monitor-bottom",
+            label: key::CMD_MONITOR_BOTTOM,
+        },
         // ---------------------------------------------------------------
         // WINDOW AND WORKSPACE — what used to be niri binds.
         //
@@ -1581,6 +1595,8 @@ mod tests {
             "file-open",
             "buffer-terminal",
             "buffer-terminal-external",
+            "monitor-btop",
+            "monitor-bottom",
             "glyphs-nerd-fonts",
             "unicode-symbols",
             "lucide-icons",

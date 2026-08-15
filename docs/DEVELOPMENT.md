@@ -86,8 +86,9 @@ ambiente já usar essa combinação, ele a captura antes, e a tecla não chega a
 "nenhum atalho funciona", que tem três causas com a mesma tela — rode `nix run .#diagnostics` antes
 de supor qual delas é.
 
-Dois atalhos ficam fora da lista de propósito, para quando o teclado para de responder:
-`Ctrl+Alt+L` abre a lista quando a leader falha, e `Ctrl+Shift+L` restaura o teclado.
+Três atalhos ficam fora da lista de propósito, para quando a máquina para de responder:
+`Ctrl+Alt+L` abre a lista quando a leader falha, `Ctrl+Shift+L` restaura o teclado e
+`Ctrl+Alt+Esc` abre o monitor de processos.
 
 O comando imprime as teclas certas ao subir. Elas valem mais do que este texto.
 

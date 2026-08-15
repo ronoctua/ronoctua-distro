@@ -64,7 +64,7 @@
       # (`Ctr` followed by one or more `l`), so the guard matched nothing and
       # always passed. A guard that never fires is worse than none —
       # it claims to have checked.
-      for press_key in Ctrl+Alt+L Ctrl+Shift+L; do
+      for press_key in Ctrl+Alt+L Ctrl+Shift+L Ctrl+Alt+Escape; do
         if ! grep -qF "    $press_key " $out; then
           echo "ERRO: o bind de emergencia $press_key nao saiu." >&2
           exit 1

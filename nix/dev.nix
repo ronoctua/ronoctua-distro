@@ -36,6 +36,9 @@ let
   # The chords, generated from the shell's command table — the same ones as in
   # production, only with a different prefix.
   binds = callPackage ./niri-binds.nix { inherit ronoctua-shell; };
+  # And the window rules, for the same reason: the monitor has to open floating
+  # HERE too, or the nested loop stops being where one sees what production does.
+  windowRules = callPackage ./niri-window-rules.nix { inherit ronoctua-shell; };
 
   # The colours come from the TOKENS, as in nix/modules/niri.nix — see the
   # comment over there. Here they matter twice over: the nested loop is where one
@@ -196,6 +199,9 @@ let
     ${gnused}/bin/sed -i -e "/@CHORDS@/r ${binds.forPrefix "Alt"}" -e "/@CHORDS@/d" $out
     grep -q "focus-column-left" $out || {
       echo "ERRO: os acordes nao entraram no config aninhado." >&2; exit 1; }
+    cat ${windowRules} >> $out
+    grep -q "open-floating" $out || {
+      echo "ERRO: as regras de janela nao entraram no config aninhado." >&2; exit 1; }
   '';
   app = writeShellApplication {
     name = "ronoctua-dev";
@@ -261,6 +267,7 @@ let
       echo "  Alt+<tecla>         acorde (SEGURADO: o Alt sozinho, sem o Espaco)"
       echo "  Ctrl+Alt+L          leader alternativa, se a de cima falhar"
       echo "  Ctrl+Shift+L        restaura o teclado"
+      echo "  Ctrl+Alt+Esc        monitor de processos (flutuante)"
       echo "  Ctrl+Alt+Space q q  sair"
       echo
       echo "config: $cfg"

@@ -1297,6 +1297,59 @@ E o cursor **não sai da grade**: pergunta-se ao terminal (`ghostty_terminal_get
 conteúdo de célula. Deixá-lo na origem fazia os dois motores divergirem em quinze de quinze casos —
 o que se lê como "eles não concordam em nada", e não como "um deles nunca foi perguntado".
 
+#### O terminal não dizia ao programa que terminal ele é
+
+Sem `TERM`, o ncurses **não** cai em nada: imprime `cannot initialize terminal type ($TERM=
+"unknown"); exiting` e o processo morre na mesma hora. Medido com o `htop` pinado. O rodapé roda
+como unidade de usuário, onde `TERM` não existe, e o filho do pty herdava esse vazio — de modo que a
+frase que o próprio `open_application` escreve ("o `htop` aberto direto abre e morre") valia também
+pelo nosso caminho.
+
+O `Pty::open` agora informa `xterm-256color` quando o ambiente não informa nada, e traz o
+`TERMINFO_DIRS` por caminho de store como piso (o NixOS define o dele; o laço aninhado num host que
+não é NixOS, não). Nenhuma das duas linhas sobrescreve o que já existe: quem define `TERM` está
+descrevendo o próprio terminal.
+
+O `btop` tem exigência diferente e **barulhenta**: sem locale UTF-8 ele escreve `No UTF-8 locale
+detected!` em vermelho e sai. Na máquina o `LANG` chega do `i18n.defaultLocale` pelo `pam_env`, então
+não há o que consertar — mas um `systemd-run` de teste não tem sessão, e por isso o `terminal-vm`
+declara o locale em vez de fingir que o ambiente é vazio.
+
+---
+
+### O monitor de processos abre FLUTUANTE — e a regra é gerada
+
+`Ctrl+Alt+Esc` e `LEADER+Esc` abrem o `btop`; `LEADER+S-Esc` abre o `bottom`. Três teclas, duas
+formas: as duas últimas são acordes (leader SEGURADA), a primeira não passa pela leader nenhuma.
+
+**Por que a terceira existe fora da leader.** É o mesmo argumento dos outros dois binds de
+emergência, e não conveniência: o que se procura quando a máquina para de responder é o monitor de
+processos, e uma máquina em thrashing é justamente onde a leader pode não chegar — ela depende do
+`keyd` distinguir toque de segurar, do daemon ser escalonado e do rodapé estar vivo para expandir.
+Este bind pede ao compositor que faça `spawn`, e mais nada. É o companheiro de
+`nix/modules/memory.nix`: aquele mantém o desktop vivo sob pressão, este é como a pessoa vê **o que**
+está comendo a máquina.
+
+**A tecla é tomada do niri.** O padrão de upstream põe `Mod+Escape` em
+`toggle-keyboard-shortcuts-inhibit`; o nosso acorde entra primeiro e a deduplicação descarta o dele.
+A ação não se perde — como as outras 140, alcança-se por nome (`LEADER :`), que é para isso que a
+exceção existe.
+
+**Quem faz flutuar é o niri** (inv. 4). O que o shell decide é a IDENTIDADE da janela: o mesmo
+terminal sobe com `app_id` `br.ronoctua.monitor` em vez de `br.ronoctua.terminal`, e uma
+`window-rule` casa esse id. Com um `app_id` só, a regra flutuaria todo terminal — inclusive o
+`LEADER b t`.
+
+**E a regra é GERADA do mesmo constante** (`export-niri-window-rules`, como os acordes). Escrita à
+mão, a string existiria em três lugares — o Rust, `nix/modules/niri.nix` e `nix/dev.nix` —, e o dia
+em que um deles divergisse o sintoma seria o monitor abrindo lado a lado: **exatamente com a cara de
+um atalho funcionando**. O `terminal-vm` fecha o outro lado, com um niri de verdade: a janela do
+monitor volta `is_floating` verdadeiro no IPC, a do terminal comum volta falso, e oito segundos
+depois a janela ainda existe — o que só é verdade se o programa lá dentro não morreu.
+
+Os dois pacotes custam ~7 MiB somados: os 48 MiB de cada closure são glibc e gcc-lib, que todo
+closure do sistema já tem.
+
 ---
 
 ### O navegador de glifos é uma GRADE

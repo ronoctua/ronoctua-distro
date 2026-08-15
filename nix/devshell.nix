@@ -119,6 +119,14 @@ pkgs.mkShell {
   RONOCTUA_TZ_TAB = "${pkgs.tzdata}/share/zoneinfo/zone1970.tab";
   RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
   RONOCTUA_SETSID = "${pkgs.util-linux}/bin/setsid";
+  # The two process monitors and where ncurses finds its entry. Same reason as
+  # everything else in this block: `option_env!` is resolved at COMPILE time, so
+  # a devshell without them builds a footer that believes they do not exist —
+  # `Ctrl+Alt+Esc` would answer "could not open" in the nested loop and work in
+  # production, which is the divergence this block exists to close.
+  RONOCTUA_BTOP = "${pkgs.btop}/bin/btop";
+  RONOCTUA_BOTTOM = "${pkgs.bottom}/bin/btm";
+  RONOCTUA_TERMINFO_DIRS = "${pkgs.ncurses}/share/terminfo";
   RONOCTUA_XWAYLAND_SATELLITE = "${pkgs.xwayland-satellite}/bin/xwayland-satellite";
   RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
   RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";

@@ -99,6 +99,17 @@ const BUFFER_LUCIDE: Option<&str> = option_env!("RONOCTUA_BUFFER_LUCIDE");
 /// compiling, and the command warns on screen.
 const XDG_OPEN_PATH: Option<&str> = option_env!("RONOCTUA_XDG_OPEN");
 
+/// The process monitor — `Ctrl+Alt+Esc` and `LEADER+Esc`.
+///
+/// By its STORE PATH, and for the sharpest version of the reason: this one is
+/// spawned when the machine is already in trouble, inside a scope whose `PATH`
+/// is minimal. A name that does not resolve would fail exactly when the person
+/// most needs to see what is happening.
+const BTOP_PATH: Option<&str> = option_env!("RONOCTUA_BTOP");
+
+/// The other one — `LEADER+S-Esc`. Same contract.
+const BOTTOM_PATH: Option<&str> = option_env!("RONOCTUA_BOTTOM");
+
 /// The Wayland client's state.
 struct Footer {
     /// The connection, KEPT on purpose.
@@ -2846,6 +2857,18 @@ impl Footer {
             // The system's terminal, for whoever wants the whole Ghostty. It is
             // a foreign buffer like any other.
             "buffer-terminal-external" => self.open_foreign("ghostty", &[], None),
+            // THE TWO MONITORS, in a FLOATING window — which is niri's doing and
+            // not ours (invariant 4): what the shell decides is the window's
+            // `app_id`, and the rule that floats it is generated from the same
+            // constant (`terminal::floating_rules`).
+            //
+            // Floating and not tiled because this is the window one opens ON TOP
+            // of what is already there, looks at, and closes — tiled, it would
+            // reflow every other buffer at the moment the machine is already
+            // struggling. It is not chrome (invariant 14): nothing shows it
+            // unless a key is pressed.
+            "monitor-btop" => self.open_monitor(BTOP_PATH, "RONOCTUA_BTOP"),
+            "monitor-bottom" => self.open_monitor(BOTTOM_PATH, "RONOCTUA_BOTTOM"),
             // The glyph browser, in an `xdg_toplevel` of its own. The
             // component's path comes from Nix, and not from the PATH: a
             // `.wasm` resolved by PATH does not exist, and a relative path
@@ -4631,6 +4654,33 @@ impl Footer {
                     "a variavel do componente nao foi definida no build"
                 );
                 let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
+                self.echo_message(m);
+            }
+            (Err(e), _) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),
+        }
+    }
+
+    /// Opens a process monitor in a floating terminal window.
+    ///
+    /// Same shape as [`Self::open_buffer`] and for the same reasons: the program
+    /// arrives by store path, and an absent variable says so on screen instead
+    /// of spawning a name that a scope's minimal `PATH` cannot resolve.
+    ///
+    /// The subcommand is `monitor` and not `terminal` because what tells one
+    /// window from the other — and therefore what floats it — is the `app_id`.
+    fn open_monitor(&mut self, program: Option<&str>, variable: &str) {
+        match (std::env::current_exe(), program) {
+            (Ok(me), Some(p)) => self.open_foreign(
+                &me.to_string_lossy(),
+                &["monitor".to_owned(), p.to_owned()],
+                None,
+            ),
+            (_, None) => {
+                tracing::error!(variable, "a variavel do monitor nao foi definida no build");
+                let m = self.texts.t_with(
+                    ronoctua_i18n::key::ECHO_NO_OPENED,
+                    &[("programa", variable)],
+                );
                 self.echo_message(m);
             }
             (Err(e), _) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),

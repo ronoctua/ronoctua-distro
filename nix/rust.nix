@@ -27,6 +27,9 @@
   util-linux,
   xdg-utils,
   systemd,
+  btop,
+  bottom,
+  ncurses,
   niri,
   wl-clipboard,
   xwayland-satellite,
@@ -142,6 +145,24 @@ let
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.
     RONOCTUA_XDG_OPEN = "${xdg-utils}/bin/xdg-open";
+    # THE TWO PROCESS MONITORS — `Ctrl+Alt+Esc` / `LEADER+Esc` and `LEADER+S-Esc`.
+    #
+    # By store path for the usual reason, in its sharpest form: they are what one
+    # opens when the machine is already struggling, inside a scope whose PATH is
+    # minimal. They are in `nix/modules/cli.nix` too, and that is not
+    # duplication — there they are commands one TYPES, here they are what the
+    # shortcut runs, and neither implies the other.
+    RONOCTUA_BTOP = "${btop}/bin/btop";
+    RONOCTUA_BOTTOM = "${bottom}/bin/btm";
+    # WHERE ncurses FINDS `xterm-256color`.
+    #
+    # The terminal now tells the program what terminal it is (`TERM`), and a
+    # name whose terminfo is missing brings back the very failure that fixes:
+    # `cannot initialize terminal type`, and the process dies. NixOS does define
+    # `TERMINFO_DIRS` for every profile — this is the floor for when it does not
+    # (the nested loop on a host that is not NixOS), and the variable is only
+    # set when the environment left it empty.
+    RONOCTUA_TERMINFO_DIRS = "${ncurses}/share/terminfo";
     # What seals the Wi-Fi password into the TPM. A store path for the same reason
     # as the others: the agent runs as a systemd unit, where PATH is minimal.
     RONOCTUA_SYSTEMD_CREDS = "${systemd}/bin/systemd-creds";

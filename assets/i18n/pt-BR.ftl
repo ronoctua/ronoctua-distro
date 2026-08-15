@@ -11,6 +11,8 @@ cmd-glyphs-nerd-fonts = Navegar glifos
 cmd-mx-open = Executar comando…
 cmd-buffer-terminal = Abrir terminal
 cmd-buffer-terminal-external = Abrir terminal externo
+cmd-monitor-btop = Monitor de processos (btop)
+cmd-monitor-bottom = Monitor de processos (bottom)
 cmd-session-quit = Encerrar sessão
 
 ## which-key prefix groups

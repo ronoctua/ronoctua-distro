@@ -68,6 +68,48 @@ use wayland_client::{
 /// the two look like the same thing in niri's IPC.
 pub const APP_ID: &str = "br.ronoctua.terminal";
 
+/// The MONITOR window's `app_id` — the same terminal, another identity.
+///
+/// # Why a second one, and not the same
+///
+/// `Ctrl+Alt+Esc`, `LEADER+Esc` and `LEADER+S-Esc` open a FLOATING window, and
+/// what floats it is a niri `window-rule` matched on this string. The shell
+/// does not place windows (invariant 4): it says WHAT the window is, and the
+/// compositor decides where. With a single `app_id` the rule would float every
+/// terminal, including `LEADER b t`.
+pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
+
+/// The `window-rule` that makes the monitor window float, in niri's KDL.
+///
+/// # Why it is generated from here, and not written in the two configs
+///
+/// The `app_id` above and the rule's regex have to be the same string, and it
+/// would exist in THREE places — this file, `nix/modules/niri.nix` and
+/// `nix/dev.nix`. A string that crosses a border needs a check (`CLAUDE.md`),
+/// and generating it is the check that cannot go stale: `export-niri-window-rules`
+/// prints this, and both configs take it in — the same arrangement as the
+/// chords in `nix/niri-binds.nix`.
+///
+/// `r#"…"#` and not plain quotes: `\.` is not a valid escape in KDL, and niri's
+/// own configuration writes its regexes in raw strings for that reason.
+///
+/// The proportions are the compositor's geometry, like `gaps` and the border's
+/// width in the same file — invariant 9's tokens are the design system's, and
+/// no component of it draws this window.
+#[must_use]
+pub fn floating_rules() -> String {
+    let regex = APP_ID_MONITOR.replace('.', r"\.");
+    format!(
+        "window-rule {{\n\
+         \x20   match app-id=r#\"^{regex}$\"#\n\
+         \x20   open-floating true\n\
+         \x20   open-focused true\n\
+         \x20   default-column-width {{ proportion 0.7; }}\n\
+         \x20   default-window-height {{ proportion 0.7; }}\n\
+         }}\n"
+    )
+}
+
 /// It builds the engine INSIDE the VT thread — see `ronoctua_term::terminal`.
 fn engine(columns: u16, lines: u16) -> Box<dyn ronoctua_term::Engine> {
     Box::new(ronoctua_term::alacritty::Alacritty::fresh(columns, lines))
@@ -81,6 +123,20 @@ fn engine(columns: u16, lines: u16) -> Box<dyn ronoctua_term::Engine> {
 ///
 /// There is no compositor, the pty does not open, or the program does not exist.
 pub fn host_it(program: Option<&str>, args: &[String]) -> Result<()> {
+    host_as(APP_ID, "ronoctua: terminal", program, args)
+}
+
+/// The same terminal, under the monitor's `app_id` — so niri floats it.
+///
+/// # Errors
+///
+/// The same as [`host_it`].
+pub fn host_monitor(program: &str, args: &[String]) -> Result<()> {
+    host_as(APP_ID_MONITOR, "ronoctua: monitor", Some(program), args)
+}
+
+/// The body of both: everything is the same but the window's identity.
+fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("nao ha compositor Wayland acessivel (WAYLAND_DISPLAY esta definida?)")?;
     let (globals, fila) = registry_queue_init(&conn).context("registry do Wayland")?;
@@ -92,8 +148,8 @@ pub fn host_it(program: Option<&str>, args: &[String]) -> Result<()> {
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the compositor (invariant 4).
     let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    window.set_title("ronoctua: terminal");
-    window.set_app_id(APP_ID);
+    window.set_title(title);
+    window.set_app_id(app_id);
     window.commit();
 
     // 80x24 until the `configure` says the actual size. The following `SIGWINCH`
@@ -598,6 +654,29 @@ smithay_client_toolkit::delegate_dispatch2!(TerminalWindow);
 mod tests {
     use super::{grid_list, key_bytes};
     use smithay_client_toolkit::seat::keyboard::Keysym;
+
+    #[test]
+    fn the_rule_matches_the_app_id_the_window_actually_sets() {
+        // THE RULE AND THE WINDOW ARE ONE STRING. Written apart, an `app_id`
+        // renamed here would give a rule that matches nothing — and the symptom
+        // is the monitor opening TILED, which looks like the shortcut working.
+        let rule = super::floating_rules();
+        assert!(
+            rule.contains(&super::APP_ID_MONITOR.replace('.', r"\.")),
+            "a regra nao cita o app id da janela:\n{rule}"
+        );
+        // The dots are escaped: `br.ronoctua.monitor` as a regex would also
+        // match `brXronoctuaYmonitor`, and — worse — is not what one reads.
+        assert!(rule.contains(r"^br\.ronoctua\.monitor$"), "{rule}");
+        // A RAW string. `"^br\.ronoctua\.monitor$"` in KDL is an invalid escape,
+        // and niri REFUSES the whole config — which is the compositor falling
+        // back to its own default, with none of our shortcuts.
+        assert!(
+            rule.contains("r#\""),
+            "a regex tem de ser string crua:\n{rule}"
+        );
+        assert!(rule.contains("open-floating true"), "{rule}");
+    }
 
     #[test]
     fn enter_sends_a_carriage_return() {

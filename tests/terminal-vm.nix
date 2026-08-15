@@ -22,6 +22,14 @@
 # The `cat` gives back exactly what it receives. A shell would print a prompt,
 # and the OCR would start depending on someone else's prompt format — a test
 # that breaks when nixpkgs's `PS1` changes is not testing our terminal.
+#
+# AND THE MONITOR, AT THE END
+# ---------------------------
+# The last subtest is the other half of `Ctrl+Alt+Esc`: it runs a real `btop`
+# under a niri loaded with the GENERATED `window-rule`s and asks the compositor
+# — not the screen — whether the window floats. A rule copied into this file
+# would prove that a rule written here works, which nobody doubts; what is in
+# doubt is whether what the shell EMITS matches the `app_id` the window SETS.
 {
   pkgs,
   lib,
@@ -32,6 +40,16 @@
 
 let
   xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
+
+  # THE GENERATED WINDOW RULES, on top of the minimal test config.
+  #
+  # Not a rule written here: this test exists to prove that what the shell
+  # EMITS makes a real niri float a real window. A copy of the rule would prove
+  # that a rule written in this file works, which nobody doubts.
+  windowRules = pkgs.callPackage ../nix/niri-window-rules.nix { inherit ronoctua-shell; };
+  configFloating = pkgs.runCommand "niri-test-floating.kdl" { } ''
+    cat ${xvfb.configNiri} ${windowRules} > $out
+  '';
 
   # Two common words and with NO digit and no hyphen: the OCR confuses `1`/`l`,
   # `0`/`O` and eats hyphens in a small monospaced font. What is asserted is that
@@ -71,7 +89,7 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     start_xvfb()
-    start_niri("niri", "${niri}")
+    start_niri("niri", "${niri}", config="${configFloating}")
     sock = socket_of("niri")
 
     with subtest("o terminal sobe com o motor VT numa thread propria"):
@@ -152,5 +170,62 @@ pkgs.testers.runNixOSTest {
         assert "funcionando" in read_back.lower(), (
             f"o que foi digitado nao chegou a tela; OCR leu {read_back!r}"
         )
+
+    with subtest("o monitor abre FLUTUANTE, e o terminal comum nao"):
+        import json
+
+        # `LANG`: btop REFUSES to start without a UTF-8 locale — it prints
+        # `No UTF-8 locale detected!` in red and exits. On the machine the
+        # session has it (`i18n.defaultLocale` reaches the user manager through
+        # `pam_env`); a `systemd-run` in a test does not, so the test says it
+        # out loud instead of pretending the environment is empty.
+        machine.succeed(
+            "systemd-run --unit=monitor ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=LANG=C.UTF-8 "
+            "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_render=debug "
+            "${ronoctua-shell}/bin/ronoctua-shell monitor ${pkgs.btop}/bin/btop"
+        )
+
+        def windows():
+            out = machine.succeed(
+                f"NIRI_SOCKET={sock} ${niri}/bin/niri msg --json windows"
+            )
+            return {w.get("app_id"): w for w in json.loads(out)}
+
+        # THE COMPOSITOR HAS TO SEE IT — with another `app_id` than the terminal's,
+        # which is the whole mechanism: one rule, one window.
+        machine.wait_until_succeeds(
+            f"NIRI_SOCKET={sock} ${niri}/bin/niri msg --json windows "
+            "| grep -q br.ronoctua.monitor",
+            timeout=60,
+        )
+        open_now = windows()
+        print(json.dumps(open_now, indent=1))
+        assert open_now["br.ronoctua.monitor"]["is_floating"], (
+            "a regra gerada nao fez o monitor flutuar; ele abriu lado a lado — "
+            "que e exatamente como um atalho funcionando se parece"
+        )
+        # AND THE ORDINARY TERMINAL DOES NOT FLOAT. Without this the test would
+        # pass just as well with a rule matching every window, which is the
+        # mistake `LEADER b t` would pay for.
+        assert not open_now["br.ronoctua.terminal"]["is_floating"], (
+            "a regra pegou o terminal comum tambem"
+        )
+
+        # AND THE PROGRAM STAYS UP. When the child exits the pty closes and the
+        # window goes with it (see the `ping` at the end of the pty's thread), so
+        # a window still there is a btop still running — which is what proves
+        # the terminal gave it what a TUI needs. Without `TERM`, ncurses dies at
+        # once; without a UTF-8 locale, btop does.
+        machine.sleep(8)
+        still = windows()
+        assert "br.ronoctua.monitor" in still, (
+            "a janela do monitor sumiu: o programa dentro dela morreu.\n"
+            + machine.execute("journalctl -u monitor --no-pager")[1]
+        )
+        journal = machine.succeed("journalctl -u monitor --no-pager")
+        for bad in ["panicked", "desenhar o frame falhou"]:
+            assert bad not in journal, f"o monitor reportou: {bad}"
   '';
 }

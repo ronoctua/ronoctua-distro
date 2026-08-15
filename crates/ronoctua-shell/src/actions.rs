@@ -243,6 +243,16 @@ pub fn acordes() -> Vec<Chord> {
         of_command("roda ↑", "WheelScrollUp", "workspace-previous"),
         // --- opening ---
         through_shell("RET", "Return", "buffer-terminal"),
+        // THE MONITOR, held-leader plus `Esc` — and `Ctrl+Alt+Esc` in
+        // `emergency()` does the same thing without the leader.
+        //
+        // It TAKES the key from niri's own default: upstream binds
+        // `Mod+Escape` to `toggle-keyboard-shortcuts-inhibit`, and ours comes
+        // first, so the deduplication in `acordes_completos` drops that one. The
+        // action is not lost — like the other 140, it is reachable by name
+        // (`LEADER :`), which is what that exception exists for.
+        through_shell("ESC", "Escape", "monitor-btop"),
+        through_shell("S-ESC", "Shift+Escape", "monitor-bottom"),
     ]
 }
 
@@ -335,11 +345,22 @@ pub fn acordes_completos() -> Vec<Chord> {
 /// tapping it no longer emits `F13`. A recovery shortcut that depended on the
 /// leader would be the lock inside the safe.
 ///
-/// # Why only two
+/// # Why only three
 ///
 /// Every bind here is a key the buffers stop receiving, and §7.4 wants
-/// **one** keymap. Two is the minimum that closes the loop: one to reach the command
+/// **one** keymap. Two of them close the loop: one to reach the command
 /// list, another to fix the most likely cause of it not opening.
+///
+/// The third is `Ctrl+Alt+Esc`, and it earns its place by the same argument
+/// rather than by convenience. What one reaches for when the machine stops
+/// answering is the process monitor — and a machine that is thrashing is
+/// exactly a machine where the leader may not arrive: it depends on `keyd`
+/// telling a tap from a hold, on the daemon being scheduled, and on the footer
+/// being alive to expand. This one asks the compositor to spawn, and nothing
+/// else. It is the key everyone already presses for this, and it is the
+/// companion of `nix/modules/memory.nix`: that file keeps the desktop alive
+/// under pressure, and this one is how the person sees WHAT is eating the
+/// machine.
 ///
 /// It returns `(key in niri, action in KDL, command)`.
 #[must_use]
@@ -359,6 +380,14 @@ pub fn emergency() -> Vec<(&'static str, String, &'static str)> {
             "Ctrl+Shift+L",
             format!("spawn \"{shell}\" \"command\" \"keyboard-restore\""),
             "keyboard-restore",
+        ),
+        // THE PROCESS MONITOR, without the leader. `Escape` and not `Delete`:
+        // `Ctrl+Alt+Delete` is systemd's reboot on the console, and binding the
+        // monitor next to it is asking for the wrong finger to end the session.
+        (
+            "Ctrl+Alt+Escape",
+            format!("spawn \"{shell}\" \"command\" \"monitor-btop\""),
+            "monitor-btop",
         ),
     ]
 }

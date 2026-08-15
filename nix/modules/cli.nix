@@ -41,7 +41,13 @@
 
     # ---- the machine's state ----
     htop
+    # THE DEFAULT PROCESS MANAGER, and the one `Ctrl+Alt+Esc` opens. `bottom` is
+    # the second, on `LEADER+S-Esc`. They are here so they can be TYPED at a
+    # prompt; what the shortcut runs is the store path baked into the shell by
+    # `nix/rust.nix`, because a scope's PATH is minimal and this is precisely
+    # the window one opens when the machine is already struggling.
     btop
+    bottom # `btm`
     iotop
     procs # `ps` that is readable
     dust # `du` sorted by size

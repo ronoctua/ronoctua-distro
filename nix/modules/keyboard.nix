@@ -34,7 +34,7 @@
 # # The way out, when it does fall over
 #
 # Losing the leader means losing the path to every command in the system,
-# and that is why two binds live outside it
+# and that is why binds live outside it
 # (`crates/ronoctua-shell/src/actions.rs`, `emergencia()`): `Ctrl+Alt+L`
 # opens the sequence without depending on `F13`, and `Ctrl+Shift+L` runs
 # `keyboard-restore`, which restarts this service. A recovery shortcut that

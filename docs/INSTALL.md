@@ -115,8 +115,9 @@ Um toque em **`Super`** abre a lista de atalhos, no rodapé. É por ela que se d
 não há outra tabela para decorar, e a lista é sempre a verdade, porque sai do mesmo lugar de onde as
 teclas são lidas.
 
-Dois atalhos ficam fora dela de propósito, para o caso de o teclado parar de responder:
-`Ctrl+Alt+L` abre a lista quando o `Super` falha, e `Ctrl+Shift+L` reinicia o `keyd`.
+Três atalhos ficam fora dela de propósito, para o caso de a máquina parar de responder:
+`Ctrl+Alt+L` abre a lista quando o `Super` falha, `Ctrl+Shift+L` reinicia o `keyd` e
+`Ctrl+Alt+Esc` abre o monitor de processos numa janela flutuante.
 
 ## Se algo der errado
 

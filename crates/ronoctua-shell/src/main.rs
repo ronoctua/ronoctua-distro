@@ -179,6 +179,14 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
+        // The `window-rule`s, for the same reason as the binds above: the
+        // monitor's `app_id` is set in `terminal.rs` and read by the
+        // compositor's config, and a string written at both ends drifts. The two
+        // configs (`nix/modules/niri.nix` and `nix/dev.nix`) take this in.
+        Some("export-niri-window-rules") => {
+            print!("{}", terminal::floating_rules());
+            return Ok(());
+        }
         // The process for an X11 buffer's scope: it starts ITS satellite and
         // runs the app inside. It is not meant to be called by hand — the footer's
         // `run_command` uses it; it exists as a subcommand because the scope needs ONE
@@ -205,6 +213,18 @@ fn main() -> Result<()> {
                 .split_first()
                 .map_or((None, &[][..]), |(p, r)| (Some(p.as_str()), r));
             return terminal::host_it(program, rest).context("hospedar o terminal");
+        }
+        // THE SAME TERMINAL, under the monitor's `app_id`. It is a subcommand and
+        // not a flag on the one above because what changes is the window's
+        // IDENTITY, which is what niri's rule reads to float it — see
+        // `terminal::APP_ID_MONITOR`. The program is required: a monitor with no
+        // monitor to run is a floating window with a shell in it.
+        Some("monitor") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let (program, rest) = args
+                .split_first()
+                .context("uso: ronoctua-shell monitor <programa> [args]")?;
+            return terminal::host_monitor(program, rest).context("hospedar o monitor");
         }
         // It checks the keymap without bringing anything up. It exists so whoever edits their own
         // keymap gets the same verdict `nix flake check` gives.

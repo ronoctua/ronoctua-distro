@@ -40,6 +40,32 @@ const SETSID_PATH: &str = match option_env!("RONOCTUA_SETSID") {
     None => "setsid",
 };
 
+/// What every terminal tells the program it is, and this one did not.
+///
+/// # The defect this closes
+///
+/// With `TERM` unset, ncurses does not fall back: it prints `cannot initialize
+/// terminal type ($TERM="unknown"); exiting` and the process dies at once.
+/// Measured with the pinned `htop` — which `nix/modules/cli.nix` installs and
+/// which `surface::open_application` names in its own comment as the reason
+/// `Terminal=true` entries go through here. The footer runs as a user unit,
+/// where `TERM` does not exist, and the child inherits that emptiness.
+///
+/// `xterm-256color` and not `alacritty`: the engine is
+/// `alacritty_terminal`, but the entry that is present on every machine is
+/// xterm's, and claiming a name whose terminfo is absent brings the failure
+/// back under another message.
+const TERM_KIND: &str = "xterm-256color";
+
+/// Where ncurses looks for that entry, by store path.
+///
+/// The session does define `TERMINFO_DIRS` (NixOS sets it for every profile),
+/// and this is the floor for when it does not: the nested loop on a host that
+/// is not NixOS, and any unit started outside a login session. Same contract as
+/// `SETSID_PATH` — set, it wins; absent, the variable stays as the environment
+/// left it.
+const TERMINFO_DIRS: Option<&str> = option_env!("RONOCTUA_TERMINFO_DIRS");
+
 /// The program that starts when nobody says which.
 ///
 /// `$SHELL` is what the person chose; `/bin/sh` is what always exists.
@@ -86,7 +112,17 @@ impl Pty {
             .open(name)
             .with_context(|| format!("abrir {name}"))?;
 
-        let child = std::process::Command::new(SETSID_PATH)
+        let mut assembled = std::process::Command::new(SETSID_PATH);
+        // WHAT THE TERMINAL OWES THE PROGRAM. Neither line overwrites what the
+        // environment already says: a person who sets `TERM` is describing their
+        // own terminal, and this is the floor, not a policy.
+        if std::env::var_os("TERM").is_none() {
+            assembled.env("TERM", TERM_KIND);
+        }
+        if let (None, Some(dirs)) = (std::env::var_os("TERMINFO_DIRS"), TERMINFO_DIRS) {
+            assembled.env("TERMINFO_DIRS", dirs);
+        }
+        let child = assembled
             // `--ctty` makes stdin (the slave) the CONTROLLING terminal. See
             // the top of the module.
             .arg("--ctty")

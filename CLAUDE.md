@@ -54,7 +54,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   tecla. Quem a vê é o niri, que roda `ronoctua-shell leader`; ele escreve no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`) e só então a superfície expande e pede
   `keyboard-interactivity: exclusive`. `ronoctua-shell command <id> [arg]` roda qualquer id — é por
-  onde entram os binds de emergência (`Ctrl+Alt+L`, `Ctrl+Shift+L`).
+  onde entram os três binds SEM leader (`Ctrl+Alt+L`, `Ctrl+Shift+L`, `Ctrl+Alt+Esc`: o monitor).
 - **Todo comando é `kebab-case`, e a chave de texto é `cmd-<id>`**; o registro recusa as duas
   divergirem. As 141 ações do niri entram como `niri-<nome>`, GERADAS do binário pinado, e são a
   exceção a "todo comando tem tecla" — alcançam-se por nome (`LEADER :`).
