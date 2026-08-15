@@ -37,6 +37,14 @@ path = "src/bin/symbols.rs"
 name = "ronoctua-test-lucide"
 path = "src/bin/lucide.rs"
 
+[[bin]]
+# The fourth, for the memory panel. The criterion only it has: the screen is
+# EMPTY until the host speaks. It is the one driver that pushes a `survey` — a
+# record with lists inside, lowered field by field — so a field out of order
+# fails here with a message instead of on somebody's screen.
+name = "ronoctua-test-memory"
+path = "src/bin/memory.rs"
+
 [dependencies]
 ronoctua-protocol = { path = "../ronoctua-protocol" }
 wasmtime.workspace = true

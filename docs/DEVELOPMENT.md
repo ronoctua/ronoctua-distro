@@ -95,12 +95,17 @@ O comando imprime as teclas certas ao subir. Elas valem mais do que este texto.
 ## Os outros comandos
 
 ```
+nix run .#quick        os checks que não sobem VM — o laço curto, ~1 min
 nix flake check        o mesmo que .#gate, cru — sem dimensionar pela memória
 nix run .#vm           a distro inteira numa VM: initrd, impermanência, boot de verdade
 nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
 nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)
 nix build .#iso        gera o ISO instalável
 ```
+
+O `nix run .#quick` é o que se roda no meio do trabalho: formatação dos dois idiomas, clippy, testes,
+keymap e as duas traduções — tudo o que não precisa de VM. Ele **não fecha nada**, e diz isso ao
+terminar: o que fecha é o `.#gate`, que sobe as VMs, o ISO e os quatro sistemas.
 
 O `nix run .#vm` é mais lento que o `.#dev`, e o que se ganha é o boot completo. Usuário `noctua`,
 senha `noctua`.

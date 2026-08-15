@@ -130,6 +130,44 @@ A correção é manter build fora da árvore (`CARGO_TARGET_DIR`). A guarda é o
 que mede `self` e falha acima de 20 MB — e tem fixture negativo. Sem o check, a correção se perderia
 no primeiro `cargo build` fora do devshell, e o custo é invisível até o disco encher.
 
+#### E a terceira vez foi pelo AMBIENTE, não pela árvore
+
+A camada de dependências reconstruía sozinha, e a explicação óbvia estava errada: **o `crane`
+funciona como projetado**. O `dummySrc` dele não carrega o hash da árvore — é montado de um
+`Cargo.lock` limpo, de cada `Cargo.toml` **reparseado** e de um `dummy.rs` fixo, com
+`unsafeDiscardStringContext`. Conferido na derivação real: o caminho do `rustFont` não aparece nela.
+Editar `crates/**/*.rs` nunca a invalidou.
+
+O que a invalidava eram as **31 variáveis que ela recebia e não usa**. `cargoArtifacts` era
+`buildDepsOnly (commonArgs // …)`, e ali dentro iam os cinco `.wasm`, as três fontes, os tokens e o
+i18n. Nenhuma é lida por dependência de terceiros — o `crane` substitui até os nossos `build.rs` por
+stubs, então eles nunca rodam ali. Mas o Nix endereça por ENTRADA: com `RONOCTUA_BUFFER_MEMORY` no
+ambiente, editar um buffer mudava o hash e pagava **4m46** de compilação por um valor que ninguém lê
+— e os cinco `.wasm` eram dependências diretas, então a camada esperava cinco builds que não
+consome.
+
+A correção é a separação `buildBase`/`generated`: a camada recebe o que LINKA (wayland, xkbcommon,
+vulkan) e nada mais. A guarda é `deps-layer-is-lean`, que lê os atributos da derivação gerada — em
+tempo de avaliação, sem build — e recusa qualquer `RONOCTUA_*` ali. **Medido depois:** um `.ftl`
+editado deixa o `.drv` da camada idêntico, e o do shell muda, como tem de mudar.
+
+**Os números do laço, medidos:** dependências 4m46 (483 crates), workspace 2m15–5m46, clippy 13–16 s,
+cada roteiro de VM 18–51 s. O gate longo é o resto — quatro sistemas NixOS, o ISO e catorze VMs —,
+e é por isso que existe `nix run .#quick`: os checks que não sobem VM, ~1 min, e que **não fecham
+nada** (invariante 7 continua sendo o gate).
+
+#### O formatador era a armadilha que ele mesmo documentava
+
+`formatter` era o `nixfmt` cru. `nix fmt` sem argumento virava um `nixfmt` lendo stdin e **travava** —
+sete horas de processo, uma vez. A armadilha ficou escrita no `CLAUDE.md`, e mesmo assim o hook de
+pre-commit e o `check-fmt` mandavam rodar exatamente o comando que trava.
+
+Documentar uma armadilha não a remove. Hoje o `formatter` é um invólucro: sem argumento formata a
+árvore — `.nix`, o workspace e os **cinco workspaces dos buffers**, que `cargo fmt --all` nunca
+alcançou porque `buffers/` está em `exclude`. Com `--check` confere, que é o que o hook usa. A
+armadilha deixou de existir por construção, e a formatação dos buffers passou a ser conferida
+(`buffers-fmt`).
+
 ---
 
 ### Atlas de glifos
@@ -2616,7 +2654,7 @@ Duas coisas apareceram ao medir isto, e as duas eram interruptores que não inte
 
 Instalar custava uma tarde, e o motivo não era o download. `nixos-install` **constrói** o sistema: o
 que vem do nixpkgs chega pronto do cache público, e o que este repositório produz não existe em cache
-nenhum — o shell, o niri do input pinado, o `libghostty-vt` com o Zig, os quatro buffers wasm, a
+nenhum — o shell, o niri do input pinado, o `libghostty-vt` com o Zig, os cinco buffers wasm, a
 família de fontes que vem de um Release do GitHub. São exatamente as compilações que o `earlyoom`
 deste host mata por peso.
 

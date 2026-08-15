@@ -105,18 +105,44 @@ let
     ];
   };
 
-  commonArgs = {
+  # WHAT THE DEPENDENCY LAYER NEEDS — and nothing else.
+  #
+  # # The measurement that split this in two
+  #
+  # `buildDepsOnly` compiles the 483 third-party crates against dummy sources:
+  # crane replaces every one of OUR crates with a stub, INCLUDING their
+  # `build.rs`. So none of the generated inputs below is read there — and yet
+  # they were all in its `env`, because it was handed the whole of `commonArgs`.
+  #
+  # Nix addresses a derivation by its INPUTS. With `RONOCTUA_BUFFER_MEMORY` in
+  # that env, editing a buffer changed the layer's hash and paid 4m46 of
+  # compilation for a value nothing in it reads — and the five `.wasm` were
+  # direct dependencies of it, so the layer waited for five builds it never
+  # consumed. The same for a `.ftl`, a token or a font.
+  #
+  # The split is the fix, and `deps-layer-is-lean` is what keeps it: it reads
+  # the generated `.drv` and refuses a `RONOCTUA_*` in there.
+  buildBase = {
     src = rustFont;
     strictDeps = true;
 
     nativeBuildInputs = [ pkg-config ];
+    # These DO belong here: the dependencies themselves link against them —
+    # `wayland-sys` and `khronos-egl` do not build without the libraries.
     buildInputs = [
       wayland
       libxkbcommon
       vulkan-loader
       libGL
     ];
+  };
 
+  # WHAT ONLY OUR OWN CRATES READ.
+  #
+  # Every one of these reaches the Rust through `option_env!` or a `build.rs`
+  # of ours — see the comment on each. A third-party crate has never heard of
+  # any of them, which is why the dependency layer above does not get them.
+  generated = {
     # The two generators. ronoctua-tokens's `build.rs` fails loudly if the
     # first is missing, instead of generating a fallback that would mask the error.
     RONOCTUA_TOKENS_RS = "${tokensRs}/tokens.rs";
@@ -254,8 +280,19 @@ let
     # or the wasm buffers, this is data the shell can do without.
   };
 
-  # The dependencies, compiled once. Editing our code does not invalidate them.
-  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { pname = "ronoctua-deps"; });
+  # What compiles OUR code needs both halves.
+  commonArgs = buildBase // generated;
+
+  # The dependencies, compiled once.
+  #
+  # `buildBase` and NOT `commonArgs`: see the comment on the split. Editing our
+  # code never invalidated this — crane's dummy is built from the parsed
+  # manifests and carries no source hash — but editing a buffer, a `.ftl` or a
+  # token did, through the environment. Now nothing does but the lockfile.
+  #
+  # No explicit `dummySrc`: crane already resolves it correctly, and pinning one
+  # here would be fixing what is not broken.
+  cargoArtifacts = craneLib.buildDepsOnly (buildBase // { pname = "ronoctua-deps"; });
 in
 rec {
   inherit cargoArtifacts craneLib;

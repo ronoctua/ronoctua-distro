@@ -179,6 +179,7 @@ pkgs.mkShell {
         crates/ronoctua-protocol/wit/deps/tokens/tokens.wit
     fi
 
+    echo "  nix run .#quick    os checks sem VM (~1 min) — nao fecha nada"
     echo "  nix flake check    verifica tudo"
     echo "  nix run .#dev      niri aninhado + rodape (leader = Ctrl+Alt+Space)"
     echo "  nix run .#vm       sistema completo em VM"

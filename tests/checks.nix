@@ -42,6 +42,10 @@
   wit,
   tokensRs,
   niriActions,
+  # The PINNED toolchain, for the buffers' formatting: `rustfmt` from nixpkgs
+  # could be another version, and two versions of a formatter are two opinions
+  # about the same file.
+  rustToolchain,
 }:
 
 let
@@ -792,6 +796,33 @@ let
     echo "OK: a faixa de origem derruba o build, dizendo quantos colidem"
   '';
 
+  # THE PANEL ANSWERS THE HOST — driven on the real component.
+  #
+  # The three sibling drivers exercise buffers that carry their own database.
+  # This one is the first whose screen is EMPTY until the host speaks: the
+  # survey crosses the WIT as a record with lists inside, lowered field by
+  # field, and `wasmtime` compares the field NAMES only after zipping them
+  # positionally. A field out of order fails here, with a message, instead of
+  # on somebody's screen.
+  #
+  # It also holds the two rules that make an irreversible key safe: one press
+  # arms, another key disarms, the same key fires — and closing points at the
+  # ROW of the last survey, never at a pid, because a scope has none.
+  memory-driven = mkCheck "memory-driven" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-memory \
+      ${buffers.memory}/lib/ronoctua_buffer_memory.wasm \
+      ${../assets/i18n}
+  '';
+
+  # AND ON THE FOURTH, which is the lightest of them: it embeds no database at
+  # all, because every number it draws is pushed in at run time. The ceiling
+  # here is loose on purpose — what it guards is a regression in the RUNTIME,
+  # which would show up first on the component that has the least to load.
+  memory-instance-fast = mkCheck "memory-instance-fast" [ ] ''
+    ${rust.workspace}/bin/ronoctua-bench-instance \
+      ${buffers.memory}/lib/ronoctua_buffer_memory.wasm 200
+  '';
+
   # THE 5 MS BUDGET, on the third component too.
   lucide-instance-fast = mkCheck "lucide-instance-fast" [ ] ''
     ${rust.workspace}/bin/ronoctua-bench-instance \
@@ -1352,6 +1383,17 @@ let
     bufferGlyphs = buffers.glyphs;
   };
 
+  # The memory panel on screen. A file of its own and not one more subtest of
+  # the sibling: what it proves is the HOST reading a real `/proc` and a clock
+  # that ticks, which no other buffer needs — and a failure there has nothing to
+  # do with the mechanism `buffer-vm` guards.
+  memoryVm = import ./memory-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.workspace;
+    bufferMemory = buffers.memory;
+  };
+
   # The clipboard history: the native capture, the view and the re-copy (4.2).
   clipboardVm = import ./clipboard-vm.nix {
     inherit pkgs lib fonts;
@@ -1431,6 +1473,41 @@ let
   # `nix/devshell.nix`). This check is what stops the fix from being lost: the
   # cost is invisible day to day and only shows up when the disk fills.
   #
+  # THE DEPENDENCY LAYER SEES ONLY WHAT IT USES.
+  #
+  # `buildDepsOnly` compiles the 483 third-party crates against stubs — crane
+  # replaces every crate of ours, `build.rs` included. So it reads none of the
+  # generated inputs; and yet all 31 `RONOCTUA_*` were in its environment,
+  # because it was handed the whole of `commonArgs`.
+  #
+  # Nix addresses a derivation by its inputs. With `RONOCTUA_BUFFER_MEMORY` in
+  # there, editing a buffer changed the layer's hash and paid 4m46 of
+  # compilation for a value nothing in it reads — and made the layer WAIT for
+  # five wasm builds it never consumes. A `.ftl` or a token did the same.
+  #
+  # This reads the attributes of the generated derivation, at evaluation time:
+  # no build, no import-from-derivation. It is the environment that is checked
+  # because the environment is how they got in — the five buffers were never
+  # named in `nix/rust.nix`'s deps call, they arrived carried by a variable.
+  deps-layer-is-lean =
+    let
+      leaked = lib.filter (lib.hasPrefix "RONOCTUA_") (lib.attrNames rust.cargoArtifacts.drvAttrs);
+    in
+    mkCheck "deps-layer-is-lean" [ ] ''
+      vazaram="${lib.concatStringsSep " " leaked}"
+      if [ -n "$vazaram" ]; then
+        echo "ERRO: a camada de dependencias recebeu variaveis que nao usa:" >&2
+        for v in $vazaram; do echo "  $v" >&2; done
+        echo >&2
+        echo "      Elas entram por \`commonArgs\`; a camada tem de receber o" >&2
+        echo "      \`buildBase\`. Cada uma dessas custa 4m46 de recompilacao a" >&2
+        echo "      cada vez que o valor dela muda — e um .wasm muda toda vez" >&2
+        echo "      que alguem edita o buffer." >&2
+        exit 1
+      fi
+      echo "OK: a camada de dependencias nao carrega nenhuma RONOCTUA_*"
+    '';
+
   lean-tree = mkCheck "lean-tree" [ ] ''
     cap=20480  # KiB — the real tree is ~1.3 MB
     tree_size=$(du -s --exclude=.git ${self} | cut -f1)
@@ -2596,7 +2673,7 @@ let
   # Everything a NixOS closure inherits from nixpkgs comes prebuilt from the
   # public cache. Everything this repository makes does not exist there, and was
   # being built on the machine being installed: the shell, niri from the pinned
-  # input, `libghostty-vt` and its Zig toolchain, the four wasm buffers, the
+  # input, `libghostty-vt` and its Zig toolchain, the five wasm buffers, the
   # font family from a GitHub Release. That is where an install's afternoon went.
   #
   # This check is the LIST's half of the promise, and `iso-fits-usb-stick` is the
@@ -2865,6 +2942,7 @@ in
     # The feedback loop is m1's goal, and a tree that gets fat destroys it
     # silently: every `nix flake check` starts copying gigabytes.
     lean-tree
+    deps-layer-is-lean
     gitignore-keeps-fonts
     fonts-single-family
     fonts-metrics
@@ -2925,6 +3003,7 @@ in
   notify-vm = notifyVm;
   impermanence-vm = impermanenceVm;
   buffer-vm = bufferVm;
+  memory-vm = memoryVm;
   clipboard-vm = clipboardVm;
   terminal-vm = terminalVm;
   x11-vm = x11Vm;
@@ -2948,6 +3027,8 @@ in
     lucide-table-generated
     lucide-range-taken-fails
     lucide-instance-fast
+    memory-instance-fast
+    memory-driven
     renderer-loads-three-faces
     layout-fast
     shaping-fast
@@ -3136,6 +3217,7 @@ in
   m7 = pkgs.linkFarmFromDrvs "check-m7" [
     # A native buffer end to end, with an `xdg_toplevel` of its own.
     bufferVm
+    memoryVm
     clipboardVm
     # Instantiation < 5 ms with `memory_init_cow` on.
     instance-fast
@@ -3163,6 +3245,8 @@ in
     lucide-table-generated
     lucide-range-taken-fails
     lucide-instance-fast
+    memory-instance-fast
+    memory-driven
     renderer-loads-three-faces
     # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
     # in the pixel, and the footer still responding with the application open —
@@ -3232,6 +3316,7 @@ in
   # =================================================================
   inherit
     lean-tree
+    deps-layer-is-lean
     gitignore-keeps-fonts
     fonts-single-family
     fonts-metrics
@@ -3294,4 +3379,35 @@ in
       fi
       touch $out
     '';
+
+  # THE BUFFERS' FORMATTING, WHICH NOTHING CHECKED.
+  #
+  # `rust-fmt` is `cargoFmt` over the workspace, and `cargo fmt --all` reaches
+  # the workspace's MEMBERS — `buffers/` is in `exclude` (a component cannot be
+  # a member; `rust-lld` refuses its symbols). So the five components were
+  # formatted by whoever remembered to `cd` into each one.
+  #
+  # The pinned toolchain, never `pkgs.rustfmt`: two versions of a formatter are
+  # two opinions about the same file, and the disagreement would show up as a
+  # check that fails on a tree `nix fmt` just formatted.
+  buffers-fmt =
+    pkgs.runCommand "check-buffers-fmt"
+      {
+        nativeBuildInputs = [ rustToolchain ];
+      }
+      ''
+        # `cargo` wants a writable home even when it only formats.
+        export CARGO_HOME=$TMPDIR/cargo
+        failed=0
+        for manifest in ${../buffers}/*/Cargo.toml; do
+          name=$(basename "$(dirname "$manifest")")
+          if ! cargo fmt --manifest-path "$manifest" -- --check; then
+            echo "ERRO: buffers/$name esta fora de formato. Rode: nix fmt" >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: os cinco buffers estao formatados"
+        touch $out
+      '';
 }

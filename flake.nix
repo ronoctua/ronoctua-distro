@@ -464,7 +464,7 @@
                 # `cache.nixos.org`; what this project makes does not exist
                 # there, and that is what the target machine was compiling every
                 # time — the shell, niri from the pinned input, `libghostty-vt`
-                # and its Zig toolchain, the four wasm buffers. They are the
+                # and its Zig toolchain, the five wasm buffers. They are the
                 # compilations this host's own `earlyoom` kills for weight.
                 #
                 # The reduced SYSTEM's whole closure would have fitted here too,
@@ -475,7 +475,7 @@
                 # rest instead of compiling it.
                 seed = [
                   # The workspace, and with it — all by baked store path —
-                  # the icon superpack, `libghostty-vt`, the four wasm buffers
+                  # the icon superpack, `libghostty-vt`, the five wasm buffers
                   # and niri itself. 1,97 GiB of closure that no cache has.
                   rust.workspace
                   # NOT in the workspace's closure: the binary embeds only the
@@ -601,6 +601,7 @@
           wit
           tokensRs
           niriActions
+          rustToolchain
           ;
       };
 
@@ -646,6 +647,46 @@
             platforms = [ system ];
           };
         };
+
+        # THE SHORT LANE — what one runs in the middle of the work.
+        #
+        # # Why it exists, and why it does not replace the gate
+        #
+        # The gate is 30–45 minutes: four NixOS systems, the ISO and fourteen
+        # virtual machines. That is the right price to CLOSE something
+        # (invariant 7) and the wrong one to ask twenty times an afternoon —
+        # so what happened instead is what happened all session: `cargo` typed
+        # by hand inside `nix develop`, which no document mentions and which
+        # checks none of the Nix side.
+        #
+        # This runs everything that needs no virtual machine, in one go so Nix
+        # parallelises it: formatting (both languages, the buffers included),
+        # clippy with `-D warnings`, the tests, the keymap, the two languages,
+        # the buffers' labels and keys, and the guard on the dependency layer.
+        # With a warm cache it is about a minute.
+        #
+        # It says out loud that it is not the gate. A short lane that lets one
+        # believe the work is finished is worse than no short lane.
+        quick = mkScriptApp "ronoctua-quick" "os checks que nao sobem VM — o laco curto" ''
+          echo "== o laco curto: nada de VM =="
+          nix build --no-link --keep-going -L \
+            .#checks.${system}.rust-fmt \
+            .#checks.${system}.fmt \
+            .#checks.${system}.buffers-fmt \
+            .#checks.${system}.rust-clippy \
+            .#checks.${system}.rust-tests \
+            .#checks.${system}.keymap-no-collision \
+            .#checks.${system}.i18n-complete \
+            .#checks.${system}.buffer-commands-have-labels \
+            .#checks.${system}.buffer-keys-have-text \
+            .#checks.${system}.deps-layer-is-lean \
+            "$@"
+          echo
+          echo "OK — e isto NAO fecha nada."
+          echo "     O que fecha e  nix run .#gate  (invariante 7): ele sobe as"
+          echo "     VMs, o ISO e os quatro sistemas, que e onde moram os"
+          echo "     defeitos que este laco nao pode ver."
+        '';
 
         # A complete system in a VM.
         vm = mkScriptApp "ronoctua-vm" "sobe o sistema completo em VM" ''
@@ -808,6 +849,83 @@
         inherit iconSuperpack ghosttyVt;
       };
 
-      formatter.${system} = pkgs.nixfmt;
+      # THE FORMATTER FORMATS THE TREE — Nix and Rust, in one command.
+      #
+      # # Why it is not `pkgs.nixfmt` any more
+      #
+      # It was, and that cost seven hours once: `nix fmt` with no argument
+      # becomes a bare `nixfmt` reading STDIN, which BLOCKS. The trap was
+      # written down in `CLAUDE.md` and worked around by always typing
+      # `nix fmt .` — while the pre-commit hook and the `check-fmt` both told
+      # the person to run the version that hangs.
+      #
+      # A trap one documents is a trap one still falls into. This wrapper
+      # removes it: with no argument it formats the whole tree, which is what
+      # the person meant.
+      #
+      # # And Rust too, including the buffers
+      #
+      # `cargo fmt --all` reaches the workspace's MEMBERS, and `buffers/` is in
+      # `exclude` — so the five components' formatting was checked by nothing.
+      # Each is its own workspace, so each gets its own call.
+      formatter.${system} = pkgs.writeShellApplication {
+        name = "ronoctua-fmt";
+        runtimeInputs = [
+          pkgs.nixfmt
+          rustToolchain
+          pkgs.fd
+        ];
+        text = ''
+          # `nix fmt` passes on whatever paths it was given. `--check` is what
+          # the pre-commit hook uses: confer, do not write.
+          check=false
+          paths=()
+          for a in "$@"; do
+            case "$a" in
+              --check) check=true ;;
+              *) paths+=("$a") ;;
+            esac
+          done
+          # NO PATH MEANS THE TREE. This one line is the whole difference
+          # between a formatter and a seven-hour hang.
+          [ ''${#paths[@]} -gt 0 ] || paths=(.)
+
+          failed=0
+
+          # --- Nix ---------------------------------------------------------
+          mapfile -t nix_files < <(fd --type f --extension nix --hidden \
+            --exclude .git . "''${paths[@]}" 2>/dev/null || true)
+          if [ ''${#nix_files[@]} -gt 0 ]; then
+            if [ "$check" = true ]; then
+              nixfmt --check "''${nix_files[@]}" || failed=1
+            else
+              nixfmt "''${nix_files[@]}"
+            fi
+          fi
+
+          # --- Rust --------------------------------------------------------
+          # Only when run over the tree: formatting a single `.nix` file must
+          # not reformat every crate as a side effect.
+          if [ "''${paths[0]}" = "." ] && [ -f Cargo.toml ]; then
+            if [ "$check" = true ]; then
+              cargo fmt --all -- --check || failed=1
+            else
+              cargo fmt --all
+            fi
+            # EACH BUFFER IS ITS OWN WORKSPACE — see the `exclude` in the root
+            # manifest. Without this loop their formatting is checked by nothing.
+            for manifest in buffers/*/Cargo.toml; do
+              [ -f "$manifest" ] || continue
+              if [ "$check" = true ]; then
+                cargo fmt --manifest-path "$manifest" -- --check || failed=1
+              else
+                cargo fmt --manifest-path "$manifest"
+              fi
+            done
+          fi
+
+          exit "$failed"
+        '';
+      };
     };
 }

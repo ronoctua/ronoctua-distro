@@ -515,26 +515,30 @@ impl State {
             GuardMode::Off => key::GUARD_OFF,
             GuardMode::Unknown => key::GUARD_UNKNOWN,
         };
-        // The label is a key and the value is data — a row cannot mix them, and
-        // the state's name is a translation. So the value carries the numbers
-        // and the note carries what the state is.
-        let value = match g.mode {
+        // THE STATE IS THE VALUE, and it is a KEY — because it is a word, and a
+        // word on this screen is a translation.
+        //
+        // It was in the NOTE, and a note is `Text::Data`: the screen drew
+        // `memory-guard-unknown`, the key's own name, in front of the person.
+        // The OCR of `memory-vm` is what caught it — no unit test could, because
+        // the key was there and correct; what was wrong was WHICH SLOT it went
+        // into. The numbers moved to the note, where data belongs.
+        let numbers = match g.mode {
             GuardMode::Tolerant | GuardMode::Strict => {
                 format!("{} · {}s", percent(g.pressure_limit), g.pressure_seconds)
             }
-            _ => "—".to_owned(),
+            _ => String::new(),
         };
         Row {
             label: key::GUARD,
-            value: Text::Data(value),
-            note: String::new(),
+            value: Text::Key(state.to_owned()),
+            note: numbers,
             color: match g.mode {
                 GuardMode::Strict => Color::StateSuccess,
                 GuardMode::Tolerant => Color::StateWarning,
                 _ => Color::StateError,
             },
         }
-        .with_note(state.to_owned())
     }
 }
 

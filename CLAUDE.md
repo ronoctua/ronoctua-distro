@@ -36,6 +36,7 @@ Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção
 ```
 nix develop           entra no ambiente (direnv é atalho opcional, e do HOST)
 nix run .#dev         niri aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
+nix run .#quick       os checks que não sobem VM (~1 min); NÃO fecha nada, só adianta
 nix run .#gate        verifica TUDO — dimensiona pela RAM e acusa o earlyoom; USE ESTE
 nix flake check       o mesmo cru;  nix run .#bench  falha se um alvo estourar
 nix run .#diagnostics instantâneo de quando os atalhos travam (só leitura)
@@ -100,7 +101,6 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 
 ## Armadilhas concretas já encontradas
 
-- **`nix fmt` SEM argumento TRAVA PARA SEMPRE** — vira `nixfmt` cru lendo stdin: com stdin fechado erra, com stdin aberto (heredoc) **bloqueia**, e o `>/dev/null 2>&1` esconde os dois. É `nix fmt .`; `timeout` no comando seguinte não salva, ele nunca chega. Custou 7 h de processo.
 - **NADA de build na árvore — 793 GB.** `CARGO_TARGET_DIR` fora (`lean-tree`); **nunca `${../.}`**.
   **Uma derivação referencia o que os BYTES dela citam**: `rust.workspace` tem todo binário, e punha
   Zig+clang+LLVM (1,70 GiB) e os ícones no ISO — extraia o binário (`rust.installer`). O `.a` do
@@ -119,7 +119,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   Rust; idem o que cruza a fronteira como STRING. **Cortar por CODEPOINT inventa desenho**: elide por
   CLUSTER. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
-- **`nix flake check` SEM `-L` não mostra log**: silêncio não é sintoma; o `secureboot-vm` leva ~2 h calado. **`nix fmt` só cuida do Nix** — Rust é `cargo fmt --all`, e o `check-fmt` cobre os dois.
+- **`nix flake check` SEM `-L` não mostra log**: silêncio não é sintoma; o `secureboot-vm` leva ~2 h calado. **`nix fmt` sem argumento formata a árvore** — Nix, workspace e os cinco buffers; `--check` confere.
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`), e `--max-jobs` não salva: o que estoura é jobs × cores. Por isso o gate é `nix run .#gate`, que mede, limita o produto e acusa o culpado. **`pkill`/`pgrep` casa o PRÓPRIO comando.**
 - **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já
   estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo.

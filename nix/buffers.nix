@@ -21,6 +21,28 @@
 }:
 
 let
+  # WHAT OF A BUFFER GOES INTO THE STORE.
+  #
+  # It used to be `src = ../buffers/<name>` — a raw path, unfiltered. Whatever
+  # was in the directory went in: a `target/` left behind by someone running
+  # `cargo build` there puts gigabytes in the store, and every edit mints a new
+  # copy. That is the class the tree already paid 793 GB for, still open in this
+  # corner (`lean-tree` measures the FLAKE's tree and would not see it, because
+  # this path is copied on its own).
+  #
+  # The same criterion as `nix/rust.nix`'s `rustFont`: the sources, the manifest
+  # and the lockfile. Nothing else is read by the build below.
+  onlySources =
+    src:
+    lib.fileset.toSource {
+      root = src;
+      fileset = lib.fileset.unions [
+        (lib.fileset.fileFilter (f: f.hasExt "rs") src)
+        (src + "/Cargo.toml")
+        (src + "/Cargo.lock")
+      ];
+    };
+
   buffer =
     {
       name,
@@ -31,7 +53,7 @@ let
       {
         pname = "ronoctua-buffer-${name}";
         version = "1";
-        inherit src;
+        src = onlySources src;
 
         # IT MIRRORS THE REPOSITORY LAYOUT.
         #
