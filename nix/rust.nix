@@ -212,7 +212,16 @@ let
     # Invariant 10 still stands: what consults it is the HOST, and no
     # design system component reaches it — the WIT `world` has no
     # filesystem.
-    RONOCTUA_ICONS = "${iconSuperpack}/share/icons/noctua";
+    # `RONOCTUA_ICONS` IS NOT SET HERE, and its absence is the point.
+    #
+    # Baked in, the icon superpack's store path is a reference this binary
+    # carries into every closure — so `ronoctua.icons.superpack = false` removed
+    # it from `environment.systemPackages` and left all 0,61 GiB in the system
+    # anyway. Measured with `nix why-depends`, not assumed.
+    #
+    # It is read from the ENVIRONMENT instead (`crates/.../apps.rs`), set by
+    # `nix/modules/icons.nix` and by `nix/dev.nix`. It can be: unlike `setsid`
+    # or the wasm buffers, this is data the shell can do without.
   };
 
   # The dependencies, compiled once. Editing our code does not invalidate them.

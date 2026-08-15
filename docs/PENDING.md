@@ -87,25 +87,7 @@ tmpfs), deixando o `target.qcow2` como único disco.
 
 - acabou quando: `--execute` roda contra um disco virtual num teste, e o sistema que ele instala boota
 
-### 4. O `ronoctua.icons.superpack` não tira o superpacote do closure · pequeno
-
-A opção existe, e desligá-la só o tira do `environment.systemPackages`. Os 0,61 GiB continuam no
-closure de **toda máquina**, porque o `ronoctua-shell` carrega o caminho do superpacote GRAVADO em
-tempo de compilação por `option_env!` (`RONOCTUA_ICONS`, posto em `nix/rust.nix`) e é instalado nos
-dois perfis. Medido com `nix why-depends`, não suposto.
-
-Por isso ele está fora da tabela de `nix/modules/profile.nix`: listá-lo lá anunciaria uma economia
-que não acontece.
-
-O caminho é o mesmo que o instalador já usa para as três listas do xkb (`model.rs`): variável de
-ambiente em tempo de EXECUÇÃO primeiro, `option_env!` como reserva do `nix run .#dev`. O
-`nix/dev.nix` já exporta `RONOCTUA_ICONS`; falta o `nix/modules/icons.nix` fazer o mesmo e o
-`nix/rust.nix` parar de gravar.
-
-- acabou quando: com `superpack = false`, `noctua-icon-theme` não aparece em `nix path-info -r` do
-  sistema, e o `apps-icon-from-superpack` continua passando com ele ligado
-
-### 5. Clipboard: o ClipCascade não está empacotado · decidir antes
+### 4. Clipboard: o ClipCascade não está empacotado · decidir antes
 
 O painel mostra `ClipCascade: não integrado` e o comando de configurar diz o mesmo — honesto, e
 reservando o lugar.

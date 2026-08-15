@@ -102,7 +102,8 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   Zig+clang+LLVM (1,70 GiB) e os ícones no ISO — extraia o binário (`rust.installer`). O `.a` do
   ghostty-vt era o único a citar o Zig, e nós linkamos o `.so`. **Interruptor que não interrompe**:
   `notoExtra` e `icons.superpack` desligavam e o pacote entrava por outra porta — meça com
-  `nix why-depends`, não confie no `mkIf`.
+  `nix why-depends`, não confie no `mkIf`. **`option_env!` com caminho de store é referência**: dado
+  que o SISTEMA decide (ícones) vem do AMBIENTE, senão nenhum interruptor o tira do closure.
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).

@@ -310,12 +310,26 @@ pub fn scan(language: &str, envio: calloop::channel::Sender<Catalogue>) {
     }
 }
 
-/// The icon superpackage's root (§6.6), by store path.
+/// The icon superpackage's root (§6.6), read at RUN TIME.
 ///
-/// The same contract as the others: `option_env!` so `cargo build` outside Nix
-/// goes on compiling. Without it, the pixmap step simply does not happen
-/// and the list is left with the glyphs — which is degradation, not a defect.
-const SUPERPACK: Option<&str> = option_env!("RONOCTUA_ICONS");
+/// # Why not `option_env!`, unlike everything else here
+///
+/// Because it is the one path the SYSTEM decides. `ronoctua.icons.superpack`
+/// exists to leave the 0,61 GiB out of a reduced installation, and a store path
+/// compiled into this binary is a reference the closure carries whatever the
+/// option says — the switch turned nothing off, and `nix why-depends` is what
+/// said so. The other paths here (`setsid`, `choom`, the wasm buffers) are
+/// programs the shell cannot run without; this is data it can do without.
+///
+/// So the value comes from the environment, set by `nix/modules/icons.nix` for
+/// the installed system and by `nix/dev.nix` for the nested loop. Unset, the
+/// pixmap step does not happen and the list is left with its glyphs — which is
+/// degradation, and it is what a machine that asked for no superpack wants.
+fn superpack() -> Option<String> {
+    std::env::var("RONOCTUA_ICONS")
+        .ok()
+        .filter(|p| !p.is_empty())
+}
 
 /// An icon's pixmap side, in pixels.
 ///
@@ -379,7 +393,7 @@ pub fn painter(
     envio: calloop::channel::Sender<Painting>,
 ) -> Option<std::sync::mpsc::Sender<Request>> {
     let (fila, requests) = std::sync::mpsc::channel::<Request>();
-    let root = SUPERPACK.map(std::path::PathBuf::from);
+    let root = superpack().map(std::path::PathBuf::from);
     let born = std::thread::Builder::new()
         .name("ronoctua-icones".to_owned())
         .spawn(move || {

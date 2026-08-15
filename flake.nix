@@ -483,6 +483,21 @@
                   # nothing else in the closure fails the way a release asset
                   # can.
                   fonts.noctua-iosevka-ttf-nerdfonts
+                  # THE ICON SUPERPACK, and it has to be said out loud now.
+                  #
+                  # It used to arrive by carriage: `ronoctua-shell` carried its
+                  # store path baked in, so the workspace's closure brought it.
+                  # Cutting that reference is what made
+                  # `ronoctua.icons.superpack` a switch that actually switches —
+                  # and it also took the package off this ISO, which would have
+                  # left a full installation BUILDING a 0,61 GiB merge of icon
+                  # themes on the target machine. `iso-carries-the-seed` is what
+                  # said so.
+                  #
+                  # It is here regardless of profile: the ISO installs either
+                  # one, and the seed is "what no cache has", not "what the
+                  # reduced profile uses".
+                  iconSuperpack
                 ]
                 # AND THE FLAKE'S OWN INPUTS, as sources.
                 #

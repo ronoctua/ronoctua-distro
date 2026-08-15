@@ -64,17 +64,15 @@ in
     fonts.full = lib.mkDefault full;
     fonts.notoExtra = lib.mkDefault full;
 
-    # `ronoctua.icons.superpack` IS DELIBERATELY ABSENT FROM THIS TABLE.
+    # The 0,61 GiB superpack is a PIXMAP FALLBACK for foreign applications
+    # (invariant 10) — no component of the design system consults it, so a
+    # reduced machine loses icons for other people's apps and nothing of its own.
     #
-    # Turning it off does not remove the 0,61 GiB from the closure, so listing it
-    # here would be claiming a saving that never happens. The superpack reaches
-    # the system twice: through `environment.systemPackages`, which the option
-    # does control, and through `ronoctua-shell`, which carries the store path
-    # BAKED IN by `option_env!` (`RONOCTUA_ICONS` in `nix/rust.nix`) and is
-    # installed by `niri.nix` in both profiles.
-    #
-    # Measured with `nix why-depends`, not assumed. Closing it means the shell
-    # finding the superpack at runtime instead of by absolute path, which is a
-    # change to the shell and not to a table — it is in `docs/PENDING.md`.
+    # It was out of this table for a while, and honestly: turning it off removed
+    # it from `environment.systemPackages` and left every byte in the closure,
+    # because `ronoctua-shell` carried the store path BAKED IN by `option_env!`.
+    # The shell reads it from the environment now, so the switch is real and the
+    # line means what it says.
+    icons.superpack = lib.mkDefault full;
   };
 }

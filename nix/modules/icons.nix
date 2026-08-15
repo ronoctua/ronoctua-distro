@@ -38,25 +38,48 @@ in
     '';
   };
 
-  config = lib.mkIf cfg.icons.superpack {
-    environment.systemPackages = [
-      ronoctua.iconSuperpack
-      # The mandatory terminal of the inheritance chain per the freedesktop spec.
-      # The merged theme declares `Inherits=hicolor`, so it has to exist.
-      pkgs.hicolor-icon-theme
-    ];
+  config = lib.mkIf cfg.icons.superpack (
+    let
+      iconsRoot = "${ronoctua.iconSuperpack}/share/icons/noctua";
+    in
+    {
+      environment.systemPackages = [
+        ronoctua.iconSuperpack
+        # The mandatory terminal of the inheritance chain per the freedesktop spec.
+        # The merged theme declares `Inherits=hicolor`, so it has to exist.
+        pkgs.hicolor-icon-theme
+      ];
 
-    # The system's default theme for foreign apps. It does not touch our UI.
-    environment.sessionVariables.XDG_ICON_THEME = "noctua";
+      # WHERE THE FOOTER FINDS THE SUPERPACK, at run time.
+      #
+      # It used to be compiled into the binary with `option_env!`, which made this
+      # very option a switch that turned nothing off: the store path was a
+      # reference the closure carried whether it was on or not, all 0,61 GiB of it.
+      #
+      # Through the session's environment instead, and inside this `mkIf`: a
+      # machine that asked for no superpack leaves the variable unset, the shell
+      # skips the pixmap step, and the application list keeps its glyphs — which
+      # is invariant 10's arrangement anyway, since no component of the design
+      # system consults this package.
+      # BOTH PLACES, because they answer different questions. `sessionVariables`
+      # reaches a login shell; the footer is a systemd USER UNIT, and a unit
+      # inherits the manager's environment rather than the shell's. Setting only
+      # the first is how this would look configured and reach nothing.
+      environment.sessionVariables.RONOCTUA_ICONS = iconsRoot;
+      systemd.user.services.ronoctua-footer.environment.RONOCTUA_ICONS = iconsRoot;
 
-    # GTK and Qt look the theme up by name; without this each would pick its own.
-    environment.etc."xdg/gtk-3.0/settings.ini".text = ''
-      [Settings]
-      gtk-icon-theme-name=noctua
-    '';
-    environment.etc."xdg/gtk-4.0/settings.ini".text = ''
-      [Settings]
-      gtk-icon-theme-name=noctua
-    '';
-  };
+      # The system's default theme for foreign apps. It does not touch our UI.
+      environment.sessionVariables.XDG_ICON_THEME = "noctua";
+
+      # GTK and Qt look the theme up by name; without this each would pick its own.
+      environment.etc."xdg/gtk-3.0/settings.ini".text = ''
+        [Settings]
+        gtk-icon-theme-name=noctua
+      '';
+      environment.etc."xdg/gtk-4.0/settings.ini".text = ''
+        [Settings]
+        gtk-icon-theme-name=noctua
+      '';
+    }
+  );
 }

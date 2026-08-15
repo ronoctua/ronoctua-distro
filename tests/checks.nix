@@ -2607,7 +2607,8 @@ let
 
       # Applications: in the full one, out of the reduced one.
       for app in -android-studio- -google-chrome- -emacs-30 -ffmpeg-full- -vlc- \
-                 -flutter- -dart- -rustc-1 -go-1 -noctua-iosevka-ttf-3; do
+                 -flutter- -dart- -rustc-1 -go-1 -noctua-iosevka-ttf-3 \
+                 -noctua-icon-theme-; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERRO: $app nao esta no perfil completo — o nome mudou?" >&2
           failed=1
@@ -2618,6 +2619,12 @@ let
           failed=1
         fi
       done
+
+      # The superpack is on that list because the switch is REAL now. It used to
+      # be excluded from the profile table for the opposite reason: the shell
+      # carried its store path baked in, so turning the option off removed it
+      # from `systemPackages` and left all 0,61 GiB in the closure. This line is
+      # what would fail if the path were ever baked in again.
 
       # And what the reduced profile may NEVER lose, or it stops being this
       # system rather than becoming a smaller one.
