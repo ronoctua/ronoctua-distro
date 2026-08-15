@@ -71,7 +71,16 @@
   };
 
   # No real hardware, no facter.
-  ronoctua.fonts.notoExtra = lib.mkDefault false; # lighter VM; 1 GB less
+  #
+  # NOT `lib.mkDefault`, and the reason is the profile table: it sets this key
+  # with `mkDefault` too, and two definitions at the same priority are a
+  # conflict rather than an override. `vm.nix` is the machine's own file and has
+  # to win — that is the whole arrangement in `nix/modules/profile.nix`.
+  #
+  # The line used to claim a gigabyte. It is ~50 MiB: `noto-fonts` was in the
+  # unconditional list as well, so this switch had never turned anything off at
+  # all, and nobody had measured what it would save if it did.
+  ronoctua.fonts.notoExtra = false;
 
   # NO ANDROID IN THE DEV VM.
   #

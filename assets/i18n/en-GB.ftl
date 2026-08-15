@@ -64,6 +64,8 @@ inst-system-locale = System formats
 inst-system-locale-help = Date, number and units. Not the interface language, which is already chosen.
 inst-timezone = Time zone
 inst-timezone-help = Where the machine is. It decides the clock and the log's timestamps.
+inst-profile = Installation
+inst-profile-help = `full` brings everything and is the recommended one. `minimal` leaves out Android, the toolchains, the browser, the editor, media and the font variants — it installs in minutes, and each group comes back with one line in host.nix.
 inst-resume-offset = Swap offset
 inst-resume-offset-help = Computed once the disk exists; not typed.
 

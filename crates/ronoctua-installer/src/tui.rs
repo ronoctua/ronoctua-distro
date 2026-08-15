@@ -244,6 +244,7 @@ impl State {
                     | Question::ComposeKey
                     | Question::SystemLocale
                     | Question::Timezone
+                    | Question::Profile
             )
         )
     }
@@ -302,6 +303,10 @@ impl State {
                 .collect(),
             Some(Question::SystemLocale) => model::available_locales(),
             Some(Question::Timezone) => model::available_timezones(),
+            // THE ONLY LIST HERE THAT COMES FROM NO FILE, and so the only one
+            // that cannot be empty. It is out of `list_is_empty` for that
+            // reason: there is no environment where it degrades to a field.
+            Some(Question::Profile) => model::PROFILES.iter().map(|p| (*p).to_owned()).collect(),
             _ => Vec::new(),
         }
     }
@@ -398,6 +403,10 @@ impl State {
             Some(Question::Timezone) => model::available_timezones()
                 .get(self.choice)
                 .cloned()
+                .unwrap_or_default(),
+            Some(Question::Profile) => model::PROFILES
+                .get(self.choice)
+                .map(|p| (*p).to_owned())
                 .unwrap_or_default(),
             Some(Question::Wifi) => self
                 .choice
@@ -876,7 +885,8 @@ mod tests {
                 | Question::KeyboardVariant
                 | Question::ComposeKey
                 | Question::SystemLocale
-                | Question::Timezone => {
+                | Question::Timezone
+                | Question::Profile => {
                     e.key(KeyCode::Enter, &t);
                 }
                 // THE LAYOUT MOVES OFF THE DEFAULT ON PURPOSE.
@@ -912,10 +922,10 @@ mod tests {
             }
         }
         assert_eq!(e.screen, Screen::Reviewing);
-        // ELEVEN screens for whoever goes by cable: the thirteen questions minus
+        // TWELVE screens for whoever goes by cable: the fourteen questions minus
         // the offset, which is computed, and the Wi-Fi password, which is skipped
         // with no network. The asserts below are what hold those two.
-        assert_eq!(views.len(), 11, "a TUI mostrou {views:?}");
+        assert_eq!(views.len(), 12, "a TUI mostrou {views:?}");
         assert!(!views.contains(&Question::ResumeOffset));
         assert!(
             !views.contains(&Question::WifiPassword),
@@ -964,7 +974,8 @@ mod tests {
                 | Question::KeyboardVariant
                 | Question::ComposeKey
                 | Question::SystemLocale
-                | Question::Timezone => {
+                | Question::Timezone
+                | Question::Profile => {
                     e.key(KeyCode::Enter, &t);
                 }
                 // The layout: typed, because the default of the list is not

@@ -2346,20 +2346,27 @@ dois wipes no mesmo segundo davam `@root` aninhado, sem erro.
 
 ---
 
-### Instalador: seis perguntas, e o "só" é o critério
+### Instalador: catorze perguntas, e o "só" continua sendo o critério
 
-A TUI coleta **só** disco, hostname, senha, passphrase, idioma e `resume_offset`. O "só" é a parte
-difícil, e por isso a lista é um enum fechado com um teste que conta os casos.
+A TUI coleta idioma, disco, instalação, o trio do teclado, locale, fuso, hostname, senha,
+frase-secreta, a rede sem fio e o `resume_offset`. O "só" é a parte difícil, e por isso a lista é um
+enum fechado com um teste que conta os casos — acrescentar uma pergunta quebra o teste, que é como
+uma décima quinta para de entrar por desatenção.
 
-O que **não** se pergunta — teclado, fuso, vídeo, rede, sistema de arquivos, tamanho de partição,
-gerenciador de boot — ou o `nixos-facter` detecta, ou a distro já decidiu.
+Eram seis, e cada uma que entrou desde então entrou por não ter alternativa: **o teclado**, porque o
+xkb não recusa layout inexistente e a frase-secreta é digitada às cegas; **o locale e o fuso**, porque
+são do lugar e não do hardware; **a rede**, porque sem ela a instalação não roda numa máquina sem
+porta Ethernet; e **a instalação**, abaixo.
+
+O que **não** se pergunta — vídeo, sistema de arquivos, tamanho de partição, gerenciador de boot,
+hibernação — ou o `nixos-facter` detecta, ou a distro já decidiu.
 
 - **O disco é a primeira pergunta.** Ela apaga dados; perguntar por último faria a pessoa investir
   cinco respostas antes de descobrir que escolheu errado.
 - **A passphrase conta CARACTERES, não bytes.** Doze com acento passam de doze bytes, e recusar
   puniria quem escreve no próprio idioma. O mínimo é 12 porque o disco **não tem limite de
   tentativas** — a única defesa é o custo do argon2 vezes o comprimento.
-- **`--executar` não é o padrão.** Um comando que apaga um disco por omissão é um comando perigoso.
+- **`--execute` não é o padrão.** Um comando que apaga um disco por omissão é um comando perigoso.
 - **A confirmação pede o caminho do disco**, não "sim". Copiar o caminho obriga a lê-lo.
 
 **Nenhum segredo passa por `argv`** — `/proc/<pid>/cmdline` é legível por qualquer processo. A
@@ -2369,6 +2376,67 @@ chave, e a quebra entraria na frase), e a senha entra no `mkpasswd` por `stdin`.
 O `host.nix` gerado **não leva segredo**: descreve a máquina e vai para backup. E o hash da senha é
 escrito **antes** do `nixos-install` — com `mutableUsers = false` o ativador o lê durante a
 instalação, e depois seria tarde.
+
+#### Duas instalações, e por que é uma OPÇÃO e não um segundo sistema
+
+`ronoctua.profile` vale `full` ou `minimal`, e a diferença é medida: **22,8 GiB contra 6,9**. Sai o
+Android (6,5), saem os compiladores (4,0), saem as variantes da fonte (2,0), saem o navegador, o
+editor e a mídia (2,0).
+
+**É uma opção, e não um `nixosConfigurations` a mais.** O instalador continua mirando `#noctua` nos
+dois casos; o perfil é uma linha no `host.nix`. Isso decide três coisas de uma vez: quem se arrepende
+faz `nixos-rebuild` em vez de reinstalar, o alvo do instalador continua sendo um só, e a tabela que
+liga perfil a chaves fica num arquivo (`nix/modules/profile.nix`) em vez de virar duas listas de
+módulos que divergem.
+
+Todas as chaves entram por `lib.mkDefault`, porque a tabela é a voz mais fraca da sala: `host.nix` e
+`vm.nix` continuam vencendo.
+
+**A reduzida não é outra distro.** Niri, rodapé, fonte primária, teclado, rede, impermanência e
+terminal ficam. O que sai é aplicativo — o que se instala para USAR, não o que é preciso para entrar.
+
+Duas coisas apareceram ao medir isto, e as duas eram interruptores que não interruptavam:
+
+- **`ronoctua.fonts.notoExtra` não fazia nada.** O `noto-fonts` estava na lista incondicional *e* na
+  opcional; o `vm.nix` desligava acreditando poupar, e o pacote entrava pelo outro caminho.
+- **`ronoctua.icons.superpack` não tira os 0,61 GiB do closure.** O `ronoctua-shell` carrega o
+  caminho do superpacote GRAVADO por `option_env!` (`RONOCTUA_ICONS`), e é instalado nos dois
+  perfis. Por isso ele está **fora** da tabela: listá-lo seria anunciar uma economia que não
+  acontece. Fechar isso é mudança no shell, não na tabela — está no `PENDING`.
+
+#### O ISO carrega o que a máquina alvo compilaria
+
+Instalar custava uma tarde, e o motivo não era o download. `nixos-install` **constrói** o sistema: o
+que vem do nixpkgs chega pronto do cache público, e o que este repositório produz não existe em cache
+nenhum — o shell, o niri do input pinado, o `libghostty-vt` com o Zig, os quatro buffers wasm, a
+família de fontes que vem de um Release do GitHub. São exatamente as compilações que o `earlyoom`
+deste host mata por peso.
+
+A semente vai no `isoImage.storeContents`, e o `iso-image.nix` roda `nix-store --load-db` no boot —
+os caminhos chegam **válidos**, e não como arquivos que por acaso estão na mídia. Junto vão as
+FONTES dos inputs do flake: sem elas o alvo tem as peças prontas e ainda assim precisa da rede para
+avaliar o flake que as nomeia.
+
+**Por que a semente não é o sistema reduzido inteiro.** Foi tentado e medido: o ISO deu 4380 MiB
+contra o teto de 4096. Desses, ~3,5 GiB são nixpkgs de prateleira — a parte que um cache serve em
+minutos. Levar só o que ninguém tem em cache deu **3702 MiB**, e o alvo continua não compilando nada.
+
+O que sobrou de comparação honesta: a máquina alvo agora *baixa* onde antes *compilava*.
+
+#### O ISO carregava 2,94 GiB que não eram dele
+
+Ele instalava `rust.workspace`, a derivação que contém TODOS os binários do workspace. Uma derivação
+referencia o que os bytes dela citam, e o `ronoctua-shell` cita o `libghostty-vt` — que arrastava
+Zig, clang e LLVM (1,70 GiB) — mais o superpacote de ícones e o mesa, pelos caminhos de
+`option_env!`. Um instalador de console não roda nada disso.
+
+A correção é extrair só `bin/ronoctua-install` (`nix/rust.nix`): o Nix varre a SAÍDA, e o que os
+bytes copiados não citam deixa de ser referência. O closure do instalador caiu de 5,81 GiB para 2,87
+e o ISO de 2,1 GiB para 1,46 — que foi o orçamento que a semente gastou.
+
+O mesmo defeito estava no desktop, por outra porta: `libghostty-vt.a`, a biblioteca **estática**, era
+o único arquivo daquela saída que citava um caminho do Zig, e nós linkamos a dinâmica. Apagá-la tirou
+1,70 GiB de **toda máquina instalada**. O check `iso-has-no-toolchain` é o que impede a volta calada.
 
 #### O sistema que o instalador instala nunca era construído
 
@@ -2396,7 +2464,7 @@ com o `resume_offset`, que só existe depois do swapfile.
 O disco poderia chegar ao `disko` por linha de comando, e chegava. Mas o `nixos-install` seguinte
 precisa do **mesmo** valor e não aceita um: ele lê o flake. Ter as duas fontes é ter duas verdades.
 
-Isto não é refinamento: sem ele o caminho `--executar` nunca poderia ter rodado. O `nixosConfigurations.noctua`
+Isto não é refinamento: sem ele o caminho `--execute` nunca poderia ter rodado. O `nixosConfigurations.noctua`
 que os dois comandos citam **não existia**, e o modo ENSAIO não acusava nada — ele *imprime* os
 comandos em vez de executá-los. É a mesma classe do check escrito contra o código, e não contra o
 critério.

@@ -159,6 +159,16 @@ pub fn host_nix(r: &Answers) -> String {
     let _ = writeln!(s, "  networking.hostName = \"{}\";", r.hostname);
     let _ = writeln!(s, "  ronoctua.disk = \"{}\";", r.disk);
     let _ = writeln!(s, "  ronoctua.language = \"{}\";", r.language);
+    // WHICH OF THE TWO INSTALLATIONS, and it is written on both answers.
+    //
+    // `full` is the module's own default, so the line is redundant there — and
+    // it goes in anyway. This file is where somebody looks to find out what
+    // their machine is, and an answer that only appears when it is not the
+    // default is an answer they have to already know the default to read.
+    //
+    // It is also the line to edit to change one's mind: `minimal` to `full` plus
+    // a `nixos-rebuild switch` is the whole upgrade, with no reinstall.
+    let _ = writeln!(s, "  ronoctua.profile = \"{}\";", r.profile);
     // THE LOCALE IS ITS OWN LINE, and not derived from the language: the two
     // answer different questions, and the module stopped tying them.
     let _ = writeln!(s, "  ronoctua.locale = \"{}\";", r.system_locale);
@@ -424,6 +434,9 @@ mod tests {
             compose_key: String::new(),
             system_locale: "en_GB.UTF-8".into(),
             timezone: "Europe/London".into(),
+            // `minimal`, and not the default: a fixture that answers the default
+            // proves the field reaches `host.nix` even when it is being dropped.
+            profile: "minimal".into(),
             resume_offset: Some(123_456),
         }
     }

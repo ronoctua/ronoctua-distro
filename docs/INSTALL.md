@@ -42,22 +42,58 @@ etapa. O sistema instalado o religa com chaves próprias.
 
 **4. Responder às perguntas.**
 
+A primeira é o **idioma**, e todas as telas seguintes aparecem nele. Cada pergunta já vem com uma
+opção escolhida; passar por todas apertando Enter dá uma máquina que funciona.
+
 | pergunta | observação |
 |---|---|
+| idioma | português ou inglês. É a primeira porque o resto é desenhado nela |
 | disco de destino | será apagado por inteiro |
+| instalação | `full` ou `minimal` — veja a seção abaixo |
+| layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta |
+| variante do teclado | `abnt2`, `nodeadkeys`, ou nenhuma |
+| tecla de acentos | qual tecla compõe acentos. O padrão é o `AltGr` |
+| locale do sistema | data, número, papel e unidades. O padrão é `en_GB.UTF-8`, que é métrico |
+| fuso horário | o padrão é `Europe/London` |
 | nome da máquina | começa com `noctua-`. Ex.: `noctua-thinkpad` |
 | sua senha | do usuário `noctua` |
 | frase-secreta do disco | criptografa o disco. **Guarde**, veja abaixo |
-| idioma | português ou inglês |
-| layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta |
-| hibernação | se sim, reserva swap do tamanho da RAM |
+| rede sem fio | opcional; deixe em branco para instalar por cabo |
 
-Todo o resto — placa de vídeo, touchpad, bateria, TPM — é detectado automaticamente. O teclado não: o
-`nixos-facter` lê hardware, e layout é o que os seus dedos esperam.
+Todo o resto — placa de vídeo, touchpad, bateria, TPM, hibernação — é detectado automaticamente. O
+teclado não: o `nixos-facter` lê hardware, e layout é o que os seus dedos esperam.
 
 > **Ver o que ele faria, sem fazer.** `ronoctua-install` sem argumento **ensaia**: imprime o
 > `host.nix` que geraria e cada comando que rodaria, e sai sem tocar em disco nenhum. É o padrão —
-> apagar exige `--executar`.
+> apagar exige `--execute`.
+
+### As duas instalações
+
+| | `full` | `minimal` |
+|---|---|---|
+| tamanho | 22,8 GiB | 6,9 GiB |
+| o que traz | tudo | o sistema, sem os aplicativos |
+| fica de fora | — | Android Studio e Flutter, os compiladores (rust, go, python, node, gcc), o Chrome, o Emacs, os players de mídia e as variantes extras da fonte |
+
+**A recomendada é a `full`**: ela é a que não pede uma segunda decisão depois.
+
+A `minimal` não é outra distro — niri, rodapé, fonte, teclado, rede, impermanência e terminal
+continuam lá. O que muda é que ela **instala em minutos**, e é por isso que ela existe: quem trabalha
+NA distro reinstala com frequência, e quem só quer experimentar um aplicativo o instala nela em vez
+de baixar 23 GiB para chegar nele.
+
+**Ligar um grupo depois é uma linha** em `/etc/nixos/host.nix`, seguida de `nixos-rebuild switch`:
+
+```
+ronoctua.browser.enable = true;    # o Chrome
+ronoctua.editor.emacs   = true;    # o Emacs e o Doom
+ronoctua.media.enable   = true;    # ffmpeg, VLC, mpv, gstreamer
+ronoctua.dev.toolchains = true;    # rust, go, python, node, gcc
+ronoctua.dev.android    = true;    # Android Studio, SDK, Flutter
+ronoctua.fonts.full     = true;    # as 27 variantes da Iosevka
+```
+
+Trocar `ronoctua.profile = "minimal"` por `"full"` liga todos de uma vez. Não é reinstalação.
 
 **5. Esperar e reiniciar.** Ao terminar, tire o pendrive.
 

@@ -38,64 +38,73 @@ let
 in
 {
   config = {
+    # THE TOOLCHAINS ARE A GROUP OF THEIR OWN, and Android is another.
+    #
+    # Building THIS repository does not depend on either: `nix develop` brings a
+    # pinned toolchain of its own, which is the whole reason two Rusts on one
+    # machine is a thing this file already warns about. What the list below is
+    # for is working on OTHER code from the installed system.
     environment.systemPackages =
-      (with pkgs; [
-        # ---- rust ----
-        #
-        # From `rust-overlay`, the same input the flake already uses to BUILD
-        # this repository. Two Rusts on one machine is how a "works in the
-        # devshell, fails outside" afternoon starts.
-        (rust-bin.stable.latest.default.override {
-          extensions = [
-            "rust-src" # rust-analyzer needs it to look inside std
-            "rust-analyzer"
-            "clippy"
-            "rustfmt"
-          ];
-        })
-        cargo-watch
-        cargo-edit
-        cargo-nextest
+      lib.optionals cfg.toolchains (
+        with pkgs;
+        [
+          # ---- rust ----
+          #
+          # From `rust-overlay`, the same input the flake already uses to BUILD
+          # this repository. Two Rusts on one machine is how a "works in the
+          # devshell, fails outside" afternoon starts.
+          (rust-bin.stable.latest.default.override {
+            extensions = [
+              "rust-src" # rust-analyzer needs it to look inside std
+              "rust-analyzer"
+              "clippy"
+              "rustfmt"
+            ];
+          })
+          cargo-watch
+          cargo-edit
+          cargo-nextest
 
-        # ---- go ----
-        go
-        gopls
-        gotools
+          # ---- go ----
+          go
+          gopls
+          gotools
 
-        # ---- python ----
-        (python3.withPackages (
-          ps: with ps; [
-            pip
-            virtualenv
-            requests
-            rich
-          ]
-        ))
-        ruff
-        pyright
-        uv # the fast resolver; still writes into a venv, not the system
+          # ---- python ----
+          (python3.withPackages (
+            ps: with ps; [
+              pip
+              virtualenv
+              requests
+              rich
+            ]
+          ))
+          ruff
+          pyright
+          uv # the fast resolver; still writes into a venv, not the system
 
-        # ---- javascript ----
-        nodejs_22
-        pnpm
-        bun
-        typescript
-        typescript-language-server
+          # ---- javascript ----
+          nodejs_22
+          pnpm
+          bun
+          typescript
+          typescript-language-server
 
-        # ---- nix itself ----
-        nixfmt
-        nil # the language server
-        nix-tree # what is actually in this closure
-        nix-output-monitor
+          # ---- nix itself ----
+          nixfmt
+          nil # the language server
+          nix-tree # what is actually in this closure
+          nix-output-monitor
 
-        # ---- general ----
-        gnumake
-        cmake
-        pkg-config
-        gcc
-        gdb
-        sqlite
-      ])
+          # ---- general ----
+          gnumake
+          cmake
+          pkg-config
+          gcc
+          gdb
+          sqlite
+        ]
+      )
       ++ lib.optionals cfg.android (
         with pkgs;
         [

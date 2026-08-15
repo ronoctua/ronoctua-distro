@@ -26,7 +26,12 @@
 # The check `browser-has-no-keyring` refuses a closure that brings gnome-keyring
 # back — otherwise this comment is the only thing standing between here and a
 # password prompt returning by way of some GTK dependency.
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 
 let
   chrome = pkgs.google-chrome.override {
@@ -41,19 +46,32 @@ let
   };
 in
 {
-  environment.systemPackages = [ chrome ];
+  options.ronoctua.browser.enable = lib.mkEnableOption "o Google Chrome (0,42 GiB)" // {
+    default = true;
+  };
 
-  # The portal is what a file dialog and a screen share go through on Wayland.
-  # `xdg.portal` is already enabled by nix/modules/niri.nix; this only adds the
-  # GTK backend, which is the one Chrome talks to.
-  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
+  config = {
+    environment.systemPackages = lib.mkIf config.ronoctua.browser.enable [ chrome ];
 
-  # NO KEYRING. Stated as a negative on purpose: leaving it unmentioned is how
-  # it comes back, since several desktop packages enable it as a side effect.
-  services.gnome.gnome-keyring.enable = lib.mkForce false;
-  programs.seahorse.enable = lib.mkForce false;
+    # The portal is what a file dialog and a screen share go through on Wayland.
+    # `xdg.portal` is already enabled by nix/modules/niri.nix; this only adds the
+    # GTK backend, which is the one Chrome talks to.
+    xdg.portal.extraPortals = lib.mkIf config.ronoctua.browser.enable [
+      pkgs.xdg-desktop-portal-gtk
+    ];
 
-  # `security.pam.services.*.enableGnomeKeyring` is what would unlock it at
-  # login. Forced off for the same reason.
-  security.pam.services.login.enableGnomeKeyring = lib.mkForce false;
+    # THE KEYRING STAYS FORCED OFF EVEN WITHOUT CHROME.
+    #
+    # It is written as a negative because leaving it unmentioned is how it comes
+    # back, and that is true of a machine with no browser too: several desktop
+    # packages enable a Secret Service as a side effect, and the prompt would
+    # then appear with nothing on screen to explain it. Turning the guard off
+    # with the browser would make the reduced profile the one where it returns.
+    services.gnome.gnome-keyring.enable = lib.mkForce false;
+    programs.seahorse.enable = lib.mkForce false;
+
+    # `security.pam.services.*.enableGnomeKeyring` is what would unlock it at
+    # login. Forced off for the same reason.
+    security.pam.services.login.enableGnomeKeyring = lib.mkForce false;
+  };
 }

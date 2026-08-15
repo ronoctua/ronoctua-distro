@@ -10,7 +10,12 @@
 # GStreamer is here for the same reason: it is what GTK apps, the browser's
 # fallbacks and any thumbnailer reach for, and half a GStreamer is a system that
 # plays some files.
-{ pkgs, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 
 let
   gstPlugins = with pkgs.gst_all_1; [
@@ -23,7 +28,16 @@ let
   ];
 in
 {
-  environment.systemPackages =
+  options.ronoctua.media.enable =
+    lib.mkEnableOption "os players e conversores: ffmpeg-full, VLC, mpv, gstreamer (~1,0 GiB)"
+    // {
+      default = true;
+    };
+
+  # THE VA-API DRIVERS ARE NOT UNDER THE SWITCH, at the bottom of the file: they
+  # are hardware enablement and not an application. A reduced machine has the
+  # same GPU, and the compositor decodes with them.
+  config.environment.systemPackages = lib.mkIf config.ronoctua.media.enable (
     (with pkgs; [
       # ---- conversion ----
       ffmpeg-full
@@ -56,16 +70,19 @@ in
       libva-utils
     ])
     ++ [ pkgs.gst_all_1.gstreamer ]
-    ++ gstPlugins;
+    ++ gstPlugins
+  );
 
   # THE PLUGIN PATH, EXPLICITLY.
   #
   # Installing the plugins is not enough: GStreamer finds them through
   # `GST_PLUGIN_SYSTEM_PATH_1_0`, and without it an app links the library and
   # then finds no decoder — which looks like a broken file, not a missing path.
-  environment.sessionVariables.GST_PLUGIN_SYSTEM_PATH_1_0 =
-    pkgs.lib.makeSearchPathOutput "lib" "lib/gstreamer-1.0"
-      gstPlugins;
+  # Under the switch too: a path pointing at plugins nobody installed is worse
+  # than no path, because it looks configured.
+  config.environment.sessionVariables.GST_PLUGIN_SYSTEM_PATH_1_0 =
+    lib.mkIf config.ronoctua.media.enable
+      (pkgs.lib.makeSearchPathOutput "lib" "lib/gstreamer-1.0" gstPlugins);
 
   # HARDWARE DECODING.
   #
@@ -73,7 +90,7 @@ in
   # goes, and the diagnosis becomes "this laptop is slow". `intel-media-driver`
   # covers Gen8 onward; the legacy driver covers what came before, and having
   # both costs a few MB and removes a whole class of question.
-  hardware.graphics.extraPackages = with pkgs; [
+  config.hardware.graphics.extraPackages = with pkgs; [
     intel-media-driver
     libvdpau-va-gl
     libva-vdpau-driver

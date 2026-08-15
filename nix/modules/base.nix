@@ -91,6 +91,38 @@ in
         default = true;
       };
       androidNdk = lib.mkEnableOption "o NDK (mais alguns GB; so para codigo nativo)";
+      toolchains = lib.mkEnableOption "os compiladores: rust, go, python, node, gcc" // {
+        default = true;
+      };
+    };
+
+    # QUAL DAS DUAS INSTALACOES ESTA MAQUINA E.
+    #
+    # Declarada aqui pelo mesmo motivo escrito logo acima: quem le o perfil e
+    # `nix/modules/profile.nix`, que nao importa este arquivo.
+    #
+    # E uma OPCAO, e nao um segundo `nixosConfiguration`. O instalador continua
+    # mirando `#noctua` nos dois casos, o `host.nix` ganha uma linha, e mudar de
+    # ideia depois e um `nixos-rebuild` — nao uma reinstalacao.
+    profile = lib.mkOption {
+      type = lib.types.enum [
+        "full"
+        "minimal"
+      ];
+      default = "full";
+      description = ''
+        `full` traz tudo (23,2 GiB de closure medidos) e e a recomendada.
+
+        `minimal` deixa de fora o Android, os compiladores, o navegador, o
+        editor, a midia, as 27 variantes da fonte e o superpacote de icones —
+        cerca de 17 GiB. Nao deixa de fora nada do que FAZ a distro: niri,
+        rodape, fonte primaria, teclado, rede, impermanencia e terminal ficam.
+
+        Ligar um grupo de volta e uma linha no `host.nix`: por exemplo
+        `ronoctua.browser.enable = true;` para instalar so o navegador.
+
+        A tabela que liga o perfil a cada chave esta em `nix/modules/profile.nix`.
+      '';
     };
   };
 

@@ -53,6 +53,8 @@ inst-system-locale = Formato do sistema
 inst-system-locale-help = Data, numero e unidade. Nao e o idioma da interface, que ja foi escolhido.
 inst-timezone = Fuso horario
 inst-timezone-help = Onde a maquina fica. E o que decide a hora do relogio e do log.
+inst-profile = Instalacao
+inst-profile-help = `full` traz tudo e e a recomendada. `minimal` deixa de fora Android, compiladores, navegador, editor, midia e as variantes de fonte — instala em minutos, e cada grupo volta com uma linha no host.nix.
 inst-resume-offset = Deslocamento do swap
 inst-resume-offset-help = Calculado depois que o disco existir; não se digita.
 

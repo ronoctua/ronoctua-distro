@@ -39,7 +39,7 @@ nix run .#dev         niri aninhado + rodapé; leader = Ctrl+Alt+Espaço, não S
 nix flake check       tudo que verifica;  nix run .#bench  falha se um alvo estourar
 nix run .#diagnostics instantâneo de quando os atalhos travam (só leitura)
 nix run .#vm          VM completa;  nix build .#iso  gera o ISO
-nix run .#install     instala a versão de produção (ensaia sem --executar)
+nix run .#install     instala (ensaia sem --execute);  ronoctua.profile: full ou minimal
 ```
 
 Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrita devia ser automático.
@@ -59,28 +59,27 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   exceção a "todo comando tem tecla" — alcançam-se por nome (`LEADER :`).
 - **O teclado tem UM lugar** (`nix/keyboard-xkb.nix`): compositor, aninhado e console. O xkb **não
   recusa** layout inexistente — cai no `us` mudo; quem impede é `keyboard-layout-exists`.
-- **Três navegadores, um léxico** (`i n` glifos, `i u` Unicode, `i l` Lucide). Só o da Lucide
-  personaliza; a prévia é o SVG COPIADO. A marca sai da MESMA `affordance` que a tecla lê.
-- **O localizador (`a`) é a SEXTA vista da expansão e a rede (`r r`) é a SÉTIMA**, não menus
-  (inv. 14). O localizador varre o XDG na PARTIDA, em thread; o pixmap chega por OUTRA. A rede lê o
-  CACHE do NetworkManager, síncrono — o que demora é o rádio, e quem espera por ele é uma THREAD em
-  `LastScan` (`watch_scans`). A precedência das sete vive só em `Footer::view()`.
-- **`LEADER r` é rede e Syncthing.** `ronoctua-network` é o único a falar NetworkManager. O Syncthing vem
-  instalado, e `overrideFolders` FICA `false`: `true` apaga as pastas do usuário a cada rebuild. Os
-  valores de `nix/modules/network.nix` saíram de medir 592 GB — 2,4 GHz dava 2,9 MB/s, 5 GHz deu 42.
-- **A senha do Wi-Fi não fica em arquivo.** `psk-flags` mais o `ronoctua-network-agent` entregando-a
-  do TPM2 (**sem PCR** — com PCR, atualizar o kernel quebraria o Wi-Fi). Quem autoriza é a política
-  do barramento, não o daemon.
-- **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix` → `ronoctua-tokens`; `*.ftl`
-  → `ronoctua_i18n::chave::*`): chave ou cor inexistente é erro de **compilação** — é assim que os
-  invariantes 8 e 9 param de depender de disciplina.
-- **Layout é aritmética de inteiros.** A célula é `0,600 × tamanho da fonte`; nada de medir texto.
-  `layout::resolve` decide em duas fases: preferência (`min_cols`) e depois "nada vaza da tela".
+- **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG
+  COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
+- **O localizador (`a`) é a SEXTA vista e a rede (`r r`) a SÉTIMA**, não menus (inv. 14). Aquele
+  varre o XDG na PARTIDA em thread (pixmap por OUTRA); esta lê o CACHE do NetworkManager, e quem
+  espera o rádio é uma THREAD em `LastScan`. A precedência das sete vive só em `Footer::view()`.
+- **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders`
+  FICA `false` (`true` apaga as pastas a cada rebuild). 592 GB medidos: 2,4 GHz 2,9 MB/s, 5 GHz 42.
+- **A senha do Wi-Fi não fica em arquivo.** `psk-flags` mais o `ronoctua-network-agent` a entregar do
+  TPM2 (**sem PCR** — com PCR, atualizar o kernel quebraria o Wi-Fi); autoriza a política do barramento.
+- **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix` → `ronoctua-tokens`; `*.ftl` →
+  `ronoctua_i18n::chave::*`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9.
+- **Layout é aritmética de inteiros.** `layout::resolve` decide em duas fases: preferência
+  (`min_cols`) e depois "nada vaza da tela".
 - **Buffers nativos são componentes wasip2.** Devolvem display list (`ronoctua-protocol`); rasteriza
   o `ronoctua-render`, posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11).
-  O estado vive na `Instance` — `Runtime::render` avulso cria store novo e **zera o buffer**.
-  Cinco primitivas: texto, régua, grade, seleção e **`svg`** — a de pixel, com TRAVA de capacidade
-  (`vector`), recusada no load e em todo quadro. Cor entra por token; `currentColor` é preto.
+  Estado vive na `Instance` — `Runtime::render` avulso zera o buffer. Cinco primitivas: texto, régua,
+  grade, seleção e **`svg`** — TRAVA de capacidade (`vector`); cor por token, `currentColor` é preto.
+- **Duas instalações, uma opção só.** `ronoctua.profile` = `full` (22,8 GiB) ou `minimal` (6,9);
+  `nix/modules/profile.nix` é a tabela, tudo `mkDefault`. Instalar mira `#noctua` nos dois — mudar de
+  ideia é `nixos-rebuild`. **O ISO leva no `storeContents` o que nenhum cache tem** (shell, niri,
+  ghostty-vt, buffers, fontes) MAIS as fontes dos inputs: o alvo baixa, não compila.
 
 ## Mapa do repositório
 
@@ -96,17 +95,27 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 
 ## Armadilhas concretas já encontradas
 
+- **`nix fmt` SEM argumento TRAVA PARA SEMPRE** — vira `nixfmt` cru lendo stdin: com stdin fechado
+  erra, com stdin aberto (heredoc) **bloqueia**, e o `>/dev/null 2>&1` esconde os dois. É `nix fmt .`.
+  `timeout` no comando seguinte não salva — ele nunca chega. Custou 7 h de processo e `check-fmt`
+  vermelho depois de "já ter formatado".
 - **NADA de build na árvore — 793 GB.** `CARGO_TARGET_DIR` fora (`lean-tree`); **nunca `${../.}`**.
+  **Uma derivação referencia o que os BYTES dela citam**: `rust.workspace` tem todo binário, e punha
+  Zig+clang+LLVM (1,70 GiB) e os ícones no ISO — extraia o binário (`rust.installer`). O `.a` do
+  ghostty-vt era o único a citar o Zig, e nós linkamos o `.so`. **Interruptor que não interrompe**:
+  `notoExtra` e `icons.superpack` desligavam e o pacote entrava por outra porta — meça com
+  `nix why-depends`, não confie no `mkIf`.
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: o `#`/`//` é do script embutido, mas o `${...}` é do Nix
   e vive até em linha comentada; e a fence não fecha no primeiro `''` (`'''`, `''$`, `''\` escapam).
-- **Chave de texto tem SETE derivados**, só um é o `.ftl`: renomear mexe nos sete (ARCHITECTURE).
-  **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × tamanho da fonte**; **caixa 1,25 em** contra
-  entrelinha 1,45 — não medir texto. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO.
+- **Chave de texto tem SETE derivados**, só um é o `.ftl` (ARCHITECTURE); **pergunta do instalador
+  tem 13** — enum, `ALL_KEYS`, rótulo, ajuda, padrão, `get`/`set`, validação, `is_list`, `options`,
+  valor escolhido, dois testes e o `.ftl`. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 ×
+  fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
-  Rust. Idem o que cruza a fronteira como STRING — WIT, campo de log, flag de gerador, subcomando.
-  **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
+  Rust; idem o que cruza a fronteira como STRING. **Cortar por CODEPOINT inventa desenho**: elide por
+  CLUSTER. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure`
   devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop`
   de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
@@ -116,26 +125,17 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   `rust-clippy`, o pacote): construa as três sozinhas antes. **`pkill`/`pgrep` casa o PRÓPRIO comando.**
 - **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já
   estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo.
-- **"Nenhum atalho funciona" tem três causas com a MESMA tela** — tecla que não chega, modificador
-  preso, foco não concedido: `nix run .#diagnostics` ANTES de supor. No Xvfb ninguém tem foco
-  (`xdotool windowfocus`), e **`xdotool key` SOLTA a tecla**: segurar exige `keydown`.
-- **ICD Vulkan ausente custa 650 ms mudo**: filtre por vendor. **`memory_init_cow`** é obrigatório (p99 95× pior);
-  **`Queue::present`** precisa do frame, que o `Drop` DESCARTA sem erro.
-- **O backend DRM do niri rejeita EGL por software**: numa VM sem GPU sobe com **zero output**, e layer-shell sem output nunca é
-  criada. Use **winit** com `Xvfb` + `LD_LIBRARY_PATH` das libs X. **`RUST_LOG` nosso filtra o niri**, que sobe MUDO — ache o display
-  por `niri.<display>.<pid>.sock`.
-- **Quem tem o codepoint primeiro GANHA** — a face pedida por nome vence o fallback. Custou 634 da
-  PUA (Lucide → `U+F2000`) e 75 emoji da Iosevka (`Emoji_Presentation`); `FE0F` vira dois glifos.
+- **"Nenhum atalho funciona" tem três causas com a MESMA tela** — tecla que não chega, modificador preso, foco não concedido: `nix run .#diagnostics` ANTES de supor. No Xvfb ninguém tem foco (`xdotool windowfocus`), e **`xdotool key` SOLTA a tecla**: segurar exige `keydown`.
+- **ICD Vulkan ausente custa 650 ms mudo**: filtre por vendor. **`memory_init_cow`** é obrigatório (p99 95× pior); **`Queue::present`** precisa do frame, que o `Drop` DESCARTA sem erro.
+- **O backend DRM do niri rejeita EGL por software**: numa VM sem GPU sobe com **zero output**, e layer-shell sem output nunca é criada. Use **winit** com `Xvfb` + `LD_LIBRARY_PATH` das libs X. **`RUST_LOG` nosso filtra o niri**, que sobe MUDO — ache o display por `niri.<display>.<pid>.sock`.
+- **Quem tem o codepoint primeiro GANHA** — a face pedida por nome vence o fallback. Custou 634 da PUA (Lucide → `U+F2000`) e 75 emoji da Iosevka (`Emoji_Presentation`); `FE0F` vira dois glifos.
 - **As fontes são asset de Release, nunca git** — 4,1 GB que git guardaria para sempre; o input é **`file+https://`**, senão o Nix
   infere tarball e descompacta os 4,1 GB no store. **O console não consome TTF**; **`/etc/nixos` e `/etc/fonts/conf.d` são read-only**
   (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`. Glifo **não** leva `nf-`; 27 variantes SemiExtended: ARCHITECTURE.
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio; hibernação depende do NOCOW (`lsattr` → `C`). **PCR 15 exige UKI medida.**
 - **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`.
-- **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script
-  mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
-  **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`;
-  `xorg.libX11` → `libx11`; `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. **Atributo dinâmico em
-  duas sentenças** é erro de avaliação: um attrset só.
+- **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
+  **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`; `xorg.libX11` → `libx11`; `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. **Atributo dinâmico em duas sentenças** é erro de avaliação: um attrset só.
 - **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store
   vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela".
   `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.

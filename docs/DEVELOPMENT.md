@@ -98,6 +98,31 @@ nix build .#iso        gera o ISO instalável
 O `nix run .#vm` é mais lento que o `.#dev`, e o que se ganha é o boot completo. Usuário `noctua`,
 senha `noctua`.
 
+## Quando é preciso instalar de verdade
+
+Boot, TPM, hibernação e desempenho gráfico não se provam em VM. E instalar costumava custar uma
+tarde: o `nixos-install` **constrói** o sistema na máquina alvo, e o que este repositório produz não
+existe em cache público nenhum — o shell, o niri do input pinado, o `libghostty-vt` e os buffers wasm
+eram compilados do zero, toda vez.
+
+Duas coisas mudaram isso, e elas se somam:
+
+**O ISO carrega o que ninguém tem em cache.** A semente vai no `isoImage.storeContents` e o
+`nix-store --load-db` a registra no boot. A máquina alvo não compila nada; ela baixa do
+`cache.nixos.org` o que já vem pronto de lá.
+
+**A instalação `minimal` tem 6,9 GiB contra 22,8.** Escolha-a na terceira pergunta. Ela deixa de fora
+os aplicativos e não deixa de fora a distro — e quando você precisar de um deles, é uma linha:
+
+```
+ronoctua.browser.enable = true;    # em /etc/nixos/host.nix, depois nixos-rebuild switch
+```
+
+Instalar o Chrome assim baixa 0,42 GiB. Instalar a `full` para chegar nele baixa 23.
+
+Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode `nixos-rebuild switch
+--flake /etc/nixos#noctua` na própria máquina.
+
 ## Se algo der errado
 
 | sintoma | causa | correção |

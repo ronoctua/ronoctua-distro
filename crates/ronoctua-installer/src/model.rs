@@ -31,12 +31,12 @@
 //! # The Wi-Fi password is a CONDITIONAL screen
 //!
 //! [`Question::WifiPassword`] only appears once a network has been chosen — see
-//! [`Question::skipped_one`]. Whoever goes by cable answers six screens, as before;
-//! whoever chooses a network answers seven.
+//! [`Question::skipped_one`]. Whoever goes by cable answers twelve screens;
+//! whoever chooses a network answers thirteen.
 
 use ronoctua_i18n::key;
 
-/// The questions. **Eight, and the test counts them.**
+/// The questions. **Fourteen, and the test counts them.**
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Question {
     /// Which disk to install on. It erases everything.
@@ -86,6 +86,18 @@ pub enum Question {
     /// would mean asking the internet where the machine is, during an install,
     /// before the network is necessarily up.
     Timezone,
+    /// Which of the two installations this machine is.
+    ///
+    /// `full` brings everything and is the recommended one; `minimal` leaves out
+    /// the applications — Android, the toolchains, the browser, the editor,
+    /// media and the extra font variants — and installs in minutes because the
+    /// ISO carries its closure already built.
+    ///
+    /// It is asked and not guessed because it is the one answer here that is
+    /// nobody else's to infer: it says what the machine is FOR. And it is not
+    /// final — the answer becomes a line in `host.nix`, and a group comes back
+    /// with a `nixos-rebuild`.
+    Profile,
     /// The system's locale: date, number, paper and units.
     ///
     /// NOT the same as `Language`, and the difference is the reason there are
@@ -121,9 +133,14 @@ impl Question {
     /// the passphrase is typed blind, is not echoed, and cannot be corrected
     /// later — typing it on the wrong layout is the one mistake here with no
     /// recovery.
-    pub const ALL_KEYS: [Self; 13] = [
+    pub const ALL_KEYS: [Self; 14] = [
         Self::Language,
         Self::Disk,
+        // WHICH installation, right after WHERE it goes. It comes before the
+        // keyboard trio because it is the answer that changes how long
+        // everything after it takes, and the person deserves that in front of
+        // them early rather than at the end of a form.
+        Self::Profile,
         Self::Keyboard,
         Self::KeyboardVariant,
         Self::ComposeKey,
@@ -158,6 +175,7 @@ impl Question {
             Self::ComposeKey => key::INST_COMPOSE_KEY,
             Self::SystemLocale => key::INST_SYSTEM_LOCALE,
             Self::Timezone => key::INST_TIMEZONE,
+            Self::Profile => key::INST_PROFILE,
             Self::ResumeOffset => key::INST_RESUME_OFFSET,
             Self::Wifi => key::INST_WIFI,
             Self::WifiPassword => key::INST_WIFI_PASSWORD,
@@ -178,6 +196,7 @@ impl Question {
             Self::ComposeKey => key::INST_COMPOSE_KEY_HELP,
             Self::SystemLocale => key::INST_SYSTEM_LOCALE_HELP,
             Self::Timezone => key::INST_TIMEZONE_HELP,
+            Self::Profile => key::INST_PROFILE_HELP,
             Self::ResumeOffset => key::INST_RESUME_OFFSET_HELP,
             Self::Wifi => key::INST_WIFI_HELP,
             // The network's help line also serves the password: what it
@@ -230,6 +249,7 @@ impl Question {
             Self::ComposeKey => Some(DEFAULT_COMPOSE),
             Self::SystemLocale => Some(DEFAULT_LOCALE),
             Self::Timezone => Some(DEFAULT_TIMEZONE),
+            Self::Profile => Some(DEFAULT_PROFILE),
             // The variant and the network default to empty, which `optional`
             // already accepts — writing it here too would say the same thing twice.
             _ => None,
@@ -283,6 +303,8 @@ pub enum Invalid {
     UnknownLayout,
     /// A Wi-Fi password too short for WPA.
     WifiPasswordTooShort,
+    /// A profile that is neither of the two.
+    UnknownProfile,
 }
 
 impl std::fmt::Display for Invalid {
@@ -297,6 +319,7 @@ impl std::fmt::Display for Invalid {
                 "a frase-secreta do disco precisa de ao menos 12 caracteres"
             }
             Self::InvalidDisk => "esse caminho nao e um disco",
+            Self::UnknownProfile => "a instalacao e `full` ou `minimal`",
             Self::UnknownLanguage => "idioma nao disponivel",
             Self::UnknownLayout => "layout de teclado nao existe no xkeyboard-config",
             Self::WifiPasswordTooShort => "a senha de uma rede WPA tem ao menos 8 caracteres",
@@ -567,6 +590,21 @@ pub const DEFAULT_LANGUAGE: &str = "en-GB";
 /// here would bring inches and Fahrenheit along with the language.
 pub const DEFAULT_LOCALE: &str = "en_GB.UTF-8";
 
+/// The two installations, in the order they appear on screen.
+///
+/// The names are the ones `ronoctua.profile` takes in `host.nix`, and they are
+/// written ONCE: the answer goes into the generated file verbatim, so a second
+/// spelling here would be a machine that fails to evaluate on the target.
+pub const PROFILES: [&str; 2] = ["full", "minimal"];
+
+/// The complete installation, and it is the recommended one.
+///
+/// Recommended because it is the one that needs no second decision afterwards:
+/// everything is there. The reduced one is for whoever knows what they are
+/// leaving out — and it is what a machine used to WORK ON this distro wants,
+/// since installing it takes minutes instead of the best part of an afternoon.
+pub const DEFAULT_PROFILE: &str = "full";
+
 /// Validates an answer.
 ///
 /// # Errors
@@ -620,6 +658,18 @@ pub fn validate_it(
         | Question::ComposeKey
         | Question::SystemLocale
         | Question::Timezone => {}
+        // THE PROFILE IS CHECKED, unlike the four above it.
+        //
+        // Those are lists read from the same file that would validate them, so
+        // the screen can only offer valid answers. This one is a list of two
+        // written here — and the terminal-less mode reads it from the
+        // environment, where a typo would reach `host.nix` and fail on the
+        // TARGET, during `nixos-install`, with the disk already erased.
+        Question::Profile => {
+            if !PROFILES.contains(&answer) {
+                return Err(Invalid::UnknownProfile);
+            }
+        }
         // AGAINST THE REAL LIST, and not a shape check: xkb accepts a layout
         // that does not exist and falls back to a mute `us`, so a plausible
         // typo would install a keyboard nobody can type on.
@@ -671,6 +721,8 @@ pub struct Answers {
     pub system_locale: String,
     /// The timezone, in tzdb's name (`Europe/London`).
     pub timezone: String,
+    /// Which of the two installations: `full` or `minimal`.
+    pub profile: String,
     /// The swap's offset, computed once the disk exists.
     pub resume_offset: Option<u64>,
     /// The chosen Wi-Fi network. Empty = going by cable.
@@ -694,6 +746,7 @@ impl Answers {
             Question::ComposeKey => &self.compose_key,
             Question::SystemLocale => &self.system_locale,
             Question::Timezone => &self.timezone,
+            Question::Profile => &self.profile,
             Question::Wifi => &self.wifi_ssid,
             Question::WifiPassword => &self.wifi_password,
             Question::ResumeOffset => "",
@@ -713,6 +766,7 @@ impl Answers {
             Question::ComposeKey => self.compose_key = v,
             Question::SystemLocale => self.system_locale = v,
             Question::Timezone => self.timezone = v,
+            Question::Profile => self.profile = v,
             Question::Wifi => self.wifi_ssid = v,
             Question::WifiPassword => self.wifi_password = v,
             Question::ResumeOffset => {}
@@ -729,7 +783,7 @@ mod tests {
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
 
     #[test]
-    fn there_are_exactly_thirteen_questions() {
+    fn there_are_exactly_fourteen_questions() {
         // Milestone 8's CRITERION still holds: one asks what ONLY THE PERSON
         // knows, and nothing beyond. One more question is a decision the project
         // handed back to the person after already making it (section 7.1).
@@ -749,11 +803,11 @@ mod tests {
         // So not asking meant installing on someone else's layout, and the
         // moment one finds out is while typing the disk's passphrase: not
         // echoed, and not correctable afterwards.
-        assert_eq!(Question::ALL_KEYS.len(), 13);
+        assert_eq!(Question::ALL_KEYS.len(), 14);
         let mut views: Vec<_> = Question::ALL_KEYS.to_vec();
         views.sort();
         views.dedup();
-        assert_eq!(views.len(), 13, "ha pergunta repetida na lista");
+        assert_eq!(views.len(), 14, "ha pergunta repetida na lista");
     }
 
     #[test]

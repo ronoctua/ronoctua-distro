@@ -342,6 +342,10 @@
       # ---------------------------------------------------------------
       distroModules = [
         ./nix/modules/base.nix
+        # The table that turns `ronoctua.profile` into the eight switches. It
+        # comes right after `base.nix` because that is where the option it reads
+        # is declared, and before every module whose default it sets.
+        ./nix/modules/profile.nix
         ./nix/modules/fonts.nix
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix
@@ -439,7 +443,47 @@
             {
               _module.args.ronoctua = {
                 inherit fonts fontconfigConf;
-                installerCrate = rust.workspace;
+                # `rust.installer`, and NOT `rust.workspace`: the workspace
+                # derivation holds every binary, and a derivation references
+                # what its bytes mention — `ronoctua-shell` was putting Zig,
+                # clang, LLVM and the icon superpack on an ISO with no desktop.
+                installerCrate = rust.installer;
+
+                # THE SEED — WHAT NO PUBLIC CACHE HAS, and nothing else.
+                #
+                # `nixos-install` does not download a system, it BUILDS one.
+                # Most of a NixOS closure arrives prebuilt from
+                # `cache.nixos.org`; what this project makes does not exist
+                # there, and that is what the target machine was compiling every
+                # time — the shell, niri from the pinned input, `libghostty-vt`
+                # and its Zig toolchain, the four wasm buffers. They are the
+                # compilations this host's own `earlyoom` kills for weight.
+                #
+                # The reduced SYSTEM's whole closure would have fitted here too,
+                # and it was measured: the ISO came to 4380 MiB against a
+                # ceiling of 4096. Stock nixpkgs is 3,5 GiB of that, and it is
+                # the part a cache serves in minutes. So the ISO carries what
+                # only this repository can produce, and the target downloads the
+                # rest instead of compiling it.
+                seed = [
+                  # The workspace, and with it — all by baked store path —
+                  # the icon superpack, `libghostty-vt`, the four wasm buffers
+                  # and niri itself. 1,97 GiB of closure that no cache has.
+                  rust.workspace
+                  # NOT in the workspace's closure: the binary embeds only the
+                  # primary face. This is the family the system installs, it
+                  # comes from a GitHub Release rather than from a cache, and
+                  # nothing else in the closure fails the way a release asset
+                  # can.
+                  fonts.noctua-iosevka-ttf-nerdfonts
+                ]
+                # AND THE FLAKE'S OWN INPUTS, as sources.
+                #
+                # To build the machine's own top — `etc`, the initrd, the
+                # hostname, the disk — Nix has to EVALUATE the flake, and
+                # evaluation needs nixpkgs, disko and niri, which `flake.lock`
+                # names but does not contain.
+                ++ builtins.filter (p: p != null) (map (i: i.outPath or null) (builtins.attrValues inputs));
                 # The flake's own tree, for the ISO to carry in
                 # `/etc/nixos` — see the comment over there.
                 flake = self;
@@ -469,6 +513,27 @@
               inputs.nixos-facter-modules.nixosModules.facter
             ]
             ++ nixpkgs.lib.optional (builtins.pathExists ./host.nix) ./host.nix;
+        };
+
+        # THE SEED — the reduced system, and it is not what gets installed.
+        #
+        # `nixos-install` still targets `#noctua` in both profiles; the profile
+        # is a line in `host.nix`, so a machine can change its mind with a
+        # rebuild instead of a reinstall. What this attribute is for is being
+        # BUILT, so its closure can travel on the ISO: everything the reduced
+        # profile needs, already realised, so the target machine compiles
+        # nothing. See `nix/installer/iso.nix`.
+        #
+        # The same modules as `noctua` — including `host.nix`, so the store
+        # paths line up with the ones the installed system will ask for.
+        minimal = nixpkgs.lib.nixosSystem {
+          inherit system;
+          specialArgs = { inherit inputs; };
+          modules = distroModules ++ [
+            ./nix/modules/host.nix
+            inputs.nixos-facter-modules.nixosModules.facter
+            { ronoctua.profile = "minimal"; }
+          ];
         };
 
         # Development VM — a complete system, without real hardware.

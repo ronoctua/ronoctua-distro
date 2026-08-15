@@ -128,6 +128,22 @@ stdenv.mkDerivation {
   # The build installs into `--prefix` itself; an install phase would copy twice.
   dontInstall = true;
 
+  # THE STATIC LIBRARY GOES, AND IT IS NOT HOUSEKEEPING: it is 1,70 GiB of
+  # closure on every machine.
+  #
+  # `libghostty-vt.a` is the ONLY file in this output that names a Zig store
+  # path (checked by grepping the whole tree), and a reference to Zig drags
+  # `clang-lib` (0,79 GiB) and `llvm-lib` (0,53 GiB) with it. Since
+  # `crates/ronoctua-term/build.rs` asks for `dylib=ghostty-vt`, the archive was
+  # never linked against — it was paying for a compiler nobody runs.
+  #
+  # Deleting it rather than rewriting the paths with `remove-references-to`: a
+  # static archive whose references have been blanked links, and then fails
+  # somewhere else. Absent, it fails at the link line, which is the truth.
+  postFixup = ''
+    rm -f "$out/lib/libghostty-vt.a"
+  '';
+
   meta = {
     description = "Motor de terminal do Ghostty, so a biblioteca VT";
     homepage = "https://github.com/ghostty-org/ghostty";

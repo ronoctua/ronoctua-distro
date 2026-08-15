@@ -247,6 +247,36 @@ rec {
     }
   );
 
+  # ONLY `ronoctua-install`, and it is the ISO that wants it.
+  #
+  # # What the whole workspace was costing the ISO
+  #
+  # `nix/installer/iso.nix` used to install `workspace`, which is ONE derivation
+  # holding EVERY binary — and a derivation references whatever its bytes
+  # mention. `ronoctua-shell` mentions `libghostty-vt`, which drags Zig, clang
+  # and LLVM (1,7 GiB measured), and through the `option_env!` paths set above it
+  # mentions the icon superpack (0,61 GiB) and the fonts. A console installer has
+  # no desktop and no compiler; none of that could ever run there.
+  #
+  # # Why copying one file is enough
+  #
+  # Nix scans the OUTPUT for store paths. What the copied bytes do not name stops
+  # being a reference — so the extraction is the whole mechanism, not a hint to
+  # the garbage collector.
+  #
+  # What it does still name is what it uses: `base.lst`, glibc's `SUPPORTED` and
+  # `zone1970.tab`, which are the three lists the questions are built from.
+  installer = pkgs.runCommand "ronoctua-installer" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-install $out/bin/
+    chmod +w $out/bin/ronoctua-install
+
+    # `workspace` adds the graphics rpath to EVERY binary it produces, and
+    # the installer draws no graphics. Left in place it would reference the
+    # Vulkan loader and mesa for a program that runs on a TTY.
+    patchelf --shrink-rpath $out/bin/ronoctua-install
+  '';
+
   # Tests. A separate derivation so it can say WHAT broke.
   tests = craneLib.cargoTest (
     commonArgs

@@ -44,6 +44,22 @@
   # text assets.
   environment.etc."nixos".source = ronoctua.flake;
 
+  # THE SEED — what the target machine would otherwise COMPILE.
+  #
+  # The list itself is in `flake.nix`, next to where those derivations are
+  # defined; what belongs here is why it travels at all.
+  #
+  # `nixos-install` does not download a system, it builds one. Everything in a
+  # NixOS closure that came from nixpkgs arrives prebuilt from the public cache;
+  # everything this repository makes has to be compiled on the machine being
+  # installed, and that is where the afternoon went. With the seed aboard, the
+  # target compiles NOTHING and downloads only what a cache already serves.
+  #
+  # `iso-image.nix` registers everything in `storeContents` with
+  # `nix-store --load-db` at boot, so these arrive as VALID store paths and not
+  # as files that happen to be on the medium.
+  isoImage.storeContents = ronoctua.seed;
+
   # -------------------------------------------------------------------
   # ISO identity
   # -------------------------------------------------------------------

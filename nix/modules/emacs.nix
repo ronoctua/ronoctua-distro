@@ -94,40 +94,52 @@ let
   };
 in
 {
-  environment.systemPackages = [ doomSync ] ++ doomDeps;
-
-  services.emacs = {
-    enable = true;
-    package = emacsPkg;
-    # NOT `install = true`. That adds `emacs.desktop` and a `client` entry to the
-    # applications menu, and invariant 14 says the system has no menu — the
-    # locator (`LEADER a`) reads the same `.desktop` files and would list two
-    # Emacsen, one of which does not use the daemon.
-    install = false;
-    defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
-    startWithGraphical = false; # a terminal Emacs must work without a session
-  };
-
-  home-manager.users.${cfg.user} = {
-    xdg.configFile = {
-      "doom/init.el".source = ../../assets/doom/init.el;
-      "doom/packages.el".source = ../../assets/doom/packages.el;
-      "doom/config.el".source = ../../assets/doom/config.el;
+  options.ronoctua.editor.emacs =
+    lib.mkEnableOption "o Emacs 30 e as dependencias do Doom (~0,6 GiB)"
+    // {
+      default = true;
     };
-  };
 
-  # `~/.config/doom/local.el` — identity and anything else personal, created
-  # once and never overwritten. Same arrangement as `~/.shellrc.local`, and the
-  # same reason: invariant 13 keeps a name and an e-mail out of the repository.
-  system.activationScripts.doomLocal = {
-    deps = [ "users" ];
-    text = ''
-      target=/home/${cfg.user}/.config/doom/local.el
-      if [ ! -e "$target" ]; then
-        mkdir -p "$(dirname "$target")"
-        cp ${doomLocalTemplate} "$target"
-        chown ${cfg.user}:users "$target"
-      fi
-    '';
+  # EVERYTHING here hangs off the switch, `home-manager` files included: a
+  # machine with no Emacs has no use for a Doom configuration in the home
+  # directory, and the activation script would create `local.el` for a framework
+  # that is not installed.
+  config = lib.mkIf cfg.editor.emacs {
+    environment.systemPackages = [ doomSync ] ++ doomDeps;
+
+    services.emacs = {
+      enable = true;
+      package = emacsPkg;
+      # NOT `install = true`. That adds `emacs.desktop` and a `client` entry to the
+      # applications menu, and invariant 14 says the system has no menu — the
+      # locator (`LEADER a`) reads the same `.desktop` files and would list two
+      # Emacsen, one of which does not use the daemon.
+      install = false;
+      defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
+      startWithGraphical = false; # a terminal Emacs must work without a session
+    };
+
+    home-manager.users.${cfg.user} = {
+      xdg.configFile = {
+        "doom/init.el".source = ../../assets/doom/init.el;
+        "doom/packages.el".source = ../../assets/doom/packages.el;
+        "doom/config.el".source = ../../assets/doom/config.el;
+      };
+    };
+
+    # `~/.config/doom/local.el` — identity and anything else personal, created
+    # once and never overwritten. Same arrangement as `~/.shellrc.local`, and the
+    # same reason: invariant 13 keeps a name and an e-mail out of the repository.
+    system.activationScripts.doomLocal = {
+      deps = [ "users" ];
+      text = ''
+        target=/home/${cfg.user}/.config/doom/local.el
+        if [ ! -e "$target" ]; then
+          mkdir -p "$(dirname "$target")"
+          cp ${doomLocalTemplate} "$target"
+          chown ${cfg.user}:users "$target"
+        fi
+      '';
+    };
   };
 }

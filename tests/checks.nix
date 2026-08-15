@@ -1234,6 +1234,9 @@ let
     # ANSWER reaches `host.nix`, and a value equal to the default would pass
     # even if the answer were being dropped.
     export RONOCTUA_INST_KEYBOARD=br
+    # And the profile, `minimal` and not the default, for the same reason: an
+    # answer equal to the default passes even when it is being dropped.
+    export RONOCTUA_INST_PROFILE=minimal
 
     out_text=$(${rust.workspace}/bin/ronoctua-install)
     echo "$out_text"
@@ -1268,6 +1271,15 @@ let
     disko_at=$(echo "$order" | tail -1)
     [ "$first_key" -lt "$disko_at" ] || {
       echo "ERRO: a chave do LUKS e escrita depois de o disko rodar" >&2; exit 1; }
+
+    # THE PROFILE REACHES THE GENERATED `host.nix`.
+    #
+    # It is the line that decides whether the machine installs 22,8 GiB or 6,9,
+    # and it is written on BOTH answers — `full` is the module's own default, so
+    # a file that only mentions the profile when it differs would be a file one
+    # has to already know the default to read.
+    echo "$out_text" | grep -q 'ronoctua.profile = "minimal"' || {
+      echo "ERRO: a resposta do perfil nao chega ao host.nix" >&2; exit 1; }
 
     # The password hash is written. Without it `base.nix` points
     # `hashedPasswordFile` at a file nobody creates, and the installed system comes
@@ -2399,6 +2411,157 @@ let
     echo "OK: texto da OFL redistribuido junto dos arquivos"
   '';
 
+  # THE ISO CARRIES WHAT THE TARGET MACHINE WOULD OTHERWISE COMPILE.
+  #
+  # Everything a NixOS closure inherits from nixpkgs comes prebuilt from the
+  # public cache. Everything this repository makes does not exist there, and was
+  # being built on the machine being installed: the shell, niri from the pinned
+  # input, `libghostty-vt` and its Zig toolchain, the four wasm buffers, the
+  # font family from a GitHub Release. That is where an install's afternoon went.
+  #
+  # This check is the LIST's half of the promise, and `iso-fits-usb-stick` is the
+  # artefact's: what goes on the medium has to be enough, and it has to fit.
+  # Measured on 2026-08-15: 3702 MiB against a ceiling of 4096.
+  #
+  # The names are grepped in the seed's CLOSURE and not in the list, because
+  # most of them arrive through `ronoctua-shell`'s baked store paths rather than
+  # by being written out — and it is the closure that goes on the ISO.
+  iso-carries-the-seed =
+    let
+      seed = pkgs.closureInfo {
+        rootPaths = self.nixosConfigurations.installer.config.isoImage.storeContents;
+      };
+    in
+    mkCheck "iso-carries-the-seed" [ pkgs.gnugrep pkgs.coreutils ] ''
+      failed=0
+      for ours in -ronoctua-0.1.0 -niri- -libghostty-vt- -ronoctua-buffer-glyphs- \
+                  -ronoctua-buffer-editor- -ronoctua-buffer-unicode- \
+                  -ronoctua-buffer-lucide- -noctua-icon-theme- \
+                  -noctua-iosevka-ttf-nerdfonts-; do
+        grep -q -e "$ours" ${seed}/store-paths || {
+          echo "ERRO: $ours nao vai no ISO — a maquina alvo vai compila-lo" >&2
+          failed=1
+        }
+      done
+
+      # The flake's inputs travel as SOURCES. Without them the target has the
+      # built pieces and still has to reach the network to evaluate the flake
+      # that names them — which is the same install, waiting on the same wire.
+      grep -q -e "-source" ${seed}/store-paths || {
+        echo "ERRO: as fontes dos inputs do flake nao vao no ISO" >&2; failed=1; }
+
+      [ "$failed" = 0 ] || exit 1
+      echo "OK: $(wc -l < ${seed}/store-paths) caminhos na semente"
+    '';
+
+  # THE REDUCED PROFILE IS REDUCED, AND STILL IS THE DISTRO.
+  #
+  # Measured on 2026-08-14: `full` 22,76 GiB, `minimal` 6,90 GiB.
+  #
+  # # Why each name is checked on BOTH sides
+  #
+  # A check that only says "android-studio is not in the reduced closure" goes
+  # green when the name is misspelled, when the package is renamed upstream, and
+  # when the whole system fails to have any packages at all. Requiring it to be
+  # PRESENT in the full one first makes the difference the thing being asserted,
+  # which is what the profile actually promises.
+  #
+  # # And what may never leave
+  #
+  # The second list is the more important one. A reduced profile that dropped
+  # niri or the footer would be smaller and would not be this system — the point
+  # was never the gigabytes, it was installing in minutes what one can then add
+  # to one line at a time.
+  profile-minimal-closes =
+    let
+      closureOf =
+        drv:
+        pkgs.closureInfo {
+          rootPaths = [ drv ];
+        };
+      minimal = closureOf self.nixosConfigurations.minimal.config.system.build.toplevel;
+      full = closureOf self.nixosConfigurations.noctua.config.system.build.toplevel;
+    in
+    mkCheck "profile-minimal-closes" [ pkgs.gnugrep pkgs.coreutils ] ''
+      failed=0
+
+      # Applications: in the full one, out of the reduced one.
+      for app in -android-studio- -google-chrome- -emacs-30 -ffmpeg-full- -vlc- \
+                 -flutter- -dart- -rustc-1 -go-1 -noctua-iosevka-ttf-3; do
+        grep -q -e "$app" ${full}/store-paths || {
+          echo "ERRO: $app nao esta no perfil completo — o nome mudou?" >&2
+          failed=1
+          continue
+        }
+        if grep -q -e "$app" ${minimal}/store-paths; then
+          echo "ERRO: $app continua no perfil reduzido" >&2
+          failed=1
+        fi
+      done
+
+      # And what the reduced profile may NEVER lose, or it stops being this
+      # system rather than becoming a smaller one.
+      for kept in -niri- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
+                  -networkmanager- -systemd-; do
+        grep -q -i -e "$kept" ${minimal}/store-paths || {
+          echo "ERRO: o perfil reduzido perdeu $kept, que faz parte da distro" >&2
+          failed=1
+        }
+      done
+
+      [ "$failed" = 0 ] || exit 1
+
+      m=$(wc -l < ${minimal}/store-paths)
+      f=$(wc -l < ${full}/store-paths)
+      [ "$m" -lt "$f" ] || {
+        echo "ERRO: o reduzido tem $m caminhos e o completo $f" >&2; exit 1; }
+      echo "OK: reduzido $m caminhos, completo $f"
+    '';
+
+  # THE ISO CARRIES NOTHING THAT ONLY A DESKTOP OR A COMPILER COULD USE.
+  #
+  # It used to carry 2,94 GiB of exactly that, and nothing said so: the ISO
+  # installed `rust.workspace`, the one derivation that holds EVERY binary of the
+  # workspace. A derivation references whatever its bytes mention, so
+  # `ronoctua-shell` was dragging in `libghostty-vt` — and with it Zig, clang and
+  # LLVM, 1,7 GiB — plus the icon superpack and mesa through the `option_env!`
+  # paths. A console installer can run none of it.
+  #
+  # The fix was to install only `bin/ronoctua-install` (`nix/rust.nix`), and the
+  # measurement is what makes it worth a check: the installer's closure went from
+  # 5,81 GiB to 2,87 GiB and the ISO from 2,1 GiB to 1,46 GiB. That is the budget
+  # the seeded closure spends, so a silent regression here costs twice.
+  #
+  # `closureInfo` and not `nix path-info`: inside the sandbox there is no daemon
+  # to ask, and the closure has to be an INPUT of the derivation to be readable.
+  iso-has-no-toolchain =
+    let
+      closure = pkgs.closureInfo {
+        rootPaths = [ self.nixosConfigurations.installer.config.system.build.toplevel ];
+      };
+    in
+    mkCheck "iso-has-no-toolchain" [ pkgs.gnugrep ] ''
+      # Each of the four was measured in the closure before the fix. `mesa` is
+      # here because a TTY installer has no GL at all — if it ever comes back it
+      # came back by accident.
+      failed=0
+      for unwanted in -zig- -clang- -llvm- -noctua-icon-theme- -mesa-; do
+        if found=$(grep -e "$unwanted" ${closure}/store-paths); then
+          echo "ERRO: o ISO carrega $unwanted, que so um desktop ou um compilador usa" >&2
+          echo "$found" >&2
+          failed=1
+        fi
+      done
+      [ "$failed" = 0 ] || exit 1
+
+      # And the installer binary IS there — a check that only forbids would go
+      # green on an ISO that lost the installer altogether.
+      grep -q -e "-ronoctua-installer" ${closure}/store-paths || {
+        echo "ERRO: o proprio instalador nao esta no ISO" >&2; exit 1; }
+
+      echo "OK: $(wc -l < ${closure}/store-paths) caminhos, nenhum de desktop ou de compilador"
+    '';
+
   # The ISO has to fit on a USB stick. The core subset exists for that.
   iso-fits-usb-stick = mkCheck "iso-fits-usb-stick" [ pkgs.coreutils ] ''
     iso=$(find ${self.packages.${system}.iso}/iso -name '*.iso' | head -1)
@@ -2540,6 +2703,9 @@ in
     format-captures-resolve
     generator-flags-agree
     iso-fits-usb-stick
+    iso-has-no-toolchain
+    iso-carries-the-seed
+    profile-minimal-closes
     self.packages.${system}.iso
     self.nixosConfigurations.vm.config.system.build.toplevel
   ];
@@ -2889,6 +3055,9 @@ in
     rust-fmt
     shell-binary
     iso-fits-usb-stick
+    iso-has-no-toolchain
+    iso-carries-the-seed
+    profile-minimal-closes
     docs-exist
     architecture-sections
     ;

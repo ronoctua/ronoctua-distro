@@ -56,7 +56,13 @@ in
     ]
     ++ (with pkgs; [
       # --- the complete Noto, enumerated (section 6.4) --------------
-      noto-fonts
+      #
+      # `noto-fonts` IS NOT HERE, and its absence is the point: it is listed at
+      # the bottom, under `ronoctua.fonts.notoExtra`. It used to be in both
+      # places, which made the switch a dead one — `vm.nix` turned it off
+      # believing it saved a gigabyte, and the package came in through this list
+      # anyway. A switch that does nothing is worse than no switch: it is a
+      # measurement everybody trusts and nobody takes.
       noto-fonts-cjk-sans
       noto-fonts-cjk-serif
       # Section 6.4 lists "noto-fonts-emoji"; in nixpkgs 26.05 that name
