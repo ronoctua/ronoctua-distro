@@ -56,17 +56,34 @@ falha inicial do `android-studio` era mirror, e passa na segunda tentativa). **O
 o plano, que o modo sem terminal imprime ANTES de qualquer passo. Isso não é lentidão; é não chegar
 ao começo.
 
-**A explicação mais provável apareceu depois, e custa nada testar.** O `install.rs` decide o modo por
-`stdin().is_terminal() && stdout().is_terminal()`, e o shell do driver de teste **é um TTY**. O
-binário teria entrado na TUI, desenhado na tela alternada que ninguém lê e ficado esperando tecla até
-o timeout — o que explica as duas coisas ao mesmo tempo: o travamento *e* o silêncio, já que o plano
-só é impresso no modo sem terminal. Primeira tentativa: `< /dev/null`.
+**O travamento de 900 s está explicado e resolvido.** O `install.rs` decide o modo por
+`stdin().is_terminal() && stdout().is_terminal()`, e o shell do driver de teste **é um TTY**: o
+binário entrava na TUI, desenhava na tela alternada que ninguém lê e esperava tecla até o timeout — o
+que explica o travamento *e* o silêncio de uma vez, já que o plano só é impresso no modo sem
+terminal. `< /dev/null` resolve.
 
-**Cada iteração custa ~15 min**, então vale instrumentar junto: rodar o binário redirecionando para
-um arquivo dentro da VM e ler o arquivo, em vez de depender do que o driver mostra.
+**O teste existe em `tests/installer-vm.nix`, e NÃO está ligado ao `tests/checks.nix`** — check
+vermelho que todo mundo aprende a ignorar é pior do que uma lacuna assumida. O que ele já tem:
+o harness de dois nós do nixpkgs (`virtualisation.diskImage` compartilhado, o segundo com
+`useBootLoader`), `substituters` forçado vazio para provar a instalação offline, as asserções do
+`host.nix` escrito EM DISCO, e o boot do resultado. Com `profile = "minimal"` a closure que entra na
+VM é de 6,9 GiB e não de 22,8.
 
-O teste ficou mais barato desde então: com `ronoctua.profile = "minimal"` a closure que precisa
-entrar na VM é de 6,9 GiB e não de 22,8.
+**Onde ele para agora: o nó instalador não boota.** Ele precisa de raiz num disco de rascunho
+(`/dev/vdb`) para poder apagar o `/dev/vda`, que é o alvo — e o disco de rascunho nasce em branco.
+Duas tentativas, duas falhas diferentes:
+
+1. Com o initrd do systemd (padrão): `fsck`, `mount`, `Can't find ext4 filesystem`, pânico aos 2,7 s.
+   O `autoFormat` do módulo `virtualisation` não é implementado pelo initrd do systemd, e a mensagem
+   fala do sistema de arquivos em vez do `mkfs` que faltou.
+2. Com `boot.initrd.systemd.enable = false`: `Attempted to kill init!` aos 1,2 s — mais cedo ainda.
+
+A pergunta seguinte é como o nó instalador ganha uma raiz sem depender do `autoFormat`. Uma pista
+não testada: rodar o nó instalador SEM disco de raiz (`useDefaultFilesystems = false` com raiz em
+tmpfs), deixando o `target.qcow2` como único disco.
+
+**Cada iteração custa ~15 min.** A instrumentação já está no arquivo: a saída do instalador vai para
+`/tmp/install.log` dentro da VM e é lida de lá, para uma falha chegar com o motivo junto.
 
 - acabou quando: `--execute` roda contra um disco virtual num teste, e o sistema que ele instala boota
 
