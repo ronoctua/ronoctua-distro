@@ -2447,6 +2447,84 @@ deixa qualquer usuário local recebê-lo. O rodapé abre uma segunda conexão e 
 notificação crítica — que já nunca expira e já abre o histórico. Zero pacote novo, zero unidade nova,
 zero ponte de root para a sessão. Reporta morte por oomd; morte pelo kernel, não.
 
+### O painel de memória — `LEADER s m`, e a primeira capacidade de sistema
+
+A política acima é real e medida, e **nada na tela dizia isso**. O `btop` mostra processos; não mostra
+o zram comprimindo, nem a reserva efetiva da `session.slice`, nem o que o `oomd` decidiu — e não
+afrouxa nada. `LEADER s m` abre o buffer onde essas quatro coisas ficam.
+
+#### O obstáculo: nada estruturado entrava num buffer
+
+O `input` do WIT levava escalares — `char`, `bool`, uma string, o clique. E `effect::command(id)`
+chegava ao host do buffer e era **só logado**. Um painel de memória precisa dos dois sentidos.
+
+A extensão entrou pela porta que o próprio arquivo abriu para a Lucide: **uma `capability`**. Com a
+trava, a superfície existe só para quem a declara — `input::survey` não é entregue a quem não pediu, e
+`effect::ask` é recusado com o nome da capacidade que falta. `Effect::requires()` nasceu ao lado do
+`Command::requires()` que já existia; até aqui o portão guardava só o que o buffer **desenha**, e o
+primeiro pedido que **age** na máquina não é coisa para deixar sem portão.
+
+**O custo apareceu no compilador, e foi mantido de propósito.** Um caso novo em `input` quebra o
+`match` exaustivo dos quatro buffers existentes. A alternativa — um `world` separado que só este
+buffer alveja — foi considerada e recusada: quatro braços explícitos dizendo "esta amostra não é
+minha" custam quatro linhas, e a **exaustividade é o que pegou isso** no minuto em que nasceu. Um
+curinga engoliria o próximo caso em silêncio.
+
+#### Quem lê a máquina é um crate, e a raiz do `/proc` é parâmetro
+
+`ronoctua-memory` é a única fronteira com `/proc`, os cgroups e a política do systemd — o mesmo
+critério do `ronoctua-niri` e do `ronoctua-network`. Os parsers são puros: entra `&str`, sai número.
+A raiz entra por parâmetro, como no `foreign::origin_at`, e é o que permite provar a gramática inteira
+do `/proc/meminfo` **sem** um `/proc` — inclusive o estouro que um teste achou: a mesma linha que traz
+`avg10=1.50` traz `total=2999599462`, e multiplicar isso por dez não cabe em `u32`.
+
+**O total de um grupo não é a soma dos RSS.** Somar RSS mente a favor justamente do que se quer achar:
+um navegador com seis processos conta o binário mapeado seis vezes. O kernel já mantém o número certo
+por cgroup (`memory.current`), e um escopo é um cgroup por aplicativo por construção. RSS só vale
+**dentro** do grupo, para dizer qual dos seis.
+
+#### Duas velocidades, e a fronteira entre elas
+
+O relógio de um segundo lê pseudo-arquivo — microssegundos, dentro do laço que desenha. O que custa
+segundos (varrer disco, perguntar ao systemd, contar no journal) vai para thread com cancelamento, ou
+para o gesto que o pediu. O `systemctl show` **não** está no relógio: são dois `fork`+`exec` por
+leitura, e a armadilha do `systemd-run --scope` síncrono já mostrou o preço de bloquear esse laço.
+
+E o store não é varrido: `nix path-info` responde pelo banco do próprio Nix o que uma caminhada de
+minutos re-derivaria.
+
+#### O interruptor tem dois alcances, e `--runtime` é a diferença
+
+Os números dos dois perfis nascem no Nix e chegam ao Rust como **tabela em `/etc`** — o painel os
+aplica verbatim, nunca os recalcula (invariante 5).
+
+- **Agora**: `systemctl --user --runtime set-property`. Sem `--runtime` o systemd **grava em disco
+  para os próximos boots** — uma segunda verdade permanente brigando com o flake, e ninguém veria.
+- **Permanente**: uma unidade oneshot escreve UMA linha no `host.nix`, liberada por uma regra polkit
+  que nomeia as cinco instâncias permitidas, verbo `start`, um usuário. O script **recusa** um arquivo
+  cuja última linha não seja `}` em vez de editar às cegas.
+
+O manual do systemd avisa que nem toda propriedade aceita mudança em execução, e o teste de VM é o
+que decide — ele aceita. **E a escala não era nenhuma das duas óbvias.** `50%` no arquivo de unidade
+volta do `systemctl show` como **2147483648**: fração de `UINT32_MAX`, nem porcentagem nem
+permiríade. A primeira versão dividia por dez, por acreditar na palavra "permyriad" do código do
+systemd; o teste respondeu com o número. E a duração vem **formatada** — `1min`, não os microssegundos
+que o nome `…DurationUSec` promete —, então lê-la como inteiro dá zero para todo valor: a tela diria
+que a proteção age "depois de 0s".
+
+#### O modo tolerante afrouxa o lado dos aplicativos, e só ele
+
+Teto 70% → 90%, pressão 50% → 70%, duração 15 s → 60 s. A reserva do desktop **não muda**: é ela que
+mantém a máquina respondendo, e afrouxá-la seria desligar a proteção em vez de afrouxá-la. O preço vai
+escrito na tela: no modo tolerante a máquina pode ficar lenta por até um minuto antes de alguém ser
+fechado.
+
+#### Um defeito que apareceu no caminho: o editor nunca salvou
+
+O `effects_from` do runtime não tinha braço para `"save"`. O editor emitia `Effect::Save`, o host do
+buffer sabia tratá-lo, e entre os dois o efeito caía em "efeito desconhecido" — um `warn` num log que
+ninguém lê. `SPC m s` parecia uma tecla que não faz nada. Uma linha, e um teste que a segura.
+
 ### Um arquivo de swap, e o offset dele
 
 O `disko` cria e ativa `/swap/swapfile`. O instalador criava um **segundo**, media o `resume_offset`

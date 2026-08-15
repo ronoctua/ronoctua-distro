@@ -2062,6 +2062,13 @@ impl Guest for Component {
                 }
                 // `Esc` in TWO layers — see `cancel`.
                 Input::Cancel => e.cancel(),
+                // NOT OURS. The survey only reaches whoever declared
+                // `capability::system`, and this buffer did not.
+                //
+                // The arm is explicit, and not a `_`: exhaustiveness is what
+                // caught this case the day it was born, and a wildcard would
+                // swallow the next one in silence.
+                Input::Survey(_) => vec![],
             }
         })
     }

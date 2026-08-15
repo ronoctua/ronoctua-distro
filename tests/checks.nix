@@ -2437,6 +2437,35 @@ let
   # (`lucide`'s formats and filters) are already covered by the panels that draw
   # them, and a check that ran the components would cost a wasm instantiation to
   # learn what a grep can see.
+  # EVERY TEXT KEY A BUFFER NAMES EXISTS IN BOTH LANGUAGES.
+  #
+  # The sibling below covers a buffer's COMMAND ids. Nothing covered the keys it
+  # writes on screen — and a buffer cannot check them itself: it does not
+  # translate (invariant 11), it names a key and the host looks it up. A typo
+  # becomes `[memory-guard-detial]` drawn in front of the person, and only when
+  # that screen is opened.
+  #
+  # The shape read here is the `mod key` every buffer keeps: one `pub const` per
+  # key, the value a literal. A key assembled with `format!` is invisible to
+  # this check — which is why the panels keep their keys as whole literals.
+  buffer-keys-have-text = mkCheck "buffer-keys-have-text" [ pkgs.gnugrep ] ''
+    keys=$(grep -rhoE 'pub const [A-Z_0-9]+: &str = "[a-z0-9-]+";' ${../buffers} \
+      | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+    [ -n "$keys" ] || { echo "ERRO: nenhuma chave de buffer encontrada — o grep mudou?" >&2; exit 1; }
+
+    failed=0
+    for k in $keys; do
+      for language in ${../assets/i18n/pt-BR.ftl} ${../assets/i18n/en-GB.ftl}; do
+        grep -q "^$k = " "$language" || {
+          echo "ERRO: falta $k em $(basename "$language") — a tela mostraria [$k]" >&2
+          failed=1
+        }
+      done
+    done
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: $(echo "$keys" | wc -l) chaves de buffer, todas traduzidas nos dois idiomas"
+  '';
+
   buffer-commands-have-labels = mkCheck "buffer-commands-have-labels" [ pkgs.gnugrep ] ''
     ids=$(grep -rhoE 'command: "[a-z0-9-]+"' ${../buffers} | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
     [ -n "$ids" ] || { echo "ERRO: nenhum comando de buffer encontrado — o grep mudou?" >&2; exit 1; }
@@ -2527,8 +2556,39 @@ let
         }
       done
 
+      # THE TABLE THE PANEL READS, and it has to agree with the units.
+      #
+      # `LEADER s m` loosens the policy by applying the numbers from this file,
+      # and the file is generated from the same options the drop-in above uses.
+      # If the two ever drift, the panel would switch to numbers that are not
+      # the ones a reboot brings back — and nothing else would say so.
+      table="$etc/ronoctua/memory-profiles.conf"
+      [ -e "$table" ] || {
+        echo "ERRO: sem a tabela de perfis; o painel nao teria como afrouxar" >&2; failed=1; }
+      for profile in strict tolerant; do
+        grep -q "^$profile ceiling=.* pressure=.* duration=" "$table" 2>/dev/null || {
+          echo "ERRO: a tabela nao traz o perfil $profile inteiro" >&2; failed=1; }
+      done
+      grep -q "^declared " "$table" 2>/dev/null || {
+        echo "ERRO: a tabela nao diz qual perfil volta ao reiniciar" >&2; failed=1; }
+      # And the strict profile's numbers ARE the ones in force on the slice —
+      # the drop-in and the table come from the same options, and this is what
+      # proves they were not wired to different ones.
+      ceiling=$(grep '^strict ' "$table" | tr ' ' '\n' | grep '^ceiling=' | cut -d= -f2)
+      grep -qR "MemoryHigh=$ceiling" "$etc/systemd/user/app.slice.d" 2>/dev/null || {
+        echo "ERRO: o teto da tabela ($ceiling) nao e o da app.slice" >&2; failed=1; }
+
+      # THE FIVE UNITS THE PANEL MAY START, and the rule that lets it.
+      #
+      # A panel that could start any unit would be a bigger door than the whole
+      # policy above closes.
+      for what in profile@ sweep@; do
+        [ -e "$etc/systemd/system/ronoctua-memory-$what.service" ] || {
+          echo "ERRO: falta a unidade ronoctua-memory-$what" >&2; failed=1; }
+      done
+
       [ "$failed" = 0 ] || exit 1
-      echo "OK: corrente de quatro niveis, app.slice armada, desktop fora do alcance"
+      echo "OK: corrente de quatro niveis, app.slice armada, desktop fora do alcance, tabela dos dois perfis"
     '';
 
   # THE ISO CARRIES WHAT THE TARGET MACHINE WOULD OTHERWISE COMPILE.
@@ -2556,7 +2616,8 @@ let
       failed=0
       for ours in -ronoctua-0.1.0 -niri- -libghostty-vt- -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-editor- -ronoctua-buffer-unicode- \
-                  -ronoctua-buffer-lucide- -noctua-icon-theme- \
+                  -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
+                  -noctua-icon-theme- \
                   -noctua-iosevka-ttf-nerdfonts-; do
         grep -q -e "$ours" ${seed}/store-paths || {
           echo "ERRO: $ours nao vai no ISO — a maquina alvo vai compila-lo" >&2
@@ -2835,6 +2896,7 @@ in
     profile-minimal-closes
     memory-policy-shape
     buffer-commands-have-labels
+    buffer-keys-have-text
     oomVm
     self.packages.${system}.iso
     self.nixosConfigurations.vm.config.system.build.toplevel
@@ -3191,6 +3253,7 @@ in
     profile-minimal-closes
     memory-policy-shape
     buffer-commands-have-labels
+    buffer-keys-have-text
     docs-exist
     architecture-sections
     ;

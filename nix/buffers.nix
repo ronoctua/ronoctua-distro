@@ -116,4 +116,13 @@ in
     src = ../buffers/lucide;
     extra.RONOCTUA_LUCIDE_JSON = "${lucidedb.db}/lucide.json";
   };
+
+  # The memory panel — `LEADER s m`. It embeds NOTHING, and it is the first one
+  # that could not: every number it draws is read by the host at that moment and
+  # pushed in through `input::survey`. What it declares instead of a database is
+  # `capability::system`.
+  memory = buffer {
+    name = "memory";
+    src = ../buffers/memory;
+  };
 }

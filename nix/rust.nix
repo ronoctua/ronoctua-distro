@@ -30,6 +30,7 @@
   btop,
   bottom,
   ncurses,
+  nix,
   niri,
   wl-clipboard,
   xwayland-satellite,
@@ -41,6 +42,7 @@
   bufferGlyphs,
   bufferUnicode,
   bufferLucide,
+  bufferMemory,
   iconSuperpack,
   lucideFontFile,
   primaryFontFile,
@@ -225,6 +227,13 @@ let
     RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
+    RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
+    # WHAT THE MEMORY PANEL SPAWNS, all by store path and for the usual reason:
+    # a user unit's `PATH` is minimal. `journalctl` counts how many times the
+    # protection acted, and `nix` answers what the store weighs — a question
+    # only its own database can answer without walking the disk for minutes.
+    RONOCTUA_JOURNALCTL = "${systemd}/bin/journalctl";
+    RONOCTUA_NIX = "${nix}/bin/nix";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a
     # FOREIGN application that brings its own `Icon=`. It had existed since the
     # icons milestone and never had a path into the Rust: `Cadeia` has the field

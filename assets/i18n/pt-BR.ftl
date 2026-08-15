@@ -637,3 +637,66 @@ notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }
 which-buffer = Buffer em foco
 cmd-editor-save = Salvar o arquivo
 cmd-exemplo-reiniciar = Reiniciar o exemplo
+
+## O painel de memoria — LEADER s m
+
+cmd-memory-open = Memória do sistema
+cmd-memory-full = Visão completa
+cmd-memory-guard = Proteção contra travamento
+cmd-memory-tab = Alternar RAM e disco
+cmd-memory-refresh = Atualizar agora
+cmd-memory-scan = Varrer
+cmd-memory-scan-cancel = Parar a varredura
+cmd-memory-stop = Encerrar o que está em foco
+cmd-memory-sweep-store = Coletar o lixo do store
+cmd-memory-sweep-generations = Remover gerações antigas
+cmd-memory-sweep-journal = Aparar o journal
+cmd-memory-tolerant = Afrouxar nesta sessão
+cmd-memory-default = Voltar ao padrão
+cmd-memory-persist = Gravar como permanente
+
+memory-title = Memória
+memory-ram = RAM
+memory-zram = zram
+memory-swap = Troca
+memory-pressure = Travamento
+memory-disk = Disco
+memory-guard = Proteção
+memory-kernel = Kernel
+memory-cached = Cache de arquivo
+memory-anonymous = Dos programas
+memory-shared = Compartilhada
+memory-dirty = A gravar
+memory-desktop = Desktop
+memory-apps = Aplicativos
+memory-system = Sistema
+memory-consumers = Quem está consumindo
+memory-scanning = Varrendo…
+memory-nothing-yet = Nada varrido ainda
+memory-asked = Pedido enviado; a próxima leitura mostra o resultado.
+
+memory-help-overview = m f completo · m o proteção · m s varrer · m r atualizar
+memory-help-full = m v troca RAM/disco · m s varrer · m k encerrar · m g m n m j faxina
+memory-help-guard = m t afrouxar · m d padrão · m p gravar · Esc volta
+
+memory-guard-description = Quando a memória acaba, a máquina pode parar de responder por minutos. Esta proteção fecha UM aplicativo antes disso — nunca o desktop, que fica de fora por construção.
+memory-guard-detail = Ela mede quanto tempo se passa esperando memória, e não quantos bytes sobraram: só age depois de um travamento sustentado, nunca de um pico.
+memory-guard-armed = armada
+memory-guard-off = desarmada
+memory-guard-unknown = não sei dizer
+memory-guard-strict = padrão
+memory-guard-tolerant = tolerante
+memory-guard-limit = Age acima de
+memory-guard-for = Depois de
+memory-guard-ceiling = Teto dos apps
+memory-guard-acted = Agiu (neste boot)
+memory-guard-persisted = Ao reiniciar
+memory-guard-session-only = Esta troca vale só até reiniciar. m p grava no host.nix, e depois falta um nixos-rebuild switch.
+memory-guard-cost = No modo tolerante a máquina pode ficar lenta por até um minuto antes de alguém ser fechado.
+
+memory-confirm-stop = Encerrar o que está em foco? A mesma tecla de novo confirma; Esc cancela.
+memory-confirm-sweep = Apagar o que não está em uso? A mesma tecla de novo confirma; Esc cancela.
+memory-confirm-persist = Gravar este perfil no host.nix? A mesma tecla de novo confirma; Esc cancela.
+
+group-system = sistema
+memory-vram = Vídeo

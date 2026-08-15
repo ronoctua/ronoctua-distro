@@ -48,11 +48,100 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 
 let
   cfg = config.ronoctua.memory;
+
+  # THE TWO PROFILES, and the numbers live HERE and nowhere else.
+  #
+  # `LEADER s m` can loosen the policy for a session, and to do that it needs
+  # the numbers. It does not compute them: the table below is written to `/etc`
+  # and the panel reads it — invariant 5 says no Nix logic gets rewritten in
+  # Rust, and two copies of `70%` would be two copies to keep in step.
+  profiles = {
+    strict = {
+      ceiling = cfg.appCeiling;
+      pressure = cfg.appPressure;
+      duration = cfg.appPressureFor;
+    };
+    tolerant = {
+      ceiling = cfg.tolerantCeiling;
+      pressure = cfg.tolerantPressure;
+      duration = cfg.tolerantPressureFor;
+    };
+  };
+  inForce = profiles.${cfg.profile};
+
+  # WHAT WRITES THE PERMANENT OPTION.
+  #
+  # `/etc/nixos/host.nix` belongs to root and the session does not. So the panel
+  # asks a oneshot to do it, and a NARROW polkit rule lets this user start those
+  # two instances and nothing else — the same shape as `keyboard-restore`.
+  #
+  # It edits ONE line and refuses anything it does not recognise. A script that
+  # guesses where to put a line in somebody's Nix file is a script that one day
+  # writes into the middle of a string.
+  profileWriter = pkgs.writeShellApplication {
+    name = "ronoctua-memory-profile";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      mode="$1"
+      file=/etc/nixos/host.nix
+      case "$mode" in
+        strict|tolerant) ;;
+        *) echo "ERRO: perfil desconhecido: $mode" >&2; exit 1 ;;
+      esac
+      if [ ! -f "$file" ]; then
+        echo "ERRO: $file nao existe; esta maquina nao tem arquivo proprio." >&2
+        exit 1
+      fi
+
+      # The old line goes, whatever it said; then the new one, right before the
+      # closing brace. Refusing when the last line is not that brace is the
+      # point: this edits a file somebody may have written by hand.
+      without=$(mktemp)
+      grep -v '^[[:space:]]*ronoctua\.memory\.profile' "$file" > "$without"
+      if [ "$(tail -n 1 "$without")" != "}" ]; then
+        echo "ERRO: nao reconheco a forma de $file; nao vou editar as cegas." >&2
+        rm -f "$without"
+        exit 1
+      fi
+      new=$(mktemp)
+      head -n -1 "$without" > "$new"
+      printf '  ronoctua.memory.profile = "%s";\n}\n' "$mode" >> "$new"
+      install -m 0644 "$new" "$file"
+      rm -f "$without" "$new"
+      echo "gravado: ronoctua.memory.profile = \"$mode\" (falta nixos-rebuild switch)"
+    '';
+  };
+
+  # THE HOUSEKEEPING, and it is housekeeping — never configuration.
+  #
+  # None of the three changes what the machine IS: they remove what nothing
+  # points at any more. The flake stays the truth, which is why these may exist
+  # at all under invariant 6.
+  sweeper = pkgs.writeShellApplication {
+    name = "ronoctua-memory-sweep";
+    runtimeInputs = [
+      pkgs.nix
+      pkgs.systemd
+    ];
+    text = ''
+      case "$1" in
+        # Garbage only: what no generation points at. Generations stay, so
+        # rolling back is still possible afterwards.
+        store) nix-collect-garbage ;;
+        # And this one DOES remove the old generations — which is why it is a
+        # separate key and a separate confirmation.
+        generations) nix-collect-garbage --delete-older-than 30d ;;
+        journal) journalctl --vacuum-size=256M ;;
+        *) echo "ERRO: faxina desconhecida: $1" >&2; exit 1 ;;
+      esac
+    '';
+  };
 
   # The reservation that keeps the desktop's pages resident, applied at every
   # level of the chain. See `theChain` below for why one level is not enough.
@@ -123,6 +212,54 @@ in
       default = "80%";
       description = "The same, for `system.slice`: daemons and builds.";
     };
+    profile = lib.mkOption {
+      type = lib.types.enum [
+        "strict"
+        "tolerant"
+      ];
+      default = "strict";
+      description = ''
+        Which of the two policies this machine boots with.
+
+        `strict` is the one the whole file argues for. `tolerant` gives the
+        applications more room and more patience before anything is closed —
+        for a machine that is about to run something heavy on purpose. The
+        DESKTOP's reservation does not change in either: it is what keeps the
+        machine answering, and loosening it would be turning the protection
+        off rather than loosening it.
+
+        `LEADER s m` can switch for the current session without touching this;
+        what is written here is what comes back after a reboot.
+      '';
+    };
+    tolerantCeiling = lib.mkOption {
+      type = lib.types.str;
+      default = "90%";
+      description = ''
+        `MemoryHigh` on `app.slice` under the tolerant profile. Throttling
+        starts later, so whoever legitimately needs a lot gets it before the
+        kernel starts squeezing.
+      '';
+    };
+    tolerantPressure = lib.mkOption {
+      type = lib.types.str;
+      default = "70%";
+      description = ''
+        The tolerant `ManagedOOMMemoryPressureLimit`. 70% of a ten-second
+        window stalled is still a machine clearly in trouble; 50% also catches
+        a compile that merely touched swap.
+      '';
+    };
+    tolerantPressureFor = lib.mkOption {
+      type = lib.types.str;
+      default = "60s";
+      description = ''
+        And for how long. A heavy job stalls for tens of seconds legitimately;
+        a minute is a decision rather than a fright. The cost is said out loud
+        on screen: in this mode the machine may be slow for up to a minute
+        before anything is closed.
+      '';
+    };
     buildCeiling = lib.mkOption {
       type = lib.types.str;
       default = "50%";
@@ -181,11 +318,30 @@ in
       overrideStrategy = "asDropin";
       sliceConfig = {
         ManagedOOMMemoryPressure = "kill";
-        ManagedOOMMemoryPressureLimit = cfg.appPressure;
-        ManagedOOMMemoryPressureDurationSec = cfg.appPressureFor;
-        MemoryHigh = cfg.appCeiling;
+        # THE PROFILE'S NUMBERS, and not the options directly: `strict` reads
+        # exactly the same as before, and `tolerant` is the same three keys
+        # with the other three values. One place decides which.
+        ManagedOOMMemoryPressureLimit = inForce.pressure;
+        ManagedOOMMemoryPressureDurationSec = inForce.duration;
+        MemoryHigh = inForce.ceiling;
       };
     };
+
+    # THE TABLE THE PANEL READS.
+    #
+    # `LEADER s m` switches profile for a session, and to do that it needs the
+    # numbers systemd takes — `70%`, `60s`, verbatim. They cross as TEXT and are
+    # applied as text: the panel never parses a percentage, never recomputes
+    # one, and cannot disagree with this file (invariant 5).
+    #
+    # `declared` is what survives a reboot, which is the one thing a transient
+    # change cannot tell you about itself.
+    environment.etc."ronoctua/memory-profiles.conf".text = ''
+      # GERADO por nix/modules/memory.nix. Nao edite a mao.
+      declared ${cfg.profile}
+      strict ceiling=${profiles.strict.ceiling} pressure=${profiles.strict.pressure} duration=${profiles.strict.duration}
+      tolerant ceiling=${profiles.tolerant.ceiling} pressure=${profiles.tolerant.pressure} duration=${profiles.tolerant.duration}
+    '';
 
     # `ManagedOOMSwap` is deliberately absent, here and everywhere. Its trigger
     # is a system-wide swap fraction, and with a 16 GiB hibernation swapfile plus
@@ -261,5 +417,57 @@ in
       memoryPercent = 50;
       priority = 100;
     };
+
+    # -----------------------------------------------------------------
+    # 7. What the panel may ask for — and only that
+    # -----------------------------------------------------------------
+    # Two templates, five instances between them, and a polkit rule that names
+    # every one. `manage-units` opened to the `wheel` group would let anything
+    # in the session stop any service, which is a much bigger thing than "write
+    # one line" and "collect garbage".
+    systemd.services."ronoctua-memory-profile@" = {
+      description = "Grava ronoctua.memory.profile = %i no host.nix";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${profileWriter}/bin/ronoctua-memory-profile %i";
+      };
+    };
+
+    systemd.services."ronoctua-memory-sweep@" = {
+      description = "Faxina de disco: %i";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${sweeper}/bin/ronoctua-memory-sweep %i";
+        # A garbage collection competes with everything for disk. `idle` on both
+        # so it yields to whatever the person is actually doing — the same
+        # reasoning as the `nix-daemon`'s scheduling above.
+        CPUSchedulingPolicy = "idle";
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    # WHO MAY START THOSE FIVE, AND ONLY THOSE.
+    #
+    # The user comes from `config.ronoctua.user` (invariant 16), never a
+    # literal. The verb is `start` and nothing else: this rule cannot stop a
+    # service, cannot restart one, and cannot name a unit that is not on the
+    # list — a typo in an instance name is a refusal, not a wider door.
+    security.polkit.extraConfig = ''
+      polkit.addRule(function(action, subject) {
+        var allowed = [
+          "ronoctua-memory-profile@strict.service",
+          "ronoctua-memory-profile@tolerant.service",
+          "ronoctua-memory-sweep@store.service",
+          "ronoctua-memory-sweep@generations.service",
+          "ronoctua-memory-sweep@journal.service"
+        ];
+        if (action.id == "org.freedesktop.systemd1.manage-units" &&
+            action.lookup("verb") == "start" &&
+            allowed.indexOf(action.lookup("unit")) >= 0 &&
+            subject.user == "${config.ronoctua.user}") {
+          return polkit.Result.YES;
+        }
+      });
+    '';
   };
 }

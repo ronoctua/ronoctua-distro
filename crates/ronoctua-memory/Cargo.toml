@@ -1,0 +1,24 @@
+[package]
+name = "ronoctua-memory"
+description = "A unica fronteira com /proc, os cgroups e a politica de memoria do systemd."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The same shape as `ronoctua-network`: the parsers are pure and know nothing
+# about the machine — a `&str` goes in, a number comes out —, and only
+# `machine.rs` opens a file or spawns a process. That is what lets the whole of
+# `/proc/meminfo`'s grammar be tested without a `/proc`.
+[dependencies]
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+anyhow.workspace = true
+tracing.workspace = true
+# `statvfs` for the filesystems and `kill` for closing a process. `rustix` and
+# not `libc` for the reason the workspace already gives: the API is safe, and
+# this crate forbids `unsafe`.
+rustix.workspace = true
+
+[lints]
+workspace = true

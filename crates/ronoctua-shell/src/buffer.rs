@@ -32,6 +32,10 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::calloop::EventLoop,
     reexports::calloop::channel as calloop_channel,
+    // The clock, for the buffer that samples the system. It reaches here
+    // through the toolkit's re-export, like everything else from calloop —
+    // depending on the crate directly would risk two versions of it.
+    reexports::calloop::timer,
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -387,6 +391,59 @@ struct Host {
     /// Kept because `Instance` does not return them, and dropping them
     /// would take the component down.
     _runtime: ronoctua_runtime::Runtime,
+    /// What a buffer with [`ronoctua_protocol::Capability::System`] is told,
+    /// and what it asked for. `None` for every other buffer — which is the
+    /// whole of the cost this capability imposes on the ones that never use it.
+    system: Option<System>,
+}
+
+/// The system half of the host: sampling, scanning and the policy.
+///
+/// It only exists for a buffer that declared the capability. Everything in it
+/// costs something — a clock, a thread, a process spawned to read systemd —
+/// and none of it should exist for a glyph browser.
+struct System {
+    /// Where `/proc` and the cgroups are. A field, and not a constant, because
+    /// that is what makes the parsers testable against a tree a test wrote.
+    places: ronoctua_memory::Places,
+    /// The policy, as systemd last reported it.
+    ///
+    /// Cached on purpose: reading it spawns `systemctl` and `journalctl`, which
+    /// is fine for a key press and not for a clock. It is refreshed when the
+    /// buffer asks and after every change.
+    guard: ronoctua_protocol::Guard,
+    /// The last scan's result, kept so a redraw does not re-scan.
+    consumers: Vec<ronoctua_protocol::Consumer>,
+    /// A scan in flight, and how far it got, in per mille.
+    scanning: bool,
+    progress: u16,
+    /// Which scan produced the list on screen.
+    ///
+    /// Kept so that closing something re-runs THAT scan: the list is stale the
+    /// moment an entry leaves it, and re-scanning the other one would swap the
+    /// screen's contents as a side effect of a key that meant "close this".
+    last_scan: Option<Scan>,
+    /// What tells a running scan to stop.
+    ///
+    /// Shared with the thread. Dropping it is not enough: a walk of a home
+    /// directory would keep consuming I/O long after the screen moved on.
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// How the scan thread answers.
+    reports: Option<calloop_channel::Sender<Scanned>>,
+    /// This machine's RAM, from the last survey.
+    ///
+    /// The guard's ceiling comes back from systemd in BYTES, and turning it
+    /// into the percentage the screen shows needs the total. Kept here so
+    /// reading the policy does not have to read `/proc/meminfo` again.
+    ram_total: u64,
+}
+
+/// What a scan thread sends back.
+enum Scanned {
+    /// How far it got.
+    Step(u16),
+    /// It finished, or it was stopped: what it had found either way.
+    Done(Vec<ronoctua_protocol::Consumer>),
 }
 
 /// The host's input in the form the buffer understands.
@@ -603,7 +660,18 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         anyhow::bail!("o buffer `{}` usa primitiva sem capacidade: {e}", d.name);
     }
 
+    // THE SYSTEM HALF EXISTS ONLY FOR WHOEVER ASKED FOR IT.
+    //
+    // Not a runtime check inside the tick, but the absence of the tick: a
+    // buffer without the capability has no clock, no thread and no `systemctl`
+    // — the cost of this surface is paid only by the buffer that uses it.
+    let system = d
+        .capabilities
+        .contains(&ronoctua_protocol::Capability::System)
+        .then(System::fresh);
+
     let mut state = Host {
+        system,
         keymap: d.keymap.clone(),
         pending: Vec::new(),
         file: file.map(std::path::Path::to_path_buf),
@@ -654,6 +722,56 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .is_err()
     {
         tracing::warn!("nao consegui pendurar o canal do keymap");
+    }
+
+    // THE CLOCK, and the thread that answers a scan — only for the buffer that
+    // declared the capability.
+    if state.system.is_some() {
+        // The scan's channel FIRST: the tick may start one, and a report with
+        // nowhere to arrive would be a scan that runs and never shows.
+        let (reports, arrivals) = calloop_channel::channel::<Scanned>();
+        if cycle
+            .handle()
+            .insert_source(arrivals, |event, (), state: &mut Host| {
+                if let calloop_channel::Event::Msg(m) = event {
+                    state.scanned(m);
+                }
+            })
+            .is_ok()
+        {
+            if let Some(s) = state.system.as_mut() {
+                s.reports = Some(reports);
+            }
+        } else {
+            tracing::warn!("nao consegui pendurar o canal da varredura");
+        }
+
+        // ONE SECOND, and the survey it carries is only pseudo-file reads —
+        // microseconds. What costs (systemd, the journal, a walk of the disk)
+        // is deliberately NOT here: the tick is the cheap half by construction,
+        // which is what lets it run inside the loop that also draws.
+        let tick = timer::Timer::from_duration(std::time::Duration::from_secs(1));
+        if cycle
+            .handle()
+            .insert_source(tick, |_, (), state: &mut Host| {
+                state.sample();
+                timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+            })
+            .is_err()
+        {
+            tracing::warn!("nao consegui pendurar o relogio da amostragem");
+        }
+        // The first survey does not wait a second: the screen opens with
+        // numbers, and not with a blank that fills in later.
+        //
+        // SAMPLE FIRST, AND THE ORDER IS NOT STYLE: the guard's ceiling comes
+        // back from systemd in bytes and is shown as a fraction of RAM, so
+        // reading it before anything knows how much RAM there is prints `0.0%`
+        // — a wrong number on the first screen, which is the one screen
+        // everybody sees.
+        state.sample();
+        state.refresh_guard();
+        state.sample();
     }
 
     let signal = cycle.get_signal();
@@ -1192,6 +1310,25 @@ impl Host {
                 ronoctua_protocol::Effect::Command(id) => {
                     tracing::info!(command = %id, "comando pedido pelo buffer");
                 }
+                // WHAT ACTS ON THE MACHINE, and the gate in front of it.
+                //
+                // The check is here and not inside `ask` so that the refusal is
+                // one line for every request there will ever be — and so that
+                // it says WHICH capability was missing, instead of the request
+                // quietly doing nothing.
+                ronoctua_protocol::Effect::Ask(demand) => {
+                    if let Some(needed) = ronoctua_protocol::Effect::Ask(demand).requires()
+                        && !self.capabilities.contains(&needed)
+                    {
+                        tracing::error!(
+                            request = ?demand.what,
+                            capability = ?needed,
+                            "pedido recusado: o buffer nao declarou a capacidade"
+                        );
+                        continue;
+                    }
+                    self.ask(demand);
+                }
                 ronoctua_protocol::Effect::Close => self.quit = true,
                 // THE BUFFER DOES NOT TOUCH THE DISK: it asks, and the host
                 // writes (invariant 11) — the same arrangement as `Copy`.
@@ -1227,6 +1364,245 @@ impl Host {
             self.deliver(&ronoctua_protocol::Input::Copied(ok));
         }
     }
+}
+
+impl System {
+    /// The system half, before anything has been read.
+    fn fresh() -> Self {
+        Self {
+            places: ronoctua_memory::Places::default(),
+            guard: ronoctua_protocol::Guard::default(),
+            consumers: Vec::new(),
+            scanning: false,
+            progress: 0,
+            last_scan: None,
+            cancel: None,
+            reports: None,
+            ram_total: 0,
+        }
+    }
+}
+
+/// The system half of the host: the clock, the scans and the policy.
+impl Host {
+    /// Reads the cheap numbers and hands them to the component.
+    ///
+    /// Everything here is a pseudo-file: it costs microseconds and never
+    /// touches the disk, which is why a clock may call it. The policy and the
+    /// consumers are NOT read here — they are what the last answer left behind.
+    fn sample(&mut self) {
+        let Some(s) = self.system.as_mut() else {
+            return;
+        };
+        let mut survey = ronoctua_memory::survey(&s.places);
+        // The machine's RAM, kept for whoever turns systemd's bytes back into a
+        // percentage. Read from the survey so there is one reading, not two.
+        if let Some(total) = survey
+            .readings
+            .iter()
+            .find(|r| r.of == ronoctua_protocol::Gauge::RamTotal)
+            .map(|r| r.bytes)
+        {
+            s.ram_total = total;
+        }
+        survey.guard = s.guard;
+        survey.consumers.clone_from(&s.consumers);
+        survey.scanning = s.scanning;
+        survey.progress = s.progress;
+        self.deliver(&ronoctua_protocol::Input::Survey(survey));
+    }
+
+    /// Asks systemd what is in force. Spawns processes — never on the clock.
+    fn refresh_guard(&mut self) {
+        let Some(s) = self.system.as_mut() else {
+            return;
+        };
+        s.guard = ronoctua_memory::guard::state(s.ram_total);
+    }
+
+    /// A scan's progress or its result.
+    fn scanned(&mut self, m: Scanned) {
+        {
+            let Some(s) = self.system.as_mut() else {
+                return;
+            };
+            match m {
+                Scanned::Step(p) => s.progress = p,
+                Scanned::Done(list) => {
+                    s.consumers = list;
+                    s.scanning = false;
+                    s.progress = 1000;
+                    s.cancel = None;
+                }
+            }
+        }
+        // The screen only moves when the survey goes back in — the component
+        // holds no state the host can write to.
+        self.sample();
+    }
+
+    /// Does what the buffer asked.
+    ///
+    /// Every arm that changes the machine reports its verdict the same way a
+    /// copy or a save does: through the log, and through the next survey, which
+    /// carries the state as systemd reports it — never as we requested it.
+    fn ask(&mut self, demand: ronoctua_protocol::Demand) {
+        use ronoctua_protocol::Request as R;
+        match demand.what {
+            R::Refresh => {
+                self.refresh_guard();
+                self.sample();
+            }
+            R::ScanRam => self.start_scan(Scan::Ram),
+            R::ScanDisk => self.start_scan(Scan::Disk),
+            R::CancelScan => self.cancel_scan(),
+            R::GuardTolerant => self.switch_guard(ronoctua_protocol::GuardMode::Tolerant),
+            R::GuardDefault => self.switch_guard(ronoctua_protocol::GuardMode::Strict),
+            R::GuardPersist => {
+                let mode = self
+                    .system
+                    .as_ref()
+                    .map_or(ronoctua_protocol::GuardMode::Unknown, |s| s.guard.mode);
+                match ronoctua_memory::guard::persist(mode) {
+                    Ok(()) => tracing::info!(?mode, "perfil gravado no host.nix"),
+                    Err(e) => tracing::error!(error = %e, "gravar o perfil FALHOU"),
+                }
+                self.refresh_guard();
+                self.sample();
+            }
+            R::StopConsumer => self.stop_consumer(demand.target),
+            R::SweepStore | R::SweepGenerations | R::SweepJournal => {
+                match ronoctua_memory::scan::sweep(demand.what) {
+                    Ok(()) => tracing::info!(what = ?demand.what, "faxina concluida"),
+                    Err(e) => tracing::error!(error = %e, what = ?demand.what, "faxina FALHOU"),
+                }
+                // The freed space only shows up on the next scan; the readings
+                // that come from `statvfs` update on their own.
+                self.sample();
+            }
+        }
+    }
+
+    /// Applies a profile for this session, and reads back what took.
+    fn switch_guard(&mut self, mode: ronoctua_protocol::GuardMode) {
+        let table = ronoctua_memory::guard::profiles();
+        match table.of(mode) {
+            Some(p) => match ronoctua_memory::guard::apply(p) {
+                Ok(()) => tracing::info!(?mode, "perfil aplicado para esta sessao"),
+                // THE MANUAL WARNS that not every property may be changed at
+                // runtime. If this one may not, the screen has to say so — which
+                // it does by the next survey carrying the UNCHANGED state.
+                Err(e) => tracing::error!(error = %e, ?mode, "o systemd recusou a troca"),
+            },
+            None => tracing::error!(?mode, "a tabela de perfis nao tem esse perfil"),
+        }
+        self.refresh_guard();
+        self.sample();
+    }
+
+    /// Closes the consumer at a 1-based index of the last survey.
+    fn stop_consumer(&mut self, target: u64) {
+        let Some(s) = self.system.as_ref() else {
+            return;
+        };
+        let Some(who) = usize::try_from(target)
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|n| s.consumers.get(n))
+            .cloned()
+        else {
+            tracing::error!(target, "indice fora da lista da ultima amostra");
+            return;
+        };
+        let places = s.places.clone();
+        match ronoctua_memory::scan::stop(&places, &who) {
+            Ok(()) => tracing::info!(name = %who.name, "encerrado"),
+            // The refusal is the point of the message: the panel does not touch
+            // what is outside `app.slice`, and saying so is how the person
+            // learns the boundary instead of thinking the key is broken.
+            Err(e) => tracing::error!(error = %e, name = %who.name, "encerrar FALHOU"),
+        }
+        // The list is stale the moment something leaves it: scan again, so the
+        // screen does not offer to close what is already gone — and the SAME
+        // scan, or the screen would change subject on its own.
+        if let Some(again) = self.system.as_ref().and_then(|s| s.last_scan) {
+            self.start_scan(again);
+        }
+    }
+
+    /// Starts a scan, cancelling whichever was running.
+    ///
+    /// Starting while one runs CANCELS it — which is what makes an explicit
+    /// stop optional rather than required, and keeps two threads from walking
+    /// the same disk.
+    fn start_scan(&mut self, what: Scan) {
+        self.cancel_scan();
+        let Some(s) = self.system.as_mut() else {
+            return;
+        };
+        let Some(reports) = s.reports.clone() else {
+            tracing::error!("sem canal de varredura; nada a fazer");
+            return;
+        };
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        s.cancel = Some(std::sync::Arc::clone(&cancel));
+        s.last_scan = Some(what);
+        s.scanning = true;
+        s.progress = 0;
+        let places = s.places.clone();
+
+        // A THREAD, because this is the half that takes seconds. The loop that
+        // draws is single-threaded, and waiting here would freeze the window —
+        // the same trap `systemd-run --scope` set on the footer.
+        let built = std::thread::Builder::new()
+            .name(format!("ronoctua-scan-{what:?}").to_lowercase())
+            .spawn(move || {
+                let found = match what {
+                    Scan::Ram => ronoctua_memory::scan::ram(&places),
+                    Scan::Disk => {
+                        let mut all = ronoctua_memory::scan::disk_metadata();
+                        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                        if let Some(home) = home {
+                            all.extend(ronoctua_memory::scan::disk(&home, &cancel, |p| {
+                                let _ = reports.send(Scanned::Step(p));
+                            }));
+                        }
+                        all.sort_by_key(|c| std::cmp::Reverse(c.bytes));
+                        all
+                    }
+                };
+                // A closed channel means the window is gone; there is nobody to
+                // tell, and that is not an error.
+                let _ = reports.send(Scanned::Done(found));
+            });
+        if let Err(e) = built {
+            tracing::error!(error = %e, "nao consegui subir a thread de varredura");
+            s.scanning = false;
+        }
+        self.sample();
+    }
+
+    /// Tells a running scan to stop, and forgets it.
+    fn cancel_scan(&mut self) {
+        let Some(s) = self.system.as_mut() else {
+            return;
+        };
+        if let Some(c) = s.cancel.take() {
+            // The flag, and not just dropping the channel: a walk of a home
+            // directory would keep consuming I/O long after the screen moved on.
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        s.scanning = false;
+    }
+}
+
+/// Which scan.
+#[derive(Debug, Clone, Copy)]
+enum Scan {
+    /// Who is holding RAM.
+    Ram,
+    /// Where the disk went.
+    Disk,
 }
 
 impl SeatHandler for Host {

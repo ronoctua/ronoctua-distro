@@ -637,3 +637,66 @@ notif-oom-orphan = Something outside your buffers was closed: { $cgroup }
 which-buffer = Focused buffer
 cmd-editor-save = Save the file
 cmd-exemplo-reiniciar = Restart the example
+
+## The memory panel — LEADER s m
+
+cmd-memory-open = System memory
+cmd-memory-full = Full overview
+cmd-memory-guard = Freeze protection
+cmd-memory-tab = Switch RAM and disk
+cmd-memory-refresh = Refresh now
+cmd-memory-scan = Scan
+cmd-memory-scan-cancel = Stop the scan
+cmd-memory-stop = Close what is focused
+cmd-memory-sweep-store = Collect the store's garbage
+cmd-memory-sweep-generations = Remove old generations
+cmd-memory-sweep-journal = Trim the journal
+cmd-memory-tolerant = Loosen for this session
+cmd-memory-default = Back to the default
+cmd-memory-persist = Save as permanent
+
+memory-title = Memory
+memory-ram = RAM
+memory-zram = zram
+memory-swap = Swap
+memory-pressure = Stall
+memory-disk = Disk
+memory-guard = Protection
+memory-kernel = Kernel
+memory-cached = File cache
+memory-anonymous = Programs
+memory-shared = Shared
+memory-dirty = To be written
+memory-desktop = Desktop
+memory-apps = Applications
+memory-system = System
+memory-consumers = What is using it
+memory-scanning = Scanning…
+memory-nothing-yet = Nothing scanned yet
+memory-asked = Request sent; the next reading shows the result.
+
+memory-help-overview = m f full · m o protection · m s scan · m r refresh
+memory-help-full = m v RAM/disk · m s scan · m k close · m g m n m j housekeeping
+memory-help-guard = m t loosen · m d default · m p save · Esc goes back
+
+memory-guard-description = When memory runs out, the machine can stop answering for minutes. This protection closes ONE application before that happens — never the desktop, which is outside the candidate set by construction.
+memory-guard-detail = It measures how long things spend waiting on memory, not how many bytes are left: it acts only after a sustained stall, never after a spike.
+memory-guard-armed = armed
+memory-guard-off = not armed
+memory-guard-unknown = cannot tell
+memory-guard-strict = default
+memory-guard-tolerant = tolerant
+memory-guard-limit = Acts above
+memory-guard-for = After
+memory-guard-ceiling = Applications' ceiling
+memory-guard-acted = Acted (this boot)
+memory-guard-persisted = After a reboot
+memory-guard-session-only = This change lasts until reboot. m p writes it into host.nix, and then a nixos-rebuild switch is still missing.
+memory-guard-cost = In tolerant mode the machine may be slow for up to a minute before anything is closed.
+
+memory-confirm-stop = Close what is focused? The same key again confirms; Esc cancels.
+memory-confirm-sweep = Delete what is not in use? The same key again confirms; Esc cancels.
+memory-confirm-persist = Write this profile into host.nix? The same key again confirms; Esc cancels.
+
+group-system = system
+memory-vram = Graphics

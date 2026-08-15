@@ -2537,6 +2537,16 @@ name = "ronoctua-keymap"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-protocol",
+ "rustix 1.1.4",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-network"
 version = "0.1.0"
 dependencies = [
@@ -2611,6 +2621,7 @@ dependencies = [
  "ronoctua-cmd",
  "ronoctua-i18n",
  "ronoctua-keymap",
+ "ronoctua-memory",
  "ronoctua-network",
  "ronoctua-niri",
  "ronoctua-notify",

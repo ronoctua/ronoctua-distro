@@ -77,6 +77,10 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   o `ronoctua-render`, posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11).
   Estado vive na `Instance` — `Runtime::render` avulso zera o buffer. Cinco primitivas: texto, régua,
   grade, seleção e **`svg`** — TRAVA de capacidade (`vector`); cor por token, `currentColor` é preto.
+- **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava dele: o host amostra
+  (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer só desenha e pede
+  por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread ou
+  gesto. Perfil tolerante: números do Nix numa tabela em `/etc`, e `--runtime` ou o systemd GRAVA.
 - **Duas instalações, uma opção só.** `ronoctua.profile` = `full` (22,8 GiB) ou `minimal` (6,9);
   `nix/modules/profile.nix` é a tabela, tudo `mkDefault`. Instalar mira `#noctua` nos dois — mudar de
   ideia é `nixos-rebuild`. **O ISO leva no `storeContents` o que nenhum cache tem** (shell, niri,

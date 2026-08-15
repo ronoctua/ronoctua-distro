@@ -2024,6 +2024,10 @@ impl Guest for Component {
                     e.filter_now();
                     vec![Effect::Redraw]
                 }
+                // NOT OURS — see the identical arm in `buffers/unicode`: the
+                // survey only reaches whoever declared `capability::system`,
+                // and the arm is explicit so the next case cannot arrive mute.
+                Input::Survey(_) => vec![],
             }
         })
     }

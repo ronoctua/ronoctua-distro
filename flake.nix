@@ -251,6 +251,7 @@
         bufferGlyphs = buffers.glyphs;
         bufferUnicode = buffers.unicode;
         bufferLucide = buffers.lucide;
+        bufferMemory = buffers.memory;
         inherit iconSuperpack ghosttyVt;
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
@@ -803,6 +804,7 @@
         bufferGlyphs = buffers.glyphs;
         bufferUnicode = buffers.unicode;
         bufferLucide = buffers.lucide;
+        bufferMemory = buffers.memory;
         inherit iconSuperpack ghosttyVt;
       };
 

@@ -84,6 +84,13 @@ const BUFFER_EDITOR: Option<&str> = option_env!("RONOCTUA_BUFFER_EDITOR");
 /// instead of the build breaking.
 const BUFFER_UNICODE: Option<&str> = option_env!("RONOCTUA_BUFFER_UNICODE");
 
+/// The memory panel's component (`LEADER s m`).
+///
+/// The only one that embeds no database: everything it draws is read by its
+/// host at that moment and pushed in. What it carries instead is
+/// `capability::system`, which is what makes the host sample at all.
+const BUFFER_MEMORY: Option<&str> = option_env!("RONOCTUA_BUFFER_MEMORY");
+
 /// The Lucide icon browser's component (`LEADER i l`).
 ///
 /// Same contract as the other two. This is the only one that also depends on a
@@ -2893,6 +2900,7 @@ impl Footer {
             // third native buffer would make three.
             "unicode-symbols" => self.open_buffer(BUFFER_UNICODE, "RONOCTUA_BUFFER_UNICODE"),
             "lucide-icons" => self.open_buffer(BUFFER_LUCIDE, "RONOCTUA_BUFFER_LUCIDE"),
+            "memory-open" => self.open_buffer(BUFFER_MEMORY, "RONOCTUA_BUFFER_MEMORY"),
             // The two WINDOW actions are the compositor's (invariant 4). The
             // shell does not reimplement them: it asks over IPC, which is the
             // only border it has with niri (invariant 3).

@@ -403,8 +403,186 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
                 ("line".into(), Val::U16(*line)),
             ])),
         ),
+        Input::Survey(s) => ("survey", Some(val_of_survey(s))),
     };
     Val::Variant(caso.to_owned(), carga.map(Box::new))
+}
+
+/// The name a `gauge` has in the WIT.
+///
+/// A `match` and not a table on purpose: it is EXHAUSTIVE, so a gauge added to
+/// the protocol without a name here does not compile. A table would let it
+/// through and the reading would simply never arrive.
+const fn gauge_name(g: ronoctua_protocol::Gauge) -> &'static str {
+    use ronoctua_protocol::Gauge as G;
+    match g {
+        G::RamTotal => "ram-total",
+        G::RamAvailable => "ram-available",
+        G::RamFree => "ram-free",
+        G::RamCached => "ram-cached",
+        G::RamBuffers => "ram-buffers",
+        G::RamShmem => "ram-shmem",
+        G::RamSlabReclaimable => "ram-slab-reclaimable",
+        G::RamDirty => "ram-dirty",
+        G::RamAnonymous => "ram-anonymous",
+        G::RamKernel => "ram-kernel",
+        G::SwapTotal => "swap-total",
+        G::SwapFree => "swap-free",
+        G::ZramOriginal => "zram-original",
+        G::ZramCompressed => "zram-compressed",
+        G::ZramLimit => "zram-limit",
+        G::DesktopMin => "desktop-min",
+        G::DesktopCurrent => "desktop-current",
+        G::AppCurrent => "app-current",
+        G::AppCeiling => "app-ceiling",
+        G::SystemCurrent => "system-current",
+        G::VramTotal => "vram-total",
+        G::VramUsed => "vram-used",
+        G::DiskTotal => "disk-total",
+        G::DiskFree => "disk-free",
+    }
+}
+
+/// The same, for what kind of thing a consumer is.
+const fn consumer_kind_name(k: ronoctua_protocol::ConsumerKind) -> &'static str {
+    use ronoctua_protocol::ConsumerKind as K;
+    match k {
+        K::Process => "process",
+        K::Scope => "scope",
+        K::Directory => "directory",
+        K::Filesystem => "filesystem",
+        K::Generation => "generation",
+    }
+}
+
+/// And for which policy is in force.
+const fn guard_mode_name(m: ronoctua_protocol::GuardMode) -> &'static str {
+    use ronoctua_protocol::GuardMode as M;
+    match m {
+        M::Unknown => "unknown",
+        M::Off => "off",
+        M::Strict => "strict",
+        M::Tolerant => "tolerant",
+    }
+}
+
+/// The survey, as a `Val` the guest can receive.
+///
+/// # The order of the fields is the WIT's order, and it is not style
+///
+/// `wasmtime` lowers a `Val::Record` by zipping it POSITIONALLY against the
+/// WIT's fields and only then compares the names (`values.rs`, `lower`). A field
+/// moved here without being moved there fails when the function is CALLED, with
+/// a message about a name — never at compile time. The test at the end of this
+/// file walks the shape so that a reordering fails in `cargo test` instead of on
+/// somebody's screen.
+fn val_of_survey(s: &ronoctua_protocol::Survey) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    let readings = s
+        .readings
+        .iter()
+        .map(|r| {
+            Val::Record(vec![
+                ("of".into(), Val::Enum(gauge_name(r.of).to_owned())),
+                ("bytes".into(), Val::U64(r.bytes)),
+            ])
+        })
+        .collect();
+
+    let consumers = s
+        .consumers
+        .iter()
+        .map(|c| {
+            Val::Record(vec![
+                (
+                    "kind".into(),
+                    Val::Enum(consumer_kind_name(c.kind).to_owned()),
+                ),
+                ("name".into(), Val::String(c.name.clone())),
+                ("bytes".into(), Val::U64(c.bytes)),
+                ("hint".into(), Val::U64(c.hint)),
+            ])
+        })
+        .collect();
+
+    Val::Record(vec![
+        ("readings".into(), Val::List(readings)),
+        (
+            "pressure".into(),
+            Val::Record(vec![
+                ("some10".into(), Val::U16(s.pressure.some10)),
+                ("some60".into(), Val::U16(s.pressure.some60)),
+                ("some300".into(), Val::U16(s.pressure.some300)),
+                ("full10".into(), Val::U16(s.pressure.full10)),
+                ("full60".into(), Val::U16(s.pressure.full60)),
+            ]),
+        ),
+        ("consumers".into(), Val::List(consumers)),
+        (
+            "guard".into(),
+            Val::Record(vec![
+                (
+                    "mode".into(),
+                    Val::Enum(guard_mode_name(s.guard.mode).to_owned()),
+                ),
+                ("pressure-limit".into(), Val::U16(s.guard.pressure_limit)),
+                (
+                    "pressure-seconds".into(),
+                    Val::U32(s.guard.pressure_seconds),
+                ),
+                ("ceiling".into(), Val::U16(s.guard.ceiling)),
+                ("acted".into(), Val::U32(s.guard.acted)),
+                ("zram".into(), Val::Bool(s.guard.zram)),
+                (
+                    "persisted".into(),
+                    Val::Enum(guard_mode_name(s.guard.persisted).to_owned()),
+                ),
+            ]),
+        ),
+        ("scanning".into(), Val::Bool(s.scanning)),
+        ("progress".into(), Val::U16(s.progress)),
+    ])
+}
+
+/// A `demand` coming back from the guest.
+///
+/// Unknown request = `None`, like every other unknown case in this file: a
+/// component built against a newer WIT is still useful for what the host
+/// understands, and a request it cannot perform is better refused than guessed.
+fn demand_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::Demand> {
+    use ronoctua_protocol::Request as R;
+    use wasmtime::component::Val;
+
+    let Some(Val::Record(fields)) = v else {
+        return None;
+    };
+    let get = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+    let Some(Val::Enum(what)) = get("what") else {
+        return None;
+    };
+    let what = match what.as_str() {
+        "refresh" => R::Refresh,
+        "scan-ram" => R::ScanRam,
+        "scan-disk" => R::ScanDisk,
+        "cancel-scan" => R::CancelScan,
+        "guard-tolerant" => R::GuardTolerant,
+        "guard-default" => R::GuardDefault,
+        "guard-persist" => R::GuardPersist,
+        "stop-consumer" => R::StopConsumer,
+        "sweep-generations" => R::SweepGenerations,
+        "sweep-store" => R::SweepStore,
+        "sweep-journal" => R::SweepJournal,
+        otherwise => {
+            tracing::warn!(request = otherwise, "pedido desconhecido");
+            return None;
+        }
+    };
+    let target = match get("target") {
+        Some(Val::U64(n)) => *n,
+        _ => 0,
+    };
+    Some(ronoctua_protocol::Demand { what, target })
 }
 
 /// The effects returned by `event`.
@@ -434,6 +612,16 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 "copy" => text().map(Effect::Copy),
                 "command" => text().map(Effect::Command),
                 "close" => Some(Effect::Close),
+                // IT WAS MISSING, AND THE EDITOR'S SAVE WAS THE PRICE.
+                //
+                // `buffers/editor` emits `effect::save` and
+                // `crates/ronoctua-shell/src/buffer.rs` handles it — but nothing
+                // ever built it: the case fell into `otherwise` below, came out
+                // as a `warn` in a log nobody reads, and `SPC m s` looked like a
+                // key that does nothing. Which is exactly what this arm's
+                // neighbours were written to prevent.
+                "save" => text().map(Effect::Save),
+                "ask" => demand_from(carga.as_deref()).map(Effect::Ask),
                 otherwise => {
                     tracing::warn!(effect = otherwise, "efeito desconhecido");
                     None
@@ -496,6 +684,13 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
                 Val::Enum(n) if n == "terminal" => Some(prot::Capability::Terminal),
                 Val::Enum(n) if n == "raw-surface" => Some(prot::Capability::RawSurface),
                 Val::Enum(n) if n == "vector" => Some(prot::Capability::Vector),
+                Val::Enum(n) if n == "system" => Some(prot::Capability::System),
+                // AN UNKNOWN CAPABILITY DISAPPEARS HERE, and that is the
+                // quietest failure in this file: the buffer declared it, the
+                // host did not learn to read it, and every gated effect is then
+                // refused with a message saying "you did not declare it" —
+                // which blames the buffer for the host's gap. A new case in the
+                // WIT's `capability` needs an arm HERE, in the same commit.
                 _ => None,
             })
             .collect(),
@@ -657,6 +852,245 @@ mod tests {
         // If the pooling allocator is refused on the platform, it is better to find out
         // here than at the first buffer opened.
         assert!(Runtime::fresh().is_ok());
+    }
+
+    /// The names of a record's fields, in the order they were built.
+    fn shape(v: &wasmtime::component::Val) -> Vec<&str> {
+        match v {
+            wasmtime::component::Val::Record(f) => f.iter().map(|(n, _)| n.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Looks a field up by name, so the assertions do not depend on position.
+    fn field<'a>(
+        v: &'a wasmtime::component::Val,
+        name: &str,
+    ) -> Option<&'a wasmtime::component::Val> {
+        match v {
+            wasmtime::component::Val::Record(f) => {
+                f.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+            }
+            _ => None,
+        }
+    }
+
+    /// THE SHAPE IS THE CONTRACT, and nothing else checks it.
+    ///
+    /// `wasmtime` lowers a record by zipping it POSITIONALLY against the WIT and
+    /// only then compares names — so a field moved in `val_of_survey` without
+    /// being moved in `buffer.wit` fails when the guest is CALLED, with a
+    /// message about a name and a stack that points at the call. Here the same
+    /// mistake fails in `cargo test`, and the list below is the `.wit`'s order
+    /// copied by hand on purpose: it is the second pair of eyes.
+    #[test]
+    fn the_survey_has_the_wit_shape_field_by_field() {
+        let s = ronoctua_protocol::Survey {
+            readings: vec![ronoctua_protocol::Reading {
+                of: ronoctua_protocol::Gauge::RamTotal,
+                bytes: 16_000_000_000,
+            }],
+            consumers: vec![ronoctua_protocol::Consumer {
+                kind: ronoctua_protocol::ConsumerKind::Scope,
+                name: "ronoctua-buffer-9f3a.scope".to_owned(),
+                bytes: 42,
+                hint: 4321,
+            }],
+            ..Default::default()
+        };
+        let v = val_of_survey(&s);
+
+        assert_eq!(
+            shape(&v),
+            [
+                "readings",
+                "pressure",
+                "consumers",
+                "guard",
+                "scanning",
+                "progress"
+            ]
+        );
+        assert_eq!(
+            shape(field(&v, "pressure").expect("pressure")),
+            ["some10", "some60", "some300", "full10", "full60"]
+        );
+        assert_eq!(
+            shape(field(&v, "guard").expect("guard")),
+            [
+                "mode",
+                "pressure-limit",
+                "pressure-seconds",
+                "ceiling",
+                "acted",
+                "zram",
+                "persisted"
+            ]
+        );
+
+        let wasmtime::component::Val::List(readings) = field(&v, "readings").expect("readings")
+        else {
+            panic!("readings nao e lista")
+        };
+        assert_eq!(shape(&readings[0]), ["of", "bytes"]);
+        let wasmtime::component::Val::List(consumers) = field(&v, "consumers").expect("consumers")
+        else {
+            panic!("consumers nao e lista")
+        };
+        assert_eq!(shape(&consumers[0]), ["kind", "name", "bytes", "hint"]);
+
+        // And the enums cross by NAME, in the WIT's kebab — not by number.
+        assert_eq!(
+            field(&readings[0], "of"),
+            Some(&wasmtime::component::Val::Enum("ram-total".to_owned()))
+        );
+    }
+
+    /// A demand comes back whole, and an unknown one comes back as nothing.
+    #[test]
+    fn a_demand_survives_the_round_trip_and_an_unknown_one_does_not() {
+        use wasmtime::component::Val;
+        let good = Val::Record(vec![
+            ("what".into(), Val::Enum("stop-consumer".to_owned())),
+            ("target".into(), Val::U64(4321)),
+        ]);
+        assert_eq!(
+            demand_from(Some(&good)),
+            Some(ronoctua_protocol::Demand {
+                what: ronoctua_protocol::Request::StopConsumer,
+                target: 4321,
+            })
+        );
+
+        // A request this host does not know is REFUSED, and not guessed: acting
+        // on the closest match would be the host inventing what the buffer meant.
+        let strange = Val::Record(vec![
+            ("what".into(), Val::Enum("format-the-disk".to_owned())),
+            ("target".into(), Val::U64(0)),
+        ]);
+        assert_eq!(demand_from(Some(&strange)), None);
+    }
+
+    /// The editor's save had no way back, and this is the regression net.
+    #[test]
+    fn saving_is_an_effect_the_host_can_actually_build() {
+        use wasmtime::component::Val;
+        let list = Val::List(vec![Val::Variant(
+            "save".to_owned(),
+            Some(Box::new(Val::String("conteudo".to_owned()))),
+        )]);
+        assert_eq!(
+            effects_from(&list),
+            vec![ronoctua_protocol::Effect::Save("conteudo".to_owned())]
+        );
+    }
+
+    /// The memory panel, put here by Nix. `None` outside the Nix build.
+    const MEMORY: Option<&str> = option_env!("RONOCTUA_BUFFER_MEMORY");
+
+    /// THE ONLY PLACE THE SURVEY IS LOWERED FOR REAL.
+    ///
+    /// `wasmtime` lowers a record by zipping it POSITIONALLY against the WIT and
+    /// checks the names afterwards — so a field out of order fails when the
+    /// guest is CALLED, with an `anyhow` error at run time and nothing at all at
+    /// compile time. The shape test above compares against a list copied by
+    /// hand; this one compares against the WIT itself, through a component that
+    /// was built from it.
+    ///
+    /// Skipped when the variable is absent (`cargo test` outside Nix), because
+    /// there is no component to load — and saying so is better than a test that
+    /// passes by not running.
+    #[test]
+    fn a_survey_crosses_into_a_real_component() {
+        let Some(path) = MEMORY else {
+            eprintln!("sem RONOCTUA_BUFFER_MEMORY: o teste do survey nao roda fora do Nix");
+            return;
+        };
+        let bytes = std::fs::read(path).expect("ler o componente");
+        let runtime = Runtime::fresh().expect("runtime");
+        let cwasm = runtime.precompile(&bytes).expect("precompilar");
+        let component = runtime.load(&cwasm).expect("carregar");
+        let mut instance = runtime.open(&component).expect("instanciar");
+
+        let d = instance.init().expect("init");
+        assert!(
+            d.capabilities
+                .contains(&ronoctua_protocol::Capability::System),
+            "o painel de memoria tem de declarar a capacidade, senao o host nao amostra"
+        );
+
+        let survey = ronoctua_protocol::Survey {
+            readings: vec![
+                ronoctua_protocol::Reading {
+                    of: ronoctua_protocol::Gauge::RamTotal,
+                    bytes: 16_000_000_000,
+                },
+                ronoctua_protocol::Reading {
+                    of: ronoctua_protocol::Gauge::RamAvailable,
+                    bytes: 8_000_000_000,
+                },
+            ],
+            pressure: ronoctua_protocol::Pressure {
+                some10: 15,
+                ..Default::default()
+            },
+            consumers: vec![ronoctua_protocol::Consumer {
+                kind: ronoctua_protocol::ConsumerKind::Scope,
+                name: "ronoctua-9f3a.scope".to_owned(),
+                bytes: 2_100_000_000,
+                hint: 0,
+            }],
+            guard: ronoctua_protocol::Guard {
+                mode: ronoctua_protocol::GuardMode::Strict,
+                pressure_limit: 500,
+                pressure_seconds: 15,
+                ceiling: 700,
+                acted: 2,
+                zram: true,
+                persisted: ronoctua_protocol::GuardMode::Strict,
+            },
+            scanning: false,
+            progress: 0,
+        };
+        let effects = instance
+            .event(&ronoctua_protocol::Input::Survey(survey))
+            .expect("o survey tem de atravessar");
+        assert_eq!(
+            effects,
+            vec![ronoctua_protocol::Effect::Redraw],
+            "a primeira amostra tem de pedir um quadro"
+        );
+
+        // AND THE NUMBERS ARRIVED, not just the call. A component that received
+        // an empty record would also answer `Redraw`.
+        let heights = ronoctua_protocol::Heights {
+            small: 1,
+            base: 1,
+            normal: 1,
+            large: 2,
+            huge: 4,
+        };
+        let list = instance.render(80, 24, heights).expect("render");
+        let drawn: String = list
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                ronoctua_protocol::Command::Text {
+                    text: ronoctua_protocol::Text::Data(t),
+                    ..
+                } => Some(t.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            drawn.contains("7.4 GiB"),
+            "os 8 GB disponiveis nao chegaram a tela; desenhado: {drawn}"
+        );
+        assert!(
+            drawn.contains("1.5%"),
+            "a pressao nao chegou; desenhado: {drawn}"
+        );
     }
 
     #[test]

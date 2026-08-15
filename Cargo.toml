@@ -27,6 +27,7 @@ members = [
   "crates/ronoctua-render",
   "crates/ronoctua-niri",
   "crates/ronoctua-network",
+  "crates/ronoctua-memory",
   "crates/ronoctua-shell",
 ]
 
@@ -115,7 +116,7 @@ alacritty_terminal = "0.26"
 # crate is `forbid(unsafe_code)`, and opening a pty with libc would require `unsafe`
 # in four calls. It is already in the tree underneath wasmtime — as a
 # direct dependency it brings nothing new.
-rustix = { version = "1.1", features = [ "pty", "termios", "process", "stdio" ] }
+rustix = { version = "1.1", features = [ "pty", "termios", "process", "stdio", "fs" ] }
 
 # --- D-Bus: notifications and tray ------------------------------------
 # zbus's BLOCKING API (`blocking-api`), on a thread of its own.

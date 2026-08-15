@@ -203,5 +203,102 @@ pkgs.testers.runNixOSTest {
         assert "app.slice" in said
         assert "> 50.00%" in said, f"o limite configurado nao e o que valeu:\n{said[-2000:]}"
         assert "for > 15s" in said, f"a duracao configurada nao valeu:\n{said[-2000:]}"
+
+    with subtest("a tabela dos dois perfis existe, e diz qual volta ao reiniciar"):
+        # It is what `LEADER s m` reads in order to loosen the policy: the
+        # numbers live in Nix and cross as text. A panel that computed them
+        # would be a second copy to keep in step (invariant 5).
+        table = large.succeed("cat /etc/ronoctua/memory-profiles.conf")
+        print(table)
+        assert "declared strict" in table
+        assert "strict ceiling=70% pressure=50% duration=15s" in table
+        assert "tolerant ceiling=90% pressure=70% duration=60s" in table
+
+    with subtest("o systemd ACEITA a troca em execucao, e em que escala ele reporta"):
+        # THE TWO QUESTIONS THIS SUBTEST EXISTS FOR, and neither was safe to
+        # assume:
+        #
+        # 1. `systemctl(1)` says "not all properties may be changed at
+        #    runtime". If `ManagedOOMMemoryPressureLimit` were one of those, the
+        #    panel would show a state that is not in force. Here it either
+        #    changes or the test says so.
+        # 2. In what SCALE the value comes back — and the answer was neither
+        #    of the two obvious ones. `50%` in the unit file is reported as
+        #    2147483648: a fraction of `UINT32_MAX`, not a percentage and not
+        #    permyriad. The panel's first version divided by ten and this
+        #    assertion is what caught it.
+        # `UINT32_MAX` is the scale, and the panel converts back by proportion:
+        # `per_mille_of_scale` in `crates/ronoctua-memory/src/guard.rs`. The same
+        # arithmetic is repeated here ON PURPOSE — if the encoding ever changes,
+        # this fails with both numbers instead of the screen quietly showing a
+        # tenth of the truth.
+        scale = 4294967295
+        before = int(large.succeed(
+            "systemctl --user --machine=noctua@ show app.slice "
+            "-p ManagedOOMMemoryPressureLimit --value"
+        ).strip())
+        assert before * 1000 // scale == 500, (
+            f"50% configurado veio como {before}, que da {before * 1000 // scale} por mil"
+        )
+
+        # `--runtime` is not tidiness: WITHOUT it systemd writes a drop-in to
+        # disk "for future boots", which would be a second permanent truth
+        # fighting the flake — and nobody would see it.
+        large.succeed(
+            "systemctl --user --machine=noctua@ --runtime set-property app.slice "
+            "MemoryHigh=90% ManagedOOMMemoryPressureLimit=70% "
+            "ManagedOOMMemoryPressureDurationSec=60s"
+        )
+        loosened = int(large.succeed(
+            "systemctl --user --machine=noctua@ show app.slice "
+            "-p ManagedOOMMemoryPressureLimit --value"
+        ).strip())
+        assert loosened * 1000 // scale == 700, (
+            f"o systemd nao aceitou afrouxar em execucao: {loosened} "
+            f"da {loosened * 1000 // scale} por mil, esperava 700"
+        )
+
+        # AND THE DURATION COMES FORMATTED, not in microseconds — which is the
+        # other thing the panel had to learn: `systemctl show` prints `1min`
+        # where the property's name promises a number.
+        duration = large.succeed(
+            "systemctl --user --machine=noctua@ show app.slice "
+            "-p ManagedOOMMemoryPressureDurationUSec --value"
+        ).strip()
+        print(f"duracao: {duration!r}")
+        assert duration in ("1min", "60s", "60000000"), duration
+
+        # AND IT DID NOT TOUCH THE DISK. The transient drop-in lives in /run and
+        # dies at the next boot; one under /etc would outlive it and diverge
+        # from the flake.
+        large.fail("test -e /etc/systemd/user.control/app.slice.d/50-MemoryHigh.conf")
+        large.succeed("ls /run/user/1000/systemd/user.control/app.slice.d/")
+
+    with subtest("gravar o perfil permanente escreve UMA linha, e recusa o que nao entende"):
+        # The unit is what has the privilege; the panel only starts it. Here it
+        # is started directly, which is the same thing minus polkit — and polkit
+        # is asserted by the `memory-policy-shape` check, on the generated rule.
+        large.succeed("mkdir -p /etc/nixos")
+        large.succeed(
+            "printf '{ ... }:\\n{\\n  networking.hostName = \"x\";\\n}\\n' > /etc/nixos/host.nix"
+        )
+        large.succeed("systemctl start ronoctua-memory-profile@tolerant.service")
+        written = large.succeed("cat /etc/nixos/host.nix")
+        print(written)
+        assert 'ronoctua.memory.profile = "tolerant";' in written
+        assert written.rstrip().endswith("}"), "o arquivo perdeu a chave de fechamento"
+
+        # TWICE DOES NOT WRITE TWICE. The old line goes before the new one
+        # arrives — two of them would be an evaluation error the next rebuild,
+        # for something the panel did.
+        large.succeed("systemctl start ronoctua-memory-profile@strict.service")
+        again = large.succeed("cat /etc/nixos/host.nix")
+        assert again.count("ronoctua.memory.profile") == 1, again
+        assert 'ronoctua.memory.profile = "strict";' in again
+
+        # AND IT REFUSES A FILE IT DOES NOT RECOGNISE, instead of writing into
+        # the middle of one.
+        large.succeed("printf 'nao sou um host.nix\\n' > /etc/nixos/host.nix")
+        large.fail("systemctl start ronoctua-memory-profile@tolerant.service")
   '';
 }

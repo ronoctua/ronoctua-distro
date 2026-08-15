@@ -1786,7 +1786,8 @@ impl State {
                 }
                 _ => redraw,
             },
-            Input::Command(_) | Input::Copied(_) => redraw,
+            // The survey is not this buffer's — see the arm at the end of `event`.
+            Input::Command(_) | Input::Copied(_) | Input::Survey(_) => redraw,
         }
     }
 
@@ -2277,6 +2278,10 @@ impl Guest for Component {
                     vec![Effect::Redraw]
                 }
                 Input::Cancel => e.cancel(),
+                // NOT OURS — see the identical arm in `buffers/unicode`: the
+                // survey only reaches whoever declared `capability::system`,
+                // and the arm is explicit so the next case cannot arrive mute.
+                Input::Survey(_) => vec![],
             }
         })
     }

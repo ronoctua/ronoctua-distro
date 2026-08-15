@@ -16,6 +16,7 @@
   bufferGlyphs,
   bufferUnicode,
   bufferLucide,
+  bufferMemory,
   iconSuperpack,
   ghosttyVt,
 }:
@@ -131,6 +132,9 @@ pkgs.mkShell {
   RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
   RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
   RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
+  RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
+  RONOCTUA_JOURNALCTL = "${pkgs.systemd}/bin/journalctl";
+  RONOCTUA_NIX = "${pkgs.nix}/bin/nix";
   # The icon superpackage, for the PIXMAP step of the app
   # launcher. Without it `nix run .#dev` would show only the glyphs, and half
   # of the path that depends most on the screen would never be seen here.

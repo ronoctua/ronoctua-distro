@@ -52,7 +52,14 @@ ISENTOS = re.compile(
     # `user@1000.service` is a systemd UNIT name, and it appears in every
     # cgroup path. Without this exemption, any test that mentions a
     # session cgroup becomes "e-mail in the repository".
-    r"user@\d+\.service)"
+    r"user@\d+\.service|"
+    # AND SO IS EVERY OTHER TEMPLATE INSTANCE: `foo@bar.service` is the
+    # syntax systemd gives one, and it cannot be a person's address — the
+    # suffix is a unit type, not a top-level domain. Without this, writing a
+    # `ronoctua-memory-profile@tolerant.service` into a polkit rule reads as
+    # personal data in the repository, which is the opposite of what this
+    # scanner is for.
+    r"@[A-Za-z0-9_.-]+\.(service|slice|scope|socket|timer|target|mount|path))"
 )
 
 # THE LICENCE OF A THIRD PARTY IS NOT OURS TO EDIT.

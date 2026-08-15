@@ -86,6 +86,26 @@ pub enum Effect {
     /// over and the host writes, exactly as [`Input::Paste`] is how text gets
     /// in. That is what lets a file editor exist without a new capability.
     Save(String),
+    /// Ask the host to do something to the machine's memory or disk.
+    ///
+    /// Requires [`Capability::System`]. Not [`Effect::Command`]: that one is a
+    /// registry id and carries no argument, and "close pid 4321" needs one.
+    Ask(Demand),
+}
+
+impl Effect {
+    /// The capability this effect requires, when it requires one.
+    ///
+    /// The twin of [`Command::requires`], and for the same reason: the host has
+    /// to refuse BEFORE acting, and a second table of what costs what is a
+    /// second table to keep in step.
+    #[must_use]
+    pub const fn requires(&self) -> Option<Capability> {
+        match self {
+            Self::Ask(_) => Some(Capability::System),
+            _ => None,
+        }
+    }
 }
 
 /// A capability the buffer ASKS for in the descriptor.
@@ -104,6 +124,240 @@ pub enum Capability {
     /// coming from the guest. It is the difference between "the buffer sends pixels" and "the
     /// buffer sends a figure".
     Vector,
+    /// Receiving [`Input::Survey`] and emitting [`Effect::Ask`].
+    ///
+    /// The buffer still reads nothing: the host samples `/proc`, the cgroups and
+    /// systemd, and the component receives numbers that are already numbers. What
+    /// the capability opens is the CHANNEL, not the access — invariant 11 stands.
+    System,
+}
+
+// ---------------------------------------------------------------------------
+// The system's memory — behind [`Capability::System`].
+//
+// THE FIELD ORDER OF EVERY STRUCT BELOW IS THE WIT'S ORDER, and it is not a
+// matter of taste: `wasmtime` lowers a `Val::Record` by zipping it POSITIONALLY
+// against the WIT's fields and only then compares the names. A field moved here
+// without being moved there fails when the function is CALLED, with a message
+// about a name — not at compile time. See `ronoctua-runtime`'s `val_of_survey`,
+// which is where the two orders meet.
+// ---------------------------------------------------------------------------
+
+/// What a number measures. An enum, and never a free string.
+///
+/// The same lesson [`Color`] paid for: a typo in a string compiles and fails in
+/// silence. And a buffer has no JSON parser — no field carries raw characters
+/// for the guest to take apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gauge {
+    /// `/proc/meminfo`: `MemTotal`.
+    RamTotal,
+    /// `MemAvailable` — what a new process could actually get, which is not
+    /// `MemFree` and is the number that says whether the machine is in trouble.
+    RamAvailable,
+    /// `MemFree`.
+    RamFree,
+    /// `Cached`.
+    RamCached,
+    /// `Buffers`.
+    RamBuffers,
+    /// `Shmem` — tmpfs and shared memory, which look like cache and are not
+    /// reclaimable.
+    RamShmem,
+    /// `SReclaimable`.
+    RamSlabReclaimable,
+    /// `Dirty` — what is on its way to disk, and the shape of a stall that is
+    /// about to happen.
+    RamDirty,
+    /// `AnonPages`.
+    RamAnonymous,
+    /// `KernelStack` + `PageTables` + `VmallocUsed`.
+    RamKernel,
+    /// `/proc/swaps`, total of every device.
+    SwapTotal,
+    /// Total minus used.
+    SwapFree,
+    /// `/sys/block/zram0/mm_stat`: what was written, uncompressed.
+    ZramOriginal,
+    /// What it occupies after compression — the pair is what makes the ratio a
+    /// measurement instead of the nominal number in the module.
+    ZramCompressed,
+    /// The ceiling zram may take from RAM.
+    ZramLimit,
+    /// The desktop's floor, EFFECTIVE — after every ancestor capped it.
+    DesktopMin,
+    /// `memory.current` of `session.slice`.
+    DesktopCurrent,
+    /// `memory.current` of `app.slice`.
+    AppCurrent,
+    /// `memory.high` of `app.slice`, resolved to bytes by systemd.
+    AppCeiling,
+    /// `memory.current` of `system.slice`.
+    SystemCurrent,
+    /// Graphics memory, when the driver reports it. On an APU it comes out of
+    /// the same RAM, which is why it belongs here.
+    VramTotal,
+    /// How much of it is taken.
+    VramUsed,
+    /// The filesystem holding the store.
+    DiskTotal,
+    /// Free bytes on it.
+    ///
+    /// The store, the journal and the caches are NOT gauges: each needs a
+    /// process spawned or a walk, so they arrive as [`Consumer`]s of a scan. A
+    /// gauge nothing fills is a row that never appears.
+    DiskFree,
+}
+
+/// One measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reading {
+    /// What it measures.
+    pub of: Gauge,
+    /// How many bytes.
+    pub bytes: u64,
+}
+
+/// Pressure (PSI) in PER MILLE: `12.3%` is `123`.
+///
+/// Integer and not float because per mille is exactly what the screen shows,
+/// and because a rounding that happens in one place is one that can be pointed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Pressure {
+    /// `some`, ten-second window.
+    pub some10: u16,
+    /// `some`, one minute.
+    pub some60: u16,
+    /// `some`, five minutes.
+    pub some300: u16,
+    /// `full`, ten seconds — everyone stalled at once.
+    pub full10: u16,
+    /// `full`, one minute.
+    pub full60: u16,
+}
+
+/// What kind of thing is eating memory or disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumerKind {
+    /// A process, by pid.
+    Process,
+    /// One of our scopes — one per foreign buffer, which is what makes the
+    /// answer "which BUFFER" and not only "which process" (section 7.5).
+    Scope,
+    /// A directory a scan walked.
+    Directory,
+    /// A mounted filesystem.
+    Filesystem,
+    /// A NixOS generation.
+    Generation,
+}
+
+/// Someone a scan found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consumer {
+    /// Process, scope, directory, filesystem or generation.
+    pub kind: ConsumerKind,
+    /// As the system spells it. Data, never a label.
+    pub name: String,
+    /// How many bytes.
+    pub bytes: u64,
+    /// The pid when there is one, `0` otherwise.
+    pub hint: u64,
+}
+
+/// Which policy is in force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GuardMode {
+    /// systemd answered something we do not recognise. It is a state to SHOW,
+    /// not to hide behind a plausible default.
+    #[default]
+    Unknown,
+    /// Nothing is armed.
+    Off,
+    /// The flake's numbers.
+    Strict,
+    /// The loosened ones.
+    Tolerant,
+}
+
+/// The protection, as systemd reports it right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Guard {
+    /// What is in force NOW — never what the flake asked for. The two diverge
+    /// exactly when the interesting thing happened.
+    pub mode: GuardMode,
+    /// Per mille of a ten-second window spent stalled.
+    pub pressure_limit: u16,
+    /// For how long it has to stay there.
+    pub pressure_seconds: u32,
+    /// `MemoryHigh` on the applications' slice, in per mille of RAM.
+    pub ceiling: u16,
+    /// How many times it has acted since boot.
+    pub acted: u32,
+    /// Whether compressed swap is up.
+    pub zram: bool,
+    /// What the machine's own file says — what survives a reboot.
+    pub persisted: GuardMode,
+}
+
+/// What the host samples and hands over.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Survey {
+    /// A list, so a machine that has no zram simply does not report it.
+    pub readings: Vec<Reading>,
+    /// Stall, in per mille.
+    pub pressure: Pressure,
+    /// Empty until a scan is asked for.
+    pub consumers: Vec<Consumer>,
+    /// The protection's state.
+    pub guard: Guard,
+    /// A scan in flight.
+    pub scanning: bool,
+    /// How far it got, in per mille.
+    pub progress: u16,
+}
+
+/// What the buffer asks the host to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Request {
+    /// Sample now instead of waiting for the tick.
+    Refresh,
+    /// Find who is eating RAM.
+    ScanRam,
+    /// Find who is eating disk.
+    ScanDisk,
+    /// Stop whichever scan is running.
+    CancelScan,
+    /// Loosen the policy for this session.
+    GuardTolerant,
+    /// Put it back.
+    GuardDefault,
+    /// Write the permanent option into the machine's own file.
+    GuardPersist,
+    /// Close what the target names.
+    StopConsumer,
+    /// Remove old system generations.
+    SweepGenerations,
+    /// Collect the store's garbage.
+    SweepStore,
+    /// Vacuum the journal.
+    ///
+    /// The user's cache is deliberately NOT a request: it is shown as a reading
+    /// so it can be found, and emptying it in one key is a button whose damage
+    /// varies by application.
+    SweepJournal,
+}
+
+/// A request plus what it acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Demand {
+    /// What to do.
+    pub what: Request,
+    /// Which consumer, 1-based into the last survey's list; `0` for none.
+    ///
+    /// An index and not a pid: a scope has no pid, and a scope — one per
+    /// application — is what one actually wants to close.
+    pub target: u64,
 }
 
 /// A key binding declared by the buffer, as DATA (section 7.9).
@@ -577,11 +831,39 @@ pub enum Input {
         /// The row, from the buffer's (0,0) cell.
         line: u16,
     },
+    /// The machine's memory, already read. Only for whoever declared
+    /// [`Capability::System`].
+    ///
+    /// The one input here that nobody pressed: it arrives on the host's clock.
+    /// A screen that shows how much memory there is has to change while it is
+    /// being looked at — waiting for a key would make it a photograph.
+    Survey(Survey),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Binding, Capability, Color, Command, Descriptor, DisplayList};
+    use super::{
+        Binding, Capability, Color, Command, Demand, Descriptor, DisplayList, Effect, Request,
+    };
+
+    /// The SAME gate, on the way out.
+    ///
+    /// `DisplayList::validate` guards what the buffer DRAWS; nothing guarded what
+    /// it ASKS FOR, and the first request that acts on the machine — closing a
+    /// process, loosening the protection — is not a thing to leave ungated.
+    #[test]
+    fn a_gated_effect_requires_the_capability() {
+        let ask = Effect::Ask(Demand {
+            what: Request::StopConsumer,
+            target: 4321,
+        });
+        assert_eq!(ask.requires(), Some(Capability::System));
+        // And everything that was already there keeps costing nothing: a buffer
+        // does not declare a capability in order to redraw.
+        assert_eq!(Effect::Redraw.requires(), None);
+        assert_eq!(Effect::Copy("x".into()).requires(), None);
+        assert_eq!(Effect::Command("mx-open".into()).requires(), None);
+    }
 
     fn with_svg() -> DisplayList {
         let mut l = DisplayList::fresh_one();

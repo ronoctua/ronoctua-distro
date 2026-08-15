@@ -189,6 +189,14 @@ interface types {
         // over and the HOST writes, the same way `paste` is how text gets in.
         // That is what keeps a file editor from needing a new capability.
         save(string),
+        // Ask the host to do something to the machine's memory or disk.
+        //
+        // Requires `capability::system`. NOT `command(string)`: that one is an
+        // id from the registry and carries no argument, and "close pid 4321"
+        // needs one. Smuggling the number inside the string would be the buffer
+        // inventing a syntax and the host parsing it — which is the shape this
+        // file refuses everywhere else.
+        ask(demand),
     }
 
     // Capabilities a buffer may ASK for in the descriptor. The host refuses whoever
@@ -207,6 +215,212 @@ interface types {
         // clips. It is the difference between "the buffer sends pixels" and "the buffer
         // sends a figure".
         vector,
+        // Receiving `input::survey` and emitting `effect::ask` — how much memory
+        // the machine has, who is eating it, and asking for something to be done
+        // about it.
+        //
+        // # Why it is a capability and not just two more cases
+        //
+        // Because of this file's own header: every extra surface is surface that
+        // EVERY future buffer gets to use. A buffer that never asked for this one
+        // receives no survey and has its demand refused — the same shape as
+        // `vector`, which exists so that "the buffer sends a figure" cannot
+        // quietly become "any buffer sends pixels".
+        //
+        // # What it does NOT open
+        //
+        // The buffer still has no filesystem, no clock and no socket. It does not
+        // read `/proc`, does not talk to systemd and does not run a command: it
+        // receives numbers ALREADY READ and names what it wants done. Whoever
+        // reads and whoever acts is the host — invariant 11 intact.
+        system,
+    }
+
+    // ------------------------------------------------------------------
+    // The system's memory, for whoever declared `capability::system`.
+    // ------------------------------------------------------------------
+
+    // WHAT a number measures. An enum, and never a free string.
+    //
+    // The same reason `color` stopped being `record { token: string }`: a typo in
+    // a string compiles and fails in silence on screen. And the harder rule from
+    // `CLAUDE.md` — a buffer has no JSON parser, so no field carries raw
+    // characters for the guest to take apart. The host reads `/proc`; what
+    // crosses is already a number with a name.
+    enum gauge {
+        // /proc/meminfo, the part a person recognises.
+        ram-total,
+        ram-available,
+        ram-free,
+        // What the kernel can hand back under pressure: the reason "used" and
+        // "unavailable" are different numbers, and why a machine with 90% "used"
+        // may be perfectly healthy.
+        ram-cached,
+        ram-buffers,
+        ram-shmem,
+        ram-slab-reclaimable,
+        ram-dirty,
+        ram-anonymous,
+        ram-kernel,
+        // /proc/swaps and /sys/block/zram0/mm_stat.
+        swap-total,
+        swap-free,
+        // The three that make compression legible: what was written, what it
+        // occupies compressed, and the ceiling zram may take from RAM.
+        zram-original,
+        zram-compressed,
+        zram-limit,
+        // The cgroups the policy names (`nix/modules/memory.nix`): what is
+        // RESERVED for the desktop and what the applications have actually spent.
+        desktop-min,
+        desktop-current,
+        app-current,
+        app-ceiling,
+        system-current,
+        // THE GRAPHICS MEMORY, when the driver reports it.
+        //
+        // On this machine's APU it comes OUT OF THE SAME RAM — which is why it
+        // belongs on a screen about memory rather than on one about the screen.
+        // A driver that does not publish it simply does not appear in the list.
+        vram-total,
+        vram-used,
+        // Disk, from `statvfs` — which costs a syscall and may be read on the
+        // clock like everything else here.
+        //
+        // THE STORE, THE JOURNAL AND THE CACHES ARE NOT GAUGES. Each of them
+        // needs a process spawned or a walk, so they arrive as `consumer`s of a
+        // scan instead. A gauge nothing ever fills is a row that never appears
+        // and a field every buffer carries — which is what this enum is trying
+        // not to be.
+        disk-total,
+        disk-free,
+    }
+
+    record reading {
+        of: gauge,
+        bytes: u64,
+    }
+
+    // Pressure (PSI) in PER MILLE: `12.3%` arrives as `123`.
+    //
+    // Integer and not float because per mille is exactly the precision the
+    // screen shows, and because a rounding that happens in one place is a
+    // rounding one can point at.
+    record pressure {
+        some10: u16,
+        some60: u16,
+        some300: u16,
+        full10: u16,
+        full60: u16,
+    }
+
+    enum consumer-kind {
+        process,
+        // A `systemd-run --scope` of ours — one per foreign buffer, which is
+        // what makes "who is eating memory" answerable by BUFFER and not only by
+        // process (section 7.5).
+        scope,
+        directory,
+        filesystem,
+        generation,
+    }
+
+    // Someone eating memory or disk, as a scan found them.
+    record consumer {
+        kind: consumer-kind,
+        // As the system spells it: a process's `comm`, a path, a device. It is
+        // DATA and comes out literal — the buffer does not translate it, and the
+        // host does not invent a label for it either.
+        name: string,
+        bytes: u64,
+        // The pid, when there is one. `0` when there is none.
+        hint: u64,
+    }
+
+    // Which policy is in force. `unknown` is not a failure to be hidden: it is
+    // what the screen must say when systemd answered something we do not
+    // recognise, instead of drawing a state that is not in effect.
+    enum guard-mode {
+        unknown,
+        off,
+        strict,
+        tolerant,
+    }
+
+    record guard {
+        // What is in force NOW, read back from systemd — never what the flake
+        // asked for. The two diverge exactly when the interesting thing happened.
+        mode: guard-mode,
+        // Per mille of a ten-second window spent stalled, and for how long it
+        // has to stay there.
+        pressure-limit: u16,
+        pressure-seconds: u32,
+        // `MemoryHigh` on the applications' slice, in per mille of RAM.
+        ceiling: u16,
+        // How many times it has acted since boot, and whether compressed swap is up.
+        acted: u32,
+        zram: bool,
+        // What the machine's own file says, which is what survives a reboot.
+        persisted: guard-mode,
+    }
+
+    record survey {
+        // A LIST and not a record with one field per gauge, so that a machine
+        // that does not have something simply does not report it: no zram, no
+        // `zram-original` reading. A fixed record would have to send zero, and
+        // zero is indistinguishable from "there is one and it is empty" —
+        // which is the same silent-fallback shape this repository keeps paying
+        // for elsewhere.
+        readings: list<reading>,
+        pressure: pressure,
+        // Empty until a scan is asked for: reading `/proc/meminfo` costs
+        // microseconds, walking a filesystem does not.
+        consumers: list<consumer>,
+        guard: guard,
+        // A scan in flight, and how far it got, in per mille. Without this the
+        // screen cannot tell "nothing found" from "still looking".
+        scanning: bool,
+        progress: u16,
+    }
+
+    // What the buffer asks the host to DO. An enum, for the same reason `gauge`
+    // is one: a free string here would be a command language with no compiler.
+    enum request {
+        // Sample now, instead of waiting for the next tick.
+        refresh,
+        scan-ram,
+        scan-disk,
+        cancel-scan,
+        // The policy: loosen it for this session, put it back, or write the
+        // permanent option into the machine's own file.
+        guard-tolerant,
+        guard-default,
+        guard-persist,
+        // Close what `target` names. Irreversible, and the buffer only asks
+        // after its own confirmation.
+        stop-consumer,
+        // Housekeeping. Each frees disk and none of them changes configuration:
+        // the flake stays the truth.
+        //
+        // THE CACHE IS NOT HERE, and the omission is deliberate: `~/.cache`
+        // shows up as a reading, and emptying it in one key is a button whose
+        // damage varies by application — some rebuild it in seconds, others
+        // lose a login. It is shown so it can be found, and left to be dealt
+        // with deliberately.
+        sweep-generations,
+        sweep-store,
+        sweep-journal,
+    }
+
+    record demand {
+        what: request,
+        // WHICH consumer, as a 1-based index into the list of the last survey;
+        // `0` when the request needs no target.
+        //
+        // An index and not a pid: a scope has no pid, and it is the scope — one
+        // per application — that one actually wants to close. Both sides are
+        // looking at the same list, and the host checks the index before acting.
+        target: u64,
     }
 
     // A key binding, declared as DATA (section 7.9). The buffer never
@@ -326,6 +540,14 @@ interface types {
         // has its own header and footer. The host sending "item number N"
         // would be the host reimplementing the buffer's layout.
         click(position),
+        // The machine's memory, ALREADY READ. Only for whoever declared
+        // `capability::system`.
+        //
+        // It arrives on its own — a tick of the host's clock —, which is the
+        // one input in this list that nobody pressed. A screen that shows how
+        // much memory there is has to change while it is being looked at;
+        // waiting for a key would make it a photograph.
+        survey(survey),
     }
 }
 
@@ -339,7 +561,12 @@ interface view {
     use types.{
         capability, command, grid-command, line-command, text-command,
         heights, context, color, descriptor, effect, input, binding, position, segment,
-        text
+        text,
+        // The system ones, for the same reason as all the others: `wit-bindgen`
+        // generates in this module only what it declares it uses, and a record
+        // reachable only from inside a `variant` ends up out of scope.
+        gauge, reading, pressure, consumer-kind, consumer, guard-mode, guard,
+        survey, request, demand
     };
 
     // Who the buffer is: name, mode, keymap, commands and modeline segments.

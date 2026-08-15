@@ -598,6 +598,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "monitor-btop",
             label: key::CMD_MONITOR_BTOP,
         },
+        // `LEADER s m`. The panel's own commands are NOT here: they live in the
+        // buffer's descriptor, under `SPC m`, and are resolved by the buffer's
+        // own host while it holds the keyboard.
+        Command {
+            id: "memory-open",
+            label: key::CMD_MEMORY_OPEN,
+        },
         Command {
             id: "monitor-bottom",
             label: key::CMD_MONITOR_BOTTOM,
@@ -909,6 +916,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("i n", "glyphs-nerd-fonts", None),
         ("i u", "unicode-symbols", None),
         ("i l", "lucide-icons", None),
+        // `LEADER s m` — the memory panel. The machine already had a policy
+        // against freezing and no screen ever said so; this is where it
+        // becomes something one can look at, and loosen.
+        ("s m", "memory-open", None),
         ("q q", "session-quit", None),
         // `LEADER :` — `M-x`'s key in Doom, which is where the concept
         // comes from. It used to be `x`, which in Doom is the scratch buffer and not the locator.
@@ -968,6 +979,11 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("q", key::GROUP_QUIT),
         ("r", key::GROUP_NETWORK),
         ("r s", key::GROUP_SYNCTHING),
+        // `s` for SYSTEM — what the machine is doing to itself, as opposed to
+        // what one is doing with it. It starts with one item, which is the
+        // honest beginning: the group is born with the name of what it will
+        // hold, not with the first thing in it.
+        ("s", key::GROUP_SYSTEM),
     ];
 
     let mut registry = Registry::fresh();
@@ -1597,6 +1613,7 @@ mod tests {
             "buffer-terminal-external",
             "monitor-btop",
             "monitor-bottom",
+            "memory-open",
             "glyphs-nerd-fonts",
             "unicode-symbols",
             "lucide-icons",
