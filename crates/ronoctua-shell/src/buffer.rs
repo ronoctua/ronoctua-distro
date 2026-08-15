@@ -31,6 +31,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
     reexports::calloop::EventLoop,
+    reexports::calloop::channel as calloop_channel,
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -635,6 +636,26 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .insert(cycle.handle())
         .map_err(|e| anyhow::anyhow!("nao consegui pendurar o Wayland: {e}"))?;
 
+    // THE KEYMAP GOES OUT, AND COMMANDS COME BACK IN.
+    //
+    // The socket thread cannot touch the component: the state lives in the
+    // `Instance` and it is not `Send`. So it puts the id on a calloop channel
+    // and the LOOP delivers it, on the same thread as every other input — which
+    // is the arrangement the footer already uses for its control socket.
+    let (orders, channel) = calloop_channel::channel::<String>();
+    let published = publish_keymap(d.keymap, orders);
+    if cycle
+        .handle()
+        .insert_source(channel, |event, (), state| {
+            if let calloop_channel::Event::Msg(id) = event {
+                state.deliver(&ronoctua_protocol::Input::Command(id));
+            }
+        })
+        .is_err()
+    {
+        tracing::warn!("nao consegui pendurar o canal do keymap");
+    }
+
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |e| {
@@ -643,7 +664,115 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             }
         })
         .context("loop de eventos")?;
+    // The socket outlives nothing: a stale one in `XDG_RUNTIME_DIR` would make
+    // the footer connect to a buffer that is not there and wait.
+    if let Some(path) = published {
+        let _ = std::fs::remove_file(path);
+    }
     Ok(())
+}
+
+/// PUBLISHES THIS BUFFER'S KEYMAP, and takes commands back.
+///
+/// # Why this exists at all
+///
+/// The buffer's host resolves its own keymap, and it has to: a buffer is a
+/// window of its own (invariant 4), so while it has the focus it is THIS process
+/// that holds the keyboard. The footer only knows the windows the compositor
+/// tells it about — id, title, `app_id` — and none of that is a key binding.
+///
+/// So `SPC m` in the footer had nothing to list. This socket is the answer, and
+/// it carries BOTH directions on purpose: a list of keys with no way to run them
+/// would teach shortcuts that do nothing, which is worse than not listing.
+///
+/// # The protocol, which is the footer's own
+///
+/// `keymap` answers one line per binding, `<sequence> <id>`. `command <id>` puts
+/// the id on the channel and answers `ok`. Anything else answers `?`.
+///
+/// # It never brings the buffer down
+///
+/// A buffer that cannot open its socket is a buffer whose keymap the footer
+/// cannot list — it is not a buffer that fails to open. The editor still edits.
+fn publish_keymap(
+    keymap: Vec<ronoctua_protocol::Binding>,
+    orders: calloop_channel::Sender<String>,
+) -> Option<std::path::PathBuf> {
+    use std::io::{BufRead as _, Write as _};
+
+    let path = match crate::leader::buffer_socket_path(std::process::id()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "sem socket do buffer; o SPC m nao vai lista-lo");
+            return None;
+        }
+    };
+    // An orphan socket from a dead process of the same PID would block the bind.
+    let _ = std::fs::remove_file(&path);
+    let listener = match std::os::unix::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "nao consegui abrir o socket do buffer");
+            return None;
+        }
+    };
+    tracing::info!(path = %path.display(), bindings = keymap.len(), "keymap publicado");
+
+    let answer = keymap
+        .iter()
+        .map(|b| format!("{} {}", b.keys, b.command))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let known: std::collections::HashSet<String> = keymap.into_iter().map(|b| b.command).collect();
+
+    let built = std::thread::Builder::new()
+        .name("keymap".into())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut stream) = connection else { continue };
+                let mut line = String::new();
+                if std::io::BufReader::new(match stream.try_clone() {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                })
+                .read_line(&mut line)
+                .is_err()
+                {
+                    continue;
+                }
+                let reply = match line.trim().split_once(' ') {
+                    None if line.trim() == "keymap" => answer.clone(),
+                    // ONLY A COMMAND THIS BUFFER DECLARED.
+                    //
+                    // The socket is in `XDG_RUNTIME_DIR` and so is reachable by
+                    // anything running as this user. Forwarding an arbitrary id
+                    // would make it a way to drive the component from outside,
+                    // which is a wider door than the feature needs: the footer
+                    // only ever sends back what it was just told.
+                    Some(("command", id)) if known.contains(id) => {
+                        if orders.send(id.to_owned()).is_err() {
+                            // The loop is gone; so is the reason to listen.
+                            return;
+                        }
+                        "ok".into()
+                    }
+                    _ => {
+                        tracing::warn!(
+                            order = line.trim(),
+                            "ordem desconhecida no socket do buffer"
+                        );
+                        "?".into()
+                    }
+                };
+                let _ = writeln!(stream, "{reply}");
+            }
+        });
+    if let Err(e) = built {
+        tracing::warn!(error = %e, "nao consegui subir a thread do keymap");
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    Some(path)
 }
 
 impl Host {

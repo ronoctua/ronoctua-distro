@@ -104,6 +104,38 @@ fn main() -> Result<()> {
             };
             return leader::send_it(&line).with_context(|| format!("mandar `{id}`"));
         }
+        // WHAT A BUFFER DECLARES, asked of the buffer's own process.
+        //
+        // The footer cannot resolve a buffer's keymap: a buffer is a window of
+        // its own (invariant 4) and holds the keyboard while focused, so the
+        // bindings live over there. These two subcommands are that boundary made
+        // reachable by hand — the same shape as `command <id>` above, and the
+        // way to tell "the buffer is not publishing" apart from "the footer is
+        // not asking" without a screenshot.
+        Some("buffer-keymap") => {
+            let pid = std::env::args()
+                .nth(2)
+                .context("uso: ronoctua-shell buffer-keymap <pid>")?
+                .parse::<u32>()
+                .context("o pid tem de ser um numero")?;
+            for (keys, id) in leader::buffer_keymap(pid).context("ler o keymap do buffer")? {
+                println!("{keys} {id}");
+            }
+            return Ok(());
+        }
+        Some("buffer-command") => {
+            let mut args = std::env::args().skip(2);
+            let pid = args
+                .next()
+                .context("uso: ronoctua-shell buffer-command <pid> <id>")?
+                .parse::<u32>()
+                .context("o pid tem de ser um numero")?;
+            let id = args
+                .next()
+                .context("uso: ronoctua-shell buffer-command <pid> <id>")?;
+            return leader::buffer_command(pid, &id)
+                .with_context(|| format!("mandar `{id}` ao buffer {pid}"));
+        }
         // It opens a native buffer in a window of its OWN. What decides where it
         // goes is niri (invariant 4) — the shell does not tile.
         Some("buffer") => {

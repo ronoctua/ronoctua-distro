@@ -105,21 +105,24 @@ ambiente em tempo de EXECUÇÃO primeiro, `option_env!` como reserva do `nix run
 - acabou quando: com `superpack = false`, `noctua-icon-theme` não aparece em `nix path-info -r` do
   sistema, e o `apps-icon-from-superpack` continua passando com ele ligado
 
-### 5. O which-key não mostra o keymap do buffer em foco · médio
+### 5. O `SPC m` ainda não existe no rodapé · pequeno
 
-O host do buffer resolve o keymap do PRÓPRIO descritor: `Ctrl+<primeira tecla>` abre a sequência, as
-seguintes são letras simples, e o que completa vira `Input::Command`. É o que torna o editor
-salvável.
+**A fronteira já está de pé, e testada.** O processo do buffer publica o keymap
+em `$XDG_RUNTIME_DIR/ronoctua-buffer-<pid>.sock` (`buffer.rs`, `publish_keymap`) e aceita
+`command <id>` de volta; o comando chega ao componente pelo canal do calloop, na mesma thread de
+todo outro input. O rodapé tem o cliente (`leader.rs`, `buffer_keymap` e `buffer_command`), e os dois
+subcomandos `ronoctua-shell buffer-keymap <pid>` / `buffer-command <pid> <id>` o tornam alcançável à
+mão — que é como se distingue "o buffer não publica" de "o rodapé não pergunta".
 
-**Quem resolve é o processo do buffer, e não o rodapé.** Um buffer é janela própria (invariante 4):
-enquanto tem o foco, é ele que segura o teclado.
+O buffer recusa id que ele não declarou: o socket fica num diretório alcançável por qualquer processo
+do usuário, e encaminhar id arbitrário faria dele um jeito de dirigir o componente de fora.
 
-Falta a outra metade: **o rodapé não lista essas ligações sob `SPC m`.** O obstáculo de tipo saiu —
-`ronoctua_keymap::Entry` agora guarda `String`, e o enxerto cabe. O que resta é maior e só ficou
-visível depois: **o rodapé não tem como saber o descritor de um buffer em execução.** Ele conhece as
-janelas por IPC do niri (id, título, `app_id`) e nada mais; o keymap vive no processo do buffer.
-Fechar isto pede o buffer PUBLICAR o descritor onde o rodapé leia — e, para a tecla não mentir, um
-caminho de volta que entregue o `Input::Command` ao processo certo.
+**Falta a vista.** `SPC m` tem de aparecer no which-key **só quando há buffer em foco** (o pid vem de
+`ronoctua_niri::Window::pid`), listar o que o socket devolve, e a tecla seguinte tem de chamar
+`buffer_command`. A precedência das vistas vive num lugar só, `Footer::view()` em `surface.rs`.
+
+**Sem buffer em foco, `SPC m` não existe** — não uma tela vazia dizendo "nenhum buffer": submenu que
+abre para nada é a mesma mentira que a lista sem caminho de volta.
 
 - acabou quando: com um buffer em foco, `SPC m` LISTA as ligações dele **e** a tecla seguinte as roda
 

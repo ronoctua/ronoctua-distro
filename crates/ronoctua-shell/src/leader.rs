@@ -135,6 +135,108 @@ pub fn socket_path() -> Result<PathBuf> {
     Ok(PathBuf::from(dir).join(format!("ronoctua-{display}.sock")))
 }
 
+/// A BUFFER's socket, one per process, named by PID.
+///
+/// # Why the PID, and not the window id
+///
+/// It is the only name both sides already know without being told. The footer
+/// learns it from `ronoctua_niri::Window::pid` on the focused window — the same
+/// field the modeline's context segment uses to find the git branch — and the
+/// buffer's process knows its own. Anything else would need a handshake, and a
+/// handshake is a third thing that can be out of date.
+///
+/// It sits next to the footer's control socket, in `XDG_RUNTIME_DIR`, and speaks
+/// the same line protocol. A second grammar in the same directory would be two
+/// things to keep in step.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent — same reason as [`socket_path`]: there is no
+/// fallback to `/tmp`.
+pub fn buffer_socket_path(pid: u32) -> Result<PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .context("XDG_RUNTIME_DIR nao esta definida; sem ela nao ha onde por o socket")?;
+    Ok(PathBuf::from(dir).join(format!("ronoctua-buffer-{pid}.sock")))
+}
+
+/// Asks a buffer for its bindings: `(sequence, command id)` per entry.
+///
+/// Empty when there is no buffer listening on that PID, and that is a normal
+/// answer rather than an error: most focused windows are not our buffers, and
+/// `SPC m` has to be ABSENT for those instead of showing a failure.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent.
+pub fn buffer_keymap(pid: u32) -> Result<Vec<(String, String)>> {
+    buffer_keymap_at(&buffer_socket_path(pid)?)
+}
+
+/// The same, at a given path.
+///
+/// Split off for the same reason as [`listen_on`]: `XDG_RUNTIME_DIR` is
+/// process-global, and a test that changes it races every other test in the
+/// binary.
+pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<(String, String)>> {
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return Ok(Vec::new());
+    };
+    // A buffer that stops answering must not take the footer's frame with it.
+    // Everything on the other side is a `HashSet` lookup and a `writeln!`.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+    if writeln!(stream, "keymap").is_err() {
+        return Ok(Vec::new());
+    }
+    let mut answer = String::new();
+    if std::io::Read::read_to_string(&mut stream, &mut answer).is_err() {
+        return Ok(Vec::new());
+    }
+    // `rsplit_once`, and the test is what said so: the SEQUENCE carries spaces
+    // (`m f s`) and the id does not, so what separates them is the LAST space.
+    // Splitting on the first gave `("m", "f s salvar-arquivo")` — a plausible
+    // pair that would have listed one key and run nothing.
+    Ok(answer
+        .lines()
+        .filter_map(|l| l.trim().rsplit_once(' '))
+        .map(|(keys, command)| (keys.to_owned(), command.to_owned()))
+        .collect())
+}
+
+/// Runs one of a buffer's own commands, in the buffer's process.
+///
+/// This is the half that makes listing honest: without it `SPC m` would be a
+/// screen teaching keys that do nothing.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent, or nobody listening on that PID.
+pub fn buffer_command(pid: u32, id: &str) -> Result<()> {
+    buffer_command_at(&buffer_socket_path(pid)?, id)
+}
+
+/// The same, at a given path. See [`buffer_keymap_at`].
+///
+/// # Errors
+///
+/// Nobody listening there, or the buffer refused the id.
+pub fn buffer_command_at(path: &std::path::Path, id: &str) -> Result<()> {
+    let mut stream = UnixStream::connect(path)
+        .with_context(|| format!("nenhum buffer escutando em {}", path.display()))?;
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+    writeln!(stream, "command {id}").context("nao consegui escrever no socket do buffer")?;
+    // THE ANSWER IS READ, and not assumed. The buffer refuses an id it did not
+    // declare, and a caller that never looked would report success for a key
+    // that did nothing — the exact failure this whole path exists to avoid.
+    let mut answer = String::new();
+    std::io::Read::read_to_string(&mut stream, &mut answer).context("o buffer nao respondeu")?;
+    anyhow::ensure!(
+        answer.trim() == "ok",
+        "o buffer recusou `{id}`: {}",
+        answer.trim()
+    );
+    Ok(())
+}
+
 /// Sends an order to the daemon and exits. It is what `ronoctua-shell leader` does.
 ///
 /// # Errors
@@ -997,6 +1099,76 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    /// THE TWO DIRECTIONS, against a socket that answers like a buffer.
+    ///
+    /// It is one test and not two on purpose: listing without running is the
+    /// defect this whole path exists to avoid, so the pair is the unit.
+    #[test]
+    fn the_footer_reads_a_buffer_keymap_and_runs_one_of_its_commands() {
+        use std::io::{BufRead as _, Write as _};
+
+        let path = std::env::temp_dir().join(format!("ronoctua-teste-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+
+        // A stand-in for the buffer's own thread, answering the same protocol.
+        let ran = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = std::sync::Arc::clone(&ran);
+        let served = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let Ok(mut stream) = listener.accept().map(|(s, _)| s) else {
+                    return;
+                };
+                let mut line = String::new();
+                let clone = stream.try_clone().expect("clone");
+                std::io::BufReader::new(clone)
+                    .read_line(&mut line)
+                    .expect("ler");
+                let reply = match line.trim() {
+                    "keymap" => "m f s salvar-arquivo\nm f r recarregar-arquivo".to_owned(),
+                    order => {
+                        seen.lock().expect("lock").push(order.to_owned());
+                        "ok".to_owned()
+                    }
+                };
+                writeln!(stream, "{reply}").expect("responder");
+            }
+        });
+
+        let keymap = super::buffer_keymap_at(&path).expect("ler o keymap");
+        assert_eq!(
+            keymap,
+            vec![
+                ("m f s".to_owned(), "salvar-arquivo".to_owned()),
+                ("m f r".to_owned(), "recarregar-arquivo".to_owned()),
+            ],
+            "a sequencia leva espacos, entao so o PRIMEIRO separa dela o id"
+        );
+
+        super::buffer_command_at(&path, "salvar-arquivo").expect("rodar o comando");
+        served.join().expect("a thread do falso buffer");
+        assert_eq!(
+            *ran.lock().expect("lock"),
+            vec!["command salvar-arquivo".to_owned()],
+            "o comando tem de chegar do lado do buffer, e nao so ser enviado"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// No buffer listening is a NORMAL answer, and not an error: most focused
+    /// windows are not ours, and `SPC m` has to be absent there rather than
+    /// showing a failure.
+    #[test]
+    fn no_buffer_listening_gives_an_empty_keymap() {
+        let path = std::env::temp_dir().join("ronoctua-nao-existe-mesmo.sock");
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            super::buffer_keymap_at(&path)
+                .expect("nao pode ser erro")
+                .is_empty()
+        );
+    }
+
     use super::*;
     use ronoctua_keymap::{Key, Sym};
 
