@@ -48,11 +48,16 @@ flake.
 **3. Verificar que está tudo de pé.**
 
 ```
-nix flake check
+nix run .#gate
 ```
 
-Sai sem reclamar? A fundação está correta. Ele demora bastante na primeira vez, e **não mostra o log
-das derivações sem `-L`** — silêncio ali não é sintoma de travamento.
+Sai sem reclamar? A fundação está correta. Ele demora bastante na primeira vez.
+
+Ele roda o `nix flake check`, e faz duas coisas antes: **mede a memória livre** e limita quantas
+compilações podem correr ao mesmo tempo, e constrói as três pesadas uma de cada vez. Sem isso, numa
+máquina com `earlyoom`, o `rustc` é morto com `signal: 15` e **sem diagnóstico nenhum** — parece
+defeito de compilação e é falta de RAM. Se acontecer mesmo assim, ele diz que foi o `earlyoom`, em
+vez de deixar você adivinhando.
 
 **4. Subir o desktop.**
 
@@ -89,6 +94,7 @@ O comando imprime as teclas certas ao subir. Elas valem mais do que este texto.
 ## Os outros comandos
 
 ```
+nix flake check        o mesmo que .#gate, cru — sem dimensionar pela memória
 nix run .#vm           a distro inteira numa VM: initrd, impermanência, boot de verdade
 nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
 nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)

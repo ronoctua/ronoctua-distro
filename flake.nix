@@ -340,6 +340,10 @@
       # ---------------------------------------------------------------
       # The distro's NixOS modules
       # ---------------------------------------------------------------
+      # The gate that sizes itself to the machine. See `nix/gate.nix` for the
+      # arithmetic and where its numbers were measured.
+      gateApp = pkgs.callPackage ./nix/gate.nix { inherit system; };
+
       distroModules = [
         ./nix/modules/base.nix
         # The table that turns `ronoctua.profile` into the eight switches. It
@@ -604,6 +608,22 @@
           program = "${diagnostics}/bin/ronoctua-diagnostics";
           meta = {
             description = "instantaneo do estado quando os atalhos travam";
+            platforms = [ system ];
+          };
+        };
+
+        # THE GATE, sized to the RAM of whoever runs it.
+        #
+        # `nix flake check` on its own is not enough on a machine with an
+        # `earlyoom`: it kills `rustc` with SIGTERM and no diagnostic, and
+        # `--max-jobs` does not save it. This one measures first, caps the
+        # product of jobs and cores, builds the three heavy derivations one at a
+        # time, and — if `rustc` dies anyway — says who killed it.
+        gate = {
+          type = "app";
+          program = "${gateApp}/bin/ronoctua-gate";
+          meta = {
+            description = "nix flake check dimensionado pela RAM da maquina";
             platforms = [ system ];
           };
         };
