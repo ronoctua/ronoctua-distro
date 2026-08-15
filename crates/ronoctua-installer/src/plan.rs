@@ -265,7 +265,19 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
                 "cp".into(),
                 // `-T`: without it, an existing destination becomes `<destination>/nixos`
                 // and `nixos-install` would say there is no `flake.nix`.
-                "-rT".into(),
+                //
+                // `-L`: AND THIS ONE IS NOT COSMETIC. `/etc/nixos` is a SYMLINK
+                // into the store (`environment.etc."nixos".source`), and `cp -r`
+                // does not follow a symlink given on the command line — it
+                // copies the LINK. The working directory then WAS the store
+                // path, and writing the `host.nix` into it failed with
+                // "Read-only file system": EROFS, not a permission error, which
+                // is what named the cause.
+                //
+                // The dry run could never have shown this: it prints the command
+                // instead of running it. What found it was the VM test, on the
+                // first boot it managed.
+                "-rTL".into(),
                 // The flake comes from the store, read-only. Copied with the source's
                 // mode, writing the `host.nix` inside it would fail with
                 // "Permission denied".
@@ -283,6 +295,32 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             // value and does not accept one.
             label: key::INST_STEP_HOST_NIX,
             command: vec![WRITE.into(), HOST_NIX_WORK_PATH.into()],
+            destructive: false,
+        },
+        Step {
+            // THE HARDWARE REPORT COMES BEFORE `disko`, and it has to.
+            //
+            // The generated `host.nix` says `facterReport = ./facter.json`, and
+            // `disko --flake <work>#noctua` EVALUATES that file. With the report
+            // written afterwards — into `/mnt`, which disko has not mounted yet
+            // — the evaluation died with "path '…/facter.json' does not exist",
+            // and no installation could ever have got past step four.
+            //
+            // The dry run could not see it: it prints the commands instead of
+            // running them. What found it was the VM test, on the first run that
+            // reached this far.
+            //
+            // Into the WORKING directory, which a later step copies whole to the
+            // target — so the report travels with the flake instead of needing a
+            // second write.
+            label: key::INST_STEP_FACTER,
+            command: vec![
+                "nixos-facter".into(),
+                "-o".into(),
+                format!("{WORK_DIRECTORY}/facter.json"),
+            ],
+            // It reads hardware and writes one file outside the target: nothing
+            // it does is destructive.
             destructive: false,
         },
         Step {
@@ -331,16 +369,6 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
                 "--no-preserve=mode".into(),
                 WORK_DIRECTORY.into(),
                 TARGET_DIRECTORY.into(),
-            ],
-            destructive: true,
-        },
-        Step {
-            label: key::INST_STEP_FACTER,
-            // What is not asked comes from here.
-            command: vec![
-                "nixos-facter".into(),
-                "-o".into(),
-                format!("{TARGET_DIRECTORY}/facter.json"),
             ],
             destructive: true,
         },

@@ -2,10 +2,18 @@
 #
 # # NOT WIRED INTO THE GATE YET — read `docs/PENDING.md` before touching it
 #
-# This file is a work in progress kept deliberately: the harness is right and the
-# two boot failures found so far are recorded here rather than rediscovered. It
-# is NOT in `tests/checks.nix`, because a red check that everyone learns to
-# ignore is worse than an honest gap.
+# It is NOT in `tests/checks.nix`, because a red check everybody learns to ignore
+# is worse than an honest gap. What it already does is worth keeping: it boots,
+# it reaches step 5 of 10, and getting there cost THREE defects of the installer
+# that no dry run could have shown — the working directory that was the store,
+# the hardware report `disko` needed before it existed, and the root disk that
+# was never formatted. All three are fixed.
+#
+# Where it stops now is COST, not a defect: `disko --flake` evaluates the whole
+# NixOS configuration inside the virtual machine, and 900 s of the driver's
+# default timeout is not enough. The next attempt raises that timeout and the
+# node's memory, and puts the disko script into `system.extraDependencies` so
+# the evaluation has less to do.
 #
 # # Why this test and not more of `installer-dryrun`
 #
@@ -23,8 +31,8 @@
 # shut down.
 #
 # The arrangement that makes it work is the one worth naming here: the installer
-# boots its root off `/dev/vdb`, a scratch image, so that `/dev/vda` — the shared
-# `target.qcow2` — is a disk it can erase without erasing itself.
+# has NO root disk at all — root on tmpfs — so that `/dev/vda`, the shared
+# `target.qcow2`, is a disk it can erase without erasing itself.
 #
 # # AND IT RUNS OFFLINE, which is the other half of what this proves
 #
@@ -93,20 +101,27 @@ pkgs.testers.runNixOSTest {
       {
         imports = [ common ];
 
-        # The installer's OWN root, on a second disk. Without this it would be
-        # partitioning the device it is running from.
-        virtualisation.emptyDiskImages = [ 3072 ];
-        virtualisation.rootDevice = "/dev/vdb";
-
-        # THE SCRATCH DISK ARRIVES BLANK, and what formats it is
-        # `virtualisation`'s `autoFormat` — which the SYSTEMD initrd does not
-        # implement. With it on, the boot goes fsck, then mount, then
-        # "Can't find ext4 filesystem", then a kernel panic 2,7 s in, and the
-        # message names the filesystem rather than the missing `mkfs`.
+        # THE INSTALLER RUNS WITH NO ROOT DISK AT ALL.
         #
-        # Only on this node: the installed system is the one that wants the
-        # systemd initrd, and it is a different machine.
-        boot.initrd.systemd.enable = lib.mkForce false;
+        # It needs a root that is not the disk it is about to erase, and the
+        # obvious answer — a second, empty image — does not boot: what formats a
+        # blank scratch disk is `virtualisation`'s `autoFormat`, which the
+        # systemd initrd does not implement. That gave fsck, mount, "Can't find
+        # ext4 filesystem" and a panic at 2,7 s, with the message naming the
+        # filesystem instead of the `mkfs` that never ran. Turning the systemd
+        # initrd off gave "Attempted to kill init!" at 1,2 s, earlier still.
+        #
+        # A tmpfs root has no such step. The store arrives over the framework's
+        # own mount, `/dev/vda` is left entirely alone for `disko` to erase, and
+        # the working directory the installer copies the flake into lives in RAM
+        # — which the 4 GiB of this node covers, since the tree is small by
+        # design (the fonts are a Release asset).
+        virtualisation.useDefaultFilesystems = false;
+        virtualisation.fileSystems."/" = {
+          device = "tmpfs";
+          fsType = "tmpfs";
+          options = [ "mode=0755" ];
+        };
 
         # NO SUBSTITUTERS. What the machine does not already have, it cannot get
         # — which is the point: an install that needs the network here is an
@@ -162,15 +177,19 @@ pkgs.testers.runNixOSTest {
         # `< /dev/null` is not tidiness: with a terminal on stdin the binary
         # enters the TUI and waits for a key forever. And the output goes to a
         # file so that a failure arrives with its reason attached.
-        status = installer.succeed(
-            "${exports} ronoctua-install --execute < /dev/null > /tmp/install.log 2>&1; echo $?"
-        ).strip()
+        # `execute` and NOT `succeed`: a failure here has to arrive WITH its
+        # output, and `succeed` raises before the next line can read the log.
+        # That is the difference between an iteration that teaches something and
+        # one that costs a quarter of an hour to say "it failed".
+        status, _ = installer.execute(
+            "${exports} ronoctua-install --execute < /dev/null > /tmp/install.log 2>&1"
+        )
         # NOT named `log`: that name belongs to the driver's own logger, and
         # rebinding it to a string fails the driver's type check before the VM
         # even starts.
-        printed = installer.succeed("cat /tmp/install.log")
+        printed = installer.execute("cat /tmp/install.log")[1]
         print(printed)
-        assert status == "0", f"o instalador saiu com {status}"
+        assert status == 0, f"o instalador saiu com {status}:\n{printed}"
 
     with subtest("ele escreveu o que so ele escreve"):
         # The generated `host.nix`, with the answers in it. `installer-dryrun`

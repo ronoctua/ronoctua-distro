@@ -39,53 +39,31 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
-### 3. O caminho `--execute` do instalador nunca rodou · médio
+### 3. O `--execute` chega ao passo 5 de 10 · pequeno
 
-O caminho destrutivo **existe de verdade**, e o modo ENSAIO não prova nada dele: ele **imprime** os
-comandos. O que falta é rodar.
+**Três defeitos do instalador saíram daqui, e nenhum deles o modo ensaio podia ver** — ele imprime os
+comandos em vez de rodá-los. Os três estão corrigidos:
 
-## O teste de VM foi TENTADO e removido — o que se sabe
+- **O diretório de trabalho ERA o store.** `cp -rT` não segue symlink dado na linha de comando, e
+  `/etc/nixos` é link para o store: escrever o `host.nix` dava `Read-only file system`. É `-rTL`.
+- **O `disko` não podia funcionar.** O `host.nix` gerado diz `facterReport = ./facter.json`, e o
+  `disko --flake #noctua` AVALIA esse arquivo — que só era criado três passos depois, dentro do
+  `/mnt` que o disko ainda não montou. Toda instalação morreria no passo quatro. O `nixos-facter`
+  roda antes agora, no diretório de trabalho.
+- **O nó instalador não bootava.** Raiz em disco de rascunho depende do `autoFormat`, que o initrd do
+  systemd não implementa (`Can't find ext4 filesystem`, pânico aos 2,7 s; sem o initrd do systemd,
+  `Attempted to kill init!` aos 1,2 s). Raiz em **tmpfs** não tem esse passo, e deixa o `/dev/vda`
+  inteiro para o disko.
 
-O harness certo **não** é o do disko nem um `runNixOSTest` comum: é o padrão do próprio nixpkgs em
-`nixos/tests/installer.nix` — um segundo nó com `virtualisation.useBootLoader`, ligado DEPOIS, que
-boota do disco que o primeiro escreveu.
+**O teste existe em `tests/installer-vm.nix` e NÃO está ligado ao `tests/checks.nix`** — check
+vermelho que todo mundo aprende a ignorar é pior do que lacuna assumida.
 
-O teste chegou a rodar. A closure do alvo entra por `system.extraDependencies` e isso funciona (a
-falha inicial do `android-studio` era mirror, e passa na segunda tentativa). **Onde ele parou:** o
-`ronoctua-install --execute` roda por 900 s e sai com 124 (timeout) **sem imprimir uma linha** — nem
-o plano, que o modo sem terminal imprime ANTES de qualquer passo. Isso não é lentidão; é não chegar
-ao começo.
+**Onde ele para: custo, não defeito.** O passo 5 (`disko --mode destroy,format,mount --flake`)
+avalia a configuração NixOS inteira DENTRO da VM, e os 900 s de timeout padrão do driver não bastam —
+sai com 124 sem terminar. A próxima tentativa é: `timeout` maior no `execute`, mais memória no nó, e
+o `diskoScript` no `system.extraDependencies` para a avaliação ter menos a fazer.
 
-**O travamento de 900 s está explicado e resolvido.** O `install.rs` decide o modo por
-`stdin().is_terminal() && stdout().is_terminal()`, e o shell do driver de teste **é um TTY**: o
-binário entrava na TUI, desenhava na tela alternada que ninguém lê e esperava tecla até o timeout — o
-que explica o travamento *e* o silêncio de uma vez, já que o plano só é impresso no modo sem
-terminal. `< /dev/null` resolve.
-
-**O teste existe em `tests/installer-vm.nix`, e NÃO está ligado ao `tests/checks.nix`** — check
-vermelho que todo mundo aprende a ignorar é pior do que uma lacuna assumida. O que ele já tem:
-o harness de dois nós do nixpkgs (`virtualisation.diskImage` compartilhado, o segundo com
-`useBootLoader`), `substituters` forçado vazio para provar a instalação offline, as asserções do
-`host.nix` escrito EM DISCO, e o boot do resultado. Com `profile = "minimal"` a closure que entra na
-VM é de 6,9 GiB e não de 22,8.
-
-**Onde ele para agora: o nó instalador não boota.** Ele precisa de raiz num disco de rascunho
-(`/dev/vdb`) para poder apagar o `/dev/vda`, que é o alvo — e o disco de rascunho nasce em branco.
-Duas tentativas, duas falhas diferentes:
-
-1. Com o initrd do systemd (padrão): `fsck`, `mount`, `Can't find ext4 filesystem`, pânico aos 2,7 s.
-   O `autoFormat` do módulo `virtualisation` não é implementado pelo initrd do systemd, e a mensagem
-   fala do sistema de arquivos em vez do `mkfs` que faltou.
-2. Com `boot.initrd.systemd.enable = false`: `Attempted to kill init!` aos 1,2 s — mais cedo ainda.
-
-A pergunta seguinte é como o nó instalador ganha uma raiz sem depender do `autoFormat`. Uma pista
-não testada: rodar o nó instalador SEM disco de raiz (`useDefaultFilesystems = false` com raiz em
-tmpfs), deixando o `target.qcow2` como único disco.
-
-**Cada iteração custa ~15 min.** A instrumentação já está no arquivo: a saída do instalador vai para
-`/tmp/install.log` dentro da VM e é lida de lá, para uma falha chegar com o motivo junto.
-
-- acabou quando: `--execute` roda contra um disco virtual num teste, e o sistema que ele instala boota
+- acabou quando: `--execute` roda até o fim contra um disco virtual, e o sistema que ele instala boota
 
 ### 4. Clipboard: o ClipCascade não está empacotado · decidir antes
 
