@@ -115,12 +115,13 @@ in
     # translations to load, and `pt_BR.UTF-8` is how glibc writes a date. Tied,
     # there was no way to read the interface in Portuguese and keep the metric,
     # A4, day-month machine the owner actually uses.
-    # A FORMA é conferida aqui, e a EXISTÊNCIA no check.
+    # THE SHAPE is checked here, and the EXISTENCE in the check.
     #
-    # A forma pega o engano comum — `pt-BR` no lugar de `pt_BR.UTF-8`, que é o
-    # id da tradução escrito onde vai a locale — e o pega na avaliação, com o
-    # nome da opção junto. Sem isto, o erro sai do gerador de locales do glibc
-    # falando de um arquivo que ninguém escreveu.
+    # The shape catches the common mistake — `pt-BR` where `pt_BR.UTF-8`
+    # belongs, which is the translation id written where the locale goes — and
+    # catches it at evaluation, with the option name attached. Without this the
+    # error comes out of glibc's locale generator, talking about a file nobody
+    # wrote.
     assertions = [
       {
         assertion = builtins.match "[a-z]+_[A-Z]+(@[a-z]+)?\\.UTF-8" cfg.locale != null;

@@ -44,6 +44,13 @@ pub struct DesktopEntry {
     pub icon: String,
     /// The `Categories=`, for the icon-by-category step.
     pub categories: Vec<String>,
+    /// The `MimeType=` — which types this application says it opens.
+    ///
+    /// It was not parsed at all until the file manager needed it: an
+    /// application launcher only ever asks "what is there", never "who opens
+    /// this". It is what answers `open with` without spawning `xdg-open` to
+    /// walk the same directories we already walked.
+    pub mime_types: Vec<String>,
     /// The program and the arguments, ready for launching.
     ///
     /// The program is the **resolved path** when it exists in the `PATH` of
@@ -197,6 +204,10 @@ fn read(path: &Path, root: &Path, language: &str) -> Option<(String, DesktopEntr
             icon: &icon,
             name: &name,
             file: &path.to_string_lossy(),
+            // NOTHING to open at scan time. What the file manager hands over
+            // later goes through `command_for`, which re-assembles the same
+            // `Exec=` line with the paths in place.
+            open: &[],
         },
     )?;
     // THE PROGRAM BECOMES A PATH HERE, during the scan, and not at launch time:
@@ -228,6 +239,10 @@ fn read(path: &Path, root: &Path, language: &str) -> Option<(String, DesktopEntr
             description,
             icon,
             categories: desktop::list(&fields, "Categories")
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            mime_types: desktop::list(&fields, "MimeType")
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),

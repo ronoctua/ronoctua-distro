@@ -32,14 +32,63 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 - acabou quando: ou existe `ronoctua-design` compilando para wasip2, ou o invariante 12 foi reescrito
 
-### 2. Desempenho medido só em host não-NixOS · pequeno
+### 2. O teto de 4 GiB do ISO · decidir antes
+
+`iso-fits-usb-stick` recusa um ISO maior que 4 GiB, e **ele está em 3712 MiB** — medido no gate de
+2026-08-20, com o gerenciador de arquivos dentro. Sobram **384 MiB**, ou 9,4%. O dono levantou que o
+teto vai apertar conforme mais aplicativos e funcionalidades entrarem, e o número diz que ele tem
+razão e que a margem é de uma feature grande, não de várias — mas
+**o número não é arbitrário e a decisão precisa do fato**: 4 GiB é o limite de
+tamanho de arquivo do **FAT32**, e ele só morde quando o `.iso` é **copiado**
+para o pendrive (Ventoy, ou uma ESP de onde a UEFI dá boot no arquivo). Gravado
+com `dd`, que escreve setores crus, não existe limite nenhum.
+
+Então a escolha é entre duas coisas, e nenhuma delas é "aumentar o número":
+
+- **Levantar o teto e assumir `dd`.** O ISO cresce à vontade e deixa de caber em
+  Ventoy. Quem instala grava com `dd`, que já é o que o `INSTALL.md` manda.
+- **Manter o teto e tirar a semente do ISO.** O `storeContents` é o que pesa —
+  ele carrega o que nenhum cache público tem. Sem ele o ISO fica pequeno e a
+  máquina alvo volta a **compilar** o shell, o niri pinado, o `libghostty-vt` e
+  os buffers, que é exatamente o que a semente resolveu.
+
+Uma terceira, mais trabalhosa: a semente numa **segunda partição** do mesmo
+pendrive, fora do arquivo `.iso`. Cabe em FAT32 porque são vários arquivos, e
+custa um passo a mais na gravação.
+
+E uma **quarta, que é a que resolve em vez de adiar** — porque o dono já
+levantou que muitos aplicativos ainda vão entrar, e as três acima escolhem entre
+perder Ventoy, perder a semente ou ganhar um passo de particionamento:
+
+- **Dois arquivos, e nenhum deles cresce sem limite.** O `.iso` sai pequeno e
+  **sem `storeContents`** — volta a caber em qualquer lugar, Ventoy inclusive —,
+  e a semente vira um **segundo arquivo ao lado**, um dump de store
+  (`nix-store --export`, comprimido), que o instalador procura no volume de onde
+  bootou ou num caminho dado por `--seed`. Gravar continua sendo copiar: dois
+  arquivos em vez de um. Se a semente um dia passar de 4 GiB, ela se parte em
+  pedaços numerados, que é coisa que um arquivo de dados aceita e uma imagem de
+  boot não.
+- **O teto deixa de ser sobre o sistema e passa a ser sobre o MEIO.** Hoje
+  `iso-fits-usb-stick` mede o `.iso` inteiro e por isso cresce junto com a
+  distro. Medindo só a imagem de boot, o número para de subir a cada aplicativo
+  novo — e o check passa a dizer o porquê de 4 GiB (o tamanho máximo de arquivo
+  do FAT32), que hoje ele não diz.
+- **Custo:** mexe em `nix/installer/`, na derivação do ISO e no crate do
+  instalador (achar, verificar e importar a semente antes do `nixos-install`),
+  mais um check de que o ISO sozinho ainda instala — só que compilando. Não é
+  pequeno: é do tamanho de uma funcionalidade, não de um ajuste.
+
+- decidir: qual das quatro; e o `iso-fits-usb-stick` passa a dizer o porquê do
+  número que ficar
+
+### 3. Desempenho medido só em host não-NixOS · pequeno
 
 `nix run .#bench` mede num niri **aninhado** dentro de outro compositor, com o contorno de driver de
 `nix/graphics-host.nix`. O caminho gráfico da distro instalada é mais curto.
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
-### 3. O `--execute` chega ao passo 5 de 10 · pequeno
+### 4. O `--execute` chega ao passo 5 de 10 · pequeno
 
 **Três defeitos do instalador saíram daqui, e nenhum deles o modo ensaio podia ver** — ele imprime os
 comandos em vez de rodá-los. Os três estão corrigidos:
@@ -65,7 +114,7 @@ o `diskoScript` no `system.extraDependencies` para a avaliação ter menos a faz
 
 - acabou quando: `--execute` roda até o fim contra um disco virtual, e o sistema que ele instala boota
 
-### 4. Clipboard: o ClipCascade não está empacotado · decidir antes
+### 5. Clipboard: o ClipCascade não está empacotado · decidir antes
 
 O painel mostra `ClipCascade: não integrado` e o comando de configurar diz o mesmo — honesto, e
 reservando o lugar.

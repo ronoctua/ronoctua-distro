@@ -152,9 +152,10 @@ tempo de avaliação, sem build — e recusa qualquer `RONOCTUA_*` ali. **Medido
 editado deixa o `.drv` da camada idêntico, e o do shell muda, como tem de mudar.
 
 **Os números do laço, medidos:** dependências 4m46 (483 crates), workspace 2m15–5m46, clippy 13–16 s,
-cada roteiro de VM 18–51 s. O gate longo é o resto — quatro sistemas NixOS, o ISO e catorze VMs —,
-e é por isso que existe `nix run .#quick`: os checks que não sobem VM, ~1 min, e que **não fecham
-nada** (invariante 7 continua sendo o gate).
+cada roteiro de VM 17–48 s (as vinte). O que sobra é caro por CONSTRUIR UMA INSTALAÇÃO — quatro
+sistemas NixOS e o ISO —, e é essa a linha que separa as três baterias: `#quick` (dez escolhidos,
+~1 min), `#most` (todo o resto) e `#gate` (tudo). Só o gate fecha o invariante 7; ver
+"Três baterias" abaixo.
 
 #### E a quarta foi pela REFERÊNCIA — que quem compila não devia pagar
 
@@ -259,10 +260,108 @@ sete horas de processo, uma vez. A armadilha ficou escrita no `CLAUDE.md`, e mes
 pre-commit e o `check-fmt` mandavam rodar exatamente o comando que trava.
 
 Documentar uma armadilha não a remove. Hoje o `formatter` é um invólucro: sem argumento formata a
-árvore — `.nix`, o workspace e os **cinco workspaces dos buffers**, que `cargo fmt --all` nunca
+árvore — `.nix`, o workspace e os **workspaces dos buffers**, que `cargo fmt --all` nunca
 alcançou porque `buffers/` está em `exclude`. Com `--check` confere, que é o que o hook usa. A
 armadilha deixou de existir por construção, e a formatação dos buffers passou a ser conferida
 (`buffers-fmt`).
+
+#### Três baterias, e por que se nomeia o LENTO
+
+Havia dois caminhos e nada entre eles: `nix run .#quick`, ~1 min, e `nix run .#gate`, horas. Quem
+está no meio de uma edição não paga o gate, então o que se verificava de fato era o `quick` — e o
+`quick` **é uma lista de dez nomes escrita à mão**, que prometia "os checks que não sobem VM" sendo
+que há mais de cem checks e dezenas deles não sobem VM. Nove criados num único dia ficaram de fora
+sem que nada acusasse.
+
+O custo disso não é hipotético. Nesta árvore o gate foi interrompido duas vezes, e da segunda por um
+**diagnóstico errado meu**: li `cannot download ... from any mirror` como "o tarball sumiu", quando o
+log dizia `Connection reset by peer` aos 100 MB e uma retomada estrangulada. Medido depois, as três
+URLs respondem `200` e o arquivo baixa a 17,6 MB/s. Um degrau intermediário não teria evitado o erro
+de leitura, mas teria evitado a pressa que o produziu.
+
+Hoje são três, e a do meio é **derivada, não escrita**:
+
+| | quanto | quando |
+|---|---|---|
+| `#quick` | ~1 min | no meio de uma edição |
+| `#most` | minutos | antes de commitar |
+| `#gate` | horas | antes de publicar — **só ele fecha o invariante 7** |
+
+**A escolha que importa é qual lado se nomeia.** Nomear o rápido é o que já existia, e falha em
+silêncio: um check barato esquecido não faz ruído nenhum. Nomear o lento (`tests/slow.nix`) faz o
+esquecimento cair para o lado seguro — quem inventar um check caro e não o registrar torna o `most`
+mais lento, e isso se percebe no relógio. Um check novo entra na bateria de todo dia sozinho, que é o
+padrão certo.
+
+**O critério é estrutural, e a exceção é medida.** O que sai do `most` constrói uma instalação — um
+`system.build.toplevel` ou o `isoImage` — ou é um `mN`, que é a pergunta "o marco fechou?". Não é
+"pareceu demorado": sete candidatos que SOAM caros foram cronometrados com `--rebuild` e ficaram
+(`disko-vm` 77 s particionando de verdade, `oom-vm` 49 s com duas máquinas, `tpm-vm` 22 s emulando um
+TPM), porque as vinte VMs da bateria levam de 17 a 48 s e nenhum sai da faixa. Até o `secureboot-vm`,
+que o `CLAUDE.md` registrava como "~2 h calado", mede **98 s de roteiro**: as ~2 h eram construir a
+imagem de disco na primeira vez, e não o check. Ele fica de fora pelo critério 1, não pelo relógio.
+
+**Uma divisão derivada precisa que tudo tenha nome.** Quatro checks — `tokens-wit-name`,
+`network-tuned`, `syncthing-tuned`, `wifi-tpm-vm` — só existiam DENTRO de um `mN`, e uma bateria
+derivada de `attrNames checks` os perderia em silêncio. Ganharam atributo próprio, o que também é
+defeito consertado por si: check que não se roda sozinho é check que não se depura. Com isso, tirar
+os oito `mN` do `most` não tira **nada** dele.
+
+**Duas guardas, porque lista à mão envelhece.** `test-tiers-are-total` exige que todo nome de
+`slow.nix` exista em `checks`, e `quick-names-exist` faz o mesmo pelo laço curto: um check renomeado
+falha DIZENDO QUAL, em vez de virar linha morta que não exclui nada. É a forma de
+`rescue-polkit-is-narrow`.
+
+**E o dimensionamento é um só.** `nix/gate.nix` passou a receber quais alvos e que texto final, então
+`most` e `gate` são dois usos da mesma aritmética — a que lê `/proc/meminfo` e limita jobs × cores.
+Sem isso o `most` mataria o `rustc` pelo `earlyoom` exatamente como o gate matava antes dela existir.
+Ao terminar, cada bateria **diz o que não verificou, com os nomes**.
+
+#### E o gate ainda não fechava — por 1,37 GB que o `fetchurl` não sabe retomar
+
+Com as três baterias de pé, o gate morreu de novo, e não por nada deste repositório. A mensagem era
+`cannot download android-studio-...tar.gz from any mirror`, que se lê como "o arquivo saiu do ar" —
+e foi assim que eu a li da primeira vez, a ponto de escrever no `PENDING.md` um item falso e matar o
+gate que estava rodando. **Ela não quer dizer isso.**
+
+O que o log dizia, quatro vezes:
+
+```
+ 13  1.37G  13 186.5M   ...  15.43M
+curl: (56) Recv failure: Connection reset by peer
+```
+
+Começa a 13–15 MB/s e o caminho derruba a conexão por volta dos 100–190 MB. Reproduzido fora do Nix,
+com `curl` puro e sem sandbox: 104 MB e o mesmo reset. **O que transforma uma transferência instável
+numa parede é que o `fetchurl` repete SEM retomar** — quatro tentativas, cada uma do zero, cada uma
+morrendo antes dos 200 MB de 1370. O arquivo nunca termina, e a mensagem culpa o Google.
+
+E nenhum cache salva: **o Android Studio é unfree, então o Hydra não o constrói** e o
+`cache.nixos.org` não tem cópia (medido: `path-info` responde `is not valid`); o espelho por hash
+responde 404 para o mesmo hash. Toda máquina que instala o perfil `full` baixa esse arquivo do
+Google, uma vez, pelo caminho de rede que tiver.
+
+`nix/prefetch.nix` é `curl --continue-at -` num laço, o hash que a derivação **já declara**, e
+`nix-store --add-fixed`. Depois disso a derivação de saída fixa já é válida e o Nix nunca busca.
+Três coisas o mantêm honesto:
+
+- **Nada é escrito à mão.** Nome, URL e hash saem de `pkgs.<attr>.unwrapped.src`, então não podem
+  divergir do que o build quer. O que uma pessoa mantém é um nome de atributo — e uma asserção
+  recusa a entrada se a fonte ganhar um segundo espelho, porque aí o `fetchurl` se vira sozinho e a
+  gambiarra deve sair.
+- **O caminho entra sem contexto.** `src.outPath` carrega dependência da própria derivação que isto
+  existe para buscar: com o contexto, construir a ferramenta BAIXA o arquivo primeiro, e a correção
+  não pode ser construída enquanto o defeito existir. `unsafeDiscardStringContext` deixa a string,
+  que é tudo o que o script quer.
+- **A consulta de validade é testada antes de ser confiada.** O ramo "já está no store" é um comando
+  só, e se ele deixar de significar o que significa a falha é MUDA: tudo é baixado de novo e o único
+  sintoma é um gate mais lento. Aconteceu na primeira escrita — `nix-store --query --valid` não é
+  flag, e o ramo nunca rodou. Hoje o script pergunta primeiro pelo **próprio caminho**, que é válido
+  por construção, e recusa se a resposta for não.
+
+O `gate-fetches-what-no-cache-has` fecha a outra metade: a ferramenta funciona, o que pode deixar de
+ser verdade em silêncio é o gate CHAMAR ela — e chamá-la **antes** das três pesadas, senão paga-se a
+compilação inteira para então descobrir que o problema é a rede.
 
 ---
 
@@ -2029,6 +2128,498 @@ respondendo enquanto ele vive.
 
 ---
 
+### O driver gráfico vem do Nix, e não do host
+
+O `nix run .#dev` parou de subir com uma mensagem que não nomeia nada:
+
+```
+niri: symbol lookup error: /usr/lib64/libc.so.6:
+      undefined symbol: __pointer_chk_guard, version GLIBC_PRIVATE
+```
+
+**`LD_LIBRARY_PATH` vence o `DT_RUNPATH`.** O contorno para host não-NixOS punha `/usr/lib64` inteiro
+lá para alcançar **uma** biblioteca — o `libEGL.so.1` do host — e junto ia o `libc.so.6`. O processo
+passou a rodar a libc do host contra o `ld.so` do Nix, e os símbolos `GLIBC_PRIVATE` da glibc só
+combinam entre um `libc.so.6` e o `ld.so` **da mesma build**. Medido: host 2.44, Nix 2.42, e o
+símbolo ausente do host.
+
+Não existe versão a acertar. O que remove a classe inteira é não pôr as bibliotecas do host no
+caminho — e para AMD e Intel isso não custa nada, porque **quem fala com a placa é o driver do
+kernel**, e o mesa é biblioteca de espaço de usuário que o Nix tem. Medido: o niri aninhado sobe em
+`wayland-2` com nada do host no caminho.
+
+**A NVIDIA é a exceção real**: o blob dela tem de casar com o módulo do kernel, então só pode vir do
+host. Esse ramo ficou, e ele **avisa** o que está fazendo — numa máquina só-NVIDIA a mistura acima é
+um risco que alguém tem de saber que está correndo.
+
+De quebra, treze ICDs Vulkan viraram um. A seleção por vendor existia e **nunca rodou**: estava
+escrita como função de shell dentro de uma string Nix, saía escapada pelo `escapeShellArg` e era
+*chamada* — o shell procurava um programa cujo nome era o corpo do `case`. Falhava em silêncio
+(`2>/dev/null || true`) e todos os ICDs eram carregados, que são justamente os 650 ms que a tabela
+existe para evitar. O `shellcheck` do próprio build recusou a forma quebrada (SC2289) quando ela foi
+reescrita.
+
+---
+
+### O gerenciador de arquivos — `LEADER .`, e duas portas para a mesma vista
+
+É a **oitava** vista da região expandida, e a primeira que também abre em janela.
+`ronoctua-files` é a única fronteira com o sistema de arquivos — mesmo critério do
+`ronoctua-niri`, do `ronoctua-network` e do `ronoctua-memory`.
+
+#### O pedido tinha um conflito, e ele decidiu a arquitetura
+
+*"Menu de contexto no botão direito"* contra o invariante 14, que proíbe popup flutuante — e o
+`surface.rs` **recusava o botão direito por escrito**, com esse argumento. O que estava datado era o
+argumento, não o invariante: ele foi escrito quando a única implementação imaginável era uma
+superfície nova. O menu que existe desenha na **mesma região** do which-key, não flutua, não tem
+superfície própria, e cada linha mostra a tecla que a roda. O mouse não alcança nada que o teclado
+não alcance — e isso não é promessa, é o `files-everything-has-a-key` comparando as duas listas.
+
+O mesmo vale para o "tooltip": ele vai para a **linha de mensagem**, que é onde o which-key já põe a
+descrição sob o ponteiro. Apontar o `w` do grupo em `rwxrw-r--` diz o que aquele bit faz **naquele
+arquivo** — e numa pasta diz outra coisa, porque ali `x` é "entrar" e não "executar". A escolha entre
+as duas frases é do IDIOMA, então mora no `.ftl`: foi por isso que este repositório ganhou o primeiro
+**seletor Fluent**.
+
+#### Uma implementação, duas portas
+
+O rodapé tem teto de doze linhas (`space.expansion`) e é certo que tenha — ele é um rodapé. Doze
+linhas bastam para consultar e agir, e não bastam para o trabalho que se abre um gerenciador para
+fazer. Então há `ronoctua-shell files`, janela própria, `app_id` `br.ronoctua.files`.
+
+**A janela não é um componente wasm, e não podia ser.** O `world` do WIT não importa sistema de
+arquivos (invariante 11, e é estrutural: não existe no `State`), e o `input` só tem `click` — sem
+hover, sem botão direito, sem roda. A versão wasm custaria uma capacidade nova, três casos de `input`
+quebrando o `match` exaustivo dos seis buffers, um diretório inteiro atravessando por valor a cada
+mudança, **e a vista escrita duas vezes** — porque o rodapé não pode ser wasm de jeito nenhum. O
+`ronoctua-shell terminal` já é janela nativa: é esse o molde.
+
+O que as duas portas dividem é `files::View` — estado, teclas, cliques, menu, seletor e as `Row`s.
+O que difere é uma coisa só: **como se inicia um processo**. Por isso o seletor mora DENTRO da vista
+em vez de usar o localizador do rodapé; a janela não tem localizador, e dois seletores seriam dois
+comportamentos para o mesmo gesto.
+
+#### A base de MIME custa 125 KB, e não 75 MiB
+
+O closure do `shared-mime-info` é 75 MiB porque arrasta glib e libxml2 — que pertencem ao
+`update-mime-database`, o programa que **compilou** a base, e ele já rodou no upstream. O que sobra em
+`share/mime` são 125 KB de dados: `globs2` (1 231 regras), `magic`, `subclasses`, `aliases`,
+`generic-icons` e `types`. O `nix/mimegen.nix` os transforma em tabela Rust em tempo de build, e o
+`files-closure-has-no-mime-db` prova que nada do pacote sobrevive para a execução.
+
+**O ícone por tipo não precisou de tabela escrita à mão.** O `generic-icons` mapeia os 1 231 tipos
+para **dezessete** nomes genéricos, então `assets/icons/mime-glyphs.nix` tem vinte e cinco linhas e
+cobre tudo por construção. Uma tabela extensão→ícone escrita à mão cobriria as extensões de que
+alguém lembrou, pareceria completa, e responderia o quadradinho neutro para o resto — que é
+indistinguível de "não resolvi".
+
+**Duas velocidades, e a fronteira entre elas.** O nome responde sem I/O nenhum e é o que uma listagem
+de duzentas linhas usa; o conteúdo só é lido quando alguém pergunta. Fazer magic por linha seriam
+duzentos `open` dentro do quadro que desenha — a forma de defeito que o localizador já pagou uma vez
+com ícones.
+
+**E o gerador recusa antes de gerar.** Cinco linhas da primeira tabela nomeavam tipos que não
+existem: `application/x-iso9660-image`, `application/x-sqlite3` e `text/x-rust` são nomes que
+qualquer um juraria certos, e a base os escreve `application/vnd.efi.iso`, `application/vnd.sqlite3`
+e `text/rust`. Linha que não casa com nada parece proposital e ninguém audita.
+
+#### Um cursor que não se vê é uma tecla que não funciona
+
+O gerenciador foi entregue com as setas funcionando e **a tela sem mostrar nada**. O relatório que
+voltou foi "a interação por teclado não está funcionando"; o teclado estava perfeito. As outras
+vistas pintam o foco **dentro do `expansion()`**, cada uma por si — não há realce genérico no
+`paint` —, e as linhas do gerenciador não pintavam nenhum. Vinte e cinco testes de unidade
+concordavam com o cursor, porque todos olhavam o ESTADO.
+
+Por isso o teste que ficou não afirma que o estado mudou: ele compara **o que seria desenhado** antes
+e depois da seta. Provado removendo o realce, e a mensagem é a da falha real: *"o cursor mexeu e o
+desenho ficou igual"*.
+
+E a divisão dos canais é a que o rodapé já usava: **foco é cor do texto, marca é glifo na calha**.
+Duas informações no mesmo canal deixam "em qual está o cursor?" sem resposta no instante em que uma
+segunda linha é marcada. A calha de uma célula faz dois trabalhos — ela é o ar entre o ícone e a
+borda, sem o qual o glifo encosta e se lê como corte.
+
+#### A letra virou QUERY, e os comandos foram para o modificador
+
+O gerenciador nasceu com um teclado de vi: `j`/`k` moviam, `s` ordenava, `m` marcava, e o filtro
+era um MODO em que se entrava com `/`. O argumento estava escrito no código e era bom até onde ia —
+*uma tecla que às vezes é texto e às vezes é comando é uma tecla que ninguém consegue usar para
+nenhum dos dois.* O que ele errava era **qual dos dois** a letra deveria ser.
+
+Numa lista de NOMES DE ARQUIVO a letra é texto. É o que o localizador (`LEADER a`) e o `M-x` já
+faziam — nos dois, o que se digita é a busca e nunca uma tecla —, e é o que o dono pediu ao usar o
+gerenciador: digitar `setup` para achar `setup.sh`, sem cerimônia antes. Então a ambiguidade foi
+resolvida para o outro lado: **a letra é query**, e os comandos da vista ganharam `C-` e `M-`
+(`OF_THE_VIEW`). O `M-` está livre enquanto a vista tem o teclado — a leader não está escutando, e
+nenhum buffer está.
+
+Três coisas quebraram com isso, e nenhuma delas fazia barulho:
+
+1. **`notation_of` DESCARTAVA os modificadores.** Era um `match` próprio, ao lado do
+   `Key::notation` do `ronoctua-keymap`, e enquanto toda tecla da tabela era uma letra nua o defeito
+   não aparecia: `C-n` e `n` saíam ambos como `n`. Com a tabela sob `C-`/`M-`, esse silêncio seria a
+   funcionalidade inteira falhando. Hoje quem escreve a notação é o keymap, que é quem a lê de volta.
+2. **As duas portas discordavam sobre o Shift.** `Footer::translate` desconta o Shift com um motivo
+   escrito — o xkb já o aplicou ao produzir o caractere, então contar os dois transforma `M-S` em
+   `M-S-S` e nunca casa — e a janela nativa o mandava adiante. Invisível enquanto a notação jogava
+   os modificadores fora.
+3. **O botão direito passou a digitar uma vírgula.** As duas portas abriam o menu SINTETIZANDO
+   `Char(',')`, escrito à mão. Virou `files::key_that_runs("files-menu")`, que lê a tecla da mesma
+   tabela: uma reamarração leva o mouse junto, que é o único arranjo em que os dois não divergem.
+
+E o `Esc` ficou com duas etapas: com query na tela ele **limpa a query**; vazia, fecha a vista. Uma
+tecla que jogasse fora as duas coisas de uma vez deixaria quem errou uma letra sem nada na tela.
+
+#### O quadro custava o diretório inteiro, e isso não era o compositor
+
+O relatório foi: *"ao passar o mouse rapidamente por cima dos itens, dá para ver um atraso entre a
+seleção do hover e a posição do mouse — mas suspeito que seja da virtualização"*. A suspeita era
+razoável: o laço aninhado põe um compositor a mais entre a mão e a tela. **Não era.**
+
+Medido, em release, nesta máquina:
+
+| entradas | lista inteira | janela de 12 |
+|---------:|--------------:|-------------:|
+|      200 |       0,61 ms |      0,03 ms |
+|    2 000 |       8,06 ms |      0,03 ms |
+|   10 000 |      56,87 ms |      0,03 ms |
+
+Cada quadro montava uma linha para CADA entrada — as nove células do modo, o tamanho, a data, o dono
+e o grupo, tudo string pronta — e desenhava doze. E fazia isso **várias vezes por quadro**: a altura,
+a contagem de páginas e o deslocamento pediam a lista de novo, cada um por sua conta. Como o hover
+redesenha a cada linha que o ponteiro cruza, o atraso era aritmética, e teria seguido o sistema para
+o hardware de verdade.
+
+A correção tem duas metades. `View::rows_from` monta só a fatia que vai ser desenhada — mantendo o
+índice ABSOLUTO, senão o foco cairia sempre na primeira linha visível —, e `expansion_len` responde
+a contagem **sem montar nada**. O teste que ficou não afirma "é rápido", que é frágil: ele afirma que
+o custo **não cresce**, comparando um diretório de 20 com um de 3 000. Provado ao contrário — com a
+lista inteira, 38 ms contra 6,7 s.
+
+Para o que o desenho custa de fato, a medida do `bench` continua valendo: preparo 0,73 ms e desenho
+1,44 ms por quadro. O que sobra de atraso, esse sim, é a cadeia de composição — e o laço aninhado
+tem um compositor a mais nela.
+
+#### A query foi para o fim do caminho, e a linha de mensagem voltou a ser dela
+
+Digitar filtrava e o que se digitava aparecia na linha de mensagem — a mesma linha onde o ponteiro
+escreve o que está embaixo dele e onde a última ação diz o que fez. As duas coisas se apagavam por
+turnos, dependendo da ordem.
+
+Hoje a query é o ÚLTIMO campo do caminho, na cor de acento. Lidos juntos, caminho e query são uma
+frase só: onde você está, e o que está estreitando ali. A cor é toda a formatação — sem caixa, sem
+separador, sem prefixo (invariantes 14 e 15) —, e o campo não leva a lugar nenhum, porque ainda não é
+um diretório.
+
+Isso obrigou o rodapé a mostrar o caminho, que ele **nunca mostrou**: a porta de janela o desenha
+desde o primeiro dia, e a do rodapé desenhava as linhas e mais nada. "Onde eu estou" é a primeira
+pergunta que uma listagem levanta. Custou duas das doze linhas — caminho e cabeçalho —, e as duas
+saem de `files_chrome`, uma função só, porque `expansion` e `expansion_window` precisam das mesmas e
+duas cópias divergiriam.
+
+E o `Backspace` com nada digitado **sobe um nível**. É o mesmo gesto continuado: apaga o que digitou,
+continua apagando, e o que está atrás da query é a pasta em que você está. Não fecha a vista —
+segurar a tecla levaria embora justamente o que ninguém quis.
+
+#### O botão direito ENTRAVA na pasta
+
+Relatado da tela, em duas formas que parecem defeitos diferentes: clicar com o direito numa pasta
+VAZIA entrava nela e não mostrava menu nenhum; numa pasta cheia, mostrava o menu — **sobre o conteúdo
+da pasta em que acabara de entrar**.
+
+Uma causa só. O botão direito "focava" a linha com o clique que ATIVA (`Hit::Name`), que põe o cursor
+e abre. Na pasta vazia, `amount()` virava zero e a guarda `amount() > row` recusava o menu; na cheia,
+a guarda passava e o menu abria no lugar errado. O código dizia isso em voz alta, num comentário
+explicando como detectar o caso que ele mesmo criava: *"o clique acima pode ter ENTRADO num
+diretório"*. Um gesto que precisa ser desfeito depois era o gesto errado — hoje existe `focus_row`,
+que só move o cursor.
+
+#### Antes de trocar permissão, ele pergunta
+
+O menu já arma as linhas irreversíveis — a tecla duas vezes — e ali isso funciona porque a linha está
+na tela dizendo o que é. Trocar permissão não é isso: quando aplica, a resposta veio de uma LISTA DE
+PRESETS, e o que a lista dizia era "leitura e escrita para o dono", não `0644` em seis arquivos.
+
+Então virou uma pergunta, no mesmo `Picker` de todas as outras: mesmas teclas, mesmo estreitamento,
+mesmo `Esc`. `Asking::Confirm` carrega o [`Doing`] pronto, que é o que a torna reutilizável — nada
+nela é sobre modos. E o **"não" é a primeira linha**, porque o cursor começa na primeira: numa
+pergunta que existe porque a ação não é obviamente reversível, um `Enter` distraído tem de escolher
+o que não faz nada.
+
+De quebra, as perguntas ganharam TÍTULO. Faltava, e o relato tinha a forma exata da falta: uma lista
+de nomes subia e nada dizia que era sobre o DONO. As escolhas não podem dizer — uma lista de pessoas
+é igual seja para quem é dono, seja para quem enviar —, e a linha de menu que abriu a pergunta já
+saiu da tela. O título vive em `Asking::title()`, no próprio enum, porque um segundo `match` ao lado
+do que monta as escolhas é um segundo lugar para esquecer uma variante — e esse o compilador não
+pegaria: ele desenharia a frase errada.
+
+#### `LEADER f f` abria outra coisa, e `f m` nunca disse por que é `m`
+
+`f f` era o seletor de arquivo do EDITOR, e foi relatado como "um gerenciador de arquivos diferente e
+inferior". A leitura estava certa: quem digita `f f` num grupo chamado "file" está atrás de arquivos,
+e o que subia era uma lista chata de nomes que só sabia fazer uma coisa com o que você escolhesse.
+Hoje `f f` abre o mesmo que `.`.
+
+O seletor continua existindo em `f e` — `e` de *edit* —, porque ele faz algo que o gerenciador não
+faz: entrega o caminho ao BUFFER DO EDITOR. E `f m` é o mesmo gerenciador em janela própria, `m` de
+*manager*: o teto de doze linhas do rodapé está certo para um rodapé e não para o trabalho que se
+abre um gerenciador para fazer. Essa letra nunca foi escrita em lugar nenhum, e a pergunta "por que
+m?" é o que lhe rendeu três linhas de comentário — um mnemônico que só o autor reconstrói é um
+mnemônico que não funciona.
+
+#### Duas margens, e uma que era paga duas vezes
+
+O espaço à esquerda dos ícones é a **calha**: a célula onde a marca mora, e o ar de que o glifo
+precisa para não encostar na borda. A porta de janela somava a ela a `buffer.marginX` inteira, então
+a mesma tabela ficava recuada três células ali e uma no rodapé. Hoje a janela deve a DIFERENÇA, e o
+número está escrito uma vez só (`CONTENT_MARGIN`) porque ele é usado três vezes — desenhar, medir
+quantas colunas cabem, e decidir sobre qual célula o ponteiro está. Duas das três discordando é um
+tooltip sobre o campo vizinho.
+
+E do outro lado faltava: a data terminava colada na borda, o que se lê como coluna cortada e não como
+coluna que acabou. `space.files.edgeRight` é o ar depois da última coluna — e não é o `edgeRight` da
+modeline, que é zero de propósito para o ícone de notificação encostar: uma tabela não é uma linha de
+status.
+
+#### A linha na TELA não é a linha da LISTAGEM
+
+O botão direito continuou errado depois de `focus_row`, e por outra causa inteiramente. `row_at`
+responde qual **linha visível** o ponteiro está; o botão esquerdo nunca se importou, porque ele passa
+pela `ExpansionRow`, que carrega o índice ABSOLUTO. O direito passava o número visível adiante como
+se fosse uma entrada — com o cabeçalho na linha zero ele agia uma linha abaixo, e com a linha de
+caminho acima dele, duas. Clicar com o direito no primeiro arquivo abria o terceiro.
+
+Hoje os dois botões perguntam a MESMA coisa à linha: o que você é? E a resposta do cabeçalho e da
+linha de caminho é "não sou um arquivo", que é a razão de nenhum dos dois ter menu.
+
+**E uma pasta vazia também tem menu.** "Não há nada aqui" não é "não há nada a fazer": numa pasta
+vazia as ações úteis são justamente as sobre a PASTA — colar o que foi copiado, abrir um terminal
+nela — e o botão direito não respondia nada. O sujeito do menu passou a ser `menu_subject()`: a
+entrada em foco, ou, sem nenhuma, um `Entry` do próprio diretório, lido do disco como qualquer outro.
+Sintetizar aqui, em vez de ensinar o menu sobre um segundo tipo de sujeito, é o que mantém
+`menu::for_entry` uma função com uma regra só.
+
+**E o menu diz sobre QUEM ele é**, na primeira linha. Ele cobre a listagem, então a linha em que foi
+aberto não está mais na tela: vinte verbos sem nada dizendo no que agiriam. Com marcas é pior, porque
+a resposta não é a linha sob o ponteiro — são todas.
+
+#### O compositor vê a tecla primeiro, e o `M-` nunca chegou
+
+As teclas da vista foram para `M-` quando a letra virou query, e `M-RET` **abria um terminal**. Não
+era defeito da vista: no laço aninhado a família dos acordes da leader É o `Alt` — a config diz isso
+com todas as letras —, então o niri consumia a tecla antes de o rodapé existir para ela.
+
+`Ctrl` é a família que ninguém acima de nós reivindica: a leader é uma sequência, os acordes são
+`Mod+…`, e os binds de emergência são `Ctrl+Alt+…`. A regra ficou simples o bastante para virar
+teste (`no_key_of_the_view_is_the_compositors`): nenhuma tecla da vista usa Alt. É o mesmo raciocínio
+de `keyboard-layout-exists` — o que decide não é o nosso código, e por isso tem de ser conferido.
+
+#### Uma confirmação que cobre um dos dois caminhos não é uma confirmação
+
+A pergunta antes de trocar permissão foi posta no caminho do PRESET, e o relato voltou dizendo que
+clicar nas letras `rwx` continuava alterando na hora. Estava certo: o clique no bit é o caminho que
+as pessoas usam de fato, e ele produzia o `Doing` direto. Hoje os dois passam pela mesma
+`Asking::Confirm` — e o bit especial (setuid) também, que é o que menos se quer virar apontando.
+
+#### Uma recusa que o ponteiro cobria
+
+"Trocar o dono não fez nada" era sobre uma ação que respondeu perfeitamente bem — numa linha que
+outra coisa estava cobrindo. A precedência da linha de mensagem punha a descrição do que está sob o
+PONTEIRO na frente do eco, e o eco EXPIRA: com a mão no mouse e o ponteiro parado sobre a linha que
+acabou de ser clicada, a mensagem vinha e ia embora por baixo do tooltip.
+
+Hoje o eco vem primeiro. Uma descrição do que está sob o ponteiro pode esperar três segundos; uma
+recusa não, porque nesse tempo ela já não existe. A porta de janela faz o mesmo, e lá a mensagem é
+limpa também pelo clique — ela não tem relógio, e sem isso um erro seria dono da linha até alguém
+apertar uma tecla.
+
+#### O atraso do hover, terceira medição
+
+Duas causas reais saíram nas rodadas anteriores (a lista inteira por quadro; e o mesmo por evento de
+movimento, dentro de `row_at`). O relato continuou, e a suspeita do dono é a virtualização. As
+medidas que temos:
+
+| o quê | quanto |
+|---|---|
+| montar a janela de 12 linhas | 0,03 ms |
+| preparo + desenho de um quadro (bench) | 0,73 + 1,44 ms |
+| `branch_of_pid`, por quadro | 0,013 ms |
+
+Nada disso explica um atraso perceptível. O que sobra dentro do nosso alcance é a LATÊNCIA de
+apresentação, e ali havia um quadro a mais: `desired_maximum_frame_latency` era 2. A fila mais funda
+existe para uma animação manter a GPU alimentada — ela compra VAZÃO com LATÊNCIA. Aqui nada anima:
+todo quadro é a resposta a algo que acabou de acontecer, e a única coisa que importa é quão cedo ele
+é visto. Com dois, o quadro que o movimento produziu podia esperar atrás de um já enfileirado — um
+refresh inteiro, ~16 ms a 60 Hz.
+
+O que continua fora do nosso alcance é a cadeia: no laço aninhado há **um compositor a mais** entre a
+mão e a tela, nos dois sentidos. Medir isso exige a distro instalada, que é o item 3 do `PENDING.md`
+— e é a razão de ele existir.
+
+#### O editor da distro saiu, e o editor da distro é o Emacs
+
+`buffers/editor` existia por uma razão só, e ela estava escrita na primeira linha dele: *"isto existe
+para que `LEADER f f` pare de prometer algo que não acontece"*. A mesma docstring dizia *"não é o
+Emacs e não tenta ser"* — e o editor deste sistema É o Doom Emacs, com módulo próprio, daemon e
+`doom sync`. Ninguém pediu um segundo.
+
+Com `f f` abrindo o gerenciador, a razão acabou. Saíram: o componente wasm, `RONOCTUA_BUFFER_EDITOR`,
+o comando `file-open` e o seu bind, o seletor de arquivo do localizador, e as chaves de texto de
+ambos. **O que ele fazia continua acontecendo**: abrir um arquivo de texto no gerenciador chama
+`emacsclient -c`, por CAMINHO de store como tudo o mais que este sistema spawna. `emacsclient` e não
+`emacs`, porque o módulo o roda como daemon — um segundo processo levaria segundos e não veria os
+buffers da sessão. E ele pode NÃO estar instalado (o perfil `minimal` o deixa de fora), então a
+ausência vira uma frase na tela e não um silêncio.
+
+#### Uma pergunta vaga e duas respostas em chave crua
+
+"Tem certeza?" não diz de quê, e quando ela aparece a linha que foi clicada já saiu da tela. Hoje a
+`Asking::Confirm` carrega a FRASE pronta, construída onde o `Doing` era conhecido: *"Trocar as
+permissões de um.txt para 0644?"* — e com marcas, "3 itens", porque agir num conjunto e nomear um
+deles é como uma operação em lote passa por individual.
+
+As respostas saíam `files-no` e `files-yes`. A causa é mais funda do que parece e vinha de antes:
+`Choice.label` guardava uma CHAVE, com o comentário "resolvida por quem desenha" — e ninguém
+desenhava. O `picker_rows` escrevia o rótulo verbatim, então a chave crua ia para a tela, que é
+exatamente o que o invariante 8 recusa. E não era só o desenho: `Picker::shown` FILTRA pelo rótulo,
+então digitar estreitava uma lista de chaves. Os presets de permissão tinham o mesmo defeito desde o
+primeiro dia.
+
+A correção foi dar o bundle à `View` — um `Rc`, porque `Texts` é um bundle Fluent e não clona, e
+porque as duas portas já têm um. Os rótulos passam a ser TEXTO no momento em que a pergunta é
+montada, e aí desenhar e filtrar concordam por construção.
+
+#### "Trocar o dono não fez nada" — e tinha feito
+
+O pedido nem chegava a ser escrito: `/run/ronoctua-files/` é `RuntimeDirectory` da unidade que
+`nix/modules/files.nix` instala, e o laço aninhado não tem NixOS. O que saía da thread era
+`criar /run/ronoctua-files/staged: Permission denied`, três segundos na linha de mensagem — e a
+precedência daquela linha punha a descrição do PONTEIRO na frente do eco, então com a mão no mouse a
+mensagem ia e voltava por baixo do tooltip.
+
+Duas correções, e as duas valem por si: o eco passou a vir primeiro (uma descrição pode esperar, uma
+recusa não, porque ela expira), e a troca de dono **pergunta antes de começar** se o lugar onde ela
+escreve existe. Assim a resposta é síncrona e diz o porquê, em vez de ser um erro de thread que
+alguém precisa pegar no ar.
+
+#### O modificador da leader era descontado para sempre
+
+`Inheritance` existe para que o `Ctrl+Alt` que ABRE a leader não entre na tecla seguinte, e a sua
+docstring prometia que *"um modificador apertado depois, no meio da sequência, conta"*. Não contava:
+`on_announcement` só gravava quando o campo estava vazio, e nada jamais o limpava. O desconto durava
+a sessão inteira.
+
+Ficou invisível enquanto nenhuma vista tinha binding com modificador. O gerenciador tem, e ali a
+falha é barulhenta do jeito errado: `M-s` não ordenaria, ele digitaria um `s` na query. Hoje o
+anúncio do compositor — que é a única coisa que sabe o que está segurado AGORA — apaga da herança o
+que foi solto.
+
+A prova de que a tecla chega é de ponta a ponta, no `leader-vm`: abre o gerenciador pela leader,
+digita, e confere no PIXEL que a lista estreitou; depois `Esc`, e depois `alt+h`, que só faz algo se
+o Alt sobreviver ao desconto. Um teste de unidade não podia responder isso — ele entrega a `Key`
+direto na `View::key`, e a pergunta era se a tecla CHEGA, atravessando Xvfb, niri e a layer surface.
+
+E o mesmo roteiro cobrou duas lições do próprio harness: sem `HOME`, o `systemd-run` abria o
+gerenciador em `/`, cuja listagem bate no teto de doze linhas — e uma lista no teto mede igual antes
+e depois, então os pixels param de responder à pergunta. E "a região encolheu" também passaria com
+um filtro que não casa NADA: por isso a asserção é comparativa — `zzz` tem de deixar MAIS na tela
+que `qqq`.
+
+#### Marca é lote, e há linhas que não têm plural
+
+Com marcas, uma ação age sobre **todas** — é a regra que todo gerenciador segue e a que surpreende
+quando não é seguida: tendo marcado seis arquivos, agir no sétimo não é o que ninguém quis dizer.
+
+Mas nem toda linha tem plural. Renomear seis arquivos para um nome não significa nada, e "abrir com"
+abre uma coisa. Essas tomam o item **em foco**, com marcas ou sem — pegar o primeiro MARCADO em vez
+disso renomearia um arquivo que a pessoa não está olhando.
+
+**Isso estava errado e um teste o achou.** Mudar permissão lia o primeiro caminho marcado e o modo
+atual do item em FOCO — dois arquivos diferentes — e não dizia nada sobre os outros cinco. Ação
+parcial silenciosa é pior que recusa, porque nada conta qual metade aconteceu. E a **primeira recusa
+interrompe o resto**, pelo mesmo motivo: um conjunto meio mudado, com uma mensagem sobre um arquivo,
+é um estado em que ninguém consegue agir.
+
+**Clique é sobre a linha em que caiu**, marcas ou não: apontar um bit de uma linha e mudar seis
+arquivos não é o que aquele gesto quer dizer.
+
+#### O que precisa de root, e o que decididamente não
+
+Quase nada. Listar, renomear, copiar, mandar para a lixeira, apagar, comprimir e mudar a permissão
+dos **próprios** arquivos não pede privilégio nenhum. Quatro coisas pedem: trocar o dono, trocar para
+um grupo do qual não se participa, mudar a permissão de arquivo alheio, e dizer ao SSD quais blocos
+estão livres.
+
+Elas passam por **uma** unidade de nome FIXO — `%i` é string livre, e uma regra polkit que casa
+prefixo é porta de largura desconhecida. O pedido é escrito num diretório da pessoa, **um arquivo por
+campo**: um caminho pode conter quebra de linha, dois-pontos e espaço, e toda codificação de uma
+linha só é um parser esperando para discordar de quem escreveu.
+
+**Apagar e mover NÃO estão entre os verbos privilegiados**, e a ausência é o desenho: são os dois que
+não se desfazem, e um apagar como root a uma tecla de uma listagem é como um gerenciador de arquivos
+apaga o sistema de alguém. Quem precisa disso abre o terminal root que o menu oferece, onde o que
+está acontecendo é visível.
+
+E o ajudante **recusa antes de agir**: caminho relativo, `/nix/store`, `/proc`, `/sys`, `/dev`, e
+link simbólico no último componente. Esse último é o afiado — sem `NOFOLLOW`, mostra-se um link à
+pessoa e uma troca entre o clique e a unidade faz o root agir em outro arquivo.
+
+#### O cabeçalho, a ficha e o caminho de volta
+
+O **cabeçalho** custa uma das doze linhas do rodapé, e paga: sem ele as colunas não têm nome —
+`rwxr-xr-x  ana  users` é legível para quem já sabe, e uma tabela legível só para quem já sabe é uma
+tabela para ninguém mais. Ele também carrega o único estado que a listagem não conseguiria mostrar de
+outro jeito: **qual** coluna ordena, e em que direção. E é onde a ordenação é clicada, que é o gesto
+que toda tabela do mundo tem; o `s` percorre o mesmo ciclo.
+
+**Ordenar não move o cursor.** O `reread` o mantém pelo NOME, e é certo: ordena-se para ver onde um
+arquivo está, não para perdê-lo de vista. Um teste chegou a afirmar o contrário, e o código estava
+certo.
+
+A **ficha de detalhe** (`i`) substitui a listagem em vez de ficar ao lado dela — doze linhas divididas
+em dois painéis dariam seis a cada um. Ela mostra o que a listagem não cabe, e uma coisa que a
+listagem deliberadamente não faz: **o que o CONTEÚDO diz que o arquivo é**, ao lado do que o nome
+afirma. Um `.txt` com um PNG dentro é coisa real, e o caminho rápido da listagem — que nunca abre
+arquivo — continuaria chamando aquilo de texto para sempre. Qualquer tecla a fecha: ela é aberta para
+se olhar, então nenhum gesto se perde esperando o certo.
+
+E a lixeira tem **volta**. Um "mover para a lixeira" de onde não se restaura é metade da ação, e a
+metade que falta é a que torna a outra segura: navegar até a lixeira oferece `devolver`, que lê o
+`.trashinfo` e põe o arquivo de volta onde estava. A raiz da lixeira é **parâmetro**, como o roster e
+o fuso — dois testes lendo a mesma variável de ambiente correm, e quem perde põe um arquivo na
+lixeira do outro.
+
+#### Apagar sobrescrevendo: o que ele faz, e o que não pode fazer
+
+Ele escreve por cima, sincroniza a cada passagem, trunca, renomeia para um nome sem significado e
+desliga. Num sistema de arquivos que escreve no lugar e num disco que expõe seus blocos reais, isso é
+destruição.
+
+**Esta máquina não é nenhum dos dois.** O btrfs é copy-on-write: sobrescrever aloca extents NOVOS e
+deixa os velhos intactos até serem recuperados, e um snapshot pode segurá-los para sempre. O SSD
+nivela desgaste: o controlador remapeia a escrita e a cópia anterior fica num bloco que o sistema
+operacional não consegue nomear.
+
+Então a confirmação diz isso, nessas palavras, em vez de prometer um apagamento que não pode cumprir.
+O que garante de verdade é a criptografia de disco que o sistema já tem — bloco que ninguém decifra é
+bloco que ninguém recupera —, e o `fstrim` é o único passo que fala com o controlador.
+
+#### Três defeitos que os testes acharam
+
+- **Todo PNG virava APNG.** Os dois abrem com os mesmos oito bytes; o que os separa é uma regra
+  aninhada do `magic`, e ela é **obrigatória**, não opcional. Tratada como opcional, a regra externa
+  bastava — e toda foto de uma listagem voltava como PNG animado, com o ícone certo e o nome errado.
+- **A coluna do nome vazava da tela.** Com um cell de largura, o ícone sozinho empurrava o nome para
+  fora, e o compositor não recorta: o nome simplesmente não estava lá. O ícone passou a ceder também
+  — por último, e o que nunca cede é o nome.
+- **O menu mostrava `files-open`.** Chave crua na tela, que é a forma exata que o invariante 8 existe
+  para recusar. Ela apareceu porque `rows()` não recebia o pacote de textos; passar a recebê-lo é o
+  que faz `Field::text` ser sempre uma string pronta.
+
+---
+
 ## 6. Rede, área de transferência e serviços
 
 ### Rede e Syncthing — `LEADER r`
@@ -2846,7 +3437,7 @@ Duas coisas apareceram ao medir isto, e as duas eram interruptores que não inte
 
 Instalar custava uma tarde, e o motivo não era o download. `nixos-install` **constrói** o sistema: o
 que vem do nixpkgs chega pronto do cache público, e o que este repositório produz não existe em cache
-nenhum — o shell, o niri do input pinado, o `libghostty-vt` com o Zig, os cinco buffers wasm, a
+nenhum — o shell, o niri do input pinado, o `libghostty-vt` com o Zig, os buffers wasm, a
 família de fontes que vem de um Release do GitHub. São exatamente as compilações que o `earlyoom`
 deste host mata por peso.
 

@@ -114,10 +114,6 @@ in
   # The file editor — `LEADER f f`. It embeds nothing: the content arrives
   # through `Input::Paste` and leaves through `Effect::Save`, and the host is
   # what touches the disk (invariant 11).
-  editor = buffer {
-    name = "editor";
-    src = ../buffers/editor;
-  };
 
   glyphs = buffer {
     name = "glyphs";

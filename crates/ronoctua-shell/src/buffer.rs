@@ -1989,10 +1989,10 @@ mod tests {
     use ronoctua_protocol::{Color, Command, DisplayList, Text};
 
     /// The keymap the editor declares.
-    fn editor_keymap() -> Vec<ronoctua_protocol::Binding> {
+    fn buffer_keymap() -> Vec<ronoctua_protocol::Binding> {
         vec![ronoctua_protocol::Binding {
             keys: "m s".into(),
-            command: "editor-save".into(),
+            command: "memory-refresh".into(),
         }]
     }
 
@@ -2001,7 +2001,7 @@ mod tests {
         // It is what makes an editor SAVEABLE. The binding had been declared
         // since section 7.9 and nothing consumed it: the buffer would open,
         // edit, and lose the work.
-        let km = editor_keymap();
+        let km = buffer_keymap();
         let mut pending = Vec::new();
         assert_eq!(
             advance_sequence(&km, &mut pending, 'm'),
@@ -2011,7 +2011,7 @@ mod tests {
         assert_eq!(pending, vec!['m'], "o prefixo tem de ficar pendente");
         assert_eq!(
             advance_sequence(&km, &mut pending, 's').as_deref(),
-            Some("editor-save")
+            Some("memory-refresh")
         );
         assert!(pending.is_empty(), "o disparo tem de limpar a sequencia");
     }
@@ -2021,7 +2021,7 @@ mod tests {
         // `m` then `x`: no binding. Re-injecting the `m` would type it into the
         // file one keystroke after the person had moved on — the class of bug
         // that makes an editor untrustworthy.
-        let km = editor_keymap();
+        let km = buffer_keymap();
         let mut pending = Vec::new();
         advance_sequence(&km, &mut pending, 'm');
         assert_eq!(advance_sequence(&km, &mut pending, 'x'), None);

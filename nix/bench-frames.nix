@@ -81,7 +81,7 @@ writeShellApplication {
       kill "$niri_proc" 2>/dev/null || true
       wait "$niri_proc" 2>/dev/null || true
     }
-    trap 'limpar; rm -rf "$dir"' EXIT
+    trap 'cleanup; rm -rf "$dir"' EXIT
 
     # THE DISPLAY COMES FROM THE IPC SOCKET'S NAME, and not from niri's log.
     #

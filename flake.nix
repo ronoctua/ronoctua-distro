@@ -201,6 +201,17 @@
         spaceFile = ./assets/tokens/space.nix;
       };
 
+      # The MIME database, from freedesktop's own files into a Rust table.
+      #
+      # `shared-mime-info` is a BUILD input and never a runtime one: its 75 MiB
+      # closure is glib and libxml2, which belong to the program that compiled
+      # the database upstream. What crosses is 125 KB of data — see
+      # `nix/mimegen.nix` and the check `files-closure-has-no-mime-db`.
+      mimeDb = pkgs.callPackage ./nix/mimegen.nix {
+        inherit glyphdb;
+        mimeTableFile = ./assets/icons/mime-glyphs.nix;
+      };
+
       # The compositor's 141 actions, extracted from the PINNED niri (section 13).
       niriActions = pkgs.callPackage ./nix/niri-actions.nix {
         niri = inputs.niri.packages.${system}.niri;
@@ -244,9 +255,9 @@
           fonts
           tokensRs
           i18nRs
+          mimeDb
           niriActions
           ;
-        bufferEditor = buffers.editor;
         inherit (pkgs) xkeyboard_config;
         bufferGlyphs = buffers.glyphs;
         bufferUnicode = buffers.unicode;
@@ -340,9 +351,76 @@
       # ---------------------------------------------------------------
       # The distro's NixOS modules
       # ---------------------------------------------------------------
+      # THE SOURCES NO CACHE HAS, and the downloader that resumes.
+      #
+      # One entry, and it is derived: name, URL and hash come from the package's
+      # own `src`, so they cannot disagree with what the build wants. What a
+      # person maintains is the attribute name. See `nix/prefetch.nix` for the
+      # measurements that made this necessary.
+      #
+      # The assertion is the guard: this workaround exists BECAUSE the source
+      # has a single mirror. If upstream ever adds one, `fetchurl` can fall over
+      # to it on its own and the entry should go — and the assertion says so
+      # instead of leaving a loop nobody questions.
+      unfreePkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+      };
+      singleMirrorSources =
+        let
+          from =
+            src:
+            assert lib.assertMsg (builtins.length src.urls == 1)
+              "${src.name}: passou a ter ${toString (builtins.length src.urls)} espelhos — nix/prefetch.nix nao e mais necessario para ela";
+            {
+              inherit (src) name outputHash;
+              url = builtins.head src.urls;
+              # THE PATH GOES IN WITHOUT ITS CONTEXT, and that is the whole
+              # point. `src.outPath` carries a dependency on the very
+              # fixed-output derivation this exists to fetch: with the context
+              # kept, building the downloader FETCHES the file first, and the
+              # tool that works around the failure cannot be built until the
+              # failure stops happening. Discarding the context leaves the
+              # string, which is all the script wants — something to hand to
+              # `nix-store --query --valid`.
+              path = builtins.unsafeDiscardStringContext src.outPath;
+            };
+        in
+        map from [
+          # 1.37 GB, unfree — so Hydra never builds it and no cache has it.
+          unfreePkgs.android-studio.unwrapped.src
+        ];
+      prefetchApp = pkgs.callPackage ./nix/prefetch.nix {
+        sources = map (s: {
+          inherit (s) name url path;
+          hash = s.outputHash;
+        }) singleMirrorSources;
+      };
+
       # The gate that sizes itself to the machine. See `nix/gate.nix` for the
       # arithmetic and where its numbers were measured.
-      gateApp = pkgs.callPackage ./nix/gate.nix { inherit system; };
+      gateApp = pkgs.callPackage ./nix/gate.nix {
+        inherit system;
+        prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
+      };
+
+      # THE MIDDLE BATTERY, derived and not hand-written.
+      #
+      # `checks` minus `tests/slow.nix`. Derived, because a hand-written list is
+      # what `.#quick` already is, and it aged exactly as one would expect: nine
+      # checks were born in a single day and none of them made it in.
+      #
+      # `test-tiers-are-total` demands that every name in `slow.nix` exist in
+      # `checks`; everything else lands here by construction, so a new check
+      # joins on its own.
+      slowNames = import ./tests/slow.nix;
+      mostApp = pkgs.callPackage ./nix/gate.nix {
+        inherit system;
+        name = "ronoctua-most";
+        what = "targets";
+        targets = lib.subtractLists slowNames (builtins.attrNames self.checks.${system});
+        left = slowNames;
+      };
 
       distroModules = [
         ./nix/modules/base.nix
@@ -354,6 +432,9 @@
         # protects — the compositor and the footer — is declared later.
         ./nix/modules/memory.nix
         ./nix/modules/rescue.nix
+        # The file manager's privileged half: one unit, one polkit rule, and
+        # where it opens. Everything else about it needs no configuration.
+        ./nix/modules/files.nix
         ./nix/modules/fonts.nix
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix
@@ -385,6 +466,10 @@
               # knows where the five components are, and the unit's `ExecStart`
               # comes from here. See `nix/rust.nix`.
               shell = rust.shell;
+              # The file manager's privileged helper, EXTRACTED from the
+              # workspace. The unit that runs it runs as root, and handing it
+              # the whole workspace would put wgpu and the wasm runtime there.
+              filesRoot = rust.filesRoot;
             };
           };
         }
@@ -430,6 +515,7 @@
 
         # Rust token table, generated from the .nix files.
         tokens-rs = tokensRs;
+        mime-db = mimeDb;
         niri-actions = niriActions;
         # THE SIX COMPONENTS, each buildable on its own.
         #
@@ -438,7 +524,6 @@
         # did not exist, so the newest buffers were the ones the loop could not
         # reload. What names them now is `nix/buffers.nix`'s own table.
         buffer-example = buffers.example;
-        buffer-editor = buffers.editor;
         buffer-glyphs = buffers.glyphs;
         buffer-unicode = buffers.unicode;
         buffer-lucide = buffers.lucide;
@@ -617,8 +702,11 @@
           sbKeys
           devApp
           reloadApp
+          gateApp
+          prefetchApp
           singleFooter
           wit
+          mimeDb
           tokensRs
           niriActions
           rustToolchain
@@ -668,6 +756,43 @@
           };
         };
 
+        # THE EVERYDAY BATTERY — everything that does not build an installation.
+        #
+        # `most` and not `check`: `nix run .#check` and `nix flake check` would
+        # be two near-homonyms hours apart, and whoever typed the wrong one
+        # would only find out afterwards.
+        #
+        # It runs the VMs — measured, each script takes 17 to 48 s — and leaves
+        # out whatever builds a NixOS system or the ISO. When it ends it SAYS
+        # what it did not verify, by name: a battery that stays quiet about what
+        # it skipped is a battery that gets mistaken for the gate.
+        most = {
+          type = "app";
+          program = "${mostApp}/bin/ronoctua-most";
+          meta = {
+            description = "os checks que nao constroem instalacao, pela RAM da maquina";
+            platforms = [ system ];
+          };
+        };
+
+        # THE SOURCES THAT HAVE TO COME BY HAND, and why that is not imperative.
+        #
+        # It changes no configuration: it puts a file the flake ALREADY names
+        # into the store, with the hash the flake ALREADY declares. What it adds
+        # is a downloader that resumes, which `fetchurl` does not have.
+        #
+        # `.#gate` runs it on its own before checking. It is exposed separately
+        # so it can be run first, on a good connection, without paying for the
+        # whole gate.
+        prefetch = {
+          type = "app";
+          program = "${prefetchApp}/bin/ronoctua-prefetch";
+          meta = {
+            description = "baixa com retomada as fontes que nenhum cache tem";
+            platforms = [ system ];
+          };
+        };
+
         # THE SHORT LANE — what one runs in the middle of the work.
         #
         # # Why it exists, and why it does not replace the gate
@@ -688,24 +813,27 @@
         # It says out loud that it is not the gate. A short lane that lets one
         # believe the work is finished is worse than no short lane.
         quick = mkScriptApp "ronoctua-quick" "os checks que nao sobem VM — o laco curto" ''
-          echo "== o laco curto: nada de VM =="
+          echo "== o laco curto: um subconjunto escolhido =="
+          # THE LIST COMES FROM `tests/quick.nix`, not from here.
+          #
+          # Written here it would be the only copy, and nothing could check it.
+          # Coming from a file that `quick-names-exist` also reads, a renamed
+          # check is reported instead of dropping out of the loop in silence.
           nix build --no-link --keep-going -L \
-            .#checks.${system}.rust-fmt \
-            .#checks.${system}.fmt \
-            .#checks.${system}.buffers-fmt \
-            .#checks.${system}.rust-clippy \
-            .#checks.${system}.rust-tests \
-            .#checks.${system}.keymap-no-collision \
-            .#checks.${system}.i18n-complete \
-            .#checks.${system}.buffer-commands-have-labels \
-            .#checks.${system}.buffer-keys-have-text \
-            .#checks.${system}.deps-layer-is-lean \
+            ${
+              lib.concatMapStringsSep " \\\n            " (n: ".#checks.${system}.${n}") (
+                import ./tests/quick.nix
+              )
+            } \
             "$@"
           echo
-          echo "OK — e isto NAO fecha nada."
-          echo "     O que fecha e  nix run .#gate  (invariante 7): ele sobe as"
-          echo "     VMs, o ISO e os quatro sistemas, que e onde moram os"
-          echo "     defeitos que este laco nao pode ver."
+          echo "OK — e isto e um SUBCONJUNTO, nao uma categoria."
+          echo "     Sao dez escolhidos para o laco de edicao. Nao e completo e"
+          echo "     nao pretende ser: ha mais de cem checks, e a maioria deles"
+          echo "     tambem nao sobe VM."
+          echo
+          echo "     nix run .#most   todos menos os que constroem instalacao"
+          echo "     nix run .#gate   tudo (invariante 7)"
         '';
 
         # A complete system in a VM.

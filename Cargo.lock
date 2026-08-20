@@ -2512,6 +2512,18 @@ name = "ronoctua-cmd"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-files"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-apps",
+ "ronoctua-i18n",
+ "ronoctua-tokens",
+ "rustix 1.1.4",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-i18n"
 version = "0.1.0"
 dependencies = [
@@ -2633,6 +2645,7 @@ dependencies = [
  "ronoctua-apps",
  "ronoctua-clipboard",
  "ronoctua-cmd",
+ "ronoctua-files",
  "ronoctua-i18n",
  "ronoctua-keymap",
  "ronoctua-memory",

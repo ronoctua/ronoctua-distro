@@ -432,6 +432,70 @@ pub fn stamp() -> Vec<Option<std::time::SystemTime>> {
         .collect()
 }
 
+/// Which application declares that it opens this type.
+///
+/// # Why the catalogue answers, and not `xdg-open`
+///
+/// Because the catalogue is already in memory: the sweep at startup read every
+/// `.desktop` there is, and `MimeType=` came along with the rest. Spawning
+/// `xdg-open` would walk the same directories again, in another process, to
+/// reach the same answer — and it would do it inside the frame that draws.
+///
+/// # The order, and why the FIRST match is the right one
+///
+/// The catalogue is deduplicated by id with the first occurrence winning, and
+/// `directories()` puts `$XDG_DATA_HOME` first — so an entry the person wrote
+/// themselves already beats the system's. That is the freedesktop override
+/// mechanism, and it is the whole of the preference this needs: a real
+/// `mimeapps.list` would add a per-type default on top, and it is the obvious
+/// next row of this function rather than a different design.
+#[must_use]
+pub fn opens<'a>(
+    catalogue: &'a Catalogue,
+    of_type: &str,
+) -> Option<&'a ronoctua_apps::DesktopEntry> {
+    let wanted = ronoctua_files::mime::canonical(of_type);
+    catalogue
+        .iter()
+        // EXACTLY the type first. A handler for `text/plain` will open a
+        // `text/x-rust` — every editor does — but so will fifty other
+        // applications, and picking one of those over the one that named the
+        // type is how a `.rs` file ends up in a mail client.
+        .find(|e| e.mime_types.iter().any(|m| m == wanted))
+        .or_else(|| {
+            catalogue.iter().find(|e| {
+                e.mime_types
+                    .iter()
+                    .any(|m| ronoctua_files::mime::is_a(wanted, m))
+            })
+        })
+}
+
+/// The command line for opening `path` with this entry.
+///
+/// It re-assembles the entry's `Exec=` with the path in the field codes, rather
+/// than appending it: an `Exec=` of `foo --open %f --window` puts the file in
+/// the MIDDLE, and appending would hand `--window` the filename.
+#[must_use]
+pub fn command_for(
+    entry: &ronoctua_apps::DesktopEntry,
+    path: &std::path::Path,
+) -> (String, Vec<String>) {
+    let open = vec![path.to_string_lossy().into_owned()];
+    // The raw `Exec=` is not kept on the entry — only the assembled command is
+    // — so a line with no field code at all gets the path appended, which is
+    // what the spec says to do with an entry that declares a type and no
+    // placeholder.
+    let (program, mut args) = entry.command.clone();
+    if args.iter().any(|a| a.contains('%')) {
+        // Should not happen: `assemble` consumed the codes at scan time. If it
+        // ever does, appending is still better than passing a literal `%f`.
+        tracing::debug!(id = %entry.id, "sobrou codigo de campo no comando");
+    }
+    args.extend(open);
+    (program, args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Action, Finder, glyph_of};
@@ -441,6 +505,7 @@ mod tests {
 
     fn input_of(id: &str, name: &str, categories: &[&str]) -> DesktopEntry {
         DesktopEntry {
+            mime_types: Vec::new(),
             id: id.to_owned(),
             name: name.to_owned(),
             description: format!("descricao de {name}"),

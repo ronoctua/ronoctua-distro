@@ -76,6 +76,22 @@ imprime `hot reload ligado` na partida — se não imprimir, você não está na
 > nunca foi adicionado é invisível para ele: a construção passa, sai idêntica, e a sua edição
 > simplesmente não está lá. O laço percebe e diz isso em vez de anunciar sucesso.
 
+## Mexer em arquivos sem sair do teclado
+
+`LEADER .` abre o gerenciador na região do rodapé; `LEADER f m` abre a mesma coisa numa janela, sem o
+teto de doze linhas. As duas desenham a mesma vista — o que muda é só o tamanho.
+
+Dentro dele, a tecla que resolve tudo é a **vírgula**: ela abre o menu de ações, e cada linha mostra
+a tecla que a roda. Não há uma segunda tabela para decorar, e isso é de propósito: o menu sai da
+mesma tabela de onde as teclas são lidas, então não tem como divergir.
+
+> **O botão direito abre o mesmo menu**, e passar o ponteiro sobre uma permissão explica aquele bit
+> na linha de baixo — numa pasta o `x` é "entrar" e não "executar", e a frase muda junto. Nada disso
+> flutua: é a mesma região, e o invariante 14 continua de pé.
+
+Trocar dono, grupo ou permissão é **escolher numa lista**, nunca digitar uma sintaxe. Só o dono pede
+senha, porque só ele precisa de root — e quem pergunta é o polkit, uma vez por sessão.
+
 ## A única tecla que você precisa saber
 
 Um toque em **`Ctrl+Alt+Espaço`** abre a lista de atalhos, logo abaixo das duas linhas do rodapé. É
@@ -109,7 +125,8 @@ O comando imprime as teclas certas ao subir. Elas valem mais do que este texto.
 ## Os outros comandos
 
 ```
-nix run .#quick        os checks que não sobem VM — o laço curto, ~1 min
+nix run .#quick        dez escolhidos — o laço de edição, ~1 min
+nix run .#most         os que não constroem instalação — antes de commitar
 nix flake check        o mesmo que .#gate, cru — sem dimensionar pela memória
 nix run .#vm           a distro inteira numa VM: initrd, impermanência, boot de verdade
 nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
@@ -117,12 +134,43 @@ nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)
 nix build .#iso        gera o ISO instalável
 ```
 
-O `nix run .#quick` é o que se roda no meio do trabalho: formatação dos dois idiomas, clippy, testes,
-keymap e as duas traduções — tudo o que não precisa de VM. Ele **não fecha nada**, e diz isso ao
-terminar: o que fecha é o `.#gate`, que sobe as VMs, o ISO e os quatro sistemas.
+### As três baterias, e por que são três
+
+| | quanto | quando |
+|---|---|---|
+| `nix run .#quick` | ~1 min | no meio de uma edição |
+| `nix run .#most` | minutos | antes de commitar |
+| `nix run .#gate` | horas | antes de publicar — **só ele fecha o invariante 7** |
+
+O **`quick`** são dez nomes em `tests/quick.nix`: formatação dos dois idiomas, clippy, testes e as
+tabelas que o compilador não confere. É um **subconjunto escolhido**, e não uma categoria — há mais
+de cem checks e a maioria também não sobe VM. Ele diz isso ao terminar.
+
+O **`most`** é derivado: todos os checks menos os de `tests/slow.nix`. O que sai de lá **constrói uma
+instalação** — um sistema NixOS, uma imagem de disco ou o ISO — ou é um marco (`mN`), que é pergunta
+de hora de publicar. As VMs comuns ficam, e ficam por medição: cada roteiro leva de 17 a 48 s, e
+mesmo os que particionam um disco ou emulam um TPM não saem da faixa (`disko-vm` 77 s, `oom-vm` 49 s,
+`tpm-vm` 22 s). Ao terminar, ele **lista o que não verificou**, com os nomes.
+
+> **A divisão não pode envelhecer.** `test-tiers-are-total` exige que todo nome de `tests/slow.nix`
+> exista em `checks`, e `quick-names-exist` faz o mesmo pelo laço curto. Um check novo entra no
+> `most` sozinho — que é o padrão certo, porque um check caro esquecido faz o relógio reclamar, e um
+> check barato esquecido não faria ruído nenhum.
 
 O `nix run .#vm` é mais lento que o `.#dev`, e o que se ganha é o boot completo. Usuário `noctua`,
 senha `noctua`.
+
+### Quando o ponteiro parece atrasado
+
+```
+RONOCTUA_MEASURE_HOVER=1 RUST_LOG=ronoctua_render=info nix run .#dev
+```
+
+Cada linha que o ponteiro cruza vira uma medida: quanto tempo do EVENTO até o `present`. É a nossa
+metade da latência — sem compositor e sem varredura. Se ela vier em milissegundos de um dígito, o
+atraso que se vê não está no que o rodapé calcula, e o que sobra é a cadeia: no laço aninhado há um
+compositor a mais entre a mão e a tela, nos dois sentidos. Medir a outra metade exige a distro
+instalada (`docs/PENDING.md`, item 3).
 
 ## Quando é preciso instalar de verdade
 

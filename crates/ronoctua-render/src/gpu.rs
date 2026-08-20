@@ -237,7 +237,18 @@ impl Gpu {
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            // ONE FRAME IN FLIGHT, AND NOT TWO.
+            //
+            // The deeper queue exists so that an animation keeps the GPU fed
+            // while the compositor is still showing the previous frame — it
+            // buys THROUGHPUT with LATENCY. Nothing here animates: every frame
+            // this surface draws is the answer to something that just happened,
+            // and the only thing that matters about it is how soon it is seen.
+            //
+            // With two, the frame a pointer movement produced could sit behind
+            // one already queued — a whole refresh of delay, ~16 ms at 60 Hz,
+            // added to a gesture whose whole point is following the hand.
+            desired_maximum_frame_latency: 1,
             // A new field in wgpu 30, with no `Default` on the struct. `Srgb` matches
             // the sRGB format we chose above.
             color_space: wgpu::SurfaceColorSpace::Srgb,

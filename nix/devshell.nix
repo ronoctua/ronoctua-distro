@@ -143,8 +143,9 @@ pkgs.mkShell {
         crates/ronoctua-protocol/wit/deps/tokens/tokens.wit
     fi
 
-    echo "  nix run .#quick    os checks sem VM (~1 min) — nao fecha nada"
-    echo "  nix flake check    verifica tudo"
+    echo "  nix run .#quick    dez escolhidos (~1 min) — subconjunto, nao categoria"
+    echo "  nix run .#most     os que nao constroem instalacao — antes de commitar"
+    echo "  nix run .#gate     tudo, pela RAM da maquina — so ele fecha o invariante 7"
     echo "  nix run .#dev      niri aninhado + rodape (leader = Ctrl+Alt+Space)"
     echo "  nix run .#vm       sistema completo em VM"
     echo "  nix run .#bench    mede o trabalho de CPU do frame"

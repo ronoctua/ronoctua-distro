@@ -71,6 +71,17 @@ fn face(language: &str) -> Option<&'static str> {
     }
 }
 
+/// One argument of a text, when the value is not always a string.
+///
+/// See [`Texts::t_args`] for why a number has to arrive as a number.
+#[derive(Debug, Clone, Copy)]
+pub enum Arg<'a> {
+    /// A piece of data: a name, a path, a key notation.
+    Text(&'a str),
+    /// A count. This is the one that makes a plural pick the right branch.
+    Number(i64),
+}
+
 impl Texts {
     /// Loads a language by name (`pt-BR`, `en-GB`).
     ///
@@ -139,17 +150,48 @@ impl Texts {
     /// Fluent and not gettext.
     #[must_use]
     pub fn t_with(&self, key: &str, args: &[(&str, &str)]) -> String {
+        let mut fluent = fluent_bundle::FluentArgs::new();
+        for (k, v) in args {
+            fluent.set(*k, *v);
+        }
+        self.format(key, fluent, args.is_empty())
+    }
+
+    /// The same, with arguments that may be NUMBERS.
+    ///
+    /// # Why a number cannot travel as a string
+    ///
+    /// A plural is a decision of the LANGUAGE — English has two forms, Polish
+    /// three — and Fluent expresses it as `{ $n -> [one] ... *[other] ... }`.
+    /// Choosing the branch means asking the plural rules what CATEGORY the
+    /// number falls into, and that only happens for a numeric value: given the
+    /// string `"1"`, Fluent looks for a variant literally named `1` and falls
+    /// through to the default. The symptom is a screen that says "1 items"
+    /// while every set check is green.
+    ///
+    /// It is a second method and not a wider `t_with` so that the twenty
+    /// existing call sites, which have no numbers, keep their shape.
+    #[must_use]
+    pub fn t_args(&self, key: &str, args: &[(&str, Arg<'_>)]) -> String {
+        let mut fluent = fluent_bundle::FluentArgs::new();
+        for (k, v) in args {
+            match v {
+                Arg::Text(s) => fluent.set(*k, *s),
+                Arg::Number(n) => fluent.set(*k, *n),
+            }
+        }
+        self.format(key, fluent, args.is_empty())
+    }
+
+    /// The half both public forms share.
+    fn format(&self, key: &str, fluent: fluent_bundle::FluentArgs<'_>, bare: bool) -> String {
         let Some(msg) = self.bundle.get_message(key) else {
             return format!("[{key}]");
         };
         let Some(default_of) = msg.value() else {
             return format!("[{key}]");
         };
-        let mut fluent = fluent_bundle::FluentArgs::new();
-        for (k, v) in args {
-            fluent.set(*k, *v);
-        }
-        let args = (!args.is_empty()).then_some(&fluent);
+        let args = (!bare).then_some(&fluent);
         let mut erros = Vec::new();
         let s = self.bundle.format_pattern(default_of, args, &mut erros);
         if !erros.is_empty() {

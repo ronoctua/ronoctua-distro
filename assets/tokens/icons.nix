@@ -128,6 +128,37 @@
   calculator = "fa-calculator";
 
   # ===================================================================
+  # FILE TYPES — the eighth view of the expansion (LEADER .), and the window.
+  #
+  # These are the OTHER end of `assets/icons/mime-glyphs.nix`: freedesktop says
+  # what a type is generically (`x-office-spreadsheet`), and that table says
+  # which of these draws it. Seventeen generic names cover all 1,232 types the
+  # database knows, so the table stays short and the coverage stays total.
+  #
+  # Codicons where they exist, for the reason the rest of the chrome gives —
+  # a column half made of Font Awesome comes out jagged. Where the family has
+  # no glyph for the idea (a font, a disc, a pipe), Material fills in.
+  # ===================================================================
+  # A picture. `file_media` and not a camera: what is being named is the FILE,
+  # and a camera is where a photograph came from, not what it is now.
+  image = "cod-file_media";
+  # A program. `oct-file_binary` says exactly that, and the two Codicon
+  # candidates (`run_all`, `gear`) both say "settings" to the eye.
+  executable = "oct-file_binary";
+  spreadsheet = "cod-table";
+  presentation = "md-presentation";
+  font = "md-format_font";
+  disc = "md-disc";
+  pdf = "cod-file_pdf";
+  # A symlink, in the LISTING — not a git branch. `git-branch` was the nearest
+  # thing that already existed and it is wrong twice over: it means something
+  # else in the modeline, and the same drawing in two roles is how a person
+  # learns to distrust an icon.
+  link = "cod-link";
+  pipe = "md-pipe";
+  socket = "md-console_network";
+
+  # ===================================================================
   # NETWORK — the seventh view of the expansion (LEADER r r).
   #
   # Four signal steps, and not a percentage: the exact number wobbles

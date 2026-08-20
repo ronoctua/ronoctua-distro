@@ -34,10 +34,10 @@ let
       cd "$root_dir"
 
       echo "pre-commit: formatacao…"
-      # `--check` confere os dois idiomas: os `.nix`, o workspace e os cinco
-      # workspaces dos buffers. E a mensagem manda rodar o comando que
-      # FUNCIONA — ela mandava rodar `nix fmt`, que ate agora travava lendo o
-      # stdin. O formatador virou um invólucro; a armadilha nao existe mais.
+      # `--check` covers both languages: the `.nix` files, the workspace and
+      # the five buffer workspaces. And the message names the command that
+      # WORKS — it used to say `nix fmt`, which until now hung reading stdin.
+      # The formatter became a wrapper; the trap no longer exists.
       if ! nix fmt -- --check . >/dev/null 2>&1; then
         echo "ERRO: ha arquivo fora de formato. Rode: nix fmt" >&2
         exit 1

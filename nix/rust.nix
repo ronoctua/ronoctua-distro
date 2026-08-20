@@ -23,23 +23,25 @@
   fonts,
   noto-fonts-color-emoji,
   tokensRs,
+  mimeDb,
   i18nRs,
   niriActions,
   coreutils,
   util-linux,
   xdg-utils,
+  emacs30,
   systemd,
   btop,
   bottom,
   ncurses,
   fontconfig,
+  libarchive,
   zsh,
   polkit,
   nix,
   niri,
   wl-clipboard,
   xwayland-satellite,
-  bufferEditor,
   xkeyboard_config,
   glibcLocales,
   ghosttyVt,
@@ -156,6 +158,12 @@ let
     # The directory, not a file: the crate embeds the generated `keys.rs` AND the
     # `.ftl` files it came from.
     RONOCTUA_I18N_DIR = "${i18nRs}";
+    # The MIME table, for `ronoctua-files`'s `build.rs`. A directory for the
+    # same reason as the one above, and read at COMPILE time only: the
+    # `shared-mime-info` package is a build input of the derivation that made
+    # this file, and nothing of it survives into the closure — which is what
+    # `files-closure-has-no-mime-db` measures rather than assumes.
+    RONOCTUA_MIME_DIR = "${mimeDb}";
     # The compositor's action table, extracted from the PINNED niri. It is what
     # makes "every OS action has a command" true without a hand-written list.
     RONOCTUA_NIRI_ACTIONS = "${niriActions}/niri-actions.rs";
@@ -180,6 +188,22 @@ let
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.
     RONOCTUA_XDG_OPEN = "${xdg-utils}/bin/xdg-open";
+    # THE EDITOR OF THIS DISTRO, which is Emacs — and `emacsclient`, not
+    # `emacs`, because `nix/modules/emacs.nix` runs it as a DAEMON: a second
+    # process would take seconds to start and would not see the buffers the
+    # session already has.
+    #
+    # `-c` (a frame of its own) rather than `-nw`: the manager is a graphical
+    # thing and what it opens has to be one too.
+    #
+    # There USED TO BE a text editor of our own, a wasm buffer, and it existed
+    # only because `LEADER f f` promised to open a file and did nothing. It was
+    # never asked for and it was never going to be Emacs; with `f f` opening the
+    # manager, its one reason was gone. See docs/ARCHITECTURE.md.
+    #
+    # It may be ABSENT — `ronoctua.editor.emacs` is off in the `minimal`
+    # profile — and the caller says so rather than failing quietly.
+    RONOCTUA_EMACSCLIENT = "${emacs30}/bin/emacsclient";
     # THE TWO PROCESS MONITORS — `Ctrl+Alt+Esc` / `LEADER+Esc` and `LEADER+S-Esc`.
     #
     # By store path for the usual reason, in its sharpest form: they are what one
@@ -272,6 +296,23 @@ let
     RONOCTUA_FC_CACHE = "${fontconfig}/bin/fc-cache";
     RONOCTUA_RESCUE_SHELL = "${zsh}/bin/zsh";
     RONOCTUA_PKTTYAGENT = "${polkit}/bin/pkttyagent";
+    # WHAT THE FILE MANAGER SPAWNS. Same route, same reason.
+    #
+    # `bsdtar` and not one tool per format: it reads and writes more formats
+    # than the rest of `nix/modules/archives.nix` put together, and one
+    # command line then serves `.tar.zst`, `.tar.gz` and `.zip` — the three the
+    # menu offers. Its own program is 440 KB; what its closure adds beyond what
+    # the system already carries is measured by `iso-fits-usb-stick`, not
+    # assumed.
+    RONOCTUA_BSDTAR = "${libarchive}/bin/bsdtar";
+    # The discard pass of an overwriting delete — the one step that reaches the
+    # SSD controller, and the reason `Verb::Trim` exists. It needs root, so it
+    # goes through the same narrow unit as the other three.
+    RONOCTUA_FSTRIM = "${util-linux}/bin/fstrim";
+    # "Open as root": our own terminal running `pkexec`. It is polkit's own
+    # front door, so the authorisation is the one the desktop already knows how
+    # to ask for — and this crate still never sees a password.
+    RONOCTUA_PKEXEC = "${polkit}/bin/pkexec";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a
     # FOREIGN application that brings its own `Icon=`. It had existed since the
     # icons milestone and never had a path into the Rust: `Cadeia` has the field
@@ -323,7 +364,6 @@ let
   # and `profile-minimal-closes` name the five, and would say so if they left.
   bufferComponents = {
     RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
-    RONOCTUA_BUFFER_EDITOR = "${bufferEditor}/lib/ronoctua_buffer_editor.wasm";
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
@@ -479,6 +519,25 @@ rec {
     # Same as above: the graphics rpath belongs to the footer, and this program
     # draws on a terminal.
     patchelf --shrink-rpath $out/bin/ronoctua-rescue
+  '';
+
+  # THE PRIVILEGED HELPER, EXTRACTED — and for the sharpest version of the
+  # reason the rescue console gives.
+  #
+  # This one runs as ROOT. Handing it the whole workspace would put wgpu, the
+  # wasm runtime, the renderer and its three embedded fonts inside a unit that
+  # runs as root — a hundred megabytes to perform four syscalls. `nix
+  # why-depends` on the unit is what would say so, and nobody runs that on a
+  # Tuesday.
+  #
+  # A `[[bin]]` of `ronoctua-files` and nothing else: it links `rustix`,
+  # `anyhow` and this crate's own parsers.
+  filesRoot = pkgs.runCommand "ronoctua-files-root" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-files-root $out/bin/
+    chmod +w $out/bin/ronoctua-files-root
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-files-root
   '';
 
   # Tests. A separate derivation so it can say WHAT broke.

@@ -32,22 +32,102 @@
 # the editor go on allocating while the gate runs.
 #
 # What is left over, divided by the peak, is how many compilers may run at once.
+#
+# # Duas baterias, uma aritmética
+#
+# # Why `most` and `gate` are one function
+#
+# They size memory identically, so they are the same function with different
+# arguments. Written twice, the middle one would kill `rustc` through
+# `earlyoom` exactly as the gate did before this file existed — the same
+# defect reappearing in a new command, with its fix sitting right next to it.
 {
   writeShellApplication,
   coreutils,
   gawk,
   gnugrep,
+  lib,
   system,
+  # WHAT THE BATTERY IS CALLED, and what it does once the sizing is done.
+  #
+  # `gate` runs the whole `nix flake check`; `most` builds a list of targets.
+  # Everything before that point is shared.
+  name ? "ronoctua-gate",
+  what ? "gate",
+  # The targets, when `what` is `targets`.
+  targets ? [ ],
+  # What is left out, so the battery can say what it did not verify.
+  left ? [ ],
+  # The downloader that resumes, or `null`. See `nix/prefetch.nix`.
+  prefetch ? null,
 }:
 
+let
+  # THE TAIL, ASSEMBLED OUT HERE AND NOT INSIDE `text`.
+  #
+  # One doubled-quote fence inside another CLOSES the outer one: it ends at
+  # any `''`, and the trap is written down in CLAUDE.md. With the tail in a
+  # binding, the two strings are siblings instead of nested.
+  targetLines = lib.concatMapStringsSep "\n      " (t: "\".#checks.${system}.${t}\"") targets;
+  leftLines = lib.concatMapStringsSep "\n    " (t: "echo \"       ${t}\"") left;
+
+  tail =
+    if what == "gate" then
+      ''
+        echo "== o gate =="
+        if ! nix flake check --keep-going -L --max-jobs "$jobs" --cores "$cores" "$@"; then
+          blame_earlyoom
+          exit 1
+        fi
+        echo ""
+        echo "GATE OK"
+      ''
+    else
+      ''
+        echo "== ${toString (builtins.length targets)} checks, sem construir instalacao =="
+        targets=(
+          ${targetLines}
+        )
+        if ! nix build --no-link --keep-going -L \
+             --max-jobs "$jobs" --cores "$cores" "''${targets[@]}" "$@"; then
+          blame_earlyoom
+          exit 1
+        fi
+        echo ""
+        echo "OK — e isto NAO fecha o invariante 7."
+        echo ""
+        echo "     Ficaram de fora ${toString (builtins.length left)}: os que constroem uma"
+        echo "     INSTALACAO — um sistema NixOS, uma imagem de disco ou o ISO —, e os"
+        echo "     marcos (mN), que sao pergunta de hora de publicar:"
+        echo ""
+        ${leftLines}
+        echo ""
+        echo "     Quem os roda e  nix run .#gate  (invariante 7)."
+      '';
+in
 writeShellApplication {
-  name = "ronoctua-gate";
+  inherit name;
   runtimeInputs = [
     coreutils
     gawk
     gnugrep
   ];
   text = ''
+    ${lib.optionalString (prefetch != null) ''
+      # THE SOURCES NO CACHE HAS COME FIRST.
+      #
+      # One source in the `full` profile is 1.37 GB, unfree, and behind a single
+      # URL that resets the connection partway through — and `fetchurl` retries
+      # WITHOUT resuming, so it never finishes. Left to the check, the gate dies
+      # after minutes of work with `cannot download ... from any mirror`, which
+      # reads like the file is gone. Measured and written down in
+      # `nix/prefetch.nix`.
+      #
+      # It is a no-op once the store has them, which is every run after the
+      # first.
+      ${prefetch}
+      echo ""
+    ''}
     # THE THREE HEAVY ONES, and they go one at a time.
     #
     # Named here rather than discovered, because "heavy" is not a property Nix
@@ -127,16 +207,15 @@ writeShellApplication {
     done
 
     echo ""
-    echo "== o gate =="
-    if ! nix flake check --keep-going -L --max-jobs "$jobs" --cores "$cores" "$@"; then
-      blame_earlyoom
-      exit 1
-    fi
-    echo ""
-    echo "GATE OK"
+    ${tail}
   '';
+
   meta = {
-    description = "nix flake check dimensionado pela RAM da maquina";
+    description =
+      if what == "gate" then
+        "nix flake check dimensionado pela RAM da maquina"
+      else
+        "os checks que nao constroem instalacao, dimensionados pela RAM";
     platforms = [ system ];
   };
 }

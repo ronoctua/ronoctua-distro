@@ -4,7 +4,6 @@
 
 cmd-buffer-next = Próximo buffer
 cmd-buffer-switch = Trocar de buffer
-cmd-file-open = Abrir arquivo
 cmd-file-save = Salvar arquivo
 cmd-buffer-close = Fechar buffer
 cmd-glyphs-nerd-fonts = Navegar glifos
@@ -635,7 +634,6 @@ notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }
 
 ## O keymap do buffer em foco
 which-buffer = Buffer em foco
-cmd-editor-save = Salvar o arquivo
 cmd-exemplo-reiniciar = Reiniciar o exemplo
 
 ## O painel de memoria — LEADER s m
@@ -750,3 +748,266 @@ rescue-door-console = console
 rescue-door-window = janela
 
 cmd-rescue-open = Console de resgate
+
+# ===================================================================
+# O gerenciador de arquivos — LEADER . (rodapé) e a janela
+#
+# As explicações de permissão são a razão pela qual este arquivo passou a ter
+# SELETOR. Numa pasta, `x` não é "executar", é "entrar", e `r` sem `x` lista
+# nomes que não se alcança — dizer "executar" ali é dizer algo falso. A escolha
+# entre as duas frases é do IDIOMA, então mora aqui e não no Rust.
+# ===================================================================
+
+# O que a primeira letra da coluna diz.
+files-kind-directory = Uma pasta: um lugar, e não uma coisa.
+files-kind-file = Um arquivo comum.
+files-kind-symlink = Um atalho: aponta para outro caminho, e apagá-lo não apaga o alvo.
+files-kind-fifo = Um cano nomeado: um programa escreve, outro lê.
+files-kind-socket = Um soquete: dois programas conversando por aqui.
+files-kind-block = Um dispositivo de bloco — um disco, ou parte de um.
+files-kind-char = Um dispositivo de caractere.
+
+files-perm-owner-read = { $kind ->
+        [dir] { $set ->
+                [yes] { $who } pode ver os nomes que há nesta pasta
+               *[no] { $who } NÃO pode ver os nomes que há nesta pasta
+            }
+       *[file] { $set ->
+                [yes] { $who } pode ler este arquivo
+               *[no] { $who } NÃO pode ler este arquivo
+            }
+    }
+files-perm-owner-write = { $kind ->
+        [dir] { $set ->
+                [yes] { $who } pode criar e apagar coisas dentro desta pasta
+               *[no] { $who } NÃO pode criar nem apagar nada nesta pasta
+            }
+       *[file] { $set ->
+                [yes] { $who } pode alterar este arquivo
+               *[no] { $who } NÃO pode alterar este arquivo
+            }
+    }
+files-perm-owner-execute = { $kind ->
+        [dir] { $set ->
+                [yes] { $who } pode ENTRAR nesta pasta
+               *[no] { $who } NÃO pode entrar nesta pasta — nem no que está dentro
+            }
+       *[file] { $set ->
+                [yes] { $who } pode rodar este arquivo como programa
+               *[no] { $who } não pode rodar este arquivo
+            }
+    }
+files-perm-group-read = { $kind ->
+        [dir] { $set ->
+                [yes] o grupo { $who } pode ver os nomes que há nesta pasta
+               *[no] o grupo { $who } NÃO pode ver os nomes que há nesta pasta
+            }
+       *[file] { $set ->
+                [yes] o grupo { $who } pode ler este arquivo
+               *[no] o grupo { $who } NÃO pode ler este arquivo
+            }
+    }
+files-perm-group-write = { $kind ->
+        [dir] { $set ->
+                [yes] o grupo { $who } pode criar e apagar coisas dentro desta pasta
+               *[no] o grupo { $who } NÃO pode criar nem apagar nada nesta pasta
+            }
+       *[file] { $set ->
+                [yes] o grupo { $who } pode alterar este arquivo
+               *[no] o grupo { $who } NÃO pode alterar este arquivo
+            }
+    }
+files-perm-group-execute = { $kind ->
+        [dir] { $set ->
+                [yes] o grupo { $who } pode ENTRAR nesta pasta
+               *[no] o grupo { $who } NÃO pode entrar nesta pasta
+            }
+       *[file] { $set ->
+                [yes] o grupo { $who } pode rodar este arquivo como programa
+               *[no] o grupo { $who } não pode rodar este arquivo
+            }
+    }
+files-perm-other-read = { $kind ->
+        [dir] { $set ->
+                [yes] qualquer pessoa da máquina pode ver os nomes desta pasta
+               *[no] mais ninguém pode ver os nomes desta pasta
+            }
+       *[file] { $set ->
+                [yes] qualquer pessoa da máquina pode ler este arquivo
+               *[no] mais ninguém pode ler este arquivo
+            }
+    }
+files-perm-other-write = { $kind ->
+        [dir] { $set ->
+                [yes] qualquer pessoa da máquina pode criar e apagar coisas aqui
+               *[no] mais ninguém pode criar nem apagar nada aqui
+            }
+       *[file] { $set ->
+                [yes] qualquer pessoa da máquina pode alterar este arquivo
+               *[no] mais ninguém pode alterar este arquivo
+            }
+    }
+files-perm-other-execute = { $kind ->
+        [dir] { $set ->
+                [yes] qualquer pessoa da máquina pode entrar nesta pasta
+               *[no] mais ninguém pode entrar nesta pasta
+            }
+       *[file] { $set ->
+                [yes] qualquer pessoa da máquina pode rodar este arquivo
+               *[no] mais ninguém pode rodar este arquivo
+            }
+    }
+
+# Os três bits que não são sobre uma pessoa. A frase começa pelo que
+# surpreende: quem aponta para um `s` está perguntando sobre o `s`.
+files-perm-setuid = { $set ->
+        [yes] Roda como { $who }, e não como quem o executou.
+       *[no] O bit está ligado numa posição que não executa — quase sempre um engano.
+    }
+files-perm-setgid = { $kind ->
+        [dir] { $set ->
+                [yes] O que nascer aqui dentro herda o grupo { $group }.
+               *[no] O bit está ligado numa posição que não executa.
+            }
+       *[file] { $set ->
+                [yes] Roda com o grupo { $group }, e não com o de quem o executou.
+               *[no] O bit está ligado numa posição que não executa.
+            }
+    }
+files-perm-sticky = { $set ->
+        [yes] Só quem é dono de um arquivo pode apagá-lo daqui — é o que faz o /tmp funcionar.
+       *[no] O bit está ligado numa posição que não executa.
+    }
+
+# Os quatro modos que respondem "o que isto devia ser".
+files-preset-file = arquivo comum — você escreve, o resto lê
+files-preset-private = só você, e mais ninguém
+files-preset-program = programa — todos rodam, só você altera
+files-preset-private-dir = pasta só sua
+files-preset-readonly = ninguém altera, nem você
+
+# O tamanho. A vírgula está AQUI porque o separador decimal é do idioma.
+files-size-bytes = { $whole } B
+files-size-kib = { $whole },{ $tenth } KiB
+files-size-mib = { $whole },{ $tenth } MiB
+files-size-gib = { $whole },{ $tenth } GiB
+files-size-tib = { $whole },{ $tenth } TiB
+
+# A data em ordem ISO nos dois idiomas: ela ordena sozinha e não confunde
+# dia com mês, que é o único jeito de uma coluna de datas não mentir.
+files-when = { $y }-{ $m }-{ $d } { $hh }:{ $mm }
+files-when-utc = { $y }-{ $m }-{ $d } { $hh }:{ $mm } UTC
+
+files-order-name = nome
+files-order-size = tamanho
+files-order-modified = modificado
+files-order-kind = tipo
+
+files-format-zstd = .tar.zst — o que se guarda
+files-format-gzip = .tar.gz — o que se envia para qualquer lugar
+files-format-zip = .zip — o que se envia para quem usa Windows
+
+# As linhas do menu de ações. O id e a chave não podem divergir — um teste
+# compara os dois, porque a linha copiada com o id trocado COMPILA e mostra as
+# palavras da linha vizinha.
+files-open = abrir
+files-open-with = abrir com
+files-terminal = terminal aqui
+files-root-terminal = abrir como root
+files-copy-path = copiar o caminho
+files-copy = copiar
+files-cut = recortar
+files-paste = colar aqui
+files-rename = renomear
+files-info = informações
+files-mode = permissões
+files-owner = dono
+files-group = grupo
+files-compress = comprimir
+files-extract = extrair
+files-extract-tar = extrair o tar
+files-trash = mover para a lixeira
+files-delete = apagar de vez
+files-shred = apagar sobrescrevendo
+
+# As teclas da própria vista — navegação e marcação. Elas vivem numa tabela
+# (`OF_THE_VIEW`) e não dentro de um `match`, porque a lista é o que o manual e
+# o check leem: tecla que só existe num braço de `match` é tecla que nada
+# consegue enumerar.
+files-down = descer
+files-up = subir
+files-enter = abrir, ou entrar na pasta
+files-parent = subir uma pasta
+files-hint = digite para filtrar · { $key } abre o menu de ações
+files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
+files-yes = sim, aplicar
+files-no = não, deixar como está
+files-items = { $n } itens
+files-confirm-mode = Trocar as permissões de { $what } para { $mode }?
+files-no-editor = o Emacs nao esta instalado neste perfil
+files-menu-on = ações em { $name }
+files-menu-on-many = ações em { $n } marcados
+files-ask-application = Abrir com qual aplicativo?
+files-ask-owner = Trocar o DONO para quem?
+files-ask-group = Trocar o GRUPO para qual?
+files-ask-mode = Trocar as PERMISSÕES para qual conjunto?
+files-ask-format = Comprimir em qual formato?
+files-ask-name = Renomear para:
+files-hidden = mostrar ou esconder os ocultos
+files-sort = trocar a ordenação
+files-sort-reverse = inverter a ordem
+files-mark = marcar, e seguir para o próximo
+files-mark-all = marcar tudo o que está à vista
+files-unmark-all = desmarcar tudo
+files-first = ir para o primeiro
+files-last = ir para o último
+files-menu = menu de ações
+files-measure = medir a pasta, ou examinar o arquivo
+
+files-type-is = { $named }
+files-type-disagrees = o nome diz { $named }, o conteúdo diz { $found }
+
+cmd-files-open = Gerenciador de arquivos
+cmd-files-window = Gerenciador de arquivos, em janela
+group-file = arquivo
+
+files-nothing-here = esta pasta está vazia
+files-nothing-to-choose = não há nada para escolher
+files-copied = copiado
+files-not-copied = não consegui copiar
+files-nothing-opens = nenhum aplicativo declara abrir { $type }
+files-no-pkexec = o `pkexec` não foi definido em nix/rust.nix
+files-no-systemctl = o `systemctl` não foi definido em nix/rust.nix
+files-refused = { $why }
+
+# O cabeçalho da tabela. Clicar num deles ordena por ele; clicar de novo
+# inverte. A tecla `s` faz a mesma volta.
+files-column-icon = tipo
+files-column-name = nome
+files-column-perms = permissões
+files-column-owner = dono
+files-column-group = grupo
+files-column-size = tamanho
+files-column-modified = modificado
+
+# O que cada campo diz ao ponteiro. Campo que acende e não explica promete uma
+# ação e não descreve nenhuma.
+files-explain-owner = { $who } é o dono; clicar troca
+files-explain-group = o grupo é { $who }; clicar troca
+files-explain-size = { $bytes } bytes exatos
+files-explain-measure = clique para medir esta pasta — é uma caminhada
+files-explain-when = e { $seconds } segundos, na hora local desta máquina
+files-explain-when-utc = e { $seconds } segundos, em UTC — não consegui ler o /etc/localtime
+
+# A ficha de detalhe.
+files-detail-path = caminho
+files-detail-type = tipo
+files-detail-mode = permissão
+files-detail-owner = dono:grupo
+files-detail-size = tamanho
+files-detail-modified = modificado
+files-detail-links = nomes deste inode
+files-detail-target = aponta para
+files-detail-broken = aponta para (não existe)
+files-restore = devolver de onde veio
+files-no-trash = não sei onde fica a lixeira; nada foi movido

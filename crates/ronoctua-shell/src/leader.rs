@@ -544,15 +544,26 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "buffer-switch",
             label: key::CMD_BUFFER_SWITCH,
         },
-        // `LEADER f f` — open a file in the editor buffer.
+        // `LEADER .` — the file manager, in the footer's expanded region.
         //
-        // It was taken out of the keymap because it promised something that did
-        // not exist. It exists now: the locator lists the files, the HOST reads
-        // the chosen one, and the content reaches the buffer through
-        // `Input::Paste` — the buffer never touches the disk (invariant 11).
+        // First level, and `.` because that is where Doom puts "find file". It
+        // was free: `.` appears only at the second level (`TAB .`), and the
+        // tree branches on the first key.
+        //
+        // A manager and not a picker: `f f` above hands a path to the editor
+        // and stops there. This one lists everything a directory holds —
+        // permissions, owner, group, size, date, and a glyph for what each
+        // thing is — and acts on it.
         Command {
-            id: "file-open",
-            label: key::CMD_FILE_OPEN,
+            id: "files-open",
+            label: key::CMD_FILES_OPEN,
+        },
+        // The SAME manager, in a window of its own. The footer's region has a
+        // twelve-line ceiling (`space.expansion`, invariant 14), which is right
+        // for a footer and not for the job.
+        Command {
+            id: "files-window",
+            label: key::CMD_FILES_WINDOW,
         },
         Command {
             id: "buffer-close",
@@ -916,7 +927,28 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // keys, the person goes back to opening everything through the terminal.
         ("a", "apps-open", None),
         ("t c", "screen-capture", None),
-        ("f f", "file-open", None),
+        // `f f` IS THE MANAGER, in the footer's region — the same thing `.`
+        // opens, and deliberately the same thing.
+        //
+        // It used to be the editor's file PICKER, and that was reported from
+        // the screen as "a different and inferior file manager". The reading
+        // was right: whoever types `f f` in a group called "file" is looking
+        // for files, and what came up was a flat list of names that could only
+        // do one thing with the one you chose.
+        ("f f", "files-open", None),
+        // `w` for WINDOW — the same manager as `f f`, in one of its own,
+        // because the footer's region has a twelve-line ceiling
+        // (`space.expansion`, invariant 14) and that is right for a footer and
+        // not for the job people open a manager to do.
+        //
+        // It was `m` for "manager" and the letter was never written down; being
+        // asked "why m?" is what earned it these lines — and the answer was that
+        // `w` says which of the two DOORS it is, which is the actual difference.
+        ("f w", "files-window", None),
+        // `LEADER .` — Doom's own key for reaching a file, at the first level
+        // because that is how often it is used. A manager that costs two keys
+        // is a manager people go back to the terminal for.
+        (".", "files-open", None),
         ("b b", "buffer-switch", None),
         ("b n", "buffer-next", None),
         ("b k", "buffer-close", None),
@@ -979,6 +1011,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 
     const GROUPS: &[(&str, &str)] = &[
         ("b", key::GROUP_BUFFER),
+        // `f` HAD NO LABEL until now. `f f` existed and the group it hangs off
+        // showed up in which-key with `keymap.sem-rotulo` — a prefix that says
+        // nothing about where it leads. It has two items now, and a name.
+        ("f", key::GROUP_FILE),
         ("w", key::GROUP_WINDOW),
         ("TAB", key::GROUP_WORKSPACE),
         ("TAB m", key::GROUP_WORKSPACE_MOVE),
@@ -1618,7 +1654,8 @@ mod tests {
             "mx-open",
             "apps-open",
             "buffer-switch",
-            "file-open",
+            "files-open",
+            "files-window",
             "buffer-terminal",
             "buffer-terminal-external",
             "monitor-btop",

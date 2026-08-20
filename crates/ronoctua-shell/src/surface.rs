@@ -141,6 +141,25 @@ struct Footer {
     /// makes the compositor close it right away. See `run`.
     screens: Vec<Screen>,
     quit: bool,
+    /// A paint is owed, and it happens once the queue is empty.
+    ///
+    /// # Why the pointer does not paint where it is handled
+    ///
+    /// Because the surface presents in `Fifo`: `get_current_texture` waits for
+    /// the compositor to hand a buffer back, which is up to a whole refresh.
+    /// Painting inside the event handler meant paying that wait once per
+    /// pointer frame — and a fast sweep produces a burst of them, so the
+    /// handler blocked while more motion piled up in the socket. Every paint
+    /// then drew a position the pointer had already left, and the highlight
+    /// visibly trailed the mouse. It got worse the faster one moved, which is
+    /// exactly how it was reported.
+    ///
+    /// Marking instead of painting collapses the burst: `calloop` dispatches
+    /// everything that is pending, and the callback paints ONCE, with the
+    /// latest position. The wait is still there — it is what `Fifo` is for —
+    /// but it is paid once per frame instead of once per event, and never with
+    /// stale input behind it.
+    owes_paint: bool,
 
     /// Is the locator currently picking a FILE, and not a buffer?
     ///
@@ -148,7 +167,6 @@ struct Footer {
     /// a field and not a guess from the id, because a path and a window id are
     /// both just strings and confusing them would open a window numbered after
     /// a filename.
-    picking_file: bool,
 
     /// What the compositor says about windows and focus. Fed by the daemon's
     /// thread; it lives HERE and not in the surface, for the reason of section 9.2
@@ -186,7 +204,7 @@ struct Footer {
     /// The interface texts in the active language. Loaded once at startup:
     /// switching language at runtime would require reloading the bundle, and
     /// nothing in the system does that today.
-    texts: ronoctua_i18n::Texts,
+    texts: std::rc::Rc<ronoctua_i18n::Texts>,
     tree: ronoctua_keymap::Tree,
     /// The which-key lines on display. Empty when the leader is not running.
     inputs: Vec<ronoctua_keymap::Entry>,
@@ -280,6 +298,13 @@ struct Footer {
     /// An index into the page, and not into the whole list: it is what the drawing
     /// positions, and converting here would avoid a second scroll calculation.
     row_under_pointer: Option<usize>,
+    /// Which CELL of that row, counting from the region's left edge.
+    ///
+    /// Only the file manager needs it, and it needs it badly: ten of its cells
+    /// are separate permission bits, and a row index alone cannot tell the
+    /// group's `w` from the owner's `r`. It is what makes both the explanation
+    /// on hover and the click on a bit possible at all.
+    cell_under_pointer: Option<u16>,
     /// Is the shortcut manual open?
     ///
     /// It is the fourth use of the expanded region, and the second MODAL one:
@@ -344,6 +369,28 @@ struct Footer {
     /// the open/closed, and there is no parallel boolean that can disagree with it.
     network: Option<crate::network::ViewState>,
 
+    // --- file manager (`LEADER .`) ---
+    /// The file manager, when open. Same design, same reason.
+    ///
+    /// It holds MORE than the others: a directory one navigated to, a set of
+    /// marks, a filter, an armed confirmation. That is why it wins the
+    /// precedence in `view()` — the rest can be reopened in a keystroke.
+    files: Option<crate::files::View>,
+    /// Where the manager's threads hand their result back.
+    files_sender: Option<calloop::channel::Sender<crate::files::Report>>,
+    /// Who the numeric ids belong to, read ONCE.
+    ///
+    /// `/etc/passwd` and `/etc/group` do not change while a listing is on
+    /// screen, and re-reading them per row would be two hundred opens inside
+    /// the frame that draws.
+    roster: ronoctua_files::who::Roster,
+    /// How far ahead of UTC this machine is.
+    ///
+    /// Read once from `/etc/localtime`. When it could not be read it says so,
+    /// and the date column is labelled UTC rather than showing a local time
+    /// nobody can vouch for.
+    zone: ronoctua_files::when::Zone,
+
     /// The freshly typed password, waiting for the answer to "remember?".
     ///
     /// It lives for the span of one key. It is the only point of the footer where
@@ -381,7 +428,7 @@ struct Footer {
 ///
 /// # Why this enum exists
 ///
-/// The precedence order between the six views was written in FOUR places — the
+/// The precedence order between the views was written in FOUR places — the
 /// height, the navigation, the drawing and the keyboard grab —, and the only
 /// thing keeping the footer standing was the four agreeing. They diverged
 /// once, and the symptom was the surface asking for twenty-two lines to draw six.
@@ -394,6 +441,8 @@ struct Footer {
 /// be written **once** without changing who is in charge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewState {
+    /// The file manager. Modal.
+    Files,
     /// The clipboard history. Modal.
     Clipboard,
     /// The shortcut manual. Modal.
@@ -516,6 +565,20 @@ struct ExpansionRow {
     separator: bool,
     key_color: tokens::Color,
     text_color: tokens::Color,
+    /// The file manager's row, when this line is one.
+    ///
+    /// # Why it hangs off the same struct
+    ///
+    /// Because `expansion()` is the SINGLE list that feeds both the height and
+    /// the drawing, and a second list for a second kind of row would be the
+    /// divergence this enum's own doc describes — the footer asking for
+    /// twenty-two lines to draw six. A `Vec` that is empty for every other
+    /// view costs a pointer per line and keeps one list.
+    ///
+    /// When it is non-empty the two columns above are not drawn: a listing has
+    /// seven columns with a hit target each, which is exactly what `key`/`text`
+    /// cannot express.
+    fields: Vec<crate::files::Field>,
 }
 
 /// What a click on a line of the expansion does.
@@ -535,6 +598,19 @@ enum Click {
     /// `mx.choose()` would run an `M-x` command — the index exists in both, so
     /// nothing would fail; something else would come out.
     Application(usize),
+    /// A cell of the file manager's PATH line.
+    ///
+    /// No index: which crumb comes from the cell, exactly as the header's
+    /// columns do. The row alone would say "the path", which is not a place.
+    FilesPath,
+    /// A cell of line `n` of the file manager.
+    ///
+    /// The row alone is not enough here, and that is the whole difference from
+    /// the other variants: a listing row has seven columns and ten of its cells
+    /// are separate permission bits. WHICH cell comes from
+    /// `Footer::cell_under_pointer`, recorded by the same press — see
+    /// `pointer_frame`.
+    Files(usize),
     /// Put the focus on line `n` of the network list.
     ///
     /// Its own variant for the same reason as `Application`: the lists share the
@@ -578,11 +654,23 @@ impl ExpansionRow {
             separator: true,
             key_color: tokens::color::STATE_ACCENT,
             text_color: tokens::color::TEXT_SECONDARY,
+            fields: Vec::new(),
         }
     }
 
     /// How much this line measures, for the grid.
     fn measurement(&self) -> Measure {
+        // A file manager row already knows its own columns — it resolved them
+        // against the screen's width before it existed. Reporting a key and a
+        // text width would make `grid_for` try to lay it out a second time,
+        // with a different answer.
+        if !self.fields.is_empty() {
+            return Measure {
+                key: 0,
+                text: u16::MAX,
+                icon: false,
+            };
+        }
         Measure {
             key: layout::width(&self.key),
             text: layout::width(&self.text),
@@ -996,6 +1084,8 @@ pub const FIRST_OF_EXPANSION: u16 = 2;
 /// `BTN_LEFT` from `linux/input-event-codes.h`. Wayland passes the raw evdev
 /// code, with no enum.
 const LEFT_BUTTON: u32 = 0x110;
+/// `BTN_RIGHT`. It opens the file manager's menu, and nothing else.
+const RIGHT_BUTTON: u32 = 0x111;
 
 /// How many lines a wheel detent steps where there is scrolling.
 ///
@@ -1081,9 +1171,30 @@ impl Inheritance {
     /// The compositor announced the modifiers. The FIRST reading after the focus
     /// is the inheritance — the protocol requires an announcement right after the `enter`.
     fn on_announcement(&mut self, mods: Modifiers) {
-        if self.0.is_none() {
+        let Some(held) = self.0.as_mut() else {
             self.0 = Some(mods);
-        }
+            return;
+        };
+        // A MODIFIER THAT WAS RELEASED STOPS BEING INHERITED.
+        //
+        // Without this the discount lasted the whole session: `LEADER .` in the
+        // nested loop starts with Ctrl and Alt held, so from then on EVERY
+        // `M-…` arrived with the Alt subtracted and matched the bare letter
+        // instead. The docstring above already claimed the opposite — "a
+        // modifier pressed afterwards, in the middle of the sequence, still
+        // counts" — and it did not, because nothing ever cleared the flag.
+        //
+        // It stayed invisible while no view had a `C-` or `M-` binding. The
+        // file manager's do, and there the failure is loud in the wrong way:
+        // `M-s` would not sort, it would type an `s` into the query.
+        //
+        // Only the announcement can say this. The release does not come as a
+        // key event — it comes as this, the compositor's own statement of what
+        // is held now.
+        held.ctrl &= mods.ctrl;
+        held.alt &= mods.alt;
+        held.shift &= mods.shift;
+        held.logo &= mods.logo;
     }
 
     /// The sequence has STARTED now: whatever is held is its inheritance.
@@ -1113,6 +1224,21 @@ impl Inheritance {
             logo: now.logo && !h.logo,
         }
     }
+}
+
+/// Which field of a loose row a cell lands on.
+///
+/// `Row::field_at` answers this for a listing row; the path is a `Vec<Field>`
+/// and not a `Row`, because it has no mark, no focus and no columns. The rule
+/// is the same one, and it is `rev()` for the same reason: fields are laid out
+/// left to right and the LAST one that starts at or before the cell is the one
+/// under it.
+fn field_at(fields: &[crate::files::Field], cell: u16) -> Option<crate::files::Hit> {
+    fields
+        .iter()
+        .rev()
+        .find(|f| cell >= f.at && cell < f.at + ronoctua_render::layout::width(&f.text))
+        .map(|f| f.hit.clone())
 }
 
 /// The mark of a PINNED entry in the clipboard history.
@@ -1164,14 +1290,14 @@ pub fn run() -> Result<()> {
         requested_height: altura_rodape,
         screens: Vec::new(),
         quit: false,
-        picking_file: false,
+        owes_paint: false,
         niri: ronoctua_niri::State::default(),
         seats: SeatState::new(&globals, &qh),
         keyboard: None,
         mods: Modifiers::default(),
         inheritance: Inheritance::default(),
         leader: Leader::default(),
-        texts: ronoctua_i18n::Texts::from_env(),
+        texts: std::rc::Rc::new(ronoctua_i18n::Texts::from_env()),
         tree,
         inputs: Vec::new(),
         buffer_bindings: Vec::new(),
@@ -1193,6 +1319,7 @@ pub fn run() -> Result<()> {
         under_pointer: false,
         dragging: false,
         row_under_pointer: None,
+        cell_under_pointer: None,
         manual: false,
         offset: 0,
         right_ctrl: false,
@@ -1202,6 +1329,13 @@ pub fn run() -> Result<()> {
         launch_sender: None,
         apps: None,
         network: None,
+        files: None,
+        files_sender: None,
+        // Read ONCE, at startup. Neither answer changes while a listing is on
+        // screen, and asking per row would put two hundred opens inside the
+        // frame that draws it.
+        roster: ronoctua_files::who::Roster::read_from(&ronoctua_files::who::Files::default()),
+        zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
         network_remember: None,
         scan_sender: None,
         scan_watching: false,
@@ -1247,6 +1381,21 @@ pub fn run() -> Result<()> {
         }
     })
     .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal de lancamento: {e}"))?;
+
+    // WHAT THE FILE MANAGER'S THREADS COME BACK WITH.
+    //
+    // Copying a directory, walking one and waiting for `systemctl start` are
+    // all unbounded, and the loop that draws cannot wait for any of them —
+    // `systemd-run --scope` already taught this project what that costs. The
+    // channel is built here and always; the threads are raised per operation.
+    let (files_sender, arquivos) = channel::channel::<crate::files::Report>();
+    state.files_sender = Some(files_sender);
+    alca.insert_source(arquivos, |event, (), state: &mut Footer| {
+        if let channel::Event::Msg(r) = event {
+            state.files_reported(r);
+        }
+    })
+    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal de arquivos: {e}"))?;
 
     // THE END OF A RADIO SCAN.
     //
@@ -1401,7 +1550,19 @@ pub fn run() -> Result<()> {
             // Both on the SAME tick: a second clock just for the echo area would
             // wake the loop twice a second for nothing.
             let venceu = state.expire_echo(now);
-            if state.notifications.tick(now) || venceu {
+            // AND THE DIRECTORY, when the manager is open. One `stat` a second
+            // against the directory's mtime: something else moved a file into
+            // it, an operation of ours finished, an archive was unpacked. A
+            // listing that only refreshes when a key is pressed is a listing
+            // that lies quietly.
+            let mudou = state.files.as_ref().is_some_and(crate::files::View::stale);
+            if mudou {
+                if let Some(v) = state.files.as_mut() {
+                    v.reread();
+                }
+                state.apply_geometry(state.interactivity());
+            }
+            if state.notifications.tick(now) || venceu || mudou {
                 state.draw_and_paint();
             }
             calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
@@ -1416,6 +1577,11 @@ pub fn run() -> Result<()> {
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |state| {
+            // THE PAINT OWED, once the queue is empty. See `Footer::owes_paint`.
+            if state.owes_paint {
+                state.owes_paint = false;
+                state.draw_and_paint();
+            }
             if state.quit {
                 signal.stop();
             }
@@ -1745,6 +1911,11 @@ impl KeyboardHandler for Footer {
             self.mx.close_it();
             self.manual = false;
             self.apps = None;
+            // THE MANAGER GOES TOO, and it is the one that loses the most: a
+            // directory, a set of marks, an armed confirmation. Leaving it open
+            // without the keyboard would be worse — a listing on screen that
+            // answers nothing, with an armed `delete` nobody can see is armed.
+            self.files = None;
             self.first_page();
             self.close_leader();
             self.draw_and_paint();
@@ -1872,7 +2043,26 @@ impl KeyboardHandler for Footer {
             return;
         }
 
-        // THE MANUAL intercepts before everything: with it open the arrows
+        // THE FILE MANAGER intercepts before the leader, and before the rest of
+        // the modals for the same reason `view()` ranks it first: it holds a
+        // directory somebody navigated to, a set of marks and possibly an armed
+        // confirmation, and a key that fell through to the keymap would end the
+        // sequence and take all of it with it.
+        //
+        // It is intercepted here and not through a table of its own because its
+        // keys are NOT commands of the registry — they navigate a listing. The
+        // table that a check reads is `files::OF_THE_VIEW`, and the unit test
+        // beside it presses every key in it.
+        if self.files.is_some() {
+            let step = self
+                .files
+                .as_mut()
+                .map_or(crate::files::Step::Nothing, |v| v.key(key));
+            self.apply_files_step(step);
+            return;
+        }
+
+        // THE MANUAL intercepts before everything else: with it open the arrows
         // SCROLL, and an arrow that fell into the keymap would end the leader
         // by unknown sequence — the manual would close by itself on the first
         // gesture of reading.
@@ -2110,13 +2300,20 @@ impl PointerHandler for Footer {
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
-        let before = (self.under_pointer, self.row_under_pointer, self.offset);
+        let before = (
+            self.under_pointer,
+            self.row_under_pointer,
+            self.cell_under_pointer,
+            self.offset,
+        );
         let mut clicou = None;
+        let mut menu_at = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.under_pointer = true;
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                    self.cell_under_pointer = self.cell_at(e.position.0);
                     // DRAGGING: the pointer's position BECOMES the offset.
                     if self.dragging {
                         self.drag_to(e.position.1);
@@ -2125,14 +2322,63 @@ impl PointerHandler for Footer {
                 PointerEventKind::Leave { .. } => {
                     self.under_pointer = false;
                     self.row_under_pointer = None;
+                    self.cell_under_pointer = None;
                     self.dragging = false;
                 }
-                // ONLY THE LEFT BUTTON. The others do nothing on purpose:
-                // a context menu would be new chrome (invariant 14), and the
-                // middle one pasting text into a list of commands would be a
-                // command run by mistake.
+                // THE RIGHT BUTTON OPENS THE FILE MANAGER'S MENU, and nothing
+                // else.
+                //
+                // This comment used to say the other buttons do nothing because
+                // "a context menu would be new chrome (invariant 14)". That was
+                // true of the only implementation anybody had in mind — a popup
+                // surface floating at the pointer. The menu that exists now is
+                // drawn in the SAME expanded region as which-key, has no
+                // surface of its own and does not float; each of its rows shows
+                // the key that runs it, so the mouse reaches nothing the
+                // keyboard does not. Invariant 14 is untouched.
+                //
+                // The middle button still does nothing: pasting text into a
+                // list of commands would be a command run by mistake.
+                PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
+                    self.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                    self.cell_under_pointer = self.cell_at(e.position.0);
+                    // THE LINE ON SCREEN IS NOT THE ROW OF THE LISTING, and
+                    // this is where that was being confused.
+                    //
+                    // `row_at` answers which VISIBLE line the pointer is on.
+                    // The left button never cared: it goes through the
+                    // `ExpansionRow`, which carries the absolute index. The
+                    // right button passed the visible number straight through
+                    // as if it were an entry — so with a header on line zero it
+                    // acted one row down, and with the path line above that,
+                    // two. Right-clicking the first file opened the third.
+                    //
+                    // Same path as the left button now: ask the row what it is.
+                    menu_at = self.row_under_pointer.and_then(|line| {
+                        match self.visible_row(line).and_then(|r| r.click) {
+                            // `usize::MAX` is the header, and the path line has
+                            // its own variant. Neither is about a file, so
+                            // neither has a menu.
+                            Some(Click::Files(n)) if n != usize::MAX => Some(n),
+                            // AN EMPTY LISTING STILL HAS A MENU, about the
+                            // directory itself — the "nothing here" line
+                            // carries no click, and answering nothing there was
+                            // reported as the right button not working. See
+                            // `files::View::menu_subject`.
+                            _ if self
+                                .files
+                                .as_ref()
+                                .is_some_and(crate::files::View::is_empty) =>
+                            {
+                                Some(0)
+                            }
+                            _ => None,
+                        }
+                    });
+                }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
+                    self.cell_under_pointer = self.cell_at(e.position.0);
                     // ON THE BAR, IT IS NOT A CLICK ON AN ITEM.
                     //
                     // It used to be: pressing over the bar scrolled nothing and
@@ -2180,6 +2426,13 @@ impl PointerHandler for Footer {
             }
         }
 
+        // THE RIGHT BUTTON FIRST: with both pressed in one frame, opening the
+        // menu is the safer of the two — a left click on a listing can run
+        // something.
+        if let Some(row) = menu_at {
+            self.open_files_menu(row);
+            return;
+        }
         if let Some(i) = clicou {
             self.click_at(i);
             return;
@@ -2202,15 +2455,40 @@ impl PointerHandler for Footer {
             };
             if self.page_by(inteiros.saturating_mul(step)) {
                 self.apply_geometry(self.interactivity());
-                self.draw_and_paint();
+                self.ask_paint();
                 return;
             }
         }
         // It only redraws if something CHANGED: a `Motion` arrives on every pixel
         // of movement, and painting a frame per pixel would spend the GPU drawing
         // exactly the same thing.
-        if before != (self.under_pointer, self.row_under_pointer, self.offset) {
-            self.draw_and_paint();
+        if before
+            != (
+                self.under_pointer,
+                self.row_under_pointer,
+                self.cell_under_pointer,
+                self.offset,
+            )
+        {
+            // THE MEASUREMENT, when it is asked for.
+            //
+            // `RONOCTUA_MEASURE_HOVER=1` marks this frame, and `Gpu::present`
+            // logs how long it took to reach `present` — OUR half of the
+            // latency, with no compositor and no scanout in it. It is the same
+            // milestone machinery `which-key` uses.
+            //
+            // Behind a variable because it would otherwise log a line per
+            // pointer movement, and because the question it answers is asked
+            // rarely: "is the delay ours or the chain's?". The nested loop puts
+            // a whole extra compositor between the hand and the screen, in both
+            // directions, and no number we can take from inside separates the
+            // two — but this one bounds ours.
+            if std::env::var_os("RONOCTUA_MEASURE_HOVER").is_some()
+                && let Some(g) = self.screens.first_mut().and_then(|t| t.gpu.as_mut())
+            {
+                g.mark_as("hover", std::time::Instant::now());
+            }
+            self.ask_paint();
         }
     }
 }
@@ -2329,10 +2607,6 @@ impl Footer {
     /// window id. It is NOT a command: the registry knows nothing about it, and
     /// running it as one would silently do nothing.
     fn select_item(&mut self, id: &str) {
-        if std::mem::take(&mut self.picking_file) {
-            self.open_editor(std::path::Path::new(id));
-            return;
-        }
         let Ok(window) = id.parse::<u64>() else {
             tracing::warn!(item = id, "item do localizador nao e id de janela");
             return;
@@ -2343,63 +2617,36 @@ impl Footer {
         self.niri_action(|n| n.action(serde_json::json!({ "FocusWindow": { "id": window } })));
     }
 
-    /// Opens the editor buffer on a file.
+    /// Opens a file in the distro's editor, which is Emacs.
     ///
-    /// The path goes as an ARGUMENT to the host of the buffer, not into the
-    /// component: the buffer receives the content through `Input::Paste` and
-    /// asks to write with `Effect::Save`, and never learns a path
-    /// (invariant 11).
+    /// # Why not one of ours
+    ///
+    /// There was one: a wasm buffer, `buffers/editor`. It existed for a single
+    /// stated reason — `LEADER f f` promised to open a file and did nothing —
+    /// and its own docstring said it was not Emacs and did not try to be. With
+    /// `f f` opening the manager, that reason was gone, and what was left was a
+    /// second editor nobody asked for on a system whose editor is Doom Emacs.
+    ///
+    /// `emacsclient` and not `emacs`, because `nix/modules/emacs.nix` runs a
+    /// DAEMON: a second process would take seconds and would not see the
+    /// buffers the session already has.
     fn open_editor(&mut self, file: &std::path::Path) {
-        let (Ok(me), Some(wasm)) = (
-            std::env::current_exe(),
-            buffer_component("RONOCTUA_BUFFER_EDITOR"),
-        ) else {
-            tracing::error!("RONOCTUA_BUFFER_EDITOR nao esta no ambiente");
-            let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
+        // IT MAY NOT BE INSTALLED. `ronoctua.editor.emacs` is off in the
+        // `minimal` profile, and a file that opens nothing has to SAY so —
+        // silence here reads as a key that stopped working.
+        let Some(client) = option_env!("RONOCTUA_EMACSCLIENT") else {
+            let m = self.texts.t(ronoctua_i18n::key::FILES_NO_EDITOR);
             self.echo_message(m);
             return;
         };
-        tracing::info!(file = %file.display(), "abrindo o editor");
+        tracing::info!(file = %file.display(), "abrindo no emacs");
         self.open_foreign(
-            &me.to_string_lossy(),
-            &[
-                "buffer".to_owned(),
-                wasm,
-                file.to_string_lossy().into_owned(),
-            ],
-            None,
+            client,
+            &["-c".to_owned(), file.to_string_lossy().into_owned()],
+            file.parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .as_deref(),
         );
-    }
-
-    /// The files of the current directory, as the locator's items.
-    ///
-    /// The CURRENT directory and not a recursive walk: a locator that lists a
-    /// whole tree takes seconds to open on a repository, and the one thing it
-    /// must be is instant. Directories come first, with a trailing slash, which
-    /// is how one sees where a step leads before taking it.
-    fn file_items(&self) -> Vec<crate::minibuffer::Item> {
-        let base = std::env::var_os("XDG_PROJECTS_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
-            .unwrap_or_else(|| std::path::PathBuf::from("/"));
-        let Ok(entries) = std::fs::read_dir(&base) else {
-            tracing::warn!(dir = %base.display(), "nao consegui listar o diretorio");
-            return Vec::new();
-        };
-        let mut out: Vec<_> = entries
-            .flatten()
-            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-            .map(|e| {
-                let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
-                let name = e.file_name().to_string_lossy().into_owned();
-                crate::minibuffer::Item {
-                    id: e.path().to_string_lossy().into_owned(),
-                    label: if is_dir { format!("{name}/") } else { name },
-                }
-            })
-            .collect();
-        out.sort_by(|a, b| a.label.cmp(&b.label));
-        out
     }
 
     /// The buffers, as the locator's items.
@@ -2597,25 +2844,6 @@ impl Footer {
             // It is the SAME locator as `M-x`: same filter, same keys, same
             // rendering. What changes is only where the list came from — see
             // `minibuffer::Item`, whose label is what made this possible.
-            // `LEADER f f` — pick a file and open it in the editor.
-            //
-            // The locator does the picking: since `minibuffer::Item` carries its
-            // own label, the SAME list that serves commands and buffers serves
-            // paths. The host opens the buffer with the file as an argument, and
-            // the buffer never learns where the text came from.
-            "file-open" => {
-                let items = self.file_items();
-                if items.is_empty() {
-                    let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_WINDOW);
-                    self.echo_message(m);
-                    return;
-                }
-                tracing::info!(files = items.len(), "seletor de arquivo aberto");
-                self.picking_file = true;
-                self.mx.open_over(items);
-                self.first_page();
-                self.apply_geometry(KeyboardInteractivity::Exclusive);
-            }
             "buffer-switch" => {
                 let items = self.buffer_items();
                 if items.is_empty() {
@@ -2629,6 +2857,26 @@ impl Footer {
                 self.mx.open_over(items);
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // `LEADER .` — the file manager, in the footer's expanded region.
+            "files-open" => self.open_files(),
+            // `LEADER f m` — the same manager, in a window of its own.
+            //
+            // A WINDOW AND NOT A SECOND IMPLEMENTATION: it re-execs this binary
+            // with `files`, and what draws there is the same `files::View` this
+            // one uses. The footer's region has a twelve-line ceiling
+            // (`space.expansion`, invariant 14) and that is right for a footer;
+            // it is not right for the job people open a file manager to do.
+            "files-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    let where_ = self
+                        .files
+                        .as_ref()
+                        .map(|v| v.where_().to_string_lossy().into_owned());
+                    let mut args = vec!["files".to_owned()];
+                    args.extend(where_);
+                    self.open_foreign(&me.to_string_lossy(), &args, None);
+                }
             }
             "apps-open" => {
                 self.rescan_if_changed();
@@ -3464,6 +3712,14 @@ impl Footer {
         self.paint();
     }
 
+    /// Owes a paint, to happen once the event queue is empty.
+    ///
+    /// For the bursts — pointer motion, the wheel, a held-down arrow — where
+    /// painting per event means blocking per event. See `Footer::owes_paint`.
+    const fn ask_paint(&mut self) {
+        self.owes_paint = true;
+    }
+
     /// Activates the leader: asks for the keyboard and expands.
     ///
     /// The keyboard request is `Exclusive` on purpose. `OnDemand` would give
@@ -3678,7 +3934,7 @@ impl Footer {
         self.first_page();
         tracing::info!(
             open = self.history_open,
-            lines = self.expansion().len(),
+            lines = self.expansion_len(),
             pages = self.pages(),
             "historico de notificacoes"
         );
@@ -3726,7 +3982,7 @@ impl Footer {
         self.apply_geometry(self.interactivity());
     }
 
-    /// Which of the six views is in the expanded region right now.
+    /// Which of the EIGHT views is in the expanded region right now.
     ///
     /// **The precedence order is written HERE, and only here.** Whoever is in
     /// the middle of something wins: the four modals captured the whole
@@ -3741,6 +3997,17 @@ impl Footer {
             ViewState::Applications
         } else if self.network.is_some() {
             ViewState::Network
+        } else if self.files.is_some() {
+            // ABOVE THE LOCATOR AND THE LEADER, because it holds state a
+            // person built by hand: a directory navigated to, a set of marks,
+            // an armed confirmation, a question half answered. Every other view
+            // can be reopened in a keystroke.
+            //
+            // It does not have to yield to the locator, and that is the point
+            // of the picker living inside it: asking which owner, which group,
+            // which permission draws in the manager's own region and answers
+            // there. Two pickers would be two behaviours for one gesture.
+            ViewState::Files
         } else if self.mx.active() {
             ViewState::Commands
         } else if self.leader.active_one() {
@@ -3829,13 +4096,32 @@ impl Footer {
         }
     }
 
+    /// How many cells wide the region is.
+    ///
+    /// From the first CONFIGURED screen and not the first of the list: an
+    /// unconfigured one is at zero width, and everything would then fit in one
+    /// column — the same reason `grid()` picks it that way.
+    fn screen_columns(&self) -> u16 {
+        let px = self
+            .screens
+            .iter()
+            .find(|t| t.configured && t.width > 0)
+            .map_or(0, |t| t.width);
+        tokens::metrics::columns(px as f32, tokens::font::SIZE_BASE)
+    }
+
     /// The expanded region's grid right now.
     ///
     /// On scrolling it is a single column — a list. On pagination it is columns
     /// side by side, filling the width before the height.
     fn grid(&self) -> Grid {
-        let lines = self.expansion();
-        let widths: Vec<Measure> = lines.iter().map(ExpansionRow::measurement).collect();
+        // THE COUNT FIRST, and the ROWS only for whoever measures them.
+        //
+        // The clipboard and the file manager take a single column, so all they
+        // want from the list is how long it is — and building it to find out is
+        // what made every frame pay for the whole directory. See
+        // `expansion_len`.
+        let total = self.expansion_len();
         // The width comes from the first CONFIGURED screen, and not from the
         // first of the list: `first()` could be at zero width, and then
         // everything would fit in one column.
@@ -3853,12 +4139,29 @@ impl Footer {
         if self.clipboard_open {
             return Grid {
                 columns: 1,
-                lines: self.expansion_ceiling().min(widths.len().max(1)),
+                lines: self.expansion_ceiling().min(total.max(1)),
                 width: list_columns(columns),
                 colon: 0,
                 icon: 0,
             };
         }
+        // THE FILE MANAGER TAKES THE WHOLE WIDTH, in one column.
+        //
+        // Its row already resolved its own columns against the screen — see
+        // `files::layout_for` — so letting the grid spread it into columns
+        // would lay the same row out twice, with two different answers, and
+        // draw one over the other.
+        if self.files.is_some() {
+            return Grid {
+                columns: 1,
+                lines: self.expansion_ceiling().min(total.max(1)),
+                width: columns,
+                colon: 0,
+                icon: 0,
+            };
+        }
+        let lines = self.expansion();
+        let widths: Vec<Measure> = lines.iter().map(ExpansionRow::measurement).collect();
         grid_for(
             &widths,
             columns,
@@ -3880,7 +4183,7 @@ impl Footer {
 
     /// How many lines the expansion takes right now — ceiling already applied.
     fn expansion_rows(&self) -> usize {
-        if self.expansion().is_empty() {
+        if self.expansion_len() == 0 {
             return 0;
         }
         self.grid().lines
@@ -3888,10 +4191,7 @@ impl Footer {
 
     /// How many pages the current content has.
     fn pages(&self) -> usize {
-        self.expansion()
-            .len()
-            .div_ceil(self.grid().per_page())
-            .max(1)
+        self.expansion_len().div_ceil(self.grid().per_page()).max(1)
     }
 
     /// The first visible line, corrected if the content shrank.
@@ -3905,7 +4205,7 @@ impl Footer {
         // columns, stopping at `per_page` from the end would leave two empty
         // columns on the last turn.
         let per_page = self.grid().per_page();
-        let last = last_offset(self.expansion().len(), per_page);
+        let last = last_offset(self.expansion_len(), per_page);
         let step = self.scroll_step().max(1);
         (self.offset - self.offset % step).min(last)
     }
@@ -3923,8 +4223,159 @@ impl Footer {
     /// The precedence order is that of whoever is in the middle of something:
     /// the `M-x` captured the whole keyboard, so it wins; then the leader,
     /// which is a sequence under way; the history is passive and yields to both.
+    /// How many lines the expansion has, WITHOUT building them.
+    ///
+    /// The height, the page count, the offset and the scrollbar all want the
+    /// count and nothing else, and each of them used to get it by building the
+    /// whole list — several full builds per frame. On a listing of ten thousand
+    /// files that is tens of milliseconds of arithmetic per pointer movement.
+    /// See `files::View::rows_from` for the measurements.
+    ///
+    /// Only the file manager can answer cheaply, and only it needs to: every
+    /// other expansion is a keymap page, a clipboard history or a command list
+    /// — dozens of rows, built in microseconds.
+    fn expansion_len(&self) -> usize {
+        if let Some(files) = &self.files
+            && let Some(n) = files.row_count()
+        {
+            if n == 0 {
+                // The "nothing here" line is still a line.
+                return 1;
+            }
+            // TWO chrome lines when it is a plain listing: the path and the
+            // header. See `expansion_window`.
+            let plain = !files.menu_open() && !files.showing_detail();
+            return n + if plain { 2 } else { 0 };
+        }
+        self.expansion().len()
+    }
+
+    /// The file manager's two lines that are NOT the listing.
+    ///
+    /// They cost two of the twelve, and each buys an answer the rows do not give.
+    ///
+    /// THE PATH, because until now this door never said where it was. The
+    /// window door has shown it from the first day; the footer showed the rows
+    /// and nothing else, and "where am I" is the first question a listing
+    /// raises. It is also where what is typed goes — see `files::View::crumbs`
+    /// for why the query belongs at the end of the path and not on the message
+    /// line.
+    ///
+    /// THE HEADER, because without it the columns are unlabelled and the sort is
+    /// invisible — and it is where the sort is clicked, which is the gesture
+    /// every table in the world has.
+    ///
+    /// Neither is drawn while the menu, the picker or the detail sheet is up:
+    /// none of those has columns or a directory, and chrome over them would
+    /// name nothing.
+    ///
+    /// ONE function, because `expansion` and `expansion_window` both need it and
+    /// two copies would drift — which is the same reason `expansion` itself
+    /// exists as a single list feeding both the height and the drawing.
+    fn files_chrome(
+        &self,
+        files: &crate::files::View,
+        width: u16,
+        plain: bool,
+    ) -> Vec<ExpansionRow> {
+        if !plain {
+            return Vec::new();
+        }
+        vec![
+            ExpansionRow {
+                click: Some(Click::FilesPath),
+                fields: files.crumbs(),
+                ..ExpansionRow::empty_one()
+            },
+            ExpansionRow {
+                click: Some(Click::Files(usize::MAX)),
+                fields: files.header(width, &self.texts).fields,
+                ..ExpansionRow::empty_one()
+            },
+        ]
+    }
+
+    /// The expansion's lines from `skip`, at most `take` of them.
+    ///
+    /// The drawing wants one page and the height wants a count; building the
+    /// whole directory for either is what made the hover trail the pointer.
+    fn expansion_window(&self, skip: usize, take: usize) -> Vec<ExpansionRow> {
+        let Some(files) = &self.files else {
+            // Every other view's list is short: build it and cut it.
+            return self.expansion().into_iter().skip(skip).take(take).collect();
+        };
+        let Some(total) = files.row_count() else {
+            return self.expansion().into_iter().skip(skip).take(take).collect();
+        };
+        if total == 0 {
+            return self.expansion().into_iter().skip(skip).take(take).collect();
+        }
+        let width = self.screen_columns();
+        let plain = !files.menu_open() && !files.showing_detail();
+        // THE HEADER IS LINE ZERO, so it belongs to the window only when the
+        // window starts at the top — and it costs one of the slots.
+        // THE TWO LINES THAT ARE NOT THE LISTING, and they cost two of the twelve.
+        //
+        // THE PATH, because until now this door never said where it was. The
+        // window door has shown it from the first day; the footer showed the
+        // rows and nothing else, and "where am I" is the question a listing
+        // raises first. It is also where the query goes now — see
+        // `files::View::crumbs`.
+        //
+        // THE HEADER, because without it the columns are unlabelled and the
+        // sort is invisible — and it is where the sort is clicked, which is the
+        // gesture every table in the world has.
+        //
+        // Neither is drawn while the menu, the picker or the detail sheet is on
+        // screen: none of those has columns, and a header over them would name
+        // nothing.
+        let chrome = self.files_chrome(files, width, plain);
+        let chrome_count = chrome.len();
+        let here: Vec<ExpansionRow> = chrome.into_iter().skip(skip).take(take).collect();
+        let first = skip.saturating_sub(chrome_count);
+        let rows = files.rows_from(first, take.saturating_sub(here.len()), width, &self.texts);
+        here.into_iter()
+            .chain(rows.into_iter().enumerate().map(|(n, r)| ExpansionRow {
+                click: Some(Click::Files(first + n)),
+                fields: r.fields,
+                ..ExpansionRow::empty_one()
+            }))
+            .collect()
+    }
+
     fn expansion(&self) -> Vec<ExpansionRow> {
-        // THE CLIPBOARD beats everything: like the manual and the `M-x`, it
+        // THE FILE MANAGER FIRST, matching `view()`'s own order — the one place
+        // the precedence is written. A branch here that disagreed with that
+        // function is exactly the divergence `ViewState` exists to prevent.
+        if let Some(files) = &self.files {
+            let width = self.screen_columns();
+            let rows = files.rows(width, &self.texts);
+            if rows.is_empty() {
+                return vec![ExpansionRow {
+                    text: self.texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE),
+                    text_color: tokens::color::TEXT_DIM,
+                    ..ExpansionRow::empty_one()
+                }];
+            }
+            // THE PATH AND THE HEADER FIRST — see `files_chrome`, which is the
+            // ONE place they are built. They scroll with the list, and that is
+            // deliberate: pinning them would mean drawing them outside
+            // `expansion()`, and `expansion()` being the single list that feeds
+            // both the height and the drawing is what keeps the two from
+            // diverging (see `ViewState`). The window door, which has its own
+            // painter and room to spare, keeps them pinned.
+            let plain = !files.menu_open() && !files.showing_detail();
+            return self
+                .files_chrome(files, width, plain)
+                .into_iter()
+                .chain(rows.into_iter().enumerate().map(|(n, r)| ExpansionRow {
+                    click: Some(Click::Files(n)),
+                    fields: r.fields,
+                    ..ExpansionRow::empty_one()
+                }))
+                .collect();
+        }
+        // THE CLIPBOARD beats everything else: like the manual and the `M-x`, it
         // captured the whole keyboard, and the region is its while it is open.
         if self.clipboard_open {
             if self.clipboard.how_many() == 0 {
@@ -4058,6 +4509,7 @@ impl Footer {
                     } else {
                         tokens::color::TEXT_DIM
                     },
+                    fields: Vec::new(),
                 })
                 .collect();
         }
@@ -4230,6 +4682,7 @@ impl Footer {
                     } else {
                         tokens::color::TEXT_SECONDARY
                     },
+                    fields: Vec::new(),
                 })
                 .collect();
         }
@@ -4313,7 +4766,7 @@ impl Footer {
     fn drag_to(&mut self, y: f64) {
         let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
         let ceiling = self.expansion_ceiling();
-        let total = self.expansion().len();
+        let total = self.expansion_len();
         let start = f64::from(FIRST_OF_EXPANSION) * line_height;
         let gap = ceiling as f64 * line_height;
         if gap <= 0.0 {
@@ -4337,13 +4790,270 @@ impl Footer {
             f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE)),
             f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE)),
             grid,
-            self.expansion().len().saturating_sub(self.current_offset()),
+            // THE COUNT, AND NOT THE LIST. `row_at` runs on EVERY pointer
+            // motion — this line alone was rebuilding a row for every entry in
+            // the directory, per pixel of movement, which is the half of the
+            // hover lag that survived `rows_from`. See `expansion_len`.
+            self.expansion_len().saturating_sub(self.current_offset()),
         )
+    }
+
+    /// Opens the file manager on the footer's expanded region.
+    ///
+    /// It starts where `RONOCTUA_FILES_START` says, relative to home — a NixOS
+    /// option and not a literal, because a directory somebody keeps their work
+    /// in is a machine's preference (invariant 13). A name that is not there
+    /// lands in the home rather than on an error.
+    fn open_files(&mut self) {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let preferred = std::env::var("RONOCTUA_FILES_START").ok();
+        let start = ronoctua_files::listing::start_at(home.as_deref(), preferred.as_deref());
+        tracing::info!(dir = %start.display(), "gerenciador de arquivos aberto");
+        // The trash's root, resolved ONCE and handed over — the same rule as
+        // the roster and the zone. `$XDG_DATA_HOME` does not move while a
+        // listing is up, and reading it per menu would be an env lookup inside
+        // the frame that draws.
+        let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
+        let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
+        self.files = Some(crate::files::View::at(
+            &start,
+            self.roster.clone(),
+            self.zone.clone(),
+            bin,
+            self.catalogue.clone(),
+            self.texts.clone(),
+        ));
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+    }
+
+    /// The right button: focus that row, then open the action menu.
+    ///
+    /// Focusing first is what makes the gesture mean what it looks like —
+    /// right-clicking a row people have not moved to is the common case, and a
+    /// menu that acted on the cursor's row instead would act on something else
+    /// entirely.
+    fn open_files_menu(&mut self, row: usize) {
+        let width = self.screen_columns();
+        let Some(view) = self.files.as_mut() else {
+            return;
+        };
+        // FOCUS, AND ONLY FOCUS. See `files::View::focus_row` for what using
+        // the activating click here did instead. With nothing to focus — an
+        // empty directory — the menu opens anyway, about the directory.
+        let moved = view.focus_row(row);
+        if matches!(moved, crate::files::Step::Nothing) && !view.is_empty() {
+            return;
+        }
+        let _ = width;
+        // THE MENU'S OWN KEY, read from the table. See `files::key_that_runs`.
+        let menu = crate::files::key_that_runs("files-menu")
+            .and_then(|t| self.files.as_mut().map(|v| v.key(t)))
+            .unwrap_or(crate::files::Step::Nothing);
+        self.apply_files_step(menu);
+    }
+
+    /// Carries out what the view asked for.
+    ///
+    /// Whatever costs more than a syscall goes to a NAMED thread and comes back
+    /// through `files_sender`. It is the lesson `systemd-run --scope` already
+    /// taught this project: waiting inside the loop that draws freezes the
+    /// keyboard, the painting and the compositor's events for as long as the
+    /// work takes — and copying a directory takes as long as it takes.
+    fn apply_files_step(&mut self, step: crate::files::Step) {
+        use crate::files::Step;
+        match step {
+            Step::Nothing => {}
+            Step::Changed => {
+                // AND THE REGION FOLLOWS THE CURSOR, as every other list does.
+                // Without it the cursor walks past the twelfth line and off the
+                // bottom, which looks exactly like a key that stopped working —
+                // the same shape as the focus not being drawn at all.
+                self.follow_cursor();
+                self.apply_geometry(self.interactivity());
+                // OWED, not painted here: a held-down arrow is a burst too, and
+                // it blocked per key for the same reason the pointer did.
+                self.ask_paint();
+            }
+            Step::Closed => {
+                self.files = None;
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            Step::Say(e) => {
+                let text = self.texts.t_with(e.key, &e.borrowed());
+                self.echo_message(text);
+                self.draw_and_paint();
+            }
+            Step::Do(doing) => self.do_about_files(doing),
+        }
+    }
+
+    /// Carries out one operation.
+    ///
+    /// A THIN WRAPPER over `files::carry_out`, which is the same code the
+    /// window runs. What is left here is the one thing the two doors do
+    /// differently: starting a process. The footer has `open_foreign`, with its
+    /// scope and its Xwayland satellite; the window reaches `foreign` a step
+    /// lower down. Everything else — the syscalls, the threads, the staged
+    /// request — is shared, because two copies of it is how the two doors would
+    /// come to behave differently.
+    fn do_about_files(&mut self, doing: crate::files::Doing) {
+        use crate::files::{Doing, Errand};
+        let me = std::env::current_exe().ok();
+        // The four that need a process, and the clipboard, are the door's
+        // business; the rest goes straight through.
+        match doing {
+            Doing::Open(path) => return self.open_the_file(&path),
+            Doing::OpenWith(path, which) => {
+                let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned() else {
+                    return;
+                };
+                let (program, args) = crate::apps::command_for(&entry, &path);
+                self.open_foreign(&program, &args, entry.working_directory.as_deref());
+                return;
+            }
+            Doing::Terminal(dir) => {
+                if let Some(me) = me {
+                    self.open_foreign(
+                        &me.to_string_lossy(),
+                        &["terminal".to_owned()],
+                        Some(&dir.to_string_lossy()),
+                    );
+                }
+                return;
+            }
+            Doing::RootTerminal(dir) => {
+                let (Some(me), Some(pkexec), Some(shell)) = (
+                    me,
+                    option_env!("RONOCTUA_PKEXEC"),
+                    option_env!("RONOCTUA_RESCUE_SHELL"),
+                ) else {
+                    let m = self.texts.t(ronoctua_i18n::key::FILES_NO_PKEXEC);
+                    self.echo_message(m);
+                    return;
+                };
+                // `--keep-cwd`, or the root shell lands in `/` and the gesture
+                // stops meaning "here". polkit is what asks; this process never
+                // sees a password.
+                self.open_foreign(
+                    &me.to_string_lossy(),
+                    &[
+                        "terminal".to_owned(),
+                        pkexec.to_owned(),
+                        "--keep-cwd".to_owned(),
+                        shell.to_owned(),
+                    ],
+                    Some(&dir.to_string_lossy()),
+                );
+                return;
+            }
+            Doing::Copy(text) => {
+                let ok = crate::buffer::copy_to_clipboard(&text).is_ok();
+                let m = self.texts.t(if ok {
+                    ronoctua_i18n::key::FILES_COPIED
+                } else {
+                    ronoctua_i18n::key::FILES_NOT_COPIED
+                });
+                self.echo_message(m);
+                self.draw_and_paint();
+                return;
+            }
+            _ => {}
+        }
+        let Some(sender) = self.files_sender.clone() else {
+            return;
+        };
+        let clip = self
+            .files
+            .as_ref()
+            .map(|v| v.clip().clone())
+            .unwrap_or_default();
+        if matches!(doing, Doing::Paste(_))
+            && let Some(v) = self.files.as_mut()
+        {
+            v.clip_used();
+        }
+        match crate::files::carry_out(doing, &sender, &clip) {
+            // A syscall that answered already: re-read now, so the new value is
+            // on screen before the hand leaves the key. What went to a thread
+            // re-reads when its report arrives instead.
+            Errand::Done => {
+                if let Some(v) = self.files.as_mut() {
+                    v.reread();
+                }
+            }
+            Errand::Say(e) => {
+                let text = self.texts.t_with(e.key, &e.borrowed());
+                self.echo_message(text);
+            }
+        }
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Opens a file with whatever handles its type.
+    ///
+    /// Text goes to the editor buffer, which is ours and always there. Anything
+    /// else goes to the application that DECLARES the type, out of the
+    /// catalogue swept at startup — no directory is walked here, and no
+    /// `xdg-open` is spawned to walk one for us.
+    fn open_the_file(&mut self, path: &std::path::Path) {
+        let of_type = ronoctua_files::mime::of_path(path, ronoctua_files::Kind::File, true);
+        if of_type.starts_with("text/") || of_type == ronoctua_files::mime::UNKNOWN {
+            self.open_editor(path);
+            return;
+        }
+        let Some(entry) = crate::apps::opens(&self.catalogue, of_type).cloned() else {
+            let m = self.texts.t_with(
+                ronoctua_i18n::key::FILES_NOTHING_OPENS,
+                &[("type", of_type)],
+            );
+            self.echo_message(m);
+            self.draw_and_paint();
+            return;
+        };
+        let (program, args) = crate::apps::command_for(&entry, path);
+        self.open_foreign(&program, &args, entry.working_directory.as_deref());
+    }
+
+    /// What a thread came back with.
+    fn files_reported(&mut self, report: crate::files::Report) {
+        match report {
+            crate::files::Report::Done => {
+                if let Some(v) = self.files.as_mut() {
+                    v.reread();
+                }
+            }
+            crate::files::Report::Measured(name, bytes) => {
+                if let Some(v) = self.files.as_mut() {
+                    v.measured(&name, bytes);
+                }
+            }
+            crate::files::Report::Failed(why) => self.echo_message(why),
+        }
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Which CELL of the region the pointer is over, from the left edge.
+    ///
+    /// Separate from `row_at` because it answers a different question and one
+    /// view needs both: the row says which entry, the cell says which of its
+    /// columns — and for the permission block, which of the ten bits.
+    fn cell_at(&self, x: f64) -> Option<u16> {
+        let cell_px = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        if cell_px <= 0.0 || x < 0.0 {
+            return None;
+        }
+        u16::try_from((x / cell_px) as u64).ok()
     }
 
     /// The visible line at index `i` on the current page.
     fn visible_row(&self, i: usize) -> Option<ExpansionRow> {
-        self.expansion().into_iter().nth(self.current_offset() + i)
+        self.expansion_window(self.current_offset() + i, 1)
+            .into_iter()
+            .next()
     }
 
     /// Runs whatever a click on that line means.
@@ -4380,6 +5090,56 @@ impl Footer {
                     v.focus_on(n);
                     self.draw_and_paint();
                 }
+            }
+            // A CRUMB OF THE PATH — which one comes from the cell, exactly as
+            // the header's columns do.
+            Some(Click::FilesPath) => {
+                let cell = self.cell_under_pointer.unwrap_or(0);
+                let Some(hit) = self
+                    .files
+                    .as_ref()
+                    .and_then(|v| field_at(&v.crumbs(), cell))
+                else {
+                    return;
+                };
+                let step = self
+                    .files
+                    .as_mut()
+                    .map_or(crate::files::Step::Nothing, |v| v.click(0, &hit));
+                self.apply_files_step(step);
+            }
+            Some(Click::Files(n)) => {
+                // WHICH CELL, and not just which row. A listing row carries
+                // seven columns and ten separate permission bits, so the row
+                // on its own would answer the wrong question — and the answer
+                // would look right, because the row is correct.
+                let cell = self.cell_under_pointer.unwrap_or(0);
+                let width = self.screen_columns();
+                // `usize::MAX` is the HEADER, which is not a row of the
+                // listing: it has its own fields and its own hits.
+                let header = n == usize::MAX;
+                let Some(hit) = self.files.as_ref().and_then(|v| {
+                    if header {
+                        return v
+                            .header(width, &self.texts)
+                            .field_at(cell)
+                            .map(|f| f.hit.clone());
+                    }
+                    v.rows(width, &self.texts)
+                        .get(n)
+                        .and_then(|r| r.field_at(cell))
+                        .map(|f| f.hit.clone())
+                }) else {
+                    return;
+                };
+                let Some(view) = self.files.as_mut() else {
+                    return;
+                };
+                // THROUGH THE SAME CODE THE KEY GOES THROUGH. Nothing here
+                // decides anything the keyboard cannot reach, which is what
+                // keeps the two from drifting apart.
+                let step = view.click(n, &hit);
+                self.apply_files_step(step);
             }
             Some(Click::Candidate(n)) => {
                 use crate::minibuffer::Action;
@@ -4421,7 +5181,7 @@ impl Footer {
         // ONLY WHAT SCROLLS HAS A BAR. On a paginated list it would be a
         // continuous control for content that moves in jumps — and what says
         // where you are there is the counter.
-        self.navigation() == Navigation::Scroll && self.expansion().len() > self.grid().per_page()
+        self.navigation() == Navigation::Scroll && self.expansion_len() > self.grid().per_page()
     }
 
     /// Navigates the expanded region without touching the leader's sequence.
@@ -4453,7 +5213,7 @@ impl Footer {
             return;
         };
         let ceiling = self.expansion_ceiling();
-        let total = self.expansion().len();
+        let total = self.expansion_len();
         let margem = SCROLL_MARGIN.min(ceiling.saturating_sub(1) / 2);
 
         let offset = self.current_offset();
@@ -4497,6 +5257,18 @@ impl Footer {
                 .network
                 .as_ref()
                 .map(|v| v.cursor() + usize::from(self.network_remember.is_some())),
+            // The manager's cursor, so the region scrolls with it — the same
+            // `scrolloff` the locator uses. A listing that does not follow its
+            // own cursor is a listing where holding `j` walks off the bottom.
+            //
+            // PLUS THE HEADER, when it is drawn: this is the VISUAL position,
+            // and the header occupies the first line of the region. Without the
+            // offset the scrolling aims one row above the focused one — the
+            // same adjustment the network view makes for its question.
+            ViewState::Files => self.files.as_ref().map(|v| {
+                let header = usize::from(!v.menu_open() && !v.showing_detail());
+                v.cursor() + header
+            }),
             _ => None,
         }
     }
@@ -4516,7 +5288,7 @@ impl Footer {
     /// frame to paint the same thing. It does not wrap around on purpose:
     /// going back to the start after the end makes the eye lose its place.
     fn scroll_by(&mut self, lines: i32) -> bool {
-        let last = last_offset(self.expansion().len(), self.grid().per_page());
+        let last = last_offset(self.expansion_len(), self.grid().per_page());
         let current = self.current_offset();
         let fresh = scrolling(current, last, lines);
         self.offset = fresh;
@@ -4875,7 +5647,25 @@ impl Footer {
         let prompt_mx = match &self.apps {
             Some(l) => Some(l.query().to_owned()),
             None => self.mx.active().then(|| self.mx.prompt()),
-        };
+        }
+        // AND THE FILE MANAGER'S HINT — but never its query.
+        //
+        // The query lives at the END OF THE PATH now (`files::View::crumbs`):
+        // the two read as one sentence there, and this line goes back to its own
+        // job, which is what the pointer is resting on and what the last action
+        // said. While the query was here, hovering a permission bit replaced
+        // what was being typed, or was replaced by it, depending on the order.
+        //
+        // The hint stays, because typing is not a key and so has no line in the
+        // manual — and it goes away the moment there is something typed, since
+        // by then the path itself is showing it.
+        .or_else(|| {
+            let v = self.files.as_ref()?;
+            if v.menu_open() || v.showing_detail() || v.filtering() {
+                return None;
+            }
+            Some(crate::files::hint(&self.texts))
+        });
 
         // THE VISIBLE PAGE of the expanded region.
         //
@@ -4886,9 +5676,9 @@ impl Footer {
         let navigation = self.navigation();
         let pages = self.pages();
         let offset = self.current_offset();
-        let all_of = self.expansion();
-        let visible: Vec<&ExpansionRow> =
-            all_of.iter().skip(offset).take(grid.per_page()).collect();
+        // ONLY THE PAGE THAT IS DRAWN gets built. See `expansion_window`.
+        let all_of = self.expansion_window(offset, grid.per_page());
+        let visible: Vec<&ExpansionRow> = all_of.iter().collect();
         // `2/4` to the RIGHT of the minibuffer's line: it is already the line
         // that says what is under way, and the indicator only exists when there
         // is more than one page — a permanent `1/1` would be noise.
@@ -4913,7 +5703,7 @@ impl Footer {
                 offset / grid.per_page().max(1) + 1
             )
         });
-        let total_expansao = all_of.len();
+        let total_expansao = self.expansion_len();
         // THE DESCRIPTION OF THE ITEM UNDER THE CURSOR.
         //
         // The list shows the COMMAND; the whole sentence shows up here, on the
@@ -4923,7 +5713,27 @@ impl Footer {
         let sob_o_cursor = self
             .row_under_pointer
             .and_then(|i| visible.get(i))
-            .and_then(|l| l.description.clone());
+            .and_then(|l| l.description.clone())
+            // THE FILE MANAGER'S FIELDS ANSWER PER CELL, and this is the whole
+            // of the "tooltip" the owner asked for: pointing at the `w` of a
+            // group says, on this line, what that bit means for THIS entry —
+            // and on a directory it says something different, because there `x`
+            // is "may enter" and not "execute".
+            //
+            // Nothing floats. It is the same place which-key already puts a
+            // description, which is what keeps invariant 14 intact.
+            .or_else(|| {
+                let cell = self.cell_under_pointer?;
+                let row = self.row_under_pointer?;
+                let e = visible
+                    .get(row)?
+                    .fields
+                    .iter()
+                    .rev()
+                    .find(|f| cell >= f.at && cell < f.at + layout::width(&f.text) + 1)?;
+                let e = e.explain.clone()?;
+                Some(self.texts.t_with(e.key, &e.borrowed()))
+            });
         // WHERE THE POINTER IS, marked by a BACKGROUND.
         //
         // # Why the pointer gets a background and the focus does not
@@ -5008,14 +5818,27 @@ impl Footer {
             // chord is being typed, what matters is the chord. A notification
             // arriving in the middle would wipe from the screen what the user is
             // building.
-            let (mini, cor_mini) = if let Some(d) = &sob_o_cursor {
+            // THE ECHO COMES FIRST, and it used to come fourth.
+            //
+            // It is what the shell has to SAY — the refusal of an action that
+            // was just asked for — and it EXPIRES. Behind the pointer's
+            // description it was unreachable in the one situation it exists
+            // for: the hand is on the mouse, the pointer is resting on the row
+            // that was just clicked, and the tooltip owns the line for as long
+            // as it stays there. The message came and went underneath it.
+            //
+            // That is how "trocar o dono não fez nada" gets reported about an
+            // action that answered perfectly well — on a line something else
+            // was covering. A description of what is under the pointer can wait
+            // three seconds; a refusal cannot, because by then it is gone.
+            let (mini, cor_mini) = if let Some(e) = &echo {
+                (e.clone(), tokens::color::TEXT_SECONDARY)
+            } else if let Some(d) = &sob_o_cursor {
                 (d.clone(), tokens::color::TEXT_SECONDARY)
             } else if let Some(p) = &prompt_mx {
                 (p.clone(), tokens::color::TEXT_PRIMARY)
             } else if let Some(p) = &pendente {
                 (p.clone(), tokens::color::STATE_ACCENT)
-            } else if let Some(e) = &echo {
-                (e.clone(), tokens::color::TEXT_SECONDARY)
             } else {
                 match &mensagem {
                     Some((t, c)) => (t.clone(), *c),
@@ -5060,6 +5883,44 @@ impl Footer {
                 // the usual list.
                 let (base, y_grade) = grid.position(i);
                 let y = FIRST_OF_EXPANSION + y_grade;
+                // A FILE MANAGER ROW DRAWS ITSELF, field by field.
+                //
+                // It resolved its own columns against the screen's width before
+                // this loop existed — see `files::layout_for` — and each field
+                // carries the cell it starts at. Passing it through the
+                // key/text machinery would lay the same row out a second time,
+                // with a different answer, and draw one over the other.
+                if !line.fields.is_empty() {
+                    // THE FIELD UNDER THE POINTER LIGHTS UP.
+                    //
+                    // The row already has a background; this marks WHICH of its
+                    // fields the explanation on the message line is about. In a
+                    // block of ten characters that look like one word, a
+                    // sentence with nothing pointing at its subject is a
+                    // sentence about an unknown bit.
+                    //
+                    // A COLOUR and not a box: invariant 15, and the same choice
+                    // the focused row already makes.
+                    let on_this_row = self.row_under_pointer == Some(i);
+                    for f in &line.fields {
+                        let under = on_this_row
+                            && self
+                                .cell_under_pointer
+                                .is_some_and(|c| c >= f.at && c < f.at + layout::width(&f.text));
+                        spans.push(ronoctua_render::Span {
+                            size: None,
+                            text: f.text.clone(),
+                            column: base + f.at,
+                            line: y,
+                            color: if under {
+                                tokens::color::STATE_ACCENT
+                            } else {
+                                f.color
+                            },
+                        });
+                    }
+                    continue;
+                }
                 let colon = base + grid.colon;
                 let with_key = !line.key.is_empty();
                 // THE ICON BEFORE EVERYTHING, in the margin. It is drawn even
@@ -5731,9 +6592,9 @@ mod tests {
     #[test]
     fn the_buffer_keymap_narrows_by_prefix() {
         let bindings = vec![
-            ("m f s".to_owned(), "editor-save".to_owned()),
-            ("m f r".to_owned(), "editor-reload".to_owned()),
-            ("m q".to_owned(), "editor-quit".to_owned()),
+            ("m f s".to_owned(), "memory-refresh".to_owned()),
+            ("m f r".to_owned(), "memory-scan".to_owned()),
+            ("m q".to_owned(), "memory-close".to_owned()),
         ];
 
         let root = super::narrow_buffer_keymap(&bindings, &["m"]);
@@ -5747,9 +6608,9 @@ mod tests {
         assert!(f.command.is_none(), "grupo nao roda nada");
         let q = root.iter().find(|e| e.key == "q").expect("sem `q`");
         assert!(!q.is_group);
-        assert_eq!(q.command.as_deref(), Some("editor-quit"));
+        assert_eq!(q.command.as_deref(), Some("memory-close"));
         assert_eq!(
-            q.label, "cmd-editor-quit",
+            q.label, "cmd-memory-close",
             "o rotulo e `cmd-<id>` (secao 7.9)"
         );
 
@@ -5772,7 +6633,7 @@ mod tests {
     fn an_unspellable_key_does_not_lose_the_others() {
         let bindings = vec![
             ("m nao-existe-essa-tecla".to_owned(), "x".to_owned()),
-            ("m s".to_owned(), "editor-save".to_owned()),
+            ("m s".to_owned(), "memory-refresh".to_owned()),
         ];
         let rows = super::narrow_buffer_keymap(&bindings, &["m"]);
         assert_eq!(rows.len(), 1);
@@ -5873,6 +6734,20 @@ mod tests {
         assert!(
             !h.discount(alt).alt,
             "o Alt que abriu a leader nao pode entrar na sequencia"
+        );
+
+        // AND WHEN THE ALT IS RELEASED, THE DISCOUNT GOES WITH IT.
+        //
+        // This is the half that did not exist, and it is what makes a `M-…`
+        // binding possible AT ALL: the file manager's view is opened with
+        // `LEADER .`, which in the nested session holds Ctrl and Alt, and
+        // without this the discount lasted until the focus changed. `M-s`
+        // inside the list would arrive as a bare `s` and be typed into the
+        // query instead of sorting.
+        h.on_announcement(Modifiers::default());
+        assert!(
+            h.discount(alt).alt,
+            "o Alt solto e apertado de novo TEM de contar"
         );
 
         // With no inheritance recorded, whatever is held HOLDS — that is the case

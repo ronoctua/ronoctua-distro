@@ -20,6 +20,18 @@ pub struct Context<'a> {
     pub name: &'a str,
     /// The path of the `.desktop` itself, for `%k`.
     pub file: &'a str,
+    /// What to OPEN, for `%f`, `%F`, `%u` and `%U`. Empty when there is
+    /// nothing — which is the app launcher's case.
+    ///
+    /// # Why the codes used to be dropped instead
+    ///
+    /// Because until the file manager there was nothing to put in them. `%f`
+    /// left in place makes an application open a file literally named `%F` —
+    /// 66 of 108 measured entries carry one — so dropping them was right for
+    /// the one caller there was. With a file to hand over, dropping them means
+    /// the application opens with nothing, which looks exactly like an
+    /// application that ignored the request.
+    pub open: &'a [String],
 }
 
 /// Splits the line into tokens, honouring the spec's quotes.
@@ -88,7 +100,11 @@ fn expand(token: &str, ctx: Context<'_>) -> Vec<String> {
     // The WHOLE token is a code: it is the form the spec uses and the only one in which
     // "disappears" and "becomes two" make sense.
     match token {
-        "%f" | "%F" | "%u" | "%U" => return Vec::new(),
+        // ONE for the singular codes, ALL for the plural ones — which is what
+        // the spec says, and what decides whether opening four files starts one
+        // process or four.
+        "%f" | "%u" => return ctx.open.first().cloned().into_iter().collect(),
+        "%F" | "%U" => return ctx.open.to_vec(),
         "%d" | "%D" | "%n" | "%N" | "%v" | "%m" => return Vec::new(),
         "%i" => {
             return if ctx.icon.is_empty() {
@@ -146,15 +162,41 @@ mod tests {
         icon: "firefox",
         name: "Navegador Web",
         file: "/usr/share/applications/firefox.desktop",
+        open: &[],
     };
 
     /// THE DEFECT: `%F` passed literally opens a file called `%F`.
     #[test]
     fn the_file_codes_vanish() {
+        // With NOTHING to open — the app launcher's case, which is 66 of 108
+        // measured entries.
         for line in ["code %F", "vlc %U", "gedit %f", "eog %u"] {
             let (_, args) = assemble(line, CTX).expect("tem programa");
             assert!(args.is_empty(), "`{line}` deixou {args:?}");
         }
+    }
+
+    #[test]
+    fn with_something_to_open_the_codes_are_filled() {
+        // THE DEFECT THIS CATCHES: dropping the code when there IS a file. The
+        // application opens with nothing, which looks exactly like an
+        // application that ignored the request.
+        const WITH: Context<'static> = Context {
+            icon: "firefox",
+            name: "Navegador Web",
+            file: "/usr/share/applications/firefox.desktop",
+            open: &[],
+        };
+        let two = ["/tmp/a.png".to_owned(), "/tmp/b.png".to_owned()];
+        let ctx = Context { open: &two, ..WITH };
+        // The singular codes take ONE, the plural ones take all — which is what
+        // decides whether opening four files starts one process or four.
+        let (_, args) = assemble("eog %f", ctx).expect("tem programa");
+        assert_eq!(args, ["/tmp/a.png"]);
+        let (_, args) = assemble("eog %F", ctx).expect("tem programa");
+        assert_eq!(args, ["/tmp/a.png", "/tmp/b.png"]);
+        let (_, args) = assemble("vlc %U", ctx).expect("tem programa");
+        assert_eq!(args, ["/tmp/a.png", "/tmp/b.png"]);
     }
 
     /// THE DEFECT: `%i` becoming a single token passes `--icon` with no value.

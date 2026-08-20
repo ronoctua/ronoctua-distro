@@ -8,11 +8,11 @@
 # The whole chain, and each of its links is a place where the text disappears
 # silently:
 #
-#   xdotool -> niri -> wl_keyboard -> key_bytes -> Pty::escrever
-#      -> process -> Pty::pump -> VT thread -> Grade
-#      -> Comando::Grade -> Trecho -> wgpu -> pixel -> OCR
+#   xdotool -> niri -> wl_keyboard -> key_bytes -> Pty::write_bytes
+#      -> process -> Pty::pump -> VT thread -> Grid
+#      -> grid_list -> DisplayList -> wgpu -> pixel -> OCR
 #
-# A unit test covers the ends (`key_bytes`, `lista_da_grade`) and cannot
+# A unit test covers the ends (`key_bytes`, `grid_list`) and cannot
 # cover the middle: calloop's `ping`, the keyboard focus, the conversion of
 # size into cells. If the Enter's `\r` became `\n`, everything would compile,
 # every unit test would pass, and the line would never be accepted.

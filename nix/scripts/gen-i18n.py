@@ -35,10 +35,33 @@ KEY = re.compile(r"^([a-z][a-z0-9-]*)\s*=")
 
 
 def keys(file: Path) -> dict[str, str]:
-    """Key -> value, in file order."""
+    """Key -> value, in file order.
+
+    A value may span several lines. Fluent puts a SELECTOR — a plural, or a
+    sentence that changes with a state — in an indented block under the key,
+    and that is where those choices belong: they are decisions of the LANGUAGE,
+    not of the Rust.
+
+    Until this function read them, an indented line was skipped and a message
+    whose whole value lived in the block came out EMPTY. That tripped the
+    empty-value guard below, which was right to fire and pointed at the wrong
+    thing — so no `.ftl` in this repository could carry a plural.
+
+    Attributes (`.label = ...`) are indented too and are still left out: they
+    are not addressable keys, and folding them into the parent's value would
+    make the guard read an attribute as if it were the message.
+    """
     out: dict[str, str] = {}
+    current: str | None = None
     for n, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
-        if not line or line.startswith("#") or line[0].isspace():
+        if not line or line.startswith("#"):
+            continue
+        if line[0].isspace():
+            body = line.strip()
+            # An attribute, or a blank continuation: neither is the value.
+            if current is None or not body or body.startswith("."):
+                continue
+            out[current] = f"{out[current]} {body}".strip()
             continue
         m = KEY.match(line)
         if not m:
@@ -49,6 +72,7 @@ def keys(file: Path) -> dict[str, str]:
             print(f"{file}:{n}: chave `{key}` repetida", file=sys.stderr)
             raise SystemExit(1)
         out[key] = line.split("=", 1)[1].strip()
+        current = key
     return out
 
 
@@ -110,6 +134,11 @@ def main() -> int:
     ]
     for c in todas:
         example = tabelas[base][c].replace("\\", "\\\\").replace('"', '\\"')
+        # A selector collapses onto one line and would run for hundreds of
+        # columns. The doc comment is a reminder of which message this is, not
+        # a copy of it.
+        if len(example) > 110:
+            example = example[:107] + "..."
         lines.append(f"    /// `{base}`: {example}")
         lines.append(f'    pub const {const_de(c)}: &str = "{c}";')
     lines.append("}")

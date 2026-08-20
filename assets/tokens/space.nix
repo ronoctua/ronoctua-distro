@@ -28,6 +28,22 @@
     edgeRight = 0;
   };
 
+  # The FILE MANAGER's table, in cells.
+  #
+  # Two different jobs, and that is why they are two names and not one number
+  # used twice. `gutter` is the cell BEFORE the first column: the mark lives
+  # there, and it is also the air the icon needs so the glyph does not touch the
+  # border and read as clipped. `edgeRight` is the air AFTER the last column —
+  # without it the modification date ends flush against the screen's edge, which
+  # reads as a column that was cut off rather than one that ended.
+  #
+  # The modeline's `edgeRight` is zero on purpose (the notification icon sits
+  # flush), so it is the wrong number to borrow: a table is not a status line.
+  files = {
+    gutter = 1;
+    edgeRight = 1;
+  };
+
   # The content's margin inside a BUFFER, in cells.
   #
   # It is not box padding (invariant 15): it is where the text starts inside the

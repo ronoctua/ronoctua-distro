@@ -36,6 +36,7 @@ ronoctua-runtime = { path = "../ronoctua-runtime" }
 ronoctua-term = { path = "../ronoctua-term" }
 # The ONLY border with /proc, the cgroups and systemd's memory policy — the
 # same arrangement as `ronoctua-network`: the shell asks, it reads.
+ronoctua-files = { path = "../ronoctua-files" }
 ronoctua-memory = { path = "../ronoctua-memory" }
 
 # Integration with the compositor ONLY through wlr-layer-shell and IPC (invariant 3).

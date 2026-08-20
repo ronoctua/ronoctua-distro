@@ -149,6 +149,12 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            # HOME, because the file manager opens in it and `systemd-run` does
+            # not inherit one. Without this it fell back to `/`, whose listing
+            # is long enough to sit at the region's ceiling — and a listing at
+            # the ceiling measures the same whatever you do to it, so the
+            # pixels stop answering the question being asked.
+            "--setenv=HOME=/root "
             # pt-BR on purpose, and not the default: that way the list on screen
             # proves the whole chain of invariant 8 — `.ftl` -> generator ->
             # constant -> Fluent -> pixel — in the language that is NOT the fallback.
@@ -431,6 +437,122 @@ pkgs.testers.runNixOSTest {
         )
         machine.sleep(1)
 
+        press_key("Escape")
+        wait_for_height(FOOTER)
+
+    with subtest("no gerenciador de arquivos, DIGITAR estreita a lista"):
+        # THE DEFECT THIS CATCHES, and it was reported from the screen: the
+        # list took a letter as a command and not as text. `j` moved, `s`
+        # sorted, and typing a file's name did everything except look for it.
+        #
+        # The unit tests cannot answer this one. They press a `Key` straight
+        # into `View::key` and prove the view does the right thing WITH the
+        # key; what is asked here is whether the key ARRIVES — through Xvfb,
+        # through niri, through the layer surface, with the leader's own
+        # modifiers discounted. That is three of the causes `CLAUDE.md` lists
+        # under "nenhum atalho funciona", and they all look the same on screen.
+        # FEW FILES, ON PURPOSE. The region has a ceiling of twelve lines, and a
+        # listing that hits it measures the same before and after — the height
+        # would stop answering the question. With four visible and three hidden
+        # (`.cache` and `.nix-channels` are already there), every state of this
+        # subtest is below the ceiling and the pixels say which one it is in.
+        machine.succeed(
+            "rm -f /root/alfa-*.txt /root/zzz-unico.txt /root/.oculto-teste; "
+            "for n in 1 2 3; do echo x > /root/alfa-$n.txt; done; "
+            "echo x > /root/zzz-unico.txt; echo x > /root/.oculto-teste"
+        )
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+            "${ronoctua-shell}/bin/ronoctua-shell leader"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+        )
+        press_key("period")
+
+        # THE LIST IS ON SCREEN when the region is taller than the two lines at
+        # rest. Measured and not assumed: the log proves it was asked for, and
+        # the pixels prove niri agreed.
+        opened = None
+        for _ in range(20):
+            opened = footer_height()
+            if opened > FOOTER:
+                break
+            machine.sleep(1)
+        assert opened is not None and opened > FOOTER, (
+            f"o gerenciador nao expandiu: {opened} px, repouso e {FOOTER}"
+        )
+
+        # AND NOW THE LETTERS, with no key before them.
+        def type_and_settle(word, was):
+            for letter in word:
+                press_key(letter)
+            for _ in range(20):
+                now = footer_height()
+                if now != was:
+                    return now
+                machine.sleep(1)
+            return footer_height()
+
+        matched = type_and_settle("zzz", opened)
+        assert matched < opened, (
+            f"digitar nao estreitou a lista: {opened} px antes, {matched} px depois. "
+            "A letra chegou como comando, ou nao chegou."
+        )
+
+        # AND IT MATCHED, rather than emptying the list.
+        #
+        # Narrowing to NOTHING also makes the region shorter, so "it got
+        # shorter" alone would pass on a filter that matches nothing — which is
+        # exactly what happened while this test was being written, with the
+        # manager opening somewhere else entirely. A query that matches one file
+        # has to leave MORE on screen than one that matches none.
+        press_key("Escape")
+        wait_for_height(opened)
+        empty = type_and_settle("qqq", opened)
+        assert matched > empty, (
+            f"`zzz` deixou {matched} px e `qqq` deixou {empty} px: o filtro nao "
+            "casou nada — so esvaziou a lista."
+        )
+        press_key("Escape")
+        wait_for_height(opened)
+        matched = type_and_settle("zzz", opened)
+
+    with subtest("Esc limpa o que foi digitado ANTES de fechar a vista"):
+        # Two things in one press would be one too many: throwing away the query
+        # AND the view leaves whoever mistyped a letter with nothing on screen.
+        press_key("Escape")
+        widened = wait_for_height(opened)
+        assert widened == opened, widened
+
+    with subtest("e um comando da vista continua existindo, um modificador adiante"):
+        # `C-h` and not `h`, because `h` is now a letter of the query — and not
+        # `M-h` either, which is the whole of the second lesson: in the nested
+        # loop the leader's chord family IS `Alt`, so the compositor eats every
+        # `M-…` before the footer sees it. Reported from the screen as "M-RET
+        # opens the terminal".
+        #
+        # This is also the end-to-end proof of the modifier inheritance: the
+        # manager is opened with a leader that HOLDS Ctrl, and until that was
+        # fixed the discount lasted the whole session — every `C-…` arrived as
+        # the bare letter and was typed into the query instead.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+h")
+        machine.sleep(1)
+        hidden_off = None
+        for _ in range(20):
+            hidden_off = footer_height()
+            if hidden_off != opened:
+                break
+            machine.sleep(1)
+        if hidden_off is None or hidden_off == opened:
+            print("ls -a:", machine.execute("ls -a /root | tr '\n' ' '")[1])
+            print("altura antes:", opened, "depois:", hidden_off)
+        assert hidden_off is not None and hidden_off != opened, (
+            f"`C-h` nao fez nada: {opened} px antes e depois. "
+            "O Ctrl foi descontado, ou a tecla virou letra do filtro."
+        )
+        # AND WITH NOTHING TYPED, `Esc` closes — a query on screen it would
+        # clear first, and there is none here.
         press_key("Escape")
         wait_for_height(FOOTER)
 

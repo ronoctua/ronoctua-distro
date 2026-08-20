@@ -1,0 +1,39 @@
+[package]
+name = "ronoctua-files"
+description = "A unica fronteira com o sistema de arquivos: listar, explicar e agir."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The same shape as `ronoctua-memory` and `ronoctua-network`: one border, one
+# crate. The parsers are pure — a `&str` goes in, a value comes out — and every
+# root is a parameter, so a fake tree in a test is worth more than a virtual
+# machine one has to boot.
+[dependencies]
+# `ronoctua-apps` for two things it already knows: `fold` (accents off, so that
+# sorting puts `Ágil` where a person looks for it) and `DesktopEntry`, which is
+# what answers "who opens this file". Resolving that here keeps the shell from
+# learning the `.desktop` format a second time.
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+anyhow.workspace = true
+tracing.workspace = true
+# `chown`, `getgroups` and `statfs`. `rustix` and not `libc` for the reason the
+# workspace already gives: the API is safe, and this crate forbids `unsafe`.
+rustix = { workspace = true, features = [ "fs", "process" ] }
+
+# THE PRIVILEGED HELPER, as its own binary.
+#
+# A `[[bin]]` and not part of the shell, so `nix/rust.nix` can extract JUST this
+# — the trap `CLAUDE.md` records: a derivation references what its BYTES cite,
+# and shipping the whole workspace to run four syscalls as root would put the
+# renderer, wgpu and the wasm runtime in a unit that runs as root.
+[[bin]]
+name = "ronoctua-files-root"
+path = "src/bin/root.rs"
+
+[lints]
+workspace = true

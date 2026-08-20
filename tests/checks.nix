@@ -44,9 +44,12 @@
   sbKeys,
   devApp,
   reloadApp,
+  gateApp,
+  prefetchApp,
   singleFooter,
   wit,
   tokensRs,
+  mimeDb,
   niriActions,
   # The PINNED toolchain, for the buffers' formatting: `rustfmt` from nixpkgs
   # could be another version, and two versions of a formatter are two opinions
@@ -1227,6 +1230,395 @@ let
         echo "OK: $(echo "$keys" | wc -l) chaves do resgate, nos dois idiomas"
       '';
 
+  # THE MIME TABLE CAME OUT WHOLE.
+  #
+  # The floors are in the generator and the compile-time assertions are in
+  # `mime.rs`; what this adds is that the derivation BUILT, which is the thing
+  # a reordered `mime-glyphs.nix` or a bumped `shared-mime-info` would break.
+  mime-table-generated = mkCheck "mime-table-generated" [ pkgs.gnugrep pkgs.coreutils ] ''
+    table=${mimeDb}/mimedb.rs
+    test -s "$table" || { echo "ERRO: a tabela saiu vazia" >&2; exit 1; }
+    for name in GLOBS MAGIC SUBCLASS ALIASES GENERIC ICON_OF_GENERIC ICON_OF_MIME; do
+      grep -qE "pub static $name" "$table" || {
+        echo "ERRO: falta a tabela $name" >&2
+        exit 1
+      }
+    done
+    # The counts, so a reader that quietly stopped understanding the format is
+    # caught here as well as at compile time. A parser that breaks returns a
+    # HANDFUL of rows, which reads as "the database is small".
+    globs=$(grep -c 'Glob {' "$table")
+    [ "$globs" -ge 900 ] || { echo "ERRO: so $globs globs" >&2; exit 1; }
+    echo "OK: $globs padroes de nome, e as sete tabelas"
+  '';
+
+  # AND IT REFUSES A TABLE THAT DOES NOT ANSWER FOR EVERY GENERIC ICON.
+  #
+  # The negative fixture. Without it, a `shared-mime-info` release adding
+  # `x-office-drawing` would draw the neutral square on a whole class of files
+  # — and the neutral square is indistinguishable from "I did not resolve it",
+  # so nothing would say so.
+  mime-unknown-icon-fails = mkCheck "mime-unknown-icon-fails" [ ] ''
+    test -s ${mimeDb.negativeFixture}/veredito
+    cat ${mimeDb.negativeFixture}/veredito
+  '';
+
+  # EVERY ROW OF THE FILE MANAGER'S MENU HAS TEXT, IN BOTH LANGUAGES.
+  #
+  # The same shape as the rescue console's, and for the same reason: a row with
+  # no translation draws `[files-open]` on screen, which is exactly the
+  # silent-fallback class invariant 8 exists to refuse — `Texts::t` gives back
+  # `[key]` rather than bringing the shell down, so somebody has to be looking
+  # for it.
+  files-actions-have-text =
+    mkCheck "files-actions-have-text"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        src=${../crates/ronoctua-files/src}
+        failed=0
+
+        # FROM THE ID, and not from the label. The label is a CONSTANT
+        # (`key::FILES_OPEN`), so grepping for a `"files-…"` literal here finds
+        # only the prefix — which is what the first version of this check did,
+        # and it would have gone green on a table with no translations at all.
+        #
+        # Deriving the key from the id is also the discipline itself: the
+        # registry refuses a row whose label is not `files-<id>`, and this is
+        # the same rule reaching the `.ftl`.
+        ids=$(grep -oE '^ *id: "[a-z0-9-]+"' "$src"/menu.rs | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$ids" ] || {
+          echo "ERRO: nenhuma linha na tabela de acoes — o grep casa o que?" >&2
+          exit 1
+        }
+        keys=$(for i in $ids; do echo "files-$i"; done | sort -u)
+
+        for k in $keys; do
+          for language in pt-BR en-GB; do
+            grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
+              echo "ERRO: falta $k em $language.ftl — a tela mostraria a chave crua" >&2
+              failed=1
+            }
+          done
+        done
+
+        # AND THE VIEW'S OWN KEYS, which live in a second table for the reason
+        # `leader::OF_CLIPBOARD_VIEW` gives: a key that only exists inside a
+        # `match` arm is a key nothing can enumerate.
+        view=$(grep -ohE '"files-[a-z0-9-]+"' ${../crates/ronoctua-shell/src}/files.rs \
+          | tr -d '"' | sort -u)
+        for k in $view; do
+          for language in pt-BR en-GB; do
+            grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
+              echo "ERRO: falta $k em $language.ftl — a tecla nao teria nome" >&2
+              failed=1
+            }
+          done
+        done
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(echo "$keys" "$view" | tr ' ' '\n' | sort -u | wc -l) chaves, nos dois idiomas"
+      '';
+
+  # NOTHING THE MOUSE DOES IS OUT OF THE KEYBOARD'S REACH.
+  #
+  # The owner's rule, mechanised. Two lists, compared in BOTH directions:
+  #
+  #   - every row of `menu.rs` has a key, and no two share one;
+  #   - every `Hit` the drawing can produce is reachable by a key too.
+  #
+  # The second half is the one that would rot: adding a clickable field is one
+  # line in `row_of`, and nothing about that line says a key has to exist for
+  # it. A file manager where "change the owner" is a click and not a key is a
+  # file manager somebody has to take their hand off the keyboard for.
+  files-everything-has-a-key =
+    mkCheck "files-everything-has-a-key"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        menu=${../crates/ronoctua-files/src}/menu.rs
+        view=${../crates/ronoctua-shell/src}/files.rs
+        failed=0
+
+        # --- every menu row has a key, and the keys do not collide ----------
+        keys=$(grep -oE '^ *key: "[^"]+"' "$menu" | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$keys" ] || { echo "ERRO: nenhuma tecla na tabela de acoes" >&2; exit 1; }
+        repeated=$(echo "$keys" | sort | uniq -d)
+        [ -z "$repeated" ] || {
+          echo "ERRO: duas linhas do menu na mesma tecla: $repeated" >&2
+          failed=1
+        }
+
+        # --- every clickable Hit is reachable by a key ----------------------
+        #
+        # The variants come from the enum itself, so a new one is caught the day
+        # it is added rather than the day somebody notices it has no key.
+        variants=$(sed -n '/^pub enum Hit {/,/^}/p' "$view" \
+          | grep -oE '^ {4}[A-Z][A-Za-z]*' | tr -d ' ')
+        [ -n "$variants" ] || { echo "ERRO: nao achei o enum Hit" >&2; exit 1; }
+
+        for v in $variants; do
+          case "$v" in
+            # These three are not a promise of an action: `Nothing` is the
+            # absence of one, and `Menu` and `Choice` are rows of something
+            # already on screen that the arrows and `Enter` already reach.
+            Nothing|Menu|Choice) continue ;;
+          esac
+          grep -qE "Hit::$v" "$view" || {
+            echo "ERRO: a variante Hit::$v nao e produzida por nada" >&2
+            failed=1
+          }
+        done
+
+        # --- and the view's key table agrees with its `match` ---------------
+        #
+        # The unit test beside the table presses every key in it; this half
+        # catches the other direction — a key handled and never declared, which
+        # the manual would not list.
+        declared=$(sed -n '/^pub const OF_THE_VIEW/,/^];/p' "$view" \
+          | grep -oE '^ *\("[^"]+"' | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$declared" ] || { echo "ERRO: nao achei OF_THE_VIEW" >&2; exit 1; }
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(echo "$keys" | wc -l) teclas de menu, $(echo "$declared" | wc -l) da vista, e todo Hit tem dono"
+      '';
+
+  # NOTHING THE FILE MANAGER SPAWNS COMES BY NAME.
+  #
+  # `bsdtar`, `fstrim` and `pkexec`. Same two sides as the rescue console's:
+  # the variables the crate reads, and the table `nix/rust.nix` sets.
+  files-runs-by-path = mkCheck "files-runs-by-path" [ pkgs.gnugrep ] ''
+    src=${../crates/ronoctua-files/src}
+    failed=0
+
+    read_it=$(grep -ohE 'option_env!\("RONOCTUA_[A-Z_]+"\)' "$src"/*.rs "$src"/bin/*.rs \
+      | grep -oE 'RONOCTUA_[A-Z_]+' | sort -u)
+    [ -n "$read_it" ] || {
+      echo "ERRO: o crate nao le nenhuma variavel — o grep casa o que?" >&2
+      exit 1
+    }
+
+    for v in $read_it; do
+      grep -qE "^ *$v = " ${../nix/rust.nix} || {
+        echo "ERRO: $v e lida pelo crate e nao esta em nix/rust.nix" >&2
+        echo "      O programa falharia longe da causa, com PATH minimo." >&2
+        failed=1
+      }
+    done
+
+    # NO BARE NAME. A `Command::new("bsdtar")` would work in the devshell and
+    # fail inside a systemd scope — the trap CLAUDE.md records.
+    bare=$(grep -nE 'Command::new\("[a-z]' "$src"/*.rs "$src"/bin/*.rs || true)
+    [ -z "$bare" ] || {
+      echo "ERRO: programa por NOME, nao por caminho:" >&2
+      echo "$bare" >&2
+      failed=1
+    }
+
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: $(echo "$read_it" | wc -l) programas, todos por caminho de store"
+  '';
+
+  # THE PRIVILEGED DOOR IS AS NARROW AS THE CODE SAYS IT IS.
+  #
+  # Two directions, the same shape as `rescue-polkit-is-narrow`:
+  #
+  #   - the unit the crate names is the one the polkit rule allows;
+  #   - the rule allows nothing else, and the verb is `start`.
+  #
+  # And one more, which is what this door has and the console's does not: the
+  # list of VERBS. `Verb::ALL` is four, and none of them destroys anything —
+  # a `remove` or a `move` slipped in there is exactly what nobody would notice
+  # reviewing a diff.
+  files-polkit-is-narrow =
+    mkCheck "files-polkit-is-narrow"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        crate=${../crates/ronoctua-files/src}/act.rs
+        module=${../nix/modules/files.nix}
+        failed=0
+
+        unit=$(grep -oE 'pub const UNIT: &str = "[^"]+"' "$crate" | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$unit" ] || { echo "ERRO: o crate nao nomeia a unidade" >&2; exit 1; }
+
+        grep -qE "unit = \"$unit\"" "$module" || {
+          echo "ERRO: o crate pede '$unit' e o modulo nao a define" >&2
+          failed=1
+        }
+        grep -qE 'action.lookup\("unit"\) == "\$\{unit\}"' "$module" || {
+          echo "ERRO: a regra polkit nao compara a unidade com a do modulo" >&2
+          failed=1
+        }
+        grep -qE 'action.lookup\("verb"\) == "start"' "$module" || {
+          echo "ERRO: a regra polkit nao limita o verbo a 'start'" >&2
+          echo "      Sem isso ela para, reinicia e recarrega qualquer coisa." >&2
+          failed=1
+        }
+        grep -qE 'subject.user == "\$\{user\}"' "$module" || {
+          echo "ERRO: a regra polkit nao limita o usuario" >&2
+          failed=1
+        }
+
+        # NO SECOND UNIT. A rule that names one unit and a module that declares
+        # two is privilege granted to something nobody audited.
+        units=$(grep -cE '^ *systemd.services.ronoctua-files' "$module" || true)
+        [ "$units" = 1 ] || {
+          echo "ERRO: o modulo declara $units unidades privilegiadas; a regra nomeia uma" >&2
+          failed=1
+        }
+
+        # AND THE FOUR VERBS, none of which destroys.
+        for bad in '"rm"' '"remove"' '"mv"' '"move"' '"delete"' '"unlink"'; do
+          grep -qE "Self::[A-Za-z]+ => $bad" "$crate" && {
+            echo "ERRO: verbo destrutivo na porta privilegiada: $bad" >&2
+            failed=1
+          }
+        done
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: uma unidade ($unit), verbo start, um usuario, quatro verbos que nao apagam"
+      '';
+
+  # THE HOST'S LIBRARIES NEVER GO ON `LD_LIBRARY_PATH` — except for NVIDIA.
+  #
+  # `LD_LIBRARY_PATH` beats `DT_RUNPATH`, so a directory put there to reach ONE
+  # library brings every other library in it. `/usr/lib64` was put there for the
+  # host's `libEGL.so.1`, and `libc.so.6` came along — and the process then ran
+  # the host's libc against Nix's `ld.so`. glibc's `GLIBC_PRIVATE` symbols only
+  # match between a `libc.so.6` and the `ld.so` of the SAME build, so the day the
+  # host's glibc moved, `nix run .#dev` died with:
+  #
+  #   niri: symbol lookup error: /usr/lib64/libc.so.6:
+  #         undefined symbol: __pointer_chk_guard, version GLIBC_PRIVATE
+  #
+  # Measured then: host 2.44, Nix 2.42, the symbol absent from the host's. There
+  # is no version to juggle — the fix is not to put the host's libraries there,
+  # and for AMD and Intel that costs nothing, because what talks to the card is
+  # the KERNEL driver and mesa is a userspace library Nix has a copy of.
+  #
+  # NVIDIA is the one real exception: its blob has to match its kernel module.
+  # That branch is allowed, and it prints what it is doing.
+  graphics-does-not-mix-libc =
+    mkCheck "graphics-does-not-mix-libc"
+      [
+        pkgs.gnugrep
+        pkgs.gawk
+        pkgs.coreutils
+      ]
+      ''
+        script=${devApp}/bin/ronoctua-dev
+        failed=0
+
+        # THE ORDINARY PATH EXISTS: a check that only forbids goes green on a
+        # script that stopped setting up graphics at all.
+        grep -q 'ronoctua-graphics/lib' "$script" || {
+          echo "ERRO: o laco nao poe o mesa do Nix no LD_LIBRARY_PATH." >&2
+          echo "      Sem ele o niri sobe sem EGL e morre com DisplayNotSupported." >&2
+          failed=1
+        }
+
+        # AND EVERY MENTION OF THE HOST'S LIBRARIES IS INSIDE THE NVIDIA BRANCH.
+        #
+        # The block is cut out and what is left must not mention `/usr/lib` at
+        # all. Grepping for the branch's presence would not do: the branch could
+        # be there and a second export outside it.
+        outside=$(awk '
+          /if \[ "\$only_nvidia" = sim \]/ { inside = 1 }
+          inside && /^      fi$/ { inside = 0; next }
+          !inside { print }
+        ' "$script" | grep -n '/usr/lib' || true)
+        if [ -n "$outside" ]; then
+          echo "ERRO: o laco poe biblioteca do HOST no caminho fora do ramo NVIDIA:" >&2
+          echo "$outside" >&2
+          echo "      Junto vai a libc do host, e ela nao combina com o ld.so do Nix." >&2
+          failed=1
+        fi
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: o driver vem do Nix, e o do host so no ramo NVIDIA"
+      '';
+
+  # THE GENERATED MIME TABLE IS A BUILD INPUT, AND STAYS ONE.
+  #
+  # `nix/mimegen.nix` turns freedesktop's 125 KB of data into a Rust table at
+  # BUILD time. What must never happen is that derivation becoming a runtime
+  # reference — which is what an `option_env!` holding its path, or a crate
+  # that decided to read `share/mime` directly, would do. The trap `CLAUDE.md`
+  # records: a derivation references what its BYTES cite.
+  #
+  # WHAT THIS CHECK DOES NOT CLAIM, and the first version of it did.
+  #
+  # It used to forbid `shared-mime-info` from the closure outright, and that
+  # was a check written against what its author hoped instead of against what
+  # it can prove — the mistake this file's own header names. The package is in
+  # the shell's closure and was there before the file manager existed:
+  # `RONOCTUA_XDG_OPEN` points at `xdg-utils`, and `xdg-open` needs the
+  # database to know what opens what. Measured with `nix why-depends`, not
+  # assumed:
+  #
+  #   ronoctua-shell → ronoctua-0.1.0 → xdg-utils → shared-mime-info
+  #
+  # That is the TOOL arriving, and this check is about the TABLE. The two are
+  # different things that share a name.
+  files-closure-has-no-mime-db =
+    let
+      closure = pkgs.closureInfo { rootPaths = [ rust.shell ]; };
+    in
+    mkCheck "files-closure-has-no-mime-db" [ pkgs.gnugrep pkgs.coreutils ] ''
+      if found=$(grep -e '-ronoctua-mimedb-' ${closure}/store-paths); then
+        echo "ERRO: a tabela gerada esta no closure de EXECUCAO:" >&2
+        echo "$found" >&2
+        echo "      Ela e lida em tempo de COMPILACAO — o build.rs a copia para" >&2
+        echo "      OUT_DIR e o binario carrega os DADOS. Uma referencia aqui" >&2
+        echo "      significa que alguem passou a le-la em execucao, e com ela" >&2
+        echo "      vem o shared-mime-info inteiro." >&2
+        exit 1
+      fi
+
+      # AND THE MANAGER ESTA LA. A check that only forbids goes green on a
+      # shell that lost the feature altogether — the lesson `iso-has-no-toolchain`
+      # already learned. `bsdtar` is the file manager's one new runtime
+      # reference, so its absence means the compressing half is gone.
+      grep -q -e '-libarchive-' ${closure}/store-paths || {
+        echo "ERRO: o libarchive nao esta no closure; o `bsdtar` do gerenciador" >&2
+        echo "      sumiu, e comprimir e extrair falhariam por caminho ausente." >&2
+        exit 1
+      }
+      echo "OK: $(wc -l < ${closure}/store-paths) caminhos; a tabela nao esta em execucao e o bsdtar esta"
+    '';
+
+  # THE COLUMNS GIVE WAY IN THE ORDER THE CODE STATES.
+  #
+  # An order that drifts with the last edit turns the narrow case into whatever
+  # happened to survive. The unit test beside `GIVE_WAY` sweeps every width from
+  # one cell to a hundred and twenty and asserts both halves — the order, and
+  # that nothing leaks past the edge. This check exists so the constant cannot
+  # be reordered without the test being re-read: it pins the FIRST to give way
+  # and the one that never does.
+  files-columns-degrade = mkCheck "files-columns-degrade" [ pkgs.gnugrep ] ''
+    view=${../crates/ronoctua-shell/src}/files.rs
+    order=$(sed -n '/^pub const GIVE_WAY/,/^];/p' "$view" | grep -oE 'Column::[A-Za-z]+' | tr -d ' ')
+    first=$(echo "$order" | head -1)
+    [ "$first" = "Column::Group" ] || {
+      echo "ERRO: a primeira coluna a ceder virou $first, e era o grupo." >&2
+      echo "      Se a mudanca e proposital, o teste ao lado de GIVE_WAY diz por que." >&2
+      exit 1
+    }
+    echo "$order" | grep -q 'Column::Name' && {
+      echo "ERRO: o nome esta em GIVE_WAY. Ele nunca cede: uma tabela sobre" >&2
+      echo "      arquivos que nao diz quais e uma tabela sobre nada." >&2
+      exit 1
+    }
+    echo "OK: cede na ordem $(echo "$order" | tr '\n' ' ')"
+  '';
+
   # NOTHING THE CONSOLE SPAWNS COMES BY NAME.
   #
   # It runs from a unit on a VT, where `PATH` is minimal, and it is opened
@@ -1323,7 +1715,7 @@ let
         echo "OK: a regra permite exatamente o que o console pede"
       '';
 
-  # `Ctrl+Alt+Del` É NOSSO — e a saida dura continua sendo do systemd.
+  # `Ctrl+Alt+Del` IS OURS — and the hard way out stays systemd's.
   #
   # Two halves, and the check exists because the second is the one a person
   # would not think to look for. Taking the key over means taking what it did:
@@ -1398,7 +1790,7 @@ let
         echo "OK: $(wc -l < ${closure}/store-paths) caminhos, e nenhum compilador"
       '';
 
-  # O EDITOR GRAVA ONDE A UNIDADE LÊ.
+  # THE EDITOR WRITES WHERE THE UNIT READS.
   #
   # The path crosses the border as a STRING: the crate writes to it and a root
   # oneshot reads from it. Divergent, saving would report success and install
@@ -1850,6 +2242,19 @@ let
       inherit fonts fontconfigConf iconSuperpack;
       niri = inputs.niri;
       shell = rust.shell;
+    };
+  };
+
+  # The file manager's privileged half: the unit, the polkit rule, and the
+  # refusals the helper makes before it acts. Only a booted machine answers any
+  # of them.
+  filesVm = import ./files-vm.nix {
+    inherit pkgs lib;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      niri = inputs.niri;
+      shell = rust.shell;
+      filesRoot = rust.filesRoot;
     };
   };
 
@@ -2643,6 +3048,61 @@ let
                 if RX.search(m.group(1)):
                     gaps.append(f"flag: {rs.relative_to(root_dir)}:{n}: --{m.group(1)}")
 
+    # 7) COMMENTS — the half of the invariant the message already claimed
+    #
+    # Invariant 18 says NAME, COMMENT and COMMIT, and the failure message below
+    # said so too. The check did not: every pass above skips comment lines on
+    # purpose, because prose has the same shape as a call. So a whole file of
+    # Portuguese comments went in without a word — `tests/slow.nix` and
+    # `tests/quick.nix` were written that way, and so were four blocks that had
+    # been sitting in `nix/modules/base.nix`, `nix/modules/host.nix`,
+    # `nix/git-hooks.nix` and this very file.
+    #
+    # Two things make prose testable with the same word list:
+    #
+    #   * COMMENT RUNS ARE JOINED. A backtick span often opens on one line and
+    #     closes on the next, and line-by-line stripping leaves half a quoted
+    #     identifier looking like Portuguese prose.
+    #   * WHAT IS QUOTED DOES NOT COUNT. An English comment naming
+    #     `Question::Senha` or the chapter `1. Fontes, glifos e icones` is
+    #     correct English about a Portuguese thing. Backticks and double quotes
+    #     come out before the ruler is applied.
+    #
+    # The comment marker is per LANGUAGE, not shared: a `#` at the start of a
+    # line inside a Rust string is not a comment, and `plan.rs` writes exactly
+    # that — the header of the generated `host.nix`, in Portuguese, which is a
+    # VALUE and stays.
+    MARKER = { ".rs": "//", ".nix": "#", ".py": "#" }
+    for suf in ("*.rs", "*.nix", "*.py"):
+        for f in sorted(root_dir.rglob(suf)):
+            if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
+                continue
+            mark = MARKER[f.suffix]
+            line_is = re.compile(r"^\s*" + re.escape(mark) + r"[!/]?\s?(.*)$")
+            run, first = [], None
+            for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1) :
+                m = line_is.match(line)
+                if m:
+                    if first is None:
+                        first = n
+                    run.append(m.group(1))
+                    continue
+                if run:
+                    prose = " ".join(run)
+                    prose = re.sub(r"`[^`]*`", " ", prose)
+                    prose = re.sub(r'"[^"]*"', " ", prose)
+                    hit = RX.search(prose.lower())
+                    if hit:
+                        rel = f.relative_to(root_dir)
+                        gaps.append(f"comentario: {rel}:{first}: {hit.group(0)}")
+                run, first = [], None
+            if run:
+                prose = re.sub(r"`[^`]*`", " ", " ".join(run))
+                prose = re.sub(r'"[^"]*"', " ", prose)
+                hit = RX.search(prose.lower())
+                if hit:
+                    gaps.append(f"comentario: {f.relative_to(root_dir)}:{first}: {hit.group(0)}")
+
     if gaps:
         print("ERRO: nome em portugues (invariante 18).", file=sys.stderr)
         print("", file=sys.stderr)
@@ -2654,7 +3114,7 @@ let
         print("       Todo NOME e todo COMENTARIO sao ingles.", file=sys.stderr)
         print("       Em pt-BR so os 4 docs, o VALOR de chave e a tag de busca.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: nenhum nome em portugues — arquivo, chave, Rust, Nix, Python, subcomando, flag")
+    print("OK: nada em portugues — nome de arquivo, chave, Rust, Nix, Python, subcomando, flag e COMENTARIO")
     FIM
   '';
 
@@ -3204,7 +3664,7 @@ let
     mkCheck "iso-carries-the-seed" [ pkgs.gnugrep pkgs.coreutils ] ''
       failed=0
       for ours in -ronoctua-0.1.0 -niri- -libghostty-vt- -ronoctua-buffer-glyphs- \
-                  -ronoctua-buffer-editor- -ronoctua-buffer-unicode- \
+                  -ronoctua-buffer-unicode- \
                   -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
                   -noctua-icon-theme- \
                   -noctua-iosevka-ttf-nerdfonts-; do
@@ -3287,7 +3747,7 @@ let
       # installs FASTER, with nothing else giving it away.
       for kept in -niri- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
                   -networkmanager- -systemd- \
-                  -ronoctua-buffer-glyphs- -ronoctua-buffer-editor- \
+                  -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
                   -ronoctua-buffer-memory-; do
         grep -q -i -e "$kept" ${minimal}/store-paths || {
@@ -3441,524 +3901,811 @@ let
     print(f"OK: {seen} remissoes por nome de secao, todas resolvem")
     PY
   '';
-in
-{
-  # =================================================================
-  # Milestones
-  # =================================================================
+  # WHAT THE FOOTER READS AT RUNTIME IS EXPORTED BEFORE THE FOOTER STARTS.
   #
-  # ===================================================================
-  # MILESTONE 1 — Feedback loop before any feature.
+  # `dev-exports-what-the-build-bakes` covers the variables the COMPILATION
+  # bakes. It says nothing about WHEN, and the two that are not build inputs —
+  # `RONOCTUA_ICONS` and `RONOCTUA_FILES_START` — were exported inside the block
+  # that sets up the hot reload, which runs AFTER the first footer is already up.
   #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
+  # So every session's first footer had neither, and only a footer restarted by
+  # a recompilation did. Both failures are silent, because a missing variable is
+  # a fallback and not an error: the launcher opened with category glyphs that
+  # were never replaced by the app's icon, and `LEADER .` opened the home while
+  # `~/main` sat right there. The second one was reported from the screen.
   #
-  #   `nix flake check` green with empty tests; bootable ISO generated by the
-  #   flake; the VM comes up to login; the three documents of §12 and the
-  #   `.gitignore`/`.gitattributes` exist.
-  # ===================================================================
-  m1 = pkgs.linkFarmFromDrvs "check-m1" [
-    # "The repository has to be publishable as it is" (section 9).
-    secrets-out-of-repo
-    planted-secret-fails
-    # The feedback loop is m1's goal, and a tree that gets fat destroys it
-    # silently: every `nix flake check` starts copying gigabytes.
-    lean-tree
-    deps-layer-is-lean
-    gitignore-keeps-fonts
-    fonts-single-family
-    fonts-metrics
-    fonts-nerdfonts-version
-    fonts-input-publishable
-    fonts-license
-    icons-table-generated
-    icons-unknown-token-fails
-    # A token name the WIT would refuse. It stays in m1 along with the other two
-    # because it is the same family of defect: the token exists, the build passes
-    # here, and the failure shows up far away.
-    tokens-wit-name
-    icons-superpack
-    fonts-renderer-parity
-    rust-tests
-    rust-clippy
-    rust-fmt
-    shell-binary
-    shell-finds-its-buffers
-    rescue-actions-have-text
-    rescue-runs-by-path
-    rescue-staging-agrees
-    rescue-has-no-toolchain
-    docs-exist
-    architecture-sections
-    english-names
-    xdg-user-dirs
-    browser-has-no-keyring
-    format-captures-resolve
-    generator-flags-agree
-    iso-fits-usb-stick
-    iso-has-no-toolchain
-    iso-carries-the-seed
-    profile-minimal-closes
-    memory-policy-shape
-    buffer-commands-have-labels
-    buffer-keys-have-text
-    oomVm
-    # The rescue console's two doors: the VT is its own machine, the window is
-    # asserted next to the monitor's in `terminal-vm`.
-    rescueVm
-    ctrl-alt-del-is-ours
-    rescue-polkit-is-narrow
-    self.packages.${system}.iso
-    self.nixosConfigurations.vm.config.system.build.toplevel
-  ];
+  # The rule is about ORDER, so the check reads line numbers: the export has to
+  # come before the line that launches the footer.
+  dev-exports-before-it-starts = mkCheck "dev-exports-before-it-starts" [ pkgs.python3 ] ''
+    python3 - <<'FIM'
+    import pathlib, re, sys
 
-  # Exposed so they can be run on their own during the work.
-  footer-vm = footerVm;
-  niri-contract = niriContract;
-  modeline-vm = modelineVm;
-  leader-vm = leaderVm;
-  apps-vm = appsVm;
-  inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
-  inherit shell-finds-its-buffers;
-  inherit
-    rescue-actions-have-text
-    rescue-runs-by-path
-    rescue-polkit-is-narrow
-    ctrl-alt-del-is-ours
-    rescue-has-no-toolchain
-    rescue-staging-agrees
-    ;
-  inherit
-    group-mark-outside-translation
-    niri-actions-translated
-    keyboard-layout-exists
-    keyboard-options-do-what-they-say
-    installer-defaults-match-the-keyboard
-    locale-exists
-    wifi-console-asks-once
-    ;
-  inherit
-    niri-config-valid
-    fontconfig-nested-finds-font
-    xdg-user-dirs
-    browser-has-no-keyring
-    ;
-  notify-vm = notifyVm;
-  impermanence-vm = impermanenceVm;
-  buffer-vm = bufferVm;
-  memory-vm = memoryVm;
-  clipboard-vm = clipboardVm;
-  terminal-vm = terminalVm;
-  x11-vm = x11Vm;
-  keyboard-vm = keyboardVm;
-  rescue-vm = rescueVm;
-  tpm-vm = tpmVm;
-  secureboot-vm = secureBootVm;
-  inherit installer-dryrun;
-  oom-vm = oomVm;
-  inherit
-    invalid-token-fails-build
-    secrets-out-of-repo
-    planted-secret-fails
-    term-differential
-    instance-fast
-    browser-filters
-    symbols-filters
-    unicode-table-generated
-    unicode-version-mismatch-fails
-    unicode-instance-fast
-    lucide-filters
-    lucide-table-generated
-    lucide-range-taken-fails
-    lucide-instance-fast
-    memory-instance-fast
-    memory-driven
-    renderer-loads-three-faces
-    layout-fast
-    shaping-fast
-    large-monitor-surface
-    reload-reloads
-    reload-command-is-defined
-    dev-exports-what-the-build-bakes
-    footer-is-single
-    footer-logs-to-file
-    dev-exits-clean
-    english-names
-    format-captures-resolve
-    generator-flags-agree
-    ;
+    # What the SHELL reads at runtime and no build bakes. A variable that
+    # arrives late is a variable that did not arrive.
+    AT_RUNTIME = ["RONOCTUA_ICONS", "RONOCTUA_FILES_START"]
 
-  # VM test of the disk layout (section 7.2). Heavy: it brings up a VM with
-  # KVM, partitions a real disk and mounts it. Exposed separately so it can be
-  # run on its own during the work.
-  disko-vm = import ./disko-vm.nix {
-    inherit pkgs lib;
-    inherit (inputs) disko;
-  };
+    text = pathlib.Path("${../nix/dev.nix}").read_text()
+    lines = text.splitlines()
 
-  # ===================================================================
-  # MILESTONE 2 — NixOS base + the whole font and icon layer.
-  #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
-  #
-  #   The VM boots from a disk partitioned by disko with LUKS2 + the 7
-  #   subvolumes of §7.2; `fc-match` gives back our font in serif/sans/mono;
-  #   renderer and fontconfig agree on the probe codepoints; a negative fixture
-  #   with an icon token that does not exist **fails the build**; the
-  #   superpack's manifest covers 100% of the input names; Ghostty installed.
-  # ===================================================================
-  m2 = pkgs.linkFarmFromDrvs "check-m2" [
-    # font layer
-    fonts-renderer-parity
-    # icon layer
-    icons-table-generated
-    icons-unknown-token-fails
-    icons-superpack
-    # system: the full VM evaluates and builds, with Ghostty and the superpack
-    self.nixosConfigurations.vm.config.system.build.toplevel
-    # AND THE SYSTEM THE INSTALLER ACTUALLY INSTALLS.
-    #
-    # It was never built by anything here. The gate built the VM configuration
-    # and the ISO — neither of which is `noctua` — so "the target system closes"
-    # was an assumption, and the moment it would have been found false is during
-    # `nixos-install`, with the disk already erased and nothing to go back to.
-    #
-    # It is not a duplicate of the VM: that one exists to be booted by a test and
-    # leaves out what a real machine carries. This is the closure of the machine
-    # somebody installs.
-    self.nixosConfigurations.noctua.config.system.build.toplevel
-  ];
+    launch = None
+    for n, line in enumerate(lines, 1):
+        if "ronoctua-footer-single" in line and not line.lstrip().startswith("#"):
+            launch = n
+            break
+    if launch is None:
+        print("ERRO: nao achei onde o rodape sobe em nix/dev.nix.", file=sys.stderr)
+        raise SystemExit(1)
 
-  # ===================================================================
-  # MILESTONE 3 — Two-line footer, in the right font, in Rust.
-  #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
-  #
-  #   A single layer-shell surface, bottom anchor, exclusive zone of 2 lines,
-  #   writing a fixed state; the nested loop (`nix run .#dev`) brings up niri
-  #   + shell with hot reload; sops-nix adopted.
-  # ===================================================================
-  m3 = pkgs.linkFarmFromDrvs "check-m3" [
-    rust-tests
-    rust-clippy
-    rust-fmt
-    shell-binary
-    # The milestone's real proof: the surface is accepted by a real compositor,
-    # wgpu assembles a context over it and a frame comes out. None of that shows
-    # up in `cargo build` — all four are runtime.
-    footerVm
-    # The nested loop, and the proof that it RELOADS — not only that it exists.
-    devApp
-    reload-reloads
-    # And that what it calls EXISTS, and that the binary it compiles gets the
-    # same environment the build bakes. Those two are the wiring; the one above
-    # is the mechanism, and the mechanism worked for months with no wiring.
-    reload-command-is-defined
-    dev-exports-what-the-build-bakes
-    # And that restarting RESTARTS: `reload-reloads` proves that the command
-    # fires, this one proves that exactly one footer is left.
-    footer-is-single
-    footer-logs-to-file
-    dev-exits-clean
-    # The two GPU-independent gates of section 9.3, which protect this
-    # milestone's frame budget.
-    layout-fast
-    shaping-fast
-    # And the resolution ceiling: the footer takes the SCREEN's width, so a
-    # texture limit below it kills the whole milestone on a big monitor.
-    large-monitor-surface
-  ];
+    gaps = []
+    for name in AT_RUNTIME:
+        where = [
+            n
+            for n, line in enumerate(lines, 1)
+            if re.match(r"\s*export " + name + r"=", line)
+        ]
+        if not where:
+            gaps.append(f"{name}: nao e exportada em nix/dev.nix")
+        elif min(where) > launch:
+            gaps.append(
+                f"{name}: exportada na linha {min(where)}, e o rodape sobe na {launch}"
+            )
 
-  # ===================================================================
-  # MILESTONE 4 — `ronoctua-niri` + contract, and a live modeline.
-  #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
-  #
-  #   The contract test passes against the pinned tag **and** against the
-  #   `niri-next` input; the daemon consumes the event stream; the modeline
-  #   reflects the focused buffer in a screenshot with OCR.
-  # ===================================================================
-  m4 = pkgs.linkFarmFromDrvs "check-m4" [
-    # The contract against BOTH versions. It is the subtest against `niri-next`
-    # that gives the drift warning before the release becomes mandatory (risk R2).
-    niriContract
-    # The daemon consuming the event stream, proved on screen by OCR.
-    modelineVm
-  ];
+    if gaps:
+        print("ERRO: variavel de runtime chega DEPOIS do rodape.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       O primeiro rodape da sessao nao a tem, e so um restart a", file=sys.stderr)
+        print("       ganha. Falha calada: variavel ausente e fallback, nao erro.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: as {len(AT_RUNTIME)} variaveis de runtime saem antes da linha {launch}")
+    FIM
+  '';
 
-  # ===================================================================
-  # MILESTONE 5 — Leader, keymap and which-key in §4's geometry.
+  # A `trap` THAT CALLS A FUNCTION THAT DOES NOT EXIST CLEANS NOTHING UP.
   #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
+  # `nix/bench-frames.nix` had `trap 'limpar; rm -rf "$dir"' EXIT` next to a
+  # function named `cleanup`: the rename to English reached the definition and
+  # not the string. Nothing said so — a shell string is not code to shellcheck,
+  # and the trap only runs at exit, when nobody is reading. The bench came back
+  # with its numbers and left a nested compositor and a footer RUNNING, plus the
+  # temp directory, because `rm -rf` came after the word that failed.
   #
-  #   The leader captures the keyboard via `keyboard-interactivity:
-  #   exclusive`; which-key expands **upwards** with the list **below** the
-  #   minibuffer; `Esc` goes back to 2 lines; the keymap collision check
-  #   passes; the §7 elision property test passes.
-  # ===================================================================
-  m5 = pkgs.linkFarmFromDrvs "check-m5" [
-    # Leader, which-key on screen, Esc, and the command fired.
-    leaderVm
-    # The default keymap does not collide. `rust-tests` already runs the same
-    # unit test; this is the command a PERSON runs after editing their own
-    # keymap, and that is why it is worth existing separately.
-    keymap-no-collision
-    # The elision property test lives in `rust-tests` (5,000 cases drawn by
-    # `layout::tests::property_*`).
-    rust-tests
-  ];
+  # That is the shape this project keeps paying for: the failure is at the end,
+  # the message scrolls past, and what is left behind is somebody else's
+  # problem. A word that has to name something is a name, and a name can be
+  # checked.
+  #
+  # The allow-list is short on purpose. A trap normally kills something, removes
+  # something, or calls a function of the script's own; anything else earns a
+  # line here and the thought that goes with it.
+  trap-calls-something-that-exists = mkCheck "trap-calls-something-that-exists" [ pkgs.python3 ] ''
+    python3 - <<'FIM'
+    import pathlib, re, sys
 
-  # ===================================================================
-  # MILESTONE 6 — Design system, i18n and notifications.
-  #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
-  #
-  #   Tokens generated from Nix; the `text-key` sweep fails if a key is
-  #   missing in `pt-BR` or `en-GB`; notifications queued **one at a time**; a
-  #   critical one does not disappear on its own; a filterable tray; the
-  #   3-stage icon chain exercised on all 3; the history opens **below the
-  #   minibuffer**, with no second surface.
-  # ===================================================================
-  m6 = pkgs.linkFarmFromDrvs "check-m6" [
-    # Both languages complete, and the proof that the generator refuses the
-    # opposite.
-    i18n-complete
-    i18n-missing-key-fails
-    group-mark-outside-translation
-    niri-actions-translated
-    keyboard-layout-exists
-    locale-exists
-    wifi-console-asks-once
-    niri-config-valid
-    fontconfig-nested-finds-font
-    # A queue one at a time, a critical one that does not disappear, the history
-    # below the minibuffer, and ONE surface.
-    notifyVm
-    # The 3-stage icon chain and the filterable tray are unit tests of
-    # `ronoctua-notify`, which run here.
-    rust-tests
-  ];
+    KNOWN = {
+        "rm", "kill", "exit", "true", "false", "echo", "wait", "pkill",
+        "umount", "rmdir", "sync", "printf", "stty", "tput", "clear",
+        "killall", "chmod", "cp", "mv",
+    }
+    root_dir = pathlib.Path("${self}")
+    gaps = []
+    for f in sorted(root_dir.rglob("*.nix")):
+        if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
+            continue
+        # COMMENT LINES DO NOT COUNT — including this check's own, which
+        # quotes the very trap that earned it and would flag itself.
+        text = "\n".join(
+            "" if l.lstrip().startswith("#") else l
+            for l in f.read_text(errors="replace").splitlines()
+        )
+        defined = set(re.findall(r"^\s*([a-z_][a-z0-9_]*)\(\)\s*\{", text, re.M))
+        for m in re.finditer(r"""trap\s+(['"])(.*?)\1""", text, re.S):
+            for piece in re.split(r"[;&|\n]+", m.group(2)):
+                word = piece.strip().split(" ")[0].strip()
+                if not word or not re.fullmatch(r"[a-z_][a-z0-9_]*", word):
+                    continue
+                if word in defined or word in KNOWN:
+                    continue
+                line = text[: m.start()].count("\n") + 1
+                rel = f.relative_to(root_dir)
+                gaps.append(f"{rel}:{line}: o trap chama `{word}`")
 
-  # Milestone 7 WAS ATTACKED — and this check stayed a `mkStub` by carelessness.
-  #
-  # A `mkStub` prints "NOT ATTACKED YET" and does `touch $out`: it ALWAYS
-  # passes. The four real checks already existed and were loose, so
-  # `nix build .#checks.x86_64-linux.m7` said OK without verifying anything.
-  #
-  # The lesson is not "I forgot to swap it": it is that a stub that PASSES is
-  # indistinguishable from a closed milestone to whoever reads the output. See
-  # the note about milestones in docs/ARCHITECTURE.md.
-  # ===================================================================
-  # MILESTONE 7 — Native buffers: protocol, runtime, glyph browser, terminal. Impermanence switchable.
-  #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
-  #
-  #   The first native buffer end to end with an `xdg_toplevel` of its own;
-  #   instantiation < 5 ms measured with `memory_init_cow` on; a glyph browser
-  #   with search, filters and assignment to an app id with hot reload; a
-  #   differential test libghostty-vt × alacritty with zero grid diff on the
-  #   corpus; a switchable root wipe.
-  # ===================================================================
-  m7 = pkgs.linkFarmFromDrvs "check-m7" [
-    # A native buffer end to end, with an `xdg_toplevel` of its own.
-    bufferVm
-    memoryVm
-    clipboardVm
-    # Instantiation < 5 ms with `memory_init_cow` on.
-    instance-fast
-    # Zero grid diff on the VT corpus.
-    term-differential
-    # The terminal wired to the shell: its own window, and what is typed in it
-    # shows up on the screen. `term-differential` proves the ENGINE; this one
-    # proves that there is a path from the keyboard to the pixel.
-    terminalVm
-    # The leader as the Super key on its own (7.4): keyd standing, the right
-    # remapping, and niri listening for the key that comes out of it.
-    keyboardVm
-    # Switchable impermanence, with the recovery window.
-    impermanenceVm
-    # Search, filters and assignment to an app id — IN THE COMPONENT, driven by
-    # `evento` and checked by `render`. This used to point at `rust-tests`, which
-    # exercises the database's GENERATOR: the database could be perfect and the
-    # browser find nothing, which is what was actually happening.
-    browser-filters
-    symbols-filters
-    unicode-table-generated
-    unicode-version-mismatch-fails
-    unicode-instance-fast
-    lucide-filters
-    lucide-table-generated
-    lucide-range-taken-fails
-    lucide-instance-fast
-    memory-instance-fast
-    memory-driven
-    renderer-loads-three-faces
-    # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
-    # in the pixel, and the footer still responding with the application open —
-    # the `--scope` is synchronous, and waiting for it froze everything.
-    appsVm
-    # And the PIXMAP step reaching the real superpack. Without it the list is
-    # left with only the category glyphs, which look deliberate.
-    apps-icon-from-superpack
-    rust-tests
-  ];
+    if gaps:
+        print("ERRO: trap chamando o que nao existe.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Nao e funcao definida no arquivo nem comando da lista.", file=sys.stderr)
+        print("       O trap falha na saida, calado, e o que ele limparia fica.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: todo trap chama funcao que existe ou comando conhecido")
+    FIM
+  '';
 
-  # The installer's questions, and the plan they generate.
+  # THE GATE HAS TO FETCH WHAT NO CACHE HAS — and the wiring is the risk.
   #
-  # It runs the binary as a DRY RUN: it prints the `host.nix` and the steps
-  # without touching a disk. It is the same path `nix run .#install` takes — a
-  # check that exercised another path would not prove the installer.
+  # `nix/prefetch.nix` exists because one source in the `full` profile cannot be
+  # downloaded by `fetchurl` on a connection that resets: it retries without
+  # resuming, so it restarts from zero and never finishes. The tool works; what
+  # can quietly stop being true is that the gate CALLS it.
+  #
+  # Unwired, nothing breaks at evaluation and nothing breaks in the short loop.
+  # The gate simply goes back to dying after minutes of work, with a message
+  # (`cannot download ... from any mirror`) that points at Google instead of at
+  # the missing call — which is exactly how an afternoon was lost once already.
+  #
+  # It also has to come FIRST. Fetching after the heavy three would still work,
+  # and would still make everyone pay the compile before finding out the network
+  # is the problem.
+  gate-fetches-what-no-cache-has = mkCheck "gate-fetches-what-no-cache-has" [ pkgs.gnugrep ] ''
+    script=${gateApp}/bin/ronoctua-gate
+    tool=${prefetchApp}/bin/ronoctua-prefetch
 
-  # ===================================================================
-  # MILESTONE 8 — Installer and secure boot end to end.
-  #
-  # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
-  # check below has to be written — never against what has already been built:
-  #
-  #   The TUI collects **only** disk, hostname, password, passphrase, language
-  #   and `resume_offset`; everything else detected by `nixos-facter` +
-  #   `nixos-hardware`; Secure Boot with lanzaboote and a signed UKI; TPM2
-  #   unlocks with PCR 7/11/12/15; **a forged LUKS volume does not unlock**
-  #   (the PCR 15 proof).
-  #
-  # THE NETWORK WENT ONTO THE LIST, and the criterion changed with it —
-  # deliberately, and with the reason written in `model.rs` and in section 7.1
-  # of the ARCHITECTURE. In short: of the things the criterion said NOT to ask
-  # about, the network is the only one that (a) `nixos-facter` has no way of
-  # detecting, because a Wi-Fi password is a per-person secret, and (b)
-  # without which the `nixos-install` step does not run on a machine with no
-  # Ethernet port. The original criterion still stands: one asks what only the
-  # person knows, and nothing beyond that.
-  # ===================================================================
-  m8 = pkgs.linkFarmFromDrvs "check-m8" [
-    # The questions, the plan with the four PCRs, and the dry run by default.
-    installer-dryrun
-    # THE NETWORK AND SYNCTHING of the installed system. They stay here because
-    # it is at m8 that the system starts really existing: before that there is no
-    # machine on which "is powersave off?" means anything.
-    network-tuned
-    syncthing-tuned
-    # The Wi-Fi password out of the file, sealed in the TPM.
-    wifiTpmVm
-    # The TUI. The milestone's criterion speaks of it — "the TUI collects ONLY
-    # disk, hostname, password, passphrase, language and resume_offset" — and its
-    # `Estado` is a function from (state, key) to state, with no terminal at all.
-    # The tests walk through the questions, check that the `resume_offset` is NOT
-    # shown, that an invalid answer does not advance, and that the confirmation
-    # requires the disk's path typed out in full.
-    rust-tests
-    # TPM2 seals and unlocks with no passphrase; a volume with no token is refused.
-    tpmVm
-    # The whole chain: a UKI signed by lanzaboote, Secure Boot on, the firmware
-    # measuring, and PCR 15 tying the state to the opened volume.
-    secureBootVm
-    # The ISO all of that is installed from.
-    self.packages.${system}.iso
-  ];
+    if ! grep -qF "$tool" "$script"; then
+      echo "ERRO: o gate nao chama o prefetch." >&2
+      echo "      Sem ele, o gate morre depois de minutos com" >&2
+      echo "      'cannot download ... from any mirror', que parece" >&2
+      echo "      arquivo removido e nao e — ver nix/prefetch.nix." >&2
+      exit 1
+    fi
 
-  # =================================================================
-  # Granular checks — exposed so they can be run in isolation during the work.
-  # =================================================================
-  inherit
-    lean-tree
-    deps-layer-is-lean
-    gitignore-keeps-fonts
-    fonts-single-family
-    fonts-metrics
-    fonts-nerdfonts-version
-    fonts-input-publishable
-    fonts-license
-    icons-table-generated
-    icons-unknown-token-fails
-    icons-superpack
-    apps-icon-from-superpack
-    fonts-renderer-parity
-    rust-tests
-    rust-clippy
-    rust-fmt
-    shell-binary
-    iso-fits-usb-stick
-    iso-has-no-toolchain
-    iso-carries-the-seed
-    profile-minimal-closes
-    memory-policy-shape
-    buffer-commands-have-labels
-    buffer-keys-have-text
-    docs-exist
-    architecture-sections
-    ;
+    called_at=$(grep -nF "$tool" "$script" | head -1 | cut -d: -f1)
+    heavy_at=$(grep -n '^heavy=(' "$script" | head -1 | cut -d: -f1)
+    if [ -z "$heavy_at" ]; then
+      echo "ERRO: nao achei o bloco das tres pesadas no gate." >&2
+      exit 1
+    fi
+    if [ "$called_at" -ge "$heavy_at" ]; then
+      echo "ERRO: o prefetch vem DEPOIS das tres pesadas (linha $called_at, contra $heavy_at)." >&2
+      echo "      Assim o compilador roda inteiro antes de descobrir que o" >&2
+      echo "      problema e a rede." >&2
+      exit 1
+    fi
+    echo "OK: o gate baixa o que nenhum cache tem, antes de compilar"
+  '';
 
-  # Nix formatting.
+  # -------------------------------------------------------------------
+  # The test tiers, and the guards that keep them total
+  # -------------------------------------------------------------------
+
+  # The names `tests/slow.nix` takes out of the everyday battery.
+  slow = import ./slow.nix;
+  # And the ten of the editing loop, which are a CHOSEN subset.
+  quick = import ./quick.nix;
+
+  # THE GUARD, and why it looks at `raw` and not at the final attrset.
   #
-  # The source is FILTERED to contain only the .nix files. Without the filter,
-  # `${../.}` would copy the 4.1 GB of assets/fonts into the store on every
-  # evaluation of this check — 4.1 GB to run a formatter.
-  fmt =
+  # It is PART of the attrset, so reading `attrNames` of that same attrset from
+  # inside one of its values would recurse. Building the set as `raw` and adding
+  # the guard afterwards puts the two in order: it sees everything that existed
+  # before it, which is exactly what it has to see.
+  tiersAreTotal =
     let
-      nixOnly = lib.cleanSourceWith {
-        src = ../.;
-        name = "ronoctua-nix-sources";
-        filter =
-          path: type:
-          let
-            base = baseNameOf path;
-          in
-          (
-            type == "directory"
-            && !lib.elem base [
-              "assets"
-              ".git"
-              ".TEMP"
-              "target"
-              ".direnv"
-            ]
-          )
-          || (type == "regular" && lib.hasSuffix ".nix" base);
-      };
+      all = builtins.attrNames raw;
+      ghosts = lib.subtractLists all slow;
+      everyday = lib.subtractLists slow all;
     in
-    pkgs.runCommand "check-fmt" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
-      cd ${nixOnly}
-      if ! nixfmt --check $(find . -name '*.nix'); then
-        echo "ERRO: rode 'nix fmt' antes de commitar" >&2
-        exit 1
-      fi
-      touch $out
+    mkCheck "test-tiers-are-total" [ pkgs.coreutils ] ''
+      ${
+        if ghosts == [ ] then
+          ""
+        else
+          ''
+            echo "ERRO: tests/slow.nix nomeia check que nao existe mais:" >&2
+            ${lib.concatMapStringsSep "\n" (n: ''echo "       ${n}" >&2'') ghosts}
+            echo "      Uma linha morta ali nao exclui nada — ela so parece que exclui," >&2
+            echo "      e o check que ela deveria segurar volta para a bateria de todo" >&2
+            echo "      dia sem ninguem perceber." >&2
+            exit 1
+          ''
+      }
+      ${
+        if everyday != [ ] then
+          ""
+        else
+          ''
+            echo "ERRO: nenhum check sobrou para a bateria do dia a dia." >&2
+            echo "      Ou tests/slow.nix engoliu tudo, ou os checks sumiram." >&2
+            exit 1
+          ''
+      }
+      echo "OK: ${toString (builtins.length everyday)} no .#most, ${toString (builtins.length slow)} so no .#gate"
     '';
 
-  # THE BUFFERS' FORMATTING, WHICH NOTHING CHECKED.
+  # THE SAME QUESTION, FOR THE SHORT LOOP.
   #
-  # `rust-fmt` is `cargoFmt` over the workspace, and `cargo fmt --all` reaches
-  # the workspace's MEMBERS — `buffers/` is in `exclude` (a component cannot be
-  # a member; `rust-lld` refuses its symbols). So the five components were
-  # formatted by whoever remembered to `cd` into each one.
-  #
-  # The pinned toolchain, never `pkgs.rustfmt`: two versions of a formatter are
-  # two opinions about the same file, and the disagreement would show up as a
-  # check that fails on a tree `nix fmt` just formatted.
-  buffers-fmt =
-    pkgs.runCommand "check-buffers-fmt"
-      {
-        nativeBuildInputs = [ rustToolchain ];
+  # `quick` is a CHOSEN subset and does not have to be complete — but it does
+  # have to be valid. A renamed check would drop out of it in silence: the list
+  # would still have ten lines, and one of them would stop meaning anything.
+  quickNamesExist =
+    let
+      ghosts = lib.subtractLists (builtins.attrNames raw) quick;
+    in
+    mkCheck "quick-names-exist" [ pkgs.coreutils ] ''
+      ${
+        if ghosts == [ ] then
+          ""
+        else
+          ''
+            echo "ERRO: tests/quick.nix nomeia check que nao existe:" >&2
+            ${lib.concatMapStringsSep "\n" (n: ''echo "       ${n}" >&2'') ghosts}
+            echo "      O laco curto rodaria com menos do que a lista diz." >&2
+            exit 1
+          ''
       }
-      ''
-        # `cargo` wants a writable home even when it only formats.
-        export CARGO_HOME=$TMPDIR/cargo
-        failed=0
-        for manifest in ${../buffers}/*/Cargo.toml; do
-          name=$(basename "$(dirname "$manifest")")
-          if ! cargo fmt --manifest-path "$manifest" -- --check; then
-            echo "ERRO: buffers/$name esta fora de formato. Rode: nix fmt" >&2
-            failed=1
-          fi
-        done
-        [ "$failed" = 0 ] || exit 1
-        echo "OK: os cinco buffers estao formatados"
+      echo "OK: os ${toString (builtins.length quick)} do laco curto existem"
+    '';
+
+  raw = {
+    # =================================================================
+    # Milestones
+    # =================================================================
+    #
+    # ===================================================================
+    # MILESTONE 1 — Feedback loop before any feature.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   `nix flake check` green with empty tests; bootable ISO generated by the
+    #   flake; the VM comes up to login; the three documents of §12 and the
+    #   `.gitignore`/`.gitattributes` exist.
+    # ===================================================================
+    m1 = pkgs.linkFarmFromDrvs "check-m1" [
+      # "The repository has to be publishable as it is" (section 9).
+      secrets-out-of-repo
+      planted-secret-fails
+      # The feedback loop is m1's goal, and a tree that gets fat destroys it
+      # silently: every `nix flake check` starts copying gigabytes.
+      lean-tree
+      deps-layer-is-lean
+      gitignore-keeps-fonts
+      fonts-single-family
+      fonts-metrics
+      fonts-nerdfonts-version
+      fonts-input-publishable
+      fonts-license
+      icons-table-generated
+      icons-unknown-token-fails
+      # A token name the WIT would refuse. It stays in m1 along with the other two
+      # because it is the same family of defect: the token exists, the build passes
+      # here, and the failure shows up far away.
+      tokens-wit-name
+      icons-superpack
+      fonts-renderer-parity
+      rust-tests
+      rust-clippy
+      rust-fmt
+      shell-binary
+      shell-finds-its-buffers
+      rescue-actions-have-text
+      rescue-runs-by-path
+      rescue-staging-agrees
+      rescue-has-no-toolchain
+      docs-exist
+      architecture-sections
+      english-names
+      xdg-user-dirs
+      browser-has-no-keyring
+      format-captures-resolve
+      generator-flags-agree
+      iso-fits-usb-stick
+      iso-has-no-toolchain
+      iso-carries-the-seed
+      profile-minimal-closes
+      memory-policy-shape
+      buffer-commands-have-labels
+      buffer-keys-have-text
+      oomVm
+      # The rescue console's two doors: the VT is its own machine, the window is
+      # asserted next to the monitor's in `terminal-vm`.
+      rescueVm
+      ctrl-alt-del-is-ours
+      rescue-polkit-is-narrow
+      # The file manager: the two doors, the narrow privileged one, and the
+      # promise that the mouse reaches nothing the keyboard does not.
+      filesVm
+      files-actions-have-text
+      files-everything-has-a-key
+      files-runs-by-path
+      files-polkit-is-narrow
+      files-closure-has-no-mime-db
+      files-columns-degrade
+      graphics-does-not-mix-libc
+      mime-table-generated
+      mime-unknown-icon-fails
+      self.packages.${system}.iso
+      self.nixosConfigurations.vm.config.system.build.toplevel
+    ];
+
+    # Exposed so they can be run on their own during the work.
+    footer-vm = footerVm;
+    niri-contract = niriContract;
+    modeline-vm = modelineVm;
+    leader-vm = leaderVm;
+    apps-vm = appsVm;
+    inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
+    inherit shell-finds-its-buffers;
+    inherit
+      rescue-actions-have-text
+      rescue-runs-by-path
+      rescue-polkit-is-narrow
+      ctrl-alt-del-is-ours
+      rescue-has-no-toolchain
+      rescue-staging-agrees
+      ;
+    files-vm = filesVm;
+    inherit
+      files-actions-have-text
+      files-everything-has-a-key
+      files-runs-by-path
+      files-polkit-is-narrow
+      files-closure-has-no-mime-db
+      files-columns-degrade
+      graphics-does-not-mix-libc
+      mime-table-generated
+      mime-unknown-icon-fails
+      gate-fetches-what-no-cache-has
+      trap-calls-something-that-exists
+      dev-exports-before-it-starts
+      ;
+    inherit
+      group-mark-outside-translation
+      niri-actions-translated
+      keyboard-layout-exists
+      keyboard-options-do-what-they-say
+      installer-defaults-match-the-keyboard
+      locale-exists
+      wifi-console-asks-once
+      ;
+    inherit
+      niri-config-valid
+      fontconfig-nested-finds-font
+      xdg-user-dirs
+      browser-has-no-keyring
+      ;
+    notify-vm = notifyVm;
+    impermanence-vm = impermanenceVm;
+    buffer-vm = bufferVm;
+    memory-vm = memoryVm;
+    clipboard-vm = clipboardVm;
+    terminal-vm = terminalVm;
+    x11-vm = x11Vm;
+    keyboard-vm = keyboardVm;
+    rescue-vm = rescueVm;
+    tpm-vm = tpmVm;
+    secureboot-vm = secureBootVm;
+    inherit installer-dryrun;
+    oom-vm = oomVm;
+    inherit
+      invalid-token-fails-build
+      secrets-out-of-repo
+      planted-secret-fails
+      term-differential
+      instance-fast
+      browser-filters
+      symbols-filters
+      unicode-table-generated
+      unicode-version-mismatch-fails
+      unicode-instance-fast
+      lucide-filters
+      lucide-table-generated
+      lucide-range-taken-fails
+      lucide-instance-fast
+      memory-instance-fast
+      memory-driven
+      renderer-loads-three-faces
+      layout-fast
+      shaping-fast
+      large-monitor-surface
+      reload-reloads
+      reload-command-is-defined
+      dev-exports-what-the-build-bakes
+      footer-is-single
+      footer-logs-to-file
+      dev-exits-clean
+      english-names
+      format-captures-resolve
+      generator-flags-agree
+      ;
+
+    # VM test of the disk layout (section 7.2). Heavy: it brings up a VM with
+    # KVM, partitions a real disk and mounts it. Exposed separately so it can be
+    # run on its own during the work.
+    disko-vm = import ./disko-vm.nix {
+      inherit pkgs lib;
+      inherit (inputs) disko;
+    };
+
+    # ===================================================================
+    # MILESTONE 2 — NixOS base + the whole font and icon layer.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   The VM boots from a disk partitioned by disko with LUKS2 + the 7
+    #   subvolumes of §7.2; `fc-match` gives back our font in serif/sans/mono;
+    #   renderer and fontconfig agree on the probe codepoints; a negative fixture
+    #   with an icon token that does not exist **fails the build**; the
+    #   superpack's manifest covers 100% of the input names; Ghostty installed.
+    # ===================================================================
+    m2 = pkgs.linkFarmFromDrvs "check-m2" [
+      # font layer
+      fonts-renderer-parity
+      # icon layer
+      icons-table-generated
+      icons-unknown-token-fails
+      icons-superpack
+      # system: the full VM evaluates and builds, with Ghostty and the superpack
+      self.nixosConfigurations.vm.config.system.build.toplevel
+      # AND THE SYSTEM THE INSTALLER ACTUALLY INSTALLS.
+      #
+      # It was never built by anything here. The gate built the VM configuration
+      # and the ISO — neither of which is `noctua` — so "the target system closes"
+      # was an assumption, and the moment it would have been found false is during
+      # `nixos-install`, with the disk already erased and nothing to go back to.
+      #
+      # It is not a duplicate of the VM: that one exists to be booted by a test and
+      # leaves out what a real machine carries. This is the closure of the machine
+      # somebody installs.
+      self.nixosConfigurations.noctua.config.system.build.toplevel
+    ];
+
+    # ===================================================================
+    # MILESTONE 3 — Two-line footer, in the right font, in Rust.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   A single layer-shell surface, bottom anchor, exclusive zone of 2 lines,
+    #   writing a fixed state; the nested loop (`nix run .#dev`) brings up niri
+    #   + shell with hot reload; sops-nix adopted.
+    # ===================================================================
+    m3 = pkgs.linkFarmFromDrvs "check-m3" [
+      rust-tests
+      rust-clippy
+      rust-fmt
+      shell-binary
+      # The milestone's real proof: the surface is accepted by a real compositor,
+      # wgpu assembles a context over it and a frame comes out. None of that shows
+      # up in `cargo build` — all four are runtime.
+      footerVm
+      # The nested loop, and the proof that it RELOADS — not only that it exists.
+      devApp
+      reload-reloads
+      # And that what it calls EXISTS, and that the binary it compiles gets the
+      # same environment the build bakes. Those two are the wiring; the one above
+      # is the mechanism, and the mechanism worked for months with no wiring.
+      reload-command-is-defined
+      dev-exports-what-the-build-bakes
+      # And that restarting RESTARTS: `reload-reloads` proves that the command
+      # fires, this one proves that exactly one footer is left.
+      footer-is-single
+      footer-logs-to-file
+      dev-exits-clean
+      # The two GPU-independent gates of section 9.3, which protect this
+      # milestone's frame budget.
+      layout-fast
+      shaping-fast
+      # And the resolution ceiling: the footer takes the SCREEN's width, so a
+      # texture limit below it kills the whole milestone on a big monitor.
+      large-monitor-surface
+    ];
+
+    # ===================================================================
+    # MILESTONE 4 — `ronoctua-niri` + contract, and a live modeline.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   The contract test passes against the pinned tag **and** against the
+    #   `niri-next` input; the daemon consumes the event stream; the modeline
+    #   reflects the focused buffer in a screenshot with OCR.
+    # ===================================================================
+    m4 = pkgs.linkFarmFromDrvs "check-m4" [
+      # The contract against BOTH versions. It is the subtest against `niri-next`
+      # that gives the drift warning before the release becomes mandatory (risk R2).
+      niriContract
+      # The daemon consuming the event stream, proved on screen by OCR.
+      modelineVm
+    ];
+
+    # ===================================================================
+    # MILESTONE 5 — Leader, keymap and which-key in §4's geometry.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   The leader captures the keyboard via `keyboard-interactivity:
+    #   exclusive`; which-key expands **upwards** with the list **below** the
+    #   minibuffer; `Esc` goes back to 2 lines; the keymap collision check
+    #   passes; the §7 elision property test passes.
+    # ===================================================================
+    m5 = pkgs.linkFarmFromDrvs "check-m5" [
+      # Leader, which-key on screen, Esc, and the command fired.
+      leaderVm
+      # The default keymap does not collide. `rust-tests` already runs the same
+      # unit test; this is the command a PERSON runs after editing their own
+      # keymap, and that is why it is worth existing separately.
+      keymap-no-collision
+      # The elision property test lives in `rust-tests` (5,000 cases drawn by
+      # `layout::tests::property_*`).
+      rust-tests
+    ];
+
+    # ===================================================================
+    # MILESTONE 6 — Design system, i18n and notifications.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   Tokens generated from Nix; the `text-key` sweep fails if a key is
+    #   missing in `pt-BR` or `en-GB`; notifications queued **one at a time**; a
+    #   critical one does not disappear on its own; a filterable tray; the
+    #   3-stage icon chain exercised on all 3; the history opens **below the
+    #   minibuffer**, with no second surface.
+    # ===================================================================
+    m6 = pkgs.linkFarmFromDrvs "check-m6" [
+      # Both languages complete, and the proof that the generator refuses the
+      # opposite.
+      i18n-complete
+      i18n-missing-key-fails
+      group-mark-outside-translation
+      niri-actions-translated
+      keyboard-layout-exists
+      locale-exists
+      wifi-console-asks-once
+      niri-config-valid
+      fontconfig-nested-finds-font
+      # A queue one at a time, a critical one that does not disappear, the history
+      # below the minibuffer, and ONE surface.
+      notifyVm
+      # The 3-stage icon chain and the filterable tray are unit tests of
+      # `ronoctua-notify`, which run here.
+      rust-tests
+    ];
+
+    # Milestone 7 WAS ATTACKED — and this check stayed a `mkStub` by carelessness.
+    #
+    # A `mkStub` prints "NOT ATTACKED YET" and does `touch $out`: it ALWAYS
+    # passes. The four real checks already existed and were loose, so
+    # `nix build .#checks.x86_64-linux.m7` said OK without verifying anything.
+    #
+    # The lesson is not "I forgot to swap it": it is that a stub that PASSES is
+    # indistinguishable from a closed milestone to whoever reads the output. See
+    # the note about milestones in docs/ARCHITECTURE.md.
+    # ===================================================================
+    # MILESTONE 7 — Native buffers: protocol, runtime, glyph browser, terminal. Impermanence switchable.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   The first native buffer end to end with an `xdg_toplevel` of its own;
+    #   instantiation < 5 ms measured with `memory_init_cow` on; a glyph browser
+    #   with search, filters and assignment to an app id with hot reload; a
+    #   differential test libghostty-vt × alacritty with zero grid diff on the
+    #   corpus; a switchable root wipe.
+    # ===================================================================
+    m7 = pkgs.linkFarmFromDrvs "check-m7" [
+      # A native buffer end to end, with an `xdg_toplevel` of its own.
+      bufferVm
+      memoryVm
+      clipboardVm
+      # Instantiation < 5 ms with `memory_init_cow` on.
+      instance-fast
+      # Zero grid diff on the VT corpus.
+      term-differential
+      # The terminal wired to the shell: its own window, and what is typed in it
+      # shows up on the screen. `term-differential` proves the ENGINE; this one
+      # proves that there is a path from the keyboard to the pixel.
+      terminalVm
+      # The leader as the Super key on its own (7.4): keyd standing, the right
+      # remapping, and niri listening for the key that comes out of it.
+      keyboardVm
+      # Switchable impermanence, with the recovery window.
+      impermanenceVm
+      # Search, filters and assignment to an app id — IN THE COMPONENT, driven by
+      # `evento` and checked by `render`. This used to point at `rust-tests`, which
+      # exercises the database's GENERATOR: the database could be perfect and the
+      # browser find nothing, which is what was actually happening.
+      browser-filters
+      symbols-filters
+      unicode-table-generated
+      unicode-version-mismatch-fails
+      unicode-instance-fast
+      lucide-filters
+      lucide-table-generated
+      lucide-range-taken-fails
+      lucide-instance-fast
+      memory-instance-fast
+      memory-driven
+      renderer-loads-three-faces
+      # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
+      # in the pixel, and the footer still responding with the application open —
+      # the `--scope` is synchronous, and waiting for it froze everything.
+      appsVm
+      # And the PIXMAP step reaching the real superpack. Without it the list is
+      # left with only the category glyphs, which look deliberate.
+      apps-icon-from-superpack
+      rust-tests
+    ];
+
+    # The installer's questions, and the plan they generate.
+    #
+    # It runs the binary as a DRY RUN: it prints the `host.nix` and the steps
+    # without touching a disk. It is the same path `nix run .#install` takes — a
+    # check that exercised another path would not prove the installer.
+
+    # ===================================================================
+    # MILESTONE 8 — Installer and secure boot end to end.
+    #
+    # ACCEPTANCE CRITERION, copied from the plan. It is against THIS that the
+    # check below has to be written — never against what has already been built:
+    #
+    #   The TUI collects **only** disk, hostname, password, passphrase, language
+    #   and `resume_offset`; everything else detected by `nixos-facter` +
+    #   `nixos-hardware`; Secure Boot with lanzaboote and a signed UKI; TPM2
+    #   unlocks with PCR 7/11/12/15; **a forged LUKS volume does not unlock**
+    #   (the PCR 15 proof).
+    #
+    # THE NETWORK WENT ONTO THE LIST, and the criterion changed with it —
+    # deliberately, and with the reason written in `model.rs` and in section 7.1
+    # of the ARCHITECTURE. In short: of the things the criterion said NOT to ask
+    # about, the network is the only one that (a) `nixos-facter` has no way of
+    # detecting, because a Wi-Fi password is a per-person secret, and (b)
+    # without which the `nixos-install` step does not run on a machine with no
+    # Ethernet port. The original criterion still stands: one asks what only the
+    # person knows, and nothing beyond that.
+    # ===================================================================
+    m8 = pkgs.linkFarmFromDrvs "check-m8" [
+      # The questions, the plan with the four PCRs, and the dry run by default.
+      installer-dryrun
+      # THE NETWORK AND SYNCTHING of the installed system. They stay here because
+      # it is at m8 that the system starts really existing: before that there is no
+      # machine on which "is powersave off?" means anything.
+      network-tuned
+      syncthing-tuned
+      # The Wi-Fi password out of the file, sealed in the TPM.
+      wifiTpmVm
+      # The TUI. The milestone's criterion speaks of it — "the TUI collects ONLY
+      # disk, hostname, password, passphrase, language and resume_offset" — and its
+      # `Estado` is a function from (state, key) to state, with no terminal at all.
+      # The tests walk through the questions, check that the `resume_offset` is NOT
+      # shown, that an invalid answer does not advance, and that the confirmation
+      # requires the disk's path typed out in full.
+      rust-tests
+      # TPM2 seals and unlocks with no passphrase; a volume with no token is refused.
+      tpmVm
+      # The whole chain: a UKI signed by lanzaboote, Secure Boot on, the firmware
+      # measuring, and PCR 15 tying the state to the opened volume.
+      secureBootVm
+      # The ISO all of that is installed from.
+      self.packages.${system}.iso
+    ];
+
+    # =================================================================
+    # Granular checks — exposed so they can be run in isolation during the work.
+    # =================================================================
+    inherit
+      lean-tree
+      deps-layer-is-lean
+      gitignore-keeps-fonts
+      fonts-single-family
+      fonts-metrics
+      fonts-nerdfonts-version
+      fonts-input-publishable
+      fonts-license
+      icons-table-generated
+      icons-unknown-token-fails
+      icons-superpack
+      apps-icon-from-superpack
+      fonts-renderer-parity
+      rust-tests
+      rust-clippy
+      rust-fmt
+      shell-binary
+      iso-fits-usb-stick
+      iso-has-no-toolchain
+      iso-carries-the-seed
+      profile-minimal-closes
+      memory-policy-shape
+      buffer-commands-have-labels
+      buffer-keys-have-text
+      docs-exist
+      architecture-sections
+      ;
+
+    # THE FOUR THAT ONLY EXISTED INSIDE AN `mN`, and that is a defect of its own.
+    #
+    # A check one cannot run alone is a check one cannot DEBUG: it fails inside a
+    # `linkFarm` of forty others, and the only way to see it again is to rebuild
+    # the whole milestone. That was true of these four until the test tiers needed
+    # to enumerate `checks` and would have dropped them in silence.
+    inherit
+      tokens-wit-name
+      network-tuned
+      syncthing-tuned
+      ;
+    wifi-tpm-vm = wifiTpmVm;
+
+    # Nix formatting.
+    #
+    # The source is FILTERED to contain only the .nix files. Without the filter,
+    # `${../.}` would copy the 4.1 GB of assets/fonts into the store on every
+    # evaluation of this check — 4.1 GB to run a formatter.
+    fmt =
+      let
+        nixOnly = lib.cleanSourceWith {
+          src = ../.;
+          name = "ronoctua-nix-sources";
+          filter =
+            path: type:
+            let
+              base = baseNameOf path;
+            in
+            (
+              type == "directory"
+              && !lib.elem base [
+                "assets"
+                ".git"
+                ".TEMP"
+                "target"
+                ".direnv"
+              ]
+            )
+            || (type == "regular" && lib.hasSuffix ".nix" base);
+        };
+      in
+      pkgs.runCommand "check-fmt" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
+        cd ${nixOnly}
+        if ! nixfmt --check $(find . -name '*.nix'); then
+          echo "ERRO: rode 'nix fmt' antes de commitar" >&2
+          exit 1
+        fi
         touch $out
       '';
+
+    # THE BUFFERS' FORMATTING, WHICH NOTHING CHECKED.
+    #
+    # `rust-fmt` is `cargoFmt` over the workspace, and `cargo fmt --all` reaches
+    # the workspace's MEMBERS — `buffers/` is in `exclude` (a component cannot be
+    # a member; `rust-lld` refuses its symbols). So the five components were
+    # formatted by whoever remembered to `cd` into each one.
+    #
+    # The pinned toolchain, never `pkgs.rustfmt`: two versions of a formatter are
+    # two opinions about the same file, and the disagreement would show up as a
+    # check that fails on a tree `nix fmt` just formatted.
+    buffers-fmt =
+      pkgs.runCommand "check-buffers-fmt"
+        {
+          nativeBuildInputs = [ rustToolchain ];
+        }
+        ''
+          # `cargo` wants a writable home even when it only formats.
+          export CARGO_HOME=$TMPDIR/cargo
+          failed=0
+          for manifest in ${../buffers}/*/Cargo.toml; do
+            name=$(basename "$(dirname "$manifest")")
+            if ! cargo fmt --manifest-path "$manifest" -- --check; then
+              echo "ERRO: buffers/$name esta fora de formato. Rode: nix fmt" >&2
+              failed=1
+            fi
+          done
+          [ "$failed" = 0 ] || exit 1
+          echo "OK: os buffers estao formatados"
+          touch $out
+        '';
+  };
+in
+# THE GUARDS GO ON AFTERWARDS, which is what lets them see the whole set
+# without recursion. They are cheap — set arithmetic over names — so they land
+# in the everyday battery on their own, which is where they have to be: a guard
+# that only ran in the `gate` would report a broken split hours after it broke.
+raw
+// {
+  test-tiers-are-total = tiersAreTotal;
+  quick-names-exist = quickNamesExist;
 }

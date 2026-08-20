@@ -375,6 +375,28 @@ let
       export RUST_LOG="$rustlog"
       [ -n "''${niri_sock:-}" ] && export NIRI_SOCKET="$niri_sock"
 
+      # WHAT THE RUNNING FOOTER READS, and it goes BEFORE the footer starts.
+      #
+      # These two were exported further down, inside the `if [ -f Cargo.toml ]`
+      # that sets up the hot reload — that is, AFTER the first footer was
+      # already up. So the first footer of every session had neither, and only
+      # the one a recompilation restarted did.
+      #
+      # The symptom of the second one was reported from the screen: `~/main`
+      # exists, `LEADER .` opened the home. And the first one had exactly the
+      # symptom its own comment describes — the launcher opening with category
+      # glyphs that are never replaced by the app's icon. Both are silent: a
+      # missing variable is a fallback, not an error.
+      #
+      # They are not build inputs, so they do not belong to that block at all.
+      # `nix/rust.nix` deliberately keeps the superpack OUT of the compilation
+      # (baked in, its store path would be a reference no
+      # `ronoctua.icons.superpack = false` could remove), and where the manager
+      # opens is a NixOS option on an installed system — here there is no NixOS
+      # to read one from, so both sides take it from `nix/files-start.nix`.
+      export RONOCTUA_ICONS="${iconSuperpack}/share/icons/noctua"
+      export RONOCTUA_FILES_START="${import ./files-start.nix}"
+
       # Which binary: the store's until the first recompilation, yours after that.
       # That way startup is instant and does not need `cargo` just to have a look.
       ${singleFooter}/bin/ronoctua-footer-single \
@@ -394,19 +416,6 @@ let
         mkdir -p "$CARGO_TARGET_DIR"
         # EVERYTHING THE BUILD BAKES — see `bakedExports` in this file's `let`.
         ${bakedExports}
-        # THE SUPERPACKAGE, for the app launcher's pixmap step, and it is the one
-        # that is NOT in that table.
-        #
-        # It is deliberately absent from the compilation's environment
-        # (`nix/rust.nix`): baked in, its store path would be a reference that no
-        # `ronoctua.icons.superpack = false` could remove. So the `nix build`
-        # binary reads it from the environment too — and the hot reload one did
-        # not read it at all. The symptom was exactly what
-        # `apps-icon-from-superpack` exists to catch: the list opened with the
-        # category glyphs and they were NEVER replaced by the app's icon.
-        # Nothing in the log, nothing on screen — the list looks fine and is wrong.
-        export RONOCTUA_ICONS="${iconSuperpack}/share/icons/noctua"
-
         # WHICH BINARY THE FOOTER IS, and it starts as the store's.
         #
         # It used to be `$CARGO_TARGET_DIR/release/ronoctua-shell`, written into

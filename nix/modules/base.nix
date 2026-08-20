@@ -112,14 +112,14 @@ in
       };
     };
 
-    # QUAL DAS DUAS INSTALACOES ESTA MAQUINA E.
+    # WHICH OF THE TWO INSTALLATIONS THIS MACHINE IS.
     #
-    # Declarada aqui pelo mesmo motivo escrito logo acima: quem le o perfil e
-    # `nix/modules/profile.nix`, que nao importa este arquivo.
+    # Declared here for the same reason written just above: what reads the
+    # profile is `nix/modules/profile.nix`, which does not import this file.
     #
-    # E uma OPCAO, e nao um segundo `nixosConfiguration`. O instalador continua
-    # mirando `#noctua` nos dois casos, o `host.nix` ganha uma linha, e mudar de
-    # ideia depois e um `nixos-rebuild` — nao uma reinstalacao.
+    # It is an OPTION, and not a second `nixosConfiguration`. The installer
+    # still aims at `#noctua` in both cases, `host.nix` gains one line, and
+    # changing one's mind later is a `nixos-rebuild` — not a reinstall.
     profile = lib.mkOption {
       type = lib.types.enum [
         "full"

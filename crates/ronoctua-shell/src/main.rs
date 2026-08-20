@@ -46,6 +46,8 @@ mod apps;
 mod buffer;
 mod clipboard;
 mod daemon;
+mod files;
+mod files_window;
 mod foreign;
 mod keyboard;
 mod leader;
@@ -207,6 +209,14 @@ fn main() -> Result<()> {
         // A terminal in a window of its own. With no argument it starts `$SHELL`;
         // with one, it runs what is asked — and it is what the VM test uses so as not
         // to depend on some shell's prompt.
+        // `ronoctua-shell files [caminho]` — the manager in a window of its
+        // own. The SAME `files::View` the footer draws from: what differs is
+        // only the window and the events of it, which is what makes "one
+        // implementation, two doors" true rather than claimed.
+        Some("files") => {
+            let where_ = std::env::args().nth(2).map(std::path::PathBuf::from);
+            return files_window::host_it(where_.as_deref()).context("hospedar o gerenciador");
+        }
         Some("terminal") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (program, rest) = args
