@@ -35,30 +35,25 @@ Não é código: é abrir o navegador depois de um rebuild e ver se a extensão 
 - acabou quando: um download começado no Chrome aparece em `t t` com pausa e cancelamento reais,
   sem ninguém ter clicado em nada para instalar
 
-### 0.1. Um download autenticado interceptado perde os cookies · médio, e talvez não se resolva
+### 0.1. O PO token não é gerado aqui, e expira · médio, e decidir antes
 
-A extensão entrega ao aria2 a URL e nada mais. Um download que só existe com a sessão do navegador —
-atrás de login, com cookie ou cabeçalho — chega ao aria2 como 403 ou como uma página de login salva
-em disco. O contorno óbvio (ler `chrome.cookies` e repassar) custa a permissão `cookies` mais
-permissão de host permanente, que é **exatamente a via de detecção** que o desenho inteiro da
-extensão evita — e passaria os cookies da pessoa para outro processo.
+Cookies dizem QUEM está pedindo; o PO token diz que quem pede é um dispositivo
+de verdade — é o papel que o OAuth fazia até o YouTube desligá-lo. O yt-dlp
+2026.07.04 carrega o arcabouço inteiro (`extractor/youtube/pot/`: registro,
+cache, a classe abstrata) e **nenhum gerador**: o token vem à mão ou de um
+plugin. Esta distro lê um de `$XDG_STATE_HOME/ronoctua/po-token`, e é só isso.
 
-- **decidir antes:** vale trocar a invisibilidade por downloads autenticados? Uma terceira saída é
-  não interceptar quando a requisição levava `Cookie`, o que exigiria `webRequest` — e isso também é
-  detectável.
-- acabou quando: um download atrás de login ou termina, ou é deixado no navegador de propósito e a
-  pessoa vê por quê
+Um token colado ali vale horas. Sem ele, cookies sozinhos já resolvem restrição
+de idade, vídeo privado, clube de membros e 1080p Premium — o token muda a
+frequência com que o YouTube pede verificação, não o que é possível.
 
-### 0.2. O `LEADER t a` lê a área de transferência, e não pergunta · pequeno
+- **decidir antes:** trazer o `bgutil-ytdlp-pot-provider` (precisa de Node ou de
+  um servidor HTTP ao lado, e é uma dependência nova de peso), ou aceitar o
+  arquivo à mão. **OAuth2 não é uma das opções**: o próprio yt-dlp o recusa em
+  `extractor/youtube/_base.py:655` — *"Login with OAuth is no longer supported"*.
+- acabou quando: um vídeo com restrição de idade baixa sem ninguém colar nada
 
-Copiar o endereço e apertar a tecla é o gesto certo na maior parte das vezes, e foi por isso que
-ficou assim: um campo pediria para colar nele, que é a mesma colagem com um passo a mais. Mas não há
-como pedir uma legenda ou só o áudio a partir do teclado — isso só existe no menu da extensão, e
-`t m` cobre apenas o vídeo.
-
-- acabou quando: dá para escolher vídeo, áudio ou legenda sem passar pelo navegador
-
-### 0.3. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
+### 0.2. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
 
 Desistir pelo painel desenrola e remove o que foi escrito; `systemctl --user stop` não — o processo
 não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo num crate que é

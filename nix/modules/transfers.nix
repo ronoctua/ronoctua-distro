@@ -74,6 +74,59 @@ in
       default = true;
       description = "A fila de transferencias do LEADER t.";
     };
+
+    # WHERE THE PERSON'S SESSION COMES FROM, when a download asks to be them.
+    #
+    # `LEADER t i …` is the only thing that uses it, and what it buys is the
+    # four things an account is needed for: age-restricted video, private
+    # video, a members' club, and 1080p Premium. What it costs is anonymity,
+    # which is why the key says so and this is only the SOURCE.
+    #
+    # It is a machine decision and not a per-download one, so it is declared
+    # here — and nothing about the cookies themselves is in this repository: a
+    # cookie jar is a session, and `nix/modules/secrets.nix` puts a session in
+    # the same sentence as a password.
+    cookies = lib.mkOption {
+      type = lib.types.enum [
+        "none"
+        "browser"
+        "file"
+      ];
+      default = if config.ronoctua.browser.enable then "browser" else "none";
+      defaultText = lib.literalExpression ''if config.ronoctua.browser.enable then "browser" else "none"'';
+      description = ''
+        De onde saem os cookies de um download identificado.
+
+        `browser` le a base do proprio navegador, o que so funciona porque
+        `nix/modules/browser.nix` forca `--password-store=basic` — e e
+        exatamente esse o chaveiro que o yt-dlp chama de `basictext`.
+
+        `file` le um arquivo no formato Netscape, exportado uma vez. E a opcao
+        mais segura das duas: o YouTube gira os cookies que entrega, e um
+        download que usa os do navegador em uso pode invalida-los — o que
+        aparece como o navegador se deslogando sozinho.
+      '';
+    };
+
+    cookiesBrowser = lib.mkOption {
+      type = lib.types.str;
+      default = "chrome+basictext";
+      description = ''
+        A grafia `BROWSER[+KEYRING]` do yt-dlp. O `+basictext` nao e detalhe:
+        sem ele, decifrar a base do Chrome no Linux pede um chaveiro que esta
+        distro deliberadamente nao tem.
+      '';
+    };
+
+    cookiesFile = lib.mkOption {
+      type = lib.types.str;
+      default = "%h/.config/ronoctua/cookies.txt";
+      description = ''
+        O arquivo Netscape, quando `cookies = "file"`. Os especificadores do
+        systemd valem aqui — `%h` e a casa da pessoa. O arquivo NASCE na
+        maquina; nada dele entra no repositorio (invariante 13).
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -124,9 +177,19 @@ in
       # yt-dlp lives under `ronoctua.media.enable`, which is `mkDefault full`.
       # Baked in, it would drag yt-dlp and ffmpeg into `minimal` through this
       # binary — the trap `RONOCTUA_EMACSCLIENT` fell into, with the same fix.
-      environment = lib.mkIf config.ronoctua.media.enable {
-        RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
-      };
+      environment =
+        lib.optionalAttrs config.ronoctua.media.enable {
+          RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
+        }
+        # EXACTLY ONE OF THE TWO, never both: the Rust reads the file first, so
+        # setting both would make the browser's setting silently dead. An
+        # option that does nothing is worse than one that is absent.
+        // lib.optionalAttrs (cfg.cookies == "browser") {
+          RONOCTUA_COOKIES_BROWSER = cfg.cookiesBrowser;
+        }
+        // lib.optionalAttrs (cfg.cookies == "file") {
+          RONOCTUA_COOKIES_FILE = cfg.cookiesFile;
+        };
       serviceConfig = {
         ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";
         Restart = "on-failure";

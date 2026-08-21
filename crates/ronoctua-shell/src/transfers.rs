@@ -724,6 +724,26 @@ fn subject_of(job: &Job) -> String {
     job.work.subjects().first()
 }
 
+/// Whether the work went out as the person.
+///
+/// It comes out of the WORK and not out of a setting: the request already
+/// carried who was asking, and a screen that read a setting would say what is
+/// true NOW rather than what was true when the job started.
+const fn identified(work: &ronoctua_transfers::Work) -> bool {
+    use ronoctua_transfers::Identity;
+    use ronoctua_transfers::Work as W;
+    matches!(
+        work,
+        W::Fetch {
+            identity: Identity::Mine,
+            ..
+        } | W::Media {
+            identity: Identity::Mine,
+            ..
+        }
+    )
+}
+
 /// The queue as the buffer receives it.
 #[must_use]
 pub fn queue_of(jobs: &[Job]) -> ronoctua_protocol::Queue {
@@ -745,6 +765,7 @@ pub fn queue_of(jobs: &[Job]) -> ronoctua_protocol::Queue {
                 // there will ever be.
                 trouble: j.trouble.clone().unwrap_or_default(),
                 answer: j.answer.unwrap_or(0),
+                identified: identified(&j.work),
             })
             .collect(),
     }

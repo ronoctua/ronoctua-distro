@@ -23,7 +23,7 @@
 //! of forty gibibytes, and there is no reason for a browser to be able to do
 //! that. The narrowness is the design.
 
-use crate::job::{Want, Work};
+use crate::job::{Identity, Want, Work};
 use crate::wire::Ask;
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,10 @@ pub enum Request {
     Fetch {
         /// Where to get it.
         url: String,
+        /// Whose session. Absent means anonymous, which is the default and
+        /// what an older build of the extension will send.
+        #[serde(default)]
+        identity: Identity,
     },
     /// The page in front of the person, for yt-dlp.
     Media {
@@ -48,6 +52,9 @@ pub enum Request {
         url: String,
         /// Video, audio alone, or subtitles alone.
         want: Want,
+        /// Whose session.
+        #[serde(default)]
+        identity: Identity,
     },
     /// A magnet or a `.torrent`.
     Torrent {
@@ -135,8 +142,26 @@ pub fn work_of(request: &Request) -> Option<Work> {
         // A URL the browser was going to fetch could still be a `.torrent`
         // link, which is why this goes through the same resolver as every
         // other door rather than assuming.
-        Request::Fetch { url } => Some(crate::where_to::work_for(url, into, None)),
-        Request::Media { url, want } => Some(crate::where_to::work_for(url, into, Some(*want))),
+        Request::Fetch { url, identity } => Some(crate::where_to::work_for(
+            url,
+            into,
+            crate::where_to::Wish {
+                want: None,
+                identity: *identity,
+            },
+        )),
+        Request::Media {
+            url,
+            want,
+            identity,
+        } => Some(crate::where_to::work_for(
+            url,
+            into,
+            crate::where_to::Wish {
+                want: Some(*want),
+                identity: *identity,
+            },
+        )),
         Request::Torrent { source } => Some(Work::Torrent {
             source: source.clone(),
             into,
@@ -190,6 +215,7 @@ mod tests {
             &Request::Media {
                 url: "https://exemplo/v".to_owned(),
                 want: Want::Subtitles,
+                identity: Identity::Anonymous,
             },
         )
         .expect("escrever");
@@ -204,6 +230,7 @@ mod tests {
             Some(Request::Media {
                 url: "https://exemplo/v".to_owned(),
                 want: Want::Subtitles,
+                identity: Identity::Anonymous,
             })
         );
         // End of stream is `None` and NOT an error: Chrome closes the pipe when
@@ -253,6 +280,7 @@ mod tests {
         // file instead of downloading what it describes.
         let work = work_of(&Request::Fetch {
             url: "https://exemplo/debian.torrent".to_owned(),
+            identity: Identity::Anonymous,
         });
         assert!(matches!(work, Some(Work::Torrent { .. })));
     }

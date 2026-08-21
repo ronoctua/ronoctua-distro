@@ -69,6 +69,9 @@ mod key {
     pub const FIELD_TOTAL: &str = "transfers-window-field-total";
     pub const FIELD_TROUBLE: &str = "transfers-window-field-trouble";
     pub const FIELD_ANSWER: &str = "transfers-window-field-answer";
+    pub const FIELD_IDENTITY: &str = "transfers-window-field-identity";
+    pub const IDENTITY_MINE: &str = "transfers-identity-mine";
+    pub const IDENTITY_ANONYMOUS: &str = "transfers-identity-anonymous";
 
     // THE QUEUE'S VOCABULARY, spelled out one constant per case instead of
     // assembled from the enum's name. Twenty-four lines against one `format!`,
@@ -554,6 +557,25 @@ impl State {
         field(
             &mut out,
             line,
+            key::FIELD_IDENTITY,
+            Text::Key(
+                if job.identified {
+                    key::IDENTITY_MINE
+                } else {
+                    key::IDENTITY_ANONYMOUS
+                }
+                .to_owned(),
+            ),
+            if job.identified {
+                Color::StateWarning
+            } else {
+                Color::TextSecondary
+            },
+        );
+        line += 1;
+        field(
+            &mut out,
+            line,
             key::FIELD_SUBJECT,
             Text::Data(job.subject.clone()),
             Color::TextPrimary,
@@ -882,7 +904,14 @@ fn row(out: &mut Vec<Command>, line: u16, job: &Job, lay: &Lay) {
         line,
         column: 2,
         content: Text::Icon(engine_icon(job.engine)),
-        color: Color::TextDim,
+        // IDENTIFIED ROWS ARE MARKED, and by colour rather than by a second
+        // glyph: the column is one cell wide, and what matters is that a
+        // glance over a screenful finds the ones that were not anonymous.
+        color: if job.identified {
+            Color::StateWarning
+        } else {
+            Color::TextDim
+        },
         scale: Scale::Normal,
         max_width: 1,
     }));
@@ -955,6 +984,7 @@ mod tests {
             subject: "file".to_owned(),
             trouble: String::new(),
             answer: 0,
+            identified: false,
         }
     }
 

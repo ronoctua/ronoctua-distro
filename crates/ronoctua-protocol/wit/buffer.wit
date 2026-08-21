@@ -532,6 +532,14 @@ interface types {
         trouble: string,
         // What a `measure` answered, in bytes. Zero when there is no answer.
         answer: u64,
+        // Whether this one went out as the PERSON rather than as nobody.
+        //
+        // On the row because it is the one property of a job that cannot be
+        // undone after the fact: an anonymous download can be repeated as
+        // oneself, and the reverse is not true — the request already carried
+        // who was asking. A screen that did not say which of the two happened
+        // would be asking the reader to remember.
+        identified: bool,
     }
 
     record queue {

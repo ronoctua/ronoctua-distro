@@ -757,16 +757,45 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "transfers-window",
             label: key::CMD_TRANSFERS_WINDOW,
         },
-        // AND THE TWO THAT PUT SOMETHING IN. What they read is the clipboard,
+        // AND THE EIGHT THAT PUT SOMETHING IN. What they read is the clipboard,
         // because an address is copied and never typed — see
         // `Footer::queue_the_clipboard`.
+        //
+        // FOUR AND FOUR, and the pairing is the point: everything that can be
+        // done through the browser's extension can be done here, and every one
+        // of them exists twice — anonymous, and as the person. The app does not
+        // depend on the extension for anything.
         Command {
             id: "transfers-add",
             label: key::CMD_TRANSFERS_ADD,
         },
         Command {
-            id: "transfers-add-media",
-            label: key::CMD_TRANSFERS_ADD_MEDIA,
+            id: "transfers-video",
+            label: key::CMD_TRANSFERS_VIDEO,
+        },
+        Command {
+            id: "transfers-audio",
+            label: key::CMD_TRANSFERS_AUDIO,
+        },
+        Command {
+            id: "transfers-subtitles",
+            label: key::CMD_TRANSFERS_SUBTITLES,
+        },
+        Command {
+            id: "transfers-add-as-me",
+            label: key::CMD_TRANSFERS_ADD_AS_ME,
+        },
+        Command {
+            id: "transfers-video-as-me",
+            label: key::CMD_TRANSFERS_VIDEO_AS_ME,
+        },
+        Command {
+            id: "transfers-audio-as-me",
+            label: key::CMD_TRANSFERS_AUDIO_AS_ME,
+        },
+        Command {
+            id: "transfers-subtitles-as-me",
+            label: key::CMD_TRANSFERS_SUBTITLES_AS_ME,
         },
         // THE CLIPBOARD. `clipboard-open` has a key in the tree (`LEADER c c`); the
         // others have keys INSIDE the view, and that is why they go into
@@ -976,8 +1005,19 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("t w", "transfers-window", None),
         // `t a` — add whatever was copied: a link, a magnet, a `.torrent`.
         ("t a", "transfers-add", None),
-        // `t m` — the same address, but as MEDIA: yt-dlp resolves the page.
-        ("t m", "transfers-add-media", None),
+        // AND THE THREE THAT SAY WHAT TO TAKE OFF A PAGE. `v` for video, `u`
+        // for the middle letter of áudio — `a` is already the plain add —, and
+        // `l` for legenda.
+        ("t v", "transfers-video", None),
+        ("t u", "transfers-audio", None),
+        ("t l", "transfers-subtitles", None),
+        // THE SAME FOUR, AS THE PERSON. Age-restricted, private, a members'
+        // club and 1080p Premium need an account; everything else is better
+        // without one.
+        ("t i a", "transfers-add-as-me", None),
+        ("t i v", "transfers-video-as-me", None),
+        ("t i u", "transfers-audio-as-me", None),
+        ("t i l", "transfers-subtitles-as-me", None),
         // `f f` IS THE MANAGER, in the footer's region — the same thing `.`
         // opens, and deliberately the same thing.
         //
@@ -1074,6 +1114,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // letter up: a queue that everything long goes through earns a
         // first-level prefix, and a single screenshot does not.
         ("t", key::GROUP_TRANSFER),
+        // `t i` — AS ME. A prefix of its own and not a switch kept somewhere
+        // else: what it costs is anonymity, and a cost paid by a setting is a
+        // cost nobody notices paying. Four keys under it, one per thing that
+        // can be asked for, so the sequence itself says which of the two
+        // happened.
+        ("t i", key::GROUP_IDENTIFIED),
         // `c` FOR CAPTURE — the clipboard and the screen, which is where the
         // screenshot went.
         ("c", key::GROUP_CAPTURE),
@@ -1730,7 +1776,13 @@ mod tests {
             "transfers-open",
             "transfers-window",
             "transfers-add",
-            "transfers-add-media",
+            "transfers-video",
+            "transfers-audio",
+            "transfers-subtitles",
+            "transfers-add-as-me",
+            "transfers-video-as-me",
+            "transfers-audio-as-me",
+            "transfers-subtitles-as-me",
             // THE CLIPBOARD. `clipboard-open` has a key in the tree; the other
             // six have keys INSIDE the view, and that is why they go through
             // `reachable` — all seven need an action, otherwise they would appear in the

@@ -5,7 +5,7 @@
 //! them belongs in three places. A caller may always name a directory instead;
 //! this is only the answer when nobody did.
 
-use crate::job::{Want, Work};
+use crate::job::{Identity, Want, Work};
 use std::path::PathBuf;
 
 /// Where downloads go.
@@ -63,6 +63,46 @@ fn expand(home: &std::path::Path, value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
+/// What was asked for, beyond the address itself.
+///
+/// A struct and not two more positional arguments: they are both small enums,
+/// and two of those in a row is a call whose arguments can be swapped without
+/// the compiler noticing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Wish {
+    /// Which part of a page's media, or `None` to fetch the address itself.
+    pub want: Option<Want>,
+    /// Whose session the request is made with.
+    pub identity: Identity,
+}
+
+impl Wish {
+    /// The address itself, as nobody. What a `.desktop` handler asks for.
+    #[must_use]
+    pub const fn plain() -> Self {
+        Self {
+            want: None,
+            identity: Identity::Anonymous,
+        }
+    }
+
+    /// A page's media, as nobody.
+    #[must_use]
+    pub const fn media(want: Want) -> Self {
+        Self {
+            want: Some(want),
+            identity: Identity::Anonymous,
+        }
+    }
+
+    /// The same, but as the person.
+    #[must_use]
+    pub const fn as_me(mut self) -> Self {
+        self.identity = Identity::Mine;
+        self
+    }
+}
+
 /// Which engine an address belongs to, as a [`Work`].
 ///
 /// ONE PLACE, and every door uses it: a magnet handed to aria2 comes back with
@@ -73,24 +113,28 @@ fn expand(home: &std::path::Path, value: &str) -> PathBuf {
 /// `want` only matters when the address turns out to be a page with media on
 /// it; for everything else it is ignored.
 #[must_use]
-pub fn work_for(address: &str, into: PathBuf, want: Option<Want>) -> Work {
+pub fn work_for(address: &str, into: PathBuf, wish: Wish) -> Work {
     let address = address.trim();
     if crate::torrent::takes(address) {
+        // A torrent carries no identity: a swarm has no account, and the
+        // request that fetches the metadata is the same for everybody.
         return Work::Torrent {
             source: address.to_owned(),
             into,
         };
     }
-    if let Some(want) = want {
+    if let Some(want) = wish.want {
         return Work::Media {
             url: address.to_owned(),
             into,
             want,
+            identity: wish.identity,
         };
     }
     Work::Fetch {
         url: address.to_owned(),
         into,
+        identity: wish.identity,
     }
 }
 
@@ -102,7 +146,7 @@ mod tests {
     fn a_magnet_never_reaches_the_link_engine() {
         let into = PathBuf::from("/onde/vai");
         assert!(matches!(
-            work_for("magnet:?xt=urn:btih:abc", into.clone(), None),
+            work_for("magnet:?xt=urn:btih:abc", into.clone(), Wish::plain()),
             Work::Torrent { .. }
         ));
         // Even when the caller asked for media: a magnet is not a page.
@@ -110,18 +154,32 @@ mod tests {
             work_for(
                 "magnet:?xt=urn:btmh:1220ab",
                 into.clone(),
-                Some(Want::Video)
+                Wish::media(Want::Video)
             ),
             Work::Torrent { .. }
         ));
         assert!(matches!(
-            work_for("https://exemplo/x.iso", into.clone(), None),
+            work_for("https://exemplo/x.iso", into.clone(), Wish::plain()),
             Work::Fetch { .. }
         ));
         assert!(matches!(
-            work_for("https://exemplo/assistir", into, Some(Want::Audio)),
+            work_for(
+                "https://exemplo/assistir",
+                into.clone(),
+                Wish::media(Want::Audio)
+            ),
             Work::Media {
                 want: Want::Audio,
+                identity: Identity::Anonymous,
+                ..
+            }
+        ));
+        // And asking to be oneself reaches the work, rather than a setting
+        // somewhere else deciding it later.
+        assert!(matches!(
+            work_for("https://exemplo/v", into, Wish::media(Want::Video).as_me()),
+            Work::Media {
+                identity: Identity::Mine,
                 ..
             }
         ));

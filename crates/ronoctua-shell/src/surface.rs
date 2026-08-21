@@ -37,6 +37,8 @@
 use anyhow::{Context as _, Result};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
+use ronoctua_transfers::where_to::Wish;
+use ronoctua_transfers::{Identity, Want};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -3249,9 +3251,19 @@ impl Footer {
             "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
             "transfers-window" => self.open_buffer("RONOCTUA_BUFFER_TRANSFERS"),
-            "transfers-add" => self.queue_the_clipboard(None),
-            "transfers-add-media" => {
-                self.queue_the_clipboard(Some(ronoctua_transfers::Want::Video));
+            "transfers-add" => self.queue_the_clipboard(Wish::plain()),
+            "transfers-video" => self.queue_the_clipboard(Wish::media(Want::Video)),
+            "transfers-audio" => self.queue_the_clipboard(Wish::media(Want::Audio)),
+            "transfers-subtitles" => self.queue_the_clipboard(Wish::media(Want::Subtitles)),
+            "transfers-add-as-me" => self.queue_the_clipboard(Wish::plain().as_me()),
+            "transfers-video-as-me" => {
+                self.queue_the_clipboard(Wish::media(Want::Video).as_me());
+            }
+            "transfers-audio-as-me" => {
+                self.queue_the_clipboard(Wish::media(Want::Audio).as_me());
+            }
+            "transfers-subtitles-as-me" => {
+                self.queue_the_clipboard(Wish::media(Want::Subtitles).as_me());
             }
             // The two WINDOW actions are the compositor's (invariant 4). The
             // shell does not reimplement them: it asks over IPC, which is the
@@ -4112,10 +4124,9 @@ impl Footer {
     /// already `Ctrl+C`. A field would ask the person to paste into it, which
     /// is the same paste with one more step and a syntax to get wrong.
     ///
-    /// `want` says what to do with a page: `None` fetches the address itself,
-    /// and `Some` hands it to yt-dlp to resolve into media. A magnet ignores
-    /// both, because a magnet is not a page.
-    fn queue_the_clipboard(&mut self, want: Option<ronoctua_transfers::Want>) {
+    /// The [`Wish`] says what to do with a page and whose session to use. A
+    /// magnet ignores both: it is not a page, and a swarm has no account.
+    fn queue_the_clipboard(&mut self, wish: Wish) {
         let latest = self
             .clipboard
             .at(0)
@@ -4140,11 +4151,19 @@ impl Footer {
         let work = ronoctua_transfers::where_to::work_for(
             &address,
             ronoctua_transfers::where_to::landing(),
-            want,
+            wish,
         );
         match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
             Ok(()) => {
-                let message = self.texts.t(ronoctua_i18n::key::TRANSFERS_QUEUED);
+                // WHICH OF THE TWO HAPPENED, said at the moment it happened.
+                // The row carries it afterwards, but the line that matters is
+                // this one: it is the only chance to notice that this download
+                // was not anonymous before it has already gone out.
+                let message = self.texts.t(if wish.identity == Identity::Mine {
+                    ronoctua_i18n::key::TRANSFERS_QUEUED_AS_ME
+                } else {
+                    ronoctua_i18n::key::TRANSFERS_QUEUED
+                });
                 self.echo_message(message);
             }
             Err(e) => {

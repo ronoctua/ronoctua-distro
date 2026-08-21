@@ -50,10 +50,12 @@ fn open() -> Result<()> {
     let work = ronoctua_transfers::where_to::work_for(
         &address,
         ronoctua_transfers::where_to::landing(),
-        // No `want`: a `.desktop` handler is given an address and never an
-        // intent, so a page with a video on it is fetched as a page. Asking
-        // for the video is what `LEADER t a` and the extension's menu are for.
-        None,
+        // PLAIN, AND ANONYMOUS. A `.desktop` handler is given an address and
+        // never an intent: a page with a video on it is fetched as a page, and
+        // nothing here says who is asking. Both of those are choices somebody
+        // makes at the keyboard — `LEADER t v` and `LEADER t i v` — and a
+        // handler that guessed either would be guessing about anonymity.
+        ronoctua_transfers::where_to::Wish::plain(),
     );
     ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work })
         .context("a fila de transferencias nao aceitou o pedido")

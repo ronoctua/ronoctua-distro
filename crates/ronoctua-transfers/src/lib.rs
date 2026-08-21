@@ -37,6 +37,7 @@
 #![forbid(unsafe_code)]
 
 pub mod aria2;
+pub mod auth;
 pub mod browser;
 pub mod client;
 pub mod engine;
@@ -49,6 +50,6 @@ pub mod torrent;
 pub mod where_to;
 pub mod wire;
 
-pub use job::{Engine, Job, Measure, Stage, Want, Work};
+pub use job::{Engine, Identity, Job, Measure, Stage, Want, Work};
 pub use ledger::Shared;
 pub use wire::{Ask, Say};

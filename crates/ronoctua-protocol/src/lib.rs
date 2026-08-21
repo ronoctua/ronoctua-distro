@@ -512,6 +512,12 @@ pub struct Job {
     pub trouble: String,
     /// What a [`Errand::Measure`] answered, in bytes. Zero when there is none.
     pub answer: u64,
+    /// Whether it went out as the PERSON rather than as nobody.
+    ///
+    /// The one property of a job that cannot be undone after the fact: an
+    /// anonymous download can be repeated as oneself, and the reverse is not
+    /// true — the request already carried who was asking.
+    pub identified: bool,
 }
 
 impl Job {

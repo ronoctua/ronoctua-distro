@@ -24,6 +24,18 @@ import { TEXT, HOST } from './generated.js';
 // so it is one answer per person and not per machine.
 const SWITCH = 'intercept';
 
+// AND WHETHER WHAT LEAVES CARRIES WHO YOU ARE.
+//
+// This is the ONE place in the whole system where identity is a setting rather
+// than a key, and the reason is interception: a download the browser started
+// has no moment at which anybody can be asked. So it is a switch — shown in
+// the popup, right above the buttons it governs, so that its state is visible
+// at the moment it is acted on rather than remembered.
+//
+// At the keyboard there is no such compromise: `LEADER t v` and `LEADER t i v`
+// are different keys, and the sequence itself says which happened.
+const AS_ME = 'identity';
+
 // What we will take over. A `blob:` or `data:` URL exists only inside the tab
 // and there is nothing to hand anybody; `ftp:` and the rest are not aria2's
 // business here either.
@@ -34,6 +46,15 @@ async function intercepting() {
   // On by default: the owner asked for the browser to HAND downloads over, so
   // the surprising state is the one that has to be chosen.
   return kept[SWITCH] !== false;
+}
+
+// OFF by default, and that direction is not symmetric with the one above:
+// anonymous is what costs nothing and can always be repeated as oneself. The
+// reverse is not true — a request that already carried who was asking cannot
+// be taken back.
+async function identity() {
+  const kept = await chrome.storage.sync.get(AS_ME);
+  return kept[AS_ME] === true ? 'mine' : 'anonymous';
 }
 
 // Says something to the queue, and reports whether it took it.
@@ -61,7 +82,7 @@ chrome.downloads.onCreated.addListener(async (item) => {
   if (!item || !OURS.test(item.url || '')) return;
   if (!(await intercepting())) return;
 
-  const taken = await tell({ kind: 'fetch', url: item.url });
+  const taken = await tell({ kind: 'fetch', url: item.url, identity: await identity() });
   if (!taken) {
     // THE QUEUE IS NOT UP, so the browser keeps the download. Cancelling first
     // and asking afterwards would lose the file whenever the unit is down,
@@ -88,26 +109,34 @@ function note(text) {
   clearing = setTimeout(() => chrome.action.setTitle({ title: TEXT.extTitle }), 4000);
 }
 
-// THE CONTEXT MENU, rebuilt on install so a changed language takes effect.
-chrome.runtime.onInstalled.addListener(() => {
+// THE CONTEXT MENU. Its titles SAY which of the two they will do, because a
+// right-click has no room for a choice and a menu that did not say would be the
+// worst place in the system to be silent about it.
+function buildMenu(who) {
+  const mark = who === 'mine' ? ` — ${TEXT.extAsMe}` : '';
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'send-link',
-      title: TEXT.extSendLink,
+      title: TEXT.extSendLink + mark,
       contexts: ['link'],
     });
     chrome.contextMenus.create({
       id: 'send-media',
-      title: TEXT.extSendMedia,
+      title: TEXT.extSendMedia + mark,
       contexts: ['page', 'video', 'audio'],
     });
   });
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  buildMenu(await identity());
   chrome.action.setTitle({ title: TEXT.extTitle });
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'send-link' && info.linkUrl) {
-    note((await tell({ kind: 'fetch', url: info.linkUrl })) ? TEXT.extSent : TEXT.extFailed);
+    const sent = await tell({ kind: 'fetch', url: info.linkUrl, identity: await identity() });
+    note(sent ? TEXT.extSent : TEXT.extFailed);
     return;
   }
   if (info.menuItemId === 'send-media') {
@@ -116,7 +145,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // lets the common case need no injection at all.
     const url = (info.srcUrl && /^https?:/i.test(info.srcUrl)) ? info.srcUrl : (tab && tab.url);
     if (!url) return;
-    note((await tell({ kind: 'media', url, want: 'video' })) ? TEXT.extSent : TEXT.extFailed);
+    const sent = await tell({ kind: 'media', url, want: 'video', identity: await identity() });
+    note(sent ? TEXT.extSent : TEXT.extFailed);
   }
 });
 
@@ -127,7 +157,11 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   (async () => {
     switch (message && message.kind) {
       case 'state':
-        reply({ up: await tell({ kind: 'ping' }), intercept: await intercepting() });
+        reply({
+          up: await tell({ kind: 'ping' }),
+          intercept: await intercepting(),
+          identity: await identity(),
+        });
         return;
       case 'toggle': {
         const now = !(await intercepting());
@@ -135,11 +169,28 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         reply({ intercept: now });
         return;
       }
+      case 'toggle-identity': {
+        const now = (await identity()) !== 'mine';
+        await chrome.storage.sync.set({ [AS_ME]: now });
+        // The context menu says which of the two it will do, so it is rebuilt
+        // whenever the answer changes — a menu entry that lied about this
+        // would be the worst place in the system to lie.
+        buildMenu(now ? 'mine' : 'anonymous');
+        reply({ identity: now ? 'mine' : 'anonymous' });
+        return;
+      }
       case 'media':
-        reply({ ok: await tell({ kind: 'media', url: message.url, want: message.want }) });
+        reply({
+          ok: await tell({
+            kind: 'media',
+            url: message.url,
+            want: message.want,
+            identity: await identity(),
+          }),
+        });
         return;
       case 'link':
-        reply({ ok: await tell({ kind: 'fetch', url: message.url }) });
+        reply({ ok: await tell({ kind: 'fetch', url: message.url, identity: await identity() }) });
         return;
       case 'scan': {
         // THE ONLY INJECTION IN THIS EXTENSION, and it happens because the

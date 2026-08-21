@@ -220,6 +220,9 @@ pub enum Work {
         /// Which directory it lands in.
         #[serde(with = "crate::wire::path")]
         into: PathBuf,
+        /// Whether it goes out as the person or as nobody.
+        #[serde(default)]
+        identity: Identity,
     },
     /// Download a site's media, through yt-dlp.
     Media {
@@ -231,6 +234,14 @@ pub enum Work {
         into: PathBuf,
         /// Which of the three the menu asked for.
         want: Want,
+        /// Whether this one goes out as the person or as nobody.
+        ///
+        /// A field of the REQUEST and never a setting: what it costs is
+        /// anonymity, and a switch somewhere else would make that cost
+        /// invisible at the moment it is paid. `Default` so an older client's
+        /// message still parses — as anonymous, which is the safe reading.
+        #[serde(default)]
+        identity: Identity,
     },
     /// A torrent: a magnet URI, or the path of a `.torrent` as text.
     Torrent {
@@ -240,6 +251,25 @@ pub enum Work {
         #[serde(with = "crate::wire::path")]
         into: PathBuf,
     },
+}
+
+/// Whose session a download is made with.
+///
+/// # Why this is not a preference
+///
+/// Because the whole of what it changes is whether the request carries who you
+/// are. Age-restricted video, private video, a members' club and 1080p Premium
+/// all need it; everything else is better without it. A setting kept somewhere
+/// else would mean pressing a key and not knowing which of the two just
+/// happened — and the one that cannot be taken back is the identified one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Identity {
+    /// Nobody. No cookies, no account, no token.
+    #[default]
+    Anonymous,
+    /// The person: their cookies, and the device proof if there is one.
+    Mine,
 }
 
 /// Which part of a page's media was asked for.

@@ -1077,6 +1077,79 @@ let
     PY
   '';
 
+  # THE APP DOES NOT DEPEND ON THE EXTENSION.
+  #
+  # The owner's requirement, turned into a test: everything that can be done
+  # from the browser's extension has to be doable without it. That is not a
+  # thing one reads and believes — an entry added to the popup is one line, and
+  # the key that would match it is in another file that nobody has to open.
+  #
+  # So this reads BOTH SIDES. What the extension can ask for comes out of its
+  # own sources; what the keyboard can ask for comes out of the leader's table;
+  # and every one of the first has to appear in the second, twice — once
+  # anonymous and once as the person, because the extension can do both.
+  downloads-do-not-need-the-extension =
+    mkCheck "downloads-do-not-need-the-extension" [ pkgs.python3 ]
+      ''
+        python3 - <<'PY'
+        import pathlib, re, sys
+
+        source = pathlib.Path("${../extension}")
+        wanted = set()
+        kinds = set()
+        for name in ("popup.js", "worker.js"):
+            text = (source / name).read_text()
+            wanted |= set(re.findall(r"want:\s*'([a-z]+)'", text))
+            kinds |= set(re.findall(r"kind:\s*'([a-z-]+)'", text))
+
+        leader = pathlib.Path("${../crates/ronoctua-shell/src/leader.rs}").read_text()
+        bound = set(re.findall(r'\(\s*"[a-z ]+"\s*,\s*"(transfers-[a-z-]+)"', leader))
+
+        failed = 0
+        # ---- WHAT THE MENU TAKES OFF A PAGE ----
+        if not wanted:
+            sys.exit("ERRO: nao achei `want:` nenhum na extensao — o check parou de olhar")
+        for want in sorted(wanted):
+            for command in (f"transfers-{want}", f"transfers-{want}-as-me"):
+                if command not in bound:
+                    print(
+                        f"ERRO: a extensao oferece `{want}` e o teclado nao tem `{command}`."
+                        " Tudo que a extensao faz tem de ser possivel sem ela.",
+                        file=sys.stderr,
+                    )
+                    failed = 1
+
+        # ---- AND THE PLAIN LINK ----
+        if "fetch" in kinds:
+            for command in ("transfers-add", "transfers-add-as-me"):
+                if command not in bound:
+                    print(
+                        f"ERRO: a extensao manda link e o teclado nao tem `{command}`",
+                        file=sys.stderr,
+                    )
+                    failed = 1
+
+        # ---- AND IDENTITY, ON BOTH SIDES ----
+        #
+        # The extension keeps it as a switch because interception has no moment
+        # at which to ask; the keyboard has it as a PREFIX. Both must exist, or
+        # one door does something the other cannot.
+        if "toggle-identity" not in kinds:
+            print("ERRO: a extensao perdeu a chave de identidade", file=sys.stderr)
+            failed = 1
+        if not any(c.endswith("-as-me") for c in bound):
+            print("ERRO: o teclado perdeu o grupo `t i`", file=sys.stderr)
+            failed = 1
+
+        if failed:
+            sys.exit(1)
+        print(
+            f"OK: {len(wanted)} midias e o link avulso, cada um com tecla anonima "
+            "e tecla identificada"
+        )
+        PY
+      '';
+
   # AND IT PARSES.
   #
   # A syntax error in a service worker is the quietest failure this extension
@@ -4578,6 +4651,7 @@ let
       torrent-speaks-v2
       extension-has-no-fingerprint
       extension-parses
+      downloads-do-not-need-the-extension
       extension-has-no-literal
       secrets-are-not-in-the-repo
       # "The repository has to be publishable as it is" (section 9).
@@ -4738,6 +4812,7 @@ let
       torrent-speaks-v2
       extension-has-no-fingerprint
       extension-parses
+      downloads-do-not-need-the-extension
       extension-has-no-literal
       secrets-are-not-in-the-repo
       renderer-loads-three-faces

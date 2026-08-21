@@ -61,6 +61,8 @@ KEYS = [
     "ext-intercept-off",
     "ext-send-link",
     "ext-send-media",
+    "ext-as-me",
+    "ext-anonymous",
 ]
 
 LANGUAGES = ["pt-BR", "en-GB"]
@@ -76,6 +78,7 @@ COLOURS = [
     ("state", "accent"),
     ("state", "success"),
     ("state", "error"),
+    ("state", "warning"),
 ]
 
 

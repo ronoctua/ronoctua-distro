@@ -67,20 +67,17 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
 - **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
   lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um por USUÁRIO. `t t` no
-  rodapé, `t w` no buffer wasip2 (capacidade `transfers`) — e o cursor é o **id**, que a lista
-  reordena. `t a`/`t m` pegam o COPIADO. Desistir APAGA o pedaço. `c c` clipboard, `c s` captura.
+  rodapé, `t w` no buffer wasip2 — e o cursor é o **id**, que a lista reordena. `t a`/`t v`/`t u`/`t l`
+  pegam o COPIADO. Desistir APAGA o pedaço. `c c` clipboard, `c s` captura.
 - **QUATRO motores, e o motor sai do `Work`** (`Work::engine()`), nunca do pedido: disco, aria2
   (JSON-RPC no loopback, HTTP na mão — sem tokio; segredo em `%t` `0600`, NUNCA em `argv`), yt-dlp
   (grupo próprio, pausar É `SIGSTOP`; vem do AMBIENTE — `option_env!` o poria no perfil mínimo) e
-  **libtorrent por FFI**, UMA sessão para todas as linhas. **v1 e v2** por 62,7 MiB — menos que o
-  rqbit, que não tem v2. O C++ para no `nix/torrent-shim/`, o `unsafe` mora em UM módulo, e o
-  `sizeof` é MEDIDO pelo compilador C++ e comparado por check. Semear é porta aberta (6881-6889, sem
-  UPnP); torrent pronto CONTINUA semeando e desistir é o que para. Magnet chega por `.desktop`.
+  **libtorrent por FFI**, UMA sessão para todas as linhas. **v1 e v2** por 62,7 MiB — menos que o rqbit, que não tem v2. O `unsafe` mora em UM módulo, e o `sizeof` é MEDIDO pelo compilador C++ e comparado por check. Semear é porta aberta (6881-6889, sem UPnP); torrent pronto CONTINUA semeando, e desistir é o que para. Magnet chega por `.desktop`.
+- **Baixar COMO VOCÊ é um prefixo, não um interruptor**: `t v` é anônimo, `t i v` é você — a tecla
+  diz qual das duas, e a identificada não se desfaz. **OAuth2 morreu**: o yt-dlp o RECUSA (`_base.py:655`); sobrou cookie, e o `--password-store=basic` que já forçávamos É o `basictext` que ele pede. Arquivo GANHA do navegador (o YouTube gira cookie e desloga). aria2 leva **cabeçalho**, nunca `--load-cookies`, que é da sessão inteira.
 - **A extensão não deixa rastro em página nenhuma**: zero `web_accessible_resources`,
   `content_scripts`, `externally_connectable`, `host_permissions` e `declarativeNetRequest` — as
-  cinco vias de detecção, e há check. Injeta só sob `activeTab`, ao apertar o botão; fala por native
-  messaging; texto e cor vêm do MESMO `.ftl` e dos MESMOS tokens. A chave que dá o id nasce NA
-  máquina (inv. 13); a política vai em `/etc/opt/chrome/policies/managed/`.
+  cinco vias de detecção, e há check. Injeta só sob `activeTab`; a chave que dá o id nasce NA máquina (inv. 13). **O app não depende dela** — cada coisa do popup tem tecla, e há check dos DOIS lados.
 - **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders`
   FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo:
   `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).

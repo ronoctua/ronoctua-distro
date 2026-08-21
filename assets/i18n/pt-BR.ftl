@@ -1074,7 +1074,20 @@ transfers-items = { $done } de { $total }
 # ---------------------------------------------------------------------------
 cmd-transfers-window = a fila de transferências, em janela
 cmd-transfers-add = baixar o que está na área de transferência
-cmd-transfers-add-media = baixar como mídia o que está na área de transferência
+cmd-transfers-video = baixar o vídeo do que está copiado
+cmd-transfers-audio = baixar só o áudio do que está copiado
+cmd-transfers-subtitles = baixar só a legenda do que está copiado
+cmd-transfers-add-as-me = baixar o que está copiado, como eu
+cmd-transfers-video-as-me = baixar o vídeo, como eu
+cmd-transfers-audio-as-me = baixar só o áudio, como eu
+cmd-transfers-subtitles-as-me = baixar só a legenda, como eu
+# O grupo que custa o anonimato — e é por isso que ele é um prefixo, e não um
+# interruptor guardado em outro lugar.
+group-identified = como eu (custa o anonimato)
+transfers-queued-as-me = na fila, COMO VOCÊ — este não é anônimo
+transfers-window-field-identity = quem pediu
+transfers-identity-mine = você
+transfers-identity-anonymous = ninguém
 transfers-nothing-copied = não há nada copiado
 transfers-not-an-address = o que está copiado não é um endereço
 transfers-queued = na fila
@@ -1139,3 +1152,5 @@ ext-intercept-on = downloads vão para a fila
 ext-intercept-off = downloads ficam no navegador
 ext-send-link = baixar este link pela ronoctua
 ext-send-media = baixar a mídia desta página
+ext-as-me = como você — não é anônimo
+ext-anonymous = anônimo

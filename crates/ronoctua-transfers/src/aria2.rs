@@ -24,8 +24,9 @@
 //! the person's own — and passes `--conf-path`. This reads the same file.
 //! Nothing about it is in the repository (invariant 13).
 
+use crate::auth::{self, Cookies};
 use crate::engine::{POLL, Progress};
-use crate::job::{Stage, Work};
+use crate::job::{Identity, Stage, Work};
 use crate::ledger::Shared;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_files::watch::{Control, Flow};
@@ -204,12 +205,33 @@ fn status_of(gid: &str) -> Result<Status> {
 /// The shape is [`crate::local::run`]'s: it owns the thread, it writes the
 /// ledger, and it never returns a value — the row IS the answer.
 pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
-    let Work::Fetch { url, into } = &work else {
+    let Work::Fetch {
+        url,
+        into,
+        identity,
+    } = &work
+    else {
         tracing::error!("o motor do aria2 recebeu trabalho que nao e um link");
         shared.touch(id, |j| j.stage = Stage::Failed);
         return;
     };
-    match carry(shared, id, switch, url, into) {
+    // A BROWSER'S STORE IS NOT SOMETHING aria2 CAN OPEN, so an identified plain
+    // download needs a file. Saying so is better than sending the request
+    // without the cookies and letting the site answer 403.
+    let cookies = Cookies::here();
+    if *identity == Identity::Mine && cookies.as_file().is_none() {
+        shared.touch(id, |j| {
+            j.stage = Stage::Failed;
+            j.trouble = Some(
+                "um link identificado precisa de um ARQUIVO de cookies; \
+                 o aria2 nao abre a base do navegador"
+                    .to_owned(),
+            );
+        });
+        return;
+    }
+    let header = auth::cookie_header(*identity, &cookies, url);
+    match carry(shared, id, switch, url, into, header.as_deref()) {
         Ok(()) => {}
         Err(e) => {
             // A cancellation is not a failure and must not read like one: the
@@ -236,14 +258,19 @@ fn carry(
     switch: &Arc<Control>,
     url: &str,
     into: &std::path::Path,
+    header: Option<&str>,
 ) -> Result<()> {
-    let gid = call(
-        "aria2.addUri",
-        vec![
-            json!([url]),
-            json!({ "dir": into.to_string_lossy(), "continue": "true" }),
-        ],
-    )?;
+    // `header` and NOT `load-cookies`: aria2 takes the latter for the whole
+    // session and not per download, so one identified link would make every
+    // other one in the queue carry the person's cookies too — identity leaking
+    // into requests nobody asked to identify.
+    let mut options = json!({ "dir": into.to_string_lossy(), "continue": "true" });
+    if let Some(header) = header
+        && let Some(map) = options.as_object_mut()
+    {
+        map.insert("header".to_owned(), json!([header]));
+    }
+    let gid = call("aria2.addUri", vec![json!([url]), options])?;
     let gid = gid
         .as_str()
         .context("o aria2 nao devolveu um gid")?

@@ -82,6 +82,22 @@ async function draw() {
       state.up ? TEXT.extQueueUp : TEXT.extQueueDown,
       state.up ? COLOUR.stateSuccess : COLOUR.stateError);
   root.appendChild(status);
+
+  // WHO IS ASKING, ABOVE THE BUTTONS IT GOVERNS.
+  //
+  // It is a switch and not a second row of buttons because interception has no
+  // moment at which anybody can be asked — and a switch whose state is not on
+  // screen where it is acted on is exactly the invisible cost this whole
+  // design avoids. Warning-coloured when it is on, because what it costs is
+  // anonymity.
+  const mine = state.identity === 'mine';
+  const who = button(
+    mine ? TEXT.extAsMe : TEXT.extAnonymous,
+    null,
+    async () => { await ask({ kind: 'toggle-identity' }); await draw(); },
+  );
+  who.firstChild.style.color = mine ? COLOUR.stateWarning : COLOUR.textSecondary;
+  root.appendChild(who);
   root.appendChild(rule());
 
   const page = tab && tab.url && /^https?:/i.test(tab.url) ? tab.url : null;
@@ -89,13 +105,19 @@ async function draw() {
   if (page) {
     // THE THREE THE OWNER ASKED FOR. Each one hands yt-dlp the PAGE, which is
     // what it resolves — no injection, and nothing read out of the document.
-    for (const [label, want] of [
-      [TEXT.extVideo, 'video'],
-      [TEXT.extAudio, 'audio'],
-      [TEXT.extSubtitles, 'subtitles'],
+    //
+    // WRITTEN AS `want: '...'`, and that spelling is load-bearing:
+    // `downloads-do-not-need-the-extension` reads this file to find out what
+    // the extension can ask for, and demands a key for each. Anything written
+    // another way is a thing the extension can do and the keyboard cannot,
+    // which is the whole failure that check exists to catch.
+    for (const item of [
+      { label: TEXT.extVideo, want: 'video' },
+      { label: TEXT.extAudio, want: 'audio' },
+      { label: TEXT.extSubtitles, want: 'subtitles' },
     ]) {
-      root.appendChild(button(label, null, async () => {
-        const out = await ask({ kind: 'media', url: page, want });
+      root.appendChild(button(item.label, null, async () => {
+        const out = await ask({ kind: 'media', url: page, want: item.want });
         say(status, out.ok ? TEXT.extSent : TEXT.extFailed,
             out.ok ? COLOUR.stateSuccess : COLOUR.stateError);
       }));

@@ -2828,6 +2828,87 @@ A linha vai para `done` quando os bytes chegaram, e a sessão continua devolvend
 que serve um cliente de torrent. **Desistir (`C-c`) é o que para**, e leva os dados junto; tirar a
 linha da lista não para a semeadura. Isso está dito aqui e no módulo em vez de ser descoberto.
 
+### Baixar como você, e o que isso custa
+
+Quatro coisas precisam de conta: vídeo com restrição de idade, vídeo privado,
+clube de membros, e 1080p Premium. O modo normal é anônimo e continua sendo o
+padrão; o que segue é a outra metade, e ela tem um preço que está dito no nome
+da tecla.
+
+#### OAuth2 não é uma das saídas, e isso foi medido
+
+O dono pediu OAuth2, e o yt-dlp pinado responde no próprio código-fonte —
+`extractor/youtube/_base.py:655`:
+
+```python
+if username.startswith('oauth'):
+    raise ExtractorError(
+        f'Login with OAuth is no longer supported. {self._youtube_login_hint}', ...)
+```
+
+A linha seguinte recusa senha também. O `_youtube_login_hint` que ele aponta diz
+**cookies**. Então cookies é o que existe, e não por preferência: é o que sobrou.
+
+O papel que o OAuth fazia — provar que quem pede é um dispositivo de verdade —
+passou para o **PO token**. O yt-dlp carrega o arcabouço inteiro
+(`extractor/youtube/pot/`) e **nenhum gerador**: um token vem à mão ou de um
+plugin. Esta distro lê `$XDG_STATE_HOME/ronoctua/po-token`, uma linha por token,
+na grafia `CLIENT.CONTEXT+TOKEN` do próprio yt-dlp — copiada sem tradução no
+meio, porque um passo de tradução é um passo que pode estar errado.
+
+#### O prefixo é a escolha, e não um interruptor
+
+`LEADER t v` baixa o vídeo; `LEADER t i v` baixa o mesmo vídeo **como você**.
+São teclas diferentes de propósito. Um interruptor guardado em outro lugar faria
+pressionar uma tecla e não saber qual das duas aconteceu — e das duas, a que não
+se desfaz é a identificada: um download anônimo sempre pode ser repetido como
+você, e o contrário não, porque o pedido já levou quem estava pedindo.
+
+Pela mesma razão a linha carrega isso (`job.identified` no WIT): a tela diz o
+que aconteceu em vez de pedir ao leitor que lembre. Na lista é uma **cor** — a
+coluna tem uma célula —, no detalhe é uma palavra.
+
+Há exatamente **um** lugar em todo o sistema onde a identidade é um interruptor:
+a extensão. A interceptação de um download que o navegador começou não tem
+momento em que perguntar, então lá é um botão — mostrado no popup, logo acima
+dos botões que ele governa, e as entradas do menu de contexto **dizem no título**
+qual das duas farão.
+
+#### De onde saem os cookies é decisão da MÁQUINA
+
+`ronoctua.transfers.cookies` vale `browser`, `file` ou `none`, e o padrão segue
+`ronoctua.browser.enable` — no perfil reduzido, que não tem navegador, é `none`.
+Nada dos cookies entra no repositório: um pote de cookies é uma sessão, e
+`nix/modules/secrets.nix` põe sessão na mesma frase que senha (invariante 13).
+
+`browser` lê a base do próprio Chrome, e **só funciona por causa de uma decisão
+que já estava tomada por outro motivo**: `nix/modules/browser.nix` força
+`--password-store=basic`, e é exatamente esse o chaveiro que o yt-dlp chama de
+`basictext`. Sem ele, decifrar a base no Linux pediria um chaveiro que esta
+distro deliberadamente não tem.
+
+`file` é a opção mais segura das duas, e a razão não é óbvia: o YouTube **gira**
+os cookies que entrega, e um download que usa os do navegador em uso pode
+invalidá-los — o que aparece como o navegador se deslogando sozinho. Quem
+exportou um arquivo quis isso. Por isso, quando os dois estão configurados, o
+arquivo ganha.
+
+#### O aria2 não abre a base de um navegador
+
+Um link identificado pelo motor de links precisa de um **arquivo**. E ele não
+recebe `--load-cookies`: essa opção do aria2 vale para a sessão inteira e não
+por download, então um link identificado faria todos os outros da fila levarem
+os cookies da pessoa junto — identidade vazando para pedidos que ninguém pediu
+para identificar. O que o aria2 aceita por download é um **cabeçalho**, então o
+pote é lido aqui e vai exatamente o que pertence àquele endereço: domínio como
+sufixo (`youtube.com` não casa `notyoutube.com`), caminho como prefixo, `secure`
+só sob TLS, e expiração zero é sessão e não vencido.
+
+#### Pedir para ser você sem ter de onde tirar não vira anônimo
+
+Vira uma linha que falhou, com a frase. O contrário — cair calado para anônimo —
+baixaria o trailer em vez do vídeo, ou nada, e o erro pareceria ser do site.
+
 ### O navegador manda para cá — e a extensão não deixa rastro
 
 A pergunta do dono foi exata: uma extensão que só ele tem torna o navegador único se todo site
@@ -2883,6 +2964,21 @@ assinatura cobre `"CRX3 SignedData\0"` mais o tamanho, o `signed_header_data` e 
 os dezesseis primeiros bytes do SHA-256 da chave pública DER, escritos no alfabeto `a`–`p` do
 próprio Chrome. O zip é reprodutível (data fixa, caminhada ordenada): sem isso o mesmo diretório
 empacota em dois arquivos diferentes, a assinatura muda, e cada rebuild vira uma extensão diferente.
+
+#### E o app não depende dela
+
+Tudo o que a extensão faz tem tecla: `t a` para um link (ou magnet, ou
+`.torrent`), `t v`, `t u` e `t l` para vídeo, áudio e legenda de uma página, e
+`t i` na frente de qualquer um dos quatro para ir como você. O que a extensão
+tem de verdade que o teclado não tem é **interceptar** um download que o
+navegador começou — que por natureza acontece dentro do navegador — e **olhar a
+página** atrás de mídia, que serve só para os sites que o yt-dlp não conhece.
+
+Isso não é uma promessa escrita: `downloads-do-not-need-the-extension` lê os
+dois lados — o `want:` de cada botão do popup e a tabela de teclas do leader — e
+exige que cada coisa que a extensão oferece tenha tecla, duas vezes: a anônima e
+a identificada. Uma entrada nova no popup sem a tecla correspondente derruba o
+build.
 
 **O que não é afirmado aqui** é que uma build específica do Chrome honra um `update_url` `file://`.
 O `tests/extension-vm.nix` confere o que é conferível — a chave existe, o `.crx` está assinado, o id

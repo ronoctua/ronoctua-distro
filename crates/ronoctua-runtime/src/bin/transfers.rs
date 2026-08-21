@@ -51,6 +51,9 @@ fn job(id: u64, engine: Engine, errand: Errand, stage: Stage, done: u64, total: 
         subject: format!("arquivo-{id}.bin"),
         trouble: String::new(),
         answer: 0,
+        // The one row that went out as the person, so the detail screen has
+        // both words to say and the row has both colours to draw.
+        identified: id == 2,
     }
 }
 
@@ -306,6 +309,7 @@ fn main() -> Result<()> {
         "transfers-window-field-engine",
         "transfers-window-field-stage",
         "transfers-window-field-total",
+        "transfers-window-field-identity",
     ] {
         if !detail.names(k) {
             bail!("o detalhe nao mostrou `{k}`");
@@ -314,7 +318,28 @@ fn main() -> Result<()> {
     if !detail.names("transfers-window-unknown") {
         bail!("o detalhe devia dizer que o total nao se sabe, em vez de imprimir 0");
     }
-    println!("detalhe: campo a campo, e diz `nao se sabe` em vez de zero");
+    if !detail.names("transfers-identity-anonymous") {
+        bail!("o detalhe nao disse quem pediu; um download identificado nao se desfaz");
+    }
+    println!("detalhe: campo a campo, quem pediu, e `nao se sabe` em vez de zero");
+
+    // ---- AND THE IDENTIFIED ONE SAYS SO ----
+    inst.event(&Input::Queue(Queue {
+        jobs: vec![Job {
+            identified: true,
+            ..job(11, Engine::Media, Errand::Media, Stage::Running, 1, 2)
+        }],
+    }))?;
+    // The screen is still on the detail from just above, and the queue that
+    // just arrived has one job in it — so the cursor is on it.
+    let mine = look(&mut inst)?;
+    if !mine.names("transfers-identity-mine") {
+        bail!("o detalhe de um trabalho identificado nao disse que foi voce");
+    }
+    if mine.names("transfers-identity-anonymous") {
+        bail!("o detalhe disse as duas coisas ao mesmo tempo");
+    }
+    println!("identidade: a linha que nao foi anonima diz que nao foi");
 
     // ---- THE CURSOR HIGHLIGHTS EXACTLY ONE ROW ----
     run(&mut inst, "transfers-detail")?;

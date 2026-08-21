@@ -21,8 +21,9 @@
 //! Cancelling kills the group and removes the parts, which is the same promise
 //! a cancelled copy makes: nothing half-written is left behind.
 
+use crate::auth::{self, Cookies};
 use crate::engine::{POLL, Progress, media_afoot, yt_dlp};
-use crate::job::{Stage, Want, Work};
+use crate::job::{Identity, Stage, Want, Work};
 use crate::ledger::Shared;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_files::watch::{Control, Flow};
@@ -77,7 +78,13 @@ fn beat_of(line: &str) -> Option<Beat> {
 /// A function of its own, and tested: what these flags select is the whole
 /// difference between "the best quality on offer" and "whatever was easiest to
 /// serve", and it is not something to discover by watching a file arrive.
-fn arguments(url: &str, into: &Path, want: Want) -> Vec<String> {
+fn arguments(
+    url: &str,
+    into: &Path,
+    want: Want,
+    identity: Identity,
+    cookies: &Cookies,
+) -> Vec<String> {
     let mut out: Vec<String> = vec![
         // Machine-readable progress on its own lines. `--newline` is what stops
         // yt-dlp rewriting one line with carriage returns, which no line reader
@@ -126,12 +133,30 @@ fn arguments(url: &str, into: &Path, want: Want) -> Vec<String> {
             "srt".to_owned(),
         ]),
     }
+    // WHO IS ASKING, and only when the request said so. Empty for the default,
+    // which is anonymous — see `crate::auth`.
+    out.extend(auth::yt_dlp_flags(identity, cookies));
+
     // END OF OPTIONS, and then the address. A URL cannot begin with a dash,
     // but this function is handed whatever the browser sent, and one argument
     // that got read as a flag is a class of bug worth one token.
     out.push("--".to_owned());
     out.push(url.to_owned());
     out
+}
+
+/// One media request, whole.
+///
+/// A struct and not five more parameters: three of them are small enums and
+/// two are borrowed, which is a call whose arguments can be reordered without
+/// the compiler noticing — and one of those arguments decides whether the
+/// request carries who you are.
+struct Asked<'a> {
+    url: &'a str,
+    into: &'a Path,
+    want: Want,
+    identity: Identity,
+    cookies: &'a Cookies,
 }
 
 /// Signals the whole group, and says nothing when there is no group left.
@@ -149,7 +174,13 @@ fn signal(pid: u32, sig: rustix::process::Signal) {
 
 /// Runs one media request to the end, or to whatever the switch says.
 pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
-    let Work::Media { url, into, want } = &work else {
+    let Work::Media {
+        url,
+        into,
+        want,
+        identity,
+    } = &work
+    else {
         tracing::error!("o motor de midia recebeu trabalho que nao e midia");
         shared.touch(id, |j| j.stage = Stage::Failed);
         return;
@@ -164,7 +195,25 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
         });
         return;
     }
-    match carry(shared, id, switch, url, into, *want) {
+    // WHOEVER ASKED TO BE THEMSELVES AND CANNOT BE gets a sentence, not a
+    // quiet anonymous download: that one fetches the trailer instead of the
+    // video, or nothing at all, and blames the site.
+    let cookies = Cookies::here();
+    if let Some(why) = auth::refusal(*identity, &cookies) {
+        shared.touch(id, |j| {
+            j.stage = Stage::Failed;
+            j.trouble = Some(why.to_owned());
+        });
+        return;
+    }
+    let asked = Asked {
+        url,
+        into,
+        want: *want,
+        identity: *identity,
+        cookies: &cookies,
+    };
+    match carry(shared, id, switch, &asked) {
         Ok(()) => {}
         Err(e) => {
             let cancelled = switch.flow() == Flow::Stop;
@@ -183,18 +232,18 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     }
 }
 
-fn carry(
-    shared: &Arc<Shared>,
-    id: u64,
-    switch: &Arc<Control>,
-    url: &str,
-    into: &Path,
-    want: Want,
-) -> Result<()> {
+fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>) -> Result<()> {
+    let into = asked.into;
     let program = yt_dlp();
     let mut command = std::process::Command::new(&program);
     command
-        .args(arguments(url, into, want))
+        .args(arguments(
+            asked.url,
+            into,
+            asked.want,
+            asked.identity,
+            asked.cookies,
+        ))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -409,7 +458,13 @@ mod tests {
     fn the_three_menu_items_ask_for_three_different_things() {
         let into = Path::new("/onde/vai");
 
-        let video = arguments("https://exemplo/v", into, Want::Video);
+        let video = arguments(
+            "https://exemplo/v",
+            into,
+            Want::Video,
+            Identity::Anonymous,
+            &Cookies::Nowhere,
+        );
         assert!(video.windows(2).any(|w| w == ["-f", "bv*+ba/b"]));
         assert!(
             video
@@ -418,12 +473,24 @@ mod tests {
             "o contêiner é MKV, senão o yt-dlp desce de qualidade para caber"
         );
 
-        let audio = arguments("https://exemplo/v", into, Want::Audio);
+        let audio = arguments(
+            "https://exemplo/v",
+            into,
+            Want::Audio,
+            Identity::Anonymous,
+            &Cookies::Nowhere,
+        );
         assert!(audio.iter().any(|a| a == "-x"));
         assert!(audio.windows(2).any(|w| w == ["--audio-format", "opus"]));
         assert!(!audio.iter().any(|a| a == "--merge-output-format"));
 
-        let subs = arguments("https://exemplo/v", into, Want::Subtitles);
+        let subs = arguments(
+            "https://exemplo/v",
+            into,
+            Want::Subtitles,
+            Identity::Anonymous,
+            &Cookies::Nowhere,
+        );
         assert!(
             subs.iter().any(|a| a == "--skip-download"),
             "legenda não baixa mídia nenhuma"
@@ -481,7 +548,13 @@ mod tests {
     fn the_url_is_the_last_argument_and_never_looks_like_a_flag() {
         // A URL cannot start with a dash, but a caller could hand one over. The
         // separator is what keeps it an argument.
-        let args = arguments("-nao-sou-flag", Path::new("/onde/vai"), Want::Video);
+        let args = arguments(
+            "-nao-sou-flag",
+            Path::new("/onde/vai"),
+            Want::Video,
+            Identity::Anonymous,
+            &Cookies::Nowhere,
+        );
         assert_eq!(args.last().map(String::as_str), Some("-nao-sou-flag"));
         assert_eq!(
             args.get(args.len() - 2).map(String::as_str),

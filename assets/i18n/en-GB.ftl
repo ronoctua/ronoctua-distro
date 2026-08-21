@@ -1077,7 +1077,20 @@ transfers-items = { $done } of { $total }
 # ---------------------------------------------------------------------------
 cmd-transfers-window = the transfer queue, in a window
 cmd-transfers-add = download whatever is on the clipboard
-cmd-transfers-add-media = download whatever is on the clipboard, as media
+cmd-transfers-video = download the video of whatever is copied
+cmd-transfers-audio = download only the audio of whatever is copied
+cmd-transfers-subtitles = download only the subtitles of whatever is copied
+cmd-transfers-add-as-me = download whatever is copied, as me
+cmd-transfers-video-as-me = download the video, as me
+cmd-transfers-audio-as-me = download only the audio, as me
+cmd-transfers-subtitles-as-me = download only the subtitles, as me
+# The group that costs anonymity — which is why it is a prefix and not a
+# switch kept somewhere else.
+group-identified = as me (costs anonymity)
+transfers-queued-as-me = in the queue, AS YOU — this one is not anonymous
+transfers-window-field-identity = asked by
+transfers-identity-mine = you
+transfers-identity-anonymous = nobody
 transfers-nothing-copied = nothing has been copied
 transfers-not-an-address = what is copied is not an address
 transfers-queued = in the queue
@@ -1142,3 +1155,5 @@ ext-intercept-on = downloads go to the queue
 ext-intercept-off = downloads stay in the browser
 ext-send-link = download this link through ronoctua
 ext-send-media = download this page’s media
+ext-as-me = as you — not anonymous
+ext-anonymous = anonymous

@@ -544,6 +544,7 @@ fn val_of_queue(q: &ronoctua_protocol::Queue) -> wasmtime::component::Val {
                 ("subject".into(), Val::String(j.subject.clone())),
                 ("trouble".into(), Val::String(j.trouble.clone())),
                 ("answer".into(), Val::U64(j.answer)),
+                ("identified".into(), Val::Bool(j.identified)),
             ])
         })
         .collect();
@@ -1056,6 +1057,7 @@ mod tests {
                 subject: "debian.iso".to_owned(),
                 trouble: String::new(),
                 answer: 0,
+                identified: true,
             }],
         };
         let v = val_of_queue(&q);
@@ -1067,8 +1069,19 @@ mod tests {
         assert_eq!(
             shape(&jobs[0]),
             [
-                "id", "engine", "errand", "stage", "amount", "done", "total", "subject", "trouble",
-                "answer"
+                "id",
+                "engine",
+                "errand",
+                "stage",
+                "amount",
+                "done",
+                "total",
+                "subject",
+                "trouble",
+                "answer",
+                // The one that cannot be undone after the fact, so it is on the
+                // row and not only in a log.
+                "identified"
             ]
         );
 
