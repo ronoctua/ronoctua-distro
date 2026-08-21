@@ -30,11 +30,39 @@ cmd-session-quit = Quit session
 group-buffer = buffer
 group-quit = quit
 
-## Modeline states
+## The modeline's two left segments
 
-mode-normal = NORMAL
+# THE BUFFER'S NAME (the window title) and its MAJOR MODE (the kind of buffer).
+# Both are addressed by an id that is ENGLISH and kebab-case (invariant 18); what
+# reaches the screen is the value here. That separation is why `glifos` used to
+# leak onto an English-language screen: the id WAS the label.
+buffer-example = example
+mode-example = example
+buffer-glyphs = glyphs
+mode-glyphs = glyphs
+buffer-lucide = lucide
+mode-lucide = lucide
+buffer-memory = memory
+mode-memory = memory
+buffer-transfers = transfers
+mode-transfers = transfers
+buffer-unicode = unicode
+mode-unicode = unicode
 buffer-no-name = *no name*
 mode-unknown = unknown
+
+## The buffer's state — the modeline's third left segment
+
+# WHAT THE BUFFER IS DOING, next to what kind of buffer it is. The id is
+# ENGLISH and declared in the component's descriptor; these are what reach the
+# screen. `Esc` always returns to `normal`, and every state that is not it is
+# drawn in the one colour the modeline reserves for an alternative.
+state-normal = normal
+state-filter = filter
+state-sheet = sheet
+state-detail = detail
+state-full = full
+state-guard = guard
 
 ## Notifications
 
@@ -633,6 +661,8 @@ notif-oom-orphan = Something outside your buffers was closed: { $cgroup }
 
 ## The focused buffer's keymap
 which-buffer = Focused buffer
+hint-state = State: { $estado } — click cycles, Esc returns, Esc+arrows chooses
+which-state = State of the focused buffer
 cmd-exemplo-reiniciar = Restart the example
 
 ## The memory panel — LEADER s m

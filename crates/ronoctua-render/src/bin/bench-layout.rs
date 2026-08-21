@@ -53,7 +53,7 @@ fn segments(name: &str) -> Vec<Segment> {
             removable: false,
         },
         Segment {
-            id: "modo",
+            id: "mode",
             text: "rust".into(),
             priority: 6,
             min_cols: 4,
@@ -62,12 +62,12 @@ fn segments(name: &str) -> Vec<Segment> {
             removable: true,
         },
         Segment {
-            id: "contexto",
-            text: format!("{} main", tokens::icon::GIT_BRANCH),
-            priority: 9,
-            min_cols: 6,
+            id: "state",
+            text: "search".into(),
+            priority: 7,
+            min_cols: 4,
             side: Side::Left,
-            shrink: Shrink::AtTheEnd,
+            shrink: Shrink::Cut,
             removable: true,
         },
     ]

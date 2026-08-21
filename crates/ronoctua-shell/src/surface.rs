@@ -268,6 +268,42 @@ struct Footer {
     /// percentage disappear the moment somebody stopped looking at the panel —
     /// which is precisely when they want it in the corner instead.
     jobs: Vec<ronoctua_transfers::Job>,
+    /// Which state each open buffer window is in, by its process id.
+    ///
+    /// # Why a map, and not just the focused one
+    ///
+    /// Because a buffer reports when it CHANGES, not when it is looked at. With
+    /// only the focused one kept, Alt-Tabbing away and back would show whatever
+    /// the last window reported until the next keystroke — the modeline naming
+    /// one buffer and describing another.
+    ///
+    /// It is pruned against the compositor's window list, so it holds at most
+    /// one entry per open window. See [`Footer::states_arrived`].
+    states: std::collections::HashMap<u32, String>,
+    /// `SPC b s` is open and the next key picks a state.
+    ///
+    /// A flag and not a pending sequence, because the level is exactly ONE deep:
+    /// a buffer declares a handful of states and each has a letter.
+    state_pending: bool,
+    /// The modeline's segments as the LAST FRAME placed them: id, first column,
+    /// width in columns.
+    ///
+    /// # Why remembered, and not recomputed for the pointer
+    ///
+    /// Because a `Motion` event arrives per pixel of movement, and resolving the
+    /// layout builds a `String` per segment. It is the same lesson `row_at`
+    /// already carries a comment about — and it is also the only version that
+    /// cannot be wrong: what the pointer is over is what was DRAWN, not what a
+    /// second calculation says would be drawn.
+    modeline_placed: Vec<(&'static str, u16, u16)>,
+    /// Which segment the pointer is over.
+    segment_under_pointer: Option<&'static str>,
+    /// The focused buffer's declared states, read when the leader opened.
+    ///
+    /// Read there and not per frame: it is a socket round trip, and the answer
+    /// cannot change between opening the leader and pressing the next key —
+    /// the buffer is not receiving keys while the footer holds the keyboard.
+    state_menu: Vec<(String, char)>,
     /// The history of what was copied. Memory only — see `ronoctua_clipboard`.
     clipboard: ronoctua_clipboard::Queue,
     /// Is the clipboard view open in the region?
@@ -1338,6 +1374,11 @@ pub fn run() -> Result<()> {
         pointer: None,
         transfers: None,
         jobs: Vec::new(),
+        states: std::collections::HashMap::new(),
+        modeline_placed: Vec::new(),
+        segment_under_pointer: None,
+        state_pending: false,
+        state_menu: Vec::new(),
         clipboard: ronoctua_clipboard::Queue::default(),
         clipboard_open: false,
         clip_cursor: 0,
@@ -1478,6 +1519,7 @@ pub fn run() -> Result<()> {
     alca.insert_source(recebimento, |event, (), state: &mut Footer| {
         if let channel::Event::Msg(e) = event {
             state.niri.apply_to(&e);
+            state.states_arrived();
             // Redrawing on every event is cheap because the layout is integer
             // arithmetic (section 4.1) and the text only changes when focus changes.
             state.draw_and_paint();
@@ -1509,6 +1551,20 @@ pub fn run() -> Result<()> {
                 Order::Quit => {
                     tracing::info!("outro rodape assumiu este display; saindo");
                     state.quit = true;
+                }
+                // A BUFFER SAYS WHICH STATE IT IS IN. It only draws when the
+                // window that reported is the one in FOCUS: a buffer changing
+                // state behind another window changes no pixel, and repainting
+                // for it would put a frame on the screen per key pressed in a
+                // window nobody is looking at.
+                Order::State { pid, id } => {
+                    let showing = state.states.get(&pid) != Some(&id);
+                    state.states.insert(pid, id);
+                    if showing
+                        && state.niri.focused().and_then(|w| w.pid) == i32::try_from(pid).ok()
+                    {
+                        state.draw_and_paint();
+                    }
                 }
             }
         }
@@ -1644,21 +1700,165 @@ impl Footer {
         // Its place is the minibuffer, which is where Doom shows it and where
         // one looks while typing a chord.
 
-        // The branch comes from the `cwd` of the focused window's process. With
-        // no pid — niri may not have one — there is no branch, and the segment
-        // disappears instead of showing the footer's, which would be the wrong repo.
-        let branch = self
-            .niri
-            .focused()
-            .and_then(|j| j.pid)
-            .and_then(crate::vcs::branch_of_pid);
+        // THE STATE IS A KEY, like everything else on this line that is not the
+        // application's own data: the buffer declares an English id and the
+        // screen reads `state-<id>` (invariants 8 and 18). The buffer's NAME is
+        // the exception, and stays the exception — it comes from the
+        // application, and translating an open file's name would be absurd.
+        let state = self
+            .state_now()
+            .map(|id| self.texts.t(&format!("state-{id}")))
+            .unwrap_or_default();
         crate::segments(
             &crate::daemon::buffer_name(&self.niri, &self.texts),
             &crate::daemon::buffer_mode(&self.niri, &self.texts),
-            branch.as_deref(),
+            &state,
             self.notifications.pending(),
             crate::transfers::segment(&self.jobs).as_deref(),
         )
+    }
+
+    /// Windows changed: prune the state map and ask the focused buffer.
+    ///
+    /// # Why it asks at all, when the buffer pushes
+    ///
+    /// The push covers every change while the window has the focus, which is
+    /// nearly all of them. It does not cover a footer that RESTARTED with
+    /// buffers already open — a real case, because replacing the footer is one
+    /// key — nor a buffer that changed state while another window had focus.
+    /// One socket round trip per Alt-Tab closes both.
+    ///
+    /// The prune is against the compositor's list and not a timer: a buffer that
+    /// dies takes its entry with it, and a PID is reused by the kernel sooner
+    /// than anybody expects.
+    fn states_arrived(&mut self) {
+        let alive: std::collections::HashSet<u32> = self
+            .niri
+            .all_windows()
+            .iter()
+            .filter_map(|w| w.pid)
+            .filter_map(|p| u32::try_from(p).ok())
+            .collect();
+        self.states.retain(|pid, _| alive.contains(pid));
+
+        // ONLY A WINDOW OF OURS IS ASKED. This runs on every event the
+        // compositor sends, and a foreign window has no socket to answer on —
+        // so without this line every workspace change would try to connect to a
+        // path that is not there, once per window that is not ours, forever.
+        let Some(window) = self.niri.focused() else {
+            return;
+        };
+        if window
+            .app_id
+            .as_deref()
+            .and_then(|a| a.strip_prefix(crate::daemon::OURS))
+            .is_none()
+        {
+            return;
+        }
+        let Some(pid) = window.pid.and_then(|p| u32::try_from(p).ok()) else {
+            return;
+        };
+        // ALREADY KNOWN IS NOT ASKED AGAIN. Most focus changes are between
+        // windows that were already open, and asking each time would put a
+        // connect and a 200 ms timeout on the path of every Alt-Tab, for an
+        // answer that has not changed.
+        if self.states.contains_key(&pid) {
+            return;
+        }
+        if let Ok(Some((now, _))) = crate::leader::buffer_states(pid) {
+            self.states.insert(pid, now);
+        }
+    }
+
+    /// Which modeline segment is at `(x, y)`, if any.
+    ///
+    /// # Why the modeline and not the minibuffer too
+    ///
+    /// Because the minibuffer has nothing to point at: it is one run of text
+    /// that is either what somebody is typing or a message. The modeline is a
+    /// row of things that each mean something different, which is what makes
+    /// pointing at one of them a question worth answering.
+    ///
+    /// Line 0 is the modeline and line 1 the minibuffer, in the same top-down
+    /// coordinates the expansion uses — see [`FIRST_OF_EXPANSION`].
+    fn segment_at(&self, x: f64, y: f64) -> Option<&'static str> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        if y < 0.0 || line_height <= 0.0 || y >= line_height {
+            return None;
+        }
+        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        if cell <= 0.0 || x < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let column = (x / cell) as u32;
+        self.modeline_placed
+            .iter()
+            .find(|(_, at, width)| {
+                column >= u32::from(*at) && column < u32::from(*at) + u32::from(*width)
+            })
+            .map(|(id, _, _)| *id)
+    }
+
+    /// A click on the state segment rotates it, in the buffer's own process.
+    ///
+    /// # The mouse reaches nothing the keyboard does not
+    ///
+    /// Left is the next state and right the previous one, which is exactly what
+    /// holding `Esc` and pressing an arrow does. That is the rule invariant 14
+    /// turns into for a pointer: the mouse is a second way to the same door, and
+    /// never a door of its own.
+    fn segment_clicked(&mut self, id: &str, forward: bool) {
+        if id != "state" {
+            return;
+        }
+        let Some(pid) = self
+            .niri
+            .focused()
+            .and_then(|w| w.pid)
+            .and_then(|p| u32::try_from(p).ok())
+        else {
+            return;
+        };
+        let order = if forward { "state-next" } else { "state-prev" };
+        match crate::leader::buffer_state(pid, order) {
+            Ok(()) => tracing::info!(order, "estado girado pelo ponteiro"),
+            Err(e) => tracing::debug!(error = %e, "sem buffer para girar o estado"),
+        }
+    }
+
+    /// What the minibuffer says while the pointer rests on a segment.
+    ///
+    /// Only the CLICKABLE one answers. The others already say what they are —
+    /// the buffer's name is the buffer's name — and a sentence explaining each
+    /// of them would be a tooltip in everything but the surface it is drawn on.
+    fn segment_hint(&self) -> Option<String> {
+        if self.segment_under_pointer? != "state" {
+            return None;
+        }
+        let now = self.state_now()?;
+        Some(self.texts.t_with(
+            ronoctua_i18n::key::HINT_STATE,
+            &[("estado", &self.texts.t(&format!("state-{now}")))],
+        ))
+    }
+
+    /// The focused buffer's state, when the focused window is one of ours.
+    ///
+    /// `None` for a foreign window, and that is the design: the compositor tells
+    /// us a title, an app id and a pid, and none of those says what state `vim`
+    /// is in. Drawing `normal` for it would be the same false assertion the
+    /// `fundamental` label used to make — a word that takes up a column and says
+    /// something nobody checked.
+    fn state_now(&self) -> Option<&str> {
+        let window = self.niri.focused()?;
+        window
+            .app_id
+            .as_deref()?
+            .strip_prefix(crate::daemon::OURS)?;
+        let pid = u32::try_from(window.pid?).ok()?;
+        self.states.get(&pid).map(String::as_str)
     }
 
     /// A new list from the queue.
@@ -2233,6 +2433,16 @@ impl KeyboardHandler for Footer {
         // are `&'static str` and these arrive over a socket at runtime. What it
         // would be as a tree is a filter over a list, because the sequences are
         // two or three keys deep.
+        // THE STATE SUBMENU, before the buffer's keymap and before the tree.
+        //
+        // Before the tree because `b s` is not in it — the rows come from what
+        // the focused window declared. Before `buffer_key` because that one only
+        // opens at the ROOT of the sequence, and this one opens after `b`; the
+        // order costs nothing and keeps each check about its own level.
+        if self.state_key(key) {
+            self.draw_and_paint();
+            return;
+        }
         if self.buffer_key(key) {
             self.draw_and_paint();
             return;
@@ -2323,6 +2533,25 @@ impl Footer {
         match effect {
             Effect::Continue { inputs } => {
                 self.inputs = inputs;
+                // THE STATE ROW, grafted onto `SPC b` the same way the focused
+                // buffer's row is grafted onto the root. It cannot be in the
+                // tree: the states come from whatever window has the focus, and
+                // the tree's bindings are `&'static str`.
+                //
+                // It appears only when there is a CHOICE — see
+                // `refresh_buffer_keymap`.
+                if !self.state_menu.is_empty()
+                    && ronoctua_keymap::notation(self.leader.typed()) == "b"
+                    && let Ok(key) = ronoctua_keymap::Key::parse("s")
+                {
+                    self.inputs.push(ronoctua_keymap::Entry {
+                        key: "s".to_owned(),
+                        sym: key,
+                        label: ronoctua_i18n::key::WHICH_STATE.to_owned(),
+                        command: None,
+                        is_group: true,
+                    });
+                }
                 self.first_page();
                 tracing::info!(
                     inputs = self.inputs.len(),
@@ -2387,14 +2616,22 @@ impl PointerHandler for Footer {
             self.cell_under_pointer,
             self.offset,
         );
+        let segment_before = self.segment_under_pointer;
         let mut clicou = None;
         let mut menu_at = None;
+        // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicou` and `menu_at`
+        // above: those two are about a ROW of the expanded region, and the
+        // modeline has no rows. Folding them together is how the right button
+        // came to act one line off once already.
+        let mut segment_next = None;
+        let mut segment_prev = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.under_pointer = true;
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self.cell_at(e.position.0);
+                    self.segment_under_pointer = self.segment_at(e.position.0, e.position.1);
                     // DRAGGING: the pointer's position BECOMES the offset.
                     if self.dragging {
                         self.drag_to(e.position.1);
@@ -2404,6 +2641,7 @@ impl PointerHandler for Footer {
                     self.under_pointer = false;
                     self.row_under_pointer = None;
                     self.cell_under_pointer = None;
+                    self.segment_under_pointer = None;
                     self.dragging = false;
                 }
                 // THE RIGHT BUTTON OPENS THE FILE MANAGER'S MENU, and nothing
@@ -2423,6 +2661,13 @@ impl PointerHandler for Footer {
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self.cell_at(e.position.0);
+                    // THE MODELINE FIRST, because it is not a row: a press on
+                    // line 0 has no `ExpansionRow` behind it, and everything
+                    // below asks the row what it is.
+                    if let Some(id) = self.segment_at(e.position.0, e.position.1) {
+                        segment_prev = Some(id);
+                        continue;
+                    }
                     // THE LINE ON SCREEN IS NOT THE ROW OF THE LISTING, and
                     // this is where that was being confused.
                     //
@@ -2460,6 +2705,10 @@ impl PointerHandler for Footer {
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self.cell_at(e.position.0);
+                    if let Some(id) = self.segment_at(e.position.0, e.position.1) {
+                        segment_next = Some(id);
+                        continue;
+                    }
                     // ON THE BAR, IT IS NOT A CLICK ON AN ITEM.
                     //
                     // It used to be: pressing over the bar scrolled nothing and
@@ -2507,6 +2756,18 @@ impl PointerHandler for Footer {
             }
         }
 
+        // THE MODELINE'S CLICKS, before the region's: they are decided by the
+        // `y`, so the two can never both be true for one press — and putting
+        // them first keeps that obvious rather than incidental.
+        if let Some(id) = segment_prev {
+            self.segment_clicked(id, false);
+            return;
+        }
+        if let Some(id) = segment_next {
+            self.segment_clicked(id, true);
+            return;
+        }
+
         // THE RIGHT BUTTON FIRST: with both pressed in one frame, opening the
         // menu is the safer of the two — a left click on a listing can run
         // something.
@@ -2543,13 +2804,14 @@ impl PointerHandler for Footer {
         // It only redraws if something CHANGED: a `Motion` arrives on every pixel
         // of movement, and painting a frame per pixel would spend the GPU drawing
         // exactly the same thing.
-        if before
-            != (
-                self.under_pointer,
-                self.row_under_pointer,
-                self.cell_under_pointer,
-                self.offset,
-            )
+        if segment_before != self.segment_under_pointer
+            || before
+                != (
+                    self.under_pointer,
+                    self.row_under_pointer,
+                    self.cell_under_pointer,
+                    self.offset,
+                )
         {
             // THE MEASUREMENT, when it is asked for.
             //
@@ -3700,6 +3962,8 @@ impl Footer {
         self.buffer_pending.clear();
         self.buffer_bindings.clear();
         self.buffer_pid = None;
+        self.state_pending = false;
+        self.state_menu.clear();
 
         let Some(pid) = self.niri.focused().and_then(|w| w.pid) else {
             return;
@@ -3714,6 +3978,92 @@ impl Footer {
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "nao consegui ler o keymap do buffer"),
         }
+
+        // THE STATES, from the same socket and in the same breath.
+        //
+        // `SPC b s` only exists with MORE THAN ONE: a submenu offering the one
+        // state the buffer is already in is a key that teaches there is a choice
+        // and then makes none — the same reason a window that publishes no
+        // keymap has no `SPC m` row at all.
+        if let Ok(Some((now, listed))) = crate::leader::buffer_states(pid) {
+            self.states.insert(pid, now);
+            self.buffer_pid = Some(pid);
+            if listed.len() > 1 {
+                self.state_menu = listed;
+            }
+        }
+    }
+
+    /// The which-key rows for the focused buffer's states.
+    ///
+    /// The label is the SAME key the modeline draws — `state-<id>` — so the list
+    /// and the segment can never disagree about what a state is called, in
+    /// either language.
+    fn state_inputs(&self) -> Vec<ronoctua_keymap::Entry> {
+        self.state_menu
+            .iter()
+            .filter_map(|(id, letter)| {
+                let typed = letter.to_string();
+                let sym = ronoctua_keymap::Key::parse(&typed).ok()?;
+                Some(ronoctua_keymap::Entry {
+                    key: typed,
+                    sym,
+                    label: format!("state-{id}"),
+                    command: Some(id.clone()),
+                    is_group: false,
+                })
+            })
+            .collect()
+    }
+
+    /// Handles a key inside `SPC b s`, and says whether it did.
+    ///
+    /// Mirrors [`Self::buffer_key`], and for the same reason: the rows are built
+    /// at runtime from what the focused window published, so they cannot live in
+    /// `ronoctua_keymap::Tree`, whose bindings are `&'static str`.
+    fn state_key(&mut self, key: ronoctua_keymap::Key) -> bool {
+        let typed = ronoctua_keymap::notation(&[key]);
+
+        if !self.state_pending {
+            // Opening it: exactly `b` typed so far, `s` now, and a buffer with
+            // more than one state in focus.
+            let after_b = ronoctua_keymap::notation(self.leader.typed()) == "b";
+            if !(after_b && typed == "s" && !self.state_menu.is_empty()) {
+                return false;
+            }
+            self.state_pending = true;
+            self.inputs = self.state_inputs();
+            self.first_page();
+            self.echo = None;
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            return true;
+        }
+
+        self.state_pending = false;
+        // `ESC` LEAVES, as it does at every level of the leader — section 7.4
+        // wants an exit that works without the person knowing where they are.
+        if typed == "ESC" {
+            self.close_leader();
+            return true;
+        }
+        let picked = self
+            .state_menu
+            .iter()
+            .find(|(_, letter)| letter.to_string() == typed)
+            .map(|(id, _)| id.clone());
+        self.close_leader();
+        match (picked, self.buffer_pid) {
+            (Some(id), Some(pid)) => {
+                match crate::leader::buffer_state(pid, &format!("state {id}")) {
+                    Ok(()) => tracing::info!(state = %id, "estado escolhido pela leader"),
+                    Err(e) => tracing::warn!(error = %e, state = %id, "o buffer recusou o estado"),
+                }
+            }
+            // A key that is not one of the letters ends the sequence, like any
+            // other key that leads nowhere.
+            _ => tracing::debug!(key = %typed, "tecla fora dos estados do buffer"),
+        }
+        true
     }
 
     /// The which-key rows for the buffer's keymap at the current depth.
@@ -6015,9 +6365,16 @@ impl Footer {
         // list is to be swept with the eye, and the description only when it is
         // asked for — and pointing with the mouse is the question.
         let sob_o_cursor = self
-            .row_under_pointer
-            .and_then(|i| visible.get(i))
-            .and_then(|l| l.description.clone())
+            // THE MODELINE'S SEGMENT WINS, and it can: the two cannot both be
+            // under the pointer, because one is line 0 and the other is line 2
+            // and below. It is first so that reading the chain matches reading
+            // the screen, from the top down.
+            .segment_hint()
+            .or_else(|| {
+                self.row_under_pointer
+                    .and_then(|i| visible.get(i))
+                    .and_then(|l| l.description.clone())
+            })
             // THE FILE MANAGER'S FIELDS ANSWER PER CELL, and this is the whole
             // of the "tooltip" the owner asked for: pointing at the `w` of a
             // group says, on this line, what that bit means for THIS entry —
@@ -6120,6 +6477,18 @@ impl Footer {
             let linha_modeline = 0u16;
             let linha_mini = 1u16;
 
+            // WHETHER THE STATE IS THE BASE ONE decides its colour, and it is
+            // asked ONCE per frame rather than per segment: the answer is the
+            // same for every span on the line, and it costs a map lookup.
+            // `None` counts as the base: with no state there is no segment to
+            // colour, and the quiet token is the answer that changes nothing.
+            let state_is_base = self
+                .state_now()
+                .is_none_or(|s| s == ronoctua_protocol::BASE_STATE);
+            self.modeline_placed = placed
+                .iter()
+                .map(|c| (c.id, c.column, ronoctua_render::layout::width(&c.text)))
+                .collect();
             let mut spans: Vec<ronoctua_render::Span> = placed
                 .iter()
                 .map(|c| ronoctua_render::Span {
@@ -6127,7 +6496,7 @@ impl Footer {
                     text: c.text.clone(),
                     column: c.column,
                     line: linha_modeline,
-                    color: segment_color(c.id, com_teclado),
+                    color: segment_color(c.id, com_teclado, state_is_base),
                 })
                 .collect();
 
@@ -6843,10 +7212,24 @@ fn screen_difference<T: PartialEq>(screens: &[T], saidas: &[T]) -> (Vec<usize>, 
 
 /// Each segment's color — emphasis by COLOR AND WEIGHT, never by a container
 /// (section 5.1).
-fn segment_color(id: &str, rodape_com_teclado: bool) -> tokens::Color {
+fn segment_color(id: &str, rodape_com_teclado: bool, state_is_base: bool) -> tokens::Color {
     match id {
-        // The mode indicator is what the eye looks for first.
-        "mode" => tokens::color::STATE_ACCENT,
+        // THE KIND OF BUFFER. It used to carry the accent, from when it was the
+        // only thing next to the name; now the state sits beside it saying what
+        // is HAPPENING, and between "this is an icon browser" and "it is showing
+        // a sheet" the second is the one that changed since you last looked.
+        //
+        // `secondary` AND NOT `dim`, and the VM is what said so: at `dim` the
+        // OCR could not read `foot` off the screen any more — 0x6E6656 on the
+        // modeline's 0x1E1E1E. A test reading it badly is a person reading it
+        // badly. `dim` is for a segment on its way out of the elision, and the
+        // mode is not on its way anywhere.
+        "mode" => tokens::color::TEXT_SECONDARY,
+        // THE STATE. Two colours and not one per state: what a reader has to
+        // learn is "quiet means the usual, green means not", and that holds
+        // whichever buffer they are in. See `assets/tokens/colors.nix`.
+        "state" if state_is_base => tokens::color::MODELINE_STATE_NORMAL,
+        "state" => tokens::color::MODELINE_STATE_ALTERNATE,
         // THE FOCUSED BUFFER, and the place the accent moves to.
         //
         // While the footer has the keyboard — leader, `M-x`, manual —, no window
@@ -6859,8 +7242,6 @@ fn segment_color(id: &str, rodape_com_teclado: bool) -> tokens::Color {
         // screen, and it still says which buffer receives whatever comes next.
         "buffer" if rodape_com_teclado => tokens::color::STATE_ACCENT,
         "buffer" => tokens::color::TEXT_PRIMARY,
-        // Secondary context: present, but it does not fight for attention.
-        "context" | "position" => tokens::color::TEXT_DIM,
         _ => tokens::color::TEXT_SECONDARY,
     }
 }

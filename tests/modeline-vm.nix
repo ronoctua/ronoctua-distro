@@ -59,10 +59,6 @@ pkgs.testers.runNixOSTest {
       client
       pkgs.imagemagick
       pkgs.tesseract
-      # The `contexto` segment shows the branch of the focused buffer's repository.
-      # The `git` here is for CREATING the test repository — the shell does not run
-      # it, it reads `.git/HEAD` directly (see `crates/ronoctua-shell/src/vcs.rs`).
-      pkgs.git
     ]
     ++ xvfb.packages;
 
@@ -206,98 +202,34 @@ pkgs.testers.runNixOSTest {
             f"desenho — nao no daemon."
         )
 
-    with subtest("o segmento de contexto mostra o RAMO do buffer em foco"):
-        # The segment was born with the text `marco 4` fixed — scaffolding in
-        # the interface, and a string literal in the UI, which invariant 8
-        # forbids. Now it shows what the branch icon promises.
+    with subtest("uma janela ESTRANGEIRA nao ganha segmento de estado"):
+        # THE SEGMENT THE BRANCH LEFT BEHIND. The context segment used to be the
+        # git branch of the focused window's process, read by walking `/proc`
+        # from the pid the compositor gives; it was removed because in
+        # production it never even appeared for a buffer — the footer's unit has
+        # no `WorkingDirectory`, so its children start in `$HOME`.
         #
-        # THE WHOLE PATH is proved only by the VM: niri delivers the window's
-        # pid, the shell reads `/proc/<pid>/cwd` and walks up the tree until it
-        # finds `.git/HEAD`. A unit test covers the parser and a fake procfs; it
-        # does not cover the pid coming from the compositor.
-        machine.succeed(
-            "mkdir -p /tmp/repo && cd /tmp/repo && "
-            "${pkgs.git}/bin/git init -q -b ramo-de-teste"
-        )
-        machine.succeed("systemctl stop client")
-        # THE REAL CASE: the terminal is launched OUTSIDE the repository, and
-        # the one inside is the shell it runs. Measured: with
-        # `--working-directory` on foot itself its `cwd` was still `/`, and
-        # looking only at the client would never find the branch — on a
-        # keyboard desktop the terminal is the most used buffer, so it would be
-        # the main case failing silently.
-        machine.succeed(
-            "systemd-run --unit=client2 ${xvfb.env} "
-            "--setenv=WAYLAND_DISPLAY=wayland-1 "
-            "${client}/bin/foot --title=no-repositorio "
-            "${pkgs.bash}/bin/bash -c 'cd /tmp/repo && exec ${pkgs.coreutils}/bin/sleep 600'"
-        )
-        try:
-            machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep -q 'ramo-de-teste'",
-                timeout=60,
-            )
-        except Exception:
-            # The TWO hypotheses, separated: the window process's `cwd` is not
-            # the repository, or it is and the reading failed. Without this each
-            # one costs a whole VM round.
-            print("--- rodape ---")
-            print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
-            pid = machine.succeed(
-                "systemctl show -p MainPID --value cliente2"
-            ).strip()
-            print(f"--- pid do cliente2: {pid} ---")
-            print(machine.execute(f"ls -l /proc/{pid}/cwd")[1])
-            print(machine.execute(f"cat /proc/{pid}/task/*/children")[1])
-            print(machine.execute(
-                f"for c in $(cat /proc/{pid}/task/*/children); "
-                "do ls -l /proc/$c/cwd; done")[1])
-            print(machine.execute("ls -la /tmp/repo /tmp/repo/.git")[1])
-            print(machine.execute("cat /tmp/repo/.git/HEAD")[1])
-            raise
-
-        journal = machine.succeed("journalctl -u footer --no-pager")
-        # In the right SEGMENT: `ramo-de-teste` showing up in the buffer's name
-        # (which comes from the title) would pass a loose grep.
-        assert 'id="context"' in journal, journal
-        last_entry = [l for l in journal.splitlines() if 'id="context"' in l][-1]
-        print(f"contexto: {last_entry}")
-        assert "ramo-de-teste" in last_entry, last_entry
-        # And NO scaffolding: if `marco` comes back, it is because someone
-        # reintroduced fixed text in place of the state.
-        assert "marco" not in last_entry, last_entry
-
-        machine.succeed("systemctl stop client2")
-
-    with subtest("fora de repositorio o segmento NAO existe"):
-        # A label like "no git" would be the same defect in other clothes: the
-        # right thing is not to take up a column. The earlier `cliente` ran in
-        # `/`, which is not a repository — and its log had no segment.
-        machine.succeed(
-            "systemd-run --unit=client3 ${xvfb.env} "
-            "--setenv=WAYLAND_DISPLAY=wayland-1 "
-            "--working-directory=/var "
-            "${client}/bin/foot --title=fora-de-repo "
-            "${pkgs.coreutils}/bin/sleep 600"
-        )
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'text=fora-de-repo'",
-            timeout=60,
-        )
-        # The layout emits the segments in a block on every resolution. We take
-        # the LAST block: `contexto` must not be in it.
+        # What is in its place is the STATE, and this is the half of it that
+        # belongs here: `foot` is up from the subtest above and it is FOREIGN,
+        # so there must be no state segment at all. That is the decision and not
+        # an omission — the compositor gives a title, an app id and a pid, and
+        # none of the three says what `vim` is in the middle of.
+        #
+        # The other half — one of OUR buffers showing its state — lives in
+        # `leader-vm`, which is the test that opens a buffer window. Opening one
+        # here would mean this VM growing a GPU stack to assert something that
+        # one already has the setup for.
         journal = machine.succeed("journalctl -u footer --no-pager")
         lines = journal.splitlines()
         last_layout = max(
             i for i, l in enumerate(lines) if "layout do rodape resolvido" in l
         )
         block = lines[last_layout:]
-        assert any("fora-de-repo" in l for l in block), block[:10]
-        assert not any('id="context"' in l for l in block), (
-            "o segmento sobreviveu fora de um repositorio:\n" + "\n".join(block[:10])
+        assert not any('id="state"' in l for l in block), (
+            "uma janela estrangeira ganhou estado: o niri nao nos diz em que\n"
+            "estado o `vim` esta, e escrever `normal` seria afirmar o que\n"
+            "ninguem conferiu.\n" + "\n".join(block[:10])
         )
-        machine.succeed("systemctl stop client3")
-        machine.succeed("systemctl start client")
 
     with subtest("fechar a janela devolve a modeline ao estado vazio"):
         # Proof that the daemon's state SHRINKS, and does not only grow: an

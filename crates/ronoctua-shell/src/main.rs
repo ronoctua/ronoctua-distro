@@ -58,7 +58,6 @@ mod surface;
 mod syncthing;
 mod terminal;
 mod transfers;
-mod vcs;
 
 /// The layer-shell surface's namespace.
 ///
@@ -355,7 +354,7 @@ pub fn leader_chord() -> String {
 
 /// The modeline's segments, with section 4.2's priority order.
 ///
-/// `name`, `mode` and `branch` are PARAMETERS and not reads of global state on
+/// `name`, `mode` and `state` are PARAMETERS and not reads of global state on
 /// purpose: that way the layout stays a pure function of (width, segments) and
 /// every combination can be tested without a compositor.
 ///
@@ -373,7 +372,7 @@ pub fn leader_chord() -> String {
 pub fn segments(
     name: &str,
     mode: &str,
-    branch: Option<&str>,
+    state: &str,
     pending: usize,
     transfer: Option<&str>,
 ) -> Vec<Segment> {
@@ -441,17 +440,25 @@ pub fn segments(
             removable: true,
         });
     }
-    // 9. It dies first — and it only exists if there is something to show.
+    // 7. THE STATE — what the buffer is DOING, next to what kind of buffer it is.
     //
-    // A branch name is DATA, like the buffer's name: it does not go through i18n.
-    if let Some(r) = branch {
+    // It only exists for a buffer of ours. A foreign window has no state we can
+    // know: the compositor gives a title, an app id and a pid, and none of the
+    // three says what `vim` is in the middle of. Writing `normal` for it would
+    // be the same false assertion the `fundamental` label used to make.
+    //
+    // It dies BEFORE the mode (7 against 6) and both die before the buffer's
+    // name. On a screen too narrow for all three, what survives is which buffer
+    // this is — a person who cannot see the state can press `Esc` and know; a
+    // person who cannot see the name has nothing to press.
+    if !state.is_empty() {
         out.push(Segment {
-            id: "context",
-            text: format!("{} {r}", tokens::icon::GIT_BRANCH),
-            priority: 9,
-            min_cols: 6,
+            id: "state",
+            text: state.to_owned(),
+            priority: 7,
+            min_cols: 4,
             side: Side::Left,
-            shrink: Shrink::AtTheEnd,
+            shrink: Shrink::Cut,
             removable: true,
         });
     }
@@ -479,10 +486,9 @@ mod tests {
         // title easily goes past 200 characters.
         let name = "a".repeat(300);
         for columns in [20_u16, 40, 80, 200] {
-            let branch = "r".repeat(300);
             for c in layout::resolve(
                 columns,
-                &segments(&name, "ghostty", Some(&branch), 99, Some("\u{ebcb} 62%")),
+                &segments(&name, "ghostty", "search", 99, Some("\u{ebcb} 62%")),
             ) {
                 assert!(
                     c.column + layout::width(&c.text) <= columns,
@@ -505,7 +511,7 @@ mod tests {
         // Invariant 9: no icon codepoint outside the tokens. If
         // someone writes a literal here, this test does not catch it — but the
         // generator has already guaranteed that the token exists in the font.
-        let s = segments("arq.rs", "rust", Some("main"), 0, None);
+        let s = segments("arq.rs", "rust", "", 0, None);
         let notif = s.iter().find(|x| x.id == "notif").unwrap();
         assert!(notif.text.starts_with(tokens::icon::NOTIFICATION));
     }

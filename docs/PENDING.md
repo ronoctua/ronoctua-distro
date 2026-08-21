@@ -19,6 +19,51 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.0. As nove vistas do rodapé não têm estado · pequeno, e é uma decisão
+
+O estado é do BUFFER, e um buffer é uma janela do compositor (invariante 4): o `Esc` que volta ao
+base é resolvido no processo que tem o teclado, e é por isso que ele pode existir sem roubar o `Esc`
+do `vim`. As vistas do rodapé — transferências em `t t`, arquivos, rede, clipboard — não são janelas:
+são painéis que o próprio rodapé desenha e que somem quando se escolhe algo.
+
+Elas têm estados de fato (o gerenciador tem query e pergunta de permissão; a fila tem lista e
+pergunta), e hoje a modeline não os mostra. **Isto não foi esquecido, foi deixado de fora**: o
+mecanismo que o levaria até lá é outro — o rodapé teria de reportar a si mesmo — e a inconsistência
+que isso cria (`t t` sem estado, `t w` com) é menor que a de inventar um segundo caminho.
+
+- acabou quando: uma vista do rodapé aparece na modeline com o mesmo vocabulário de um buffer, sem
+  um segundo mecanismo de relato
+
+### 0.001. O minibuffer não mostra os submenus montados em runtime · pequeno
+
+`SPC m` e `SPC b s` são listados a partir do que a janela em foco publicou, e por isso não estão na
+`ronoctua_keymap::Tree` — as ligações dela são `&'static str`. A consequência é que a sequência
+pendente que o minibuffer desenha vem só do `Leader`, e ela **para no nível anterior**: com a lista
+de estados na tela, a linha diz `LEADER b-` e não `LEADER b s-`.
+
+Isto **não é novo**: o `SPC m` faz o mesmo desde que existe, e o `buffer_pending` dele nunca foi
+alimentado no prefixo. O estado só acrescentou um segundo caso, e por isso vira item — dois é
+padrão, um era acidente.
+
+O conserto é um só e serve para ambos: o prefixo do minibuffer passa a somar o que os submenus de
+runtime têm pendente, em vez de ler só a sequência do `Leader`.
+
+- acabou quando: com a lista de estados aberta, o minibuffer diz `LEADER b s-`, e o `SPC m` diz
+  `LEADER m-`
+
+### 0.01. Nenhum buffer usa o `tone` explícito · pequeno
+
+O descritor deixa um estado escolher o papel da cor (`accent`, `success`, `warning`, `error`) em vez
+de aceitar a regra padrão, e os seis buffers usam `standard`. O caminho está provado no runtime (um
+tom desconhecido cai em `standard` em vez de sumir) e no teste de forma, mas **não** ponta a ponta
+numa tela.
+
+O primeiro candidato real é a pergunta de permissão do gerenciador de arquivos, que é `warning` de
+verdade — e ela depende do item acima.
+
+- acabou quando: um estado sai numa cor que não é o verde de todos os outros, e há check disso
+
+
 ### 0. A extensão instalada fora da Web Store não foi provada num Chrome de verdade · médio
 
 Tudo o que é conferível já é conferido, e por check: a chave nasce na máquina, o `.crx` é assinado

@@ -137,16 +137,40 @@ pub fn buffer_mode(state: &State, texts: &Texts) -> String {
     let Some(j) = state.focused() else {
         return String::new();
     };
-    match j
-        .app_id
-        .as_deref()
-        .filter(|a| !a.is_empty())
-        // An app id is usually a reverse-DNS id (`with_it.mitchellh.ghostty`);
-        // the last component is what a person recognises.
-        .and_then(|a| a.rsplit('.').next())
-    {
-        Some(a) => a.to_owned(),
+    match j.app_id.as_deref().filter(|a| !a.is_empty()) {
+        Some(a) => mode_label(texts, a),
         None => texts.t(key::MODE_UNKNOWN),
+    }
+}
+
+/// The prefix an `app_id` of OURS carries.
+///
+/// It is what `crate::buffer::host_it` writes, and the only thing on screen that
+/// tells a buffer of this system from any other window.
+pub const OURS: &str = "br.ronoctua.";
+
+/// The mode segment's label for an `app_id`.
+///
+/// # Why ours are translated and the rest are not
+///
+/// A foreign application's `app_id` is DATA that belongs to it — the same as its
+/// title. Nobody can write a key for every program that might be installed, and
+/// translating `ghostty` would be inventing a name for somebody else's software.
+/// So it keeps the LAST COMPONENT of the reverse-DNS id, which is what a person
+/// recognises out of `with_it.mitchellh.ghostty`.
+///
+/// Ours are the opposite: the id is a name we chose, English by invariant 18,
+/// and what the screen shows is interface, which invariant 8 says comes from a
+/// key. Keeping the two the same string is exactly how `glifos` came to be drawn
+/// raw on an English-language screen.
+///
+/// A mode of ours with no key shows `[mode-x]`, and it is meant to: what stops
+/// that from reaching a screen is `buffer-modes-have-text`, at build time.
+#[must_use]
+pub fn mode_label(texts: &Texts, app_id: &str) -> String {
+    match app_id.strip_prefix(OURS) {
+        Some(id) => texts.t(&format!("mode-{id}")),
+        None => app_id.rsplit('.').next().unwrap_or(app_id).to_owned(),
     }
 }
 
@@ -215,5 +239,30 @@ mod tests {
         let (e, t) = (with_focus(None, None), texts());
         assert_eq!(buffer_name(&e, &t), "*sem nome*");
         assert_eq!(buffer_mode(&e, &t), "desconhecido");
+    }
+
+    #[test]
+    fn a_mode_of_ours_is_translated_and_a_foreign_one_is_not() {
+        let t = texts();
+        // OURS. The id is English and the screen is not — which is the whole
+        // point of the split, and the reason `glifos` used to be the label.
+        assert_eq!(mode_label(&t, "br.ronoctua.glyphs"), "glifos");
+        assert_eq!(mode_label(&t, "br.ronoctua.memory"), "memória");
+        // FOREIGN. Nobody can write a key for every program on earth, and
+        // inventing a name for somebody else's software is worse than showing
+        // the one they chose.
+        assert_eq!(mode_label(&t, "com.mitchellh.ghostty"), "ghostty");
+        assert_eq!(mode_label(&t, "firefox"), "firefox");
+    }
+
+    #[test]
+    fn our_buffer_shows_the_translated_mode_on_the_modeline() {
+        // End to end through the state, because `buffer_mode` used to take the
+        // last component of EVERY app id — and that is what drew `glifos` raw.
+        let (e, t) = (
+            with_focus(Some("*glifos*"), Some("br.ronoctua.glyphs")),
+            texts(),
+        );
+        assert_eq!(buffer_mode(&e, &t), "glifos");
     }
 }

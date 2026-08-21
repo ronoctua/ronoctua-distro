@@ -41,8 +41,9 @@ wit_bindgen::generate!({
 
 use exports::ronoctua::buffer::view::Guest;
 use ronoctua::buffer::types::{
-    Amount, Binding, Capability, Color, Command, Context, Demand, Descriptor, Effect, Engine,
-    Errand, Icon, Input, Job, LineCommand, Queue, Request, Scale, Stage, Text, TextCommand,
+    Amount, Binding, BufferState, Capability, Color, Command, Context, Demand, Descriptor, Effect,
+    Engine, Errand, Icon, Input, Job, LineCommand, Queue, Request, Scale, Stage, Text, TextCommand,
+    Tone,
 };
 
 /// Every text key this buffer names.
@@ -818,8 +819,24 @@ struct Component;
 impl Guest for Component {
     fn init() -> Descriptor {
         Descriptor {
-            name: "transferencias".into(),
+            name: "transfers".into(),
             mode: "transfers".into(),
+            // THE TWO SCREENS, and they were already two: the `Screen` enum in
+            // this file has said so since the panel existed. What is new is that
+            // the modeline gets to say which one is up — before this, the queue
+            // and one job field by field were the same word on screen.
+            states: vec![
+                BufferState {
+                    id: "normal".into(),
+                    letter: 'n',
+                    tone: Tone::Standard,
+                },
+                BufferState {
+                    id: "detail".into(),
+                    letter: 'd',
+                    tone: Tone::Standard,
+                },
+            ],
             keymap: KEYMAP
                 .iter()
                 .map(|(keys, command)| Binding {
@@ -847,7 +864,56 @@ impl Guest for Component {
     }
 
     fn event(e: Input) -> Vec<Effect> {
-        STATE.with_borrow_mut(|s| match e {
+        // THE STATE IS REPORTED FROM ONE PLACE, and not at each site that
+        // assigns `screen`. There are five of those and there will be more; a
+        // report per site is a report somebody forgets, and what it costs is the
+        // modeline going on saying `normal` with a job's fields on screen.
+        //
+        // Comparing before against after also gets the case no site could report
+        // by itself: `Cancel` leaves `Detail` only SOMETIMES — a pending
+        // question eats it first.
+        STATE.with_borrow_mut(|s| {
+            let before = s.state_id();
+            let mut out = s.act(e);
+            let after = s.state_id();
+            if before != after {
+                out.push(Effect::StateChanged(after.into()));
+            }
+            out
+        })
+    }
+}
+
+impl State {
+    /// Which of the declared states this is, right now.
+    ///
+    /// DERIVED and never stored: a stored copy is a second source of truth for
+    /// something `screen` already answers, and the two would drift on the first
+    /// path that forgot to update it.
+    const fn state_id(&self) -> &'static str {
+        match self.screen {
+            Screen::List => "normal",
+            Screen::Detail => "detail",
+        }
+    }
+
+    /// One input, before the state is compared.
+    fn act(&mut self, e: Input) -> Vec<Effect> {
+        let s = self;
+        match e {
+            // THE HOST SENDS THE ID THIS BUFFER DECLARED, so an id from anywhere
+            // else is a bug on the other side and is ignored rather than guessed
+            // at. `normal` also clears the question: leaving a `pending` alive
+            // under the list is a key waiting for an `Enter` nobody can see.
+            Input::EnterState(id) => {
+                s.screen = match id.as_str() {
+                    "detail" => Screen::Detail,
+                    _ => Screen::List,
+                };
+                s.pending = None;
+                s.asked = false;
+                vec![Effect::Redraw]
+            }
             Input::Queue(queue) => s.receive(queue),
             Input::Command(id) => s.command(&id),
             Input::Down => s.step(true),
@@ -884,7 +950,7 @@ impl Guest for Component {
                 }
             }
             _ => Vec::new(),
-        })
+        }
     }
 }
 

@@ -118,7 +118,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ronoctua-buffer-exemplo"
+name = "ronoctua-buffer-example"
 version = "0.1.0"
 dependencies = [
  "wit-bindgen",

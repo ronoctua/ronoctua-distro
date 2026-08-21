@@ -398,6 +398,116 @@ struct Host {
     /// The same, for [`ronoctua_protocol::Capability::Transfers`]: a
     /// subscription to the queue's socket, and the ids it may act on.
     queue: Option<Queue>,
+    /// The states the descriptor declared, in order. The first is the base.
+    ///
+    /// Never empty: [`ronoctua_protocol::Descriptor::validate`] refuses an empty
+    /// list at load, which is what lets every reader here index without a guard.
+    states: Vec<ronoctua_protocol::BufferState>,
+    /// Which state is in effect, as an index into [`Self::states`].
+    ///
+    /// SHARED with the socket thread, which answers `states` to the footer and
+    /// has no other way to know. An index and not a string because that makes
+    /// it an atomic — a lock held across a socket read is a lock the frame can
+    /// wait on.
+    current: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// `Esc`: whether it is down, and whether it has been used as a modifier.
+    escape: Escape,
+}
+
+/// `Esc` held, and what has happened while it was.
+///
+/// # Why a tap and a hold, and why it is resolved HERE
+///
+/// `Esc` had one meaning — cancel — and the state machine needs two: go back to
+/// the base state, and choose among the states. Every other key in this system
+/// that has two meanings gets them from `keyd`, which tells a tap from a hold
+/// before the compositor sees anything. That is not available for this one: a
+/// `keyd` layer on `Esc` would change `Esc` for the terminal, for `vim` and for
+/// every page in the browser, to give a shortcut to six windows.
+///
+/// So it is resolved in the client that already has the keyboard. While a
+/// buffer of ours has the focus, THIS process receives the keys; while anything
+/// else does, none of this exists. That is the whole reason the feature can have
+/// `Esc` at all.
+///
+/// The cost is that the tap acts on RELEASE. For a tap that is the time between
+/// pressing and letting go, and it is the same contract the leader already
+/// teaches on `Super`.
+#[derive(Debug, Default, Clone, Copy)]
+struct Escape {
+    /// It is down right now.
+    down: bool,
+    /// Something was pressed while it was down, so letting go is not a tap.
+    used: bool,
+}
+
+/// What the `Esc` layer decided about a key.
+///
+/// It exists so the decision is a PURE FUNCTION and can be tested without a
+/// compositor: `Host` needs a Wayland connection, a GPU and a live wasm
+/// component to exist at all, and the three cases below are the whole of the
+/// behaviour anybody would want to check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EscapeAct {
+    /// Not this layer's: the key goes on to the rest of the handler.
+    NotMine,
+    /// Eaten, and nothing else happens.
+    Swallow,
+    /// Rotate the state; `true` is forward.
+    Rotate(bool),
+    /// A tap finished: back to the base state, and `Cancel` as before.
+    Tap,
+}
+
+impl Escape {
+    /// A key going down.
+    fn press(&mut self, sym: Keysym) -> EscapeAct {
+        if sym == Keysym::Escape {
+            // A REPEAT IS NOT A SECOND PRESS. Holding the key makes the
+            // compositor send more of them, and treating one as a fresh press
+            // would clear `used` — so `Esc`+arrow, held a moment too long, would
+            // rotate and then cancel on release.
+            if !self.down {
+                *self = Self {
+                    down: true,
+                    used: false,
+                };
+            }
+            return EscapeAct::Swallow;
+        }
+        if !self.down {
+            return EscapeAct::NotMine;
+        }
+        // WHILE IT IS HELD, THIS BUFFER IS CHOOSING A STATE and nothing else
+        // reaches the component. Swallowing the keys that are not arrows is what
+        // makes the gesture safe: without it, letting go after `Esc`+letter
+        // would cancel AND the letter would have gone into the search on the way
+        // past — one gesture doing two things nobody asked for.
+        self.used = true;
+        match sym {
+            Keysym::Right | Keysym::Down => EscapeAct::Rotate(true),
+            Keysym::Left | Keysym::Up => EscapeAct::Rotate(false),
+            _ => EscapeAct::Swallow,
+        }
+    }
+
+    /// A key coming up.
+    fn release(&mut self, sym: Keysym) -> EscapeAct {
+        if sym != Keysym::Escape {
+            return EscapeAct::NotMine;
+        }
+        // `down` IS CHECKED, and it is not paranoia: a key held while the focus
+        // ARRIVES gives this window the release without ever giving it the
+        // press. Without the check that release would cancel something nobody
+        // asked to cancel — the same trap `CLAUDE.md` records for the leader,
+        // where a modifier held across a focus change has to be discounted.
+        let was = std::mem::take(self);
+        if was.down && !was.used {
+            EscapeAct::Tap
+        } else {
+            EscapeAct::Swallow
+        }
+    }
 }
 
 /// The queue half of the host: one subscription, and the id check.
@@ -654,13 +764,26 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     //
     // `*name*` is Emacs's convention for a buffer that is not a file, the same one
     // as the `*scratch*` the modeline already uses in the empty state.
+    // THE ID IS ENGLISH AND THE LABEL COMES FROM THE i18n, and the two used to be
+    // the same string. That is how `glifos` reached an English screen: the
+    // descriptor's `name` WAS the label, drawn raw, so a Portuguese id was a
+    // Portuguese window title in every language (invariant 18 and invariant 8 at
+    // the same time). Now the buffer publishes `glyphs` and this is what turns
+    // it into what the person reads.
+    //
+    // The `app_id` is NOT translated, and that is deliberate: niri's window
+    // rules match on it, and a rule that only fires in one language is a rule
+    // that fails on the machine of whoever changed `LANG`.
+    let texts = ronoctua_i18n::Texts::from_env();
+    let title = texts.t(&format!("buffer-{}", d.name));
+
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the COMPOSITOR, never to us. Drawing a
     // border or a title bar here would be reimplementing window layout, and
     // invariant 4 forbids it. niri runs with `prefer-no-csd`, so in
     // practice there is no decoration at all — which is what section 3 wants.
     let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    window.set_title(format!("*{}*", d.name));
+    window.set_title(format!("*{title}*"));
     window.set_app_id(format!("br.ronoctua.{}", d.mode));
     window.commit();
 
@@ -699,9 +822,13 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .contains(&ronoctua_protocol::Capability::Transfers)
         .then(Queue::fresh);
 
+    let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut state = Host {
         system,
         queue,
+        states: d.states.clone(),
+        current: std::sync::Arc::clone(&current),
+        escape: Escape::default(),
         keymap: d.keymap.clone(),
         pending: Vec::new(),
         file: file.map(std::path::Path::to_path_buf),
@@ -734,25 +861,46 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .insert(cycle.handle())
         .map_err(|e| anyhow::anyhow!("nao consegui pendurar o Wayland: {e}"))?;
 
-    // THE KEYMAP GOES OUT, AND COMMANDS COME BACK IN.
+    // THE KEYMAP AND THE STATES GO OUT, AND ORDERS COME BACK IN.
     //
     // The socket thread cannot touch the component: the state lives in the
-    // `Instance` and it is not `Send`. So it puts the id on a calloop channel
-    // and the LOOP delivers it, on the same thread as every other input — which
+    // `Instance` and it is not `Send`. So it puts the order on a calloop channel
+    // and the LOOP acts on it, on the same thread as every other input — which
     // is the arrangement the footer already uses for its control socket.
-    let (orders, channel) = calloop_channel::channel::<String>();
-    let published = publish_keymap(d.keymap, orders);
+    let (orders, channel) = calloop_channel::channel::<FromSocket>();
+    let published = publish_keymap(d.keymap, d.states, current, orders);
     if cycle
         .handle()
         .insert_source(channel, |event, (), state| {
-            if let calloop_channel::Event::Msg(id) = event {
-                state.deliver(&ronoctua_protocol::Input::Command(id));
+            if let calloop_channel::Event::Msg(order) = event {
+                match order {
+                    FromSocket::Command(id) => {
+                        state.deliver(&ronoctua_protocol::Input::Command(id));
+                    }
+                    FromSocket::Named(id) => match state.index_of(&id) {
+                        Some(n) => state.enter_state(n),
+                        // The footer only ever sends back an id it was just
+                        // told, so this is a bug on the other side rather than
+                        // a person's mistake — and guessing at the nearest
+                        // state would hide it.
+                        None => tracing::warn!(state = %id, "estado que este buffer nao declara"),
+                    },
+                    FromSocket::Next => state.rotate_state(true),
+                    FromSocket::Previous => state.rotate_state(false),
+                }
             }
         })
         .is_err()
     {
         tracing::warn!("nao consegui pendurar o canal do keymap");
     }
+
+    // AND THE FOOTER IS TOLD WHERE THIS BUFFER STARTS.
+    //
+    // Without this the modeline shows the state only from the first change on:
+    // a window that opens and is not touched would have a mode and no state,
+    // which reads as "this buffer has none" rather than "nobody asked yet".
+    state.tell_the_footer();
 
     // THE CLOCK, and the thread that answers a scan — only for the buffer that
     // declared the capability.
@@ -864,15 +1012,41 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
 /// # The protocol, which is the footer's own
 ///
 /// `keymap` answers one line per binding, `<sequence> <id>`. `command <id>` puts
-/// the id on the channel and answers `ok`. Anything else answers `?`.
+/// the id on the channel and answers `ok`.
+///
+/// `states` answers the CURRENT id on the first line and then one line per
+/// declared state, `<id> <letter>`. `state <id>`, `state-next` and `state-prev`
+/// put the change on the same channel and answer `ok`. They are here and not on
+/// a socket of their own for the reason the file's header already gives: a
+/// second grammar in the same directory is two things to keep in step.
+///
+/// Anything else answers `?`.
 ///
 /// # It never brings the buffer down
 ///
 /// A buffer that cannot open its socket is a buffer whose keymap the footer
 /// cannot list — it is not a buffer that fails to open. The editor still edits.
+/// What the socket asks the buffer's loop to do.
+///
+/// It used to be a bare `String` — a command id — and widening it is what let
+/// the state verbs share the one socket that already exists instead of opening
+/// a second one next to it.
+enum FromSocket {
+    /// Run one of the ids this buffer declared.
+    Command(String),
+    /// Go to this state, by the id this buffer declared.
+    Named(String),
+    /// The next state, wrapping round.
+    Next,
+    /// The previous one.
+    Previous,
+}
+
 fn publish_keymap(
     keymap: Vec<ronoctua_protocol::Binding>,
-    orders: calloop_channel::Sender<String>,
+    states: Vec<ronoctua_protocol::BufferState>,
+    current: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    orders: calloop_channel::Sender<FromSocket>,
 ) -> Option<std::path::PathBuf> {
     use std::io::{BufRead as _, Write as _};
 
@@ -900,6 +1074,15 @@ fn publish_keymap(
         .collect::<Vec<_>>()
         .join("\n");
     let known: std::collections::HashSet<String> = keymap.into_iter().map(|b| b.command).collect();
+    // The LIST does not change after `init`, so the thread owns a copy of it and
+    // reads only the index from the shared cell. Sharing the list too would be a
+    // lock the frame can wait on, for something that is immutable.
+    let listed = states
+        .iter()
+        .map(|s| format!("{} {}", s.id, s.letter))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let ids: Vec<String> = states.iter().map(|s| s.id.clone()).collect();
 
     let built = std::thread::Builder::new()
         .name("keymap".into())
@@ -918,6 +1101,41 @@ fn publish_keymap(
                 }
                 let reply = match line.trim().split_once(' ') {
                     None if line.trim() == "keymap" => answer.clone(),
+                    // THE CURRENT STATE FIRST, then the list. The footer asks
+                    // this on every change of focus, because a buffer that
+                    // changed state while it was NOT focused has nothing to push
+                    // — and a footer that restarted has nothing at all.
+                    None if line.trim() == "states" => {
+                        let n = current.load(std::sync::atomic::Ordering::Relaxed);
+                        let now = ids.get(n).cloned().unwrap_or_default();
+                        if listed.is_empty() {
+                            now
+                        } else {
+                            format!("{now}\n{listed}")
+                        }
+                    }
+                    None if line.trim() == "state-next" => {
+                        if orders.send(FromSocket::Next).is_err() {
+                            return;
+                        }
+                        "ok".into()
+                    }
+                    None if line.trim() == "state-prev" => {
+                        if orders.send(FromSocket::Previous).is_err() {
+                            return;
+                        }
+                        "ok".into()
+                    }
+                    // ONLY A STATE THIS BUFFER DECLARED, for the same reason as
+                    // `command` below: the socket is reachable by anything
+                    // running as this user, and an id from outside would be a
+                    // way to drive the component that the feature does not need.
+                    Some(("state", id)) if ids.iter().any(|k| k == id) => {
+                        if orders.send(FromSocket::Named(id.to_owned())).is_err() {
+                            return;
+                        }
+                        "ok".into()
+                    }
                     // ONLY A COMMAND THIS BUFFER DECLARED.
                     //
                     // The socket is in `XDG_RUNTIME_DIR` and so is reachable by
@@ -926,7 +1144,7 @@ fn publish_keymap(
                     // which is a wider door than the feature needs: the footer
                     // only ever sends back what it was just told.
                     Some(("command", id)) if known.contains(id) => {
-                        if orders.send(id.to_owned()).is_err() {
+                        if orders.send(FromSocket::Command(id.to_owned())).is_err() {
                             // The loop is gone; so is the reason to listen.
                             return;
                         }
@@ -1321,6 +1539,87 @@ impl Host {
     }
 
     /// Delivers a key to the component and runs what it ASKS for.
+    /// The index of a declared state, by id.
+    fn index_of(&self, id: &str) -> Option<usize> {
+        self.states.iter().position(|s| s.id == id)
+    }
+
+    /// The state in effect right now.
+    fn now(&self) -> usize {
+        self.current.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Asks the component to go to state `n`.
+    ///
+    /// # It does NOT record the state here, and that is the whole point
+    ///
+    /// The first version stored the index and told the footer BEFORE delivering,
+    /// which reads as the natural order and is wrong: **a component is allowed
+    /// to refuse**. `sheet` with nothing under the cursor is a screen of empty
+    /// fields, and the icon browsers say no to it — so the host would have
+    /// announced a state the screen was never in, and the modeline would have
+    /// gone on naming it until the next change.
+    ///
+    /// What records the state is `effect::state-changed`, arriving back through
+    /// [`Self::deliver`]. So the host's idea of where the buffer is can only
+    /// ever be something the buffer confirmed — one source of truth, and it is
+    /// the one that draws.
+    ///
+    /// Idempotent, for the same reason it always was: `Esc` at the base state
+    /// arrives here and has to cost nothing.
+    fn enter_state(&mut self, n: usize) {
+        let Some(going) = self.states.get(n) else {
+            return;
+        };
+        if n == self.now() {
+            return;
+        }
+        self.deliver(&ronoctua_protocol::Input::EnterState(going.id.clone()));
+    }
+
+    /// The next state, or the previous one, wrapping round.
+    ///
+    /// WRAPPING and not stopping at the end: with two states — which is what
+    /// most buffers have — a rotation that stopped would make one of the two
+    /// arrows do nothing half the time, and the person would learn to distrust
+    /// both.
+    fn rotate_state(&mut self, forward: bool) {
+        let total = self.states.len();
+        if total < 2 {
+            return;
+        }
+        let now = self.now();
+        let going = if forward {
+            (now + 1) % total
+        } else {
+            (now + total - 1) % total
+        };
+        self.enter_state(going);
+    }
+
+    /// Tells the footer which state this window is in.
+    ///
+    /// # Why it pushes, when the footer can also ask
+    ///
+    /// Because the footer only asks when the FOCUS changes, and most state
+    /// changes happen without one — pressing a key in a window that is already
+    /// focused. Asking per frame instead would put a socket round trip inside
+    /// the frame budget for something that changes when a person presses a key.
+    ///
+    /// Failure is silent, and it has to be: there is no footer while the buffer
+    /// runs under `ronoctua-shell buffer` on its own, which is how every VM test
+    /// and the whole of `nix run .#dev`'s single-buffer mode work. A window that
+    /// refused to run without a modeline would be a buffer that needs chrome.
+    fn tell_the_footer(&self) {
+        let Some(id) = self.states.get(self.now()).map(|s| s.id.as_str()) else {
+            return;
+        };
+        let order = format!("state {} {id}", std::process::id());
+        if let Err(e) = crate::leader::send_it(&order) {
+            tracing::debug!(error = %e, "sem rodape para contar o estado");
+        }
+    }
+
     fn deliver(&mut self, input_of: &ronoctua_protocol::Input) {
         let effects = match self.instance.event(input_of) {
             Ok(e) => e,
@@ -1388,6 +1687,38 @@ impl Host {
                     self.ask(demand);
                 }
                 ronoctua_protocol::Effect::Close => self.quit = true,
+                // THE COMPONENT SAYS WHERE IT IS, and this is the ONLY place the
+                // host writes that down — whether the change came from a key
+                // pressed here or from the person typing a letter over there.
+                // Nobody presses a key meaning "open the sheet"; they press
+                // `Enter` on a row, and without this the host would never know.
+                //
+                // `enter_state` deliberately records nothing: a component may
+                // REFUSE — `sheet` with nothing under the cursor does — and a
+                // host that had already announced the state would leave the
+                // modeline naming a screen that never came up.
+                //
+                // It does not call `enter_state` back, either: that would send
+                // the id to the component that just announced it, and a buffer
+                // whose `EnterState` sets the screen it is already on would
+                // answer with another `StateChanged`. It would terminate, and it
+                // would spend a round trip through wasm per keystroke.
+                ronoctua_protocol::Effect::StateChanged(id) => match self.index_of(&id) {
+                    Some(n) => {
+                        if n != self.now() {
+                            self.current.store(n, std::sync::atomic::Ordering::Relaxed);
+                            tracing::info!(state = %id, "estado do buffer");
+                            self.tell_the_footer();
+                        }
+                    }
+                    // An id outside the descriptor would put a word on the
+                    // modeline that no key can return from — refused, and said
+                    // out loud, because it is a defect in the component.
+                    None => tracing::error!(
+                        state = %id,
+                        "o componente relatou um estado que nao declarou"
+                    ),
+                },
                 // THE BUFFER DOES NOT TOUCH THE DISK: it asks, and the host
                 // writes (invariant 11) — the same arrangement as `Copy`.
                 ronoctua_protocol::Effect::Save(text) => {
@@ -1768,6 +2099,14 @@ impl SeatHandler for Host {
 }
 
 impl KeyboardHandler for Host {
+    /// Focus arrives — and whatever was held before it belongs to the OTHER
+    /// window.
+    ///
+    /// `CLAUDE.md` records this as a trap with a name: a modifier held across a
+    /// focus change kills the keymap, and the fix is to discount what was
+    /// already down both on gaining focus and on starting a sequence. Here it is
+    /// `Esc`: alt-tabbing into a buffer while it is down would leave this window
+    /// believing it is choosing a state, and every key would vanish.
     fn enter(
         &mut self,
         _: &Connection,
@@ -1778,8 +2117,10 @@ impl KeyboardHandler for Host {
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.escape = Escape::default();
     }
 
+    /// Focus leaves, and so does the release this window will never see.
     fn leave(
         &mut self,
         _: &Connection,
@@ -1788,6 +2129,7 @@ impl KeyboardHandler for Host {
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        self.escape = Escape::default();
     }
 
     fn press_key(
@@ -1798,6 +2140,21 @@ impl KeyboardHandler for Host {
         _: u32,
         event: KeyEvent,
     ) {
+        // `Esc` IS A KEY AND A MODIFIER, and which of the two is decided by what
+        // happens before it comes back up. See [`Escape`].
+        //
+        // Nothing is delivered here: a tap only becomes `Cancel` on release,
+        // because until then it might still be the start of a hold.
+        match self.escape.press(event.keysym) {
+            EscapeAct::NotMine => {}
+            EscapeAct::Swallow => return,
+            EscapeAct::Rotate(forward) => {
+                self.rotate_state(forward);
+                return;
+            }
+            // A press never ends a tap; only a release does.
+            EscapeAct::Tap => return,
+        }
         // `Ctrl+V` PASTES, and it is the only chord this host handles.
         //
         // It comes BEFORE the Ctrl guard below, otherwise it would fall into the `return` and
@@ -1865,6 +2222,15 @@ impl KeyboardHandler for Host {
     ) {
         // Repeating IS right here: holding the arrow scrolls the list, holding
         // backspace erases the search.
+        //
+        // EXCEPT WHILE `Esc` IS DOWN, and that covers both halves of the
+        // gesture. `Esc` repeating would re-enter the press above on a key that
+        // is already down; the arrow repeating would spin the states at the
+        // keyboard's repeat rate, which is a rotation nobody can stop on the one
+        // they wanted.
+        if event.keysym == Keysym::Escape || self.escape.down {
+            return;
+        }
         self.press_key(conn, qh, kb, serial, event);
     }
 
@@ -1874,8 +2240,26 @@ impl KeyboardHandler for Host {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        if self.escape.release(event.keysym) == EscapeAct::Tap {
+            // `Cancel` ALONE, and the state follows from it.
+            //
+            // The first version sent the buffer to the base state and THEN
+            // delivered `Cancel`, on the reasoning that "`Esc` returns to
+            // normal" should be guaranteed by the host rather than trusted to
+            // six components. It cost a real regression: every one of those
+            // components already walks back ONE LAYER per `Esc` — the sheet to
+            // the grid, then the grid clearing the search — and jumping to the
+            // base did both at once, so leaving a sheet also threw away the
+            // filter the person had typed to find it.
+            //
+            // One layer per press is what Doom does and what the six already
+            // did. The modeline stays truthful because the walk back reports
+            // itself through `effect::state-changed`, which is the same path
+            // every other change uses.
+            self.deliver(&ronoctua_protocol::Input::Cancel);
+        }
     }
 
     fn update_modifiers(
@@ -2067,6 +2451,75 @@ fn advance_sequence(
 
 #[cfg(test)]
 mod tests {
+    use super::{Escape, EscapeAct};
+    use smithay_client_toolkit::seat::keyboard::Keysym;
+
+    /// A TAP of `Esc` is still `Esc`, and it acts when the key comes back up.
+    #[test]
+    fn a_tap_of_escape_is_a_tap() {
+        let mut e = Escape::default();
+        assert_eq!(e.press(Keysym::Escape), EscapeAct::Swallow);
+        assert_eq!(e.release(Keysym::Escape), EscapeAct::Tap);
+        // And it left nothing behind: the next key is not this layer's.
+        assert_eq!(e.press(Keysym::a), EscapeAct::NotMine);
+    }
+
+    /// HELD, it is a modifier, and letting go is NOT a cancellation.
+    #[test]
+    fn escape_and_an_arrow_rotates_and_does_not_cancel() {
+        let mut e = Escape::default();
+        e.press(Keysym::Escape);
+        assert_eq!(e.press(Keysym::Right), EscapeAct::Rotate(true));
+        assert_eq!(e.press(Keysym::Left), EscapeAct::Rotate(false));
+        // THE WHOLE POINT: the release after a rotation must not cancel. If it
+        // did, choosing a state would clear the search on the way out.
+        assert_eq!(e.release(Keysym::Escape), EscapeAct::Swallow);
+    }
+
+    /// Anything else pressed while it is held is EATEN, and still not a tap.
+    #[test]
+    fn a_letter_under_escape_reaches_nothing() {
+        let mut e = Escape::default();
+        e.press(Keysym::Escape);
+        assert_eq!(e.press(Keysym::a), EscapeAct::Swallow);
+        assert_eq!(e.release(Keysym::Escape), EscapeAct::Swallow);
+    }
+
+    /// A REPEAT IS NOT A SECOND PRESS.
+    ///
+    /// The defect it prevents: holding `Esc` a moment longer than the repeat
+    /// delay after rotating would clear `used`, and letting go would cancel the
+    /// search the person had just filtered with.
+    #[test]
+    fn repeating_escape_does_not_forget_the_rotation() {
+        let mut e = Escape::default();
+        e.press(Keysym::Escape);
+        e.press(Keysym::Right);
+        // The compositor repeats the key that is down.
+        assert_eq!(e.press(Keysym::Escape), EscapeAct::Swallow);
+        assert_eq!(e.release(Keysym::Escape), EscapeAct::Swallow);
+    }
+
+    /// A RELEASE WITH NO PRESS cancels nothing.
+    ///
+    /// It happens for real: Alt-Tabbing into a buffer while `Esc` is down gives
+    /// this window the release and never the press. `CLAUDE.md` records the same
+    /// trap for the leader — a modifier held across a focus change has to be
+    /// discounted, on gaining focus AND on starting a sequence.
+    #[test]
+    fn a_release_this_window_never_saw_pressed_does_nothing() {
+        let mut e = Escape::default();
+        assert_eq!(e.release(Keysym::Escape), EscapeAct::Swallow);
+    }
+
+    /// And a key that has nothing to do with it passes straight through.
+    #[test]
+    fn every_other_key_is_not_this_layers() {
+        let mut e = Escape::default();
+        assert_eq!(e.press(Keysym::Right), EscapeAct::NotMine);
+        assert_eq!(e.release(Keysym::Right), EscapeAct::NotMine);
+    }
+
     /// The defect this gate exists for: the editor swallowed every `m`.
     ///
     /// A plain letter must NEVER open a sequence. When it did, typing `m` was

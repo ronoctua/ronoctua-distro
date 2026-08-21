@@ -91,6 +91,17 @@ pub enum Effect {
     /// Requires [`Capability::System`]. Not [`Effect::Command`]: that one is a
     /// registry id and carries no argument, and "close pid 4321" needs one.
     Ask(Demand),
+    /// "I am in this state now", after changing on my own.
+    ///
+    /// Typing a letter into the icon browser enters its search, and nobody
+    /// pressed a key that means "enter search" — so the host has no way to know.
+    /// Without this the modeline would be truthful only about the changes the
+    /// host itself caused, which is the same class of lie as a stale branch
+    /// name and worse, because this one goes wrong every time somebody types.
+    ///
+    /// The id has to be one the descriptor declared; the host refuses any other
+    /// rather than drawing a word no key can return from.
+    StateChanged(String),
 }
 
 impl Effect {
@@ -569,6 +580,55 @@ pub struct Binding {
 /// behaviour because of one buffer.
 pub const LOCAL_PREFIX: &str = "m";
 
+/// The id every buffer's BASE state carries.
+///
+/// A constant and not a convention: `Esc` returns to it, the modeline draws it
+/// quiet while it draws every other state in the alternative colour, and both
+/// of those need to know which one it is without asking the buffer.
+pub const BASE_STATE: &str = "normal";
+
+/// The tone a state is drawn in — a NAME, never a colour value (invariant 11).
+///
+/// [`Tone::Standard`] is what every buffer uses, and it means "the host
+/// decides": [`BASE_STATE`] comes out quiet and everything else comes out in the
+/// one token the system reserves for an alternative state. That token having a
+/// name of its own is the whole point — a theme changes one line and every
+/// buffer follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tone {
+    /// Let the host choose by the id. What every buffer should use.
+    #[default]
+    Standard,
+    /// The accent — the colour the system otherwise reserves for focus.
+    Accent,
+    /// Something is going well or is under way.
+    Success,
+    /// Something is waiting on the person.
+    Warning,
+    /// Something went wrong.
+    Error,
+}
+
+/// One state a buffer can be in.
+///
+/// `BufferState` and not `State`: every component that has one calls its own
+/// whole memory `State`, and two things by that name in one file is how a reader
+/// stops knowing which is which.
+///
+/// The major mode says what KIND of buffer this is; the state says what it is
+/// doing right now. The second existed before this type — it just had no name,
+/// so typing a letter into the icon browser silently became a search while the
+/// modeline went on saying the same word it said at rest.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BufferState {
+    /// English, kebab-case (invariant 18). The screen reads `state-<id>`.
+    pub id: String,
+    /// The key that selects it directly under `SPC b s`.
+    pub letter: char,
+    /// How it is drawn.
+    pub tone: Tone,
+}
+
 /// What the buffer says about itself in `init`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Descriptor {
@@ -576,6 +636,8 @@ pub struct Descriptor {
     pub name: String,
     /// The mode, in the sense of Emacs's major mode.
     pub mode: String,
+    /// The states it can be in. At least one, and the first is the base.
+    pub states: Vec<BufferState>,
     /// The keymap declared as data.
     pub keymap: Vec<Binding>,
     /// The command ids it registers.
@@ -623,6 +685,7 @@ impl Descriptor {
     ///
     /// Some binding leaves the local prefix. The message says which.
     pub fn validate(&self) -> Result<(), String> {
+        self.states_are_sound()?;
         for l in &self.keymap {
             let first = l.keys.split_whitespace().next().unwrap_or("");
             if first != LOCAL_PREFIX {
@@ -631,6 +694,54 @@ impl Descriptor {
                      Buffers so bindam sob a particao local (secao 7.9); um \
                      prefixo global sequestraria a tecla para todo o sistema.",
                     self.name, l.keys
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The state list's three guarantees, refused AT LOAD.
+    ///
+    /// Same place as the keymap's prefix guard and for the same reason
+    /// (section 7.9): each of these is a way for a buffer to put a word on the
+    /// modeline that no key can get out of.
+    ///
+    /// - **Empty**: the segment would show nothing and `Esc` would have nowhere
+    ///   to return to.
+    /// - **A base that is not [`BASE_STATE`]**: the modeline decides "quiet or
+    ///   alternative" by comparing against that id, so a buffer whose base is
+    ///   called something else would draw itself as permanently not-normal.
+    /// - **A repeated id or letter**: two states on one letter is a menu with an
+    ///   unreachable entry, and two states on one id is a rotation that cannot
+    ///   say where it stopped.
+    fn states_are_sound(&self) -> Result<(), String> {
+        let Some(base) = self.states.first() else {
+            return Err(format!(
+                "o buffer `{}` nao declara estado nenhum.\n\
+                 Todo buffer tem pelo menos `{BASE_STATE}`: e para onde o `Esc` volta.",
+                self.name
+            ));
+        };
+        if base.id != BASE_STATE {
+            return Err(format!(
+                "o buffer `{}` comeca em `{}`, e o estado base tem de ser `{BASE_STATE}`.\n\
+                 E por esse id que a modeline decide entre o tom discreto e o \
+                 alternativo, e para onde o `Esc` volta.",
+                self.name, base.id
+            ));
+        }
+        for (n, s) in self.states.iter().enumerate() {
+            if self.states[..n].iter().any(|o| o.id == s.id) {
+                return Err(format!(
+                    "o buffer `{}` declara `{}` duas vezes.",
+                    self.name, s.id
+                ));
+            }
+            if self.states[..n].iter().any(|o| o.letter == s.letter) {
+                return Err(format!(
+                    "o buffer `{}` usa `{}` para dois estados; um deles seria \
+                     inalcancavel sob `SPC b s`.",
+                    self.name, s.letter
                 ));
             }
         }
@@ -976,6 +1087,13 @@ pub enum Input {
     /// declares, the host resolves the key, and the command comes back through here — the buffer
     /// never captures a key (section 7.9).
     Command(String),
+    /// Go to this state — the host's half of the contract [`Effect::StateChanged`]
+    /// completes.
+    ///
+    /// It arrives when somebody tapped `Esc`, held it and used an arrow, or
+    /// chose a state under `SPC b s`. The buffer is told the ID IT DECLARED and
+    /// never a key, the same rule as [`Input::Command`] and for the same reason.
+    EnterState(String),
     /// A character typed.
     Char(char),
     /// Up arrow.
@@ -1115,6 +1233,16 @@ mod tests {
     fn with_keys(t: &str) -> Descriptor {
         Descriptor {
             name: "x".into(),
+            // THE BASE STATE IS PART OF A VALID DESCRIPTOR, and this fixture is
+            // about the KEYMAP. Without it `validate` refuses on the state list
+            // before it ever looks at a binding — which is what happened the
+            // first time the guard went in, and the keymap assertions below
+            // stopped being exercised while still passing.
+            states: vec![BufferState {
+                id: BASE_STATE.into(),
+                letter: 'n',
+                tone: Tone::Standard,
+            }],
             keymap: vec![Binding {
                 keys: t.into(),
                 command: "x.y".into(),

@@ -358,7 +358,7 @@ mod tests {
     }
 
     fn draw_segments(r: &mut Draw) -> Vec<Segment> {
-        const IDS: &[&str] = &["mode", "notif", "buffer", "modo", "contexto", "posicao"];
+        const IDS: &[&str] = &["mode", "notif", "buffer", "kind", "state", "position"];
         // Drawing the presence BEFORE assembling: two closures borrowing `r`
         // at the same time does not pass the borrow checker, and the
         // compiler's message does not suggest this.
@@ -524,7 +524,7 @@ mod tests {
                 false,
             ),
             seg("estado", "*", 5, 1, Side::Left, Shrink::Cut, true),
-            seg("modo", "rust", 6, 4, Side::Left, Shrink::Cut, true),
+            seg("kind", "rust", 6, 4, Side::Left, Shrink::Cut, true),
             seg(
                 "tray",
                 "\u{F0}\u{F1}\u{F2}",
@@ -534,10 +534,10 @@ mod tests {
                 Shrink::AtTheEnd,
                 true,
             ),
-            seg("posicao", "42:17", 8, 5, Side::Left, Shrink::Cut, true),
+            seg("position", "42:17", 8, 5, Side::Left, Shrink::Cut, true),
             seg(
-                "contexto",
-                "main +3 -1",
+                "state",
+                "permission",
                 9,
                 6,
                 Side::Left,
@@ -570,11 +570,11 @@ mod tests {
     }
 
     #[test]
-    fn the_context_dies_before_the_buffers_name() {
-        // Priority 9 against 4: the context is the first to go.
+    fn the_lowest_priority_dies_before_the_buffers_name() {
+        // Priority 9 against 4: the lowest is the first to go.
         let r = resolve(40, &typical_modeline());
         let ids: Vec<_> = r.iter().map(|c| c.id).collect();
-        assert!(!ids.contains(&"contexto"));
+        assert!(!ids.contains(&"state"));
         assert!(ids.contains(&"buffer"));
     }
 

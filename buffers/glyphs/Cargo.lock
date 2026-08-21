@@ -118,7 +118,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ronoctua-buffer-glifos"
+name = "ronoctua-buffer-glyphs"
 version = "0.1.0"
 dependencies = [
  "wit-bindgen",

@@ -1015,27 +1015,156 @@ janela e parece corte.
 
 ---
 
-### O segmento de contexto: o ramo, e de quem
+### Os três segmentos da esquerda: o buffer, o modo e o estado
 
-À esquerda da modeline fica o estado do buffer em foco, e o segmento de contexto é o ramo do git.
+À esquerda da modeline ficam três coisas, e cada uma responde a uma pergunta diferente:
 
-Ele já foi um texto fixo montado com `format!` no shell — uma **string literal na UI**, que o
-invariante 8 proíbe. As guardas não pegaram porque ela não passava pelo `t()`: o invariante vale para
-o que atravessa a tradução, e o que não atravessa não é conferido por ninguém.
+| segmento | pergunta | de onde vem |
+|---|---|---|
+| `*lucide*` | **qual** buffer é este? | o TÍTULO da janela, pelo niri |
+| `lucide` | que **espécie** de buffer é? | o último trecho do `app_id` |
+| `filtro` | o que ele está **fazendo**? | o que o próprio buffer relata |
 
-O ramo vem do `cwd` do processo da janela em foco, lido pelo pid que o event stream do niri já
-entrega. **E dos filhos dele**, e essa é a parte que importa: o `cwd` de um cliente Wayland é onde
-ele foi *lançado*, e num terminal quem navega é o shell de dentro. Medido no teste de VM — `foot`
-lançado com `cwd = /`, o shell dentro do repositório. Olhando só o cliente, o segmento acertaria o
-caso raro e erraria o principal, que num desktop de teclado é justamente o terminal.
+Havia um quarto, e ele saiu: o **ramo do git**. Ele lia o `cwd` do processo da janela em foco e dos
+filhos dele, em busca em largura pelo `/proc`, a cada troca de foco. Custava isso mais até vinte
+`stat` subindo diretórios, para uma informação que em produção nem aparecia nos buffers — a unidade
+do rodapé não tem `WorkingDirectory`, então o `cwd` é `$HOME` e não há repositório nenhum. O dono
+pediu a coluna de volta, e ela foi para o estado.
 
-A busca é em largura, com teto de dois níveis e 32 processos: o mais raso vence, então um `git`
-rodando dentro do terminal não muda o que a modeline mostra. Fora de qualquer repositório o segmento
-**não existe** — um rótulo tipo "sem git" seria o mesmo defeito com outra roupa.
+#### O identificador é inglês, e a tela vem do i18n
 
-Ler `.git/HEAD` à mão, e não uma biblioteca de git: precisamos de uma linha de um arquivo, e uma
-biblioteca traria resolução de objeto, index e rede para dentro do caminho de partida do rodapé, que
-tem orçamento de 200 ms de partida.
+Os dois primeiros segmentos foram desenhados CRUS por muito tempo, e é assim que `glifos` chegava a
+uma tela em inglês. O descritor do componente dizia `name: "glifos"`, o host escrevia `*glifos*` no
+título e `br.ronoctua.glifos` no `app_id`, e a modeline lia os dois de volta. **Um literal de UI
+(invariante 8) e um nome em português (invariante 18) na mesma linha**, pela única porta que nenhum
+check olhava — porque nenhuma regra de declaração enxerga uma string à direita de dois-pontos.
+
+Hoje o id é inglês e o que a tela mostra vem de `buffer-<id>` e `mode-<id>`. Quem traduz o TÍTULO é o
+host do buffer, no `set_title`; quem traduz o MODO é o rodapé, e só quando o `app_id` começa com
+`br.ronoctua.` — o `app_id` de um app estrangeiro é dado dele, como o título, e inventar um nome para
+o software dos outros é pior que mostrar o que eles escolheram.
+
+**O `app_id` NÃO é traduzido**, e isso é deliberado: as *window rules* do niri casam por ele, e uma
+regra que só dispara num idioma é uma regra que falha na máquina de quem mudou o `LANG`.
+
+---
+
+### O estado do buffer, e por que o `Esc` é resolvido no cliente
+
+O `mode` nunca foi um modo: é um campo constante do descritor, fixado no `init()` e nunca mais
+tocado. Sub-estados sempre existiram de fato — no lucide, no glyphs e no unicode, letra é busca e há
+uma ficha; no files, letra é query; no transfers há lista e detalhe — e nenhum tinha nome, então a
+modeline dizia a mesma palavra com qualquer um deles na tela.
+
+Agora o descritor declara `states`, o primeiro é o base, e o id dele **tem de ser `normal`** —
+recusado no load, ao lado da guarda do prefixo `m` (§7.9). Não é cerimônia: é por esse id que a cor
+decide entre o tom discreto e o alternativo, e é para ele que o `Esc` volta. Um buffer cujo base se
+chamasse outra coisa se desenharia como permanentemente fora do normal.
+
+#### `Esc` tem dois significados, e o keyd não podia dar o segundo
+
+Toda tecla deste sistema com dois significados os ganha do **keyd**, que separa toque de retenção
+antes de o compositor ver qualquer coisa. Para o `Esc` isso não serve: uma camada do keyd sobre ele
+mudaria o `Esc` do terminal, do `vim` e de toda página do navegador — para dar um atalho a seis
+janelas.
+
+Então ele é resolvido **no cliente que já tem o teclado**. Enquanto um buffer nosso está em foco,
+quem recebe as teclas é o processo dele; enquanto qualquer outra coisa está, nada disto existe. É a
+razão inteira de a funcionalidade poder usar o `Esc`.
+
+| | |
+|---|---|
+| `Esc` desce | marca, e **não entrega nada** — ainda pode virar retenção |
+| `Esc` + `←`/`→` | gira o estado, e marca que não foi toque |
+| `Esc` + outra tecla | **engolida** |
+| `Esc` sobe sem uso | entrega `Cancel`, e só |
+
+O preço é que o toque age no `release`. Para um toque isso é o tempo de soltar a tecla, e é o mesmo
+contrato que a leader já ensina no `Super`.
+
+**E o toque entrega `Cancel`, e só isso.** A primeira versão mandava o buffer para o base e *depois*
+entregava o `Cancel`, com o argumento de que "o `Esc` volta ao normal" deveria ser garantia do host e
+não confiança em seis componentes. Custou uma regressão de verdade: os seis já andavam **um nível por
+`Esc`** — a ficha para a grade, e então a grade limpando a busca —, e o salto fazia os dois de uma
+vez, então sair de uma ficha jogava fora o filtro que a pessoa tinha digitado para achá-la. Um nível
+por toque é o que o Doom faz e o que os seis já faziam; a modeline continua verdadeira porque a volta
+se relata sozinha, pelo mesmo `state-changed` de qualquer outra mudança.
+
+Três detalhes que custaram teste próprio, e cada um é um jeito de a coisa falhar em silêncio:
+
+- **repetição não é segundo press.** Segurar faz o compositor mandar mais, e tratar um deles como
+  press novo limparia o "foi usado" — `Esc`+seta segurado um instante a mais cancelaria a busca;
+- **teclas que não são seta são engolidas.** Sem isso, soltar depois de `Esc`+letra cancelaria E a
+  letra teria entrado na busca no caminho: um gesto fazendo duas coisas que ninguém pediu;
+- **release sem press não cancela nada.** Alt-Tab para dentro de um buffer com o `Esc` em baixo dá a
+  esta janela o release e nunca o press. É a mesma armadilha que o `CLAUDE.md` registra para a
+  leader: modificador segurado tem de ser descontado ao ganhar foco.
+
+#### Os dois sentidos, e por que os dois
+
+O host manda `input::enter-state`; o componente responde `effect::state-changed`. **Um só não
+bastaria**: digitar uma letra no navegador de ícones entra na busca, e ninguém apertou uma tecla que
+significa "entrar na busca" — sem o efeito de volta, a modeline seria verdadeira apenas sobre as
+mudanças que o próprio host causou.
+
+**E o host não anota nada por conta própria.** A primeira versão guardava o índice e avisava o
+rodapé *antes* de entregar — que é a ordem que parece natural e está errada: **um componente pode
+recusar**. `sheet` sem nada sob o cursor é uma tela de campos vazios, e os navegadores dizem não; o
+host teria anunciado um estado em que a tela nunca esteve, e a modeline seguiria nomeando ele até a
+mudança seguinte. Quem escreve o estado é o `state-changed` que volta — uma verdade só, e é a que
+desenha.
+
+Do lado do componente o relato sai de **um lugar só** — comparar o estado antes e depois de tratar a
+entrada — e não de cada sítio que atribui `screen`. São de quatro a doze desses por buffer, e relato
+por sítio é relato que alguém esquece.
+
+#### Como o estado chega ao rodapé
+
+O buffer é um processo à parte, e o rodapé só sabe o que o compositor conta: título, `app_id`, pid.
+Então há **um empurrão e uma pergunta**, e um cobre o outro:
+
+- o host do buffer **empurra** `state <pid> <id>` no socket de controle do rodapé, a cada mudança.
+  Cobre tudo que acontece com a janela em foco, que é quase tudo;
+- o rodapé **pergunta** (`states`, no socket que já existia do buffer) a cada troca de foco. Cobre um
+  rodapé que reiniciou com buffers abertos — trocar de rodapé é uma tecla — e um buffer que mudou de
+  estado sem foco.
+
+Perguntar por quadro seria uma ida e volta de socket dentro do orçamento do quadro, para algo que
+muda quando alguém aperta uma tecla. O mapa `pid → estado` é **podado contra a lista de janelas** do
+compositor, e não por relógio: um pid é reusado pelo kernel mais cedo do que se espera.
+
+**Janela estrangeira não tem estado**, e é a mesma regra que apagou o rótulo `fundamental`: o niri
+não nos diz em que estado o `vim` está, e escrever `normal` ali gastaria uma coluna afirmando algo
+que ninguém conferiu.
+
+#### Duas cores, e não uma por estado
+
+A rampa, de cima para baixo: o NOME do buffer é `text.primary`, o modo é `text.secondary`, e o
+estado base é o mais apagado dos três — `normal` é o que diz "nada em particular", então recua. O
+modo já esteve em `text.dim`, e quem disse que era escuro demais foi o teste de VM: o OCR parou de
+achar `foot` na tela. **Teste que lê mal é pessoa que lê mal.**
+
+`normal` sai discreto e **todo o resto sai no mesmo verde**, num token só
+(`modeline.state.alternate`). O que um leitor tem de aprender é "discreto é o de sempre, verde é
+não", e isso vale em qualquer buffer; trocar de tema é mexer numa linha. Um buffer PODE sobrepor por
+estado, nomeando um papel (`tone`) no descritor — nome, nunca valor (invariante 11) —, e nenhum o faz
+hoje.
+
+**O acento não entra aqui.** Azul marca foco e mais nada: vive na borda da janela e se muda para o
+nome do buffer quando o rodapé toma o teclado. Um estado em azul seria a segunda coisa azul na tela,
+e aí nenhuma das duas diz "é aqui que a tecla vai".
+
+#### O ponteiro alcança as duas linhas
+
+O rodapé já tinha ponteiro — barra de rolagem, linhas do gerenciador, menu do botão direito — mas só
+dentro da região expandida. Agora a modeline responde também: o segmento sob o cursor se explica **no
+minibuffer** (nunca em tooltip, invariante 14), o botão esquerdo gira para o próximo estado e o
+direito para o anterior. São exatamente as duas ordens que `Esc`+seta manda: **o mouse é um segundo
+caminho para a mesma porta, e nunca uma porta própria** — e há check dos dois lados disso.
+
+O que ele usa para saber onde está é o que o ÚLTIMO QUADRO desenhou, guardado como `(id, coluna,
+largura)`. Não é economia: um `Motion` chega por pixel de movimento, e um segundo cálculo do layout
+poderia discordar do que está na tela.
 
 ---
 
@@ -2445,7 +2574,7 @@ medidas que temos:
 |---|---|
 | montar a janela de 12 linhas | 0,03 ms |
 | preparo + desenho de um quadro (bench) | 0,73 + 1,44 ms |
-| `branch_of_pid`, por quadro | 0,013 ms |
+| `branch_of_pid`, por quadro (medida da época; o segmento saiu) | 0,013 ms |
 
 Nada disso explica um atraso perceptível. O que sobra dentro do nosso alcance é a LATÊNCIA de
 apresentação, e ali havia um quadro a mais: `desired_maximum_frame_latency` era 2. A fila mais funda

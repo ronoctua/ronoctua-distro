@@ -604,6 +604,33 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u footer --no-pager")
         assert "comando sem acao registrada" not in journal, journal
 
+    with subtest("o buffer aberto ANUNCIA seu estado, e a modeline o mostra"):
+        # THE HALF OF THE STATE CONTRACT THAT ONLY A COMPOSITOR REACHES.
+        #
+        # The buffer publishes on a socket named by its own pid, the footer is
+        # told on every change and ASKS on every change of focus. Every piece is
+        # unit-tested apart — the line protocol in `leader.rs`, the round trip
+        # through the WIT in `states-driven`, the `Esc` layer in `buffer.rs` —
+        # and none of those has a compositor telling one process about another
+        # process's window.
+        #
+        # It is here and not in `modeline-vm` because this is the test that opens
+        # a buffer WINDOW: doing it there would mean that VM growing a GPU stack
+        # to assert something this one is already set up for.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -q 'id=\"state\"'",
+            timeout=60,
+        )
+        journal = machine.succeed("journalctl -u footer --no-pager")
+        state = [l for l in journal.splitlines() if 'id="state"' in l]
+        print(f"estado: {state[-1]}")
+        # BY ITS TEXT AND NOT BY THE ID. What the segment carries is what the
+        # i18n resolved — `normal` reads the same in both languages, and it is
+        # the base state every buffer starts in. Asserting the id would pass
+        # with the key drawn raw, which is the defect the whole `state-<id>`
+        # arrangement exists to prevent.
+        assert "text=normal" in state[-1], state[-1]
+
     with subtest("`i u` abre o navegador de SIMBOLOS, e e outra janela"):
         # THE DEFECT THIS CATCHES is the same as the subtest above, and that is why
         # it exists again for the second buffer: a command can show up in which-key,

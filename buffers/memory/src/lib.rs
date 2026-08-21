@@ -39,8 +39,9 @@ wit_bindgen::generate!({
 
 use exports::ronoctua::buffer::view::Guest;
 use ronoctua::buffer::types::{
-    Binding, Capability, Color, Command, Consumer, ConsumerKind, Context, Demand, Descriptor,
-    Effect, Gauge, GuardMode, Icon, Input, LineCommand, Request, Scale, Survey, Text, TextCommand,
+    Binding, BufferState, Capability, Color, Command, Consumer, ConsumerKind, Context, Demand,
+    Descriptor, Effect, Gauge, GuardMode, Icon, Input, LineCommand, Request, Scale, Survey, Text,
+    TextCommand, Tone,
 };
 
 /// Every text key this buffer names.
@@ -1043,8 +1044,29 @@ struct Component;
 impl Guest for Component {
     fn init() -> Descriptor {
         Descriptor {
-            name: "memoria".into(),
+            name: "memory".into(),
             mode: "memory".into(),
+            // THE THREE SCREENS this panel always had: the live overview, the
+            // full breakdown and the protection. `Esc` already walked back from
+            // the last two to the first — what it lacked was the modeline
+            // saying which of the three it had walked back from.
+            states: vec![
+                BufferState {
+                    id: "normal".into(),
+                    letter: 'n',
+                    tone: Tone::Standard,
+                },
+                BufferState {
+                    id: "full".into(),
+                    letter: 'f',
+                    tone: Tone::Standard,
+                },
+                BufferState {
+                    id: "guard".into(),
+                    letter: 'g',
+                    tone: Tone::Standard,
+                },
+            ],
             keymap: KEYMAP
                 .iter()
                 .map(|(keys, command)| Binding {
@@ -1086,7 +1108,55 @@ impl Guest for Component {
     }
 
     fn event(e: Input) -> Vec<Effect> {
-        STATE.with_borrow_mut(|s| match e {
+        // THE STATE IS REPORTED FROM ONE PLACE, and not at each site that
+        // assigns `screen` — there are four, between the commands and the two
+        // layers of `Cancel`. A report per site is a report somebody forgets.
+        STATE.with_borrow_mut(|s| {
+            let before = s.state_id();
+            let mut out = s.act(e);
+            let after = s.state_id();
+            if before != after {
+                out.push(Effect::StateChanged(after.into()));
+            }
+            out
+        })
+    }
+}
+
+impl State {
+    /// Which of the declared states this is, right now.
+    ///
+    /// DERIVED and never stored: `screen` already answers it, and a stored copy
+    /// is a second truth that drifts on the first path that forgets it.
+    const fn state_id(&self) -> &'static str {
+        match self.screen {
+            Screen::Overview => "normal",
+            Screen::Full(_) => "full",
+            Screen::Guard => "guard",
+        }
+    }
+
+    /// One input, before the state is compared.
+    fn act(&mut self, e: Input) -> Vec<Effect> {
+        let s = self;
+        match e {
+            // THE HOST SENDS AN ID THIS BUFFER DECLARED. It also clears what is
+            // armed: leaving a `pending` alive under another screen is a key
+            // waiting for an `Enter` nobody can see — and on this panel what is
+            // armed CLOSES a process.
+            Input::EnterState(id) => {
+                s.pending = None;
+                s.screen = match id.as_str() {
+                    // The tab it lands on is the FIRST, and not the one it was
+                    // last on: a state entered by name has to land somewhere
+                    // predictable, and the memory half is the one this panel is
+                    // named after.
+                    "full" => Screen::Full(Tab::Ram),
+                    "guard" => Screen::Guard,
+                    _ => Screen::Overview,
+                };
+                vec![Effect::Redraw]
+            }
             // THE SURVEY, which is the only input nobody pressed. It redraws
             // only when something CHANGED: a screen that repaints every second
             // for identical numbers spends a frame to show the same thing.
@@ -1151,7 +1221,7 @@ impl Guest for Component {
                 vec![Effect::Redraw]
             }
             _ => vec![],
-        })
+        }
     }
 }
 

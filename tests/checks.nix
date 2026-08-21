@@ -960,6 +960,180 @@ let
       ${../assets/i18n}
   '';
 
+  # THE MOUSE REACHES NOTHING THE KEYBOARD DOES NOT, and opens no surface.
+  #
+  # The footer had a pointer before this — the scrollbar, the file manager's
+  # rows, the right-button menu — but only inside the EXPANDED region. Making
+  # the modeline itself clickable is the change that invites invariant 14 back
+  # in, so the check is written in the same commit as the feature rather than
+  # after it.
+  #
+  # Two things, and each is a way for a mouse to become chrome:
+  #
+  #   1. every id the pointer acts on is one a KEY also reaches. Today that is
+  #      `state`, and the two orders it sends — `state-next`, `state-prev` — are
+  #      the same two `Esc`+arrow sends in `buffer.rs`. A click that ran anything
+  #      else would be a door only the mouse has;
+  #   2. NOTHING FLOATS. No `xdg_popup`, no second layer surface, no window
+  #      created from a pointer path. The right-button menu already draws in the
+  #      footer's own region for exactly this reason, and the comment there says
+  #      so — this makes it true rather than intended.
+  footer-mouse-reaches-nothing-new = mkCheck "footer-mouse-reaches-nothing-new" [ pkgs.python3 ] ''
+    python3 - <<'FIM'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    surface = (shell / "surface.rs").read_text()
+    buffer_host = (shell / "buffer.rs").read_text()
+    gaps = []
+
+    # 1) WHAT A CLICK ON THE MODELINE CAN DO.
+    body = re.search(
+        r"fn segment_clicked\(&mut self[^\n]*\n(.*?)\n    \}\n",
+        surface,
+        re.S,
+    )
+    if not body:
+        sys.exit("ERRO: `segment_clicked` sumiu ou mudou de forma")
+    clicked = body.group(1)
+    orders = set(re.findall(r'"(state-next|state-prev)"', clicked))
+    if orders != {"state-next", "state-prev"}:
+        gaps.append("o clique manda " + repr(sorted(orders)) + ", e nao os dois do teclado")
+
+    # The SAME two the keyboard produces, on the other side of the socket.
+    from_keys = set(re.findall(r'"(state-next|state-prev)"', buffer_host))
+    rotates = "EscapeAct::Rotate" in buffer_host
+    if not rotates:
+        gaps.append("o `Esc` do host nao gira mais: o clique ficaria sozinho")
+
+    # And nothing else: the only segment id it acts on.
+    acted = set(re.findall(r'if id != "([a-z-]+)"', clicked))
+    if acted != {"state"}:
+        gaps.append("o clique age em " + repr(sorted(acted)) + ", fora do combinado")
+
+    # 2) NOTHING FLOATS.
+    forbidden = ("xdg_popup", "XdgPopup", "create_popup", "Popup::")
+    for name in ("surface.rs", "buffer.rs", "files_window.rs"):
+        text = (shell / name).read_text()
+        for word in forbidden:
+            if word in text:
+                gaps.append(name + ": " + word + " — invariante 14")
+
+    if gaps:
+        print("ERRO: o ponteiro ganhou porta propria.", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: o clique da modeline gira o estado, e nada flutua")
+    FIM
+  '';
+
+  # THE STATE CONTRACT, ON EVERY BUFFER AT ONCE.
+  #
+  # Each half of it is already guarded and neither is worth much alone: the
+  # descriptor's states by `Descriptor::validate`, the words by
+  # `buffer-states-have-text`, the host's `Esc` layer by unit tests in
+  # `buffer.rs`. What none of them reaches is the ROUND TRIP — send the id the
+  # buffer declared and get the same id back out of `effect::state-changed`,
+  # through the WIT and out of the component's own memory.
+  #
+  # A buffer that took `enter-state` and did nothing would satisfy every check
+  # above and leave `SPC b s` offering a state nobody can enter, with the
+  # modeline naming a screen that is not up. That is not hypothetical: it was
+  # planted, and the first version of the driver PRINTED it and exited zero.
+  #
+  # All six and not one chosen buffer, because the contract is the same for all
+  # of them and the six were written in a single pass — which is the pass whose
+  # mistakes land in whichever file the writer got tired on.
+  states-driven = mkCheck "states-driven" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-states \
+      ${buffers.lucide}/lib/ronoctua_buffer_lucide.wasm \
+      ${buffers.glyphs}/lib/ronoctua_buffer_glyphs.wasm \
+      ${buffers.unicode}/lib/ronoctua_buffer_unicode.wasm \
+      ${buffers.memory}/lib/ronoctua_buffer_memory.wasm \
+      ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm \
+      ${buffers.example}/lib/ronoctua_buffer_example.wasm
+  '';
+
+  # EVERY STATE A BUFFER DECLARES HAS A WORD, IN BOTH LANGUAGES.
+  #
+  # Same shape as `buffer-modes-have-text`, and the same failure it prevents: the
+  # id is English by invariant 18 and what the modeline draws comes from
+  # `state-<id>` by invariant 8, so a state added without its two lines puts a
+  # bracketed key on screen. It ALSO checks the base, because the colour rule
+  # reads it — `normal` is drawn quiet and everything else in the alternative
+  # token, and a buffer whose base were called something else would draw itself
+  # as permanently not-normal.
+  buffer-states-have-text = mkCheck "buffer-states-have-text" [ pkgs.python3 ] ''
+    python3 - <<'FIM'
+    import pathlib, re, sys
+
+    root_dir = pathlib.Path("${self}")
+    ID = re.compile(r'^\s+id: "([a-z][a-z0-9-]*)"\.into\(\),')
+    LETTER = re.compile(r"^\s+letter: '(.)',")
+
+    # Read the `states:` block of each descriptor. The same shape
+    # `english-names` and `buffer-modes-have-text` read, and for the same
+    # reason: nothing ties the literal to the key.
+    per_buffer = {}
+    for rs in sorted((root_dir / "buffers").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        inside = False
+        found = []
+        pending = None
+        for line in rs.read_text().splitlines():
+            if "states: vec![" in line:
+                inside = True
+                continue
+            if inside and line.strip() == "],":
+                inside = False
+                continue
+            if not inside:
+                continue
+            m = ID.match(line)
+            if m:
+                pending = m.group(1)
+                continue
+            m = LETTER.match(line)
+            if m and pending:
+                found.append((pending, m.group(1)))
+                pending = None
+        if found:
+            per_buffer[rs.parts[-3]] = found
+
+    if not per_buffer:
+        sys.exit("ERRO: nenhum estado encontrado — o formato do bloco mudou?")
+
+    gaps = []
+    for buffer, states in sorted(per_buffer.items()):
+        if not states or states[0][0] != "normal":
+            gaps.append(buffer + ": o estado base e " + repr(states[:1]) + ", nao `normal`")
+        ids = [i for i, _ in states]
+        letters = [l for _, l in states]
+        if len(set(ids)) != len(ids):
+            gaps.append(buffer + ": id de estado repetido")
+        if len(set(letters)) != len(letters):
+            gaps.append(buffer + ": duas letras iguais deixariam um estado inalcancavel")
+
+    wanted = {i for states in per_buffer.values() for i, _ in states}
+    for language in ("pt-BR", "en-GB"):
+        ftl = (root_dir / "assets/i18n" / (language + ".ftl")).read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        for ident in sorted(wanted):
+            if "state-" + ident not in have:
+                gaps.append(language + ": falta state-" + ident)
+
+    if gaps:
+        print("ERRO: estado de buffer mal declarado.", file=sys.stderr)
+        for g in gaps:
+            print("       " + g, file=sys.stderr)
+        raise SystemExit(1)
+    total = sum(len(v) for v in per_buffer.values())
+    print("OK: " + str(total) + " estados em " + str(len(per_buffer)) + " buffers, com texto nos dois idiomas")
+    FIM
+  '';
+
   transfers-instance-fast = mkCheck "transfers-instance-fast" [ ] ''
     ${rust.workspace}/bin/ronoctua-bench-instance \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm 200
@@ -3676,6 +3850,35 @@ let
                 if hit:
                     gaps.append(f"comentario: {f.relative_to(root_dir)}:{first}: {hit.group(0)}")
 
+    # 8) THE DESCRIPTOR'S ids — the last Portuguese name that reached a screen
+    #
+    # A buffer's `name` and `mode` are STRING LITERALS inside the component, and
+    # no rule above sees a string on the right of a colon. They became the window
+    # TITLE and the `app_id`, both drawn raw — so `glifos`, `memoria`, `exemplo`
+    # and `transferencias` went through the whole identifier refactor untouched
+    # and were the only Portuguese left on a running screen, in every language.
+    #
+    # They are ids now, and what the screen shows comes from `buffer-<id>` and
+    # `mode-<id>`. This is the ruler that keeps them ids.
+    DESCRIPTOR_ID = re.compile(r'^\s+(name|mode):\s*"([a-z][a-z0-9-]*)"')
+    for rs in sorted((root_dir / "buffers").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        inside = False
+        for n, line in enumerate(rs.read_text().splitlines(), 1):
+            if "Descriptor {" in line:
+                inside = True
+                continue
+            if inside and line.strip() in ("}", "};"):
+                inside = False
+                continue
+            if not inside:
+                continue
+            m = DESCRIPTOR_ID.match(line)
+            if m and RX.search(m.group(2)):
+                rel = rs.relative_to(root_dir)
+                gaps.append(f"descritor: {rel}:{n}: {m.group(1)} = {m.group(2)}")
+
     if gaps:
         print("ERRO: nome em portugues (invariante 18).", file=sys.stderr)
         print("", file=sys.stderr)
@@ -4086,6 +4289,67 @@ let
     done
     [ "$failed" = 0 ] || exit 1
     echo "OK: $(echo "$keys" | wc -l) chaves de buffer, todas traduzidas nos dois idiomas"
+  '';
+
+  # EVERY BUFFER ID HAS A LABEL, IN BOTH LANGUAGES.
+  #
+  # The descriptor's `name` and `mode` used to BE the label: the host wrote
+  # `*{name}*` into the window title and `br.ronoctua.{mode}` into the app id,
+  # and the modeline drew both raw. That is how `glifos` appeared on a screen
+  # running in English — invariant 18 and invariant 8 broken by the same line,
+  # through the one door no check was looking at.
+  #
+  # They are ids now: English, kebab-case, and what the screen reads is
+  # `buffer-<id>` and `mode-<id>`. Without this check a rename compiles, runs,
+  # and puts a literal bracketed key on the modeline — which is the failure the
+  # i18n was built to make impossible everywhere else.
+  buffer-modes-have-text = mkCheck "buffer-modes-have-text" [ pkgs.python3 ] ''
+    python3 - <<'FIM'
+    import pathlib, re, sys
+
+    root_dir = pathlib.Path("${self}")
+    ID = re.compile(r'^\s+(name|mode):\s*"([a-z][a-z0-9-]*)"')
+
+    # The ids as the COMPONENT declares them, read out of the descriptor block —
+    # the same place `english-names` reads, and for the same reason: nothing ties
+    # the literal to the key, so both sides have to be read from the source.
+    wanted = set()
+    for rs in sorted((root_dir / "buffers").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        inside = False
+        for line in rs.read_text().splitlines():
+            if "Descriptor {" in line:
+                inside = True
+                continue
+            if inside and line.strip() in ("}", "};"):
+                inside = False
+                continue
+            if not inside:
+                continue
+            m = ID.match(line)
+            if m:
+                wanted.add(("buffer" if m.group(1) == "name" else "mode", m.group(2)))
+
+    if not wanted:
+        sys.exit("ERRO: nenhum descritor encontrado — o formato do bloco mudou?")
+
+    missing = []
+    for language in ("pt-BR", "en-GB"):
+        ftl = (root_dir / "assets/i18n" / (language + ".ftl")).read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        for kind, ident in sorted(wanted):
+            key = kind + "-" + ident
+            if key not in have:
+                missing.append(language + ": " + key)
+
+    if missing:
+        print("ERRO: id de buffer sem texto — a tela mostraria a chave entre colchetes.", file=sys.stderr)
+        for m in missing:
+            print("       " + m, file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: " + str(len(wanted)) + " ids de buffer, todos com texto nos dois idiomas")
+    FIM
   '';
 
   buffer-commands-have-labels = mkCheck "buffer-commands-have-labels" [ pkgs.gnugrep ] ''
@@ -4781,6 +5045,10 @@ let
       memory-policy-shape
       buffer-commands-have-labels
       buffer-keys-have-text
+      buffer-modes-have-text
+      buffer-states-have-text
+      states-driven
+      footer-mouse-reaches-nothing-new
       oomVm
       # The rescue console's two doors: the VT is its own machine, the window is
       # asserted next to the monitor's in `terminal-vm`.
@@ -5218,6 +5486,10 @@ let
       memory-policy-shape
       buffer-commands-have-labels
       buffer-keys-have-text
+      buffer-modes-have-text
+      buffer-states-have-text
+      states-driven
+      footer-mouse-reaches-nothing-new
       docs-exist
       architecture-sections
       ;

@@ -8,6 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
+# The sixth, and the only one that runs over EVERY buffer: the state contract is
+# the same for all of them, and what it proves is the round trip — send the id
+# the descriptor declared and get it back out of `state-changed`, through the
+# WIT. A buffer that took `enter-state` and did nothing would pass every other
+# check and leave the modeline naming a screen that is not up.
+name = "ronoctua-test-states"
+path = "src/bin/states.rs"
+
+[[bin]]
 # It measures instantiation and FAILS above the ceiling. It is a binary, and not a `#[bench]`,
 # because the Nix check needs a command that exits non-zero.
 name = "ronoctua-bench-instance"

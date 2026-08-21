@@ -47,7 +47,8 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 ## Como funciona
 
-- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página, e nenhuma chrome (inv. 14).
+- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página, e nenhuma chrome (inv. 14). O ponteiro alcança as DUAS linhas, e clique só faz o que tecla faz.
+- **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER b s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
 - **A fronteira com o niri é só IPC** — `ronoctua-niri` é o único crate que fala `niri-ipc`. **E a
   leader vem de FORA**: em repouso o rodapé não captura teclado, senão nenhum buffer receberia tecla.
   Quem a vê é o niri, que roda `ronoctua-shell leader` no socket de controle

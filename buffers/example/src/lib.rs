@@ -41,8 +41,8 @@ wit_bindgen::generate!({
 // in the WIT brings the type into the WIT's scope, not into a new Rust module.
 use exports::ronoctua::buffer::view::Guest;
 use ronoctua::buffer::types::{
-    Binding, Color, Command, Context, Descriptor, Effect, Input, LineCommand, Scale, Text,
-    TextCommand,
+    Binding, BufferState, Color, Command, Context, Descriptor, Effect, Input, LineCommand, Scale,
+    Text, TextCommand, Tone,
 };
 
 thread_local! {
@@ -59,13 +59,21 @@ struct Component;
 impl Guest for Component {
     fn init() -> Descriptor {
         Descriptor {
-            name: "exemplo".into(),
-            mode: "exemplo".into(),
+            name: "example".into(),
+            mode: "example".into(),
             // The keymap as DATA (section 7.9), and only under `SPC m`: the host refuses
             // at load whoever tries to bind under a global prefix.
             keymap: vec![Binding {
                 keys: "m r".into(),
                 command: "exemplo-reiniciar".into(),
+            }],
+            // ONE STATE, which is the normal case: a counter is never doing
+            // anything other than counting. Every buffer declares at least
+            // `normal`, because that is where `Esc` returns to.
+            states: vec![BufferState {
+                id: "normal".into(),
+                letter: 'n',
+                tone: Tone::Standard,
             }],
             commands: vec!["exemplo-reiniciar".into()],
             // Nothing in the modeline: this buffer exists to prove the boundary.
@@ -120,6 +128,12 @@ impl Guest for Component {
         // Here it only does not count the key: there is no transient state to
         // cancel in a counter.
         if matches!(e, Input::Cancel) {
+            return vec![];
+        }
+        // BEING SENT TO THE ONE STATE IT HAS IS NOT A KEYSTROKE. It arrives when
+        // somebody taps `Esc` anywhere, and counting it would make the counter
+        // measure the host's bookkeeping instead of the person's typing.
+        if matches!(e, Input::EnterState(_)) {
             return vec![];
         }
         KEYS.set(KEYS.get() + 1);

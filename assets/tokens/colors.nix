@@ -113,5 +113,38 @@
     # Badge counting pending notifications (4.2).
     badge = "0xF7768EFF";
     badgeText = "0x000000FF";
+
+    # -----------------------------------------------------------------
+    # The buffer's STATE — two tokens, and the second is one on purpose
+    # -----------------------------------------------------------------
+    #
+    # A buffer declares which state it is in; the modeline draws the name. There
+    # are exactly two colours here and not one per state, because a state that
+    # is not the base one is drawn the SAME regardless of which buffer it
+    # belongs to: the reader learns one colour, and a theme changes one line.
+    #
+    # A buffer MAY override this per state, by naming a role in its descriptor
+    # (`tone`) — for the day a file manager waiting on a permission answer needs
+    # to say something stronger than "not the usual one". None does today.
+    #
+    # THE ACCENT IS NOT USED HERE, and that is deliberate. Blue marks focus and
+    # nothing else: it lives on the window's border and moves to the buffer's
+    # name when the footer takes the keyboard. A state in blue would be a second
+    # blue thing on screen, and then neither of them says "this is where the
+    # keyboard goes".
+    #
+    # NESTED, and not `stateNormal`: a flattened `modeline.stateNormal` comes out
+    # of the generator as `modeline-statenormal`, because the conversion to a WIT
+    # identifier lowercases before it splits. Two levels give
+    # `modeline-state-normal`, which is the name a person would have guessed.
+    state = {
+      #
+      # THE RAMP, from the top: the buffer's NAME is `text.primary`, the mode is
+      # `text.secondary`, and the base state is the quietest of the three —
+      # `normal` is the one that says "nothing in particular", so it recedes.
+      # Anything that is NOT normal jumps straight past all of them into green.
+      normal = "0x6E6656FF"; # the same as `text.dim`
+      alternate = "0x9ECE6AFF"; # the same green as `state.success`
+    };
   };
 }

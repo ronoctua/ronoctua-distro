@@ -197,6 +197,19 @@ interface types {
         // inventing a syntax and the host parsing it — which is the shape this
         // file refuses everywhere else.
         ask(demand),
+        // "I AM IN THIS STATE NOW", after changing on my own.
+        //
+        // Typing a letter into the icon browser enters its search; nobody
+        // pressed a key that means "enter search", so the host has no way to
+        // know. Without this the modeline would be truthful only about the
+        // changes the host itself caused — which is the same class of lie as a
+        // cached branch name, and worse, because this one changes every time
+        // somebody types.
+        //
+        // The id has to be one the descriptor declared. The host refuses any
+        // other, rather than putting a word on the modeline that no key can
+        // return from.
+        state-changed(string),
     }
 
     // Capabilities a buffer may ASK for in the descriptor. The host refuses whoever
@@ -562,10 +575,57 @@ interface types {
         content: text,
     }
 
+    // THE TONE A STATE IS DRAWN IN — a name, never a value (invariant 11).
+    //
+    // `standard` is what every buffer uses and means "the host decides": the
+    // base state comes out quiet and every other one comes out in the SINGLE
+    // token the whole system reserves for an alternative state. That is the
+    // point of it having a name of its own — a theme changes one line in
+    // `assets/tokens/colors.nix` and every buffer follows.
+    //
+    // The other four exist for the day a state has to say something stronger
+    // than "not the usual one" — a file manager waiting for a permission answer
+    // is not the same kind of not-usual as a search field.
+    enum tone {
+        standard,
+        accent,
+        success,
+        warning,
+        error,
+    }
+
+    // ONE STATE THE BUFFER CAN BE IN.
+    //
+    // `buffer-state` and not `state`, because every component that has one calls
+    // its own whole memory `State` — two things by that name in one file is how
+    // a reader stops knowing which is which. The name is longer at the one place
+    // it is written and unambiguous at every place it is read.
+    //
+    // The major mode says what KIND of buffer this is; the state says what it is
+    // doing right now. Both existed before this record — the second one just had
+    // no name, so typing a letter into the icon browser silently became a search
+    // and the modeline went on saying the same word it said at rest.
+    //
+    // `id` is ENGLISH and kebab-case, like every other name in this repository
+    // (invariant 18); what reaches the screen is `state-<id>` out of the i18n
+    // (invariant 8). The first state a buffer declares is its BASE, its id has to
+    // be `normal`, and `Esc` is what returns to it.
+    record buffer-state {
+        id: string,
+        // The key that selects it directly under `SPC b s`. Unique within the
+        // buffer — the host refuses a repeat at load, because two states on the
+        // same letter is a menu where one of them is unreachable.
+        letter: char,
+        tone: tone,
+    }
+
     // What the buffer says about itself in `init` (section 7.6).
     record descriptor {
         name: string,
         mode: string,
+        // At least one, and the first is the base. A buffer with a single
+        // `normal` is the normal case and costs it one line.
+        states: list<buffer-state>,
         keymap: list<binding>,
         commands: list<string>,
         segments: list<segment>,
@@ -651,6 +711,17 @@ interface types {
         // clipboard. Without this way back, the buffer could only show
         // an optimistic "copied!", which lies exactly when it matters.
         copied(bool),
+        // GO TO THIS STATE — the host's half of the state contract.
+        //
+        // It arrives when somebody pressed `Esc`, held it and used an arrow, or
+        // chose a state under `SPC b s`. The buffer is told the id it declared,
+        // never a key: the same rule as `command`, and for the same reason —
+        // the component does not capture keys (invariant 11 and section 7.9).
+        //
+        // A buffer that changes state on its own says so with
+        // `effect::state-changed`, which is the other half. Without both, the
+        // modeline would be right only about the changes it caused itself.
+        enter-state(string),
         // Text coming from the clipboard (`Ctrl+V`).
         //
         // Already resolved by the host: the buffer does not read the clipboard, just as it does not read a
@@ -699,7 +770,10 @@ interface view {
         gauge, reading, pressure, consumer-kind, consumer, guard-mode, guard,
         survey, request, demand,
         // And the queue's, for the same reason.
-        engine, stage, errand, amount, job, queue
+        engine, stage, errand, amount, job, queue,
+        // And the state's — `state` is only reachable from inside `descriptor`,
+        // which is exactly the case this list exists for.
+        tone, buffer-state
     };
 
     // Who the buffer is: name, mode, keymap, commands and modeline segments.

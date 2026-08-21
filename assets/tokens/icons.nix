@@ -190,9 +190,8 @@
   disc = "md-disc";
   pdf = "cod-file_pdf";
   # A symlink, in the LISTING — not a git branch. `git-branch` was the nearest
-  # thing that already existed and it is wrong twice over: it means something
-  # else in the modeline, and the same drawing in two roles is how a person
-  # learns to distrust an icon.
+  # thing that already existed, and reaching for it is how a person learns to
+  # distrust an icon: the same drawing in two roles means neither of them.
   link = "cod-link";
   pipe = "md-pipe";
   socket = "md-console_network";

@@ -384,6 +384,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
 
     let (caso, carga) = match e {
         Input::Command(id) => ("command", Some(Val::String(id.clone()))),
+        Input::EnterState(id) => ("enter-state", Some(Val::String(id.clone()))),
         // `caractere`, and not `char`: see the comment in the `.wit`.
         Input::Char(c) => ("character", Some(Val::Char(*c))),
         Input::Up => ("up", None),
@@ -713,6 +714,7 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 // neighbours were written to prevent.
                 "save" => text().map(Effect::Save),
                 "ask" => demand_from(carga.as_deref()).map(Effect::Ask),
+                "state-changed" => text().map(Effect::StateChanged),
                 otherwise => {
                     tracing::warn!(effect = otherwise, "efeito desconhecido");
                     None
@@ -789,9 +791,42 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
         _ => Vec::new(),
     };
 
+    // THE STATES, and the tone is read by NAME — the same reason the capability
+    // list above says an unknown case must not disappear. A tone the host has
+    // not learned to read would silently become `standard`, which draws the
+    // right colour by accident until the day somebody uses `warning`.
+    let states = match field("states") {
+        Some(Val::List(l)) => l
+            .iter()
+            .filter_map(|x| {
+                let Val::Record(f) = x else { return None };
+                let g = |n: &str| f.iter().find(|(k, _)| k == n).map(|(_, v)| v);
+                Some(prot::BufferState {
+                    id: match g("id") {
+                        Some(Val::String(s)) => s.clone(),
+                        _ => return None,
+                    },
+                    letter: match g("letter") {
+                        Some(Val::Char(c)) => *c,
+                        _ => return None,
+                    },
+                    tone: match g("tone") {
+                        Some(Val::Enum(n)) if n == "accent" => prot::Tone::Accent,
+                        Some(Val::Enum(n)) if n == "success" => prot::Tone::Success,
+                        Some(Val::Enum(n)) if n == "warning" => prot::Tone::Warning,
+                        Some(Val::Enum(n)) if n == "error" => prot::Tone::Error,
+                        _ => prot::Tone::Standard,
+                    },
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
     Ok(prot::Descriptor {
         name: texto_de(field("name")),
         mode: texto_de(field("mode")),
+        states,
         keymap,
         commands: lista_de_str(field("commands")),
         // Modeline segments arrive once the modeline consumes them; the
@@ -1095,6 +1130,122 @@ mod tests {
             field(&jobs[0], "engine"),
             Some(&wasmtime::component::Val::Enum("torrent".to_owned()))
         );
+    }
+
+    #[test]
+    fn the_states_come_back_whole_and_an_unknown_tone_is_the_standard_one() {
+        // THE DESCRIPTOR CROSSES BY NAME and not by position — `descriptor_of`
+        // looks each field up — so what this proves is the other half: that the
+        // TONE is read by its case name, and that a case this host has not
+        // learned to read falls back to `standard` instead of vanishing.
+        //
+        // The fallback is deliberate and it is the reason a wrong tone is a
+        // colour and never a missing state: losing the state would lose the row.
+        use wasmtime::component::Val;
+        let d = Val::Record(vec![
+            ("name".into(), Val::String("glyphs".into())),
+            ("mode".into(), Val::String("glyphs".into())),
+            (
+                "states".into(),
+                Val::List(vec![
+                    Val::Record(vec![
+                        ("id".into(), Val::String("normal".into())),
+                        ("letter".into(), Val::Char('n')),
+                        ("tone".into(), Val::Enum("standard".into())),
+                    ]),
+                    Val::Record(vec![
+                        ("id".into(), Val::String("filter".into())),
+                        ("letter".into(), Val::Char('f')),
+                        ("tone".into(), Val::Enum("warning".into())),
+                    ]),
+                    Val::Record(vec![
+                        ("id".into(), Val::String("sheet".into())),
+                        ("letter".into(), Val::Char('s')),
+                        ("tone".into(), Val::Enum("a-tone-from-the-future".into())),
+                    ]),
+                ]),
+            ),
+            ("keymap".into(), Val::List(vec![])),
+            ("commands".into(), Val::List(vec![])),
+            ("segments".into(), Val::List(vec![])),
+            ("capabilities".into(), Val::List(vec![])),
+        ]);
+
+        let got = descriptor_of(&d).expect("descritor");
+        assert_eq!(
+            got.states
+                .iter()
+                .map(|s| (s.id.as_str(), s.letter, s.tone))
+                .collect::<Vec<_>>(),
+            [
+                ("normal", 'n', ronoctua_protocol::Tone::Standard),
+                ("filter", 'f', ronoctua_protocol::Tone::Warning),
+                ("sheet", 's', ronoctua_protocol::Tone::Standard),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_buffer_with_no_state_or_a_wrong_base_is_refused_at_load() {
+        // The three refusals are at LOAD, next to the keymap's prefix guard and
+        // for the same reason: each is a way of putting a word on the modeline
+        // that no key can get out of.
+        use ronoctua_protocol::{BufferState, Descriptor, Tone};
+        let normal = BufferState {
+            id: "normal".to_owned(),
+            letter: 'n',
+            tone: Tone::Standard,
+        };
+
+        let none = Descriptor {
+            name: "x".to_owned(),
+            ..Descriptor::default()
+        };
+        assert!(none.validate().is_err(), "sem estado nenhum tem de recusar");
+
+        let wrong_base = Descriptor {
+            name: "x".to_owned(),
+            states: vec![BufferState {
+                id: "search".to_owned(),
+                ..normal
+            }],
+            ..Descriptor::default()
+        };
+        assert!(
+            wrong_base.validate().is_err(),
+            "base fora de `normal` tem de recusar: e por esse id que a cor decide"
+        );
+
+        let same_letter = Descriptor {
+            name: "x".to_owned(),
+            states: vec![
+                normal.clone(),
+                BufferState {
+                    id: "filter".to_owned(),
+                    letter: 'n',
+                    tone: Tone::Standard,
+                },
+            ],
+            ..Descriptor::default()
+        };
+        assert!(
+            same_letter.validate().is_err(),
+            "duas letras iguais deixam um estado inalcancavel sob `SPC b s`"
+        );
+
+        let good = Descriptor {
+            name: "x".to_owned(),
+            states: vec![
+                normal,
+                BufferState {
+                    id: "filter".to_owned(),
+                    letter: 'f',
+                    tone: Tone::Standard,
+                },
+            ],
+            ..Descriptor::default()
+        };
+        assert!(good.validate().is_ok());
     }
 
     #[test]

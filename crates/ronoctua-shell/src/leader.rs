@@ -59,6 +59,22 @@ pub enum Order {
     /// It is not a command, and it has no key: it is not something one asks for, and it is the
     /// only thing on the socket that a footer sends to ANOTHER footer.
     Quit,
+    /// A buffer window says which state it is in now.
+    ///
+    /// Like [`Order::Quit`] it is not a command and has no key: nobody asks for
+    /// it. It is a REPORT, sent by the buffer's own process whenever its state
+    /// changes, so the modeline can say which of the buffer's screens is up
+    /// without a socket round trip inside the frame.
+    ///
+    /// The PID names the window for the same reason
+    /// [`buffer_socket_path`] uses it: it is the only name both sides already
+    /// know without a handshake.
+    State {
+        /// The buffer window's process.
+        pid: u32,
+        /// The id it declared in its descriptor.
+        id: String,
+    },
 }
 
 /// The word a new footer says to the one it is going to replace.
@@ -202,6 +218,87 @@ pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<(String, String)>>
         .collect())
 }
 
+/// What a buffer answers about its states: which one is in effect, and the list
+/// of `(id, letter)` it declared.
+pub type States = (String, Vec<(String, char)>);
+
+/// Asks a buffer which state it is in, and which ones it has.
+///
+/// Answers `(current, [(id, letter)])`, and `None` when there is no buffer
+/// listening on that PID — which is the normal answer for most focused windows,
+/// exactly as [`buffer_keymap`] returning empty is.
+///
+/// # Why the footer asks at all, when the buffer also pushes
+///
+/// The push covers every change while the window is focused, which is nearly all
+/// of them. It does NOT cover a footer that restarted with buffers already open,
+/// nor a buffer that changed state while another window had the focus. Asking on
+/// each change of focus closes both, and costs one socket round trip per Alt-Tab.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent.
+pub fn buffer_states(pid: u32) -> Result<Option<States>> {
+    Ok(buffer_states_at(&buffer_socket_path(pid)?))
+}
+
+/// The same, at a given path. See [`buffer_keymap_at`].
+#[must_use]
+pub fn buffer_states_at(path: &std::path::Path) -> Option<States> {
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return None;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+    if writeln!(stream, "states").is_err() {
+        return None;
+    }
+    let mut answer = String::new();
+    if std::io::Read::read_to_string(&mut stream, &mut answer).is_err() {
+        return None;
+    }
+    let mut lines = answer.lines();
+    let now = lines.next()?.trim().to_owned();
+    if now.is_empty() {
+        return None;
+    }
+    let states = lines
+        .filter_map(|l| {
+            let (id, letter) = l.trim().split_once(' ')?;
+            Some((id.to_owned(), letter.chars().next()?))
+        })
+        .collect();
+    Some((now, states))
+}
+
+/// Tells a buffer to go to a state, or to rotate.
+///
+/// # Errors
+///
+/// Nobody listening there, or the buffer refused the id.
+pub fn buffer_state_at(path: &std::path::Path, order: &str) -> Result<()> {
+    let mut stream = UnixStream::connect(path)
+        .with_context(|| format!("nenhum buffer escutando em {}", path.display()))?;
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+    writeln!(stream, "{order}").context("nao consegui escrever no socket do buffer")?;
+    let mut answer = String::new();
+    std::io::Read::read_to_string(&mut stream, &mut answer).context("o buffer nao respondeu")?;
+    anyhow::ensure!(
+        answer.trim() == "ok",
+        "o buffer recusou `{order}`: {}",
+        answer.trim()
+    );
+    Ok(())
+}
+
+/// [`buffer_state_at`], by PID.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent, or nobody listening on that PID.
+pub fn buffer_state(pid: u32, order: &str) -> Result<()> {
+    buffer_state_at(&buffer_socket_path(pid)?, order)
+}
+
 /// Runs one of a buffer's own commands, in the buffer's process.
 ///
 /// This is the half that makes listing honest: without it `SPC m` would be a
@@ -315,6 +412,19 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                     (Some("command"), Some(id)) => {
                         Order::Command(id.to_owned(), fields.next().map(str::to_owned))
                     }
+                    // `state <pid> <id>`. A pid that does not parse is dropped
+                    // with the rest: there is nothing sensible to do with a
+                    // report about a window nobody can name.
+                    (Some("state"), Some(pid)) => match (pid.parse(), fields.next()) {
+                        (Ok(pid), Some(id)) => Order::State {
+                            pid,
+                            id: id.to_owned(),
+                        },
+                        _ => {
+                            tracing::warn!(order = line.trim(), "estado sem pid ou sem id");
+                            continue;
+                        }
+                    },
                     _ => {
                         tracing::warn!(order = line.trim(), "ordem desconhecida no controle");
                         continue;
@@ -346,6 +456,17 @@ impl Leader {
     #[must_use]
     pub fn at_root(&self) -> bool {
         self.sequence.is_empty()
+    }
+
+    /// The keys typed since the leader opened.
+    ///
+    /// It exists for the same reason [`Self::at_root`] does: a submenu whose
+    /// rows are built at RUNTIME — the focused buffer's keymap, the states it
+    /// declares — has to know where in the sequence it is, and the tree cannot
+    /// answer because those rows are not in it.
+    #[must_use]
+    pub fn typed(&self) -> &[ronoctua_keymap::Key] {
+        &self.sequence
     }
 }
 
@@ -1289,6 +1410,82 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    /// THE STATE PROTOCOL, both ways, against a socket that answers like a buffer.
+    ///
+    /// Two hand-rolled parsers face each other here — the buffer writes the
+    /// answer in `publish_keymap` and the footer reads it in `buffer_states_at`
+    /// — and nothing but this ties them together. The shape is deliberately
+    /// unlike the keymap's: the FIRST line is the current state and the rest are
+    /// the list, so a reader that treated every line the same would come back
+    /// with a state called `normal n` and a menu missing its first row.
+    #[test]
+    fn the_footer_reads_a_buffers_states_and_asks_for_one() {
+        use std::io::{BufRead as _, Write as _};
+
+        let path =
+            std::env::temp_dir().join(format!("ronoctua-estados-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = std::sync::Arc::clone(&asked);
+        let served = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let Ok(mut stream) = listener.accept().map(|(s, _)| s) else {
+                    return;
+                };
+                let mut line = String::new();
+                let clone = stream.try_clone().expect("clone");
+                std::io::BufReader::new(clone)
+                    .read_line(&mut line)
+                    .expect("ler");
+                let reply = match line.trim() {
+                    "states" => "filter\nnormal n\nfilter f\nsheet s".to_owned(),
+                    order => {
+                        seen.lock().expect("lock").push(order.to_owned());
+                        "ok".to_owned()
+                    }
+                };
+                writeln!(stream, "{reply}").expect("responder");
+            }
+        });
+
+        let (now, listed) = super::buffer_states_at(&path).expect("ler os estados");
+        // THE CURRENT ONE IS THE FIRST LINE and is NOT in the list — that is the
+        // whole reason the shape differs from the keymap's.
+        assert_eq!(now, "filter");
+        assert_eq!(
+            listed,
+            vec![
+                ("normal".to_owned(), 'n'),
+                ("filter".to_owned(), 'f'),
+                ("sheet".to_owned(), 's'),
+            ]
+        );
+
+        super::buffer_state_at(&path, "state sheet").expect("pedir o estado");
+        super::buffer_state_at(&path, "state-next").expect("girar");
+        served.join().expect("a thread do buffer");
+        assert_eq!(
+            *asked.lock().expect("lock"),
+            vec!["state sheet".to_owned(), "state-next".to_owned()]
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// NOBODY LISTENING IS `None`, and not an error.
+    ///
+    /// Most focused windows are not our buffers, and this runs on every event
+    /// the compositor sends. An error here would put a warning in the journal
+    /// per window that is not ours, forever — and would teach whoever reads it
+    /// to ignore the ones that matter.
+    #[test]
+    fn a_window_that_is_not_ours_answers_nothing() {
+        let path = std::env::temp_dir().join("ronoctua-nao-existe.sock");
+        let _ = std::fs::remove_file(&path);
+        assert!(super::buffer_states_at(&path).is_none());
+    }
+
     /// THE TWO DIRECTIONS, against a socket that answers like a buffer.
     ///
     /// It is one test and not two on purpose: listing without running is the
