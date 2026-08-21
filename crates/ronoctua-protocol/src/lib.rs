@@ -102,7 +102,7 @@ impl Effect {
     #[must_use]
     pub const fn requires(&self) -> Option<Capability> {
         match self {
-            Self::Ask(_) => Some(Capability::System),
+            Self::Ask(d) => Some(d.what.requires()),
             _ => None,
         }
     }
@@ -130,6 +130,14 @@ pub enum Capability {
     /// systemd, and the component receives numbers that are already numbers. What
     /// the capability opens is the CHANNEL, not the access — invariant 11 stands.
     System,
+    /// Receiving [`Input::Queue`] and asking for a job to be paused, resumed,
+    /// cancelled or forgotten.
+    ///
+    /// Separate from [`Capability::System`] because they are different powers
+    /// over different things: one closes processes and sweeps the store, the
+    /// other touches a queue the host owns. A buffer that wants both asks for
+    /// both.
+    Transfers,
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +354,39 @@ pub enum Request {
     /// so it can be found, and emptying it in one key is a button whose damage
     /// varies by application.
     SweepJournal,
+
+    /// Hold the job the target names.
+    PauseJob,
+    /// Let it run again.
+    ResumeJob,
+    /// Give it up. Irreversible: it deletes the piece already written at the
+    /// destination.
+    CancelJob,
+    /// Drop a FINISHED job from the list. Touches no file.
+    ForgetJob,
+    /// Drop every finished job at once. The target is ignored.
+    SweepJobs,
+}
+
+impl Request {
+    /// The capability this request needs.
+    ///
+    /// It is the request and NOT the effect that decides, because
+    /// [`Effect::Ask`] carries every one of them and two capabilities now meet
+    /// inside it. A `match` and not a table: a request added without an arm
+    /// does not compile, where a table would let it through and the host would
+    /// refuse it at runtime for the wrong reason.
+    #[must_use]
+    pub const fn requires(self) -> Capability {
+        match self {
+            Self::PauseJob
+            | Self::ResumeJob
+            | Self::CancelJob
+            | Self::ForgetJob
+            | Self::SweepJobs => Capability::Transfers,
+            _ => Capability::System,
+        }
+    }
 }
 
 /// A request plus what it acts on.
@@ -358,6 +399,151 @@ pub struct Demand {
     /// An index and not a pid: a scope has no pid, and a scope — one per
     /// application — is what one actually wants to close.
     pub target: u64,
+}
+
+// ---------------------------------------------------------------------------
+// The transfer queue — behind [`Capability::Transfers`].
+//
+// THE FIELD ORDER OF [`Job`] IS THE WIT'S ORDER, for the reason written above
+// the survey's structs: `wasmtime` zips a record positionally and only then
+// compares names.
+// ---------------------------------------------------------------------------
+
+/// Who is doing the moving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// This machine's own disk.
+    Local,
+    /// A plain link, through aria2.
+    Fetch,
+    /// A site's media, through yt-dlp.
+    Media,
+    /// BitTorrent, through the session the queue owns.
+    Torrent,
+}
+
+/// Where a job is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Finding out how much there is.
+    Weighing,
+    /// Moving.
+    Running,
+    /// Held.
+    Paused,
+    /// Finished, and it worked.
+    Done,
+    /// Finished, and it did not.
+    Failed,
+    /// Given up on.
+    Cancelled,
+}
+
+/// What is being done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Errand {
+    /// Copy into a directory.
+    Copy,
+    /// Move into a directory.
+    ///
+    /// `MoveIt` and not `Move`: a bare `Move` reads as the verb in half the
+    /// call sites and as a noun in the other half, and the WIT case has to
+    /// avoid a word that several generators treat as a keyword.
+    MoveIt,
+    /// Remove, without the wastebasket.
+    Delete,
+    /// Overwrite before removing.
+    Shred,
+    /// Move to the wastebasket.
+    Trash,
+    /// Bring back from the wastebasket.
+    Restore,
+    /// Pack into an archive.
+    Compress,
+    /// Unpack an archive.
+    Extract,
+    /// Add up a directory's size.
+    Measure,
+    /// Download a plain link.
+    Fetch,
+    /// Download a site's video.
+    Media,
+    /// Download a site's audio only.
+    Audio,
+    /// Download a site's subtitles.
+    Subtitles,
+    /// Download a torrent.
+    Torrent,
+}
+
+/// What `done` and `total` are counted in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Amount {
+    /// Bytes.
+    Bytes,
+    /// Whole items — files, entries.
+    Items,
+}
+
+/// One line of the queue, as the buffer sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job {
+    /// What the buffer names when it asks for something. Never a row number:
+    /// the list reorders itself as jobs finish.
+    pub id: u64,
+    /// Who is moving it.
+    pub engine: Engine,
+    /// What is being done.
+    pub errand: Errand,
+    /// Where it is in its life.
+    pub stage: Stage,
+    /// What `done` and `total` count.
+    pub amount: Amount,
+    /// How much is done.
+    pub done: u64,
+    /// How much there is in total. **Zero means not known** — a download with
+    /// no `Content-Length`, a torrent whose metadata has not arrived. The
+    /// buffer shows the stage instead of a proportion.
+    pub total: u64,
+    /// What it is working on right now. Data, and already cut by the host: the
+    /// buffer has no path type and no idea what a separator is.
+    pub subject: String,
+    /// A failure, already translated by the host. Empty when there is none.
+    pub trouble: String,
+    /// What a [`Errand::Measure`] answered, in bytes. Zero when there is none.
+    pub answer: u64,
+}
+
+impl Job {
+    /// How far along, in **per mille**, or `None` when the total is not known.
+    ///
+    /// Per mille and not per cent for the same reason the queue's own model
+    /// uses it: a bar twelve cells wide has more than a hundred distinguishable
+    /// positions, and integer per cent makes it stutter.
+    #[must_use]
+    pub const fn along(&self) -> Option<u16> {
+        if self.total == 0 {
+            return None;
+        }
+        let done = if self.done > self.total {
+            self.total
+        } else {
+            self.done
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        Some((done as u128 * 1000 / self.total as u128) as u16)
+    }
+}
+
+/// Every line, as the host last read them.
+///
+/// The WHOLE list and never a delta: a buffer that had to apply deltas would
+/// need to hold state that can go out of step with the host's, and the list is
+/// short enough that sending it whole costs less than being wrong.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Queue {
+    /// The lines, in the order they are to be drawn.
+    pub jobs: Vec<Job>,
 }
 
 /// A key binding declared by the buffer, as DATA (section 7.9).
@@ -838,6 +1024,13 @@ pub enum Input {
     /// A screen that shows how much memory there is has to change while it is
     /// being looked at — waiting for a key would make it a photograph.
     Survey(Survey),
+    /// The transfer queue, ALREADY READ. Only for whoever declared
+    /// [`Capability::Transfers`].
+    ///
+    /// Like [`Input::Survey`] nobody pressed it — but unlike it, it is not a
+    /// clock: the host is subscribed to the queue's socket on a thread, and a
+    /// copy that moves no byte for a minute sends nothing in that minute.
+    Queue(Queue),
 }
 
 #[cfg(test)]

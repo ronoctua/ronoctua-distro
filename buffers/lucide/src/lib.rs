@@ -1787,7 +1787,7 @@ impl State {
                 _ => redraw,
             },
             // The survey is not this buffer's — see the arm at the end of `event`.
-            Input::Command(_) | Input::Copied(_) | Input::Survey(_) => redraw,
+            Input::Command(_) | Input::Copied(_) | Input::Survey(_) | Input::Queue(_) => redraw,
         }
     }
 
@@ -2281,7 +2281,8 @@ impl Guest for Component {
                 // NOT OURS — see the identical arm in `buffers/unicode`: the
                 // survey only reaches whoever declared `capability::system`,
                 // and the arm is explicit so the next case cannot arrive mute.
-                Input::Survey(_) => vec![],
+                // Neither arrives here: this buffer declared no capability.
+                Input::Survey(_) | Input::Queue(_) => vec![],
             }
         })
     }

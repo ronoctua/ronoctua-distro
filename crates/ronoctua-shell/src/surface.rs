@@ -71,14 +71,15 @@ use crate::leader::{Effect, Leader, Order};
 /// Where a native buffer's component is — read from the ENVIRONMENT, by the
 /// name of the variable that carries it.
 ///
-/// The five that exist: `RONOCTUA_BUFFER_GLYPHS` (`LEADER i n`), `_EDITOR`
-/// (`LEADER f f`), `_UNICODE` (`i u`), `_LUCIDE` and `_MEMORY`. The last two
-/// carry something the others do not: Lucide (`i l`) also depends on a FACE —
-/// the `RONOCTUA_FONT_LUCIDE` embedded in the renderer, and the two come out of
-/// the same derivation, without which the 1,668 icons would be tofu —, and the
-/// memory panel (`LEADER s m`) is the only one that embeds no database at all:
-/// everything it draws is read by its host at that moment and pushed in, which
-/// is what `capability::system` exists for.
+/// The six that exist: `RONOCTUA_BUFFER_GLYPHS` (`LEADER i n`), `_EDITOR`
+/// (`LEADER f f`), `_UNICODE` (`i u`), `_LUCIDE`, `_MEMORY` and `_TRANSFERS`.
+/// The last three carry something the others do not: Lucide (`i l`) also
+/// depends on a FACE — the `RONOCTUA_FONT_LUCIDE` embedded in the renderer, and
+/// the two come out of the same derivation, without which the 1,668 icons would
+/// be tofu —, and the memory panel (`LEADER s m`) and the queue (`LEADER t w`)
+/// embed no database at all: everything they draw is read by their host at that
+/// moment and pushed in, which is what `capability::system` and
+/// `capability::transfers` exist for.
 ///
 /// # Why not `option_env!`, which is what this was
 ///
@@ -3247,6 +3248,11 @@ impl Footer {
             "unicode-symbols" => self.open_buffer("RONOCTUA_BUFFER_UNICODE"),
             "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
+            "transfers-window" => self.open_buffer("RONOCTUA_BUFFER_TRANSFERS"),
+            "transfers-add" => self.queue_the_clipboard(None),
+            "transfers-add-media" => {
+                self.queue_the_clipboard(Some(ronoctua_transfers::Want::Video));
+            }
             // The two WINDOW actions are the compositor's (invariant 4). The
             // shell does not reimplement them: it asks over IPC, which is the
             // only border it has with niri (invariant 3).
@@ -4097,6 +4103,58 @@ impl Footer {
     const ECHO_SECONDS: u64 = 3;
 
     /// Puts a message in the echo area.
+    /// Puts whatever was last copied into the queue.
+    ///
+    /// # Why the clipboard and not a field to type into
+    ///
+    /// Because an address is never typed. It is copied — from the browser's own
+    /// bar, from a chat window, from a page — and the gesture that follows is
+    /// already `Ctrl+C`. A field would ask the person to paste into it, which
+    /// is the same paste with one more step and a syntax to get wrong.
+    ///
+    /// `want` says what to do with a page: `None` fetches the address itself,
+    /// and `Some` hands it to yt-dlp to resolve into media. A magnet ignores
+    /// both, because a magnet is not a page.
+    fn queue_the_clipboard(&mut self, want: Option<ronoctua_transfers::Want>) {
+        let latest = self
+            .clipboard
+            .at(0)
+            .and_then(|e| e.text())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(ToOwned::to_owned);
+        let Some(address) = latest else {
+            self.echo_message(self.texts.t(ronoctua_i18n::key::TRANSFERS_NOTHING_COPIED));
+            return;
+        };
+        // A SANITY CHECK AND NOT A PARSER: what decides the engine is
+        // `where_to::work_for`, in the queue's crate, where every other door
+        // asks the same question. This only refuses what is plainly not an
+        // address, so that copying a paragraph and pressing the key gives a
+        // sentence rather than a failed job.
+        let plausible = address.contains("://") || address.starts_with("magnet:");
+        if !plausible || address.contains(char::is_whitespace) {
+            self.echo_message(self.texts.t(ronoctua_i18n::key::TRANSFERS_NOT_AN_ADDRESS));
+            return;
+        }
+        let work = ronoctua_transfers::where_to::work_for(
+            &address,
+            ronoctua_transfers::where_to::landing(),
+            want,
+        );
+        match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
+            Ok(()) => {
+                let message = self.texts.t(ronoctua_i18n::key::TRANSFERS_QUEUED);
+                self.echo_message(message);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "a fila recusou o endereco");
+                let message = self.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE);
+                self.echo_message(message);
+            }
+        }
+    }
+
     fn echo_message(&mut self, text: String) {
         tracing::info!(echo = %text, "area de eco");
         self.echo = Some((

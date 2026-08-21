@@ -111,14 +111,24 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
         }
         Ask::Watch => stream_it(shared, out),
         Ask::Add { work } => {
-            let (id, switch) = shared.take(Engine::Local, work.clone());
+            // THE ENGINE COMES OUT OF THE WORK, and the request carries none.
+            // With an engine on the wire a caller could ask for a magnet to be
+            // pasted, and this function would have to decide which half of the
+            // request to believe.
+            let engine = work.engine();
+            let (id, switch) = shared.take(engine, work.clone());
             let mine = Arc::clone(shared);
             let work = work.clone();
             // ONE THREAD PER JOB, and named after the work so `top` answers
             // "what is my machine copying" without a debugger.
             if let Err(e) = std::thread::Builder::new()
                 .name(format!("trabalho-{}", work.word()))
-                .spawn(move || local::run(&mine, id, &switch, work))
+                .spawn(move || match engine {
+                    Engine::Local => local::run(&mine, id, &switch, work),
+                    Engine::Fetch => crate::aria2::run(&mine, id, &switch, work),
+                    Engine::Media => crate::media::run(&mine, id, &switch, work),
+                    Engine::Torrent => crate::torrent::run(&mine, id, &switch, work),
+                })
             {
                 tracing::error!(error = %e, "nao consegui subir a thread do trabalho");
                 shared.touch(id, |j| {

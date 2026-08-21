@@ -47,48 +47,53 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 ## Como funciona
 
-- **O rodapé é o desktop.** `wlr-layer-shell` ancorada embaixo: modeline e minibuffer COLADAS, e a
-  expansão abaixo, com teto e página. Sem chrome (inv. 14).
-- **A fronteira com o niri é só IPC.** `ronoctua-niri` é o único crate que fala `niri-ipc`.
-- **A leader vem de FORA.** Em repouso o rodapé não captura teclado — senão nenhum buffer receberia
-  tecla. Quem a vê é o niri, que roda `ronoctua-shell leader` no socket de controle
+- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página, e nenhuma chrome (inv. 14).
+- **A fronteira com o niri é só IPC** — `ronoctua-niri` é o único crate que fala `niri-ipc`. **E a
+  leader vem de FORA**: em repouso o rodapé não captura teclado, senão nenhum buffer receberia tecla.
+  Quem a vê é o niri, que roda `ronoctua-shell leader` no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`); só então a superfície expande e pede exclusividade.
   `ronoctua-shell command <id>` roda qualquer id — é por onde entram os QUATRO binds SEM leader.
 - **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem niri.
-- **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. As 141
-  ações do niri entram como `niri-<nome>`, GERADAS, e alcançam-se por nome (`LEADER :`), sem tecla.
-- **O teclado tem UM lugar** (`nix/keyboard-xkb.nix`): compositor, aninhado e console. O xkb **não
-  recusa** layout inexistente — cai no `us` mudo; quem impede é `keyboard-layout-exists`.
-- **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG
-  COPIADO, e a marca sai da MESMA `affordance` que a tecla lê — molde do menu de arquivos.
-- **São NOVE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14). O
-  localizador (`a`) varre o XDG na PARTIDA em thread (pixmap por OUTRA); a rede (`r r`) lê o CACHE do
-  NetworkManager e quem espera o rádio é uma THREAD em `LastScan`.
+- **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. As 141 ações
+  do niri entram como `niri-<nome>`, GERADAS, alcançáveis por nome (`LEADER :`). **O teclado tem UM
+  lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
+  quem impede é `keyboard-layout-exists`.
+- **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
+- **São NOVE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14). O localizador (`a`) varre o XDG na PARTIDA em thread; a rede (`r r`) lê o CACHE do NetworkManager.
 - **`LEADER .` (e `f f`) é o gerenciador, DUAS portas** — rodapé (teto de 12) e janela (`f w`), UMA
   `files::View`; só o `ronoctua-files` toca o disco. **Letra é QUERY** e vai no FIM do caminho;
   comandos da vista sob `C-` — **nunca `M-`, que é a família dos acordes do compositor**;
   `Backspace` vazio SOBE; o direito só FOCA, e a linha na TELA não é a da listagem. Permissão
-  PERGUNTA nos DOIS caminhos, com a frase pronta. Pasta vazia tem menu (sobre ela). **Rótulo de
-  `Choice` é TEXTO, não chave** — a `View` tem o bundle. Texto abre no `emacsclient`.
-- **`LEADER t t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`), não do rodapé: três
-  processos olham a mesma lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um
-  por USUÁRIO. As SETE operações longas do gerenciador entram nela; pausar e desistir são o
-  `watch::Control`, e desistir APAGA o pedaço. O segmento da modeline some em repouso — mas FICA se
-  algo falhou. `LEADER c` virou grupo: `c c` clipboard, `c s` captura.
+  PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
+- **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
+  lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um por USUÁRIO. `t t` no
+  rodapé, `t w` no buffer wasip2 (capacidade `transfers`) — e o cursor é o **id**, que a lista
+  reordena. `t a`/`t m` pegam o COPIADO. Desistir APAGA o pedaço. `c c` clipboard, `c s` captura.
+- **QUATRO motores, e o motor sai do `Work`** (`Work::engine()`), nunca do pedido: disco, aria2
+  (JSON-RPC no loopback, HTTP na mão — sem tokio; segredo em `%t` `0600`, NUNCA em `argv`), yt-dlp
+  (grupo próprio, pausar É `SIGSTOP`; vem do AMBIENTE — `option_env!` o poria no perfil mínimo) e
+  **libtorrent por FFI**, UMA sessão para todas as linhas. **v1 e v2** por 62,7 MiB — menos que o
+  rqbit, que não tem v2. O C++ para no `nix/torrent-shim/`, o `unsafe` mora em UM módulo, e o
+  `sizeof` é MEDIDO pelo compilador C++ e comparado por check. Semear é porta aberta (6881-6889, sem
+  UPnP); torrent pronto CONTINUA semeando e desistir é o que para. Magnet chega por `.desktop`.
+- **A extensão não deixa rastro em página nenhuma**: zero `web_accessible_resources`,
+  `content_scripts`, `externally_connectable`, `host_permissions` e `declarativeNetRequest` — as
+  cinco vias de detecção, e há check. Injeta só sob `activeTab`, ao apertar o botão; fala por native
+  messaging; texto e cor vêm do MESMO `.ftl` e dos MESMOS tokens. A chave que dá o id nasce NA
+  máquina (inv. 13); a política vai em `/etc/opt/chrome/policies/managed/`.
 - **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders`
   FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo:
   `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
-- **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix` → `ronoctua-tokens`; `*.ftl` →
-  `ronoctua_i18n::chave::*`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9.
-- **Layout é aritmética de inteiros**, em duas fases: preferência (`min_cols`), e "nada vaza da tela".
-- **Buffers nativos são componentes wasip2.** Devolvem display list (`ronoctua-protocol`); rasteriza
-  o `ronoctua-render`, posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11).
-  Estado vive na `Instance` — `Runtime::render` avulso zera o buffer. Cinco primitivas: texto, régua,
-  grade, seleção e **`svg`** — TRAVA de capacidade (`vector`); cor por token, `currentColor` é preto.
-- **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava dele: o host amostra
-  (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer só desenha e pede
+- **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix`, `*.ftl`): chave ou cor inexistente é
+  erro de **compilação** — inv. 8 e 9. **Layout é aritmética de inteiros**, em duas fases:
+  preferência (`min_cols`), e "nada vaza da tela".
+- **Buffers nativos são componentes wasip2.** Devolvem display list; rasteriza o `ronoctua-render`,
+  posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
+  `Instance`. Cinco primitivas: texto, régua, grade, seleção e **`svg`** (TRAVA `vector`), e **campo
+  de record cruza por POSIÇÃO** e só depois pelo nome.
+- **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava: o host amostra
+  (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer desenha e pede
   por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread.
-  Perfil tolerante: números do Nix numa tabela em `/etc`, e `--runtime` ou o systemd GRAVA.
 - **Duas instalações, uma opção só.** `ronoctua.profile` = `full` (22,8 GiB) ou `minimal` (6,9);
   `nix/modules/profile.nix` é a tabela, tudo `mkDefault`. **O ISO leva no `storeContents` o que
   nenhum cache tem** (shell, niri, ghostty-vt, buffers, fontes): o alvo baixa, não compila.
@@ -131,8 +136,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **As fontes são asset de Release, nunca git** — 4,1 GB; o input é **`file+https://`**, senão o Nix infere tarball e descompacta no store. **O console não consome TTF**; **`/etc/nixos` e `/etc/fonts/conf.d` são read-only** (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`. Glifo **não** leva `nf-`.
 - **`systemd.oomd.enable` JÁ é `true` e não vigia nada** — arma é `ManagedOOMMemoryPressure=kill` numa slice. `session.slice` é IRMÃ da `app.slice`: vigiar só a segunda tira o desktop do conjunto por construção, e `enableRootSlice`/`enableUserSlices` desfazem isso. **`memory.min` é limitado por TODOS os ancestrais** — quatro drop-ins ou vale zero. Porcentagem o systemd resolve na MÁQUINA. **`OOMScoreAdjust` em unidade de usuário é ignorado em silêncio**: suba o app com `choom`. **`grep -r` não segue symlink**, e todo `/etc` do NixOS é symlink: `-R`.
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio; hibernação depende do NOCOW (`lsattr` → `C`). **PCR 15 exige UKI medida.**
-- **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`.
-- **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
+- **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`. No libtorrent isso virou check (`torrent-layout-matches-cxx`), e o `-fvisibility=hidden` esconde o `extern "C"` TAMBÉM — precisa de `__attribute__((visibility("default")))`. **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
   **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`; `xorg.libX11` → `libx11`; `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. **Atributo dinâmico em duas sentenças** é erro de avaliação: um attrset só.
 - **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
 

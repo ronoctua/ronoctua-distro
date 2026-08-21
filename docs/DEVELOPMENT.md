@@ -207,9 +207,18 @@ Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode
 | o rodapé não aparece, mas o compositor sobe | ele recusou a layer surface | `RUST_LOG=ronoctua_shell=debug nix run .#dev` mostra o motivo |
 | nenhum atalho responde | tecla que não chega, modificador preso, ou foco não concedido | `nix run .#diagnostics` separa as três |
 | a modeline não mostra porcentagem ao colar | a fila de transferências não subiu | `journalctl --user -u ronoctua-transfers`; fora do NixOS ela é iniciada pelo próprio rodapé, e `RUST_LOG=ronoctua_transfers=info` diz o porquê |
+| um link some da fila com `o aria2 nao esta atendendo` | o aria2 é uma **unidade**, e o laço aninhado não sobe unidade nenhuma | é esperado fora de uma sessão de verdade; para exercitar o motor, rode `aria2c --conf-path=$XDG_RUNTIME_DIR/ronoctua-aria2.conf` à mão depois de gerar o arquivo, ou use `nix run .#vm` |
+| um vídeo falha com `esta instalacao nao tem o yt-dlp` | o caminho vem da unidade, não do binário | no laço aninhado, `export RONOCTUA_YT_DLP=$(which yt-dlp)` antes de subir — baked por `option_env!` ele entraria no perfil reduzido, e por isso não é |
+| um magnet não abre nada | o `.desktop` é do sistema instalado | `xdg-open` só encontra o manipulador depois de um rebuild; à mão, `ronoctua-transfers open '<magnet>'` |
+| a extensão não aparece no Chrome | a política é escrita por unidade de SISTEMA, no boot | `systemctl status ronoctua-browser-extension`; o Chrome lê a política ao **iniciar**, então feche todas as janelas antes de conferir |
 
 **Um processo fica de pé depois do `nix run .#dev`, e é de propósito.** `ronoctua-transfers` é a fila:
 ela existe para **sobreviver** ao rodapé reiniciar — que no laço aninhado acontece a cada edição de
 arquivo. O `trap` de saída não a mata porque o socket é **por usuário**, não por sessão: matá-la
 poderia derrubar uma cópia de verdade da sessão real. Ela é ociosa e a próxima execução a reaproveita;
 para encerrá-la à mão, `pkill -f bin/ronoctua-transfers`.
+
+**A sessão de torrent vive dentro dessa unidade.** Ela sobe na primeira vez que um magnet chega e
+escuta em 6881-6889; matar a fila para a semeadura, e o estado (o que retomar) fica em
+`$XDG_DATA_HOME/ronoctua/torrent`. Um `.torrent` puramente v2 para experimentar sai de
+`ronoctua-test-torrent <diretório>`, que cria um, verifica, e não toca a rede.

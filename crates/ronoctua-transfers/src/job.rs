@@ -25,13 +25,19 @@ use crate::wire::Paths;
 pub enum Engine {
     /// This machine's own disk, through [`ronoctua_files`].
     Local,
+    /// A plain link, through aria2's RPC.
+    Fetch,
+    /// A site's media, through yt-dlp.
+    Media,
+    /// BitTorrent, through the session this unit owns.
+    Torrent,
 }
 
 impl Engine {
     /// Every one of them, for the check that demands a text and an icon per
     /// engine. A `match` would compile with one missing; a list is what can be
     /// compared against the `.ftl`.
-    pub const ALL: [Self; 1] = [Self::Local];
+    pub const ALL: [Self; 4] = [Self::Local, Self::Fetch, Self::Media, Self::Torrent];
 
     /// The stem of its text key and of its icon token.
     ///
@@ -42,6 +48,9 @@ impl Engine {
     pub const fn word(self) -> &'static str {
         match self {
             Self::Local => "local",
+            Self::Fetch => "fetch",
+            Self::Media => "media",
+            Self::Torrent => "torrent",
         }
     }
 }
@@ -197,6 +206,56 @@ pub enum Work {
         #[serde(with = "crate::wire::path")]
         path: PathBuf,
     },
+
+    // ---- AND THE ONES THAT COME OVER THE NETWORK ----
+    //
+    // They carry a `String` and not a `PathBuf`, and the difference is not
+    // cosmetic: a URL is text with a grammar, and putting it through the
+    // path-or-bytes encoding would let a byte sequence that is not a URL
+    // through as if it were one.
+    /// Download a plain link, through aria2.
+    Fetch {
+        /// Where to get it.
+        url: String,
+        /// Which directory it lands in.
+        #[serde(with = "crate::wire::path")]
+        into: PathBuf,
+    },
+    /// Download a site's media, through yt-dlp.
+    Media {
+        /// The PAGE's address, not the media's: yt-dlp is what resolves one
+        /// into the other, and it is the only thing here that knows how.
+        url: String,
+        /// Which directory it lands in.
+        #[serde(with = "crate::wire::path")]
+        into: PathBuf,
+        /// Which of the three the menu asked for.
+        want: Want,
+    },
+    /// A torrent: a magnet URI, or the path of a `.torrent` as text.
+    Torrent {
+        /// The magnet, or the file.
+        source: String,
+        /// Which directory it lands in.
+        #[serde(with = "crate::wire::path")]
+        into: PathBuf,
+    },
+}
+
+/// Which part of a page's media was asked for.
+///
+/// A field of [`Work::Media`] and not three variants, for the same reason
+/// `moves` is a field of [`Work::Paste`]: it is one operation with a switch,
+/// and three variants would be three copies of the same argument building.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Want {
+    /// The video, at the best quality on offer.
+    Video,
+    /// The audio alone.
+    Audio,
+    /// The subtitles alone, with no media at all.
+    Subtitles,
 }
 
 impl Work {
@@ -213,13 +272,61 @@ impl Work {
             Self::Compress { .. } => "compress",
             Self::Extract { .. } => "extract",
             Self::Measure { .. } => "measure",
+            Self::Fetch { .. } => "fetch",
+            Self::Media {
+                want: Want::Video, ..
+            } => "media",
+            Self::Media {
+                want: Want::Audio, ..
+            } => "audio",
+            Self::Media {
+                want: Want::Subtitles,
+                ..
+            } => "subtitles",
+            Self::Torrent { .. } => "torrent",
         }
     }
 
     /// Every stem, for the check that demands a text per kind of work.
-    pub const WORDS: [&'static str; 9] = [
-        "copy", "move", "delete", "shred", "trash", "restore", "compress", "extract", "measure",
+    pub const WORDS: [&'static str; 14] = [
+        "copy",
+        "move",
+        "delete",
+        "shred",
+        "trash",
+        "restore",
+        "compress",
+        "extract",
+        "measure",
+        "fetch",
+        "media",
+        "audio",
+        "subtitles",
+        "torrent",
     ];
+
+    /// Who does it.
+    ///
+    /// It comes OUT of the work and is not asked for alongside it: with an
+    /// engine field on the request, a caller could ask for a torrent to be
+    /// pasted, and the daemon would have to decide which half of the request to
+    /// believe. Here there is nothing to disagree with.
+    #[must_use]
+    pub const fn engine(&self) -> Engine {
+        match self {
+            Self::Fetch { .. } => Engine::Fetch,
+            Self::Media { .. } => Engine::Media,
+            Self::Torrent { .. } => Engine::Torrent,
+            Self::Paste { .. }
+            | Self::Delete { .. }
+            | Self::Shred { .. }
+            | Self::Trash { .. }
+            | Self::Restore { .. }
+            | Self::Compress { .. }
+            | Self::Extract { .. }
+            | Self::Measure { .. } => Engine::Local,
+        }
+    }
 
     /// What the counter will count.
     ///
@@ -230,7 +337,11 @@ impl Work {
     #[must_use]
     pub const fn measure(&self) -> Measure {
         match self {
-            Self::Paste { .. } | Self::Shred { .. } => Measure::Bytes,
+            Self::Paste { .. }
+            | Self::Shred { .. }
+            | Self::Fetch { .. }
+            | Self::Media { .. }
+            | Self::Torrent { .. } => Measure::Bytes,
             Self::Measure { .. }
             | Self::Delete { .. }
             | Self::Trash { .. }
@@ -253,7 +364,11 @@ impl Work {
     #[must_use]
     pub fn landing(&self) -> Option<&std::path::Path> {
         match self {
-            Self::Paste { into, .. } | Self::Extract { into, .. } => Some(into),
+            Self::Paste { into, .. }
+            | Self::Extract { into, .. }
+            | Self::Fetch { into, .. }
+            | Self::Media { into, .. }
+            | Self::Torrent { into, .. } => Some(into),
             Self::Trash { root, .. } | Self::Restore { root, .. } => Some(root),
             Self::Compress { archive, .. } => Some(archive),
             Self::Delete { .. } | Self::Shred { .. } | Self::Measure { .. } => None,
@@ -271,6 +386,8 @@ impl Work {
             Self::Restore { names, .. } | Self::Compress { names, .. } => Paths::Named(names),
             Self::Extract { archive, .. } => Paths::One(archive),
             Self::Measure { path } => Paths::One(path),
+            Self::Fetch { url, .. } | Self::Media { url, .. } => Paths::Text(url),
+            Self::Torrent { source, .. } => Paths::Text(source),
         }
     }
 
@@ -280,7 +397,7 @@ impl Work {
         match self.subjects() {
             Paths::Some(p) => p.len(),
             Paths::Named(n) => n.len(),
-            Paths::One(_) => 1,
+            Paths::One(_) | Paths::Text(_) => 1,
         }
     }
 }

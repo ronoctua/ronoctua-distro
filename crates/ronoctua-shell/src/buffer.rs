@@ -395,6 +395,30 @@ struct Host {
     /// and what it asked for. `None` for every other buffer — which is the
     /// whole of the cost this capability imposes on the ones that never use it.
     system: Option<System>,
+    /// The same, for [`ronoctua_protocol::Capability::Transfers`]: a
+    /// subscription to the queue's socket, and the ids it may act on.
+    queue: Option<Queue>,
+}
+
+/// The queue half of the host: one subscription, and the id check.
+///
+/// It owns no list. The unit `ronoctua-transfers` owns it, this process is
+/// merely subscribed, and a copy of forty gibibytes carries on whether this
+/// window is open or not.
+struct Queue {
+    /// The ids of the last rows delivered.
+    ///
+    /// THE GATE, and it is the same discipline `stop_consumer` uses for an
+    /// index: the buffer names an id, and the host checks it against what it
+    /// actually sent before passing it on. Without it a component could name
+    /// any number and cancel a job that is not even on its screen.
+    known: Vec<u64>,
+}
+
+impl Queue {
+    const fn fresh() -> Self {
+        Self { known: Vec::new() }
+    }
 }
 
 /// The system half of the host: sampling, scanning and the policy.
@@ -669,9 +693,15 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .capabilities
         .contains(&ronoctua_protocol::Capability::System)
         .then(System::fresh);
+    // And the same for the queue: no capability, no thread and no socket.
+    let queue = d
+        .capabilities
+        .contains(&ronoctua_protocol::Capability::Transfers)
+        .then(Queue::fresh);
 
     let mut state = Host {
         system,
+        queue,
         keymap: d.keymap.clone(),
         pending: Vec::new(),
         file: file.map(std::path::Path::to_path_buf),
@@ -772,6 +802,34 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         state.sample();
         state.refresh_guard();
         state.sample();
+    }
+
+    // THE QUEUE'S SUBSCRIPTION, and it is NOT a clock.
+    //
+    // A socket round trip has no business inside a one-second timer: the unit
+    // already knows when something changed, and `client::watch` blocks on the
+    // socket until it does. So it is a thread that blocks and a channel that
+    // wakes the loop — the same shape the scan uses, and the same one the
+    // footer already uses for this very list.
+    if state.queue.is_some() {
+        let (send, arrivals) = calloop_channel::channel::<Vec<ronoctua_transfers::Job>>();
+        if cycle
+            .handle()
+            .insert_source(arrivals, |event, (), state: &mut Host| {
+                if let calloop_channel::Event::Msg(jobs) = event {
+                    state.queue_arrived(&jobs);
+                }
+            })
+            .is_ok()
+        {
+            // `listen` starts the unit if it is not up, so an empty screen here
+            // means an empty queue and never a queue nobody asked.
+            if !crate::transfers::listen(send) {
+                tracing::warn!("sem fila de transferencias; o buffer abre vazio");
+            }
+        } else {
+            tracing::warn!("nao consegui pendurar o canal da fila");
+        }
     }
 
     let signal = cycle.get_signal();
@@ -1471,6 +1529,10 @@ impl Host {
                 self.sample();
             }
             R::StopConsumer => self.stop_consumer(demand.target),
+            R::PauseJob | R::ResumeJob | R::CancelJob | R::ForgetJob => {
+                self.job_demand(demand.what, demand.target);
+            }
+            R::SweepJobs => Self::tell_queue(&ronoctua_transfers::Ask::Sweep),
             R::SweepStore | R::SweepGenerations | R::SweepJournal => {
                 match ronoctua_memory::scan::sweep(demand.what) {
                     Ok(()) => tracing::info!(what = ?demand.what, "faxina concluida"),
@@ -1480,6 +1542,55 @@ impl Host {
                 // that come from `statvfs` update on their own.
                 self.sample();
             }
+        }
+    }
+
+    /// A fresh queue arrived from the unit.
+    ///
+    /// The whole list, every time, and never a delta: the buffer holds no
+    /// state that could go out of step, and the list is short enough that
+    /// sending it whole costs less than being wrong about it.
+    fn queue_arrived(&mut self, jobs: &[ronoctua_transfers::Job]) {
+        let queue = crate::transfers::queue_of(jobs);
+        if let Some(q) = self.queue.as_mut() {
+            q.known.clear();
+            q.known.extend(queue.jobs.iter().map(|j| j.id));
+        }
+        self.deliver(&ronoctua_protocol::Input::Queue(queue));
+    }
+
+    /// Passes one of the buffer's demands on to the unit, once the id checks out.
+    fn job_demand(&mut self, what: ronoctua_protocol::Request, target: u64) {
+        use ronoctua_protocol::Request as R;
+        let Some(q) = self.queue.as_ref() else {
+            return;
+        };
+        if !q.known.contains(&target) {
+            // NOT an error the buffer can act on, and not a panic either: the
+            // job finished between the draw and the key, which is ordinary. The
+            // next ledger will already show it gone.
+            tracing::warn!(id = target, "pedido para um trabalho que nao esta na lista");
+            return;
+        }
+        let ask = match what {
+            R::PauseJob => ronoctua_transfers::Ask::Pause { id: target },
+            R::ResumeJob => ronoctua_transfers::Ask::Resume { id: target },
+            R::CancelJob => ronoctua_transfers::Ask::Cancel { id: target },
+            R::ForgetJob => ronoctua_transfers::Ask::Forget { id: target },
+            // Unreachable by construction: `ask` only routes those four here.
+            _ => return,
+        };
+        Self::tell_queue(&ask);
+    }
+
+    /// Says it to the unit, and says so in the log when it cannot.
+    ///
+    /// `tell` and not `ask`: none of these answer, and waiting for a reply that
+    /// never comes would freeze this window's loop — which is the whole of the
+    /// bug the footer's own split exists to avoid.
+    fn tell_queue(what: &ronoctua_transfers::Ask) {
+        if let Err(e) = ronoctua_transfers::client::tell(what) {
+            tracing::error!(error = %e, ?what, "a fila nao aceitou o pedido");
         }
     }
 

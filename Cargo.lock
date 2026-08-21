@@ -2682,11 +2682,21 @@ name = "ronoctua-tokens"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-torrent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-transfers"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ronoctua-files",
+ "ronoctua-torrent",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tracing",

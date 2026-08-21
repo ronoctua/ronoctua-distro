@@ -1,0 +1,29 @@
+[package]
+name = "ronoctua-torrent"
+description = "A fronteira com o libtorrent: BitTorrent v1 e v2, e todo o unsafe do torrent."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE BORDER, ONE CRATE — the same shape as `ronoctua-term` in front of
+# `libghostty-vt`, and for the same reason. The queue depends on this; this
+# depends on a `.so` that `nix/torrent-shim.nix` builds. Nothing else in the
+# workspace may write `unsafe`.
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+# THE PROOF THAT v2 IS NOT A CLAIM.
+#
+# It makes a purely-v2 torrent from a directory it just wrote, adds it, and
+# asserts the session reports a v2 info hash and NO v1 one — then does the same
+# with a v1-only torrent, so that a flag which is simply always true fails too.
+# Entirely offline: nothing here touches a tracker, a peer or the DHT.
+name = "ronoctua-test-torrent"
+path = "src/bin/proof.rs"

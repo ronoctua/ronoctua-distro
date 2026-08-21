@@ -234,6 +234,24 @@ interface types {
         // receives numbers ALREADY READ and names what it wants done. Whoever
         // reads and whoever acts is the host — invariant 11 intact.
         system,
+        // Receiving `input::queue` and asking for a job to be paused, resumed,
+        // cancelled or forgotten.
+        //
+        // # Why not `system`
+        //
+        // Because they are different powers over different things, and one
+        // capability covering both would give the memory panel the right to
+        // cancel a copy of forty gibibytes. `system` closes processes and
+        // sweeps the store; this one only touches a queue the host owns. A
+        // buffer that wants both asks for both, and the descriptor says so.
+        //
+        // # What it does NOT open
+        //
+        // The same as `system`: no filesystem, no socket, no clock. The rows
+        // arrive already read and already cut, and the buffer names an id it
+        // was given — it cannot invent one that means anything, because the
+        // host checks the id against the list it just sent.
+        transfers,
     }
 
     // ------------------------------------------------------------------
@@ -410,6 +428,21 @@ interface types {
         sweep-generations,
         sweep-store,
         sweep-journal,
+
+        // The transfer queue, for whoever declared `capability::transfers`.
+        // `target` is the JOB'S ID and never a row: the list reorders itself
+        // as jobs finish, and a row number would act on whatever moved into
+        // that position between the draw and the key.
+        pause-job,
+        resume-job,
+        // Irreversible: it deletes the piece already written at the
+        // destination. Like `stop-consumer`, the buffer only asks after its
+        // own confirmation.
+        cancel-job,
+        // Drop a FINISHED job from the list. Touches no file.
+        forget-job,
+        // Drop every finished job at once. `target` is ignored.
+        sweep-jobs,
     }
 
     record demand {
@@ -421,6 +454,88 @@ interface types {
         // per application — that one actually wants to close. Both sides are
         // looking at the same list, and the host checks the index before acting.
         target: u64,
+    }
+
+    // ------------------------------------------------------------------
+    // The transfer queue, for whoever declared `capability::transfers`.
+    //
+    // THE FIELD ORDER OF `job` IS THE ORDER `ronoctua-runtime` LOWERS IT IN.
+    // `wasmtime` zips a record POSITIONALLY against the WIT and only then
+    // compares names — a field moved on one side alone fails when the function
+    // is CALLED, with a message about a name.
+    // ------------------------------------------------------------------
+
+    // Who is doing the moving. One word each, and the same word the host uses
+    // to find the text and the icon.
+    enum engine {
+        // This machine's own disk.
+        local,
+        // A plain link, through aria2.
+        fetch,
+        // A site's media, through yt-dlp.
+        media,
+        // BitTorrent, through the session the queue owns.
+        torrent,
+    }
+
+    // Where a job is in its life.
+    enum stage {
+        weighing,
+        running,
+        paused,
+        done,
+        failed,
+        cancelled,
+    }
+
+    // WHAT is being done. An enum and not a string for the reason `gauge` is
+    // one: the buffer has no parser and is not getting one.
+    enum errand {
+        copy,
+        move-it,
+        delete,
+        shred,
+        trash,
+        restore,
+        compress,
+        extract,
+        measure,
+        fetch,
+        media,
+        audio,
+        subtitles,
+        torrent,
+    }
+
+    // What `done` and `total` are counted in.
+    enum amount {
+        bytes,
+        items,
+    }
+
+    record job {
+        id: u64,
+        engine: engine,
+        errand: errand,
+        stage: stage,
+        amount: amount,
+        done: u64,
+        // ZERO MEANS NOT KNOWN — a download with no `Content-Length`, a torrent
+        // whose metadata has not arrived. The buffer shows the stage instead of
+        // a proportion, and never a bar that pretends.
+        total: u64,
+        // What it is working on RIGHT NOW: a file name, a torrent's name. Data
+        // and not a key — the host already cut it, because the buffer has no
+        // path type and no idea what a separator is.
+        subject: string,
+        // A failure, ALREADY TRANSLATED by the host. Empty when there is none.
+        trouble: string,
+        // What a `measure` answered, in bytes. Zero when there is no answer.
+        answer: u64,
+    }
+
+    record queue {
+        jobs: list<job>,
     }
 
     // A key binding, declared as DATA (section 7.9). The buffer never
@@ -548,6 +663,14 @@ interface types {
         // much memory there is has to change while it is being looked at;
         // waiting for a key would make it a photograph.
         survey(survey),
+        // The transfer queue, ALREADY READ. Only for whoever declared
+        // `capability::transfers`.
+        //
+        // Like `survey`, nobody pressed it: it arrives when the queue changed.
+        // Unlike `survey`, it is NOT a clock — the host is subscribed to the
+        // queue's own socket on a thread, and a copy that moves no byte for a
+        // minute sends nothing in that minute.
+        queue(queue),
     }
 }
 
@@ -566,7 +689,9 @@ interface view {
         // generates in this module only what it declares it uses, and a record
         // reachable only from inside a `variant` ends up out of scope.
         gauge, reading, pressure, consumer-kind, consumer, guard-mode, guard,
-        survey, request, demand
+        survey, request, demand,
+        // And the queue's, for the same reason.
+        engine, stage, errand, amount, job, queue
     };
 
     // Who the buffer is: name, mode, keymap, commands and modeline segments.

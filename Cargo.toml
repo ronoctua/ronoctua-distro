@@ -29,6 +29,7 @@ members = [
   "crates/ronoctua-network",
   "crates/ronoctua-memory",
   "crates/ronoctua-files",
+  "crates/ronoctua-torrent",
   "crates/ronoctua-transfers",
   "crates/ronoctua-rescue",
   "crates/ronoctua-shell",

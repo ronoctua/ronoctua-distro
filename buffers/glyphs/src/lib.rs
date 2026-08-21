@@ -2027,7 +2027,9 @@ impl Guest for Component {
                 // NOT OURS — see the identical arm in `buffers/unicode`: the
                 // survey only reaches whoever declared `capability::system`,
                 // and the arm is explicit so the next case cannot arrive mute.
-                Input::Survey(_) => vec![],
+                // Not this buffer's: it declared no capability, so neither
+                // ever arrives — the arm exists because the match is exhaustive.
+                Input::Survey(_) | Input::Queue(_) => vec![],
             }
         })
     }

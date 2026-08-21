@@ -748,6 +748,26 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "transfers-open",
             label: key::CMD_TRANSFERS_OPEN,
         },
+        // AND THE SAME QUEUE IN A WINDOW OF ITS OWN (`LEADER t w`), which is a
+        // wasm buffer and not a second implementation: it subscribes to the
+        // same socket and draws the same rows with room to breathe. Its own
+        // keys are in ITS descriptor, under `SPC m`, and are resolved by its
+        // host while it holds the keyboard — not here.
+        Command {
+            id: "transfers-window",
+            label: key::CMD_TRANSFERS_WINDOW,
+        },
+        // AND THE TWO THAT PUT SOMETHING IN. What they read is the clipboard,
+        // because an address is copied and never typed — see
+        // `Footer::queue_the_clipboard`.
+        Command {
+            id: "transfers-add",
+            label: key::CMD_TRANSFERS_ADD,
+        },
+        Command {
+            id: "transfers-add-media",
+            label: key::CMD_TRANSFERS_ADD_MEDIA,
+        },
         // THE CLIPBOARD. `clipboard-open` has a key in the tree (`LEADER c c`); the
         // others have keys INSIDE the view, and that is why they go into
         // `OF_CLIPBOARD_VIEW` — otherwise the orphan-command check flags them, and
@@ -951,6 +971,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // — because `t` is a PREFIX, and hanging a command off a prefix is the
         // collision `PrefixWithCommand` exists to flag.
         ("t t", "transfers-open", None),
+        // `t w` — the same queue, in a window. `w` for window, and it is the
+        // second door of one thing, exactly like the file manager's `f w`.
+        ("t w", "transfers-window", None),
+        // `t a` — add whatever was copied: a link, a magnet, a `.torrent`.
+        ("t a", "transfers-add", None),
+        // `t m` — the same address, but as MEDIA: yt-dlp resolves the page.
+        ("t m", "transfers-add-media", None),
         // `f f` IS THE MANAGER, in the footer's region — the same thing `.`
         // opens, and deliberately the same thing.
         //
@@ -1701,6 +1728,9 @@ mod tests {
             // registry; everything that acts on a row is a key of the view,
             // like the file manager's.
             "transfers-open",
+            "transfers-window",
+            "transfers-add",
+            "transfers-add-media",
             // THE CLIPBOARD. `clipboard-open` has a key in the tree; the other
             // six have keys INSIDE the view, and that is why they go through
             // `reachable` — all seven need an action, otherwise they would appear in the

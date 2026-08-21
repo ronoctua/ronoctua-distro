@@ -1,0 +1,9 @@
+/* The reset, and nothing else.
+ *
+ * Every colour and every measurement is applied from `popup.js`, out of the
+ * tokens — invariant 9 does not stop at the browser's edge, and a stylesheet
+ * with a hex code in it would be the easiest place in the project to hide one.
+ * What is left here is what has no token: the removal of the browser's own
+ * defaults. */
+* { box-sizing: border-box; }
+button:focus-visible { outline: 1px solid currentColor; outline-offset: -1px; }

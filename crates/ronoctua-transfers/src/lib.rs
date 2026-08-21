@@ -36,13 +36,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aria2;
+pub mod browser;
 pub mod client;
+pub mod engine;
 pub mod job;
 pub mod ledger;
 pub mod local;
+pub mod media;
 pub mod serve;
+pub mod torrent;
+pub mod where_to;
 pub mod wire;
 
-pub use job::{Engine, Job, Measure, Stage, Work};
+pub use job::{Engine, Job, Measure, Stage, Want, Work};
 pub use ledger::Shared;
 pub use wire::{Ask, Say};

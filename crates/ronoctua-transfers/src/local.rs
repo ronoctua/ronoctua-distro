@@ -140,6 +140,13 @@ fn weigh(work: &Work, switch: &Arc<Control>) -> Result<u64> {
         // means unknown, and the row shows the stage instead of a bar that
         // would be a guess.
         Work::Compress { .. } | Work::Extract { .. } | Work::Measure { .. } => 0,
+        // THE NETWORK ONES NEVER ARRIVE HERE, and the arm is not dead code:
+        // `serve` routes by `Work::engine()`, so reaching this means the router
+        // and the model disagree. An error puts that on the row where somebody
+        // sees it; a panic would take the unit down and every copy with it.
+        Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } => {
+            anyhow::bail!("trabalho de rede entregue ao motor local")
+        }
     })
 }
 
@@ -203,6 +210,13 @@ fn carry_out(work: &Work, w: &mut Watch<'_>) -> Result<Option<u64>> {
             waited(cmd, w).map(|()| None)
         }
         Work::Measure { path } => watch::weigh(path, w).map(Some),
+        // THE NETWORK ONES NEVER ARRIVE HERE, and the arm is not dead code:
+        // `serve` routes by `Work::engine()`, so reaching this means the router
+        // and the model disagree. An error puts that on the row where somebody
+        // sees it; a panic would take the unit down and every copy with it.
+        Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } => {
+            anyhow::bail!("trabalho de rede entregue ao motor local")
+        }
     }
 }
 

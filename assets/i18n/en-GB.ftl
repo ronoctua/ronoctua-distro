@@ -1067,3 +1067,78 @@ transfers-and-more = { $name } and { $rest } more
 transfers-into = → { $where }
 # How many items, for the operations that count things rather than bytes.
 transfers-items = { $done } of { $total }
+
+# ---------------------------------------------------------------------------
+# THE SAME QUEUE, IN A WINDOW OF ITS OWN — `LEADER t w`, the wasip2 buffer.
+#
+# Not a second implementation: the same socket, the same rows, with room for
+# all of them at once and a detail screen the footer's region cannot hold. Its
+# own keys live under `SPC m`, like every buffer's.
+# ---------------------------------------------------------------------------
+cmd-transfers-window = the transfer queue, in a window
+cmd-transfers-add = download whatever is on the clipboard
+cmd-transfers-add-media = download whatever is on the clipboard, as media
+transfers-nothing-copied = nothing has been copied
+transfers-not-an-address = what is copied is not an address
+transfers-queued = in the queue
+cmd-transfers-hold = hold or let go
+cmd-transfers-give-up = give up
+cmd-transfers-drop = drop from the list
+cmd-transfers-clear = clear what has finished
+cmd-transfers-detail = this row, in detail
+
+transfers-window-title = transfers
+transfers-window-detail = the transfer, field by field
+transfers-window-empty = nothing in the queue
+transfers-window-unknown = not known
+transfers-window-hint = m p holds · m c gives up · m d details · m l clears
+transfers-window-hint-detail = m d back to the list · m p holds · m c gives up
+transfers-window-confirm-cancel = giving up deletes the piece already written. Enter confirms, any other key drops the question.
+transfers-window-asked = request sent
+
+transfers-window-field-engine = moved by
+transfers-window-field-stage = state
+transfers-window-field-errand = operation
+transfers-window-field-subject = right now
+transfers-window-field-done = done
+transfers-window-field-total = total
+transfers-window-field-trouble = trouble
+transfers-window-field-answer = answer
+
+# The engines still to come, and the network operations. They are here already
+# because the buffer names each one as a constant — and a word with no
+# translation fails the check instead of showing up on screen.
+transfers-engine-fetch = link
+transfers-engine-media = media
+transfers-engine-torrent = torrent
+
+transfers-work-fetch = download
+transfers-work-media = download video
+transfers-work-audio = download audio
+transfers-work-subtitles = download subtitles
+transfers-work-torrent = torrent
+
+
+# ---------------------------------------------------------------------------
+# THE BROWSER EXTENSION.
+#
+# FIFTEEN keys, and `nix/scripts/gen-extension.py` demands every one of them in
+# both languages: a missing one does not fall back to English, it puts the
+# key’s own name on a button. The popup writes no words of its own — it builds
+# the screen out of these.
+# ---------------------------------------------------------------------------
+ext-title = ronoctua
+ext-queue-up = the queue is up
+ext-queue-down = the queue is not up
+ext-video = video, at the best quality
+ext-audio = the audio alone
+ext-subtitles = the subtitles alone
+ext-scan = look for media on this page
+ext-found-none = nothing found on this page
+ext-page-not-media = this tab has no address to download
+ext-sent = sent to the queue
+ext-failed = the queue refused
+ext-intercept-on = downloads go to the queue
+ext-intercept-off = downloads stay in the browser
+ext-send-link = download this link through ronoctua
+ext-send-media = download this page’s media

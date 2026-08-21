@@ -45,6 +45,15 @@ path = "src/bin/lucide.rs"
 name = "ronoctua-test-memory"
 path = "src/bin/memory.rs"
 
+[[bin]]
+# The fifth, for the transfer queue in a window. The criterion only it has: the
+# cursor is an ID, and the list REORDERS underneath it — a job finishing moves
+# every row below it, and the key in question deletes the piece already written
+# at the destination. Here the reorder is simulated between the frame and the
+# key, which is the one place both sides of the WIT are visible at once.
+name = "ronoctua-test-transfers"
+path = "src/bin/transfers.rs"
+
 [dependencies]
 ronoctua-protocol = { path = "../ronoctua-protocol" }
 wasmtime.workspace = true

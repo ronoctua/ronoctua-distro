@@ -15,8 +15,15 @@ publish.workspace = true
 # The disk. Every local operation in the queue is one of this crate's, watched —
 # there is no second implementation of "copy a tree" here.
 ronoctua-files = { path = "../ronoctua-files" }
+# BitTorrent. The `unsafe` and the C++ live THERE and never here — this crate
+# stays `forbid(unsafe_code)`, which is the whole reason the border is a crate
+# of its own rather than a module.
+ronoctua-torrent = { path = "../ronoctua-torrent" }
 anyhow.workspace = true
 tracing.workspace = true
+# For `SIGSTOP`/`SIGCONT` on the media engine's process group — the one way to
+# pause a subprocess that is not killing it and starting over.
+rustix.workspace = true
 # The wire. One JSON object per line, both ways: a path and a URL carry spaces,
 # and a whitespace grammar loses half of one without saying so — the trap
 # `leader.rs`'s `rsplit_once` already records.

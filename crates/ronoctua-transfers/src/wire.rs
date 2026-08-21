@@ -111,6 +111,12 @@ pub enum Paths<'a> {
     Named(&'a [String]),
     /// Exactly one.
     One(&'a std::path::Path),
+    /// Not a path at all — a URL, or a magnet.
+    ///
+    /// A case of its own rather than a `PathBuf` holding text: a URL has a
+    /// grammar, and the path-or-bytes encoding on the wire would happily carry
+    /// a byte sequence that is not one. Here the type says which it is.
+    Text(&'a str),
 }
 
 impl Paths<'_> {
@@ -123,6 +129,10 @@ impl Paths<'_> {
             Self::Some(p) => p.first().map(|one| one.as_path()),
             Self::Named(n) => return n.first().cloned().unwrap_or_default(),
             Self::One(p) => Some(*p),
+            // The whole thing, uncut: a URL's last segment is often a token or
+            // an empty string, and `file_name` on it would print neither the
+            // site nor the file.
+            Self::Text(t) => return (*t).to_owned(),
         };
         borrowed
             .and_then(std::path::Path::file_name)

@@ -1,36 +1,60 @@
-//! The queue's daemon: one process, one socket, one list.
+//! The queue's own process — and the two doors that lead into it.
 //!
-//! # Why it is a `[[bin]]` and not a mode of the shell
+//! # Three shapes, one binary
 //!
-//! Two reasons, and each holds on its own.
+//! - no argument: **the unit**. It listens on the socket and owns the ledger.
+//! - `open <address>`: what `xdg-open` runs when a **magnet** is clicked, or a
+//!   `.torrent` opened. It adds and leaves; it does not wait for the download.
+//! - `browser`: the **native-messaging host** Chrome starts. It translates
+//!   Chrome's length-prefixed framing into the queue's own asks.
 //!
-//! A derivation references what its BYTES cite. The shell's binary carries the
-//! renderer, wgpu, the wasm runtime and every font path baked in; a unit that
-//! only copies files has no business dragging any of that into its closure —
-//! the same reasoning that made `ronoctua-files-root` and `ronoctua-rescue`
-//! binaries of their own.
-//!
-//! And it has to outlive the shell. A copy of forty gibibytes must not die
-//! because the footer was restarted, and in the nested development loop the
-//! footer is restarted on every file edit.
-//!
-//! Everything it actually does is in `ronoctua_transfers::serve`, where a test
-//! can reach it. What is left here is the two decisions a binary makes: where
-//! the log goes and where the socket is.
+//! One binary because all three need the same model, the same socket and the
+//! same resolver for "which engine takes this" — and three binaries would be
+//! three closures of the same size in the ISO.
 
+use anyhow::{Context as _, Result};
+use ronoctua_transfers::{Shared, serve, wire};
 use std::sync::Arc;
 
-use anyhow::Result;
-use ronoctua_transfers::ledger::Shared;
-use ronoctua_transfers::{serve, wire};
-
 fn main() -> Result<()> {
+    // The unit's log goes to the journal; the two short-lived doors are quiet
+    // unless something is wrong, because `xdg-open` has nowhere to show a line
+    // and Chrome treats anything on stdout as a message.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "ronoctua_transfers=info".into()),
         )
         .init();
 
-    serve::listen_on(&wire::socket_path()?, &Arc::new(Shared::fresh_one()))
+    match std::env::args().nth(1).as_deref() {
+        None => serve::listen_on(&wire::socket_path()?, &Arc::new(Shared::fresh_one())),
+        Some("open") => open(),
+        Some("browser") => ronoctua_transfers::browser::serve_stdio(),
+        Some(other) => {
+            anyhow::bail!("nao sei fazer `{other}`; use `open <endereco>`, `browser`, ou nada")
+        }
+    }
+}
+
+/// Adds whatever address was handed over, and leaves.
+///
+/// It does NOT wait: a magnet clicked in a browser or a chat window must not
+/// leave a process hanging around for the life of the download. What watches it
+/// is the unit, which is already running or is started by the client.
+fn open() -> Result<()> {
+    let address = std::env::args()
+        .nth(2)
+        .context("uso: ronoctua-transfers open <magnet|arquivo.torrent|endereco>")?;
+    let work = ronoctua_transfers::where_to::work_for(
+        &address,
+        ronoctua_transfers::where_to::landing(),
+        // No `want`: a `.desktop` handler is given an address and never an
+        // intent, so a page with a video on it is fetched as a page. Asking
+        // for the video is what `LEADER t a` and the extension's menu are for.
+        None,
+    );
+    ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work })
+        .context("a fila de transferencias nao aceitou o pedido")
 }

@@ -143,4 +143,13 @@ in
     name = "memory";
     src = ../buffers/memory;
   };
+
+  # The transfer queue in a window of its own — `LEADER t w`. Like `memory` it
+  # embeds nothing: every row it draws was read by the host at that moment and
+  # pushed in through `input::queue`. What it declares instead of a database is
+  # `capability::transfers`.
+  transfers = buffer {
+    name = "transfers";
+    src = ../buffers/transfers;
+  };
 }

@@ -2068,7 +2068,8 @@ impl Guest for Component {
                 // The arm is explicit, and not a `_`: exhaustiveness is what
                 // caught this case the day it was born, and a wildcard would
                 // swallow the next one in silence.
-                Input::Survey(_) => vec![],
+                // Neither arrives here: this buffer declared no capability.
+                Input::Survey(_) | Input::Queue(_) => vec![],
             }
         })
     }

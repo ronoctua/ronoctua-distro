@@ -636,6 +636,120 @@ pub fn listen_as_reports(
     built.is_ok()
 }
 
+// ---------------------------------------------------------------------------
+// The queue, in the shape the wasm buffer receives it.
+//
+// `LEADER t w` draws the same list as `LEADER t t`, and this is where the two
+// stop sharing code: the footer's view builds `files::Field` rows, and a
+// component builds nothing — it is handed data. The cutting happens HERE, on
+// the host, because the buffer has no path type and would not know a separator
+// if it saw one (invariant 11).
+// ---------------------------------------------------------------------------
+
+/// The queue's own model, as [`ronoctua_protocol::Errand`].
+///
+/// An exhaustive `match` and not `Work::word()` parsed back: a work variant
+/// added without an arm here does not compile, where a string lookup would
+/// simply draw the wrong word.
+const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand {
+    use ronoctua_protocol::Errand as E;
+    use ronoctua_transfers::Work as W;
+    match work {
+        W::Paste { moves: true, .. } => E::MoveIt,
+        W::Paste { moves: false, .. } => E::Copy,
+        W::Delete { .. } => E::Delete,
+        W::Shred { .. } => E::Shred,
+        W::Trash { .. } => E::Trash,
+        W::Restore { .. } => E::Restore,
+        W::Compress { .. } => E::Compress,
+        W::Extract { .. } => E::Extract,
+        W::Measure { .. } => E::Measure,
+        W::Fetch { .. } => E::Fetch,
+        W::Media {
+            want: ronoctua_transfers::Want::Video,
+            ..
+        } => E::Media,
+        W::Media {
+            want: ronoctua_transfers::Want::Audio,
+            ..
+        } => E::Audio,
+        W::Media {
+            want: ronoctua_transfers::Want::Subtitles,
+            ..
+        } => E::Subtitles,
+        W::Torrent { .. } => E::Torrent,
+    }
+}
+
+/// And the engine.
+const fn engine_of(engine: ronoctua_transfers::Engine) -> ronoctua_protocol::Engine {
+    use ronoctua_protocol::Engine as E;
+    match engine {
+        ronoctua_transfers::Engine::Local => E::Local,
+        ronoctua_transfers::Engine::Fetch => E::Fetch,
+        ronoctua_transfers::Engine::Media => E::Media,
+        ronoctua_transfers::Engine::Torrent => E::Torrent,
+    }
+}
+
+const fn stage_of(stage: Stage) -> ronoctua_protocol::Stage {
+    use ronoctua_protocol::Stage as S;
+    match stage {
+        Stage::Weighing => S::Weighing,
+        Stage::Running => S::Running,
+        Stage::Paused => S::Paused,
+        Stage::Done => S::Done,
+        Stage::Failed => S::Failed,
+        Stage::Cancelled => S::Cancelled,
+    }
+}
+
+const fn amount_of(measure: Measure) -> ronoctua_protocol::Amount {
+    match measure {
+        Measure::Bytes => ronoctua_protocol::Amount::Bytes,
+        Measure::Items => ronoctua_protocol::Amount::Items,
+    }
+}
+
+/// What the row says it is working on.
+///
+/// The name it is on RIGHT NOW beats the set's first name, for the same reason
+/// the footer's sentence prefers it: while twelve files are copying, "which one
+/// is it on" is the question. Already cut to a file name — a component drawing
+/// a whole path would push everything else off the row.
+fn subject_of(job: &Job) -> String {
+    if !job.now.is_empty() {
+        return job.now.clone();
+    }
+    job.work.subjects().first()
+}
+
+/// The queue as the buffer receives it.
+#[must_use]
+pub fn queue_of(jobs: &[Job]) -> ronoctua_protocol::Queue {
+    ronoctua_protocol::Queue {
+        jobs: jobs
+            .iter()
+            .map(|j| ronoctua_protocol::Job {
+                id: j.id,
+                engine: engine_of(j.engine),
+                errand: errand_of(&j.work),
+                stage: stage_of(j.stage),
+                amount: amount_of(j.measure),
+                done: j.done,
+                total: j.total,
+                subject: subject_of(j),
+                // The failure is DATA, and it crosses as it is: it was written
+                // by whoever failed, and a buffer that received a key here
+                // would need the host to have a key for every `io::Error`
+                // there will ever be.
+                trouble: j.trouble.clone().unwrap_or_default(),
+                answer: j.answer.unwrap_or(0),
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

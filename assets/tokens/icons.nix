@@ -55,6 +55,20 @@
   transfer-paused = "cod-debug_pause";
   transfer-cancelled = "cod-circle_slash";
 
+  # THE ENGINES, one drawing each.
+  #
+  # A row says WHO is moving before it says how far along it is: a paste and a
+  # torrent that look alike are two rows one has to read to tell apart, and the
+  # queue's whole point is being able to glance at it. `local` reuses the disk's
+  # drawing and `media` the camera's — the same meaning in two places gets the
+  # same drawing, which is this file's rule.
+  engine-local = "cod-save";
+  engine-fetch = "cod-cloud_download";
+  engine-media = "cod-device_camera_video";
+  # The magnet, because it is what a person clicks to start one — the drawing
+  # they already associate with the thing.
+  engine-torrent = "cod-magnet";
+
   # Buffer state, in the left cluster.
   modified = "cod-circle_filled";
   readonly = "cod-lock";

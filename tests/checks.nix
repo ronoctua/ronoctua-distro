@@ -51,6 +51,12 @@
   tokensRs,
   mimeDb,
   niriActions,
+  # The C border in front of libtorrent, which carries the `sizeof` table the
+  # layout check compares the Rust against.
+  torrentShim,
+  # The browser extension, already generated: the fingerprint check reads its
+  # manifest, and the literal check reads the sources it was built from.
+  extension,
   # The PINNED toolchain, for the buffers' formatting: `rustfmt` from nixpkgs
   # could be another version, and two versions of a formatter are two opinions
   # about the same file.
@@ -936,6 +942,242 @@ let
   memory-instance-fast = mkCheck "memory-instance-fast" [ ] ''
     ${rust.workspace}/bin/ronoctua-bench-instance \
       ${buffers.memory}/lib/ronoctua_buffer_memory.wasm 200
+  '';
+
+  # AND ON THE FIFTH — the queue in a window, which embeds nothing either.
+  #
+  # What only this driver can prove: the cursor is an ID, and the list REORDERS
+  # underneath it. The queue sorts what is afoot above what has finished, so a
+  # job ending moves every row below it — and the key in question deletes the
+  # piece already written at the destination. The reorder is simulated between
+  # the frame and the key, which is the one place both sides of the WIT are
+  # visible at once.
+  transfers-driven = mkCheck "transfers-driven" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-transfers \
+      ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm \
+      ${../assets/i18n}
+  '';
+
+  transfers-instance-fast = mkCheck "transfers-instance-fast" [ ] ''
+    ${rust.workspace}/bin/ronoctua-bench-instance \
+      ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm 200
+  '';
+
+  # ===================================================================
+  # THE TORRENT BORDER, and the two things about it that cannot be read.
+  # ===================================================================
+
+  # THE LAYOUT, COMPARED AGAINST THE C++ COMPILER'S OWN MEASUREMENT.
+  #
+  # `#[repr(C)]` promises to ARRANGE what it was told and never to check it: a
+  # wrong width is a register with the wrong contents and produces no
+  # diagnostic at all. `CLAUDE.md` records that this cost three wrong struct
+  # layouts on `libghostty-vt`, found by hand with a twenty-line C program.
+  #
+  # `nix/torrent-shim.nix` now compiles the REAL header with the real C++
+  # compiler and writes every `sizeof` and `offsetof` down; this compares that
+  # file against the constants in the Rust. Neither side can drift alone.
+  torrent-layout-matches-cxx = mkCheck "torrent-layout-matches-cxx" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import re, sys, pathlib
+
+    measured = {}
+    for row in pathlib.Path("${torrentShim}/share/ronoctua/layout.txt").read_text().split("\n"):
+        if not row.strip():
+            continue
+        name, value = row.split()
+        measured[name] = int(value)
+
+    rust = pathlib.Path("${../crates/ronoctua-torrent/src/ffi.rs}").read_text()
+    declared = {}
+    m = re.search(r"assert_eq!\(size_of::<Status>\(\), (\d+)", rust)
+    if m:
+        declared["size"] = int(m.group(1))
+    m = re.search(r"assert_eq!\(align_of::<Status>\(\), (\d+)", rust)
+    if m:
+        declared["align"] = int(m.group(1))
+    for field, value in re.findall(r"offset_of!\(Status, (\w+)\), (\d+)", rust):
+        declared[field] = int(value)
+
+    if not declared:
+        sys.exit("ERRO: nao achei numero nenhum em ffi.rs — o teste de layout sumiu")
+
+    failed = 0
+    for name, value in sorted(measured.items()):
+        if name not in declared:
+            print(f"ERRO: o C++ mede `{name}` = {value} e o Rust nao o declara", file=sys.stderr)
+            failed = 1
+        elif declared[name] != value:
+            print(
+                f"ERRO: `{name}`: o C++ mede {value}, o Rust diz {declared[name]}."
+                " Um FFI com layout errado nao da diagnostico — da registrador"
+                " com conteudo errado.",
+                file=sys.stderr,
+            )
+            failed = 1
+    for name in declared:
+        if name not in measured:
+            print(f"ERRO: o Rust declara `{name}` e o C++ nao o mede", file=sys.stderr)
+            failed = 1
+    if failed:
+        sys.exit(1)
+    print(f"OK: {len(measured)} medidas do compilador C++ batem com as do Rust")
+    PY
+  '';
+
+  # AND THAT v2 IS NOT A CLAIM.
+  #
+  # It makes a purely-v2 torrent, hands it to a real session, and demands a v2
+  # info hash and NO v1 one — then does the same with a v1-only torrent, so a
+  # flag that were simply always true fails here too. Entirely offline: the data
+  # is already where the torrent says it is, so the session checks it against
+  # the Merkle tree of SHA-256 hashes and goes straight to seeding.
+  torrent-speaks-v2 = mkCheck "torrent-speaks-v2" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-torrent "$TMPDIR/torrent"
+  '';
+
+  # ===================================================================
+  # THE EXTENSION, and the fingerprint the owner asked about.
+  # ===================================================================
+
+  # THE FIVE WAYS A WEBSITE CAN SEE AN EXTENSION, refused in the manifest.
+  #
+  # The owner's question was exact: an extension nobody else has makes this
+  # browser unique if every site can list it. The detection vectors are known
+  # and every one of them is a manifest key — so the manifest is GENERATED with
+  # none of them, and this fails the build the day one appears.
+  extension-has-no-fingerprint = mkCheck "extension-has-no-fingerprint" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import json, pathlib, sys
+
+    m = json.loads(pathlib.Path("${extension}/share/ronoctua-extension/manifest.json").read_text())
+    forbidden = [
+        ("web_accessible_resources", "qualquer pagina consegue `fetch` de chrome-extension://"),
+        ("content_scripts", "o que ele deixa no DOM e um marcador"),
+        ("externally_connectable", "entrega `chrome.runtime` a uma origem"),
+        ("host_permissions", "acesso permanente e o que torna o resto possivel"),
+        ("declarative_net_request", "a pagina infere pela propria requisicao"),
+    ]
+    failed = 0
+    for key, why in forbidden:
+        if key in m:
+            print(f"ERRO: o manifesto ganhou `{key}` — {why}", file=sys.stderr)
+            failed = 1
+    # And the permissions: `activeTab` instead of standing access IS the whole
+    # design. Without it the only alternative is `host_permissions`.
+    if "activeTab" not in m.get("permissions", []):
+        print("ERRO: sem `activeTab` a extensao precisaria de acesso permanente", file=sys.stderr)
+        failed = 1
+    if m.get("manifest_version") != 3:
+        print("ERRO: MV2 nao tem `activeTab` com este significado", file=sys.stderr)
+        failed = 1
+    if failed:
+        sys.exit(1)
+    print(f"OK: nenhuma das cinco vias de deteccao, e {len(m['permissions'])} permissoes")
+    PY
+  '';
+
+  # AND IT PARSES.
+  #
+  # A syntax error in a service worker is the quietest failure this extension
+  # can have: Chrome loads the extension, the worker never starts, the button
+  # does nothing, and the message is behind two clicks in a page nobody has
+  # open. Eleven megabytes of esbuild at build time buys that away — and it
+  # checks the GENERATED tree, so a broken `generated.js` fails here too.
+  extension-parses = mkCheck "extension-parses" [ pkgs.esbuild ] ''
+    failed=0
+    for f in ${extension}/share/ronoctua-extension/*.js; do
+      if ! esbuild --log-level=warning --format=esm --target=chrome116 "$f" > /dev/null; then
+        echo "ERRO: $(basename "$f") nao compila — o service worker nunca subiria" >&2
+        failed=1
+      fi
+    done
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: os quatro arquivos da extensao compilam para chrome116"
+  '';
+
+  # AND NO TEXT AND NO COLOUR WRITTEN BY HAND.
+  #
+  # Invariants 8 and 9 do not stop at the browser's edge. Every word comes from
+  # `assets/i18n/*.ftl` and every colour from `assets/tokens/colors.nix`, both
+  # through the generated table — so a hex code or a sentence in the extension's
+  # own sources is a value outside the design system.
+  extension-has-no-literal = mkCheck "extension-has-no-literal" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    source = pathlib.Path("${../extension}")
+    failed = 0
+    for entry in sorted(source.iterdir()):
+        if entry.name == "generated.js":
+            continue
+        text = entry.read_text()
+        # A colour by hand, in any notation a browser would accept.
+        for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d+", text):
+            row = text[: m.start()].count("\n") + 1
+            print(
+                f"ERRO: {entry.name}:{row} tem cor a mao (`{m.group(0)}`)."
+                " Toda cor vem de assets/tokens/colors.nix (invariante 9).",
+                file=sys.stderr,
+            )
+            failed = 1
+        # UI text. What a person reads arrives through `TEXT.*`; what is left
+        # over are log messages, which nobody reads off a screen.
+        for m in re.finditer(r"textContent\s*=\s*['\"`]([^'\"`]+)", text):
+            if m.group(1).strip():
+                row = text[: m.start()].count("\n") + 1
+                print(
+                    f"ERRO: {entry.name}:{row} escreve text direto na tela."
+                    " Todo text vem de assets/i18n (invariante 8).",
+                    file=sys.stderr,
+                )
+                failed = 1
+    if failed:
+        sys.exit(1)
+    print("OK: a extensao nao carrega palavra nem cor propria")
+    PY
+  '';
+
+  # ===================================================================
+  # AND WHAT IS BORN ON THE MACHINE — invariant 13.
+  # ===================================================================
+  #
+  # Two things this work needs that may never be in a public repository: the
+  # extension's signing key, which decides its id, and aria2's RPC token. Both
+  # are generated by units declared in the flake, on the machine, and
+  # `nix/modules/secrets.nix` is explicit that "but it is encrypted" is not an
+  # argument for either.
+  secrets-are-not-in-the-repo = mkCheck "secrets-are-not-in-the-repo" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    root = pathlib.Path("${../.}")
+    failed = 0
+    # The extension's private key, in any PEM shape.
+    private = re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")
+    # And aria2's token WITH A VALUE: the line that generates it lives in the
+    # module and ends in `$secret`, which is not a secret, and the line that
+    # reads it lives in the Rust.
+    token = re.compile(r"rpc-secret\s*=\s*[A-Za-z0-9+/=]{8,}")
+    for entry in root.rglob("*"):
+        if not entry.is_file():
+            continue
+        if any(part in {".git", "target", "result"} for part in entry.parts):
+            continue
+        try:
+            text = entry.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if private.search(text):
+            print(f"ERRO: chave privada em {entry.relative_to(root)}", file=sys.stderr)
+            failed = 1
+        if token.search(text):
+            print(f"ERRO: segredo do aria2 em {entry.relative_to(root)}", file=sys.stderr)
+            failed = 1
+    if failed:
+        sys.exit(1)
+    print("OK: nem chave privada nem token — os dois nascem NA maquina")
+    PY
   '';
 
   # THE 5 MS BUDGET, on the third component too.
@@ -2428,6 +2670,12 @@ let
     ronoctua-transfers = rust.transfers;
   };
 
+  extensionVm = import ./extension-vm.nix {
+    inherit pkgs lib extension;
+    ronoctua-shell = rust.shell;
+    ronoctua-transfers = rust.transfers;
+  };
+
   keyboardVm = import ./keyboard-vm.nix {
     inherit pkgs lib;
     ronoctua = {
@@ -3548,7 +3796,7 @@ let
         )}
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: os dois lados batem, e os cinco componentes estao la"
+        echo "OK: os dois lados batem, e os seis componentes estao la"
       '';
 
   # Section 9 requires the repository to be publishable AS IT IS. A local-path
@@ -3836,6 +4084,7 @@ let
       for ours in -ronoctua-0.1.0 -niri- -libghostty-vt- -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- \
                   -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
+                  -ronoctua-buffer-transfers- \
                   -noctua-icon-theme- \
                   -noctua-iosevka-ttf-nerdfonts-; do
         grep -q -e "$ours" ${seed}/store-paths || {
@@ -3919,7 +4168,7 @@ let
                   -networkmanager- -systemd- \
                   -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
-                  -ronoctua-buffer-memory-; do
+                  -ronoctua-buffer-memory- -ronoctua-buffer-transfers-; do
         grep -q -i -e "$kept" ${minimal}/store-paths || {
           echo "ERRO: o perfil reduzido perdeu $kept, que faz parte da distro" >&2
           failed=1
@@ -4325,6 +4574,12 @@ let
     #   `.gitignore`/`.gitattributes` exist.
     # ===================================================================
     m1 = pkgs.linkFarmFromDrvs "check-m1" [
+      torrent-layout-matches-cxx
+      torrent-speaks-v2
+      extension-has-no-fingerprint
+      extension-parses
+      extension-has-no-literal
+      secrets-are-not-in-the-repo
       # "The repository has to be publishable as it is" (section 9).
       secrets-out-of-repo
       planted-secret-fails
@@ -4413,6 +4668,7 @@ let
       ;
     files-vm = filesVm;
     transfers-vm = transfersVm;
+    extension-vm = extensionVm;
     inherit
       files-actions-have-text
       files-everything-has-a-key
@@ -4476,6 +4732,14 @@ let
       lucide-instance-fast
       memory-instance-fast
       memory-driven
+      transfers-instance-fast
+      transfers-driven
+      torrent-layout-matches-cxx
+      torrent-speaks-v2
+      extension-has-no-fingerprint
+      extension-parses
+      extension-has-no-literal
+      secrets-are-not-in-the-repo
       renderer-loads-three-faces
       layout-fast
       shaping-fast
@@ -4701,6 +4965,8 @@ let
       lucide-instance-fast
       memory-instance-fast
       memory-driven
+      transfers-instance-fast
+      transfers-driven
       renderer-loads-three-faces
       # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
       # in the pixel, and the footer still responding with the application open —

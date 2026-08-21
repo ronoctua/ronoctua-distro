@@ -247,6 +247,22 @@
       # project hands the Rust.
       ghosttyVt = pkgs.callPackage ./nix/ghostty-vt.nix { };
 
+      # THE C BORDER IN FRONT OF LIBTORRENT, built on its own so that no `.cpp`
+      # has to survive `nix/rust.nix`'s file set — and so `build.rs` stays a
+      # reader of one variable. See `nix/torrent-shim.nix` for the measurement
+      # that chose libtorrent over librqbit.
+      torrentShim = pkgs.callPackage ./nix/torrent-shim.nix { };
+
+      # THE BROWSER EXTENSION, with its texts and colours GENERATED from the
+      # same `assets/i18n` and `assets/tokens` everything else reads. Invariants
+      # 8 and 9 do not stop at the browser's edge.
+      extension = pkgs.callPackage ./nix/extension.nix {
+        colorsFile = ./assets/tokens/colors.nix;
+        spaceFile = ./assets/tokens/space.nix;
+        i18nDir = ./assets/i18n;
+        source = ./extension;
+      };
+
       rust = pkgs.callPackage ./nix/rust.nix {
         inherit (inputs) crane;
         inherit
@@ -263,7 +279,8 @@
         bufferUnicode = buffers.unicode;
         bufferLucide = buffers.lucide;
         bufferMemory = buffers.memory;
-        inherit iconSuperpack ghosttyVt;
+        bufferTransfers = buffers.transfers;
+        inherit iconSuperpack ghosttyVt torrentShim;
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
         lucideFontFile = "${lucidedb.db}/NoctuaLucide.ttf";
@@ -438,6 +455,8 @@
         # The queue of everything that takes a while, and the unit that owns
         # it. After `files.nix` because what it runs is that crate's work.
         ./nix/modules/transfers.nix
+        ./nix/modules/aria2.nix
+        ./nix/modules/browser-extension.nix
         ./nix/modules/fonts.nix
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix
@@ -477,6 +496,10 @@
               # that outlives the session, and its closure should be the copy
               # and not the desktop.
               transfers = rust.transfers;
+              # The browser extension, already generated: `nix/modules/browser-extension.nix`
+              # packs and signs it on the machine, because the id comes from a
+              # key that may not live in this repository.
+              extension = extension;
             };
           };
         }
@@ -517,6 +540,14 @@
         # `docs/PENDING.md`, item 1.
         ghostty-vt = ghosttyVt;
 
+        # The shim, buildable and inspectable on its own: it carries the
+        # `sizeof` table the layout check compares the Rust against.
+        torrent-shim = torrentShim;
+
+        # The extension, unpacked and inspectable: `share/ronoctua-extension`
+        # is what Chrome is pointed at, and what the packer signs.
+        browser-extension = extension;
+
         # Merged icon theme, with manifest and coverage report.
         noctua-icon-theme = iconSuperpack;
 
@@ -524,7 +555,7 @@
         tokens-rs = tokensRs;
         mime-db = mimeDb;
         niri-actions = niriActions;
-        # THE SIX COMPONENTS, each buildable on its own.
+        # THE SEVEN COMPONENTS, each buildable on its own.
         #
         # Three of them used to be missing here, and it showed the day the
         # nested loop learned to rebuild a buffer: `nix build .#buffer-memory`
@@ -535,6 +566,7 @@
         buffer-unicode = buffers.unicode;
         buffer-lucide = buffers.lucide;
         buffer-memory = buffers.memory;
+        buffer-transfers = buffers.transfers;
         i18n-rs = i18nRs;
 
         # The shell: the two-line footer.
@@ -716,6 +748,8 @@
           mimeDb
           tokensRs
           niriActions
+          torrentShim
+          extension
           rustToolchain
           ;
       };

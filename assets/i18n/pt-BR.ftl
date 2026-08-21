@@ -1064,3 +1064,78 @@ transfers-and-more = { $name } e mais { $rest }
 transfers-into = → { $where }
 # Quantos itens, para as operações que contam coisas e não bytes.
 transfers-items = { $done } de { $total }
+
+# ---------------------------------------------------------------------------
+# A MESMA FILA, EM JANELA PRÓPRIA — `LEADER t w`, o buffer wasip2.
+#
+# Não é uma segunda implementação: é o mesmo socket, as mesmas linhas, com
+# espaço para todas de uma vez e uma tela de detalhe que a região do rodapé não
+# comporta. As teclas de dentro vivem sob `SPC m`, como as de todo buffer.
+# ---------------------------------------------------------------------------
+cmd-transfers-window = a fila de transferências, em janela
+cmd-transfers-add = baixar o que está na área de transferência
+cmd-transfers-add-media = baixar como mídia o que está na área de transferência
+transfers-nothing-copied = não há nada copiado
+transfers-not-an-address = o que está copiado não é um endereço
+transfers-queued = na fila
+cmd-transfers-hold = segurar ou soltar
+cmd-transfers-give-up = desistir
+cmd-transfers-drop = tirar da lista
+cmd-transfers-clear = limpar o que acabou
+cmd-transfers-detail = detalhe desta linha
+
+transfers-window-title = transferências
+transfers-window-detail = a transferência, campo a campo
+transfers-window-empty = nada na fila
+transfers-window-unknown = não se sabe
+transfers-window-hint = m p segura · m c desiste · m d detalha · m l limpa
+transfers-window-hint-detail = m d volta à lista · m p segura · m c desiste
+transfers-window-confirm-cancel = desistir apaga o pedaço já escrito. Enter confirma, qualquer outra tecla desiste da pergunta.
+transfers-window-asked = pedido enviado
+
+transfers-window-field-engine = quem move
+transfers-window-field-stage = situação
+transfers-window-field-errand = operação
+transfers-window-field-subject = no momento
+transfers-window-field-done = feito
+transfers-window-field-total = total
+transfers-window-field-trouble = problema
+transfers-window-field-answer = resposta
+
+# Os motores que ainda vão chegar, e as operações de rede. Estão aqui desde já
+# porque o buffer nomeia cada uma como constante — e uma palavra sem tradução
+# reprova no check em vez de aparecer na tela.
+transfers-engine-fetch = link
+transfers-engine-media = mídia
+transfers-engine-torrent = torrent
+
+transfers-work-fetch = baixar
+transfers-work-media = baixar vídeo
+transfers-work-audio = baixar áudio
+transfers-work-subtitles = baixar legenda
+transfers-work-torrent = torrent
+
+
+# ---------------------------------------------------------------------------
+# A EXTENSÃO DO NAVEGADOR.
+#
+# São QUINZE chaves e o `nix/scripts/gen-extension.py` cobra todas nas duas
+# línguas: uma que falte não vira texto em inglês, vira o nome da própria chave
+# num botão. O popup não escreve palavra nenhuma — ele monta a tela a partir
+# daqui.
+# ---------------------------------------------------------------------------
+ext-title = ronoctua
+ext-queue-up = a fila está no ar
+ext-queue-down = a fila não está no ar
+ext-video = vídeo, na melhor qualidade
+ext-audio = só o áudio
+ext-subtitles = só a legenda
+ext-scan = procurar mídia nesta página
+ext-found-none = nada encontrado nesta página
+ext-page-not-media = esta aba não tem endereço para baixar
+ext-sent = mandado para a fila
+ext-failed = a fila recusou
+ext-intercept-on = downloads vão para a fila
+ext-intercept-off = downloads ficam no navegador
+ext-send-link = baixar este link pela ronoctua
+ext-send-media = baixar a mídia desta página

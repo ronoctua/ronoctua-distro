@@ -19,58 +19,46 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
-### 0. A fila de transferências tem UM motor de quatro · grande, e em degraus
+### 0. A extensão instalada fora da Web Store não foi provada num Chrome de verdade · médio
 
-`LEADER t t` já existe: a fila é uma unidade própria, as sete operações longas do gerenciador entram
-nela, a modeline mostra ícone e porcentagem, e dá para segurar e desistir. O que existe é o motor
-**local** — o disco desta máquina. O dono pediu que esse mesmo painel seja o gerenciador de tudo o
-que se transfere, e os outros três degraus não foram feitos:
+Tudo o que é conferível já é conferido, e por check: a chave nasce na máquina, o `.crx` é assinado
+(a assinatura foi verificada com `openssl` contra a chave pública, do jeito que o Chrome verifica),
+o id da política é o id do `.crx`, e o `allowed_origins` do host de native messaging nomeia
+exatamente ele. O que **não** foi provado é o último passo: que uma build específica do Chrome
+honre `ExtensionSettings` com `installation_mode: force_installed` e um `update_url` `file://`.
 
-- **O buffer wasip2 (`t w`).** A mesma fila numa janela própria, no molde do painel de memória:
-  capacidade nova no WIT (`transfers`), `input::ledger` entrando e `effect::ask` saindo, lowering no
-  `ronoctua-runtime`, `buffers/transfers` com workspace próprio, entrada na semente e no
-  `iso-carries-the-seed`. **A tecla `t w` ainda não existe** — não há atalho pendurado no vazio.
-  - acabou quando: `t w` abre janela mostrando a MESMA fila que `t t`, e pausa e desiste por lá
+Não é código: é abrir o navegador depois de um rebuild e ver se a extensão está lá.
 
-- **Download comum e vídeo.** `aria2` (1.37.0) e `yt-dlp` (2026.07.04) **já estão instalados**
-  (`nix/modules/cli.nix`, `nix/modules/media.nix`): falta a unidade do aria2 com RPC em 127.0.0.1 e
-  `--rpc-secret` **gerado na máquina** (invariante 13), o motor que espelha o `tellActive`, o motor
-  do yt-dlp lendo `--progress-template`, e o `t a` que pergunta o endereço.
-  - acabou quando: `t a` com um link direto baixa pelo aria2 e com um link de vídeo pelo yt-dlp, e os
-    dois aparecem na mesma lista das operações locais
+- **se o Chrome recusar**, a saída honesta é carregar desempacotada uma vez pelo
+  `chrome://extensions` e escrever aqui que foi preciso. **Vigiar a pasta de downloads não conta**:
+  aquilo não pausa, não cancela e chama de transferência qualquer arquivo salvo.
+- acabou quando: um download começado no Chrome aparece em `t t` com pausa e cancelamento reais,
+  sem ninguém ter clicado em nada para instalar
 
-- **Torrent, com `librqbit` como biblioteca da unidade** — o app próprio que o dono pediu, e não o
-  `rqbit` empacotado. Traz tokio ao workspace, confinado a este binário. Mais o `.desktop` que
-  registra `x-scheme-handler/magnet` e `application/x-bittorrent`, que é o que faz um magnet chegar
-  por `xdg-open` **sem depender de extensão nenhuma**.
-  - acabou quando: um magnet clicado em qualquer lugar vira linha na fila, baixa, pausa e semeia
+### 0.1. Um download autenticado interceptado perde os cookies · médio, e talvez não se resolva
 
-- **O navegador manda para cá.** Extensão **nossa**, construída no flake (não da Web Store —
-  invariante 6), que cancela o download do Chrome e entrega a URL por **native messaging** a
-  `ronoctua-transfers`. Native messaging é o caminho limpo: sem porta TCP e sem segredo
-  compartilhado, e o manifesto em `/etc/opt/chrome/native-messaging-hosts/` é declarável em Nix.
-  - **O risco está aqui, e é anterior ao código:** instalar extensão fora da Web Store no Chrome
-    estável **não está estabelecido** — o `--load-extension` foi restringido nas versões recentes e a
-    política de instalação local varia. Este degrau começa por PROVAR isso numa VM. Se o Chrome
-    recusar, a saída honesta é ficar com o magnet e o `.torrent` por `xdg-open` mais o `t a` para
-    colar link, e escrever aqui o que faltou. **Vigiar a pasta de downloads não conta**: aquilo não
-    pausa, não cancela e chama de transferência qualquer arquivo salvo.
-  - acabou quando: um download começado no Chrome aparece em `t t` com pausa e cancelamento reais
+A extensão entrega ao aria2 a URL e nada mais. Um download que só existe com a sessão do navegador —
+atrás de login, com cookie ou cabeçalho — chega ao aria2 como 403 ou como uma página de login salva
+em disco. O contorno óbvio (ler `chrome.cookies` e repassar) custa a permissão `cookies` mais
+permissão de host permanente, que é **exatamente a via de detecção** que o desenho inteiro da
+extensão evita — e passaria os cookies da pessoa para outro processo.
 
-### 0.1. BitTorrent v2 não vem com o librqbit · grande, e decidir antes
+- **decidir antes:** vale trocar a invisibilidade por downloads autenticados? Uma terceira saída é
+  não interceptar quando a requisição levava `Cookie`, o que exigiria `webRequest` — e isso também é
+  detectável.
+- acabou quando: um download atrás de login ou termina, ou é deixado no navegador de propósito e a
+  pessoa vê por quê
 
-Medido, não suposto: no `rqbit` 8.1.1 do nixpkgs pinado, `TorrentMetaV1Info`
-(`crates/librqbit_core/src/torrent_metainfo.rs`) não tem `meta version`, `file tree` nem
-`piece layers`, e o hash é o crate `sha1w`. O único vestígio de v2 é um alias de tipo `Id32`
-comentado como *"used in Bittorrent V2"*, sem nada atrás. **V2 é trabalho DENTRO do librqbit** —
-metainfo v2, verificação Merkle com SHA-256, torrent híbrido e as extensões v2 do protocolo de peers.
+### 0.2. O `LEADER t a` lê a área de transferência, e não pergunta · pequeno
 
-- **decidir antes:** upstream, fork nosso (o invariante 3 proíbe forkar o **niri**, não uma
-  dependência), ou FFI para `libtorrent-rasterbar`, que já tem v2. O tamanho muda por um fator grande
-  entre as três.
-- acabou quando: um torrent puramente v2 baixa e verifica
+Copiar o endereço e apertar a tecla é o gesto certo na maior parte das vezes, e foi por isso que
+ficou assim: um campo pediria para colar nele, que é a mesma colagem com um passo a mais. Mas não há
+como pedir uma legenda ou só o áudio a partir do teclado — isso só existe no menu da extensão, e
+`t m` cobre apenas o vídeo.
 
-### 0.2. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
+- acabou quando: dá para escolher vídeo, áudio ou legenda sem passar pelo navegador
+
+### 0.3. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
 
 Desistir pelo painel desenrola e remove o que foi escrito; `systemctl --user stop` não — o processo
 não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo num crate que é
@@ -94,8 +82,10 @@ superou, **o invariante muda** — e isso é decisão do dono, não do agente.
 
 ### 2. O teto de 4 GiB do ISO · decidir antes
 
-`iso-fits-usb-stick` recusa um ISO maior que 4 GiB, e **ele está em 3712 MiB** — medido no gate de
-2026-08-20, com o gerenciador de arquivos dentro. Sobram **384 MiB**, ou 9,4%. O dono levantou que o
+`iso-fits-usb-stick` recusa um ISO maior que 4 GiB, e **ele está em 3720 MiB** — medido no gate de
+2026-08-21, com a fila de quatro motores e o libtorrent dentro. Sobram **376 MiB**, ou 9,2%. Os
+quatro motores custaram **8 MiB**, e não os 62,7 do fecho do libtorrent: quase tudo que ele traz
+(openssl, a `libstdc++`) já estava lá — o que é uma medição, não uma expectativa. O dono levantou que o
 teto vai apertar conforme mais aplicativos e funcionalidades entrarem, e o número diz que ele tem
 razão e que a margem é de uma feature grande, não de várias — mas
 **o número não é arbitrário e a decisão precisa do fato**: 4 GiB é o limite de

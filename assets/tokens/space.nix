@@ -104,4 +104,17 @@
     maxLines = 12;
     maxFooterPct = 40;
   };
+
+  # THE BROWSER EXTENSION'S POPUP, and this is the one block in this file
+  # measured in PIXELS rather than in cells.
+  #
+  # Everything else here is a count of terminal cells, because everything else
+  # is drawn on a cell grid. A Chrome popup is a web page and has no cells —
+  # but invariant 9 does not stop at the browser's edge, so the two numbers it
+  # needs live here with the rest rather than inside a stylesheet where nobody
+  # would look for them.
+  extension = {
+    tight = 6;
+    gap = 10;
+  };
 }

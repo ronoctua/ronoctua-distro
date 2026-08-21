@@ -2732,6 +2732,163 @@ caminho desenrola e remove o que escreveu —, mas matar é matar, e o processo 
 escrito no módulo, e o `TimeoutStopSec` é curto de propósito: uma fila que demorasse noventa segundos
 para morrer atrasaria todo logout.
 
+#### Quatro motores, e o motor sai do trabalho
+
+`Engine` tem quatro valores e `Ask::Add` não carrega nenhum: quem decide é `Work::engine()`. A
+alternativa — um campo de motor no pedido — deixaria um chamador pedir que um magnet fosse *colado*,
+e o `serve` teria de escolher em qual metade do pedido acreditar. Aqui não há do que discordar, e o
+despacho é o único `match` do arquivo.
+
+- **`Local`** — as sete operações do gerenciador, pelo `ronoctua_files::watch`.
+- **`Fetch`** — aria2, por JSON-RPC no *loopback*. **HTTP escrito à mão**, e a razão é o
+  `Cargo.lock`: a conversa inteira é um POST de um objeto pequeno para `127.0.0.1`, sem TLS, sem
+  redirecionamento e sem reuso de conexão; um cliente HTTP traria `tokio`, `hyper` e uma pilha de TLS
+  para o `Cargo.lock` que todo crate do workspace compartilha, para poupar sessenta linhas que nunca
+  vão mudar. **O segredo nunca vai em `argv`** — ali seria legível por qualquer processo em
+  `/proc/*/cmdline` — e sim num arquivo `0600` dentro do `XDG_RUNTIME_DIR`, que é `0700` e da pessoa.
+  Ele **nasce na máquina** a cada sessão (invariante 13), e o diretório ser esvaziado no logout é o
+  que faz a rotação acontecer sozinha.
+- **`Media`** — yt-dlp, como processo, **em grupo próprio**. Pausar é `SIGSTOP` no GRUPO e não no
+  processo: o yt-dlp sobe um ffmpeg para juntar as faixas, e parar só o pai deixaria o filho
+  trabalhando. É uma pausa mais honesta que matar e recomeçar, que jogaria fora a extração e bateria
+  no site de novo. O contêiner é **MKV**, e não é preferência: as faixas boas do YouTube são VP9 ou
+  AV1 com Opus, que não cabem em MP4 — forçar MP4 faz o yt-dlp *descer* para um par que caiba. O
+  caminho do binário vem do **ambiente**, posto pela unidade: baked por `option_env!` ele seria uma
+  referência, e arrastaria yt-dlp e ffmpeg para o perfil reduzido, onde `ronoctua.media.enable` é
+  `false` — a mesma armadilha em que o `RONOCTUA_EMACSCLIENT` caiu.
+- **`Torrent`** — uma sessão do libtorrent para TODAS as linhas, e por isso o único motor que não é
+  uma thread por trabalho: uma sessão é um objeto com porta, cache de disco e threads próprias, e
+  duas seriam duas portas e duas cópias da DHT. A thread por trabalho que o `serve` sobe apenas
+  entrega o pedido e volta.
+
+### BitTorrent v2 por FFI, e por que não foi escrito do zero
+
+O dono pediu **BitTorrent v2**. Medido no nixpkgs pinado, não suposto: o `librqbit` do `rqbit` 8.1.1
+não tem `meta version`, nem `file tree`, nem `piece layers` — o único vestígio de v2 é um alias de
+tipo com um comentário. Escrever v2 é metainfo v2, verificação Merkle com SHA-256, torrent híbrido e
+a metade v2 do protocolo de peers: trabalho de especialista, com prazo incerto.
+
+E o fecho contradiz a intuição:
+
+| | fecho | v2 hoje | `unsafe`/C++ | tokio |
+|---|---:|:---:|:---:|:---:|
+| librqbit (biblioteca) | 69,8 MiB | não | não | **sim** |
+| **libtorrent-rasterbar** | **62,7 MiB** | **sim** | sim | não |
+| qbittorrent-nox (fora do processo) | 886,7 MiB | sim | não | — |
+
+O que pesa nos daemons é Qt e Python, não o motor. O libtorrent é **mais leve que o rqbit**, fala v2
+hoje e não traz um segundo modelo de concorrência. O que se perde é a autoria do motor — o app
+continua nosso: a fila, o painel, o teclado, os textos e o `.desktop`. A troca foi feita de propósito
+e está escrita aqui porque contradiz o "criado do zero" da conversa que a originou.
+
+#### A fronteira é de seis verbos, e não da biblioteca
+
+O libtorrent são 272 cabeçalhos `.hpp` e **nenhuma ABI C**: bindá-lo seria bindar C++, que não tem
+ABI estável, tem *name mangling*, exceções e `std::shared_ptr`. O que a fila precisa são seis verbos
+— adicionar, pausar, retomar, remover, "onde está tudo" e salvar o retomar —, e isso cabe em C
+puro. `nix/torrent-shim/shim.h` é a fronteira inteira.
+
+**Nada que atravessa possui memória.** Toda string que volta é um arranjo de tamanho fixo dentro de
+um `struct` que o chamador alocou: não há `free` para esquecer nem tempo de vida para errar. Custa
+uma cópia por leitura e elimina uma classe inteira de defeito.
+
+**E `sizeof` É o contrato.** O `CLAUDE.md` já registra que `#[repr(C)]` promete ARRANJAR e não
+conferir — um tamanho errado é um registrador com o conteúdo errado, sem diagnóstico nenhum, e no
+`libghostty-vt` isso custou três layouts errados achados à mão com um programa em C. Aqui a medição
+virou check: `nix/torrent-shim.nix` compila o cabeçalho REAL com o compilador C++ real e escreve
+cada `sizeof` e cada `offsetof`; `torrent-layout-matches-cxx` compara essa tabela com as constantes
+do Rust, e nenhum dos dois lados pode andar sozinho.
+
+Uma armadilha nova, que o Ghostty não teve: **`-fvisibility=hidden` esconde o `extern "C"` também**.
+Sem ele o `.so` exporta as dezenas de milhares de símbolos que os cabeçalhos do libtorrent
+instanciam; com ele, e sem `__attribute__((visibility("default")))` nas doze funções, o link do Rust
+falha com "undefined symbol" longe da bandeira que causou.
+
+#### v2 não é alegação: há uma prova, e ela é offline
+
+"libtorrent 2.0 suporta BEP 52" é o que um changelog diz. O `ronoctua-test-torrent` faz um torrent
+**puramente v2** a partir de um diretório que ele mesmo escreveu, entrega a uma sessão de verdade, e
+exige um info hash v2 e **nenhum v1** — depois faz o mesmo com um torrent só-v1, para que uma
+bandeira que fosse simplesmente sempre verdadeira também reprovasse. Confere ainda os bytes do
+próprio `.torrent` (`meta version`, `file tree`, `piece layers`, e nenhum `pieces` do v1) e que os
+pedaços **verificam**: chegar a `seeding` com `done == total` é ter percorrido a árvore Merkle de
+SHA-256 sobre bytes em disco. Nada disso toca tracker, peer ou DHT.
+
+O hash que nomeia um torrent aqui é o v2 inteiro quando existe, e nunca o `get_best()` do libtorrent
+— que TRUNCA um SHA-256 a vinte bytes para que caminhos v1 possam carregá-lo. Truncados, dois
+torrents v2 diferentes podem colidir, e o que esse nome identifica é o que um cancelamento apaga.
+
+#### Semear é porta aberta, e um torrent pronto continua semeando
+
+A sessão escuta em 6881-6889, uma faixa fixa que `nix/modules/transfers.nix` abre no firewall e que
+a thread da sessão declara com os mesmos números. **UPnP e NAT-PMP ficam desligados**: um programa
+que pede ao roteador para abrir uma porta sozinho mudou a exposição da máquina sem ninguém decidir.
+
+A linha vai para `done` quando os bytes chegaram, e a sessão continua devolvendo-os — que é para o
+que serve um cliente de torrent. **Desistir (`C-c`) é o que para**, e leva os dados junto; tirar a
+linha da lista não para a semeadura. Isso está dito aqui e no módulo em vez de ser descoberto.
+
+### O navegador manda para cá — e a extensão não deixa rastro
+
+A pergunta do dono foi exata: uma extensão que só ele tem torna o navegador único se todo site
+puder listá-la. As vias de detecção são conhecidas, e **todas elas são chaves de manifesto**:
+
+1. **`web_accessible_resources`** — qualquer página faz `fetch('chrome-extension://<id>/x.png')`;
+2. **`content_scripts`** — o que ele deixa no DOM é um marcador que a página lê;
+3. **`externally_connectable`** — entrega `chrome.runtime` a uma origem;
+4. **`host_permissions`** — o acesso permanente é o que torna o item 2 possível em toda parte;
+5. **`declarativeNetRequest`** — a página infere pela própria requisição alterada.
+
+O manifesto é **gerado** sem nenhuma das cinco, e `extension-has-no-fingerprint` reprova o build no
+dia em que uma aparecer. O que sobra roda no *service worker*, onde JavaScript de página não
+enxerga. A interceptação é `chrome.downloads.onCreated` mais `cancel`; o menu de mídia entrega ao
+yt-dlp o endereço **da aba**, que é o que ele resolve, então o caso comum não injeta nada. A única
+injeção é o "procurar mídia nesta página", sob `activeTab`, quando se aperta o botão — e ela lê e
+volta, sem tocar em elemento, atributo ou estilo.
+
+**O que NÃO é prometido:** isso remove a detecção passiva por página; não remove a inferência
+comportamental — um download que a página provocou e que nunca aparece é um sinal. Isso não é
+consertável de dentro de uma extensão.
+
+#### Cancelar depois de perguntar, e não antes
+
+`onCreated` pergunta à fila ANTES de cancelar. Se a fila não estiver no ar, o navegador fica com o
+download: cancelar primeiro e perguntar depois perderia o arquivo toda vez que a unidade estivesse
+fora, que é o único desfecho pior do que não interceptar.
+
+#### E a porta do navegador só sabe ADICIONAR
+
+O host de native messaging aceita quatro mensagens e **nenhuma delas nomeia um id de trabalho**: não
+há como pausar, cancelar, listar ou limpar por ali. Uma página que se apoderasse da extensão não
+teria mensagem para cancelar uma cópia de quarenta gibibytes, porque ela não existe.
+
+#### Instalar fora da Web Store, sem chave no repositório
+
+O Chrome não carrega uma extensão de um diretório sem alguém ligar o modo de desenvolvedor e clicar,
+o que é imperativo e o invariante 6 recusa. O que ele faz sem ninguém clicar é honrar uma política em
+`/etc/opt/chrome/policies/managed/` — mas uma extensão *force-installed* precisa de um `.crx`
+assinado e de um id estável, e o id vem da chave de assinatura.
+
+E a chave não pode estar aqui: `nix/modules/secrets.nix` é explícito ao listar "chave SSH privada" na
+mesma frase que senha e token. Então a unidade declarada em `nix/modules/browser-extension.nix` gera
+a chave **na máquina** no primeiro boot, empacota o `.crx` que o flake construiu, deriva o id dessa
+chave e escreve os dois arquivos que o Chrome lê — a política e o manifesto do host de native
+messaging, cujo `allowed_origins` precisa do MESMO id, e é por isso que uma unidade só escreve os
+dois. É o mesmo arranjo do segredo do Wi-Fi: a unidade é declarada, o que ela produz é estado da
+máquina.
+
+O formato CRX3 está documentado em lugar nenhum conveniente, e o `nix/scripts/pack-crx.py` o escreve
+à mão: `"Cr24"`, versão, um cabeçalho protobuf com a chave pública e a assinatura, e o zip. A
+assinatura cobre `"CRX3 SignedData\0"` mais o tamanho, o `signed_header_data` e o zip — e o id são
+os dezesseis primeiros bytes do SHA-256 da chave pública DER, escritos no alfabeto `a`–`p` do
+próprio Chrome. O zip é reprodutível (data fixa, caminhada ordenada): sem isso o mesmo diretório
+empacota em dois arquivos diferentes, a assinatura muda, e cada rebuild vira uma extensão diferente.
+
+**O que não é afirmado aqui** é que uma build específica do Chrome honra um `update_url` `file://`.
+O `tests/extension-vm.nix` confere o que é conferível — a chave existe, o `.crx` está assinado, o id
+da política é o id do `.crx`, e a lista do host nomeia exatamente ele — e o `docs/PENDING.md` registra
+que o último passo é do dono, num navegador de verdade.
+
 ---
 
 ## 6. Rede, área de transferência e serviços

@@ -44,11 +44,13 @@
   xkeyboard_config,
   glibcLocales,
   ghosttyVt,
+  torrentShim,
   tzdata,
   bufferGlyphs,
   bufferUnicode,
   bufferLucide,
   bufferMemory,
+  bufferTransfers,
   iconSuperpack,
   lucideFontFile,
   primaryFontFile,
@@ -281,6 +283,11 @@ let
     # library; without it the crate compiles with the alacritty engine alone,
     # and the differential degrades to a golden file — which it says out loud.
     RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
+
+    # THE TORRENT ENGINE. `ronoctua-torrent`'s `build.rs` reads this to find the
+    # shim; without it the crate compiles with no engine at all, and the queue
+    # says a torrent job cannot be taken instead of taking one that never moves.
+    RONOCTUA_TORRENT_SHIM = "${torrentShim}";
     # WHAT THE MEMORY PANEL SPAWNS, all by store path and for the usual reason:
     # a user unit's `PATH` is minimal. `journalctl` counts how many times the
     # protection acted, and `nix` answers what the store weighs — a question
@@ -370,6 +377,7 @@ let
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
+    RONOCTUA_BUFFER_TRANSFERS = "${bufferTransfers}/lib/ronoctua_buffer_transfers.wasm";
   };
 
   # The dependencies, compiled once.

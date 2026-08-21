@@ -404,6 +404,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
             ])),
         ),
         Input::Survey(s) => ("survey", Some(val_of_survey(s))),
+        Input::Queue(q) => ("queue", Some(val_of_queue(q))),
     };
     Val::Variant(caso.to_owned(), carga.map(Box::new))
 }
@@ -464,6 +465,90 @@ const fn guard_mode_name(m: ronoctua_protocol::GuardMode) -> &'static str {
         M::Strict => "strict",
         M::Tolerant => "tolerant",
     }
+}
+
+/// The name an `engine` has in the WIT.
+const fn engine_name(e: ronoctua_protocol::Engine) -> &'static str {
+    use ronoctua_protocol::Engine as E;
+    match e {
+        E::Local => "local",
+        E::Fetch => "fetch",
+        E::Media => "media",
+        E::Torrent => "torrent",
+    }
+}
+
+/// The name a `stage` has in the WIT.
+const fn stage_name(s: ronoctua_protocol::Stage) -> &'static str {
+    use ronoctua_protocol::Stage as S;
+    match s {
+        S::Weighing => "weighing",
+        S::Running => "running",
+        S::Paused => "paused",
+        S::Done => "done",
+        S::Failed => "failed",
+        S::Cancelled => "cancelled",
+    }
+}
+
+/// The name an `errand` has in the WIT.
+const fn errand_name(e: ronoctua_protocol::Errand) -> &'static str {
+    use ronoctua_protocol::Errand as E;
+    match e {
+        E::Copy => "copy",
+        E::MoveIt => "move-it",
+        E::Delete => "delete",
+        E::Shred => "shred",
+        E::Trash => "trash",
+        E::Restore => "restore",
+        E::Compress => "compress",
+        E::Extract => "extract",
+        E::Measure => "measure",
+        E::Fetch => "fetch",
+        E::Media => "media",
+        E::Audio => "audio",
+        E::Subtitles => "subtitles",
+        E::Torrent => "torrent",
+    }
+}
+
+/// And for what the counters count.
+const fn amount_name(a: ronoctua_protocol::Amount) -> &'static str {
+    use ronoctua_protocol::Amount as A;
+    match a {
+        A::Bytes => "bytes",
+        A::Items => "items",
+    }
+}
+
+/// The queue, as a `Val` the guest can receive.
+///
+/// The field order is the WIT's, and the warning above [`val_of_survey`]
+/// applies here word for word: `wasmtime` zips positionally and only then
+/// compares names. The test at the end of this file walks this shape too.
+fn val_of_queue(q: &ronoctua_protocol::Queue) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    let jobs = q
+        .jobs
+        .iter()
+        .map(|j| {
+            Val::Record(vec![
+                ("id".into(), Val::U64(j.id)),
+                ("engine".into(), Val::Enum(engine_name(j.engine).to_owned())),
+                ("errand".into(), Val::Enum(errand_name(j.errand).to_owned())),
+                ("stage".into(), Val::Enum(stage_name(j.stage).to_owned())),
+                ("amount".into(), Val::Enum(amount_name(j.amount).to_owned())),
+                ("done".into(), Val::U64(j.done)),
+                ("total".into(), Val::U64(j.total)),
+                ("subject".into(), Val::String(j.subject.clone())),
+                ("trouble".into(), Val::String(j.trouble.clone())),
+                ("answer".into(), Val::U64(j.answer)),
+            ])
+        })
+        .collect();
+
+    Val::Record(vec![("jobs".into(), Val::List(jobs))])
 }
 
 /// The survey, as a `Val` the guest can receive.
@@ -573,6 +658,11 @@ fn demand_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol
         "sweep-generations" => R::SweepGenerations,
         "sweep-store" => R::SweepStore,
         "sweep-journal" => R::SweepJournal,
+        "pause-job" => R::PauseJob,
+        "resume-job" => R::ResumeJob,
+        "cancel-job" => R::CancelJob,
+        "forget-job" => R::ForgetJob,
+        "sweep-jobs" => R::SweepJobs,
         otherwise => {
             tracing::warn!(request = otherwise, "pedido desconhecido");
             return None;
@@ -685,6 +775,7 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
                 Val::Enum(n) if n == "raw-surface" => Some(prot::Capability::RawSurface),
                 Val::Enum(n) if n == "vector" => Some(prot::Capability::Vector),
                 Val::Enum(n) if n == "system" => Some(prot::Capability::System),
+                Val::Enum(n) if n == "transfers" => Some(prot::Capability::Transfers),
                 // AN UNKNOWN CAPABILITY DISAPPEARS HERE, and that is the
                 // quietest failure in this file: the buffer declared it, the
                 // host did not learn to read it, and every gated effect is then
@@ -944,6 +1035,70 @@ mod tests {
             field(&readings[0], "of"),
             Some(&wasmtime::component::Val::Enum("ram-total".to_owned()))
         );
+    }
+
+    #[test]
+    fn the_queue_has_the_wit_shape_field_by_field() {
+        // THE LIST BELOW IS THE `.wit`'s ORDER, COPIED BY HAND on purpose. It
+        // is the second pair of eyes on `val_of_queue`: `wasmtime` zips a
+        // record positionally, so a field swapped in one file alone fails only
+        // when the guest is CALLED, and the message names a field rather than
+        // the swap.
+        let q = ronoctua_protocol::Queue {
+            jobs: vec![ronoctua_protocol::Job {
+                id: 7,
+                engine: ronoctua_protocol::Engine::Torrent,
+                errand: ronoctua_protocol::Errand::MoveIt,
+                stage: ronoctua_protocol::Stage::Running,
+                amount: ronoctua_protocol::Amount::Bytes,
+                done: 512,
+                total: 2048,
+                subject: "debian.iso".to_owned(),
+                trouble: String::new(),
+                answer: 0,
+            }],
+        };
+        let v = val_of_queue(&q);
+
+        assert_eq!(shape(&v), ["jobs"]);
+        let wasmtime::component::Val::List(jobs) = field(&v, "jobs").expect("jobs") else {
+            panic!("jobs nao e lista")
+        };
+        assert_eq!(
+            shape(&jobs[0]),
+            [
+                "id", "engine", "errand", "stage", "amount", "done", "total", "subject", "trouble",
+                "answer"
+            ]
+        );
+
+        // The enums cross by NAME, and `move-it` is the case that would be
+        // silently wrong if it were spelled `move` on one side only.
+        assert_eq!(
+            field(&jobs[0], "errand"),
+            Some(&wasmtime::component::Val::Enum("move-it".to_owned()))
+        );
+        assert_eq!(
+            field(&jobs[0], "engine"),
+            Some(&wasmtime::component::Val::Enum("torrent".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_queue_request_needs_the_queue_capability() {
+        // The gate that decides is the REQUEST and not the effect, because
+        // `Effect::Ask` now carries requests of two different capabilities.
+        use ronoctua_protocol::{Capability, Demand, Effect, Request};
+        let cancel = Effect::Ask(Demand {
+            what: Request::CancelJob,
+            target: 3,
+        });
+        assert_eq!(cancel.requires(), Some(Capability::Transfers));
+        let sweep = Effect::Ask(Demand {
+            what: Request::SweepStore,
+            target: 0,
+        });
+        assert_eq!(sweep.requires(), Some(Capability::System));
     }
 
     /// A demand comes back whole, and an unknown one comes back as nothing.
