@@ -35,23 +35,22 @@ Não é código: é abrir o navegador depois de um rebuild e ver se a extensão 
 - acabou quando: um download começado no Chrome aparece em `t t` com pausa e cancelamento reais,
   sem ninguém ter clicado em nada para instalar
 
-### 0.1. O PO token não é gerado aqui, e expira · médio, e decidir antes
+### 0.1. O gerador de PO token roda sem o `canvas`, e isso pode parar de bastar · pequeno
 
-Cookies dizem QUEM está pedindo; o PO token diz que quem pede é um dispositivo
-de verdade — é o papel que o OAuth fazia até o YouTube desligá-lo. O yt-dlp
-2026.07.04 carrega o arcabouço inteiro (`extractor/youtube/pot/`: registro,
-cache, a classe abstrata) e **nenhum gerador**: o token vem à mão ou de um
-plugin. Esta distro lê um de `$XDG_STATE_HOME/ronoctua/po-token`, e é só isso.
+O `canvas` está nas dependências do gerador e **nenhum arquivo sob `server/src` o
+importa** — o jsdom só o procura se uma página pedir um contexto 2D. Ele é
+instalado com `--ignore-scripts`, então a ligação nativa não é construída, e a
+saída traz uma linha dizendo isso. Medido: o token é cunhado e aceito assim
+mesmo, e o plugin lê a ÚLTIMA linha da saída, então o aviso é inofensivo.
 
-Um token colado ali vale horas. Sem ele, cookies sozinhos já resolvem restrição
-de idade, vídeo privado, clube de membros e 1080p Premium — o token muda a
-frequência com que o YouTube pede verificação, não o que é possível.
+O que isso arrisca é o dia em que o BotGuard passar a exigir uma impressão de
+canvas de verdade: aí os tokens seriam recusados, e o sintoma apareceria como
+vídeo que não baixa, não como erro do gerador.
 
-- **decidir antes:** trazer o `bgutil-ytdlp-pot-provider` (precisa de Node ou de
-  um servidor HTTP ao lado, e é uma dependência nova de peso), ou aceitar o
-  arquivo à mão. **OAuth2 não é uma das opções**: o próprio yt-dlp o recusa em
-  `extractor/youtube/_base.py:655` — *"Login with OAuth is no longer supported"*.
-- acabou quando: um vídeo com restrição de idade baixa sem ninguém colar nada
+- **o conserto, se chegar esse dia:** construir o `canvas` — o que traz Cairo,
+  Pango e librsvg para o fecho e roda node-gyp dentro do sandbox. Não vale
+  pagar isso por uma sonda que hoje não é usada.
+- acabou quando: ou o aviso some, ou está escrito aqui que ele parou de bastar
 
 ### 0.2. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
 

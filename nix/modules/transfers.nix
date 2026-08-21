@@ -118,6 +118,44 @@ in
       '';
     };
 
+    # THE DEVICE ATTESTATION, and the reason it is a switch rather than always
+    # on.
+    #
+    # A PO token says the request comes from a real device — the job OAuth2 did
+    # until YouTube removed it. It is NOT about identity: an anonymous download
+    # gets one bound to a visitor id minted on the spot, which is exactly the
+    # case YouTube increasingly refuses without one.
+    #
+    # What it costs is 53,6 MiB — the minter and its vendored JavaScript.
+    # Measured, and smaller than it looks: minting runs Google's BotGuard
+    # challenge and therefore needs a JavaScript runtime, but `nix why-depends`
+    # says Deno is ALREADY in the closure because nixpkgs' own yt-dlp depends on
+    # it. So the runtime is paid for either way, and this option adds only the
+    # minter. It is still off by default: it is a subprocess per token on a
+    # machine that may never download a video.
+    #
+    # `on-demand` IS THE ONLY MODE, and the name is the promise: the minter is a
+    # SCRIPT that runs once per token and exits. Upstream also ships an HTTP
+    # server that stays resident and caches; `nix/pot-provider.nix` deliberately
+    # does not install that half, so there is no port, no resident process, and
+    # nothing anybody has to remember to stop.
+    poToken = lib.mkOption {
+      type = lib.types.enum [
+        "none"
+        "on-demand"
+      ];
+      default = "none";
+      description = ''
+        Se esta instalacao gera PO token para o yt-dlp.
+
+        `on-demand` roda o gerador por pedido e ele sai; nada fica de pe. Os
+        tokens ficam num cache sob `XDG_CACHE_HOME`, entao o custo de alguns
+        segundos e pago uma vez por alguams horas, e nao por download.
+
+        Custa Deno e o gerador no fecho — por isso o padrao e `none`.
+      '';
+    };
+
     cookiesFile = lib.mkOption {
       type = lib.types.str;
       default = "%h/.config/ronoctua/cookies.txt";
@@ -189,6 +227,14 @@ in
         }
         // lib.optionalAttrs (cfg.cookies == "file") {
           RONOCTUA_COOKIES_FILE = cfg.cookiesFile;
+        }
+        # BOTH OR NEITHER: the minter is TypeScript and needs the runtime that
+        # reads it. The Rust refuses half a pair rather than producing a plugin
+        # that finds no runtime and says so once per download.
+        // lib.optionalAttrs (cfg.poToken == "on-demand") {
+          RONOCTUA_POT_HOME = "${ronoctua.potProvider}/server";
+          # THE PATH AND NOT THE NAME — a unit's `PATH` is minimal.
+          RONOCTUA_DENO = lib.getExe pkgs.deno;
         };
       serviceConfig = {
         ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";

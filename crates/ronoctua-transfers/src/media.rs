@@ -133,6 +133,12 @@ fn arguments(
             "srt".to_owned(),
         ]),
     }
+    // THE DEVICE ATTESTATION, for EVERY media job and not only the identified
+    // ones: a PO token says the request comes from a real device, not who is
+    // making it, and the anonymous case is the one YouTube increasingly refuses
+    // without one. Empty when this installation has no minter.
+    out.extend(auth::pot_flags());
+
     // WHO IS ASKING, and only when the request said so. Empty for the default,
     // which is anonymous — see `crate::auth`.
     out.extend(auth::yt_dlp_flags(identity, cookies));

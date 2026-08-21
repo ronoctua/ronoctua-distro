@@ -57,6 +57,8 @@
   # The browser extension, already generated: the fingerprint check reads its
   # manifest, and the literal check reads the sources it was built from.
   extension,
+  # The PO token minter, so the check can prove there is no server half in it.
+  potProvider,
   # The PINNED toolchain, for the buffers' formatting: `rustfmt` from nixpkgs
   # could be another version, and two versions of a formatter are two opinions
   # about the same file.
@@ -1076,6 +1078,86 @@ let
     print(f"OK: nenhuma das cinco vias de deteccao, e {len(m['permissions'])} permissoes")
     PY
   '';
+
+  # THE PO TOKEN MINTER RUNS AND EXITS, and there is no server half at all.
+  #
+  # The owner asked for a minter that runs only when needed and leaves nothing
+  # behind. That is a promise about a SHAPE, so it is checked as one: upstream
+  # ships two providers, an HTTP one that wants a resident server and a script
+  # one that does not, and `nix/pot-provider.nix` installs only the second. A
+  # future edit that installed the other half would give this system a port and
+  # a process without anybody deciding to.
+  #
+  # It also runs the thing, OFFLINE. `--version` reaches the script through
+  # Deno, resolves every bare import out of the vendored `node_modules`, and
+  # exits — inside a sandbox with no network, which is what proves that the
+  # runtime and its dependencies are all in the closure rather than fetched on
+  # first use. And it compares the version with the plugin's, because a skew
+  # between the two is a warning upstream prints and nobody reads.
+  pot-provider-is-script-only =
+    let
+      closure = pkgs.closureInfo { rootPaths = [ potProvider ]; };
+    in
+    mkCheck "pot-provider-is-script-only"
+      [
+        pkgs.deno
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        home=${potProvider}/server
+        plugin=${potProvider}/plugin/yt_dlp_plugins/extractor
+        failed=0
+
+        # ---- NO SERVER HALF ----
+        if [ -e "$plugin/getpot_bgutil_http.py" ]; then
+          echo "ERRO: o provedor HTTP foi instalado — isso pede um servidor de pe" >&2
+          failed=1
+        fi
+        test -f "$plugin/getpot_bgutil_script.py" || {
+          echo "ERRO: o provedor de script sumiu" >&2
+          failed=1
+        }
+        # A namespace package has no `__init__.py`; with one, yt-dlp's plugin
+        # finder does not see it and the whole thing is silently absent.
+        if [ -e ${potProvider}/plugin/yt_dlp_plugins/__init__.py ]; then
+          echo "ERRO: yt_dlp_plugins deixou de ser namespace package" >&2
+          failed=1
+        fi
+
+        # ---- NODE IS NOT IN THE CLOSURE ----
+        #
+        # It is a build tool here: what runs is Deno. Measured — the reference
+        # arrived through shebangs of command-line entry points nothing
+        # executes, and it was 249 MiB.
+        if found=$(grep -e "-nodejs-" ${closure}/store-paths); then
+          echo "ERRO: o gerador arrasta o node, que ele nunca roda:" >&2
+          echo "$found" >&2
+          failed=1
+        fi
+
+        # ---- AND IT RUNS, WITH NO NETWORK ----
+        export DENO_NO_PROMPT=1 DENO_NO_UPDATE_CHECK=1 FORCE_COLOR=false
+        export DENO_DIR="$TMPDIR/deno" XDG_CACHE_HOME="$TMPDIR/cache"
+        mkdir -p "$TMPDIR/cache/bgutil-ytdlp-pot-provider"
+        got=$(deno run --allow-env --allow-net \
+          --allow-ffi="$home/node_modules" \
+          --allow-write="$TMPDIR/cache/bgutil-ytdlp-pot-provider" \
+          --allow-read="$TMPDIR/cache/bgutil-ytdlp-pot-provider,$home/node_modules" \
+          "$home/src/generate_once.ts" --version 2>&1 | tail -1) || {
+          echo "ERRO: o gerador nao roda sem rede — falta algo no fecho" >&2
+          echo "$got" >&2
+          exit 1
+        }
+        want=$(grep -oP "__version__ = '\K[^']+" "$plugin/getpot_bgutil.py")
+        if [ "$got" != "$want" ]; then
+          echo "ERRO: o script diz $got e o plugin diz $want; um aviso por download" >&2
+          failed=1
+        fi
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: so o provedor de script, versao $got, e ele roda sem rede"
+      '';
 
   # THE APP DOES NOT DEPEND ON THE EXTENSION.
   #
@@ -4652,6 +4734,7 @@ let
       extension-has-no-fingerprint
       extension-parses
       downloads-do-not-need-the-extension
+      pot-provider-is-script-only
       extension-has-no-literal
       secrets-are-not-in-the-repo
       # "The repository has to be publishable as it is" (section 9).
@@ -4813,6 +4896,7 @@ let
       extension-has-no-fingerprint
       extension-parses
       downloads-do-not-need-the-extension
+      pot-provider-is-script-only
       extension-has-no-literal
       secrets-are-not-in-the-repo
       renderer-loads-three-faces

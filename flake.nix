@@ -253,6 +253,11 @@
       # that chose libtorrent over librqbit.
       torrentShim = pkgs.callPackage ./nix/torrent-shim.nix { };
 
+      # THE PO TOKEN MINTER, in its script shape: it runs when a token is
+      # needed and exits. See `nix/pot-provider.nix` for why the server half is
+      # deliberately not installed.
+      potProvider = pkgs.callPackage ./nix/pot-provider.nix { };
+
       # THE BROWSER EXTENSION, with its texts and colours GENERATED from the
       # same `assets/i18n` and `assets/tokens` everything else reads. Invariants
       # 8 and 9 do not stop at the browser's edge.
@@ -500,6 +505,10 @@
               # packs and signs it on the machine, because the id comes from a
               # key that may not live in this repository.
               extension = extension;
+              # The PO token minter. Referenced only when
+              # `ronoctua.transfers.poToken` asks for it, so a machine that
+              # never downloads a video does not carry Deno.
+              potProvider = potProvider;
             };
           };
         }
@@ -543,6 +552,7 @@
         # The shim, buildable and inspectable on its own: it carries the
         # `sizeof` table the layout check compares the Rust against.
         torrent-shim = torrentShim;
+        pot-provider = potProvider;
 
         # The extension, unpacked and inspectable: `share/ronoctua-extension`
         # is what Chrome is pointed at, and what the packer signs.
@@ -750,6 +760,7 @@
           niriActions
           torrentShim
           extension
+          potProvider
           rustToolchain
           ;
       };

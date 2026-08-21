@@ -2851,10 +2851,74 @@ A linha seguinte recusa senha também. O `_youtube_login_hint` que ele aponta di
 
 O papel que o OAuth fazia — provar que quem pede é um dispositivo de verdade —
 passou para o **PO token**. O yt-dlp carrega o arcabouço inteiro
-(`extractor/youtube/pot/`) e **nenhum gerador**: um token vem à mão ou de um
-plugin. Esta distro lê `$XDG_STATE_HOME/ronoctua/po-token`, uma linha por token,
-na grafia `CLIENT.CONTEXT+TOKEN` do próprio yt-dlp — copiada sem tradução no
-meio, porque um passo de tradução é um passo que pode estar errado.
+(`extractor/youtube/pot/`) e **nenhum gerador**: cunhar um token é executar o
+desafio BotGuard do Google, que é JavaScript ofuscado.
+
+#### O gerador roda quando é preciso e sai — e essa é a forma, não um detalhe
+
+`ronoctua.transfers.poToken = "on-demand"` liga o gerador; o padrão é `none`.
+
+O custo é **53,6 MiB**, e ele é menor do que parece — o que foi medido, e não
+suposto. Cunhar exige um runtime de JavaScript, e a primeira conta que fiz
+somava os 182,6 MiB do Deno; o `nix why-depends` disse outra coisa:
+
+```
+nixos-system → system-path → yt-dlp-2026.07.04 → deno-2.8.3
+```
+
+O yt-dlp do nixpkgs **já depende do Deno** (ele o usa para decifrar assinatura),
+então o runtime está pago de qualquer jeito e esta opção acrescenta só o
+gerador. Continua desligada por padrão porque é um subprocesso por token numa
+máquina que pode nunca baixar vídeo — não porque pese.
+
+Upstream oferece duas formas, e a escolha entre elas é a razão de
+`nix/pot-provider.nix` existir:
+
+- um **servidor HTTP** que fica de pé e faz cache — rápido na repetição, e um
+  processo residente pela sessão inteira;
+- um **script**, invocado uma vez por token, que imprime o token e sai.
+
+A segunda é a empacotada, e a primeira é **deliberadamente deixada de fora**: o
+`getpot_bgutil_http.py` não é instalado, então não existe caminho de código que
+procure um servidor, não há porta, e não há nada para ninguém lembrar de
+encerrar. O custo são alguns segundos na primeira vez que um vídeo precisa de
+token; eles ficam num cache sob `XDG_CACHE_HOME` e valem horas.
+
+`pot-provider-is-script-only` confere isso como forma: reprova se a metade
+servidora aparecer, e — dentro do sandbox, **sem rede** — roda o gerador e
+compara a versão dele com a do plugin. Rodar sem rede é o que prova que Deno e
+todas as dependências estão no fecho em vez de serem buscadas no primeiro uso.
+
+#### Deno, e não Node
+
+Não é preferência. O caminho do Node quer `build/generate_once.js`, o que
+significa compilar o TypeScript com swc — um passo de build, uma toolchain, e
+uma segunda coisa para manter em dia. O Deno lê `src/generate_once.ts` como
+está. O próprio plugin concorda: pontua Deno 20 e Node 10, e pega o maior.
+
+E o Node **não entra no fecho**, embora o `npm` seja usado para montar o
+`node_modules`. Medido: 302,8 MiB contra 53,6 depois de tirá-lo, e a referência
+chegava por shebangs de utilitários de linha de comando dentro do
+`node_modules` que nada aqui executa. `disallowedReferences` o cobra.
+
+#### O token do gerador NÃO é a mesma coisa que o token colado à mão
+
+Um PO token não diz quem você é: diz que quem pede é um dispositivo de verdade.
+Sem conta, o gerador o vincula a um *visitor id* criado na hora — então o
+download anônimo continua anônimo e ganha a atestação que o YouTube passou a
+exigir dos clientes padrão. Por isso o **gerador vale para todo download de
+mídia**, e não só para os identificados: o anônimo é o caso comum e é
+justamente o que quebra sem ele.
+
+O arquivo `$XDG_STATE_HOME/ronoctua/po-token` é o oposto e continua atrás do
+`t i`: alguém o colou, então ele está vinculado à sessão em que foi cunhado, e
+mandá-lo num pedido anônimo prenderia essa sessão a ele. Uma linha por token, na
+grafia `CLIENT.CONTEXT+TOKEN` do próprio yt-dlp — copiada sem tradução no meio,
+porque um passo de tradução é um passo que pode estar errado.
+
+As duas chaves de `--extractor-args` são diferentes de propósito
+(`youtubepot-bgutilscript:` e `youtube:`): o yt-dlp indexa essa opção por
+extrator, e duas para a MESMA chave se substituem.
 
 #### O prefixo é a escolha, e não um interruptor
 
