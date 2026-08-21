@@ -30,6 +30,31 @@
   notification-pending = "cod-bell_dot";
   notification-muted = "cod-bell_slash";
 
+  # TRANSFERS — the queue of everything that takes a while (LEADER t).
+  #
+  # The segment sits next to the notification's, which is why this one is a
+  # Codicon too: two glyphs from different families side by side in the same
+  # line read as two different weights, and the modeline is where that shows
+  # most.
+  transfer = "cod-arrow_swap";
+
+  # THE BAR, and it is two glyphs because a cell grid has no stretching.
+  #
+  # A progress bar here is not a rectangle somebody resizes: the cell is the
+  # unit, so the bar is N cells of one glyph followed by the rest of the other.
+  # Invariant 9 reaches the codepoint, which is why these are tokens and not two
+  # characters written into the Rust.
+  progress-done = "md-rectangle";
+  progress-left = "md-rectangle_outline";
+
+  # The stages. `done` and `failed` deliberately reuse `success` and `error`
+  # above: the same drawing in two roles is already this file's rule, and a
+  # second check mark would be a second thing to keep in step.
+  transfer-weighing = "md-progress_clock";
+  transfer-running = "cod-sync";
+  transfer-paused = "cod-debug_pause";
+  transfer-cancelled = "cod-circle_slash";
+
   # Buffer state, in the left cluster.
   modified = "cod-circle_filled";
   readonly = "cod-lock";

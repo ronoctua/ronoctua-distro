@@ -2473,6 +2473,15 @@ ambos. **O que ele fazia continua acontecendo**: abrir um arquivo de texto no ge
 buffers da sessão. E ele pode NÃO estar instalado (o perfil `minimal` o deixa de fora), então a
 ausência vira uma frase na tela e não um silêncio.
 
+**E o caminho vem do AMBIENTE, não de um `option_env!` — a segunda vez que esta armadilha custou.**
+Assado no binário, o caminho do Emacs virava referência que o workspace carregava para dentro de
+TODA closure: `ronoctua.editor.emacs = false` tirava o pacote do `systemPackages` e deixava o Emacs
+inteiro no sistema assim mesmo. O comentário que estava ali dizia, em tantas palavras, *"ele pode
+estar ausente"* — que é exatamente a forma de um interruptor que não interrompe. É a mesma armadilha
+do superpacote de ícones, com a mesma saída: quem põe a variável é o `nix/modules/emacs.nix`, dentro
+do próprio `mkIf`, e o `nix/dev.nix` para o laço aninhado. Quem perguntou foi o
+`profile-minimal-closes`, no gate — e a resposta veio do `nix why-depends`, não de leitura de código.
+
 #### Uma pergunta vaga e duas respostas em chave crua
 
 "Tem certeza?" não diz de quê, e quando ela aparece a linha que foi clicada já saiu da tela. Hoje a
@@ -2617,6 +2626,111 @@ bloco que ninguém recupera —, e o `fstrim` é o único passo que fala com o c
 - **O menu mostrava `files-open`.** Chave crua na tela, que é a forma exata que o invariante 8 existe
   para recusar. Ela apareceu porque `rows()` não recebia o pacote de textos; passar a recebê-lo é o
   que faz `Field::text` ser sempre uma string pronta.
+
+---
+
+### A fila de transferências — `LEADER t t`, e por que ela é uma UNIDADE
+
+Sete operações do gerenciador subiam uma thread e trabalhavam em silêncio: colar, apagar,
+sobrescrever, lixeira, comprimir, extrair e medir pasta. A única coisa que a tela dizia sobre
+qualquer uma delas era a listagem se atualizando quando acabava — inclusive no `shred`, que escreve
+três vezes o arquivo e é a mais lenta de todas. Colar 40 GiB não dizia **nada**.
+
+#### A fila não pode viver no rodapé, e não é preferência
+
+Duas razões, e cada uma se sustenta sozinha.
+
+**A mesma lista tem de ser vista de TRÊS processos.** O rodapé desenha a porcentagem na modeline e o
+painel na região expandida; a janela do gerenciador é um `exec` do próprio binário, e portanto outro
+processo inteiro; e o buffer wasip2 será um terceiro. Uma fila dentro do rodapé seria invisível para
+os outros dois, e cada um acabaria criando a sua.
+
+**E uma cópia de 40 GiB não pode morrer com o rodapé.** No `nix run .#dev` o rodapé reinicia **a cada
+edição de arquivo**; na máquina instalada ele tem `Restart=on-failure` com um segundo — o que está
+certo para uma tela e errado para uma hora de cópia.
+
+Por isso `ronoctua-transfers` é um serviço de usuário, com o binário **extraído** do workspace
+(`rust.transfers`). O check `transfers-unit-is-narrow` mede a closure: dezesseis caminhos, e nenhum
+deles desenha. Com `rust.shell` no lugar seriam mesa e o carregador Vulkan dentro de uma unidade que
+nunca abre janela — e nada falharia, que é exatamente por que existe um check.
+
+#### O socket fala JSON, e é o único do projeto que fala
+
+O socket de controle do rodapé fala palavras separadas por espaço, e o `rsplit_once(' ')` que existe
+lá é um remendo: a sequência (`m f s`) tem espaços e o id não, e dividir no primeiro devolvia um par
+plausível que listava uma tecla e não rodava nada.
+
+Aqui o que atravessa são **caminhos**, e depois serão URLs. Um caminho carrega espaço, dois-pontos,
+quebra de linha — e bytes que não são texto nenhum. Uma gramática de espaços perderia metade sem
+dizer nada.
+
+E um caminho **não é uma string**. `serde_json` serializa `PathBuf` por `to_str()` e **falha** num
+nome que não é UTF-8: um gerenciador que levasse caminhos como texto recusaria copiar um arquivo
+vindo de um disco Windows, e recusaria no socket, três processos longe de quem pediu. Por isso o
+caminho vai como texto quando É texto e como bytes quando não é — o caso normal continua legível num
+`socat`, e o esquisito continua correto. O teste que fecha isso manda um `nome-\xFF-torto` pelo
+socket de verdade e confere os bytes na volta.
+
+**O invariante 11 continua inteiro:** o JSON morre no host. Um buffer wasm recebe registros tipados
+pelo WIT e não tem parser.
+
+#### A cópia continua sendo do kernel — o que mudou foi o tamanho da mordida
+
+`std::fs::copy` é `copy_file_range` por baixo, e no btrfs isso é cópia **do lado do servidor**: o
+sistema de arquivos compartilha as extensões em vez de mover bytes por este processo. Trocá-la por um
+laço de `read`/`write` para ganhar um número de progresso teria deixado toda cópia dentro do disco
+dramaticamente mais lenta — pagando segundos por uma porcentagem.
+
+Então a chamada fica e o que muda é o TAMANHO: oito mebibytes por vez, com o interruptor e o contador
+lidos no meio. **Medido em 2026-08-21, um gibibyte no btrfs desta máquina: 153 ms numa chamada só
+contra 178 ms em mordidas** — dezesseis por cento, e o que sobra são 128 syscalls onde havia uma. Um
+laço de `read`/`write` estaria dez a cem vezes pior, que é a ordem de grandeza que o número existe
+para separar. E a queda para `read`/`write` não é enfeite — `copy_file_range` recusa entre sistemas
+de arquivos em kernel antigo (`EXDEV`), recusa o que não é arquivo comum (`EINVAL`) e em alguns não
+existe (`ENOSYS`) —, e o caso interessante, copiar para um pendrive, é justamente o que atravessa.
+
+#### Desistir APAGA o pedaço, e essa é a razão de o botão existir
+
+`free_name` garante que não havia nada no destino antes, então tirar o que foi escrito não pode levar
+o arquivo de ninguém. Sem isso, "colei 40 GiB na pasta errada" viraria "colei 19 GiB na pasta
+errada", que é o mesmo problema com um número menor.
+
+**Pausar não é parar.** O interruptor tem três estados e dois deles encerram a operação se
+`allowed` for escrito com um `if` só — o teste `pausing_holds_and_resuming_finishes` é o que separa
+os dois, e ele solta a pausa de OUTRA thread, que é o arranjo que a fila tem de verdade.
+
+#### O cursor do painel é um ID, nunca uma linha
+
+A lista **reordena por baixo**: o que ainda acontece fica acima do que acabou, então no instante em
+que uma cópia termina toda linha abaixo dela se move. Um cursor que estava na linha três apontaria
+para outro trabalho sem a mão ter saído do lugar — e o `C-c` seguinte desistiria da transferência
+errada.
+
+#### A modeline some em repouso, e o sino não
+
+O sino é o **único** indicador de que há algo pendente: uma tela sem ele diz "nada está esperando", e
+ela precisa poder dizer isso — encolhe, nunca desaparece. O segmento das transferências aparece
+porque algo está acontecendo; em repouso seria uma coluna gasta com `0%`, para sempre, em toda tela.
+
+Mas ele **fica quando algo falhou**. Uma cópia que morreu há dois minutos não deixa nada correndo, e
+um segmento que só mostrasse trabalho em curso tiraria a falha da tela antes de alguém ver.
+
+E a média é média, não soma: um contador conta bytes e outro conta entradas. Somar dá um número em
+coisa nenhuma — um arquivo de um gibibyte mais três entradas apagadas leria `1073741827` de algo.
+
+#### O que a fila não faz
+
+Não desenha, não traduz e não toca o disco: toda operação local é do `ronoctua_files::watch`,
+vigiada. O rótulo de uma linha sai como CHAVE de texto mais dado (`Work::word`, `Stage::word`), e
+quem tem o pacote monta a frase — invariante 8. O check `transfers-words-are-total` cobra as duas
+línguas para cada palavra, porque a chave é **montada em runtime** e é portanto uma das que a seção
+das sete derivadas descreve: uma variante nova não falha a compilação, ela desenha a chave crua na
+tela.
+
+**Uma unidade morta por `SIGTERM` deixa o pedaço no destino.** Desistir pelo painel não — aquele
+caminho desenrola e remove o que escreveu —, mas matar é matar, e o processo não tem tratador. Está
+escrito no módulo, e o `TimeoutStopSec` é curto de propósito: uma fila que demorasse noventa segundos
+para morrer atrasaria todo logout.
 
 ---
 
@@ -3004,7 +3118,13 @@ por isso a marca de "já tentei" é posta *antes* de saber se deu certo.
 
 ### O histórico de clipboard
 
-`LEADER c` abre, na região abaixo do minibuffer, o histórico à esquerda e — separado por uma régua,
+`c` virou GRUPO: a captura de tela era `t c`, e `t` passou a ser a fila de transferências. O dono
+escolheu onde ela cairia — `c` de CAPTURA, que é o que as duas coisas embaixo dele fazem: o clipboard
+captura o que se copia, a tela captura o que se vê. Custou uma tecla ao histórico (`c` virou `c c`),
+que é a convenção que este keymap já usa em todo prefixo com um segundo item — `r r`, `f f`,
+`TAB TAB`.
+
+`LEADER c c` abre, na região abaixo do minibuffer, o histórico à esquerda e — separado por uma régua,
 que é a única divisão que o projeto usa (invariante 15) — o conteúdo do item, o que ele é, o estado
 do ClipCascade e as ações à direita. É o **quinto** modo da mesma superfície, ao lado do which-key,
 do `M-x`, do manual e do histórico de notificações: nenhuma janela nova, nenhum popup

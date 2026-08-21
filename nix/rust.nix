@@ -29,7 +29,6 @@
   coreutils,
   util-linux,
   xdg-utils,
-  emacs30,
   systemd,
   btop,
   bottom,
@@ -188,22 +187,26 @@ let
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.
     RONOCTUA_XDG_OPEN = "${xdg-utils}/bin/xdg-open";
-    # THE EDITOR OF THIS DISTRO, which is Emacs — and `emacsclient`, not
-    # `emacs`, because `nix/modules/emacs.nix` runs it as a DAEMON: a second
-    # process would take seconds to start and would not see the buffers the
-    # session already has.
+    # `RONOCTUA_EMACSCLIENT` IS NOT SET HERE, and its absence is the point —
+    # the same point `RONOCTUA_ICONS` makes below, learned twice.
     #
-    # `-c` (a frame of its own) rather than `-nw`: the manager is a graphical
-    # thing and what it opens has to be one too.
+    # THE EDITOR OF THIS DISTRO IS EMACS, and the manager opens text with
+    # `emacsclient` — not `emacs`, because `nix/modules/emacs.nix` runs it as a
+    # DAEMON: a second process would take seconds to start and would not see the
+    # buffers the session already has. `-c` (a frame of its own) and not `-nw`:
+    # the manager is a graphical thing and what it opens has to be one too.
     #
-    # There USED TO BE a text editor of our own, a wasm buffer, and it existed
-    # only because `LEADER f f` promised to open a file and did nothing. It was
-    # never asked for and it was never going to be Emacs; with `f f` opening the
-    # manager, its one reason was gone. See docs/ARCHITECTURE.md.
+    # Baked in with `option_env!`, its store path became a reference the
+    # workspace carries into EVERY closure — and `ronoctua.editor.emacs = false`
+    # in the `minimal` profile removed the package from `systemPackages` and left
+    # all of Emacs in the system anyway. The comment that used to sit here even
+    # said "it may be ABSENT", which is exactly the shape of a switch that does
+    # not switch. `nix why-depends` said so; `profile-minimal-closes` is what
+    # asked the question.
     #
-    # It may be ABSENT — `ronoctua.editor.emacs` is off in the `minimal`
-    # profile — and the caller says so rather than failing quietly.
-    RONOCTUA_EMACSCLIENT = "${emacs30}/bin/emacsclient";
+    # It is read from the ENVIRONMENT instead, set by `nix/modules/emacs.nix` —
+    # inside its own `mkIf`, so it exists precisely when Emacs does — and by
+    # `nix/dev.nix`. Like the superpack, this is data the shell can do without.
     # THE TWO PROCESS MONITORS — `Ctrl+Alt+Esc` / `LEADER+Esc` and `LEADER+S-Esc`.
     #
     # By store path for the usual reason, in its sharpest form: they are what one
@@ -538,6 +541,29 @@ rec {
     chmod +w $out/bin/ronoctua-files-root
     # The graphics rpath belongs to the footer; this program opens no window.
     patchelf --shrink-rpath $out/bin/ronoctua-files-root
+  '';
+
+  # THE QUEUE'S DAEMON, extracted for the reason the three above give, and for
+  # one more that is its own.
+  #
+  # This one is a UNIT that outlives the session — it is what keeps a copy of
+  # forty gibibytes alive across a footer restart. A unit whose closure carried
+  # wgpu, the wasm runtime, the renderer and three embedded fonts would be a
+  # hundred megabytes resident to copy files, and it would keep every one of
+  # those store paths alive for as long as the machine is on.
+  #
+  # A `[[bin]]` of `ronoctua-transfers`: it links `ronoctua-files`, `serde` and
+  # this crate's own queue.
+  #
+  # It is NOT how the shell finds it — that one looks next door, because the two
+  # come out of the same build and a variable holding this path would be the
+  # workspace referencing itself. See `ronoctua_transfers::client::beside_me`.
+  transfers = pkgs.runCommand "ronoctua-transfers" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-transfers $out/bin/
+    chmod +w $out/bin/ronoctua-transfers
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-transfers
   '';
 
   # Tests. A separate derivation so it can say WHAT broke.

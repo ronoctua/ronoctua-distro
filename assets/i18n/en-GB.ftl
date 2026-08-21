@@ -127,7 +127,6 @@ cmd-workspace-move-previous = Move window to previous workspace
 cmd-screen-capture = Screenshot
 group-window = window
 group-workspace = workspace
-group-screen = screen
 cmd-workspace-overview = Workspace overview
 cmd-window-float = Toggle floating
 cmd-workspace-go = Go to workspace
@@ -1013,3 +1012,58 @@ files-detail-target = points at
 files-detail-broken = points at (does not exist)
 files-restore = put back where it came from
 files-no-trash = I do not know where the trash is; nothing was moved
+
+# === The transfer queue — `LEADER t` =======================================
+#
+# Seven operations used to go off to a thread saying nothing on screen: paste,
+# delete, shred, trash, compress, extract and measure. They all join one queue
+# now, and it is that queue the modeline summarises and the panel details.
+group-transfer = transfers
+# `c` stopped being a command and became a group: the clipboard captures what
+# you copy, and the screen captures what you see.
+group-capture = capture
+
+cmd-transfers-open = the transfer queue
+# The VIEW's keys. The id IS the key, as in the file manager: `cmd-` belongs
+# to the command registry, and these are not in it.
+transfers-down = down
+transfers-up = up
+transfers-pause = hold or release this transfer
+transfers-cancel = give this transfer up
+transfers-forget = take this row off the list
+transfers-sweep = take everything finished off the list
+
+transfers-empty = nothing under way
+transfers-offline = the transfer queue is not up
+# The hint line, with the key resolved at the time — never written here.
+transfers-hint = { $pause } holds, { $cancel } gives up, { $sweep } clears what ended
+
+# What the operation IS.
+transfers-work-copy = copy
+transfers-work-move = move
+transfers-work-delete = delete
+transfers-work-shred = overwrite
+transfers-work-trash = move to the trash
+transfers-work-restore = put back from the trash
+transfers-work-compress = compress
+transfers-work-extract = extract
+transfers-work-measure = measure
+
+# Where it is.
+transfers-stage-weighing = weighing
+transfers-stage-running = under way
+transfers-stage-paused = held
+transfers-stage-done = done
+transfers-stage-failed = failed
+transfers-stage-cancelled = given up
+
+# Who moves it. For now only this machine's disk.
+transfers-engine-local = disk
+
+# The subject, when there is more than one.
+transfers-and-more = { $name } and { $rest } more
+# Where it goes. The arrow is the only drawing here, and it is not chrome: it is
+# the preposition.
+transfers-into = → { $where }
+# How many items, for the operations that count things rather than bytes.
+transfers-items = { $done } of { $total }

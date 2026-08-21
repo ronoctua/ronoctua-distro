@@ -2657,6 +2657,7 @@ dependencies = [
  "ronoctua-runtime",
  "ronoctua-term",
  "ronoctua-tokens",
+ "ronoctua-transfers",
  "serde_json",
  "smithay-client-toolkit",
  "tracing",
@@ -2679,6 +2680,18 @@ dependencies = [
 [[package]]
 name = "ronoctua-tokens"
 version = "0.1.0"
+
+[[package]]
+name = "ronoctua-transfers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-files",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "roxmltree"

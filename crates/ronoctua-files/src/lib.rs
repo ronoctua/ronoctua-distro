@@ -39,6 +39,7 @@ pub mod mime;
 pub mod mode;
 pub mod size;
 pub mod trash;
+pub mod watch;
 pub mod when;
 pub mod who;
 

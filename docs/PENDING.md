@@ -19,6 +19,66 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0. A fila de transferências tem UM motor de quatro · grande, e em degraus
+
+`LEADER t t` já existe: a fila é uma unidade própria, as sete operações longas do gerenciador entram
+nela, a modeline mostra ícone e porcentagem, e dá para segurar e desistir. O que existe é o motor
+**local** — o disco desta máquina. O dono pediu que esse mesmo painel seja o gerenciador de tudo o
+que se transfere, e os outros três degraus não foram feitos:
+
+- **O buffer wasip2 (`t w`).** A mesma fila numa janela própria, no molde do painel de memória:
+  capacidade nova no WIT (`transfers`), `input::ledger` entrando e `effect::ask` saindo, lowering no
+  `ronoctua-runtime`, `buffers/transfers` com workspace próprio, entrada na semente e no
+  `iso-carries-the-seed`. **A tecla `t w` ainda não existe** — não há atalho pendurado no vazio.
+  - acabou quando: `t w` abre janela mostrando a MESMA fila que `t t`, e pausa e desiste por lá
+
+- **Download comum e vídeo.** `aria2` (1.37.0) e `yt-dlp` (2026.07.04) **já estão instalados**
+  (`nix/modules/cli.nix`, `nix/modules/media.nix`): falta a unidade do aria2 com RPC em 127.0.0.1 e
+  `--rpc-secret` **gerado na máquina** (invariante 13), o motor que espelha o `tellActive`, o motor
+  do yt-dlp lendo `--progress-template`, e o `t a` que pergunta o endereço.
+  - acabou quando: `t a` com um link direto baixa pelo aria2 e com um link de vídeo pelo yt-dlp, e os
+    dois aparecem na mesma lista das operações locais
+
+- **Torrent, com `librqbit` como biblioteca da unidade** — o app próprio que o dono pediu, e não o
+  `rqbit` empacotado. Traz tokio ao workspace, confinado a este binário. Mais o `.desktop` que
+  registra `x-scheme-handler/magnet` e `application/x-bittorrent`, que é o que faz um magnet chegar
+  por `xdg-open` **sem depender de extensão nenhuma**.
+  - acabou quando: um magnet clicado em qualquer lugar vira linha na fila, baixa, pausa e semeia
+
+- **O navegador manda para cá.** Extensão **nossa**, construída no flake (não da Web Store —
+  invariante 6), que cancela o download do Chrome e entrega a URL por **native messaging** a
+  `ronoctua-transfers`. Native messaging é o caminho limpo: sem porta TCP e sem segredo
+  compartilhado, e o manifesto em `/etc/opt/chrome/native-messaging-hosts/` é declarável em Nix.
+  - **O risco está aqui, e é anterior ao código:** instalar extensão fora da Web Store no Chrome
+    estável **não está estabelecido** — o `--load-extension` foi restringido nas versões recentes e a
+    política de instalação local varia. Este degrau começa por PROVAR isso numa VM. Se o Chrome
+    recusar, a saída honesta é ficar com o magnet e o `.torrent` por `xdg-open` mais o `t a` para
+    colar link, e escrever aqui o que faltou. **Vigiar a pasta de downloads não conta**: aquilo não
+    pausa, não cancela e chama de transferência qualquer arquivo salvo.
+  - acabou quando: um download começado no Chrome aparece em `t t` com pausa e cancelamento reais
+
+### 0.1. BitTorrent v2 não vem com o librqbit · grande, e decidir antes
+
+Medido, não suposto: no `rqbit` 8.1.1 do nixpkgs pinado, `TorrentMetaV1Info`
+(`crates/librqbit_core/src/torrent_metainfo.rs`) não tem `meta version`, `file tree` nem
+`piece layers`, e o hash é o crate `sha1w`. O único vestígio de v2 é um alias de tipo `Id32`
+comentado como *"used in Bittorrent V2"*, sem nada atrás. **V2 é trabalho DENTRO do librqbit** —
+metainfo v2, verificação Merkle com SHA-256, torrent híbrido e as extensões v2 do protocolo de peers.
+
+- **decidir antes:** upstream, fork nosso (o invariante 3 proíbe forkar o **niri**, não uma
+  dependência), ou FFI para `libtorrent-rasterbar`, que já tem v2. O tamanho muda por um fator grande
+  entre as três.
+- acabou quando: um torrent puramente v2 baixa e verifica
+
+### 0.2. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
+
+Desistir pelo painel desenrola e remove o que foi escrito; `systemctl --user stop` não — o processo
+não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo num crate que é
+`forbid(unsafe_code)`. `TimeoutStopSec=5` limita o atraso, não a sujeira.
+
+- acabou quando: parar a unidade com uma cópia em andamento não deixa arquivo pela metade no destino
+
+
 ### 1. `ronoctua-design` não existe · decidir antes
 
 O invariante 12 nomeia `ronoctua-design` e `ronoctua-glyphdb` como componentes `wasm32-wasip2`. O

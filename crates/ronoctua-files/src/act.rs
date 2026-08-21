@@ -66,12 +66,7 @@ pub fn rename(from: &Path, to: &Path) -> Result<()> {
 /// When the source cannot be read, the destination cannot be written, or a
 /// name is already taken.
 pub fn copy_into(source: &Path, directory: &Path) -> Result<PathBuf> {
-    let name = source
-        .file_name()
-        .context("um caminho sem nome nao pode ser copiado")?;
-    let landing = free_name(&directory.join(name));
-    copy_tree(source, &landing)?;
-    Ok(landing)
+    crate::watch::copy_into(source, directory, &mut crate::watch::Watch::none())
 }
 
 /// Moves into a directory, falling back to copy-then-delete across filesystems.
@@ -85,19 +80,7 @@ pub fn copy_into(source: &Path, directory: &Path) -> Result<PathBuf> {
 /// When either half fails. A failure after the copy leaves both, which is the
 /// safe side of that choice.
 pub fn move_into(source: &Path, directory: &Path) -> Result<PathBuf> {
-    let name = source
-        .file_name()
-        .context("um caminho sem nome nao pode ser movido")?;
-    let landing = free_name(&directory.join(name));
-    match std::fs::rename(source, &landing) {
-        Ok(()) => Ok(landing),
-        Err(e) if e.raw_os_error() == Some(rustix::io::Errno::XDEV.raw_os_error()) => {
-            copy_tree(source, &landing)?;
-            remove(source)?;
-            Ok(landing)
-        }
-        Err(e) => Err(e).with_context(|| format!("mover {}", source.display())),
-    }
+    crate::watch::move_into(source, directory, &mut crate::watch::Watch::none())
 }
 
 /// Deletes, whatever it is.
@@ -110,14 +93,7 @@ pub fn move_into(source: &Path, directory: &Path) -> Result<PathBuf> {
 ///
 /// When the removal fails.
 pub fn remove(path: &Path) -> Result<()> {
-    let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("{} nao existe", path.display()))?;
-    if meta.is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    }
-    .with_context(|| format!("apagar {}", path.display()))
+    crate::watch::remove(path, &mut crate::watch::Watch::none())
 }
 
 /// How many times an overwriting delete writes over the content.
@@ -156,64 +132,7 @@ pub const PASSES: u32 = 3;
 /// operation with a different confirmation, and doing it behind this name
 /// would be a surprise.
 pub fn shred(path: &Path, passes: u32) -> Result<()> {
-    use std::io::{Seek, SeekFrom, Write};
-
-    let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("{} nao existe", path.display()))?;
-    if meta.is_dir() {
-        bail!(
-            "{} e uma pasta; sobrescrever uma arvore e outra operacao",
-            path.display()
-        );
-    }
-    if meta.is_symlink() {
-        // Overwriting through a link would destroy the target while the person
-        // was looking at the link.
-        return remove(path);
-    }
-    let size = meta.len();
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .with_context(|| format!("abrir {} para sobrescrever", path.display()))?;
-
-    // A block at a time, so a large file does not become a large allocation.
-    const BLOCK: usize = 64 * 1024;
-    for pass in 0..passes {
-        // 0x00, then 0xFF, then a pattern that varies with the pass: the three
-        // classic passes. On this hardware the pattern is not what decides
-        // anything, and a varying one costs nothing.
-        let byte = match pass % 3 {
-            0 => 0x00,
-            1 => 0xFF,
-            _ => u8::try_from(pass % 251).unwrap_or(0x5A),
-        };
-        let block = vec![byte; BLOCK];
-        file.seek(SeekFrom::Start(0)).context("voltar ao inicio")?;
-        let mut left = size;
-        while left > 0 {
-            let now = usize::try_from(left).unwrap_or(BLOCK).min(BLOCK);
-            file.write_all(&block[..now]).context("sobrescrever")?;
-            left -= now as u64;
-        }
-        // Per pass, and not once at the end: without it the passes coalesce in
-        // the page cache and only the last one ever reaches the device.
-        file.sync_all().context("sincronizar")?;
-    }
-    file.set_len(0).context("truncar")?;
-    file.sync_all().context("sincronizar")?;
-    drop(file);
-
-    // The NAME is metadata too, and it survives the content. Renaming to
-    // something meaningless before unlinking is what keeps a directory entry
-    // from saying `senhas-do-banco.txt` to whoever reads the raw device.
-    let blind = path.with_file_name(format!("{:016x}", fnv(path)));
-    let gone = if std::fs::rename(path, &blind).is_ok() {
-        blind
-    } else {
-        path.to_path_buf()
-    };
-    remove(&gone)
+    crate::watch::shred(path, passes, &mut crate::watch::Watch::none())
 }
 
 /// Asks the filesystem to tell the device which blocks are free.
@@ -468,7 +387,7 @@ pub fn weigh(path: &Path) -> u64 {
 }
 
 /// A name nothing is using, by appending a number before the extension.
-fn free_name(wanted: &Path) -> PathBuf {
+pub(crate) fn free_name(wanted: &Path) -> PathBuf {
     if wanted.symlink_metadata().is_err() {
         return wanted.to_path_buf();
     }
@@ -491,32 +410,8 @@ fn free_name(wanted: &Path) -> PathBuf {
     wanted.with_file_name(format!("{stem} ({}){extension}", std::process::id()))
 }
 
-/// Copies a file, a symlink or a whole tree.
-fn copy_tree(source: &Path, landing: &Path) -> Result<()> {
-    let meta = std::fs::symlink_metadata(source)
-        .with_context(|| format!("{} nao existe", source.display()))?;
-    if meta.is_symlink() {
-        // The LINK is copied, not what it points at. Copying the target would
-        // turn a twelve-byte shortcut into a gigabyte, which is the kind of
-        // surprise that fills a disk.
-        let target = std::fs::read_link(source)?;
-        std::os::unix::fs::symlink(target, landing)
-            .with_context(|| format!("recriar o link {}", landing.display()))?;
-        return Ok(());
-    }
-    if !meta.is_dir() {
-        std::fs::copy(source, landing).with_context(|| format!("copiar {}", source.display()))?;
-        return Ok(());
-    }
-    std::fs::create_dir_all(landing).with_context(|| format!("criar {}", landing.display()))?;
-    for child in std::fs::read_dir(source)?.flatten() {
-        copy_tree(&child.path(), &landing.join(child.file_name()))?;
-    }
-    Ok(())
-}
-
 /// A short, stable hash of a path, for the blind name a shredded file wears.
-fn fnv(path: &Path) -> u64 {
+pub(crate) fn fnv(path: &Path) -> u64 {
     use std::os::unix::ffi::OsStrExt;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in path.as_os_str().as_bytes() {

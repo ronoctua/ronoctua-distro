@@ -1,0 +1,39 @@
+[package]
+name = "ronoctua-transfers"
+description = "A fila do trabalho demorado: quem copia, quem baixa, e quem diz onde esta."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE BORDER, ONE CRATE — the same shape as `ronoctua-files`, `ronoctua-memory`
+# and `ronoctua-network`. What this one owns is the QUEUE: who is running, how
+# far along, and the switch that pauses or stops it. It does not draw, does not
+# translate and does not speak Wayland.
+[dependencies]
+# The disk. Every local operation in the queue is one of this crate's, watched —
+# there is no second implementation of "copy a tree" here.
+ronoctua-files = { path = "../ronoctua-files" }
+anyhow.workspace = true
+tracing.workspace = true
+# The wire. One JSON object per line, both ways: a path and a URL carry spaces,
+# and a whitespace grammar loses half of one without saying so — the trap
+# `leader.rs`'s `rsplit_once` already records.
+serde = { workspace = true }
+serde_json.workspace = true
+
+# THE DAEMON, as its own binary.
+#
+# A `[[bin]]` so `nix/rust.nix` can extract JUST this: a derivation references
+# what its BYTES cite, and shipping the whole workspace to run a copy would put
+# the renderer, wgpu and the wasm runtime inside a unit that has no screen.
+[[bin]]
+name = "ronoctua-transfers"
+path = "src/bin/daemon.rs"
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+[lints]
+workspace = true

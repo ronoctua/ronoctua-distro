@@ -256,6 +256,15 @@ struct Footer {
     /// when the mouse is over the surface, and knowing that requires receiving the
     /// events.
     pointer: Option<wl_pointer::WlPointer>,
+    /// The transfer queue's panel, when it is open. `None` = it is not.
+    transfers: Option<crate::transfers::View>,
+    /// The last list the queue sent, KEPT even with the panel closed.
+    ///
+    /// The modeline's segment is drawn from it, and the modeline is always on
+    /// screen. Throwing the list away when the panel closes would make the
+    /// percentage disappear the moment somebody stopped looking at the panel —
+    /// which is precisely when they want it in the corner instead.
+    jobs: Vec<ronoctua_transfers::Job>,
     /// The history of what was copied. Memory only — see `ronoctua_clipboard`.
     clipboard: ronoctua_clipboard::Queue,
     /// Is the clipboard view open in the region?
@@ -445,6 +454,14 @@ enum ViewState {
     Files,
     /// The clipboard history. Modal.
     Clipboard,
+    /// The transfer queue's panel. Modal.
+    ///
+    /// Next to the clipboard rather than next to the file manager, and the
+    /// reason is what each one HOLDS: the manager sits below the locator
+    /// because it carries a directory somebody navigated to, a set of marks and
+    /// a half-answered question. This panel carries a cursor. Reopening it
+    /// costs one keystroke and loses nothing.
+    Transfers,
     /// The shortcut manual. Modal.
     Manual,
     /// The app finder. Modal.
@@ -611,6 +628,13 @@ enum Click {
     /// `Footer::cell_under_pointer`, recorded by the same press — see
     /// `pointer_frame`.
     Files(usize),
+    /// Put the focus on line `n` of the transfer panel.
+    ///
+    /// Focus and nothing else. Every action in that panel is destructive in the
+    /// small — giving a copy up, taking a row away — and a single click that
+    /// carried one out would be the gesture nobody meant. The keys act; the
+    /// mouse aims.
+    Transfers(usize),
     /// Put the focus on line `n` of the network list.
     ///
     /// Its own variant for the same reason as `Application`: the lists share the
@@ -1309,6 +1333,8 @@ pub fn run() -> Result<()> {
         echo: None,
         mx: crate::minibuffer::Minibuffer::default(),
         pointer: None,
+        transfers: None,
+        jobs: Vec::new(),
         clipboard: ronoctua_clipboard::Queue::default(),
         clipboard_open: false,
         clip_cursor: 0,
@@ -1538,6 +1564,17 @@ pub fn run() -> Result<()> {
     })
     .map_err(|e| anyhow::anyhow!("nao consegui pendurar as notificacoes: {e}"))?;
 
+    // SIXTH SOURCE: the transfer queue. The watching thread sends the whole
+    // list every time it changes; see `crate::transfers::listen`.
+    let (envio_fila, fila_transferencias) = channel::channel::<Vec<ronoctua_transfers::Job>>();
+    crate::transfers::listen(envio_fila);
+    alca.insert_source(fila_transferencias, |event, (), state: &mut Footer| {
+        if let channel::Event::Msg(jobs) = event {
+            state.ledger_arrived(jobs);
+        }
+    })
+    .map_err(|e| anyhow::anyhow!("nao consegui pendurar a fila de transferencias: {e}"))?;
+
     // A timer to expire the notification on screen.
     //
     // One second is coarse on purpose: the resolution that matters is "it went
@@ -1617,7 +1654,40 @@ impl Footer {
             &crate::daemon::buffer_mode(&self.niri, &self.texts),
             branch.as_deref(),
             self.notifications.pending(),
+            crate::transfers::segment(&self.jobs).as_deref(),
         )
+    }
+
+    /// A new list from the queue.
+    ///
+    /// # Why it does not simply repaint
+    ///
+    /// Because the queue beats every 120 ms while a copy runs, and the segment
+    /// shows WHOLE per cent: eight of those beats out of nine change no pixel
+    /// at all. Repainting on each would put the frame cost of a copy onto every
+    /// screen in the session for a number that did not move.
+    ///
+    /// So it compares what the modeline would SAY. If the sentence is the same
+    /// and no panel is open, the list is stored and nothing is drawn.
+    fn ledger_arrived(&mut self, jobs: Vec<ronoctua_transfers::Job>) {
+        let before = crate::transfers::segment(&self.jobs);
+        // WHAT ENDED, by the same function the window door uses. Two ways of
+        // deciding "this job is over" is how the two doors come to disagree
+        // about whether to read the directory again.
+        for report in crate::transfers::what_ended(&self.jobs, &jobs) {
+            self.files_reported(report);
+        }
+        self.jobs = jobs;
+        if let Some(v) = self.transfers.as_mut() {
+            v.refresh(self.jobs.clone());
+        }
+        let changed = before != crate::transfers::segment(&self.jobs);
+        if self.transfers.is_some() {
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+        }
+        if changed || self.transfers.is_some() {
+            self.draw_and_paint();
+        }
     }
 
     /// Recomputes and logs the layout. The actual drawing comes in when the wgpu
@@ -1973,6 +2043,14 @@ impl KeyboardHandler for Footer {
         // keyboard is its — `d` removes, and does not fire `LEADER d`.
         if self.clipboard_open {
             self.clipboard_key(key.sym);
+            return;
+        }
+
+        // THE TRANSFER PANEL intercepts for the same reason: with it open the
+        // whole keyboard is its, and `C-c` gives a transfer up rather than
+        // reaching whatever `C-c` would otherwise mean.
+        if self.transfers.is_some() {
+            self.transfers_key(key);
             return;
         }
 
@@ -2631,17 +2709,25 @@ impl Footer {
     /// DAEMON: a second process would take seconds and would not see the
     /// buffers the session already has.
     fn open_editor(&mut self, file: &std::path::Path) {
-        // IT MAY NOT BE INSTALLED. `ronoctua.editor.emacs` is off in the
-        // `minimal` profile, and a file that opens nothing has to SAY so —
-        // silence here reads as a key that stopped working.
-        let Some(client) = option_env!("RONOCTUA_EMACSCLIENT") else {
+        // FROM THE ENVIRONMENT, and not from an `option_env!`.
+        //
+        // Baked in, the path is a reference the binary carries into every
+        // closure — so `ronoctua.editor.emacs = false` in the `minimal` profile
+        // removed the package from `systemPackages` and left the whole of Emacs
+        // in the system anyway. It is the trap the icon superpack already
+        // sprang once, and `profile-minimal-closes` is what caught it a second
+        // time. `nix/modules/emacs.nix` sets it, inside its own `mkIf`.
+        //
+        // IT MAY NOT BE THERE, and then a file that opens nothing has to SAY
+        // so — silence reads as a key that stopped working.
+        let Ok(client) = std::env::var("RONOCTUA_EMACSCLIENT") else {
             let m = self.texts.t(ronoctua_i18n::key::FILES_NO_EDITOR);
             self.echo_message(m);
             return;
         };
         tracing::info!(file = %file.display(), "abrindo no emacs");
         self.open_foreign(
-            client,
+            &client,
             &["-c".to_owned(), file.to_string_lossy().into_owned()],
             file.parent()
                 .map(|d| d.to_string_lossy().into_owned())
@@ -2877,6 +2963,22 @@ impl Footer {
                     args.extend(where_);
                     self.open_foreign(&me.to_string_lossy(), &args, None);
                 }
+            }
+            // THE TRANSFER QUEUE. Like the clipboard, it keeps the keyboard
+            // while it is open: without that the arrows would go to the
+            // buffers and `C-c` would never reach the row it is aimed at.
+            "transfers-open" => {
+                let mut view = crate::transfers::View::fresh_one();
+                // THE LIST IT ALREADY HAS, immediately. The daemon will send
+                // another within the frame, but a panel that opens empty and
+                // fills in a moment later reads as "nothing is running" at the
+                // exact instant somebody opened it to check.
+                view.refresh(self.jobs.clone());
+                tracing::info!(jobs = self.jobs.len(), "painel de transferencias aberto");
+                self.transfers = Some(view);
+                self.first_page();
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
             }
             "apps-open" => {
                 self.rescan_if_changed();
@@ -3358,6 +3460,51 @@ impl Footer {
         };
         let action = l.key(key);
         self.apply_app_action(action);
+    }
+
+    /// One key for the transfer panel, and what it asked for.
+    ///
+    /// The view never opens a socket — it says what to send and this sends it.
+    /// A failure to reach the queue lands on the message line rather than in
+    /// the log: the panel is on screen, and a key that did nothing needs to say
+    /// why where the person is looking.
+    fn transfers_key(&mut self, key: ronoctua_keymap::Key) {
+        let step = self
+            .transfers
+            .as_mut()
+            .map_or(crate::transfers::Step::Nothing, |v| v.key(key));
+        match step {
+            crate::transfers::Step::Nothing => {}
+            crate::transfers::Step::Changed => {
+                self.follow_cursor();
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            crate::transfers::Step::Closed => {
+                self.transfers = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            crate::transfers::Step::Send(ask) => {
+                self.tell_the_queue(&ask);
+                self.draw_and_paint();
+            }
+        }
+    }
+
+    /// Sends one ask to the queue, saying so on the message line if it cannot.
+    ///
+    /// It is `tell` and not `ask`: nothing here needs an answer, and waiting
+    /// for one would put a socket round trip inside the frame that draws. What
+    /// comes back is the LIST, through the watching thread, which is the only
+    /// thing that has to be right.
+    fn tell_the_queue(&mut self, ask: &ronoctua_transfers::Ask) {
+        if let Err(e) = ronoctua_transfers::client::tell(ask) {
+            tracing::warn!(error = %e, ?ask, "a fila de transferencias nao respondeu");
+            let said = self.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE);
+            self.echo_message(said);
+        }
     }
 
     /// What the app finder asked for, with the screen already set right.
@@ -3991,6 +4138,8 @@ impl Footer {
     const fn view(&self) -> ViewState {
         if self.clipboard_open {
             ViewState::Clipboard
+        } else if self.transfers.is_some() {
+            ViewState::Transfers
         } else if self.manual {
             ViewState::Manual
         } else if self.apps.is_some() {
@@ -4145,6 +4294,20 @@ impl Footer {
                 icon: 0,
             };
         }
+        // THE TRANSFER PANEL, for the same reason as the file manager just
+        // below: its row already resolved its own columns against the screen
+        // (`transfers::row_of`), so letting the grid spread it would lay the
+        // same row out twice, with two different answers, and draw one over the
+        // other.
+        if matches!(self.view(), ViewState::Transfers) {
+            return Grid {
+                columns: 1,
+                lines: self.expansion_ceiling().min(total.max(1)),
+                width: columns,
+                colon: 0,
+                icon: 0,
+            };
+        }
         // THE FILE MANAGER TAKES THE WHOLE WIDTH, in one column.
         //
         // Its row already resolved its own columns against the screen — see
@@ -4246,6 +4409,17 @@ impl Footer {
             // header. See `expansion_window`.
             let plain = !files.menu_open() && !files.showing_detail();
             return n + if plain { 2 } else { 0 };
+        }
+        // The panel counts without building: `expansion()` would clone every
+        // job to answer "how many", and this runs on every pointer motion —
+        // which is the half of the hover lag `rows_from` was written to end.
+        //
+        // Through `view()`, for the reason `expansion()` gives: a height taken
+        // from one view and rows from another is a region with a gap in it.
+        if matches!(self.view(), ViewState::Transfers)
+            && let Some(view) = &self.transfers
+        {
+            return view.row_count().max(1);
         }
         self.expansion().len()
     }
@@ -4373,6 +4547,42 @@ impl Footer {
                     fields: r.fields,
                     ..ExpansionRow::empty_one()
                 }))
+                .collect();
+        }
+        // THE TRANSFER PANEL. One row per job, drawn by `transfers::View` with
+        // the file manager's own `Row` and `Field` — see that module for why it
+        // does not have a second row type of its own.
+        //
+        // IT ASKS `view()`, and does not test its own field. The two are not
+        // the same question: the leader arrives from the compositor whatever is
+        // on screen, so `LEADER c c` opens the clipboard **on top of** an open
+        // panel — and then the keyboard belongs to one of them and the region
+        // would have drawn the other. That is the exact divergence `ViewState`
+        // exists to prevent, and it is why the precedence lives in one place.
+        if let Some(view) = self
+            .transfers
+            .as_ref()
+            .filter(|_| matches!(self.view(), ViewState::Transfers))
+        {
+            let rows = view.rows(self.screen_columns(), &self.texts);
+            if rows.is_empty() {
+                // "Nothing under way" is still a line. An empty region would
+                // leave the person unable to tell an empty queue from a panel
+                // that failed to open.
+                return vec![ExpansionRow {
+                    text: self.texts.t(ronoctua_i18n::key::TRANSFERS_EMPTY),
+                    text_color: tokens::color::TEXT_DIM,
+                    ..ExpansionRow::empty_one()
+                }];
+            }
+            return rows
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: Some(Click::Transfers(n)),
+                    fields: r.fields,
+                    ..ExpansionRow::empty_one()
+                })
                 .collect();
         }
         // THE CLIPBOARD beats everything else: like the manual and the `M-x`, it
@@ -5085,6 +5295,12 @@ impl Footer {
                 self.apply_app_action(action);
                 self.draw_and_paint();
             }
+            Some(Click::Transfers(n)) => {
+                if let Some(v) = self.transfers.as_mut() {
+                    v.focus_row(n);
+                    self.draw_and_paint();
+                }
+            }
             Some(Click::Network(n)) => {
                 if let Some(v) = self.network.as_mut() {
                     v.focus_on(n);
@@ -5269,6 +5485,12 @@ impl Footer {
                 let header = usize::from(!v.menu_open() && !v.showing_detail());
                 v.cursor() + header
             }),
+            // The transfer panel's, for the same reason and with no adjustment:
+            // it draws no chrome above the list, so its row IS its visual line.
+            ViewState::Transfers => self
+                .transfers
+                .as_ref()
+                .and_then(crate::transfers::View::focused_row),
             _ => None,
         }
     }
@@ -5665,7 +5887,12 @@ impl Footer {
                 return None;
             }
             Some(crate::files::hint(&self.texts))
-        });
+        })
+        // AND THE TRANSFER PANEL'S, for the same reason: its keys are chords
+        // that nothing on the row spells out, and a panel whose only way to
+        // find `C-c` is the manual is a panel where nobody ever stops
+        // anything.
+        .or_else(|| self.transfers.as_ref().map(|v| v.hint(&self.texts)));
 
         // THE VISIBLE PAGE of the expanded region.
         //
@@ -5733,6 +5960,33 @@ impl Footer {
                     .find(|f| cell >= f.at && cell < f.at + layout::width(&f.text) + 1)?;
                 let e = e.explain.clone()?;
                 Some(self.texts.t_with(e.key, &e.borrowed()))
+            })
+            // AND A TRANSFER'S ROW SAYS WHAT WENT WRONG.
+            //
+            // A row that says only "failed" sends somebody to the journal —
+            // which on this system means opening a terminal to find out why a
+            // copy did not happen. The daemon's own words are already in the
+            // record; this is where they reach the screen.
+            .or_else(|| {
+                // THE VISIBLE ROW IS NOT THE LIST'S ROW, and this is the third
+                // time that distinction has cost something in this file. With
+                // the region scrolled, `row_under_pointer` is a line of the
+                // PAGE; indexing the job list with it names a different
+                // transfer, and the sentence would describe one row while the
+                // pointer sat on another.
+                //
+                // The `click` the row already carries is the list's index, put
+                // there by `expansion()`. Reading it back is the only
+                // arrangement in which the two cannot drift.
+                let row = self.row_under_pointer?;
+                let view = self.transfers.as_ref()?;
+                let Some(Click::Transfers(n)) = visible.get(row)?.click else {
+                    return None;
+                };
+                Some(crate::transfers::under_the_pointer(
+                    view.at(n)?,
+                    &self.texts,
+                ))
             });
         // WHERE THE POINTER IS, marked by a BACKGROUND.
         //

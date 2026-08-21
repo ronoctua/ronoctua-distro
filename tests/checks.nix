@@ -1790,6 +1790,166 @@ let
         echo "OK: $(wc -l < ${closure}/store-paths) caminhos, e nenhum compilador"
       '';
 
+  # WHATEVER THE SHELL LOOKS FOR NEXT DOOR, THE DEV LOOP HAS TO BUILD.
+  #
+  # Two binaries are found by ASKING THE FILESYSTEM rather than by a store path
+  # in a variable — `ronoctua-rescue` and `ronoctua-transfers` — and they have
+  # to be: they come out of the same build as the shell, so a path baked into
+  # one would be that derivation referencing itself.
+  #
+  # Installed, they are next door: `rust.shell` is a `symlinkJoin` over the
+  # whole workspace. In the nested loop they are next door too — until the FIRST
+  # edit, when `RONOCTUA_FOOTER_BIN` moves to `$CARGO_TARGET_DIR/release/` and
+  # only what `cargo build` named is there.
+  #
+  # The symptom is the worst kind there is: everything works, and then one edit
+  # quietly takes a feature away. A missing transfer queue looks exactly like
+  # "nothing is running", and a missing rescue console looks exactly like a key
+  # that does nothing. This check is what noticed that the rescue console had
+  # been in that state the whole time.
+  dev-rebuilds-what-sits-beside =
+    mkCheck "dev-rebuilds-what-sits-beside" [ pkgs.gnugrep pkgs.coreutils ]
+      ''
+        shell=${../crates/ronoctua-shell/src}
+        queue=${../crates/ronoctua-transfers/src}
+        failed=0
+
+        # The names come from the CODE that looks them up, never from a list
+        # written here: a list would be a third place to keep in step.
+        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" \
+          | grep -oE '"[a-z-]+"' | tr -d '"' | sort -u)
+        [ -n "$beside" ] || {
+          echo "ERRO: ninguem procura binario ao lado — o grep casa o que?" >&2
+          exit 1
+        }
+
+        for b in $beside; do
+          grep -q -- "--bin $b" ${../nix/dev.nix} || {
+            echo "ERRO: o rodape procura $b ao lado, e o laco de dev nao o constroi." >&2
+            echo "      Depois da PRIMEIRA edicao ele some, em silencio." >&2
+            failed=1
+          }
+        done
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(echo "$beside" | wc -l) binarios ao lado, e o laco constroi todos"
+      '';
+
+  # THE QUEUE'S UNIT IS A COPY, NOT A DESKTOP.
+  #
+  # `ronoctua-transfers` is a user service that outlives the session — it is
+  # what keeps a copy of forty gibibytes alive across a footer restart. Handing
+  # it `rust.shell` instead of the extracted binary would put wgpu, the wasm
+  # runtime, the renderer and three embedded fonts inside a unit that never
+  # opens a window, and would hold every one of those store paths alive for as
+  # long as the machine is on.
+  #
+  # Nothing would fail. That is exactly why this is a check and not a comment:
+  # `nix why-depends` on the unit is what would say so, and nobody runs that on
+  # a Tuesday.
+  transfers-unit-is-narrow =
+    let
+      closure = pkgs.closureInfo { rootPaths = [ rust.transfers ]; };
+    in
+    mkCheck "transfers-unit-is-narrow"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        failed=0
+        for unwanted in -zig- -clang- -llvm- -mesa- -vulkan-loader- -noctua-iosevka- -icons-superpack-; do
+          if found=$(grep -e "$unwanted" ${closure}/store-paths); then
+            echo "ERRO: a unidade da fila arrasta $unwanted:" >&2
+            echo "$found" >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(wc -l < ${closure}/store-paths) caminhos, e nenhum deles desenha"
+      '';
+
+  # THE QUEUE'S SOCKET IS THE PERSON'S, AND NOBODY ELSE'S.
+  #
+  # `XDG_RUNTIME_DIR` is `0700` and per user. A control socket in `/tmp` would
+  # be a door anybody on the machine can knock on — and what is behind this one
+  # is "copy that there" and "delete those", with the person's own privileges.
+  #
+  # `leader::socket_path` states the same rule for the footer's socket and has
+  # no check; this one does, because the failure is silent: a fallback to `/tmp`
+  # WORKS, and works better — it works when `XDG_RUNTIME_DIR` is missing, which
+  # is exactly when it should refuse.
+  transfers-socket-is-private = mkCheck "transfers-socket-is-private" [ pkgs.gnugrep ] ''
+    src=${../crates/ronoctua-transfers/src}
+    grep -q 'XDG_RUNTIME_DIR' "$src/wire.rs" || {
+      echo "ERRO: o socket deixou de sair de XDG_RUNTIME_DIR." >&2; exit 1; }
+
+    # NO FALLBACK. Not `unwrap_or`, not `/tmp`, not `std::env::temp_dir`.
+    #
+    # The failure this refuses is a SILENT one: a fallback to /tmp works, and
+    # works better — it works when XDG_RUNTIME_DIR is missing, which is
+    # exactly when it should refuse.
+    #
+    # The tests build their trees under the temporary directory and that is
+    # fine; what may not go there is the SOCKET.
+    hits=$(grep -nE '/tmp|temp_dir' "$src"/*.rs "$src"/bin/*.rs || true)
+    # A comment is prose, and one of them is this very rule written out.
+    bad=$(echo "$hits" | grep -vE ':[0-9]+: *//' || true)
+    # A test builds its tree under the temporary directory, which is what a
+    # temporary directory is for. What may not go there is the SOCKET.
+    bad=$(echo "$bad" | grep -vE 'std::env::temp_dir\(\)' || true)
+    bad=$(echo "$bad" | grep -vE '^ *$' || true)
+    [ -z "$bad" ] || {
+      echo "ERRO: a fila caiu para /tmp em algum lugar:" >&2
+      echo "$bad" >&2
+      exit 1
+    }
+    echo "OK: o socket da fila e do usuario, sem plano B"
+  '';
+
+  # EVERY ENGINE, EVERY STAGE AND EVERY KIND OF WORK HAS WORDS IN BOTH LANGUAGES.
+  #
+  # The key is ASSEMBLED at runtime — `transfers-stage-{}` with `Stage::word()`
+  # — so it is one of the keys `docs/ARCHITECTURE.md` describes as having seven
+  # derivatives and being invisible to every search in the code. A variant added
+  # without its `.ftl` line does not fail to compile; it draws the raw key on
+  # screen, which is precisely the shape invariant 8 exists to refuse and which
+  # was reported from this system's own screen once already.
+  transfers-words-are-total = mkCheck "transfers-words-are-total" [ pkgs.gnugrep pkgs.coreutils ] ''
+    job=${../crates/ronoctua-transfers/src}/job.rs
+    failed=0
+
+    # The words come out of the `word()` tables — the same place the Rust
+    # builds the key from. Reading the enum's variants instead would be a
+    # second spelling of the same list.
+    words=$(grep -oE '=> "[a-z]+",' "$job" | grep -oE '"[a-z]+"' | tr -d '"' | sort -u)
+    [ -n "$words" ] || { echo "ERRO: nao achei nenhuma palavra em job.rs" >&2; exit 1; }
+
+    for w in $words; do
+      for prefix in transfers-work transfers-stage transfers-engine; do
+        # A word belongs to exactly one of the three families; what this
+        # loop demands is that WHEREVER it appears in one language it
+        # appears in the other.
+        pt=$(grep -c "^$prefix-$w = " ${../assets/i18n}/pt-BR.ftl || true)
+        en=$(grep -c "^$prefix-$w = " ${../assets/i18n}/en-GB.ftl || true)
+        if [ "$pt" != "$en" ]; then
+          echo "ERRO: $prefix-$w existe em uma lingua so (pt=$pt en=$en)" >&2
+          failed=1
+        fi
+      done
+      # And it has to exist in AT LEAST one family, or it is a variant
+      # nothing can draw.
+      total=$(grep -c "^transfers-[a-z]*-$w = " ${../assets/i18n}/pt-BR.ftl || true)
+      if [ "$total" = 0 ]; then
+        echo "ERRO: a palavra $w de job.rs nao tem texto nenhum" >&2
+        failed=1
+      fi
+    done
+
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: $(echo "$words" | wc -l) palavras da fila, nas duas linguas"
+  '';
+
   # THE EDITOR WRITES WHERE THE UNIT READS.
   #
   # The path crosses the border as a STRING: the crate writes to it and a root
@@ -2256,6 +2416,16 @@ let
       shell = rust.shell;
       filesRoot = rust.filesRoot;
     };
+  };
+
+  # The transfer queue reaching the SCREEN: the unit comes up, the footer finds
+  # it, the segment resolves to columns in the modeline, and `LEADER t t` opens
+  # the panel with the list the footer already had.
+  transfersVm = import ./transfers-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.shell;
+    ronoctua-transfers = rust.transfers;
   };
 
   keyboardVm = import ./keyboard-vm.nix {
@@ -4214,6 +4384,10 @@ let
       files-polkit-is-narrow
       files-closure-has-no-mime-db
       files-columns-degrade
+      transfers-unit-is-narrow
+      transfers-socket-is-private
+      transfers-words-are-total
+      dev-rebuilds-what-sits-beside
       graphics-does-not-mix-libc
       mime-table-generated
       mime-unknown-icon-fails
@@ -4238,6 +4412,7 @@ let
       rescue-staging-agrees
       ;
     files-vm = filesVm;
+    transfers-vm = transfersVm;
     inherit
       files-actions-have-text
       files-everything-has-a-key
@@ -4245,6 +4420,10 @@ let
       files-polkit-is-narrow
       files-closure-has-no-mime-db
       files-columns-degrade
+      transfers-unit-is-narrow
+      transfers-socket-is-private
+      transfers-words-are-total
+      dev-rebuilds-what-sits-beside
       graphics-does-not-mix-libc
       mime-table-generated
       mime-unknown-icon-fails

@@ -107,6 +107,21 @@ in
   config = lib.mkIf cfg.editor.emacs {
     environment.systemPackages = [ doomSync ] ++ doomDeps;
 
+    # WHERE THE FILE MANAGER SENDS TEXT — and it is set HERE, inside this
+    # `mkIf`, rather than baked into the binary.
+    #
+    # `nix/rust.nix` used to hold it as an `option_env!`, and that made the
+    # whole of Emacs a reference the workspace carried into every closure:
+    # `ronoctua.editor.emacs = false` took the package off `systemPackages` and
+    # changed nothing at all. It is the same trap the icon superpack sprang, and
+    # the same answer — read it from the environment, set it where the switch
+    # is. `profile-minimal-closes` is the check that refuses the other way.
+    #
+    # A store PATH and never a name: the footer runs inside a scope whose `PATH`
+    # is minimal, and a bare name fails far from its cause.
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACSCLIENT =
+      "${emacsPkg}/bin/emacsclient";
+
     services.emacs = {
       enable = true;
       package = emacsPkg;

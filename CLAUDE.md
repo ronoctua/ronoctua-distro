@@ -61,7 +61,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   recusa** layout inexistente — cai no `us` mudo; quem impede é `keyboard-layout-exists`.
 - **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG
   COPIADO, e a marca sai da MESMA `affordance` que a tecla lê — molde do menu de arquivos.
-- **São OITO vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14). O
+- **São NOVE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14). O
   localizador (`a`) varre o XDG na PARTIDA em thread (pixmap por OUTRA); a rede (`r r`) lê o CACHE do
   NetworkManager e quem espera o rádio é uma THREAD em `LastScan`.
 - **`LEADER .` (e `f f`) é o gerenciador, DUAS portas** — rodapé (teto de 12) e janela (`f w`), UMA
@@ -70,6 +70,11 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `Backspace` vazio SOBE; o direito só FOCA, e a linha na TELA não é a da listagem. Permissão
   PERGUNTA nos DOIS caminhos, com a frase pronta. Pasta vazia tem menu (sobre ela). **Rótulo de
   `Choice` é TEXTO, não chave** — a `View` tem o bundle. Texto abre no `emacsclient`.
+- **`LEADER t t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`), não do rodapé: três
+  processos olham a mesma lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um
+  por USUÁRIO. As SETE operações longas do gerenciador entram nela; pausar e desistir são o
+  `watch::Control`, e desistir APAGA o pedaço. O segmento da modeline some em repouso — mas FICA se
+  algo falhou. `LEADER c` virou grupo: `c c` clipboard, `c s` captura.
 - **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders`
   FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo:
   `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
@@ -104,7 +109,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 
 - **NADA de build na árvore — 793 GB.** `CARGO_TARGET_DIR` fora (`lean-tree`); **nunca `${../.}`**.
   **Uma derivação referencia o que os BYTES dela citam**: extraia o binário (`rust.installer`,
-  `rust.rescue`, `rust.filesRoot`) — o workspace inteiro punha Zig+clang+LLVM no ISO.
+  `rust.rescue`, `rust.filesRoot`, `rust.transfers`) — o workspace inteiro punha Zig+clang+LLVM no ISO.
   **Interruptor que não interrompe**: `notoExtra` e `icons.superpack` desligavam e o pacote entrava
   por outra porta — meça com `nix why-depends`, não confie no `mkIf`. **`option_env!` com caminho de
   store é referência, e quem COMPILA a paga**: ícones e os buffers vêm do AMBIENTE, senão editar
@@ -112,22 +117,15 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
-- **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois
-  no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 ×
-  fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO.
+- **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
 - **Três baterias, e só o gate fecha**: `quick` (dez escolhidos), `most` (tudo que não constrói instalação), `gate` (tudo). `tests/slow.nix` diz o que sai do `most`, e `test-tiers-are-total` cobra a divisão. **`nix flake check` SEM `-L` não mostra log** — silêncio não é sintoma. **`nix fmt` sem argumento formata a árvore**; `--check` confere.
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`), e `--max-jobs` não salva: o que estoura é jobs × cores. Por isso o gate mede e limita o produto. **`cannot download … from any mirror` NÃO é arquivo removido**: o `fetchurl` repete SEM retomar, e o android-studio (1,37 GB, unfree, um espelho, fora de todo cache) reseta aos ~150 MB — quem baixa é o `nix/prefetch.nix`, que o gate roda ANTES de compilar. **`pkill`/`pgrep` casa o PRÓPRIO comando**, e **`git checkout <arquivo>` apaga o não-commitado** (o store guarda cópia: `ls -dt /nix/store/*-source`).
-- **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já
-  estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo.
+- **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo.
 - **"Nenhum atalho funciona" tem três causas com a MESMA tela** — tecla que não chega, modificador preso, foco não concedido: `nix run .#diagnostics` ANTES de supor. No Xvfb ninguém tem foco (`xdotool windowfocus`), e **`xdotool key` SOLTA a tecla**: segurar exige `keydown`.
-- **`LD_LIBRARY_PATH` vence o `DT_RUNPATH`**: pôr `/usr/lib64` lá para achar UMA lib traz a `libc` do
-  host junto, e ela só combina com o `ld.so` da MESMA build (`undefined symbol ... GLIBC_PRIVATE`).
-  O driver vem do Nix (`mesa`); do host, só para NVIDIA. **ICD Vulkan ausente custa 650 ms mudo** —
-  filtre por vendor. **`memory_init_cow`** é obrigatório (p99 95× pior); **`Queue::present`** precisa
-  do frame, que o `Drop` DESCARTA sem erro.
+- **`LD_LIBRARY_PATH` vence o `DT_RUNPATH`**: pôr `/usr/lib64` lá para achar UMA lib traz a `libc` do host junto, e ela só combina com o `ld.so` da MESMA build (`undefined symbol ... GLIBC_PRIVATE`). O driver vem do Nix (`mesa`); do host, só para NVIDIA. **ICD Vulkan ausente custa 650 ms mudo** — filtre por vendor. **`memory_init_cow`** é obrigatório (p99 95× pior); **`Queue::present`** precisa do frame, que o `Drop` DESCARTA sem erro.
 - **O backend DRM do niri rejeita EGL por software**: numa VM sem GPU sobe com **zero output**, e layer-shell sem output nunca é criada. Use **winit** com `Xvfb` + `LD_LIBRARY_PATH` das libs X. **`RUST_LOG` nosso filtra o niri**, que sobe MUDO — ache o display por `niri.<display>.<pid>.sock`.
 - **Quem tem o codepoint primeiro GANHA** — a face pedida por nome vence o fallback. Custou 634 da PUA (Lucide → `U+F2000`) e 75 emoji da Iosevka (`Emoji_Presentation`); `FE0F` vira dois glifos.
 - **As fontes são asset de Release, nunca git** — 4,1 GB; o input é **`file+https://`**, senão o Nix infere tarball e descompacta no store. **O console não consome TTF**; **`/etc/nixos` e `/etc/fonts/conf.d` são read-only** (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`. Glifo **não** leva `nf-`.
@@ -136,9 +134,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`.
 - **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
   **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`; `xorg.libX11` → `libx11`; `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. **Atributo dinâmico em duas sentenças** é erro de avaliação: um attrset só.
-- **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store
-  vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela".
-  `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
+- **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
 
 ## Documentação — seis arquivos, em pt-BR (o resto é inglês — inv. 18)
 

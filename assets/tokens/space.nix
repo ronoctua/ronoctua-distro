@@ -44,6 +44,23 @@
     edgeRight = 1;
   };
 
+  # The TRANSFER queue's row, in cells.
+  #
+  # `bar` is how many cells the progress bar occupies. Twelve, and the number is
+  # not taste: the bar is TILED — one glyph per cell, invariant 9 reaches the
+  # codepoint too — so its resolution is exactly its width. Twelve cells means
+  # the smallest visible step is 8.3%, which is the granularity a person reads
+  # off a bar anyway; the exact figure is next to it in digits, and that is what
+  # answers "is it moving".
+  #
+  # Wider was tried in the arithmetic and does not pay: at twelve, a row still
+  # fits the name, the destination, the bar, the percentage and the size inside
+  # eighty columns, which is the narrow terminal every layout here is checked
+  # against.
+  transfers = {
+    bar = 12;
+  };
+
   # The content's margin inside a BUFFER, in cells.
   #
   # It is not box padding (invariant 15): it is where the text starts inside the

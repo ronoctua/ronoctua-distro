@@ -435,6 +435,9 @@
         # The file manager's privileged half: one unit, one polkit rule, and
         # where it opens. Everything else about it needs no configuration.
         ./nix/modules/files.nix
+        # The queue of everything that takes a while, and the unit that owns
+        # it. After `files.nix` because what it runs is that crate's work.
+        ./nix/modules/transfers.nix
         ./nix/modules/fonts.nix
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix
@@ -470,6 +473,10 @@
               # workspace. The unit that runs it runs as root, and handing it
               # the whole workspace would put wgpu and the wasm runtime there.
               filesRoot = rust.filesRoot;
+              # The queue's daemon, EXTRACTED for the same reason: it is a unit
+              # that outlives the session, and its closure should be the copy
+              # and not the desktop.
+              transfers = rust.transfers;
             };
           };
         }

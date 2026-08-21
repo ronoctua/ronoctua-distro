@@ -102,6 +102,12 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     let mut cycle: EventLoop<FilesWindow> = EventLoop::try_new().context("calloop")?;
     let alca = cycle.handle();
     let (sender, reports) = channel::channel::<crate::files::Report>();
+    // THE QUEUE, AS REPORTS. This door has no modeline and no panel: what it
+    // needs from the transfer queue is "the thing you asked for is over, read
+    // the directory again". Without it, `Errand::Done` would refresh the
+    // listing at the instant the work was HANDED OVER — showing the directory
+    // as it was before the copy, and never again.
+    crate::transfers::listen_as_reports(sender.clone());
     alca.insert_source(reports, |event, (), state: &mut FilesWindow| {
         if let channel::Event::Msg(r) = event {
             state.reported(r);

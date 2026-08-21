@@ -116,7 +116,6 @@ cmd-workspace-move-previous = Levar a janela para o espaço anterior
 cmd-screen-capture = Capturar a tela
 group-window = janela
 group-workspace = workspace
-group-screen = tela
 cmd-workspace-overview = Panorama dos espaços
 cmd-window-float = Alternar flutuante
 cmd-workspace-go = Ir para o espaço
@@ -1011,3 +1010,57 @@ files-detail-target = aponta para
 files-detail-broken = aponta para (não existe)
 files-restore = devolver de onde veio
 files-no-trash = não sei onde fica a lixeira; nada foi movido
+
+# === A fila de transferências — `LEADER t` =================================
+#
+# Sete operações iam para uma thread sem dizer nada na tela: colar, apagar,
+# sobrescrever, lixeira, comprimir, extrair e medir pasta. Agora todas entram na
+# mesma fila, e é ela que a modeline resume e o painel detalha.
+group-transfer = transferências
+# O `c` deixou de ser um comando e virou grupo: o clipboard captura o que se
+# copia, e a tela captura o que se vê.
+group-capture = captura
+
+cmd-transfers-open = a fila de transferências
+# As teclas da VISTA. O id É a chave, como no gerenciador de arquivos:
+# `cmd-` é do registro de comandos, e estas não estão nele.
+transfers-down = descer
+transfers-up = subir
+transfers-pause = segurar ou soltar esta transferência
+transfers-cancel = desistir desta transferência
+transfers-forget = tirar esta linha da lista
+transfers-sweep = tirar da lista tudo o que já acabou
+
+transfers-empty = nada em andamento
+transfers-offline = a fila de transferências não está no ar
+# A linha de dica, com a tecla resolvida na hora — nunca escrita aqui.
+transfers-hint = { $pause } segura, { $cancel } desiste, { $sweep } limpa o que acabou
+
+# O que a operação É.
+transfers-work-copy = copiar
+transfers-work-move = mover
+transfers-work-delete = apagar
+transfers-work-shred = sobrescrever
+transfers-work-trash = mandar para a lixeira
+transfers-work-restore = devolver da lixeira
+transfers-work-compress = comprimir
+transfers-work-extract = extrair
+transfers-work-measure = medir
+
+# Onde ela está.
+transfers-stage-weighing = pesando
+transfers-stage-running = em andamento
+transfers-stage-paused = segurada
+transfers-stage-done = pronta
+transfers-stage-failed = falhou
+transfers-stage-cancelled = desistida
+
+# Quem move. Por enquanto só o disco desta máquina.
+transfers-engine-local = disco
+
+# O sujeito, quando é mais de um.
+transfers-and-more = { $name } e mais { $rest }
+# Para onde vai. A seta é o único desenho aqui, e não é chrome: é a preposição.
+transfers-into = → { $where }
+# Quantos itens, para as operações que contam coisas e não bytes.
+transfers-items = { $done } de { $total }

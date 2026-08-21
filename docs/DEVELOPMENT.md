@@ -206,3 +206,10 @@ Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode
 | `nix run .#dev` diz que não há sessão gráfica | você está num TTY | use `nix run .#vm` |
 | o rodapé não aparece, mas o compositor sobe | ele recusou a layer surface | `RUST_LOG=ronoctua_shell=debug nix run .#dev` mostra o motivo |
 | nenhum atalho responde | tecla que não chega, modificador preso, ou foco não concedido | `nix run .#diagnostics` separa as três |
+| a modeline não mostra porcentagem ao colar | a fila de transferências não subiu | `journalctl --user -u ronoctua-transfers`; fora do NixOS ela é iniciada pelo próprio rodapé, e `RUST_LOG=ronoctua_transfers=info` diz o porquê |
+
+**Um processo fica de pé depois do `nix run .#dev`, e é de propósito.** `ronoctua-transfers` é a fila:
+ela existe para **sobreviver** ao rodapé reiniciar — que no laço aninhado acontece a cada edição de
+arquivo. O `trap` de saída não a mata porque o socket é **por usuário**, não por sessão: matá-la
+poderia derrubar uma cópia de verdade da sessão real. Ela é ociosa e a próxima execução a reaproveita;
+para encerrá-la à mão, `pkill -f bin/ronoctua-transfers`.

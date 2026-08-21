@@ -27,6 +27,10 @@
   reloadApp,
   singleFooter,
   rustToolchain,
+  # The editor the manager sends text to. It is a parameter and not an
+  # `option_env!` for the reason `nix/rust.nix` writes out: baked into the
+  # binary, its store path is a reference no profile switch can remove.
+  emacs30,
 }:
 
 let
@@ -395,6 +399,10 @@ let
       # opens is a NixOS option on an installed system — here there is no NixOS
       # to read one from, so both sides take it from `nix/files-start.nix`.
       export RONOCTUA_ICONS="${iconSuperpack}/share/icons/noctua"
+      # AND THE EDITOR, for the same reason: it is out of the compilation so
+      # that `ronoctua.editor.emacs = false` can really remove it, which means
+      # somebody has to put it back for the nested loop.
+      export RONOCTUA_EMACSCLIENT="${emacs30}/bin/emacsclient"
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
 
       # Which binary: the store's until the first recompilation, yours after that.
@@ -483,7 +491,32 @@ let
               ;;
             *)
               echo "  compilando…"
-              if cargo build --release -p ronoctua-shell --bin ronoctua-shell 2>&1 | tail -20; then
+              # THE QUEUE'S DAEMON COMES ALONG, and leaving it out was a silent
+              # trap waiting to be sprung.
+              #
+              # The footer finds `ronoctua-transfers` NEXT DOOR — it has to,
+              # because both come out of the same build and a store path baked
+              # into one would be that build referencing itself. Before the
+              # first reload "next door" is the wrapper's `bin/`, where it is;
+              # after one it is `$CARGO_TARGET_DIR/release/`, where it would not
+              # have been.
+              #
+              # The symptom would have been the worst kind: everything works,
+              # and then the FIRST edit of the session quietly takes the
+              # transfer queue away — with the modeline simply not showing a
+              # segment, which is also what "nothing is running" looks like.
+              #
+              # `ronoctua-rescue` is here for the same reason and was already
+              # missing before any of this: `Ctrl+Alt+Del` looks next door too,
+              # so the rescue console has been quietly unreachable after the
+              # first reload of every session. The check
+              # `dev-rebuilds-what-sits-beside` is what found it.
+              #
+              # It costs nothing: one workspace, one build, and neither binary
+              # links wgpu or the wasm runtime.
+              if cargo build --release -p ronoctua-shell --bin ronoctua-shell \
+                   --bin ronoctua-rescue \
+                   -p ronoctua-transfers --bin ronoctua-transfers 2>&1 | tail -20; then
                 export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/release/ronoctua-shell"
                 restart_footer
               else

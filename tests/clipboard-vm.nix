@@ -104,7 +104,7 @@ pkgs.testers.runNixOSTest {
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
             raise
 
-    with subtest("`LEADER c` abre a vista com as duas entradas"):
+    with subtest("`LEADER c c` abre a vista com as duas entradas"):
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
@@ -112,6 +112,10 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
         )
+        # `c` IS A PREFIX now that the screen capture moved under it: `c c` is
+        # the clipboard and `c s` the capture. A lone `c` only narrows
+        # which-key, which is exactly what this test saw when it changed.
+        press_key("c")
         press_key("c")
         journal = machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'clipboard aberto'", timeout=30
@@ -186,6 +190,10 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
         )
+        # `c` IS A PREFIX now that the screen capture moved under it: `c c` is
+        # the clipboard and `c s` the capture. A lone `c` only narrows
+        # which-key, which is exactly what this test saw when it changed.
+        press_key("c")
         press_key("c")
 
         try:

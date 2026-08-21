@@ -57,6 +57,7 @@ mod network;
 mod surface;
 mod syncthing;
 mod terminal;
+mod transfers;
 mod vcs;
 
 /// The layer-shell surface's namespace.
@@ -369,7 +370,13 @@ pub fn leader_chord() -> String {
 /// and writing an invented mode name is worse than writing nothing: it
 /// takes up a column and asserts something false. The segment only exists when there is a buffer.
 #[must_use]
-pub fn segments(name: &str, mode: &str, branch: Option<&str>, pending: usize) -> Vec<Segment> {
+pub fn segments(
+    name: &str,
+    mode: &str,
+    branch: Option<&str>,
+    pending: usize,
+    transfer: Option<&str>,
+) -> Vec<Segment> {
     let mut out = vec![
         // 2. Never disappears: the only indicator that something is pending.
         Segment {
@@ -382,6 +389,33 @@ pub fn segments(name: &str, mode: &str, branch: Option<&str>, pending: usize) ->
             removable: false,
         },
     ];
+    // 3. THE TRANSFERS, next to the bell — and it goes away when there is
+    // nothing to say.
+    //
+    // # Why `removable`, when the bell is not
+    //
+    // They answer different questions. The bell is the ONLY indicator that
+    // something is pending, so a screen without it has to be able to say
+    // "nothing is waiting" — it may shrink, never vanish. This one appears
+    // because something is happening; with nothing happening it would be a
+    // column spent on `0%`, on every screen, forever.
+    //
+    // So on a screen too narrow for both, the bell wins. That is the right way
+    // round: a copy at 62% is on the panel and in the log, and a notification
+    // nobody was told about is nowhere.
+    if let Some(t) = transfer {
+        out.push(Segment {
+            id: "transfer",
+            text: t.to_owned(),
+            priority: 3,
+            // The icon and two digits. Below that there is no segment worth
+            // having: `6…` is not a percentage.
+            min_cols: 5,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
     // The name only exists if there is a buffer. `removable: false` still holds
     // for when it does exist: then it elides in the middle, but does not disappear.
     if !name.is_empty() {
@@ -446,7 +480,10 @@ mod tests {
         let name = "a".repeat(300);
         for columns in [20_u16, 40, 80, 200] {
             let branch = "r".repeat(300);
-            for c in layout::resolve(columns, &segments(&name, "ghostty", Some(&branch), 99)) {
+            for c in layout::resolve(
+                columns,
+                &segments(&name, "ghostty", Some(&branch), 99, Some("\u{ebcb} 62%")),
+            ) {
                 assert!(
                     c.column + layout::width(&c.text) <= columns,
                     "'{}' vaza com {columns} colunas",
@@ -468,7 +505,7 @@ mod tests {
         // Invariant 9: no icon codepoint outside the tokens. If
         // someone writes a literal here, this test does not catch it — but the
         // generator has already guaranteed that the token exists in the font.
-        let s = segments("arq.rs", "rust", Some("main"), 0);
+        let s = segments("arq.rs", "rust", Some("main"), 0, None);
         let notif = s.iter().find(|x| x.id == "notif").unwrap();
         assert!(notif.text.starts_with(tokens::icon::NOTIFICATION));
     }

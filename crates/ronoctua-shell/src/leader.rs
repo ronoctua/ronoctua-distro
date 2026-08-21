@@ -739,7 +739,16 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "notif-history",
             label: key::CMD_NOTIF_HISTORY,
         },
-        // THE CLIPBOARD. `clipboard-open` has a key in the tree (`LEADER c`); the
+        // THE TRANSFER QUEUE. `transfers-open` has a key in the tree
+        // (`LEADER t t`); the keys that act on a row live INSIDE the view
+        // (`transfers::OF_THE_VIEW`), the same arrangement the file manager
+        // uses — they navigate a list rather than being commands of the
+        // registry.
+        Command {
+            id: "transfers-open",
+            label: key::CMD_TRANSFERS_OPEN,
+        },
+        // THE CLIPBOARD. `clipboard-open` has a key in the tree (`LEADER c c`); the
         // others have keys INSIDE the view, and that is why they go into
         // `OF_CLIPBOARD_VIEW` — otherwise the orphan-command check flags them, and
         // rightly: a command with no path at all is a command nobody uses.
@@ -921,12 +930,27 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("TAB m <up>", "workspace-move-previous", None),
         ("TAB m .", "workspace-move-next", None),
         ("TAB m ,", "workspace-move-previous", None),
-        ("c", "clipboard-open", None),
+        // `c` STOPPED BEING A COMMAND AND BECAME A GROUP.
+        //
+        // The screen capture used to be `t c`, and `t` is now the transfers
+        // group — so it had to move, and the owner chose where: `c` for
+        // CAPTURE, which is what both things under it do. The clipboard
+        // captures what you copy; the screen captures what you see.
+        //
+        // It costs the clipboard one keystroke (`c` became `c c`), and that is
+        // the convention this keymap already uses everywhere a prefix gained a
+        // second item — `r r`, `f f`, `TAB TAB`.
+        ("c c", "clipboard-open", None),
+        ("c s", "screen-capture", None),
         // `a` for APPLICATIONS, at the first level. It was free, and an
         // application launcher is a first-level thing: if it costs two
         // keys, the person goes back to opening everything through the terminal.
         ("a", "apps-open", None),
-        ("t c", "screen-capture", None),
+        // `LEADER t` IS THE TRANSFER QUEUE. `t t` opens the panel in the
+        // footer's region, doubling the key the way `r r` and `f f` already do
+        // — because `t` is a PREFIX, and hanging a command off a prefix is the
+        // collision `PrefixWithCommand` exists to flag.
+        ("t t", "transfers-open", None),
         // `f f` IS THE MANAGER, in the footer's region — the same thing `.`
         // opens, and deliberately the same thing.
         //
@@ -1019,7 +1043,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("TAB", key::GROUP_WORKSPACE),
         ("TAB m", key::GROUP_WORKSPACE_MOVE),
         ("i", key::GROUP_ICONS),
-        ("t", key::GROUP_SCREEN),
+        // `t` FOR TRANSFERS. It held the screen capture alone and gave the
+        // letter up: a queue that everything long goes through earns a
+        // first-level prefix, and a single screenshot does not.
+        ("t", key::GROUP_TRANSFER),
+        // `c` FOR CAPTURE — the clipboard and the screen, which is where the
+        // screenshot went.
+        ("c", key::GROUP_CAPTURE),
         ("n", key::GROUP_NOTIFICATION),
         ("h", key::GROUP_HELP),
         ("q", key::GROUP_QUIT),
@@ -1667,6 +1697,10 @@ mod tests {
             "lucide-icons",
             "buffer-close",
             "buffer-next",
+            // THE TRANSFER QUEUE. Only `transfers-open` is a command of the
+            // registry; everything that acts on a row is a key of the view,
+            // like the file manager's.
+            "transfers-open",
             // THE CLIPBOARD. `clipboard-open` has a key in the tree; the other
             // six have keys INSIDE the view, and that is why they go through
             // `reachable` — all seven need an action, otherwise they would appear in the

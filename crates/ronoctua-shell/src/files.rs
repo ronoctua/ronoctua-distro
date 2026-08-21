@@ -39,6 +39,7 @@ use ronoctua_files::{
 };
 use ronoctua_keymap::{Key, Sym};
 use ronoctua_tokens::Color;
+use ronoctua_transfers::Work;
 use smithay_client_toolkit::reexports::calloop;
 
 /// A column of the table.
@@ -1505,64 +1506,36 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             });
             Errand::Done
         }
-        // UNBOUNDED: to a thread, every one of them.
-        Doing::Trash(root, paths) => {
-            in_a_thread(sender, "lixeira", move || {
-                let bin = ronoctua_files::trash::Bin::at(root);
-                let zone =
-                    ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
-                for p in &paths {
-                    bin.put(p, now, &zone)?;
-                }
-                Ok(())
-            });
-            Errand::Done
-        }
-        Doing::Restore(root, names) => {
-            in_a_thread(sender, "restaurar", move || {
-                let bin = ronoctua_files::trash::Bin::at(root);
-                for n in &names {
-                    bin.restore(n)?;
-                }
-                Ok(())
-            });
-            Errand::Done
-        }
-        Doing::Delete(paths) => {
-            in_a_thread(sender, "apagar", move || {
-                for p in &paths {
-                    ronoctua_files::act::remove(p)?;
-                }
-                Ok(())
-            });
-            Errand::Done
-        }
-        Doing::Shred(paths) => {
-            in_a_thread(sender, "sobrescrever", move || {
-                for p in &paths {
-                    ronoctua_files::act::shred(p, ronoctua_files::act::PASSES)?;
-                }
-                Ok(())
-            });
-            Errand::Done
-        }
-        Doing::Paste(into) => {
-            let clip = clip.clone();
-            in_a_thread(sender, "colar", move || {
-                for p in &clip.paths {
-                    if clip.moves {
-                        ronoctua_files::act::move_into(p, &into)?;
-                    } else {
-                        ronoctua_files::act::copy_into(p, &into)?;
-                    }
-                }
-                Ok(())
-            });
-            Errand::Done
-        }
+        // UNBOUNDED, EVERY ONE OF THEM — and they no longer go to a thread of
+        // this process. They go to the QUEUE.
+        //
+        // # What changed, and why
+        //
+        // Each of these used to raise a named thread here, work in silence and
+        // report once at the end. Seven operations, and the only thing the
+        // screen ever said about any of them was the listing refreshing when it
+        // was over — including `shred`, which writes three times the file and
+        // is the slowest of the lot.
+        //
+        // Now the request crosses to `ronoctua-transfers`, which owns them.
+        // That buys three things this side could not have: the SAME list is
+        // visible from the footer, from this window and from the panel; the
+        // work survives the footer being restarted, which in the nested loop
+        // happens on every file edit; and every one of them can be held and
+        // given up, because the switch lives with the thread rather than with
+        // whoever asked.
+        //
+        // What comes back is not a `Report` any more — it is the list, through
+        // the watching thread, which is the only thing that has to be right.
+        Doing::Trash(root, paths) => queued(Work::Trash { root, paths }),
+        Doing::Restore(root, names) => queued(Work::Restore { root, names }),
+        Doing::Delete(paths) => queued(Work::Delete { paths }),
+        Doing::Shred(paths) => queued(Work::Shred { paths }),
+        Doing::Paste(into) => queued(Work::Paste {
+            paths: clip.paths.clone(),
+            into,
+            moves: clip.moves,
+        }),
         Doing::Compress(paths, extension) => {
             let Some(first) = paths.first().cloned() else {
                 return Errand::Done;
@@ -1580,47 +1553,47 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "arquivo".to_owned());
             let archive = directory.join(format!("{stem}.{extension}"));
-            in_a_thread(sender, "comprimir", move || {
-                ran(ronoctua_files::act::packing(&directory, &names, &archive)?)
-            });
-            Errand::Done
+            queued(Work::Compress {
+                directory,
+                names,
+                archive,
+            })
         }
         Doing::Extract(archive) => {
-            let Some(directory) = archive.parent().map(Path::to_path_buf) else {
+            let Some(into) = archive.parent().map(Path::to_path_buf) else {
                 return Errand::Done;
             };
-            in_a_thread(sender, "extrair", move || {
-                ran(ronoctua_files::act::unpacking(&archive, &directory)?)
-            });
-            Errand::Done
+            queued(Work::Extract { archive, into })
         }
-        // THE WALK. Unbounded by definition, and the one operation somebody
-        // will be looking at the screen during.
-        Doing::Measure(path) => {
-            let sender = sender.clone();
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            raise("medir-pasta", move || {
-                let bytes = ronoctua_files::act::weigh(&path);
-                let _ = sender.send(Report::Measured(name, bytes));
-            });
-            Errand::Done
-        }
+        // THE WALK. It is in the queue for the same reason as the rest: it is
+        // unbounded, and it was the one operation somebody watches the screen
+        // during with nothing to watch. The answer comes back in the list —
+        // see `Footer::measurements_of`.
+        Doing::Measure(path) => queued(Work::Measure { path }),
     }
 }
 
-/// Waits for a child and turns its failure into its own words.
-fn ran(mut cmd: std::process::Command) -> anyhow::Result<()> {
-    let out = cmd.output()?;
-    if out.status.success() {
-        return Ok(());
+/// Hands one piece of work to the queue.
+///
+/// It is `tell` and not `ask`: nothing here needs the id back, and waiting for
+/// an answer would put a socket round trip inside the frame that draws — the
+/// lesson `systemd-run --scope` already taught this project twice.
+///
+/// A queue that is not up says so ON THE MESSAGE LINE. It used to be
+/// unthinkable for a paste to fail before it started, and the honest handling
+/// of a new failure mode is a sentence where the person is looking, not a line
+/// in a journal.
+fn queued(work: Work) -> Errand {
+    match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
+        Ok(()) => Errand::Done,
+        Err(e) => {
+            tracing::warn!(error = %e, "a fila de transferencias nao aceitou o trabalho");
+            Errand::Say(Explanation {
+                key: ronoctua_i18n::key::TRANSFERS_OFFLINE,
+                args: Vec::new(),
+            })
+        }
     }
-    Err(anyhow::anyhow!(
-        "{}",
-        String::from_utf8_lossy(&out.stderr).trim().to_owned()
-    ))
 }
 
 /// An immediate result, as something to say or nothing at all.
@@ -1767,7 +1740,7 @@ fn colour_of(entry: &Entry, focused: bool) -> Color {
 /// hundred of these per frame and the language only decides the separator —
 /// which the caller passes in when it has the bundle. The plain form is what
 /// the tests and the window use.
-fn size_text(bytes: u64) -> String {
+pub(crate) fn size_text(bytes: u64) -> String {
     let h = size::human(bytes);
     if matches!(h.unit, size::Unit::Bytes) {
         format!("{} B", h.whole)
