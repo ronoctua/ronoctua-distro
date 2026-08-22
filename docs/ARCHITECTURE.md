@@ -764,6 +764,98 @@ divergiram, e isso tem de aparecer.
 
 ---
 
+### A escala não é hierarquia, e uma run ocupa mais de uma célula
+
+O parágrafo acima diz que o texto em volta do glifo é texto, e que corpo 32 é desconfortável de ler.
+Isso foi escrito depois de acontecer no navegador — e voltou a acontecer, em **três buffers de uma
+vez**, na forma de título: `formatar`, `transferências` e `memória` pediam `Scale::Large` para a
+frase do topo. Quarenta pixels sobre uma janela cujas outras linhas todas têm vinte. O dono relatou
+da tela, com uma foto.
+
+Junto vinha o segundo defeito, e ele é o interessante: **a régua encostava no título**. Uma run de
+40 px tem caixa de linha de 58, e a célula da grade é 29 — ela ocupa DUAS. A régua estava em
+`line + 1`, que é exatamente a segunda, e caía na linha de base do próprio título: na tela, um
+sublinhado atravessando as descidas. Nenhum teste falhou, e nenhum teria: a display list dizia linha
+0 e linha 1, que são linhas diferentes, e **nada em lugar nenhum multiplicava uma linha pela altura
+que a escala dela vale**. O `heights` do contexto existe para isso desde o glifo cortado da ficha —
+os três títulos simplesmente não o consultavam.
+
+**O que marca um título não é o tamanho.** O `colors.nix` já dizia, na abertura: ênfase é por peso e
+cor, separação é por espaço em branco e uma régua de uma linha. O título passou a ser do tamanho do
+corpo, com o glifo de acento na frente, a régua embaixo e uma célula vazia depois dela — no painel
+de memória não há régua, e lá o que separa é só a célula vazia. Uma célula em vez de duas, o que uma
+janela que precisa caber uma lista de discos agradece.
+
+**Duas perguntas, no crate da display list.** `DisplayList::nothing_overlaps` (de lado) e
+`nothing_is_covered` (para baixo) moram junto da lista que leem, e não dentro de um driver, para que
+nenhum deles discorde sobre o que um comando ocupa. Elas não rodam no caminho de desenho: recusar
+um quadro por um encostamento apagaria o buffer inteiro por um defeito cosmético. Quem as cobra é o
+`states-driven`, que é o único que passa **todo buffer por todo estado** — e o `format`, `memory` e
+`transfers` driven, que são os que enchem a tela de dados, porque lista vazia não encosta em nada.
+
+Três detalhes que a primeira versão da pergunta errou:
+
+- **Uma chave cobra o orçamento inteiro; um dado cobra o comprimento.** `Text::Key` é frase que o
+  host vai traduzir — o buffer não sabe quanto ela mede, então o que ele reservou é tudo com que se
+  pode contar, e orçamento que invade o campo seguinte é campo que SERÁ escrito por cima assim que o
+  idioma mudar. `Text::Data` o buffer tem na mão, e quase sempre posiciona o campo seguinte a partir
+  desse comprimento: cobrar dele um orçamento que comprovadamente não usa condenaria toda lista cuja
+  última coluna vai até a borda.
+- **A escala alarga tanto quanto sobe.** A célula é `0,600 em`, então um glifo `Large` cobre as duas
+  colunas que o `heights` já lhe cobra na outra direção.
+- **Só as linhas DEPOIS da primeira.** Dois comandos na mesma linha é o caso comum — uma linha de
+  colunas, uma faixa de seleção sob o próprio texto, um ícone ao lado de um nome. Quem decide se
+  aqueles se chocam é a largura, que é a outra pergunta.
+
+E há uma terceira cobrança, que é sobre o tamanho e não sobre a geometria: **uma chave traduzida
+nunca é desenhada em escala de glifo**. `Large` e `Huge` são legítimos e frequentes — é o que os três
+navegadores usam para o codepoint, onde o conteúdo É o desenho. Frase, não. O comentário do
+`font.size.xlarge` já dizia isso por escrito e não impediu nada, porque nada lia o comentário.
+
+E a primeira coisa que ela encontrou de verdade não foi o título: foi a ficha do Lucide. São três
+marcas antes do valor — ajustar, digitar, restaurar — e o espaço reservado para elas era de DUAS
+células. A terceira, `History`, caía na primeira célula do valor: no `24 px` da linha de tamanho, o
+glifo ficava sobre o `2`, em toda linha de ajuste. A reserva e a quantidade de coisas que reservam
+têm de ser o mesmo número.
+
+**E depois disso veio `nix run .#png`, que é a parte que muda o dia a dia.** Nada disso teria durado
+meses se olhar custasse pouco. Custava uma VM NixOS: subir, niri sob Xvfb, capturar a raiz do X,
+recortar pela geometria que o niri informou, passar OCR. Três minutos para ver se uma régua encostava
+numa descida — e regra que custa três minutos é regra que se pula, que é exatamente o que aconteceu.
+
+O comando desenha um buffer num PNG em **0,2 s**, sem compositor e sem VM. O que ele NÃO faz é ter
+um segundo rasterizador: o componente é carregado como o host carrega, dirigido pelos mesmos
+`Input`, e a display list dele atravessa o `paint` — o mesmo módulo que o `buffer.rs` usa para pôr um
+buffer num `xdg_toplevel`. Foi por isso que o `paint` virou módulo: a conversão de lista em trechos,
+a cor por token, a elisão pelo orçamento, a margem, a célula e a faixa de seleção estavam ao lado do
+Wayland que as desenha, e o terminal já as pegava por cima do muro. Um PNG que discordasse da tela
+significaria que essa ponte se duplicou — não que a tela é um mistério. Do `Gpu` só sai a superfície:
+o `offscreen` entrega dispositivo e textura com as MESMAS limites, e o `prepare`/`draw` é o do
+rodapé, linha por linha.
+
+Duas coisas ele não desenha, e **diz** em vez de fingir: `Command::Svg`, que precisa do cache de
+pixmap que a janela guarda, e qualquer tela que dependa do host responder ao buffer — uma leitura de
+discos, uma fila, uma amostra de memória. Esses buffers saem com a tela vazia, que é o retrato
+honesto do que eles têm.
+
+**E o comando tem check** (`png-tool-draws`), porque ferramenta que ninguém confere é ferramenta que
+para de funcionar calada, e a descoberta acontece no dia em que se precisa dela. Ele não se contenta
+com "o arquivo apareceu": um PNG do tamanho certo, todo da cor do fundo, é EXATAMENTE o que um
+desenho quebrado produz. Então o CRC de cada pedaço é recalculado e o `IDAT` passa por um `zlib` de
+verdade — é o que segura as quarenta linhas escritas à mão, e um `65521` trocado por `65520` no
+Adler-32 o derruba; o tamanho no cabeçalho tem de ser o que a ferramenta IMPRIMIU; tem de haver
+tinta, isto é, pixels que não são a cor mais comum; e **pt-BR e en-GB têm de sair diferentes**, o que
+fecha a corrente inteira numa comparação só — componente, display list, i18n, tokens, wgpu, pixel —
+sem OCR e sem nomear uma cor ali, que seria uma segunda cópia de um token.
+
+O ambiente gráfico é o lavapipe, o mesmo dos checks, e não é escolha de desempenho: é o que faz o
+comando responder igual nesta máquina, numa sem GPU e dentro de um check. Seção 9.3 continua valendo
+— aqui **nunca** se mede tempo de quadro. E o PNG sai sem compressão, escrito à mão em quarenta
+linhas: fazer do `png` uma dependência direta custaria uma recompilação de toda a camada de
+dependências do crane, minutos em toda máquina, para poupar essas quarenta.
+
+---
+
 ### Um rodapé por sessão — garantido, e não afirmado
 
 O socket de controle tem o display no nome, e por muito tempo um comentário afirmava que outro rodapé

@@ -1114,6 +1114,222 @@ impl DisplayList {
             .unwrap_or(0)
     }
 
+    /// The rows a command claims: `(first row, how many)`.
+    ///
+    /// A run does NOT occupy the row it names — it occupies as many cells as
+    /// its scale is worth, which is the whole reason [`Heights`] crosses the
+    /// WIT. One place, so no caller has to remember that.
+    fn rows_of(c: &Command, heights: Heights) -> (u16, u16) {
+        match c {
+            Command::Text { line, scale, .. } => (*line, heights.of(*scale).max(1)),
+            Command::Rule { line, .. } | Command::Selection { line, .. } => (*line, 1),
+            Command::Grid { line, lines, .. } => {
+                (*line, u16::try_from(lines.len()).unwrap_or(u16::MAX).max(1))
+            }
+            Command::Svg { line, lines, .. } => (*line, (*lines).max(1)),
+        }
+    }
+
+    /// The columns a command claims: `(first column, how many)`.
+    ///
+    /// # Why a KEY claims its whole budget and DATA does not
+    ///
+    /// Because they are two different promises. A `Text::Key` is a sentence the
+    /// HOST will translate: the buffer does not know how long it comes out, so
+    /// what it reserved is all anyone can go on — and a budget that reaches
+    /// into the next field is a field that WILL be written over as soon as the
+    /// language changes, which is exactly the fault that put an exact byte
+    /// count on top of a sentence. A `Text::Data` is a string the buffer is
+    /// holding: it knows the length, it usually positions the next field from
+    /// that length, and the host cuts the run at whichever of the two is
+    /// smaller. Charging it for a budget it demonstrably does not use would
+    /// condemn every list that lets its last column run to the edge.
+    ///
+    /// The scale multiplies the WIDTH as well as the height: the cell is
+    /// `0.600 em`, so a run at twice the body's size has twice the advance —
+    /// and one glyph of `Large` covers the two cells [`Heights`] already
+    /// charges it in the other direction.
+    ///
+    /// `Rule` and `Selection` paint the whole width by definition and have no
+    /// column of their own.
+    fn columns_of(c: &Command, heights: Heights, columns: u16) -> (u16, u16) {
+        match c {
+            Command::Text {
+                column,
+                text,
+                scale,
+                max_width,
+                ..
+            } => {
+                let budget = if *max_width == 0 {
+                    columns.saturating_sub(*column)
+                } else {
+                    *max_width
+                };
+                let wide = match text {
+                    // NOTHING IS KNOWN about a key until the host looks it up.
+                    Text::Key(_) => budget,
+                    Text::Data(t) => u16::try_from(t.chars().count())
+                        .unwrap_or(u16::MAX)
+                        .saturating_mul(heights.of(*scale).max(1))
+                        .min(budget),
+                    Text::Icon(_) => heights.of(*scale).max(1).min(budget),
+                };
+                (*column, wide)
+            }
+            Command::Rule { .. } | Command::Selection { .. } => (0, columns),
+            Command::Grid { column, lines, .. } => (
+                *column,
+                lines
+                    .iter()
+                    .map(|l| u16::try_from(l.chars().count()).unwrap_or(u16::MAX))
+                    .max()
+                    .unwrap_or(0),
+            ),
+            Command::Svg {
+                column,
+                columns: wide,
+                ..
+            } => (*column, *wide),
+        }
+    }
+
+    /// A command in a few words, for a message somebody has to act on.
+    ///
+    /// The name of the key or the beginning of the data, because "two fields
+    /// collide on row 13" is a report and not a diagnosis: what the person
+    /// reading it needs is WHICH two, and every one of these commands is
+    /// written in a different place in the buffer.
+    fn sketch(c: &Command) -> String {
+        match c {
+            Command::Text { text, scale, .. } => match text {
+                Text::Key(k) => format!("chave `{k}` ({scale:?})"),
+                Text::Data(t) => {
+                    let mut short: String = t.chars().take(24).collect();
+                    if t.chars().count() > 24 {
+                        short.push('…');
+                    }
+                    format!("texto `{short}` ({scale:?})")
+                }
+                Text::Icon(i) => format!("icone `{i}` ({scale:?})"),
+            },
+            Command::Rule { .. } => "regua".into(),
+            Command::Selection { .. } => "selecao".into(),
+            Command::Grid { lines, .. } => format!("grade de {} linhas", lines.len()),
+            Command::Svg { .. } => "svg".into(),
+        }
+    }
+
+    /// Whether two `(first, how many)` spans touch.
+    const fn meet(a: (u16, u16), b: (u16, u16)) -> bool {
+        a.0 < b.0.saturating_add(b.1) && b.0 < a.0.saturating_add(a.1)
+    }
+
+    /// Refuses a frame where one command is drawn INSIDE another's box.
+    ///
+    /// # The fault this exists for
+    ///
+    /// A `Large` run is 40 px with a 58 px line box against the grid's 29, so
+    /// it covers TWO cells — and three buffers put their title at that scale
+    /// and then drew the rule at `line + 1`. The rule landed on the title's own
+    /// baseline and came out as an underline touching the descenders. Every
+    /// check they had was green: the display list said row 0 and row 1, which
+    /// are different rows, and nothing anywhere multiplied a row by a height.
+    ///
+    /// # Why only the rows AFTER the first
+    ///
+    /// Because two commands on the SAME row is the ordinary case — a row of
+    /// columns, a selection band under its own text, an icon beside a name —
+    /// and what decides whether those collide is the width, which
+    /// [`Self::nothing_overlaps`] answers. What is never ordinary is a command
+    /// that begins on a row another command has already grown into.
+    ///
+    /// # Errors
+    ///
+    /// Names the covering row, how far it reaches, and the row that starts
+    /// inside it.
+    pub fn nothing_is_covered(&self, heights: Heights, columns: u16) -> Result<(), String> {
+        let rows: Vec<(u16, u16)> = self
+            .commands
+            .iter()
+            .map(|c| Self::rows_of(c, heights))
+            .collect();
+        let cols: Vec<(u16, u16)> = self
+            .commands
+            .iter()
+            .map(|c| Self::columns_of(c, heights, columns))
+            .collect();
+
+        for (i, &(from, tall)) in rows.iter().enumerate() {
+            if tall <= 1 {
+                continue;
+            }
+            let inside = from.saturating_add(1)..from.saturating_add(tall);
+            for (j, &(at, _)) in rows.iter().enumerate() {
+                if i == j || !inside.contains(&at) || !Self::meet(cols[i], cols[j]) {
+                    continue;
+                }
+                return Err(format!(
+                    "na linha {from}, {} ocupa {tall} celulas e vai ate a linha \
+                     {}, mas {} comeca na linha {at}: o segundo e desenhado \
+                     dentro da caixa do primeiro",
+                    Self::sketch(&self.commands[i]),
+                    from.saturating_add(tall).saturating_sub(1),
+                    Self::sketch(&self.commands[j])
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses a frame where two runs on the same row can reach each other, or
+    /// where the last one runs off the right edge.
+    ///
+    /// # Errors
+    ///
+    /// Names the row, where the field starts and how far it can reach.
+    pub fn nothing_overlaps(&self, heights: Heights, columns: u16) -> Result<(), String> {
+        let mut per_row: alloc::collections::BTreeMap<u16, Vec<(u16, u16, &Command)>> =
+            alloc::collections::BTreeMap::new();
+        for c in &self.commands {
+            // ONLY TEXT. A rule and a selection paint the whole width on
+            // purpose, and counting them here would make every list row collide
+            // with its own cursor band.
+            if !matches!(c, Command::Text { .. }) {
+                continue;
+            }
+            let (at, wide) = Self::columns_of(c, heights, columns);
+            per_row.entry(c.line()).or_default().push((at, wide, c));
+        }
+
+        for (line, mut fields) in per_row {
+            fields.sort_by_key(|(at, wide, _)| (*at, *wide));
+            for pair in fields.windows(2) {
+                let (at, wide, what) = pair[0];
+                let (next, _, after) = pair[1];
+                if at.saturating_add(wide) > next {
+                    return Err(format!(
+                        "na linha {line}, {} comeca em {at} e pode chegar a {}, \
+                         mas {} comeca em {next}: os dois se sobrepoem",
+                        Self::sketch(what),
+                        at.saturating_add(wide),
+                        Self::sketch(after)
+                    ));
+                }
+            }
+            if let Some(&(at, wide, what)) = fields.last()
+                && at.saturating_add(wide) > columns
+            {
+                return Err(format!(
+                    "na linha {line}, {} comeca em {at} e pede {wide} celulas \
+                     numa janela de {columns}",
+                    Self::sketch(what)
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Every colour token named, in stable order and without repetition.
     ///
     /// It is what the host has to resolve before drawing, and what a check
@@ -1176,6 +1392,23 @@ pub struct Heights {
 }
 
 impl Heights {
+    /// How many cells a run of this scale occupies.
+    ///
+    /// The record is five named fields because that is what crosses the WIT;
+    /// this is the one place that turns a [`Scale`] back into its field, so a
+    /// caller reserving space for a run never has to spell the mapping out
+    /// again — and cannot spell it out differently.
+    #[must_use]
+    pub const fn of(&self, scale: Scale) -> u16 {
+        match scale {
+            Scale::Small => self.small,
+            Scale::Base => self.base,
+            Scale::Normal => self.normal,
+            Scale::Large => self.large,
+            Scale::Huge => self.huge,
+        }
+    }
+
     /// How many cells a run of `size` px occupies.
     ///
     /// Pure arithmetic, with no token: whoever has the numbers is the host, and what
@@ -1478,6 +1711,124 @@ mod tests {
             });
         }
         assert_eq!(d.colors(), ["rule.default", "text.primary"]);
+    }
+
+    /// The production heights: the cell is `normal`, and `large` is two of it.
+    fn heights() -> Heights {
+        Heights::from_sizes(15.0, 18.0, 20.0, 40.0, 116.0, 1.45)
+    }
+
+    fn titled(scale: Scale) -> DisplayList {
+        let mut d = DisplayList::fresh_one();
+        d.push(Command::Text {
+            line: 0,
+            column: 3,
+            text: Text::key("format-title"),
+            color: Color::name("text-primary"),
+            scale,
+            max_width: 40,
+        });
+        d.push(Command::Rule {
+            line: 1,
+            color: Color::name("rule-default"),
+        });
+        d
+    }
+
+    #[test]
+    fn a_title_at_the_glyph_scale_swallows_the_rule_under_it() {
+        // The defect, exactly as it reached the screen: a 40 px run has a 58 px
+        // line box on a 29 px grid, so it covers row 1 as well, and the rule
+        // drawn there came out as an underline through the descenders. The
+        // display list named two different rows, which is why every check that
+        // read rows was green.
+        assert!(
+            titled(Scale::Large)
+                .nothing_is_covered(heights(), 80)
+                .is_err()
+        );
+        // And the fix is not the rule moving: it is the title being the body's
+        // size, which is one cell and cannot cover anything.
+        assert!(
+            titled(Scale::Normal)
+                .nothing_is_covered(heights(), 80)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn two_fields_on_the_same_row_are_the_ordinary_case() {
+        // What decides whether these collide is the WIDTH, and that is the other
+        // question. If this were a fault, every list row with more than one
+        // column would be one.
+        let mut d = DisplayList::fresh_one();
+        for column in [0, 20, 40] {
+            d.push(Command::Text {
+                line: 7,
+                column,
+                text: Text::key("some-label"),
+                color: Color::name("text-primary"),
+                scale: Scale::Normal,
+                max_width: 20,
+            });
+        }
+        assert!(d.nothing_is_covered(heights(), 80).is_ok());
+        assert!(d.nothing_overlaps(heights(), 80).is_ok());
+    }
+
+    #[test]
+    fn a_sentence_claims_its_budget_and_a_datum_claims_its_length() {
+        // The asymmetry that keeps this honest. A key is a sentence the host
+        // will translate, so the budget is all anyone can go on — a budget that
+        // reaches into the next field is a field that WILL be written over as
+        // soon as the language changes. A datum is a string the buffer is
+        // holding, and it usually positions the next field from that length:
+        // charging it for a budget it demonstrably does not use would condemn
+        // every list that lets its last column run to the edge.
+        let field = |text: Text, column: u16, max_width: u16| Command::Text {
+            line: 0,
+            column,
+            text,
+            color: Color::name("text-primary"),
+            scale: Scale::Normal,
+            max_width,
+        };
+
+        let mut sentence = DisplayList::fresh_one();
+        sentence.push(field(Text::key("a-sentence"), 0, 40));
+        sentence.push(field(Text::datum("32 GiB"), 20, 10));
+        assert!(sentence.nothing_overlaps(heights(), 80).is_err());
+
+        let mut datum = DisplayList::fresh_one();
+        datum.push(field(Text::datum("nixos"), 0, 40));
+        datum.push(field(Text::datum("32 GiB"), 20, 10));
+        assert!(datum.nothing_overlaps(heights(), 80).is_ok());
+    }
+
+    #[test]
+    fn a_glyph_run_is_as_wide_as_it_is_tall() {
+        // The cell is `0.600 em`, so the scale multiplies the advance the same
+        // way it multiplies the line box: one `Large` glyph covers the two cells
+        // `Heights` already charges it in the other direction. A neighbour one
+        // cell away is under it.
+        let mut d = DisplayList::fresh_one();
+        d.push(Command::Text {
+            line: 0,
+            column: 0,
+            text: Text::icon("disk"),
+            color: Color::name("text-primary"),
+            scale: Scale::Large,
+            max_width: 2,
+        });
+        d.push(Command::Text {
+            line: 0,
+            column: 1,
+            text: Text::datum("x"),
+            color: Color::name("text-primary"),
+            scale: Scale::Normal,
+            max_width: 1,
+        });
+        assert!(d.nothing_overlaps(heights(), 80).is_err());
     }
 
     #[test]

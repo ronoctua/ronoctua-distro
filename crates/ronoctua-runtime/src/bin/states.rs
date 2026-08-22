@@ -49,6 +49,77 @@ fn reported(effects: &[Effect]) -> Option<&str> {
     })
 }
 
+/// Renders, and refuses a frame where anything is drawn on top of anything.
+///
+/// # Why this rides along with the state contract
+///
+/// Because this is the only driver that puts EVERY buffer through EVERY state
+/// it declares, which is exactly the coverage a geometry fault needs. The one
+/// that prompted it was three buffers drawing their title at `Scale::Large` —
+/// a 58 px line box on a 29 px grid — and then putting the rule in the cell the
+/// title had grown into. On screen it was an underline through the descenders.
+/// No test failed, because every test read the display list as rows and none of
+/// them multiplied a row by the height its scale is worth.
+///
+/// # And at more than one width
+///
+/// Because a sideways collision appears at the width where two fields happen to
+/// meet, and that width depends on how long a sentence came out in whichever
+/// language is loaded. A single size proves the single size.
+fn look(inst: &mut ronoctua_runtime::Instance, name: &str) -> Result<()> {
+    for columns in [46, 80, COLUMNS] {
+        let list = inst.render(columns, ROWS, heights())?;
+        if let Err(e) = list.nothing_overlaps(heights(), columns) {
+            bail!("{name}: em {columns} colunas, {e}");
+        }
+        if let Err(e) = list.nothing_is_covered(heights(), columns) {
+            bail!("{name}: em {columns} colunas, {e}");
+        }
+        no_sentence_at_a_glyph_scale(&list, name)?;
+    }
+    Ok(())
+}
+
+/// A SENTENCE is never drawn at the size a glyph is drawn at.
+///
+/// # Why the rule is about the KEY and not about the scale
+///
+/// Because `Large` and `Huge` are legitimate, and often: they are what the
+/// three browsers draw a codepoint at, where the content IS the shape and the
+/// whole screen exists so somebody can see the drawing. What is never
+/// legitimate is a translated sentence at that size. `font.size.xlarge` says so
+/// in writing — "it does not hold for the whole buffer; interface text at 32
+/// point is uncomfortable to read" — and it says it because that is how the
+/// glyph browser's header and footer once grew along with the icons.
+///
+/// It came back anyway, in three buffers at once, as the title: 40 px over a
+/// window whose every other line is 20. The comment could not stop it because
+/// nothing read the comment. This does.
+///
+/// `Text::Data` is deliberately NOT covered: the browsers draw their codepoints
+/// as data, and a codepoint is the shape, not a sentence.
+fn no_sentence_at_a_glyph_scale(list: &ronoctua_protocol::DisplayList, name: &str) -> Result<()> {
+    use ronoctua_protocol::{Command, Scale, Text};
+
+    for c in &list.commands {
+        if let Command::Text {
+            text: Text::Key(k),
+            scale: scale @ (Scale::Large | Scale::Huge),
+            line,
+            ..
+        } = c
+        {
+            bail!(
+                "{name}: a chave `{k}` esta na linha {line} em escala \
+                 `{scale:?}`, que e o tamanho de um GLIFO.\n\
+                 Uma frase traduzida se le no tamanho do corpo; o que marca um \
+                 titulo e a cor, a regua e o espaco em branco, nunca o tamanho."
+            );
+        }
+    }
+    Ok(())
+}
+
 fn drive(path: &str) -> Result<()> {
     let wasm = std::fs::read(path).with_context(|| format!("nao consegui ler {path}"))?;
     let rt = ronoctua_runtime::Runtime::fresh()?;
@@ -69,7 +140,7 @@ fn drive(path: &str) -> Result<()> {
     // The first `render` before anything else, because the host does it too —
     // and because a component that only computes its state lazily would other-
     // wise be measured from a screen it never drew.
-    inst.render(COLUMNS, ROWS, heights())?;
+    look(&mut inst, &d.name)?;
 
     // ---- ONE STATE IS THE NORMAL CASE, AND IT IS NOT A FAILURE ----
     if d.states.len() == 1 {
@@ -96,10 +167,10 @@ fn drive(path: &str) -> Result<()> {
         // Without this, `sheet` after `filter` would prove only that the second
         // change works from wherever the first one left off.
         inst.event(&Input::EnterState(BASE_STATE.to_owned()))?;
-        inst.render(COLUMNS, ROWS, heights())?;
+        look(&mut inst, &d.name)?;
 
         let effects = inst.event(&Input::EnterState(going.clone()))?;
-        inst.render(COLUMNS, ROWS, heights())?;
+        look(&mut inst, &d.name)?;
         match reported(&effects) {
             Some(said) if said == going => {}
             Some(said) => bail!("{}: pedi `{going}` e o componente relatou `{said}`", d.name),
@@ -137,7 +208,7 @@ fn drive(path: &str) -> Result<()> {
         // `state-changed`, so a buffer that walked back without saying so would
         // draw the grid and go on naming the sheet.
         let back = inst.event(&Input::Cancel)?;
-        inst.render(COLUMNS, ROWS, heights())?;
+        look(&mut inst, &d.name)?;
         if reported(&back).is_none() {
             bail!(
                 "{}: `Esc` em `{going}` nao voltou, ou voltou sem relatar.\n\

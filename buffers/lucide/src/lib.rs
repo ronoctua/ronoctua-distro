@@ -143,11 +143,18 @@ fn value_column(ctx: &Context) -> u16 {
 
 /// How many cells sit between the label and the value, for the marks.
 ///
-/// **Two, always** — including on the lines that have no mark at all. It is
-/// the same rule the symbols browser wrote for its own marker: the drawing
-/// starts after them on every line, because reserving space only where there
-/// is a mark would make the value column move about from line to line.
-const MARK_CELLS: u16 = 2;
+/// **Always the same number** — including on the lines that have no mark at
+/// all. It is the same rule the symbols browser wrote for its own marker: the
+/// drawing starts after them on every line, because reserving space only where
+/// there is a mark would make the value column move about from line to line.
+///
+/// THREE, BECAUSE THERE ARE THREE MARKS. It was two, and the third one —
+/// `History`, drawn at offset 2 — landed on the value's own first cell: on the
+/// size line it sat on the `2` of `24 px`, and every adjustment line has that
+/// mark. The reservation and the number of things reserving it have to be the
+/// same number, and nothing said so until a check compared what would be drawn
+/// with what else would be drawn there.
+const MARK_CELLS: u16 = 3;
 
 /// What a sheet line responds to.
 ///
@@ -213,7 +220,7 @@ impl Mark {
         }
     }
 
-    /// The glyphs, in the two cells reserved before the value.
+    /// The glyphs, in the cells reserved before the value — one each.
     ///
     /// Icons are **tokens** (invariant 10): whoever knows the codepoint is the
     /// host, and a name that does not exist does not compile here — the enum

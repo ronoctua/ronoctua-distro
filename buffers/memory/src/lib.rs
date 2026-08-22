@@ -340,14 +340,34 @@ fn row(out: &mut Vec<Command>, line: u16, r: &Row, ctx: &Context) -> u16 {
     line + 1
 }
 
-/// A title with its icon.
+/// A title with its icon, and the empty cell under it.
+///
+/// # Why the title is the BODY's size, and not the glyph's
+///
+/// It used to ask for `Scale::Large`: 40 px, which is what a glyph is drawn at
+/// in the browsers and not what a sentence is read at. A panel whose every
+/// other line is 20 px got a heading twice that height — the same complaint
+/// `font.size.xlarge` already carries in writing — and, because a 40 px run
+/// has a line box of 58 px against the grid's 29, it also SPENT the cell under
+/// it. That cell was the panel's air: the blank row this function returns was
+/// there to keep the first gauge off the title, and the title had already
+/// filled it. What is left over is a few pixels, which is not air.
+///
+/// The heading is marked by the accent glyph in front of it and by the blank
+/// cell after it, which is what `colors.nix` prescribes: emphasis by colour,
+/// separation by whitespace. One cell instead of two, and the gauges get their
+/// row back.
+///
+/// THE AIR, on both sides: the buffer's own top margin above, and now a whole
+/// empty cell between the title's descenders and the first line of content
+/// below, which is what that returned row was always for.
 fn title(out: &mut Vec<Command>, line: u16, icon: Icon, text_key: &str, ctx: &Context) -> u16 {
     out.push(Command::Text(TextCommand {
         line,
         column: 0,
         content: Text::Icon(icon),
         color: Color::StateAccent,
-        scale: Scale::Large,
+        scale: Scale::Normal,
         max_width: 2,
     }));
     out.push(Command::Text(TextCommand {
@@ -355,7 +375,7 @@ fn title(out: &mut Vec<Command>, line: u16, icon: Icon, text_key: &str, ctx: &Co
         column: 3,
         content: Text::Key(text_key.to_owned()),
         color: Color::TextPrimary,
-        scale: Scale::Large,
+        scale: Scale::Normal,
         max_width: ctx.columns.saturating_sub(3),
     }));
     line + 2

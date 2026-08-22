@@ -322,7 +322,7 @@ impl TerminalWindow {
         let texts = ronoctua_i18n::Texts::from_env();
         // The window's COLUMNS: the host guarantees that nothing leaks past the
         // edge, and a terminal line wider than the window is the common case.
-        let spans = crate::buffer::spans_of(&list, &texts, self.columns);
+        let spans = crate::paint::spans_of(&list, &texts, self.columns);
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };

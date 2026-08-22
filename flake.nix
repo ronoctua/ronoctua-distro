@@ -241,6 +241,12 @@
         staticWit = ./crates/ronoctua-protocol/wit;
       };
 
+      # THE SOFTWARE VULKAN THE CHECKS ALREADY USE, from the one file that names
+      # it. `nix run .#png` draws with wgpu and needs an ICD; taking it from
+      # here instead of writing the path again means a Mesa that renames the
+      # file breaks both at once, and is fixed once.
+      xvfbIcd = (import ./tests/niri-xvfb.nix { inherit pkgs lib; }).icd;
+
       # The native buffers, for `wasm32-wasip2`. After `rustToolchain`
       # because they use the SAME toolchain — the wasm target is already in it.
       buffers = pkgs.callPackage ./nix/buffers.nix {
@@ -1052,6 +1058,39 @@
             echo "Sem sessao grafica: os alvos de frame nao foram medidos."
             echo "Rode este comando de dentro de uma sessao Wayland ou X."
           fi
+        '';
+
+        # A BUFFER BECOMES A PNG, WITH NO COMPOSITOR AND NO VM.
+        #
+        # The owner's rule is that green is not proof: what appears on the
+        # screen is opened on the screen before anybody says it is done. Until
+        # this existed, obeying that rule cost a whole NixOS VM — boot, niri
+        # under Xvfb, screenshot the X root, crop by the geometry niri reported.
+        # Three minutes to see whether a rule was touching a title's descenders,
+        # and a rule that expensive is a rule that gets skipped: the title that
+        # prompted this went months at twice the body's size with every check
+        # green.
+        #
+        # Here it is 0.2 s. What differs from the screen is ONLY where the pixel
+        # lands — a texture instead of a `wl_surface`; the conversion, the
+        # margins, the cell, the atlas and the font are the production ones, by
+        # way of the `paint` module.
+        #
+        # The graphics environment is the checks' own: lavapipe, Mesa's software
+        # Vulkan rasteriser. That is not a performance choice — it is what makes
+        # the command answer the same on this machine, on one with no GPU and
+        # inside a check. Section 9.3 still holds: frame time is NEVER measured
+        # here.
+        png = mkScriptApp "ronoctua-png" "desenha um buffer num PNG, sem VM" ''
+          # NO `LD_LIBRARY_PATH` HERE, and that is deliberate: it beats
+          # `DT_RUNPATH`, and the binary already carries the loader it was built
+          # against. Putting a second `libvulkan` in front of it is the same
+          # mistake as reaching for the host's `/usr/lib64` — measured, and it
+          # works without it.
+          export VK_DRIVER_FILES=${xvfbIcd}
+          export VK_ICD_FILENAMES=${xvfbIcd}
+          export LIBGL_ALWAYS_SOFTWARE=1
+          exec ${rust.workspace}/bin/ronoctua-render-png "$@"
         '';
       };
 

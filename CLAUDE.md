@@ -36,9 +36,9 @@ Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção
 ```
 nix develop           entra no ambiente (direnv é atalho opcional, e do HOST)
 nix run .#dev         niri aninhado + rodapé; leader = Ctrl+Alt+Espaço, não Super
+nix run .#png         um buffer vira PNG em 0,2 s, sem VM: a tela antes do "pronto"
 nix run .#quick       DEZ escolhidos (tests/quick.nix), ~1 min; subconjunto, não categoria
-nix run .#most        os que não constroem instalação — a bateria de todo dia
-nix run .#gate        TUDO; dimensiona pela RAM e acusa o earlyoom. Só ele fecha o inv. 7
+nix run .#gate        TUDO; dimensiona pela RAM e o earlyoom. Só ele fecha o inv. 7; .#most é a bateria de todo dia, sem instalação
 nix run .#vm  VM completa; .#iso o ISO; .#bench falha se estourar; .#diagnostics só lê
 nix run .#install     instala (ensaia sem --execute);  ronoctua.profile: full ou minimal
 ```
@@ -121,7 +121,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
-- **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO.
+- **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO. **Uma run ocupa `heights.of(escala)` CÉLULAS, e a escala alarga tanto quanto sobe**: `Large` são DUAS, e a régua em `line+1` virava sublinhado. Título é do tamanho do CORPO — hierarquia é cor, régua e ar, nunca tamanho; os dois `DisplayList::nothing_*` cobram isso em TODO buffer, em TODO estado.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.

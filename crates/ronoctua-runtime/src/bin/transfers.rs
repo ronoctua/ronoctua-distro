@@ -118,8 +118,37 @@ impl Screen {
     }
 }
 
+/// Draws, reads the screen, and refuses a frame where anything is drawn on top
+/// of anything.
+///
+/// # Why the geometry rides along with every reading
+///
+/// Because this driver is the only one that fills this buffer with data, and a
+/// collision needs the data: an empty list collides with nothing. The two
+/// questions live in `ronoctua-protocol`, next to the display list they read —
+/// sideways, whether a field's budget reaches into the next one; downwards,
+/// whether a run's scale grew it into the cell below, which is what put a rule
+/// through the title's descenders.
+///
+/// AT THREE WIDTHS, because a collision appears at the width where two fields
+/// happen to meet, and that width depends on how long a sentence came out in
+/// whichever language is loaded.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
-    Ok(Screen::of(&inst.render(COLUMNS, ROWS, heights())?))
+    let list = inst.render(COLUMNS, ROWS, heights())?;
+    for columns in [46, 80, COLUMNS] {
+        let at = if columns == COLUMNS {
+            list.clone()
+        } else {
+            inst.render(columns, ROWS, heights())?
+        };
+        if let Err(e) = at.nothing_overlaps(heights(), columns) {
+            bail!("em {columns} colunas, {e}");
+        }
+        if let Err(e) = at.nothing_is_covered(heights(), columns) {
+            bail!("em {columns} colunas, {e}");
+        }
+    }
+    Ok(Screen::of(&list))
 }
 
 /// Fires a command by id, the way the buffer's host does when a key completes.

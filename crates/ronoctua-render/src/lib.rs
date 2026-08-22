@@ -48,6 +48,7 @@ pub fn start() -> std::time::Instant {
 }
 pub mod image;
 pub mod layout;
+pub mod offscreen;
 pub mod quad;
 pub mod text;
 

@@ -2041,6 +2041,125 @@ let
     ${rust.workspace}/bin/ronoctua-test-large-surface
   '';
 
+  # THE TOOL THAT MAKES "OPEN IT ON THE SCREEN" AFFORDABLE HAS TO KEEP WORKING.
+  #
+  # `nix run .#png` draws a buffer into a PNG in 0,2 s, and it exists because
+  # the alternative — a NixOS VM, niri under Xvfb, a screenshot of the X root —
+  # cost three minutes, which is how a title came to be drawn at twice the
+  # body's size for months. A tool nobody checks is a tool that stops working
+  # quietly, and the discovery happens on the day somebody needs it.
+  #
+  # # What is actually asserted, and why not "the file appeared"
+  #
+  # Because a PNG of the right size, filled edge to edge with the background
+  # colour, is EXACTLY what a broken draw produces — and it would pass. So:
+  #
+  #   - every chunk's CRC is recomputed, and the `IDAT` goes through a real
+  #     `zlib`. The writer is forty hand-rolled lines (making `png` a direct
+  #     dependency would cost a rebuild of crane's whole dependency layer), and
+  #     this is what stops those forty lines from being subtly wrong;
+  #   - the size in the header has to be the size the tool PRINTED. A writer
+  #     that lies about its own dimensions is the one failure a viewer would
+  #     see as "the picture is a bit odd";
+  #   - there has to be INK: pixels that are not the commonest colour. That is
+  #     the assertion that separates "it drew" from "it cleared the screen";
+  #   - and pt-BR and en-GB have to come out DIFFERENT. That one closes the
+  #     whole chain in a single comparison — component, display list, i18n,
+  #     tokens, wgpu, pixel — with no OCR and without naming a single colour
+  #     here, which would be a second copy of a token (invariant 9).
+  #
+  # Under lavapipe, like `large-monitor-surface`: hermetic, no GPU. Section 9.3
+  # forbids measuring frame time here, and nothing here measures time.
+  png-tool-draws = mkCheck "png-tool-draws" [ pkgs.python3 ] ''
+    export VK_DRIVER_FILES=${xvfb.icd}
+    export VK_ICD_FILENAMES=${xvfb.icd}
+    export LIBGL_ALWAYS_SOFTWARE=1
+
+    for language in pt-BR en-GB; do
+      ${rust.workspace}/bin/ronoctua-render-png \
+        ${buffers.format}/lib/ronoctua_buffer_format.wasm \
+        --columns 60 --lines 10 --language "$language" \
+        --out "$PWD/$language.png" | tee "$PWD/$language.txt"
+    done
+
+    python3 - <<'FIM'
+    import pathlib, re, struct, sys, zlib
+
+    def read(language):
+        raw = pathlib.Path(f"{language}.png").read_bytes()
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n", f"{language}: assinatura PNG errada"
+        at, chunks = 8, {}
+        while at < len(raw):
+            size = struct.unpack(">I", raw[at : at + 4])[0]
+            kind = raw[at + 4 : at + 8]
+            body = raw[at + 8 : at + 8 + size]
+            said = struct.unpack(">I", raw[at + 8 + size : at + 12 + size])[0]
+            # THE CRC AGAINST A REAL IMPLEMENTATION. Our table is written by
+            # hand; `zlib.crc32` is not.
+            mine = zlib.crc32(kind + body)
+            assert mine == said, f"{language}: CRC de {kind!r}: {mine:08x} != {said:08x}"
+            chunks.setdefault(kind, b"")
+            chunks[kind] += body
+            at += 12 + size
+        width, height, depth, colour, _, _, laced = struct.unpack(">IIBBBBB", chunks[b"IHDR"])
+        assert (depth, colour, laced) == (8, 6, 0), (
+            f"{language}: cabecalho diz {depth} bits, tipo {colour}, entrelacado {laced}"
+        )
+        rows = zlib.decompress(chunks[b"IDAT"])
+        # ONE FILTER BYTE PER ROW, and ours is always 0 — nothing compresses, so
+        # nothing needs filtering. A row that arrived with another filter would
+        # mean the writer changed and this reader did not.
+        stride = width * 4 + 1
+        assert len(rows) == stride * height, (
+            f"{language}: {len(rows)} bytes de pixel para {width}x{height}"
+        )
+        pixels = []
+        for n in range(height):
+            row = rows[n * stride : (n + 1) * stride]
+            assert row[0] == 0, f"{language}: linha {n} veio com filtro {row[0]}"
+            pixels.extend(
+                bytes(row[1 + i * 4 : 5 + i * 4]) for i in range(width)
+            )
+        said = pathlib.Path(f"{language}.txt").read_text()
+        printed = re.search(r"(\d+)x(\d+) px", said)
+        assert printed, f"{language}: a ferramenta nao disse o tamanho: {said!r}"
+        assert (width, height) == (int(printed[1]), int(printed[2])), (
+            f"{language}: o cabecalho diz {width}x{height} e a ferramenta disse "
+            f"{printed[1]}x{printed[2]}"
+        )
+        return width, height, pixels
+
+    shape, seen = None, {}
+    for language in ("pt-BR", "en-GB"):
+        width, height, pixels = read(language)
+        if shape is None:
+            shape = (width, height)
+        assert shape == (width, height), "as duas linguas sairam com tamanhos diferentes"
+
+        # THE INK. The commonest colour is the background by construction — it is
+        # what the frame was cleared with — so anything else is something drawn.
+        tally = {}
+        for p in pixels:
+            tally[p] = tally.get(p, 0) + 1
+        background, _ = max(tally.items(), key=lambda kv: kv[1])
+        ink = len(pixels) - tally[background]
+        share = ink / len(pixels)
+        print(f"{language}: {width}x{height}, {len(tally)} cores, {share:.2%} de tinta")
+        assert share > 0.005, (
+            f"{language}: so {share:.3%} da imagem nao e o fundo — isso e uma tela "
+            "limpa, nao um buffer desenhado"
+        )
+        seen[language] = pixels
+
+    # AND AS TRADUCOES DIFEREM NO PIXEL.
+    assert seen["pt-BR"] != seen["en-GB"], (
+        "pt-BR e en-GB sairam pixel por pixel iguais: a chave nao esta sendo "
+        "traduzida antes de virar desenho"
+    )
+    print("OK: o PNG e valido, tem tinta, e o idioma chega ate o pixel")
+    FIM
+  '';
+
   # ENDING THE SESSION MUST NOT PRINT AN ERROR.
   #
   # # What this catches
@@ -6151,6 +6270,7 @@ let
       layout-fast
       shaping-fast
       large-monitor-surface
+      png-tool-draws
       reload-reloads
       reload-command-is-defined
       dev-exports-what-the-build-bakes

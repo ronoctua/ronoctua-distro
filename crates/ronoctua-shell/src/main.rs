@@ -58,6 +58,7 @@ mod minibuffer;
 mod network;
 mod notifications;
 mod notifications_window;
+mod paint;
 mod surface;
 mod syncthing;
 mod terminal;

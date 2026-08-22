@@ -27,7 +27,7 @@
 //!
 //! Usage: `ronoctua-test-format <component.wasm> <i18n-dir>`
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use ronoctua_protocol::{Command, Device, Effect, Input, Outcome, Rack, Recipe, Text};
 
 /// The scale heights the production host sends.
@@ -108,72 +108,41 @@ impl Screen {
     }
 }
 
+/// Draws, reads the screen, and refuses a frame that draws on top of itself.
+///
+/// Here on EVERY reading, and not only in the width walk below: the walk goes
+/// over one screen, and the three this buffer has do not lay out alike.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
-    Ok(Screen::of(&inst.render(COLUMNS, ROWS, heights())?))
+    let list = inst.render(COLUMNS, ROWS, heights())?;
+    nothing_touches(&list, COLUMNS)?;
+    Ok(Screen::of(&list))
 }
 
-/// Nothing on any line may reach into what is drawn to its right.
+/// Nothing on the frame touches anything else, in either direction.
 ///
-/// # The defect this exists for, which was found on a SCREENSHOT
+/// # The two defects this exists for, both found on a SCREENSHOT
 ///
-/// The detail line has two halves: a sentence on the left and an exact byte
-/// count against the right edge. The first version gave the sentence the whole
-/// window's width and then drew the number on top of it — on screen,
+/// SIDEWAYS: the detail line has two halves, a sentence on the left and an
+/// exact byte count against the right edge. The first version gave the sentence
+/// the whole window's width and then drew the number on top of it — on screen,
 /// `…dos até 2 §1BO88p4 B`. Every test passed, because every test compared
 /// STATE, and the state was right: both fields existed and both said the right
 /// thing.
 ///
-/// So this compares what would be DRAWN. A field's budget is `max_width`
-/// (`0` meaning to the edge), and a field whose budget runs into its
-/// neighbour's column is a field that CAN overlap — whether it does depends on
-/// how long the sentence turned out in that language, which is exactly the kind
-/// of thing that is right in one language and wrong in the other.
-fn nothing_overlaps(list: &ronoctua_protocol::DisplayList, columns: u16) -> Result<()> {
-    use ronoctua_protocol::Command;
-
-    let mut per_line: std::collections::BTreeMap<u16, Vec<(u16, u16)>> =
-        std::collections::BTreeMap::new();
-    for c in &list.commands {
-        if let Command::Text {
-            line,
-            column,
-            max_width,
-            ..
-        } = c
-        {
-            let budget = if *max_width == 0 {
-                columns.saturating_sub(*column)
-            } else {
-                *max_width
-            };
-            per_line.entry(*line).or_default().push((*column, budget));
-        }
-    }
-
-    for (line, mut fields) in per_line {
-        fields.sort_unstable();
-        for pair in fields.windows(2) {
-            let (at, budget) = pair[0];
-            let (next, _) = pair[1];
-            if at + budget > next {
-                bail!(
-                    "na linha {line}, um campo em {at} pode chegar a {} e o \
-                     seguinte comeca em {next}: os dois se sobrepoem",
-                    at + budget
-                );
-            }
-        }
-        // AND NOTHING RUNS OFF THE RIGHT EDGE either, which is the same fault
-        // pointing the other way.
-        if let Some((at, budget)) = fields.last()
-            && at + budget > columns
-        {
-            bail!(
-                "na linha {line}, o ultimo campo comeca em {at} e pede {budget} \
-                 celulas numa janela de {columns}"
-            );
-        }
-    }
+/// DOWNWARDS: the title asked for `Scale::Large`, whose line box is 58 px
+/// against the grid's 29, so it covered the cell under it — and the rule drawn
+/// there came out as an underline through the descenders. Same shape of
+/// mistake: the display list named two different rows, and nothing multiplied a
+/// row by the height its scale is worth.
+///
+/// Both live in `ronoctua-protocol`, next to the display list they read, so
+/// every driver asks the same question and no two of them can disagree about
+/// what a command occupies.
+fn nothing_touches(list: &ronoctua_protocol::DisplayList, columns: u16) -> Result<()> {
+    list.nothing_overlaps(heights(), columns)
+        .map_err(|e| anyhow!(e))?;
+    list.nothing_is_covered(heights(), columns)
+        .map_err(|e| anyhow!(e))?;
     Ok(())
 }
 
@@ -328,7 +297,7 @@ fn main() -> Result<()> {
     // appears at the width where two fields happen to meet — and that width
     // depends on how long a sentence came out in whichever language is loaded.
     for columns in [46, 60, 80, 110, 160] {
-        nothing_overlaps(&inst.render(columns, ROWS, heights())?, columns)?;
+        nothing_touches(&inst.render(columns, ROWS, heights())?, columns)?;
     }
     println!("e nada encosta em nada, de 46 a 160 colunas");
 

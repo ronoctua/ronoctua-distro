@@ -384,14 +384,34 @@ fn put(out: &mut Vec<Command>, line: u16, column: u16, content: Text, color: Col
     }));
 }
 
-/// The title, and the line after it.
+/// The title, and the rule that closes it off.
+///
+/// # Why the title is the BODY's size, and not the glyph's
+///
+/// It used to ask for `Scale::Large` — the size a glyph is drawn at in the
+/// browsers, 40 px against the body's 20 — and that is two defects in one
+/// line. A sentence at 40 px is uncomfortable to read above a list whose every
+/// row is 20 px; and a 40 px run has a line box of 58 px, which covers TWO
+/// cells of the 29 px grid, so the rule at `line + 1` fell on the title's own
+/// baseline and read as an underline touching the descenders.
+///
+/// What makes this line a title is not its size: it is the accent glyph in
+/// front of it and the rule under it, which is exactly the pair `colors.nix`
+/// prescribes — emphasis by colour, separation by whitespace and a one-line
+/// rule. At the body's size it also costs ONE cell instead of two, and in a
+/// footer with a ceiling that row goes back to the list.
+///
+/// THE AIR: the descenders stop at the bottom of the title's own cell and the
+/// rule's ink sits near the middle of the NEXT one, so better than half a cell
+/// separates them; the first row starts a cell below the rule, with the same
+/// clearance again on the other side of it. Neither pair touches.
 fn title(out: &mut Vec<Command>, line: u16, icon: Icon, text: &str, ctx: &Context) -> u16 {
     out.push(Command::Text(TextCommand {
         line,
         column: 0,
         content: Text::Icon(icon),
         color: Color::StateAccent,
-        scale: Scale::Large,
+        scale: Scale::Normal,
         max_width: 2,
     }));
     out.push(Command::Text(TextCommand {
@@ -399,7 +419,7 @@ fn title(out: &mut Vec<Command>, line: u16, icon: Icon, text: &str, ctx: &Contex
         column: 3,
         content: Text::Key(text.to_owned()),
         color: Color::TextPrimary,
-        scale: Scale::Large,
+        scale: Scale::Normal,
         max_width: ctx.columns.saturating_sub(3),
     }));
     out.push(Command::Rule(LineCommand {

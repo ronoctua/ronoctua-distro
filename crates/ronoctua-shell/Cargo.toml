@@ -12,6 +12,13 @@ name = "ronoctua-shell"
 path = "src/main.rs"
 
 [[bin]]
+# It draws a buffer into a PNG with no compositor and no VM. It is a binary, and
+# not a `#[test]`, for the same reason the drivers are: what it produces is a
+# FILE somebody looks at, and the thing it loads is a wasip2 component.
+name = "ronoctua-render-png"
+path = "src/bin/render-png.rs"
+
+[[bin]]
 # It walks the action table against a actual niri. It is a binary, and not a
 # `#[test]`, because the Nix check needs a command that talks to a live
 # compositor.

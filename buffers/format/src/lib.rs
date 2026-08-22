@@ -358,14 +358,44 @@ fn put(out: &mut Vec<Command>, line: u16, column: u16, content: Text, color: Col
     }));
 }
 
-/// The title, and the rule under it.
+/// The title, the rule under it, and the empty cell after the rule.
+///
+/// # Why the title is the BODY's size, and not the glyph's
+///
+/// It used to ask for `Scale::Large`, which is the size a GLYPH is drawn at in
+/// the browsers: 40 px against the body's 20. Two things came of that, and the
+/// screen reported both at once.
+///
+/// A sentence at 40 px is uncomfortable to read at the top of a window where
+/// every other line is 20 px — which is the same complaint `font.size.xlarge`
+/// already carries in writing, from the pass where the glyph browser's header
+/// and footer grew along with the icons. And a 40 px run has a line box of
+/// 58 px, so it covers TWO cells of the 29 px grid: the rule at `line + 1` was
+/// landing on the title's own baseline and came out as an underline touching
+/// the descenders.
+///
+/// THE HIERARCHY WAS NEVER THE SIZE. `colors.nix` says so in its opening
+/// lines: emphasis is by weight and colour, separation is by whitespace and a
+/// one-line rule. What marks this line as a title is the accent glyph in front
+/// of it, the rule under it and the blank cell after that — and it now costs
+/// one cell instead of two, which a window that has to fit a list of disks
+/// notices.
+///
+/// # The air, on both sides
+///
+/// Above: the title is the first row, and the buffer's own top margin is what
+/// stands between it and the window's edge. Below: the descenders stop at the
+/// bottom of the title's own cell and the rule's ink sits near the middle of
+/// the NEXT one, so better than half a cell separates them — and under the
+/// rule comes a whole empty cell before the first row of content. Nothing
+/// leans on anything.
 fn title(out: &mut Vec<Command>, icon: Icon, text: &str, tint: Color, ctx: &Context) -> u16 {
     out.push(Command::Text(TextCommand {
         line: 0,
         column: GUTTER,
         content: Text::Icon(icon),
         color: tint,
-        scale: Scale::Large,
+        scale: Scale::Normal,
         max_width: 2,
     }));
     out.push(Command::Text(TextCommand {
@@ -373,7 +403,7 @@ fn title(out: &mut Vec<Command>, icon: Icon, text: &str, tint: Color, ctx: &Cont
         column: GUTTER + 3,
         content: Text::Key(text.to_owned()),
         color: Color::TextPrimary,
-        scale: Scale::Large,
+        scale: Scale::Normal,
         max_width: ctx.columns.saturating_sub(GUTTER + 3),
     }));
     out.push(Command::Rule(LineCommand {
