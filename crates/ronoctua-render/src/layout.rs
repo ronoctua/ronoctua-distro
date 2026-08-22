@@ -123,6 +123,39 @@ pub fn width(s: &str) -> u16 {
     u16::try_from(units(s).count()).unwrap_or(u16::MAX)
 }
 
+/// Is this a CHROME GLYPH — an icon from the font, and not a letter?
+///
+/// The Nerd Fonts glyphs all live in a private use area: the BMP's
+/// (`U+E000..U+F8FF`) and plane 15's (`U+F0000..U+FFFFD`). Nothing a person
+/// types and nothing an application puts in a window title lands there, so the
+/// range answers the question without a table to keep in step with
+/// `icons.nix`.
+///
+/// It exists because a glyph and the text beside it are drawn at DIFFERENT
+/// sizes (see `font.size.icon`), and the drawing has to know where one ends.
+#[must_use]
+pub const fn is_chrome_glyph(c: char) -> bool {
+    matches!(c, '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..='\u{FFFFD}')
+}
+
+/// Splits a leading chrome glyph off the rest.
+///
+/// `Some((glyph, rest))` when the text starts with one — the bell and its
+/// count, the transfer's arrow and its percentage. `None` when it does not, and
+/// then the run is drawn whole, at one size.
+///
+/// It splits ONE cluster, not a run of them: what the modeline puts in front
+/// of text is a single icon, and a second one would be a second thing to line
+/// up against the grid.
+#[must_use]
+pub fn leading_glyph(s: &str) -> Option<(&str, &str)> {
+    let first = units(s).next()?;
+    if !first.chars().next().is_some_and(is_chrome_glyph) {
+        return None;
+    }
+    Some(s.split_at(first.len()))
+}
+
 /// Elides in the middle, preserving both ends.
 #[must_use]
 pub fn elide_middle(s: &str, max: u16) -> String {
@@ -325,6 +358,26 @@ mod tests {
     // dependency here enters everybody's build closure. Xorshift with a fixed seed
     // also makes the failure **reproducible** without recording anything — the same
     // case breaks on the same iteration.
+
+    #[test]
+    fn a_leading_glyph_comes_off_the_text() {
+        use super::{is_chrome_glyph, leading_glyph};
+        // The bell and its count, which is what the modeline actually draws.
+        let bell = ronoctua_tokens::icon::NOTIFICATION;
+        let line = format!("{bell}12");
+        let (g, rest) = leading_glyph(&line).expect("o sino e glifo de chrome");
+        assert_eq!(g, bell.to_string());
+        assert_eq!(rest, "12");
+        // Plane 15 counts too: the countdown pie lives there.
+        assert!(is_chrome_glyph(ronoctua_tokens::icon::COUNTDOWN_EIGHT));
+        // And ordinary text is left whole — otherwise a buffer's name would
+        // have its first letter drawn at another size.
+        assert!(leading_glyph("arquivo.rs").is_none());
+        assert!(leading_glyph("").is_none());
+        // An emoji is NOT chrome: its colour is inside the glyph and it is
+        // content, not an icon of ours.
+        assert!(!is_chrome_glyph('\u{1F600}'));
+    }
 
     /// Xorshift64*. Deterministic on purpose.
     struct Draw(u64);

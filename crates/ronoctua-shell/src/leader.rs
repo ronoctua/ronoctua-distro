@@ -856,9 +856,43 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "workspace-move",
             label: key::CMD_WORKSPACE_MOVE,
         },
+        // THE NOTIFICATION MANAGER, and its second door.
+        //
+        // `notif-history` keeps its id because it keeps its key: `n h` is what
+        // the hand already does, and the thing it opens simply grew from a list
+        // one reads into a view one uses.
         Command {
             id: "notif-history",
             label: key::CMD_NOTIF_HISTORY,
+        },
+        // The same manager in a window of its own — the same `View`, and the
+        // same reason the file manager has two doors: the footer's region has a
+        // twelve-line ceiling (invariant 14), which is right for a footer and
+        // not for reading a fortnight of history.
+        Command {
+            id: "notif-window",
+            label: key::CMD_NOTIF_WINDOW,
+        },
+        Command {
+            id: "notif-read-all",
+            label: key::CMD_NOTIF_READ_ALL,
+        },
+        // THE THREE THAT ACT ON THE FOCUSED ROW, and that is why they have no
+        // key in the tree: outside the manager there is no focused row to act
+        // on. They come in through `notifications::OF_THE_VIEW`, which is what
+        // the manual and the orphan check read — the same arrangement the
+        // network list already has.
+        Command {
+            id: "notif-read",
+            label: key::CMD_NOTIF_READ,
+        },
+        Command {
+            id: "notif-forget",
+            label: key::CMD_NOTIF_FORGET,
+        },
+        Command {
+            id: "notif-act",
+            label: key::CMD_NOTIF_ACT,
         },
         // THE TRANSFER QUEUE. `transfers-open` has a key in the tree
         // (`LEADER t t`); the keys that act on a row live INSIDE the view
@@ -1191,6 +1225,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // finds.
         ("n h", "notif-history", None),
         ("n d", "notif-dismiss", None),
+        // `w` for WINDOW, the same letter the file manager and the transfer
+        // queue already use for their second door. Three views, one letter.
+        ("n w", "notif-window", None),
+        ("n r", "notif-read-all", None),
         // `h` for help, as in Doom. A group with a single item is the honest
         // beginning: the other help content comes in here, and the group already
         // exists to receive it.
@@ -1404,6 +1442,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .filter(|id| *id != crate::actions::LEADER_ALTERNATE),
     );
     out.extend(OF_CLIPBOARD_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::notifications::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_NETWORK_VIEW.iter().map(|(_, id)| *id));
     out
 }
@@ -1948,7 +1987,14 @@ mod tests {
         const WITH_ACTION: &[&str] = &[
             "session-quit",
             "notif-history",
+            "notif-window",
+            "notif-read-all",
             "notif-dismiss",
+            // The three that reach the manager's focused row, through the same
+            // `View::key` the keyboard uses — see `Footer::manager_press`.
+            "notif-read",
+            "notif-forget",
+            "notif-act",
             "keyboard-restore",
             "help-shortcuts",
             "mx-open",

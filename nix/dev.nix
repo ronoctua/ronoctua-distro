@@ -31,6 +31,8 @@
   # `option_env!` for the reason `nix/rust.nix` writes out: baked into the
   # binary, its store path is a reference no profile switch can remove.
   emacs30,
+  # The screenshot editor, for the notification a capture raises.
+  swappy,
 }:
 
 let
@@ -403,6 +405,12 @@ let
       # that `ronoctua.editor.emacs = false` can really remove it, which means
       # somebody has to put it back for the nested loop.
       export RONOCTUA_EMACSCLIENT="${emacs30}/bin/emacsclient"
+      # AND THE SCREENSHOT'S EDITOR, third of the same family: the notification
+      # a capture raises offers to edit it, and `swappy` is out of the
+      # compilation so `ronoctua.media.enable = false` can really remove it.
+      # Without this the action simply is not offered in the nested loop — see
+      # `usable_actions` in the shell.
+      export RONOCTUA_SWAPPY="${swappy}/bin/swappy"
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
 
       # Which binary: the store's until the first recompilation, yours after that.

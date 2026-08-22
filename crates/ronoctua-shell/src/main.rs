@@ -43,6 +43,7 @@ use ronoctua_tokens as tokens;
 
 mod actions;
 mod apps;
+mod band;
 mod buffer;
 mod clipboard;
 mod daemon;
@@ -54,6 +55,8 @@ mod leader;
 mod manual;
 mod minibuffer;
 mod network;
+mod notifications;
+mod notifications_window;
 mod surface;
 mod syncthing;
 mod terminal;
@@ -213,6 +216,13 @@ fn main() -> Result<()> {
         // own. The SAME `files::View` the footer draws from: what differs is
         // only the window and the events of it, which is what makes "one
         // implementation, two doors" true rather than claimed.
+        // `ronoctua-shell notifications` — the manager in a window of its own.
+        // The SAME `notifications::View` the footer draws from: what differs is
+        // the window and its events, which is what makes "one implementation,
+        // two doors" true rather than claimed.
+        Some("notifications") => {
+            return notifications_window::host_it().context("hospedar o gerenciador");
+        }
         Some("files") => {
             let where_ = std::env::args().nth(2).map(std::path::PathBuf::from);
             return files_window::host_it(where_.as_deref()).context("hospedar o gerenciador");
@@ -354,9 +364,14 @@ pub fn leader_chord() -> String {
 
 /// The modeline's segments, with section 4.2's priority order.
 ///
-/// `name`, `mode` and `state` are PARAMETERS and not reads of global state on
-/// purpose: that way the layout stays a pure function of (width, segments) and
-/// every combination can be tested without a compositor.
+/// `name`, `mode`, `state` and `unread` are PARAMETERS and not reads of global
+/// state on purpose: that way the layout stays a pure function of (width,
+/// segments) and every combination can be tested without a compositor.
+///
+/// `unread` is what the BELL counts, and it is deliberately not the queue's
+/// length: a notification a filter suppressed is not shown and is not counted
+/// either — a badge that counts what the person asked never to see is a badge
+/// that cannot be brought to zero.
 ///
 /// # What left here, and why
 ///
@@ -373,14 +388,39 @@ pub fn segments(
     name: &str,
     mode: &str,
     state: &str,
-    pending: usize,
+    unread: usize,
     transfer: Option<&str>,
 ) -> Vec<Segment> {
     let mut out = vec![
         // 2. Never disappears: the only indicator that something is pending.
+        //
+        // # One cell between the glyph and the number
+        //
+        // Glued (`{glyph}{n}`), they were reported from the screen as too close
+        // to read — and the measurement says why: a chrome glyph is drawn at
+        // `font.size.icon` and its ink leaves the cell by up to 1,2 px, while
+        // the digit beside it only begins 1,44 px into its own. They do not
+        // touch, and 0,24 px apart is indistinguishable from touching.
+        //
+        // One cell, not two: two is `space.modeline.segmentGap`, which is what
+        // separates one SEGMENT from the next. Spending the same gap inside a
+        // segment would say these are two things.
+        //
+        // # And the bell gains a dot when something is unread
+        //
+        // `notification-pending` existed in `icons.nix` since the icon layer
+        // and had never been drawn. A zero next to a bell answers the question,
+        // but only after the number is read; the dot answers it before.
         Segment {
             id: "notif",
-            text: format!("{} {pending}", tokens::icon::NOTIFICATION),
+            text: format!(
+                "{} {unread}",
+                if unread > 0 {
+                    tokens::icon::NOTIFICATION_PENDING
+                } else {
+                    tokens::icon::NOTIFICATION
+                }
+            ),
             priority: 2,
             min_cols: 3,
             side: Side::Right,
@@ -504,6 +544,40 @@ mod tests {
         // The line always exists (the footer has TWO lines, section 4.1), but
         // does not invent content.
         assert!(minibuffer_at_rest().is_empty());
+    }
+
+    #[test]
+    fn one_cell_separates_the_bell_from_the_count() {
+        // ONE, and not two: two is `segmentGap`, which is what separates one
+        // segment from the next — using it inside a segment would say the bell
+        // and the number are two different things.
+        let s = segments("", "", "", 3, None);
+        let notif = s.iter().find(|x| x.id == "notif").unwrap();
+        let cells: Vec<&str> = notif.text.split(' ').collect();
+        assert_eq!(
+            cells.len(),
+            2,
+            "{:?} nao e glifo, espaco, numero",
+            notif.text
+        );
+        assert_eq!(cells[1], "3");
+    }
+
+    #[test]
+    fn the_bell_gains_a_dot_when_something_is_unread() {
+        let with = segments("", "", "", 1, None);
+        let without = segments("", "", "", 0, None);
+        let of = |v: &[Segment]| {
+            v.iter()
+                .find(|x| x.id == "notif")
+                .unwrap()
+                .text
+                .chars()
+                .next()
+                .unwrap()
+        };
+        assert_eq!(of(&with), tokens::icon::NOTIFICATION_PENDING);
+        assert_eq!(of(&without), tokens::icon::NOTIFICATION);
     }
 
     #[test]

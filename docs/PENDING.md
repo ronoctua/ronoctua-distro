@@ -64,6 +64,38 @@ verdade — e ela depende do item acima.
 - acabou quando: um estado sai numa cor que não é o verde de todos os outros, e há check disso
 
 
+### 0.02. Notificação não toca som · pequeno
+
+O campo `audio` existe ponta a ponta — protocolo, catálogo, filtro, gerenciador, disco — e **não
+faz nada**. Ele não está mudo: `ronoctua_notify::INERT` diz por quê, o gerenciador desenha a razão
+ao lado do interruptor e o check `switches-that-do-nothing-say-so` cobra os três. Mas ele continua
+sendo um interruptor que não interrompe, e este item é a dívida.
+
+O caminho já está medido: o pipewire que a distro liga traz `pw-play`, e o
+`sound-theme-freedesktop` são uns 400 KB com `bell.oga`, `message.oga` e `dialog-warning.oga`. O que
+falta decidir é qual som para qual nível — e isso é escolha do dono, não de quem implementa.
+
+- acabou quando: uma notificação com `audio = true` toca, o `INERT` perde a linha do `audio`, e o
+  check acusa se ela voltar
+
+### 0.03. Glifo por nome só vale para o que é DECLARADO · pequeno, e é uma decisão
+
+**Isto está em uso**: a entrada `screenshot` nomeia `md-monitor_screenshot`, porque nada no design
+system diz "captura de tela" — o token `camera` é uma câmera de vídeo. O que falta é a outra porta.
+
+
+`assets/notifications.nix` aceita um token (`camera`) ou um nome Nerd Fonts qualquer
+(`md-camera_iris`), e resolve os dois no BUILD. Isso cobre tudo o que existe hoje: a distro declara,
+o gerador resolve, e o rodapé não carrega tabela nenhuma.
+
+O que não existe é a outra porta: um serviço externo mandando `md-bell` pelo barramento. Para
+resolver isso em runtime o rodapé precisaria dos 10.473 nomes — 2,8 MB de `glyphs.json`, ou uma
+tabela nova e enxuta lida **sob demanda** de `RONOCTUA_GLYPHDB`, no molde do `RONOCTUA_ICONS`. Custa
+zero enquanto ninguém pedir, e é por isso que fica para quando a API existir.
+
+- acabou quando: `notify-send --hint=string:glyph:md-bell` desenha o sino, e não desenha nada quando
+  o nome não existe
+
 ### 0. A extensão instalada fora da Web Store não foi provada num Chrome de verdade · médio
 
 Tudo o que é conferível já é conferido, e por check: a chave nasce na máquina, o `.crx` é assinado

@@ -102,6 +102,53 @@
   };
 
   # -------------------------------------------------------------------
+  # THE NOTIFICATION BAND — the line (or three) ABOVE the modeline
+  # -------------------------------------------------------------------
+  #
+  # It is not a toast and not a card: it is the footer's own surface growing
+  # UPWARDS, exactly as the expansion already grows downwards. One surface,
+  # invariants 14 and 15 intact. What separates it from the modeline is the
+  # background, which is the same device that already separates the modeline
+  # from the minibuffer — a difference in colour, no rule and no box.
+  #
+  # The owner's decision, and it replaced two earlier readings of the ask: a
+  # floating toast (forbidden) and the modeline itself (which would push the
+  # buffer's name off the one line that says where you are).
+  notification = {
+    # ONE TONE ABOVE the modeline's, which is itself one above the chrome. The
+    # three together are a ramp the eye reads as "content, footer, and the
+    # thing that just arrived", from bottom to top.
+    background = "0x242424FF";
+
+    # THE TWO FORMATTINGS, and the difference between them is the whole point
+    # of having two: a copy that finished and a disk that is full must not
+    # look alike.
+    #
+    # `quiet` is the same warm grey as `text.secondary`: present, readable,
+    # and it does not pull the eye off what is being read.
+    quiet = "0xA59B87FF";
+    # `loud` is the WARM alert, and deliberately NOT the accent. Blue marks
+    # focus and only focus (see the border block above); a shouting
+    # notification in blue would be a second blue thing on screen, and then
+    # neither of them says "the keyboard goes here".
+    loud = "0xE0AF68FF";
+
+    # HOW MUCH TIME IS LEFT, drawn as an eighths pie in one cell. It has to be
+    # findable and forgettable at once, so it takes the quietest tone in the
+    # family — the same as `text.dim`.
+    countdown = "0x6E6656FF";
+
+    # ALREADY READ, in the manager's left column. It stays in the list — the
+    # list is the record of what happened — and it recedes.
+    read = "0x6E6656FF";
+    # SUPPRESSED BY A FILTER, in the manager's right column. The same tone as
+    # `read` on purpose: both are "here, and not asking for anything". What
+    # tells them apart is which column they are in, and the column has a
+    # heading.
+    suppressed = "0x6E6656FF";
+  };
+
+  # -------------------------------------------------------------------
   # Modeline
   # -------------------------------------------------------------------
   modeline = {

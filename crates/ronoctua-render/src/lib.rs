@@ -51,4 +51,4 @@ pub mod layout;
 pub mod quad;
 pub mod text;
 
-pub use text::{Atlas, EMBEDDED_FONT, Span, Text};
+pub use text::{Atlas, EMBEDDED_FONT, Size, Span, Text};

@@ -25,10 +25,42 @@
   # have consistent weight among themselves and do not clash next to text.
   # ===================================================================
 
-  # Notifications — the icon flush against the modeline's right edge (4.2).
+  # Notifications — the icon at the modeline's right edge (4.2).
   notification = "cod-bell";
   notification-pending = "cod-bell_dot";
   notification-muted = "cod-bell_slash";
+
+  # THE TWO THINGS ONE DOES TO A NOTIFICATION WITH THE MOUSE.
+  #
+  # It was a hollow circle, and it was reported from the screen as not reading
+  # like anything. A circle is a SHAPE, not a verb: it says "here is a control"
+  # and leaves what it does to be guessed.
+  #
+  # An OPEN ENVELOPE is the drawing everybody already reads as "read", and a bin
+  # is the drawing everybody already reads as "gone". Neither is a circle, and
+  # neither needs a legend.
+  notification-mark-read = "md-email_open_outline";
+  notification-delete = "cod-trash";
+
+  # HOW LONG THE ONE ON SCREEN HAS LEFT — a pie in ONE cell, eight steps.
+  #
+  # Not a bar: a bar of a few cells next to a sentence reads as a second piece
+  # of content, and this has to be answerable with the corner of the eye and
+  # forgettable. Not a number of seconds either — nobody decides anything with
+  # "4 s", and it would tick in the middle of a line being read.
+  #
+  # The names count what is LEFT, in eighths: `countdown-eight` is a full
+  # circle and `countdown-one` is the last sliver before it goes. Words and not
+  # digits because every stretch of a WIT identifier begins with a letter —
+  # `countdown-8` is refused three derivations away, inside a buffer.
+  countdown-eight = "md-circle_slice_8";
+  countdown-seven = "md-circle_slice_7";
+  countdown-six = "md-circle_slice_6";
+  countdown-five = "md-circle_slice_5";
+  countdown-four = "md-circle_slice_4";
+  countdown-three = "md-circle_slice_3";
+  countdown-two = "md-circle_slice_2";
+  countdown-one = "md-circle_slice_1";
 
   # TRANSFERS — the queue of everything that takes a while (LEADER t).
   #

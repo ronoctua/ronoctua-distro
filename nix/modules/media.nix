@@ -34,6 +34,23 @@ in
       default = true;
     };
 
+  # WHERE THE SCREENSHOT'S EDITOR IS, for the notification's `edit` action.
+  #
+  # From the ENVIRONMENT and not baked into the binary: a store path compiled in
+  # with `option_env!` is a reference the closure carries whether the switch is
+  # on or not — the measured trap `RONOCTUA_ICONS` carries a comment about, and
+  # the reason this is the second variable to take this route.
+  #
+  # BOTH PLACES, for the reason written over there: `sessionVariables` reaches a
+  # login shell, and the footer is a systemd USER UNIT, which inherits the
+  # manager's environment rather than the shell's.
+  #
+  # Unset on a minimal install, and the action simply is not offered — an offer
+  # that does nothing is worse than one that was never made.
+  config.environment.sessionVariables.RONOCTUA_SWAPPY = lib.mkIf config.ronoctua.media.enable "${pkgs.swappy}/bin/swappy";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_SWAPPY =
+    lib.mkIf config.ronoctua.media.enable "${pkgs.swappy}/bin/swappy";
+
   # THE VA-API DRIVERS ARE NOT UNDER THE SWITCH, at the bottom of the file: they
   # are hardware enablement and not an application. A reduced machine has the
   # same GPU, and the compositor decodes with them.
@@ -50,6 +67,17 @@ in
       vlc # the one that opens what mpv refuses
 
       # ---- images ----
+      # THE SCREENSHOT'S EDITOR, and the reason it is HERE and not in
+      # `base.nix`: the notification the compositor raises after a capture
+      # offers to edit it, and `swappy` is what that action starts. It is
+      # Wayland-native, a few MiB, and it is the whole of the "edit" the owner
+      # asked for.
+      #
+      # Under the `media` switch, so a minimal install simply does not offer
+      # the action — see `usable_actions` in the shell: an action whose program
+      # is missing DISAPPEARS from the notification rather than failing when
+      # clicked.
+      swappy
       libwebp
       libavif
       libheif # what a phone photo actually is

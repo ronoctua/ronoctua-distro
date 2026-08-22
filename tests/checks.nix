@@ -49,6 +49,9 @@
   singleFooter,
   wit,
   tokensRs,
+  # The notification catalogue, for the two checks that read it: the table's
+  # own shape, and the text keys it demands of both languages.
+  notificationsRs,
   mimeDb,
   niriActions,
   # The C border in front of libtorrent, which carries the `sizeof` table the
@@ -1006,14 +1009,68 @@ let
     if not rotates:
         gaps.append("o `Esc` do host nao gira mais: o clique ficaria sozinho")
 
-    # And nothing else: the only segment id it acts on.
-    acted = set(re.findall(r'if id != "([a-z-]+)"', clicked))
-    if acted != {"state"}:
+    # AND NOTHING ELSE. Two segments answer, and each has a key: the `state`
+    # rotates (what holding `Esc` and an arrow does) and the `notif` opens the
+    # manager (what `LEADER n h` does). A third would be a door only the mouse
+    # knows about.
+    acted = set(re.findall(r'if id == "([a-z-]+)"', clicked))
+    acted |= set(re.findall(r'if id != "([a-z-]+)"', clicked))
+    if acted != {"state", "notif"}:
         gaps.append("o clique age em " + repr(sorted(acted)) + ", fora do combinado")
+    if '"notif-history"' not in clicked:
+        gaps.append("o clique no sino nao abre o gerenciador")
 
-    # 2) NOTHING FLOATS.
+    # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
+    #
+    # Two things, and each has a key: the circle marks it read, which is what
+    # `notif-dismiss` does; an action runs, which is what its own letter does in
+    # the manager. There is nothing up there the keyboard cannot reach, and this
+    # is what keeps that true as the band grows.
+    band = (shell / "band.rs").read_text()
+    # EVERY variant of the enum, and not only the two we hoped to find: a check
+    # that looks for what it expects passes on a THIRD target nobody gave a key
+    # to, which is the whole defect. Planted, and the first version passed.
+    enum = re.search(r"pub enum Hit \{(.*?)\n\}", band, re.S)
+    if not enum:
+        sys.exit("ERRO: `band::Hit` sumiu ou mudou de forma")
+    hits = set(re.findall(r"^    ([A-Z]\w*)", enum.group(1), re.M))
+    if hits != {"Read", "Action"}:
+        gaps.append("a faixa tem alvos " + repr(sorted(hits)) + ", fora do combinado")
+    # The keyboard's half of each.
+    keymap = (shell / "leader.rs").read_text()
+    if '"notif-dismiss"' not in keymap:
+        gaps.append("o circulo da faixa nao tem tecla equivalente")
+    manager = (shell / "notifications.rs").read_text()
+    if "a.key == Some(c)" not in manager:
+        gaps.append("a acao da faixa nao e alcancavel por letra no gerenciador")
+
+    # THE MANAGER'S ROW TARGETS, and the keys that do the same thing.
+    #
+    # Every variant of the enum, and not the two we hoped to find: a check that
+    # looks for what it expects passes on a THIRD target nobody gave a key to.
+    rows_enum = re.search(r"pub enum Hit \{(.*?)\n\}", manager, re.S)
+    if not rows_enum:
+        sys.exit("ERRO: `notifications::Hit` sumiu ou mudou de forma")
+    targets = set(re.findall(r"^    ([A-Z]\w*)", rows_enum.group(1), re.M))
+    if targets != {"MarkRead", "Delete"}:
+        gaps.append("a lista tem alvos " + repr(sorted(targets)) + ", fora do combinado")
+    for key, verb in (("Press::Space", "MarkRead"), ("Press::Letter('d')", "Delete")):
+        if key not in manager:
+            gaps.append("o alvo " + verb + " da lista nao tem tecla equivalente")
+    # AND EVERY CONTROL EXPLAINS ITSELF on the message line, never in a tooltip.
+    if band.count("explain: Some(") < 3:
+        gaps.append("um controle da faixa nao diz o que faz ao passar o ponteiro")
+
+    # 3) NOTHING FLOATS.
     forbidden = ("xdg_popup", "XdgPopup", "create_popup", "Popup::")
-    for name in ("surface.rs", "buffer.rs", "files_window.rs"):
+    for name in (
+        "surface.rs",
+        "buffer.rs",
+        "files_window.rs",
+        "band.rs",
+        "notifications.rs",
+        "notifications_window.rs",
+    ):
         text = (shell / name).read_text()
         for word in forbidden:
             if word in text:
@@ -1024,7 +1081,7 @@ let
         for g in gaps:
             print("       " + g, file=sys.stderr)
         raise SystemExit(1)
-    print("OK: o clique da modeline gira o estado, e nada flutua")
+    print("OK: modeline e faixa so fazem o que o teclado faz, e nada flutua")
     FIM
   '';
 
@@ -3234,6 +3291,134 @@ let
     PY
   '';
 
+  # THE ICON HAS TO BE THE SIZE OF THE TEXT NEXT TO IT — and it was not.
+  #
+  # Reported from the screen: "the bell looks much too small, smaller than the
+  # rest of the letters and numbers". It was true and it is measurable: the ink
+  # of `cod-bell` is 600 units tall against 751 for the digit `0`, so at the
+  # same point size the bell comes out a fifth shorter. Nothing failed; it just
+  # looked wrong, which is the class of defect that survives for months.
+  #
+  # The fix is the `font.size.icon` token, and this is what keeps it honest: the
+  # two numbers come from the token file, the ink comes from the real face, and
+  # a new chrome icon whose drawing is out of scale fails HERE instead of on
+  # somebody's screen.
+  #
+  # 85%..115% and not "equal": these are different families of drawing (a bell,
+  # a swap arrow, a pie) and they are not going to agree to the unit. What the
+  # band excludes is what the eye reads as another size.
+  chrome-icons-match-the-text =
+    let
+      typography = import ../assets/tokens/typography.nix;
+    in
+    mkCheck "chrome-icons-match-the-text" [ py pkgs.gnugrep ] ''
+      python3 - <<'PY'
+      from fontTools.ttLib import TTFont
+      from fontTools.pens.boundsPen import BoundsPen
+      import json, sys
+
+      BASE = ${toString typography.size.base}
+      ICON = ${toString typography.size.icon}
+
+      # THE ICONS THE CHROME DRAWS INLINE WITH TEXT, at `font.size.icon`.
+      #
+      # They are named here, and not derived by prefix, because the prefix is
+      # not the property: `transfer-paused` and `transfer-running` share the
+      # family and are drawn in the transfer PANEL, on the grid, next to a row
+      # of their own. What this list holds is what sits shoulder to shoulder
+      # with digits on one line.
+      INLINE = [
+          "notification", "notification-pending", "notification-muted",
+          # The two things one does to a notification with the mouse.
+          "notification-mark-read", "notification-delete",
+          # And the generic marks, for what nobody named a glyph for.
+          "info", "warning", "error",
+          "transfer",
+          "countdown-one", "countdown-two", "countdown-three", "countdown-four",
+          "countdown-five", "countdown-six", "countdown-seven", "countdown-eight",
+      ]
+
+      face = "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"
+      f = TTFont(face, lazy=True)
+      cmap = f.getBestCmap()
+      glyphs = f.getGlyphSet()
+      icons = json.load(open("${glyphdb.db}/icons.json"))
+
+      def ink(cp):
+          pen = BoundsPen(glyphs)
+          glyphs[cmap[cp]].draw(pen)
+          return pen.bounds
+
+      x0, y0, x1, y1 = ink(ord("0"))
+      digit = (y1 - y0) * BASE / 1000.0
+      # THE CELL, and how far into it the neighbouring digit's ink begins.
+      #
+      # A chrome glyph is drawn bigger than the grid and centred on its cell, so
+      # its ink DOES leave the cell — by design, and harmlessly, as long as it
+      # stops short of where the character beside it starts drawing. That is
+      # what this number is: `0` has 80 units of left bearing, which at the base
+      # size is 1,44 px of air the icon may borrow.
+      cell = BASE * 0.6
+      bearing = x0 * BASE / 1000.0
+      print(f"digito `0` a {BASE} px: {digit:.2f} px de tinta, folga {bearing:.2f} px")
+
+      failed = False
+      for token in INLINE:
+          if token not in icons:
+              print(f"ERRO: `{token}` nao e token de icone (renomeado?)")
+              failed = True
+              continue
+          gx0, gy0, gx1, gy1 = ink(icons[token]["codepoint"])
+          h = (gy1 - gy0) * ICON / 1000.0
+          pct = 100.0 * h / digit
+          # The run is placed so its ADVANCE is centred on the cell — see
+          # `render::Size::OnTheCell` — and the ink rides wherever the font put
+          # it inside that advance, which is not always the middle.
+          shift = (cell - ICON * 0.6) / 2.0
+          over = max(-(gx0 * ICON / 1000.0 + shift), gx1 * ICON / 1000.0 + shift - cell)
+          tall = 85.0 <= pct <= 115.0
+          wide = over < bearing
+          mark = "ok " if tall and wide else "NAO"
+          print(
+              f"{mark} {token:24s} {icons[token]['glyph']:28s} "
+              f"{h:5.2f} px {pct:5.1f}%  transborda {over:5.2f} px"
+          )
+          if not tall:
+              failed = True
+          if not wide:
+              print(f"       `{token}` invade a tinta do caractere ao lado")
+              failed = True
+
+      if failed:
+          print("")
+          print("ERRO: um icone da chrome esta fora de escala com o texto ao lado.")
+          print("      Ou o `font.size.icon` mudou, ou o glifo novo tem desenho")
+          print("      de outra proporcao — troque o glifo, nao o tamanho: o")
+          print("      tamanho vale para todos os outros.")
+          sys.exit(1)
+      print("")
+      print(f"OK: {len(INLINE)} icones da chrome na altura do digito, e nenhum encosta nele")
+      PY
+
+      # AND NOBODY introduces a second inline size without passing through here.
+      #
+      # The list above only holds while OnTheCell is asked for with ONE size. A
+      # second one, written loose, would escape the measurement entirely — and
+      # the way to find out would again be by looking at the screen.
+      #
+      # The shell is the whole scope on purpose: a wasm buffer cannot ask for a
+      # size in px (invariant 11 gives it a Scale, and the host resolves it), so
+      # every chrome glyph in the system is drawn from here.
+      loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -v "SIZE_ICON" || true)
+      if [ -n "$loose" ]; then
+        echo "ERRO: glifo centrado na celula com tamanho fora do token:" >&2
+        echo "$loose" >&2
+        echo "      O tamanho de icone da chrome tem UM lugar: font.size.icon." >&2
+        exit 1
+      fi
+      echo "OK: todo glifo centrado na celula usa o mesmo token de tamanho"
+    '';
+
   # The guard of section 6.3: the Nerd Fonts version comes from the FILE ITSELF
   # (nameID 5), not from a constant. If the font is updated without the
   # matching glyphnames.json, the PUA codepoints move silently.
@@ -3293,6 +3478,336 @@ let
     [ "$unnamed" -eq 126 ] || { echo "ERRO: esperava 126 sem nome" >&2; exit 1; }
 
     echo "OK: tabela de icones e base de glifos geradas do arquivo real"
+  '';
+
+  # THE NOTIFICATION CATALOGUE COMES OUT OF NIX, and the two vocabularies agree.
+  #
+  # `assets/notifications.nix` is the single place every notification and every
+  # pre-created filter of the distro is declared (section 4.2). The generator
+  # already refuses an invalid field at build time — this is the OTHER half:
+  # that the words the generator accepts are the words the Rust knows.
+  #
+  # They are two lists, in two languages, and nothing but this compares them. A
+  # `show = "brief"` the generator accepts and the Rust has never heard of would
+  # come out as a table that does not compile — or worse, as a name the Rust
+  # spells differently and silently reads as something else.
+  notifications-table-generated = mkCheck "notifications-table-generated" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    generator = pathlib.Path("${../nix/scripts/gen-notifications.py}").read_text()
+    table = pathlib.Path("${notificationsRs}/notifications.rs").read_text()
+    keys = pathlib.Path("${notificationsRs}/keys.txt").read_text().split()
+
+    failed = False
+
+    # (a) the table was generated, and it is not empty.
+    for wanted in ("fn generated_entries()", "fn generated_rules()"):
+        if wanted not in table:
+            print(f"ERRO: a tabela nao tem `{wanted}`")
+            failed = True
+    entries = table.count("Entry {")
+    rules = table.count("Rule {")
+    print(f"catalogo: {entries} entradas, {rules} filtros, {len(keys)} chaves exigidas")
+    if entries < 1 or rules < 1 or not keys:
+        print("ERRO: geracao veio vazia ou truncada")
+        failed = True
+
+    # (b) the vocabularies. The generator names them as sets of strings; the
+    #     Rust names them in the `id()` of each enum. Both are parsed from the
+    #     SOURCE, so a rename on either side shows up here.
+    def from_generator(name):
+        m = re.search(name + r" = \{([^}]*)\}", generator)
+        assert m, name
+        return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+    def from_rust(path, enum):
+        """The names in the `id()` of one enum.
+
+        Two levels of narrowing, and both are needed: `presentation.rs` holds
+        `Show` AND `Life`, and `rule.rs` holds `Field` AND `Test`, so grabbing
+        every arrow in the file gives one enum the other's names.
+        """
+        src = pathlib.Path(path).read_text()
+        impl = re.search(rf"\nimpl {enum} \{{(.*?)\n\}}\n", src, re.S)
+        if not impl:
+            print(f"ERRO: nao achei `impl {enum}` em {path}")
+            return set()
+        fn = re.search(r"fn id\(&?self\)[^{]*\{(.*?)\n    \}", impl.group(1), re.S)
+        if not fn:
+            print(f"ERRO: `{enum}` nao tem `id()` — o nome nao teria como ir e voltar")
+            return set()
+        return set(re.findall(r'=> "([^"]+)"', fn.group(1)))
+
+    NOTIFY = "${../crates/ronoctua-notify/src}"
+    pairs = [
+        ("SHOW", f"{NOTIFY}/presentation.rs", "Show"),
+        ("LIFE", f"{NOTIFY}/presentation.rs", "Life"),
+        ("FIELDS", f"{NOTIFY}/rule.rs", "Field"),
+        ("PROGRAMS", f"{NOTIFY}/action.rs", "Program"),
+    ]
+    for name, path, enum in pairs:
+        a, b = from_generator(name), from_rust(path, enum)
+        if a != b:
+            print(f"ERRO: `{name}` diverge entre o gerador e o Rust")
+            print(f"       so no gerador: {sorted(a - b)}")
+            print(f"       so no Rust:    {sorted(b - a)}")
+            failed = True
+        else:
+            print(f"ok  {name:10s} {len(a)} nomes iguais dos dois lados")
+
+    # (c) every text key it demands has the shape the manager derives.
+    for k in keys:
+        if not re.fullmatch(r"notif-[a-z0-9-]+", k):
+            print(f"ERRO: chave `{k}` fora do formato `notif-<...>`")
+            failed = True
+
+    # (d) AND THE TAG THE SHELL STAMPS IS A TAG THE TABLE RECOGNISES.
+    #
+    # The out-of-memory notification is raised by the shell and recognised by
+    # the catalogue through a tag — a string that has to be the same on both
+    # sides with no compiler between them. Diverging, the notification arrives
+    # as a stranger: quiet, short, with no action and no explanation of why a
+    # window disappeared.
+    surface = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+    stamped = set(re.findall(r'pub const [A-Z_]+: &str = "([a-z-]+)";', surface))
+    known = set(re.findall(r'Test::Is\("([a-z-]+)"\.to_owned\(\)\)', table))
+    for tag in stamped:
+        if tag not in known:
+            print(f"ERRO: o shell carimba `{tag}` e nenhuma entrada o reconhece")
+            failed = True
+    if stamped:
+        print(f"ok  tags carimbadas pelo shell e reconhecidas: {sorted(stamped)}")
+
+    if failed:
+        sys.exit(1)
+    print("OK: catalogo gerado do Nix, e os dois vocabularios batem")
+    PY
+  '';
+
+  # THE COMPOSITOR STILL SENDS WHAT THE FILTER LOOKS FOR.
+  #
+  # The screenshot notification is not ours: niri raises it after a capture,
+  # with `app_name = "niri"`, the English summary "Screenshot captured", and —
+  # this is the part that matters — the FILE'S PATH in the icon field, as a
+  # `file://` URL. That is where the `edit` action gets the image from, with no
+  # directory guessed at.
+  #
+  # All three are strings that belong to somebody else. If upstream changes any
+  # of them the entry stops matching IN SILENCE: the screenshot arrives in
+  # English, loud, with no actions, and nothing fails. This is the check that
+  # turns that into a build error, and it is the same shape as `niri-contract`,
+  # which already extracts the compositor's actions from the pinned tree.
+  screenshot-notification-contract = mkCheck "screenshot-notification-contract" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    source = pathlib.Path("${inputs.niri}/src/utils/mod.rs").read_text()
+    catalogue = pathlib.Path("${../assets/notifications.nix}").read_text()
+
+    failed = False
+
+    # (a) the notification exists at all, and goes to the session bus.
+    for wanted in ("fn show_screenshot_notification", "org.freedesktop.Notifications"):
+        if wanted not in source:
+            print(f"ERRO: o niri fixado nao tem `{wanted}`")
+            failed = True
+
+    # (b) the two strings the entry matches on.
+    for wanted in ('"niri"', '"Screenshot captured"'):
+        if wanted not in source:
+            print(f"ERRO: o niri fixado nao manda mais {wanted}")
+            failed = True
+        elif wanted.strip('"') not in catalogue:
+            print(f"ERRO: assets/notifications.nix nao casa com {wanted}")
+            failed = True
+
+    # (c) AND THE PATH TRAVELS IN THE ICON FIELD. Without this the `edit`
+    #     action has no file, and it would have to guess a directory.
+    if "image_url" not in source or "filename_to_uri" not in source:
+        print("ERRO: o niri nao poe mais o caminho como file:// no campo do icone")
+        failed = True
+
+    # (d) AND THE EDITOR IS NOT BAKED INTO THE BINARY.
+    #
+    # `swappy` lives in the `full` profile only. A store path compiled in with
+    # `option_env!` is a reference the closure carries whether the switch is on
+    # or not — the measured trap `RONOCTUA_ICONS` carries a comment about in
+    # `nix/rust.nix`, and the one `notoExtra` and `icons.superpack` cost before
+    # that. Read from the environment, `ronoctua.media.enable = false` really
+    # removes it and the action simply is not offered.
+    rust_nix = pathlib.Path("${../nix/rust.nix}").read_text()
+    if "RONOCTUA_SWAPPY" in rust_nix:
+        print("ERRO: `RONOCTUA_SWAPPY` esta em nix/rust.nix — assado no binario.")
+        print("       Isso poe o swappy em todo closure, e o interruptor do")
+        print("       perfil para de interromper. Ele vem do AMBIENTE.")
+        failed = True
+
+    # (e) AND EACH PROGRAM IS READ FROM THE RIGHT PLACE.
+    #
+    # Two programs, two sources, and getting it wrong fails SILENTLY: both were
+    # read from the environment, `RONOCTUA_XDG_OPEN` only exists at build time,
+    # so at runtime every `Run` action was dropped as "not installed". The
+    # screenshot's band came out two lines instead of three, with no actions and
+    # nothing failing. It took a screenshot to see.
+    resolver = re.search(
+        r"pub fn notification_program\(.*?\n\}",
+        pathlib.Path("${../crates/ronoctua-shell/src}/actions.rs").read_text(),
+        re.S,
+    )
+    if not resolver:
+        print("ERRO: `notification_program` sumiu ou mudou de forma")
+        failed = True
+    else:
+        body = resolver.group(0)
+        if "XDG_OPEN" not in body:
+            print("ERRO: o `open` da acao nao vem do caminho assado no build")
+            failed = True
+        if 'std::env::var("RONOCTUA_SWAPPY")' not in body:
+            print("ERRO: o `edit` da acao nao vem do AMBIENTE")
+            failed = True
+        if 'std::env::var("RONOCTUA_XDG_OPEN")' in body:
+            print("ERRO: o `open` esta sendo lido do ambiente, onde nao existe")
+            failed = True
+
+    if failed:
+        print("")
+        print("       O filtro `screenshot` reconhece a notificacao do")
+        print("       compositor pelo par (app, summary) e tira o arquivo do")
+        print("       campo do icone. Mudou la, para de casar aqui — em")
+        print("       silencio, que e por isto que este check existe.")
+        sys.exit(1)
+    print("OK: o niri fixado ainda manda a captura como o filtro espera")
+    print("OK: o editor da captura vem do ambiente, nao do binario")
+    PY
+  '';
+
+  # A SWITCH THAT SWITCHES NOTHING OFF HAS TO SAY SO.
+  #
+  # The trap has a name in `CLAUDE.md` — "interruptor que não interrompe" — and
+  # the project has paid for it twice: `notoExtra` and `icons.superpack` were
+  # both switches that turned nothing off, and the way anybody found out was by
+  # measuring the closure.
+  #
+  # Two fields of the presentation are in that state ON PURPOSE: `vibrate` has
+  # no device on a machine like this, and `audio` is not implemented (it is in
+  # `docs/PENDING.md`). They exist because the external API the owner is going
+  # to put online will set them, and dropping them at the door would make one
+  # notification mean different things depending on where it came in.
+  #
+  # So they are not silent: each is in `ronoctua_notify::INERT` with a text key
+  # saying why, the manager draws that next to the switch, and this check makes
+  # sure the three lists — the field, the reason, and both `.ftl`s — agree.
+  switches-that-do-nothing-say-so = mkCheck "switches-that-do-nothing-say-so" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    notify = pathlib.Path("${../crates/ronoctua-notify/src}")
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    presentation = (notify / "presentation.rs").read_text()
+    manager = (shell / "notifications.rs").read_text()
+
+    failed = False
+
+    # THE LIST, from the Rust that declares it.
+    inert = re.findall(
+        r'Inert \{\s*field: "([a-z-]+)",\s*why: "([a-z-]+)",',
+        presentation,
+    )
+    if not inert:
+        print("ERRO: `INERT` esta vazia ou mudou de forma")
+        sys.exit(1)
+    print(f"interruptores declarados inertes: {[f for f, _ in inert]}")
+
+    # (a) every one of them is a real field of `Presentation`.
+    fields = set(re.findall(r"^    pub ([a-z_]+):", presentation, re.M))
+    for field, why in inert:
+        if field.replace("-", "_") not in fields:
+            print(f"ERRO: `{field}` nao e campo de Presentation")
+            failed = True
+        for language in ("pt-BR", "en-GB"):
+            ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+            if not re.search(rf"^{why} *=", ftl, re.M):
+                print(f"ERRO: {language} nao explica `{field}` (falta `{why}`)")
+                failed = True
+
+    # (b) AND THE MANAGER READS THAT LIST, rather than keeping a second one.
+    #     Two lists is one more thing to keep in step, and the day they
+    #     diverge is the day a switch goes quiet again.
+    #
+    #     THE COMMENTS DO NOT COUNT. The first version of this test looked for
+    #     the name anywhere in the file and passed on a doc link — a check
+    #     against the CRITERION and not against the CODE, which is the way
+    #     `CLAUDE.md` puts it. Only a line that is not a comment answers.
+    reads_it = any(
+        "ronoctua_notify::INERT" in line and not line.lstrip().startswith("//")
+        for line in manager.splitlines()
+    )
+    if not reads_it:
+        print("ERRO: o gerenciador nao le `INERT`; a razao nao chegaria a tela")
+        failed = True
+    # (b2) AND IT REACHES THE SCREEN. The reason used to be a third column on
+    #      the row; the owner asked for it gone, so it moved to the message
+    #      line — which means there has to be something that PUTS it there.
+    #      Without this, "removed from the row" and "removed from the system"
+    #      look the same to a check.
+    if "pub fn hint(" not in manager:
+        print("ERRO: o gerenciador nao tem por onde dizer a razao")
+        failed = True
+    for door, name in (("rodape", "surface.rs"), ("janela", "notifications_window.rs")):
+        drawn = (shell / name).read_text()
+        if "manager.hint(" not in drawn and "view.hint(" not in drawn:
+            print(f"ERRO: a {door} nao desenha a razao na linha de mensagem")
+            failed = True
+
+    # (c) and every knob it draws is either inert-with-a-reason or does
+    #     something. A knob nobody can find in either list is the defect.
+    knobs = set(re.findall(r'Self::(\w+) => "([a-z-]+)",', manager))
+    names = {name for _, name in knobs}
+    if not names:
+        print("ERRO: nao achei os nomes dos knobs do gerenciador")
+        failed = True
+    for field, _ in inert:
+        if field not in names:
+            print(f"ERRO: `{field}` e inerte e o gerenciador nem o desenha")
+            failed = True
+
+    if failed:
+        sys.exit(1)
+    print("OK: todo interruptor sem efeito diz na tela por que nao tem")
+    PY
+  '';
+
+  # AND EVERY NOTIFICATION OF THE DISTRO EXISTS IN BOTH LANGUAGES.
+  #
+  # The owner asked for it in those words. It does not depend on discipline: the
+  # generator emits the list of keys the table demands, and this compares that
+  # list against the two `.ftl`s. Adding an entry to `assets/notifications.nix`
+  # and forgetting its Portuguese fails here, with the key's name.
+  notifications-have-text = mkCheck "notifications-have-text" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    keys = pathlib.Path("${notificationsRs}/keys.txt").read_text().split()
+    failed = False
+    for language in ("pt-BR", "en-GB"):
+        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        missing = [k for k in keys if k not in have]
+        if missing:
+            print(f"ERRO: {language} nao tem: {', '.join(missing)}")
+            failed = True
+        else:
+            print(f"ok  {language}: as {len(keys)} chaves do catalogo estao la")
+
+    if failed:
+        print("")
+        print("       Toda notificacao e todo filtro da distro tem de existir")
+        print("       nos dois idiomas (invariante 8). A lista sai do proprio")
+        print("       assets/notifications.nix — nao ha como esquecer sem falhar.")
+        sys.exit(1)
+    print("OK: o catalogo de notificacoes fala os dois idiomas")
+    PY
   '';
 
   # The guard of section 6.3 is only worth anything if it is tested. This check
@@ -4334,6 +4849,21 @@ let
     if not wanted:
         sys.exit("ERRO: nenhum descritor encontrado — o formato do bloco mudou?")
 
+    # AND THE NATIVE WINDOWS, which are not buffers and reach the same place.
+    #
+    # `daemon::mode_label` turns any `br.ronoctua.<id>` into `mode-<id>` — it
+    # does not care whether the window is a wasm component or a process of ours
+    # with a `wl_surface`. The file manager's window, the terminal's, the
+    # monitor's and the rescue console's had NO key: the modeline drew
+    # `[mode-files]`, in brackets, and had been doing it since they existed.
+    #
+    # Found while adding the fifth. One list, one rule, one place to add the
+    # next one.
+    APP_ID = re.compile(r'pub const APP_ID[A-Z_]*: &str = "br\.ronoctua\.([a-z][a-z0-9-]*)"')
+    for rs in sorted((root_dir / "crates/ronoctua-shell/src").rglob("*.rs")):
+        for ident in APP_ID.findall(rs.read_text()):
+            wanted.add(("mode", ident))
+
     missing = []
     for language in ("pt-BR", "en-GB"):
         ftl = (root_dir / "assets/i18n" / (language + ".ftl")).read_text()
@@ -4348,7 +4878,7 @@ let
         for m in missing:
             print("       " + m, file=sys.stderr)
         raise SystemExit(1)
-    print("OK: " + str(len(wanted)) + " ids de buffer, todos com texto nos dois idiomas")
+    print("OK: " + str(len(wanted)) + " ids de buffer e de janela, com texto nos dois idiomas")
     FIM
   '';
 
@@ -5012,6 +5542,7 @@ let
       fonts-single-family
       fonts-metrics
       fonts-nerdfonts-version
+      chrome-icons-match-the-text
       fonts-input-publishable
       fonts-license
       icons-table-generated
@@ -5141,6 +5672,10 @@ let
     inherit installer-dryrun;
     oom-vm = oomVm;
     inherit
+      notifications-table-generated
+      notifications-have-text
+      screenshot-notification-contract
+      switches-that-do-nothing-say-so
       invalid-token-fails-build
       secrets-out-of-repo
       planted-secret-fails
@@ -5168,6 +5703,7 @@ let
       extension-has-no-literal
       secrets-are-not-in-the-repo
       renderer-loads-three-faces
+      chrome-icons-match-the-text
       layout-fast
       shaping-fast
       large-monitor-surface
@@ -5209,6 +5745,9 @@ let
       icons-table-generated
       icons-unknown-token-fails
       icons-superpack
+      # An icon drawn at another size than the text beside it — the defect the
+      # bell had for as long as the modeline existed.
+      chrome-icons-match-the-text
       # system: the full VM evaluates and builds, with Ghostty and the superpack
       self.nixosConfigurations.vm.config.system.build.toplevel
       # AND THE SYSTEM THE INSTALLER ACTUALLY INSTALLS.
@@ -5330,8 +5869,17 @@ let
       wifi-console-asks-once
       niri-config-valid
       fontconfig-nested-finds-font
-      # A queue one at a time, a critical one that does not disappear, the history
-      # below the minibuffer, and ONE surface.
+      # THE CATALOGUE: one place for every notification and every filter the
+      # distro ships with, generated from Nix — and both languages complete for
+      # all of them, which is invariant 8 reaching the notifications.
+      notifications-table-generated
+      notifications-have-text
+      # The screenshot the owner asked for, end to end: the compositor still
+      # sends what the filter looks for, and the two dead switches say why.
+      screenshot-notification-contract
+      switches-that-do-nothing-say-so
+      # A queue one at a time, nothing that holds the screen for ever, the band
+      # above the modeline, and ONE surface.
       notifyVm
       # The 3-stage icon chain and the filterable tray are unit tests of
       # `ronoctua-notify`, which run here.

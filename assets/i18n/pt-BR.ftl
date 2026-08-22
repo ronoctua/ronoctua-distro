@@ -26,6 +26,15 @@ group-quit = sair
 # reaches the screen is the value here. That separation is why `glifos` used to
 # leak onto an English-language screen: the id WAS the label.
 buffer-example = exemplo
+# THE NATIVE WINDOWS, which are not buffers and reach the same place: the
+# modeline turns any `br.ronoctua.<id>` into `mode-<id>`, and it does not care
+# whether the window is a wasm component or a process of ours.
+mode-files = arquivos
+mode-monitor = monitor
+mode-notifications = notificações
+mode-rescue = resgate
+mode-terminal = terminal
+
 mode-example = exemplo
 buffer-glyphs = glifos
 mode-glyphs = glifos
@@ -58,6 +67,73 @@ state-guard = proteção
 notif-empty = sem notificações
 notif-history = Notificações
 notif-critical = CRÍTICA
+
+# A faixa, acima da modeline. O contador só aparece com mais de uma.
+notif-queue-position = { $shown }/{ $total }
+notif-mark-read = marcar como lida
+
+# O CATÁLOGO — as notificações da própria distro, com um resumo e um corpo
+# cada. Para uma entrada REESCRITA (a captura de tela do compositor), é isto
+# que chega à tela. Para uma que nós mesmos levantamos, é o texto padrão e o
+# nome da entrada no gerenciador.
+notif-screenshot-summary = Tela capturada
+notif-screenshot-body = A imagem está na área de transferência e salva no disco.
+notif-memory-killed-summary = Fechado para liberar memória
+notif-memory-killed-body = Um aplicativo foi fechado para a máquina não travar.
+
+# O que cada notificação deixa fazer.
+notif-action-edit = editar
+notif-action-open = abrir
+notif-action-folder = pasta
+notif-action-copy-path = copiar o caminho
+notif-action-memory-panel = painel de memória
+
+# OS FILTROS QUE A DISTRO JÁ TRAZ. O gerenciador os lista por estes nomes.
+notif-rule-important-gets-room = O que é importante ganha espaço
+notif-rule-small-things-are-quick = Coisa pequena passa rápido
+
+# O gerenciador: três listas, e um título para cada.
+notif-column-unread = Não lidas
+notif-column-suppressed = Filtradas
+notif-column-catalogue = Notificações e filtros
+notif-read = lida
+notif-suppressed-by = filtrada por { $rule }
+notif-decided-by = por { $rule }
+notif-from-catalogue = { $entry }
+notif-default = padrão da distro
+notif-yours = seu ajuste
+notif-nothing-here = nada aqui
+notif-yes = sim
+notif-no = não
+notif-knob-show = aparece
+notif-knob-life = fica
+notif-window-title = { $pane } — { $n } não lidas
+notif-window-keys = TAB coluna · ↑↓ move · ESPAÇO lida · r todas · RET ajustar · ←→ mudar
+notif-act-in-the-footer = A ação roda pelo rodapé: LEADER n h, e a letra dela
+
+# Como os campos da apresentação aparecem na tela.
+notif-show-hidden = não mostrar
+notif-show-brief = uma linha
+notif-show-full = até três linhas
+notif-life-quick = rápida
+notif-life-normal = normal
+notif-life-long = longa
+notif-loud = chamativa
+notif-level = nível
+notif-blink = piscar
+notif-vibrate = vibrar
+notif-audio = tocar som
+
+# OS DOIS INTERRUPTORES QUE NÃO FAZEM NADA, e por quê. Um interruptor que não
+# interrompe e não diz nada é a armadilha que este projeto já pagou uma vez.
+notif-inert-vibrate = sem dispositivo háptico nesta máquina
+notif-inert-audio = ainda não implementado — veja docs/PENDING.md
+
+# O que o ponteiro explica na faixa.
+hint-notif-bell = clique para abrir o gerenciador de notificações
+hint-notif-read = marcar como lida e tirar da tela
+hint-notif-countdown = quanto tempo ela ainda tem
+hint-notif-action = { $action } — aperte { $key } no gerenciador
 
 ## Installer — the six questions (section 7.1)
 
@@ -152,6 +228,11 @@ cmd-workspace-move = Levar a janela para o espaço
 ## Notifications, keyboard and help — commands that existed only as an order or a key
 
 cmd-notif-history = Histórico de notificações
+cmd-notif-window = Notificações em uma janela
+cmd-notif-read-all = Marcar todas como lidas
+cmd-notif-read = Marcar esta notificação como lida
+cmd-notif-forget = Esquecer esta notificação
+cmd-notif-act = Rodar a ação da notificação
 cmd-notif-dismiss = Dispensar a notificação
 cmd-keyboard-restore = Restaurar o teclado
 group-notification = notificação
@@ -654,7 +735,6 @@ echo-network-no-stored = Conectado. A senha não ficou guardada.
 echo-network-store-failed = Conectado, mas não consegui guardar a senha: { $motivo }
 ## Falta de memoria
 notif-oom-app = sistema
-notif-oom-summary = Fechado para liberar memoria
 notif-oom-pressure = O { $app } estava deixando a maquina travada por falta de memoria.
 notif-oom-used = O { $app } encheu a memoria e a area de troca.
 notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }

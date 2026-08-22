@@ -22,8 +22,14 @@ let
   # be `35`, from when the font was 14 px and the line height 1.25 — both
   # changed, and the test started measuring against a value that no longer exists.
   typography = import ../assets/tokens/typography.nix;
-  linePx = builtins.ceil (typography.size.base * typography.lineHeight);
-  footerPx = builtins.ceil (typography.size.base * typography.lineHeight * 2);
+  # THE HEIGHT OF N LINES, rounded the way the shell rounds it.
+  #
+  # ONE ceiling over the whole product, and not a sum of ceilings: the line is
+  # 26,1 px, so two lines are `ceil(52,2) = 53` and three are `ceil(78,3) = 79`
+  # — while `53 + ceil(26,1)` is 80. The test asked for 80, the footer drew 79,
+  # and the failure looked like a missing line.
+  heightOf = lines: builtins.ceil (typography.size.base * typography.lineHeight * lines);
+  footerPx = heightOf 2;
 
 in
 pkgs.testers.runNixOSTest {
@@ -39,6 +45,8 @@ pkgs.testers.runNixOSTest {
       pkgs.imagemagick
       pkgs.tesseract
       pkgs.libnotify
+      # The history is JSON on disk, and the last subtest counts it.
+      pkgs.jq
     ]
     ++ xvfb.packages;
 
@@ -54,6 +62,11 @@ pkgs.testers.runNixOSTest {
 
 
     FOOTER = ${toString footerPx}
+    # THE FOOTER WITH A BAND of one and of two lines. The band is one line for a
+    # brief notification and up to three for a full one, and the height is what
+    # the test can see from outside — see `heightOf` for why these are not sums.
+    WITH_ONE = ${toString (heightOf 3)}
+    WITH_TWO = ${toString (heightOf 4)}
 
 
     def footer_height():
@@ -145,6 +158,11 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            # THE HISTORY IS WRITTEN UNDER `$XDG_STATE_HOME`, and a systemd
+            # scope inherits neither that nor `HOME` — so without this the
+            # store would silently write nowhere and the last subtest would be
+            # measuring an absence.
+            "--setenv=HOME=/root "
             f"--setenv=NIRI_SOCKET={sock} "
             "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
             "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_notify=debug "
@@ -169,40 +187,129 @@ pkgs.testers.runNixOSTest {
         assert journal.count("notificacao recebida") == 3, journal
 
         # The queue counts the ones that are WAITING: 2, not 3. The one on the
-        # screen is not pending.
+        # band is not pending.
         #
-        # The grep is in the QUEUE's log, not in the segment's: the segment's text
-        # starts with a PUA glyph, and `body= 2` does not match
-        # `body=<glyph> 2`.
+        # The grep is in the QUEUE's log, not in the segment's: the segment's
+        # text starts with a PUA glyph, and `body= 2` does not match
+        # `body=<glyph>2`.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'pending=2'", timeout=30
         )
 
-    with subtest("a critica nao some sozinha"):
-        notificar("bateria em 3%", urgencia="critical")
-        machine.sleep(9)  # much more than the time of a normal one
-        journal = machine.succeed("journalctl -u footer --no-pager")
-        assert "urgency=Critical" in journal, journal
-        assert "critical=true" in journal, journal
-        # Still expanded: the critical one forced the history to open (section
-        # 4.3) and did not expire.
-        assert footer_height() > FOOTER, "a critica sumiu sozinha"
-
-    with subtest("dispensar a critica e o unico jeito de fecha-la"):
-        control("notif-dismiss")
-        control("notif-history")  # closes the history the critical one opened
+    with subtest("a faixa aparece ACIMA da modeline, na MESMA superficie"):
+        # THE BAND LASTS SECONDS, so it is raised HERE and measured at once.
+        # Measuring after another subtest is measuring an empty band: three
+        # normal notifications are eighteen seconds of screen, and the checks in
+        # between spend more than that.
+        #
+        # The queue is drained first, so what is on the band is what this
+        # subtest put there.
+        for _ in range(6):
+            control("notif-dismiss")
         wait_for_height(FOOTER)
 
-    with subtest("o historico abre ABAIXO do minibuffer, na MESMA superficie"):
-        control("notif-history")
-        expanded = footer_height()
-        assert expanded > FOOTER, f"o historico nao expandiu: {expanded} px"
+        notificar("uma linha discreta")
+        # A brief notification is ONE line above the pair. The log says which,
+        # and the height is what proves it reached the screen.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -q 'band=1'", timeout=30
+        )
+        wait_for_height(WITH_ONE, tentativas=5)
 
-        # The clause only the VM proves. One surface, not two.
+        # THE CLAUSE ONLY THE VM PROVES. The owner asked for a line above the
+        # modeline and not a floating toast; what makes that legal is that it is
+        # the footer's own surface growing upwards. One surface, still.
         c = layers()
         print(c)
         assert c.count("ronoctua-footer") == 1, (
-            f"o historico criou uma SEGUNDA superficie (invariante 14):\n{c}"
+            f"a faixa criou uma SEGUNDA superficie (invariante 14):\n{c}"
+        )
+
+    with subtest("a critica some sozinha, e continua nao lida"):
+        # THE RULE THIS REPLACED said a critical one never expires. The band
+        # pushes the content up while it is there, so one that never leaves is a
+        # permanent tax on every window — the owner's decision, and this is
+        # where it is proved rather than asserted.
+        notificar("bateria em 3%", urgencia="critical", corpo="troque de tomada")
+        # Loud, and TWO lines: the summary and the body. `Show::Full` is up to
+        # three, and the third is the row of actions — this one has none, and a
+        # band with an empty line is a band lying about its size.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -q 'band=2 loud=true'", timeout=30
+        )
+        wait_for_height(WITH_TWO, tentativas=5)
+        # `long` is 20 s. Well past it, the band is gone and the pair is back.
+        wait_for_height(FOOTER, tentativas=40)
+        # AND IT IS STILL UNREAD. Leaving the screen and being seen are not the
+        # same event, which is the whole point of the count surviving the band.
+        #
+        # The LAST line the queue logged is the one that counts: the ones before
+        # it are the states it passed through.
+        last = machine.succeed(
+            "journalctl -u footer --no-pager | grep 'fila de notificacoes' | tail -1"
+        ).strip()
+        print(last)
+        assert "unread=" in last, last
+        assert "unread=0 " not in last, "a critica saiu da tela E do contador"
+
+    with subtest("uma tag do barramento cai no catalogo"):
+        # THE OTHER DOOR into the catalogue: an app of ours that is not the
+        # shell names itself with a hint, and the entry recognises it. Without
+        # this it would have to be recognised by its summary — an English
+        # string, in a system that translates.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 "
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
+            "${pkgs.libnotify}/bin/notify-send -a testes "
+            "--hint=string:tags:memory-killed 'algo fechou' 'por falta de memoria'"
+        )
+        machine.sleep(2)
+        decided = machine.succeed(
+            "journalctl -u footer --no-pager | grep 'notificacao decidida' | tail -1"
+        ).strip()
+        print(decided)
+        # THE QUOTES ARE PART OF IT: `tracing` writes a string field as
+        # `catalogue="memory-killed"`, and matching without them passes on
+        # nothing and fails on everything.
+        assert 'catalogue="memory-killed"' in decided, decided
+        # And the entry's verdict reached it: three lines, and long.
+        assert 'life="long"' in decided, decided
+        assert 'show="full"' in decided, decided
+        for _ in range(4):
+            control("notif-dismiss")
+
+    with subtest("o caminho do arquivo chega pelas DUAS convencoes"):
+        # The compositor puts a screenshot's `file://` URL in the icon field;
+        # libnotify puts it in the standard `image-path` hint and leaves the
+        # icon empty. Reading only the first made every action that needs a file
+        # vanish for every libnotify client — a band two lines tall where three
+        # were expected, and nothing failing.
+        for _ in range(4):
+            control("notif-dismiss")
+        machine.succeed("touch /root/uma-imagem.png")
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 "
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
+            "${pkgs.libnotify}/bin/notify-send -a testes "
+            "--hint=string:image-path:file:///root/uma-imagem.png "
+            "'com imagem' 'pelo hint'"
+        )
+        machine.sleep(1)
+        got = machine.succeed(
+            "journalctl -u footer --no-pager | grep 'notificacao recebida' | tail -1"
+        ).strip()
+        print(got)
+        assert 'icon="file:///root/uma-imagem.png"' in got, got
+
+    with subtest("o gerenciador abre ABAIXO do minibuffer, na MESMA superficie"):
+        control("notif-history")
+        expanded = footer_height()
+        assert expanded > FOOTER, f"o gerenciador nao expandiu: {expanded} px"
+
+        c = layers()
+        print(c)
+        assert c.count("ronoctua-footer") == 1, (
+            f"o gerenciador criou uma SEGUNDA superficie (invariante 14):\n{c}"
         )
 
         # And the content is there, on the screen, below the footer's two lines.
@@ -216,13 +323,34 @@ pkgs.testers.runNixOSTest {
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/hist.png stdout --psm 6 2>/dev/null"
         ).strip()
-        print(f"OCR do historico: {read_back!r}")
+        print(f"OCR do gerenciador: {read_back!r}")
         assert "mensagem" in read_back.lower() or "bateria" in read_back.lower(), (
-            f"o historico nao esta na tela; OCR leu {read_back!r}"
+            f"o gerenciador nao esta na tela; OCR leu {read_back!r}"
         )
 
-    with subtest("fechar o historico devolve as duas linhas"):
+    with subtest("fechar o gerenciador devolve as duas linhas"):
         control("notif-history")
         wait_for_height(FOOTER)
+
+    with subtest("o historico sobrevive ao rodape reiniciar"):
+        # FIFTEEN DAYS ON DISK, and this is the half a VM can prove: the file is
+        # written where the footer says it is, and a fresh process reads it.
+        machine.wait_until_succeeds(
+            "test -s /root/.local/state/ronoctua/notifications.json", timeout=30
+        )
+        before = machine.succeed(
+            "${pkgs.jq}/bin/jq 'length' /root/.local/state/ronoctua/notifications.json"
+        ).strip()
+        assert int(before) >= 4, f"o historico tem {before} registros"
+        machine.succeed("systemctl restart footer")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -q 'historico de notificacoes lido'",
+            timeout=60,
+        )
+        after = machine.succeed(
+            "journalctl -u footer --no-pager | grep 'historico de notificacoes lido' | tail -1"
+        )
+        print(after)
+        assert f"lidas={before}" in after, after
   '';
 }

@@ -81,6 +81,65 @@ pub enum Atlas {
     Scratch,
 }
 
+/// What size a run is drawn at, and how it sits on the cell grid.
+///
+/// # Why per run
+///
+/// The glyph browser needs the icon large and the surrounding text at the
+/// normal size, on the same screen. A second renderer would give a second
+/// atlas and a second copy of the font just to draw two sizes; here each run
+/// already has its own glyphon `Buffer`, and the metric is its own.
+///
+/// # Why the last two are not one
+///
+/// Because a run drawn at another size has an ADVANCE of another size, and the
+/// grid positions by cell. Whoever draws a whole line at 20 px wants it to
+/// start where a 20 px line starts — from the same left edge. Whoever drops ONE
+/// larger glyph among text at the base size wants it centred on the cell it
+/// occupies, or it drifts right and reads as a glyph that slipped.
+///
+/// A single variant with a boolean beside it would let the two be asked for at
+/// once, which means nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Size {
+    /// The size the renderer was built with — the common case, which is why it
+    /// forces nobody to say anything.
+    Grid,
+    /// Another size, from the same left edge a grid run would use.
+    Px(f32),
+    /// Another size, CENTRED on the cell it occupies.
+    ///
+    /// For a chrome glyph sitting inline with text at the base size — the bell,
+    /// the transfer arrows, the countdown. See `font.size.icon`.
+    OnTheCell(f32),
+}
+
+impl Size {
+    /// The size in px, when it is not the renderer's.
+    #[must_use]
+    pub const fn px(self) -> Option<f32> {
+        match self {
+            Self::Grid => None,
+            Self::Px(v) | Self::OnTheCell(v) => Some(v),
+        }
+    }
+
+    /// How far LEFT of its cell the run starts, in px.
+    ///
+    /// Zero for everything but [`Size::OnTheCell`], where it is half the
+    /// difference between the two advances — which is what "centred on the
+    /// cell" means once both advances are `size x cell_width_em`.
+    #[must_use]
+    pub fn nudge(self, grid: f32) -> f32 {
+        match self {
+            Self::OnTheCell(v) => {
+                (tokens::metrics::cell_width(grid) - tokens::metrics::cell_width(v)) / 2.0
+            }
+            _ => 0.0,
+        }
+    }
+}
+
 /// A run positioned in CELLS.
 ///
 /// Position in cells, not in pixels: with the exact cell (0.600 at), the
@@ -95,18 +154,32 @@ pub struct Span {
     pub line: u16,
     /// Colour, from [`ronoctua_tokens::color`].
     pub color: tokens::Color,
-    /// Size in px, when it is **not** the renderer's.
-    ///
-    /// # Why per run
-    ///
-    /// The glyph browser needs the icon large and the surrounding text at the
-    /// normal size, on the same screen. A second renderer would give a second
-    /// atlas and a second copy of the font just to draw two sizes; here
-    /// each run already has its own glyphon `Buffer`, and the metric is its own.
-    ///
-    /// `None` is the size the renderer was built with — the common case,
-    /// and that is why it forces nobody to say anything.
-    pub size: Option<f32>,
+    /// The size, and how it sits on the grid. See [`Size`].
+    pub size: Size,
+}
+
+/// The line box a run occupies, which is what decides whether it moves the
+/// line it is on.
+///
+/// # Why a cell-centred glyph keeps the GRID's box
+///
+/// [`aligned_tops`] centres every run of a line against the LARGEST box on it.
+/// While an icon carried a box of its own size, one 22 px bell made the
+/// modeline's box 31,9 px instead of 26,1 — and every letter beside it moved
+/// down 2,9 px. Nothing failed: the line simply sat lower inside its own
+/// background, and the `modeline-vm` OCR went from reading `foot` to reading
+/// `fant`. The gate found it; nobody would have.
+///
+/// "Centred on the cell" has to mean the cell in BOTH axes. The font's box at
+/// 22 px is 27,5 px against the line's 26,1, so such a run is clipped by 0,7 px
+/// at each end — and the ink of a chrome glyph is 0,60 em, nowhere near it.
+/// `chrome-icons-match-the-text` measures exactly that ink.
+#[must_use]
+pub fn line_box(size: Size, grid: f32) -> f32 {
+    match size {
+        Size::Grid | Size::OnTheCell(_) => grid,
+        Size::Px(px) => px * tokens::font::LINE_HEIGHT,
+    }
 }
 
 /// Where the top of each run goes, so the LINE shares a MIDDLE.
@@ -310,10 +383,17 @@ impl Text {
         //
         // The line height follows the size: with the renderer's, a large
         // run would be clipped top and bottom by the line box.
-        let metrica_de = |t: &Span| {
-            t.size.map_or(metrica, |px| {
-                glyphon::Metrics::new(px, px * tokens::font::LINE_HEIGHT)
-            })
+        let metrica_de = |t: &Span| match t.size {
+            Size::Grid => metrica,
+            // A WHOLE LINE AT ANOTHER SIZE takes that size's line height too:
+            // with the renderer's, a large run would be clipped top and bottom
+            // by the line box.
+            Size::Px(px) => glyphon::Metrics::new(px, px * tokens::font::LINE_HEIGHT),
+            // A GLYPH CENTRED ON ITS CELL KEEPS THE GRID'S LINE HEIGHT — see
+            // [`line_box`], which is the same rule and the only place it is
+            // written. Two expressions of it are how the box and the metric
+            // come to disagree, and the disagreement moves a whole line.
+            Size::OnTheCell(px) => glyphon::Metrics::new(px, line_box(t.size, lh)),
         };
 
         // In cosmic-text 0.19, `set_size` and `set_text` no longer take the
@@ -346,7 +426,7 @@ impl Text {
         // `metrica_de` built. See `aligned_tops`.
         let caixas: Vec<(u16, f32)> = spans
             .iter()
-            .map(|t| (t.line, metrica_de(t).line_height))
+            .map(|t| (t.line, line_box(t.size, lh)))
             .collect();
         let tops = aligned_tops(&caixas, lh);
 
@@ -358,7 +438,10 @@ impl Text {
                 let [r, g, b, a] = t.color.to_rgba8();
                 glyphon::TextArea {
                     buffer: buf,
-                    left: f32::from(t.column) * cw,
+                    // THE NUDGE IS THE ONLY PLACE A RUN LEAVES THE GRID, and
+                    // it is zero for everything but `Size::OnTheCell` — see
+                    // `Size::nudge`.
+                    left: f32::from(t.column).mul_add(cw, t.size.nudge(self.size)),
                     top: *topo,
                     scale: 1.0,
                     bounds: glyphon::TextBounds {
@@ -440,6 +523,62 @@ mod tests {
     const ICON: f32 = 58.0;
     /// The search field's box: `18 × 1.45`.
     const TEXT: f32 = 26.1;
+
+    #[test]
+    fn a_grid_run_does_not_leave_its_cell() {
+        // The common case, and the one that must not move a pixel: everything
+        // the footer draws is `Grid`, and a nudge there would shift the whole
+        // system half a cell.
+        assert_eq!(Size::Grid.nudge(18.0), 0.0);
+        // And a whole line at ANOTHER size still starts from the same left
+        // edge: the file manager's window draws every run at 20 px, and
+        // centring each of them would jitter the columns against each other.
+        assert_eq!(Size::Px(20.0).nudge(18.0), 0.0);
+    }
+
+    #[test]
+    fn a_glyph_on_the_cell_is_centred_on_it() {
+        // The bell: 22 px of glyph on a grid of 18. The advance grows from
+        // 10,8 px to 13,2, so the run starts 1,2 px to the LEFT and the ink
+        // ends up centred on the cell the layout gave it.
+        let nudge = Size::OnTheCell(22.0).nudge(18.0);
+        assert!((nudge - -1.2).abs() < 0.001, "deslocamento {nudge}");
+        // A glyph SMALLER than the grid goes the other way, and that is the
+        // same rule and not a second one.
+        assert!(Size::OnTheCell(15.0).nudge(18.0) > 0.0);
+    }
+
+    #[test]
+    fn an_icon_on_the_cell_does_not_move_the_line() {
+        // THE DEFECT THIS EXISTS FOR, and the gate is what found it. See
+        // `line_box` for the whole story.
+        //
+        // The modeline is text at the grid's size plus ONE bell at 22 px. With
+        // the bell carrying a box of its own, every letter beside it moved down
+        // 2,9 px — silently, inside its own background.
+        let icon = Size::OnTheCell(22.0);
+        assert_eq!(line_box(icon, LH), LH, "o icone trouxe caixa propria");
+
+        let boxes: Vec<(u16, f32)> = vec![
+            (0, line_box(Size::Grid, LH)),
+            (0, line_box(icon, LH)),
+            (0, line_box(Size::Grid, LH)),
+        ];
+        let tops = aligned_tops(&boxes, LH);
+        assert_eq!(
+            tops,
+            vec![0.0, 0.0, 0.0],
+            "a linha desceu por causa do icone"
+        );
+
+        // And the guard on the other side: a run that DOES carry its own box
+        // still moves the line, which is what the glyph browser wants.
+        let browser = aligned_tops(&[(0, line_box(Size::Px(40.0), LH)), (0, TEXT)], LH);
+        assert!(
+            browser[1] > 0.0,
+            "o navegador perdeu o alinhamento pelo meio"
+        );
+    }
 
     #[test]
     fn a_line_of_a_single_size_does_not_move() {

@@ -23,6 +23,9 @@
   fonts,
   noto-fonts-color-emoji,
   tokensRs,
+  # The notification catalogue and filters (section 4.2), generated from
+  # `assets/notifications.nix` in the same shape as the tokens.
+  notificationsRs,
   mimeDb,
   i18nRs,
   niriActions,
@@ -156,6 +159,7 @@ let
     # The two generators. ronoctua-tokens's `build.rs` fails loudly if the
     # first is missing, instead of generating a fallback that would mask the error.
     RONOCTUA_TOKENS_RS = "${tokensRs}/tokens.rs";
+    RONOCTUA_NOTIFICATIONS_RS = "${notificationsRs}/notifications.rs";
     # The directory, not a file: the crate embeds the generated `keys.rs` AND the
     # `.ftl` files it came from.
     RONOCTUA_I18N_DIR = "${i18nRs}";

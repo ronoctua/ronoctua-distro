@@ -855,9 +855,15 @@ teclado.
 
 ### O rodapé: onde cada linha fica, e o que aparece nelas
 
-**Modeline e minibuffer ficam coladas, e a expansão cresce abaixo delas.** De cima para baixo:
-o nome do buffer, a linha do que se digita, e então a lista — which-key, candidatos do localizador,
-histórico, manual.
+**Modeline e minibuffer ficam coladas; a expansão cresce abaixo e a notificação acima.** De cima
+para baixo: a faixa de notificação (0 a 3 linhas), o nome do buffer, a linha do que se digita, e
+então a lista — which-key, candidatos do localizador, gerenciador, manual.
+
+A superfície é ancorada **embaixo**, e é isso que torna as duas direções livres: crescer para cima
+não move a modeline na tela, come conteúdo. O primeiro da expansão deixou de ser constante por causa
+disso — ele é `faixa + 2`, e o `row_at` do ponteiro recebe o número em vez de lê-lo. Com uma
+constante ali, toda linha da lista descreveria a de cima enquanto houvesse notificação na tela, e
+nada pareceria quebrado: o cursor estaria só uma linha fora.
 
 A posição não é arbitrária, e as duas alternativas caem por defeitos opostos: com a lista **acima**
 da modeline, o nome do buffer desce junto e a única linha que diz *onde você está* salta de lugar a
@@ -1243,18 +1249,137 @@ distro vai mostrar.
 
 ### Notificações
 
-Não há popup de canto nem card. Isso não é restrição estética; determina o desenho inteiro:
+Não há popup de canto nem card. Isso não é restrição estética; determina o desenho inteiro.
 
-- **Uma de cada vez.** A modeline tem uma região de mensagem. Empilhar exigiria contêiner, e
-  contêiner é card. Ou a notificação está na linha, ou está na fila.
-- **O histórico usa A superfície**, crescendo abaixo do minibuffer — a mesma área do which-key, e
-  nunca as duas ao mesmo tempo. Com a leader ativa o which-key vence.
-- **O tray é lista de PERMISSÃO**, não de bloqueio. Um tray que mostra tudo come a linha no dia em
-  que se instala mais um aplicativo, e ninguém ligaria os pontos. O único furo é o estado de
-  atenção, porque a alternativa — um app pedindo atenção que ninguém vê — é pior.
-- **Crítica nunca expira sozinha**, mesmo que o aplicativo peça. A especificação permite ao cliente
-  cravar timeout; aqui a decisão vence. Um aviso de bateria crítica que some sozinho é um aviso que
-  não foi dado.
+**A notificação tem uma faixa própria, ACIMA da modeline.** É a superfície do rodapé crescendo para
+cima, exatamente como a expansão já cresce para baixo — uma superfície só, sem popup e sem card
+(invariantes 14 e 15). Ela ocupa **uma linha**, ou **até três** quando há corpo e ações.
+
+O pedido original era uma *toast* flutuante, e ela é literalmente o que o invariante 14 nomeia. A
+segunda leitura — pôr a notificação **na** modeline — cai por outro motivo: a modeline tem uma linha
+só, e é a linha que diz *onde você está*. Uma notificação pousando ali tira da tela a única coisa que
+nunca deveria se mexer. A faixa acima resolve as duas: como a superfície é ancorada embaixo, crescer
+para cima **não move a modeline** — quem cede é o conteúdo.
+
+**Uma de cada vez.** A faixa tem uma região de mensagem. Empilhar exigiria contêiner, e contêiner é
+card. Ou a notificação está na faixa, ou está na fila — e o contador `2/5` aparece **só com mais de
+uma**, porque `1/1` não diz nada e custa três colunas de uma linha que elide.
+
+**Nada fica para sempre — nem a crítica.** Essa regra foi invertida por decisão do dono, e a razão é
+a faixa: enquanto ela está lá, o conteúdo está uma a três linhas mais curto. Uma notificação que
+nunca sai é um imposto permanente sobre toda janela. A crítica ganha `long` (20 s) e **continua não
+lida**: sair da tela e ter sido vista são eventos diferentes, e o contador do sino é o que lembra
+depois. O que sobrou de "a especificação permite ao cliente cravar timeout" é uma aproximação: o
+`expire_timeout` vira a mais próxima das três classes, e só quando nenhum filtro opinou.
+
+**O que CHEGOU e o que foi DECIDIDO são dois tipos.** `Notification` é dado — um aplicativo disse
+uma frase num instante, e nada revisa isso. `Presentation` é política — os filtros da pessoa
+decidem, ela muda de ideia depois, e a mesma notificação mostrada duas vezes pode aparecer diferente.
+Num struct só, "o app pediu 5 s" e "nós damos 6" ficavam indistinguíveis, e é o segundo que o
+gerenciador precisa editar.
+
+**Tudo o que a distro levanta está em `assets/notifications.nix`**, e sai dali gerado: a tabela Rust,
+**a lista de chaves de texto que os dois idiomas têm de ter** e a recusa de um campo inválido no
+build. Escrito em Rust, "toda notificação da distro" seria um `match` num arquivo e um `format!`
+noutro, e a resposta honesta a "quais existem?" seria um grep. O gerenciador desenha ESSA lista.
+
+**Uma entrada é um reconhecimento, não um construtor.** Nem todas nascem aqui: a da captura de tela é
+mandada pelo compositor, em inglês, com o caminho do arquivo no campo do ícone. Então a entrada diz
+como RECONHECÊ-LA e o que fazer com ela, e a mesma máquina serve uma que levantamos e uma que chega
+de fora. As nossas carregam uma `tag` igual ao próprio id, que é por que quase todo `when` é de uma
+linha. O check `screenshot-notification-contract` lê a fonte do niri fixado: se o texto lá mudar, o
+filtro pararia de casar **em silêncio**.
+
+**O sino abre o gerenciador.** É a única coisa daquela linha para onde o olho vai quando quer saber o
+que perdeu, e clicar nele não fazia nada — uma marca que diz "há seis" e não responde quando
+perguntada. Os dois botões fazem o mesmo: há uma coisa só a fazer ali, e um segundo sentido para o
+botão direito seria um menu que ninguém pediu.
+
+**O filtro é `campo + teste`, e não regex.** Duas razões, nenhuma ascética: é dependência num crate
+que o rodapé linka, e é armadilha num arquivo que o dono edita à mão — um regex que casa demais vira
+"uma notificação que eu nunca vi", que é o defeito mais difícil de notar. Três testes de texto
+(`is`, `contains`, `starts-with`) e dois numéricos cobrem o que uma pessoa escreve, e cada um está
+obviamente certo ou obviamente errado à primeira vista.
+
+**A PRIMEIRA regra que casa decide**, e o gerenciador mostra qual foi. Com toda regra que casa
+sobrepondo a anterior, a resposta a "por que isto está silencioso?" é uma lista, e a pessoa teria de
+simular o livro inteiro na cabeça. Uma regra, uma resposta, uma coisa para editar.
+
+**A ordem é: a distro fala primeiro, do geral ao específico; depois você, na mesma direção.** Padrão
+por urgência → entrada do catálogo → primeira regra (as suas antes das da distro) → seu ajuste à
+REGRA → seu ajuste à ENTRADA. Os dois últimos passos já estiveram colados nos dois do meio, e estava
+errado de um jeito que um teste pegou: ajustar a captura para ser chamativa não fazia nada, porque
+uma regra da distro sobre nível baixo rodava depois e a devolvia ao discreto.
+
+**Suprimida não aparece e não conta.** Um contador que soma o que a pessoa pediu para nunca ver é um
+contador que não dá para zerar. Mas ela é REGISTRADA, e a coluna da direita do gerenciador é onde
+ela aparece — um filtro que ninguém consegue auditar é um filtro em que ninguém confia.
+
+**Duas portas, uma `notifications::View`.** `n h` abre no rodapé, `n w` numa janela; duas colunas
+quando cabe, uma quando não. O corte sai de um token, e vale para as duas portas — que é o que faz
+"uma implementação, duas portas" ser verdade também do layout.
+
+**A janela não RODA ação, e diz isso.** Marcar lida, ajustar filtro e navegar são dela; executar uma
+ação é do rodapé, que é o processo que sabe abrir num escopo próprio (seção 9.1) e que tem a área de
+transferência. Uma segunda implementação ali é exatamente a segunda porta discordando da primeira —
+o defeito que este arranjo existe para evitar. Quando se aperta a letra na janela, ela responde com a
+frase que diz onde a ação roda, em vez de não fazer nada.
+
+**Quinze dias em disco.** O histórico é estado — foi o que aconteceu, é escrito por máquina e é
+grande — e mora em `$XDG_STATE_HOME`. As preferências são configuração e moram em
+`$XDG_CONFIG_HOME`, ao lado da tabela de ícone por app id que já estava lá. O arquivo é reescrito
+inteiro porque um registro MUDA (ser lido é mutação do que já foi escrito), e um log append-only
+precisaria de um segundo fluxo de "e esta foi lida" mais um replay para reconstruir o estado.
+
+**`vibrate` e `audio` existem e não fazem nada — e a tela diz isso, na linha de mensagem.** Eles
+existem porque a API externa que o dono vai pôr no ar vai setá-los, e derrubá-los na porta faria a
+mesma notificação significar coisas diferentes conforme por onde entrou. O que eles não podem ser é o
+"interruptor que não interrompe" que este repositório já pagou duas vezes: cada um está em `INERT`
+com uma chave de texto dizendo por quê.
+
+A razão era uma **terceira coluna na linha do interruptor**, e o dono pediu para tirar: duas linhas
+de sete carregando uma frase faziam a folha parecer uma lista de problemas. Ela foi para a linha de
+mensagem, quando a linha está em foco — que é onde este rodapé já explica coisa, e é o mesmo lugar
+em que os campos do gerenciador de arquivos se explicam. O que fica na linha é o valor ser `não`,
+que é verdade. O check passou a cobrar as duas metades: a razão existir, e **haver quem a desenhe**
+— senão "saiu da linha" e "saiu do sistema" seriam a mesma coisa para quem confere.
+
+**O que não tem glifo próprio ganha um genérico**, e nunca nada. Uma lista em que algumas linhas
+começam com uma marca e outras não se lê como uma lista furada, e a marca é a resposta mais rápida a
+"quanto isso importa" — antes de o olho chegar à primeira palavra. É a SEVERIDADE, e não um quadrado
+neutro, porque a severidade é a única coisa que o protocolo dá que diz alguma coisa: um estranho que
+gritou ganha o desenho de quem grita.
+
+**O controle de marcar como lida fica na BORDA DIREITA da faixa**, e é um envelope aberto. Ele
+começou como um círculo vazio na margem esquerda, e as duas coisas estavam erradas: a margem
+esquerda é onde a frase começa, então o controle empurrava as palavras e se lia como parte delas; e
+um círculo é uma FORMA, não um verbo — diz "há um controle aqui" e deixa o que ele faz por adivinhar.
+Um envelope aberto é o desenho que todo mundo já lê como "lida", e a borda direita é para onde a mão
+vai quando quer dispensar algo.
+
+**A coluna da esquerda para ANTES da direita.** Os dois alvos ficam no fim da linha, e com o painel
+terminando exatamente na divisão eles encostavam na primeira célula da outra coluna — lido da tela
+como lixeiras que pertenciam às notificações de lá. O vão é o `space.modeline.segmentGap`, que é o
+número que este sistema já usa para "duas coisas numa linha são duas coisas".
+
+E as duas extensões saem de **uma função só** (`extent_of`). O desenho calculava a sua e o ponteiro
+calculava a dele, e os dois concordavam por sorte: uma lixeira desenhada numa célula e testada em
+outra é um controle que não faz nada onde aparece e faz onde não aparece.
+
+**Na lista, cada linha tem dois alvos à direita**: o mesmo envelope e uma lixeira. Aqui o mouse AGE,
+e não só mira — ao contrário do painel de transferências, cuja regra é "as teclas agem, o mouse
+mira". A diferença é que lá o clique é na LINHA, onde nada na tela diz qual de cinco coisas
+destrutivas ele rodaria; um clique numa lixeira não é palpite. Cada um tem tecla (`Espaço` e `d`), e
+o gerador **recusa** uma ação que peça essas letras — uma ação encoberta por tecla de vista é uma
+ação que ninguém alcança, e o jeito de descobrir seria apertando e vendo outra coisa acontecer.
+
+**Esquecer não é dispensar.** Dispensar tira da FILA e nunca do registro; esquecer tira do registro
+para sempre. Quinze dias é muito tempo para conviver com uma linha que não se quer, e a alternativa
+era esperar ela envelhecer. É o registro da própria pessoa.
+
+**O tray é lista de PERMISSÃO**, não de bloqueio. Um tray que mostra tudo come a linha no dia em que
+se instala mais um aplicativo, e ninguém ligaria os pontos. O único furo é o estado de atenção,
+porque a alternativa — um app pedindo atenção que ninguém vê — é pior.
 
 ---
 

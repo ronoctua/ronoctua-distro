@@ -20,6 +20,24 @@
     # the cell, so changing the size does not touch any of the sums.
     base = 18;
     small = 15;
+    # THE SIZE A CHROME GLYPH IS DRAWN AT, next to text of the base size.
+    #
+    # It is not taste, it is a MEASUREMENT. In the real face the ink of
+    # `cod-bell` is 600 units tall and the ink of the digit `0` is 751 — so a bell
+    # drawn at the text's size comes out 20% shorter than the number beside it,
+    # and reads as a different, smaller thing. It was reported from the screen
+    # exactly like that.
+    #
+    # 22 makes the ink 13,2 px against the digit's 13,5, which is the same
+    # thing to the eye. The advance grows past the cell (13,2 against 10,8), so
+    # the run has to be CENTRED on its cell — `render::Size::OnTheCell` — and
+    # then the ink overflows 0,3 px on each side, while the neighbouring digit's
+    # ink only begins 1,4 px into its own cell. They do not touch.
+    #
+    # The `chrome-icons-match-the-text` check re-measures this against the font
+    # on every build, so a new icon token that is drawn too small fails there
+    # instead of on somebody's screen.
+    icon = 22;
     # The buffers' content. LARGER than the footer on purpose: the footer is
     # peripheral reference, the buffer is what one reads.
     large = 20;

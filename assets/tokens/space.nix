@@ -22,10 +22,19 @@
   # padding: the segments are text, not boxes.
   modeline = {
     segmentGap = 2;
-    # Margin at the screen's edges. The notification icon sits flush against the right
-    # edge (4.2), so the right margin is zero on purpose.
+    # Margin at the screen's edges, in cells.
+    #
+    # THE RIGHT ONE USED TO BE ZERO, and it was wrong. The reasoning was
+    # "the notification icon sits flush against the right edge (4.2)", and
+    # flush is exactly what it looked like on screen: the unread count ended
+    # against the panel's border, with no air, and read as a number that had
+    # been cut off rather than one that had ended. It is the same defect
+    # `files.edgeRight` already names one block below, in a table.
+    #
+    # One cell, and not two: this is a status line, not a table. Two would
+    # start to look like a margin.
     edgeLeft = 1;
-    edgeRight = 0;
+    edgeRight = 1;
   };
 
   # The FILE MANAGER's table, in cells.
@@ -37,8 +46,9 @@
   # without it the modification date ends flush against the screen's edge, which
   # reads as a column that was cut off rather than one that ended.
   #
-  # The modeline's `edgeRight` is zero on purpose (the notification icon sits
-  # flush), so it is the wrong number to borrow: a table is not a status line.
+  # The modeline has an `edgeRight` of its own, and for the same reason — but
+  # they stay two numbers: a table is not a status line, and the day one of them
+  # wants two cells the other must not follow.
   files = {
     gutter = 1;
     edgeRight = 1;
@@ -103,6 +113,21 @@
   expansion = {
     maxLines = 12;
     maxFooterPct = 40;
+  };
+
+  # THE NOTIFICATION MANAGER, in cells.
+  #
+  # From this width on it splits into two columns — what happened on the left,
+  # what a filter suppressed on the right; below it, the two stack. The same
+  # number serves BOTH doors, which is what makes "one implementation, two
+  # doors" true of the layout and not only of the code: the footer's region on a
+  # small display and a narrow window get the same answer.
+  #
+  # Eighty is the narrow terminal every layout here is checked against, and it
+  # is the width at which a sentence plus a filter's name stops fitting beside a
+  # second list.
+  notifications = {
+    twoColumnsFrom = 80;
   };
 
   # THE BROWSER EXTENSION'S POPUP, and this is the one block in this file

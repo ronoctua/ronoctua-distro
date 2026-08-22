@@ -1,0 +1,49 @@
+# The notification catalogue and filters, from Nix to Rust — section 4.2.
+#
+# "Every notification and every pre-created filter of the distro, centralised."
+# One file (`assets/notifications.nix`) becomes three things here, and the third
+# is the one that matters most:
+#
+#   notifications.rs   the table `ronoctua_notify::catalogue` includes
+#   keys.txt           the text keys BOTH languages have to carry
+#   a refusal          an invalid field takes the build down, with the id
+#
+# `keys.txt` is what makes "all of the distro's notifications exist in English
+# and Portuguese" stop depending on discipline: the `notifications-have-text`
+# check reads it and demands every line of both `.ftl`s.
+{
+  lib,
+  stdenvNoCC,
+  python3,
+  writeText,
+  glyphdb,
+  notificationsFile,
+}:
+
+stdenvNoCC.mkDerivation {
+  pname = "ronoctua-notifications-rs";
+  version = "1";
+
+  nativeBuildInputs = [ python3 ];
+  dontUnpack = true;
+  dontConfigure = true;
+
+  buildPhase = ''
+    runHook preBuild
+    mkdir -p $out
+    python3 ${./scripts/gen-notifications.py} \
+      --notifications ${writeText "notifications.json" (builtins.toJSON (import notificationsFile))} \
+      --icons ${glyphdb.db}/icons.json \
+      --glyphs ${glyphdb.db}/glyphs.json \
+      --out $out/notifications.rs \
+      --out-keys $out/keys.txt
+    runHook postBuild
+  '';
+
+  dontInstall = true;
+
+  meta = {
+    description = "Catalogo de notificacoes e filtros, gerado de assets/notifications.nix";
+    platforms = lib.platforms.all;
+  };
+}

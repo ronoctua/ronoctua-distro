@@ -1,34 +1,57 @@
-//! Notification queue — section 4.2.
+//! The queue: what is on screen, what is waiting, and what happened — 4.2.
 //!
-//! **One at a time.** The modeline has one message region, not a stack
-//! of cards: invariant 14 does not allow a floating popup, and invariant 15
-//! does not allow a card. So either the notification is on the line, or it is in the queue.
+//! **One at a time.** The band above the modeline has one message region, not a
+//! stack of cards: invariant 14 allows no floating popup and invariant 15 no
+//! card. So either the notification is on the band, or it is in the queue.
 //!
 //! # Why time comes in as a parameter
 //!
-//! [`Queue::tick`] receives the instant instead of calling `Instant::now()`. That
-//! makes the whole expiry policy testable without sleeping: a test that
-//! waits 5 seconds to prove something expires is a test nobody runs.
+//! [`Queue::tick`] receives the instant instead of calling `Instant::now()`.
+//! That makes the whole expiry policy testable without sleeping: a test that
+//! waits 6 seconds to prove something expires is a test nobody runs.
+//!
+//! # Two clocks, and they are not interchangeable
+//!
+//! `Instant` decides when something leaves the screen — it is monotonic, and a
+//! clock that jumps must not make a notification vanish. `SystemTime` decides
+//! when something leaves the HISTORY, fifteen days later — an `Instant` does
+//! not survive a reboot, and the history does.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+use crate::action::Action;
+use crate::presentation::{Presentation, Show};
 
 /// Urgency, as `org.freedesktop.Notifications` defines it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Urgency {
-    /// It disappears on its own, and gives way to anything more urgent.
+    /// It gives way to anything more urgent.
     Low,
-    /// The default.
+    /// The default, and the protocol's own when a sender says nothing.
+    #[default]
     Normal,
-    /// It **never disappears on its own** and jumps the queue.
+    /// The sender says it matters. It becomes a high level and a long life —
+    /// see [`Presentation::from_urgency`].
     Critical,
 }
 
 impl Urgency {
     /// Converts the protocol's integer. An unknown value becomes `Normal`.
     ///
-    /// It is not an error: the specification allows future values, and refusing the
-    /// notification over that would lose information the user wants.
+    /// It is not an error: the specification allows future values, and refusing
+    /// the notification over that would lose information the user wants.
     #[must_use]
     pub const fn from_protocol(v: u8) -> Self {
         match v {
@@ -39,37 +62,70 @@ impl Urgency {
     }
 }
 
-/// How long a notification stays on screen, by urgency.
-///
-/// Values in seconds. They are not visual tokens (invariant 9 speaks of colour,
-/// font, size, spacing and codepoint) — they are behaviour policy,
-/// and they live here next to the rule that uses them.
-const SECONDS_LOW: u64 = 3;
-const SECONDS_NORMAL: u64 = 6;
-
-/// A notification already normalised.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A notification, as it ARRIVED. What is decided about it is a
+/// [`Presentation`], and it lives apart on purpose.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Notification {
     /// The protocol's id. Stable for as long as the notification exists.
     pub id: u32,
     /// The name of the application that sent it.
     pub app: String,
     /// The `IconName` requested, if any. It enters the icon chain.
+    ///
+    /// It may also be a `file://` URL: that is what the compositor puts there
+    /// for a screenshot, and it is where an action gets its file.
     pub icon: Option<String>,
     /// A short title.
     pub summary: String,
     /// Long text. It may be empty.
     pub body: String,
-    /// Urgency.
+    /// Urgency, as the sender declared it.
     pub urgency: Urgency,
-    /// How long it stays on screen. `None` = until dismissed by hand.
-    pub expires: Option<Duration>,
+    /// How long the sender ASKED for. `None` = it did not say.
+    ///
+    /// It is a request and not a decision: what decides is the filter book.
+    /// Recorded because with nothing else having an opinion it picks the
+    /// nearest of the three classes, and throwing it away would make
+    /// `notify-send -t 1000` mean nothing at all.
+    pub asked: Option<Duration>,
+    /// Tags, for a filter to test. Ours come from the catalogue.
+    pub tags: Vec<String>,
+    /// What it lets you do.
+    pub actions: Vec<Action>,
+    /// When it arrived, on the wall clock. The fifteen days count from here.
+    pub at: SystemTime,
+}
+
+/// A hand-written `Default`, because `SystemTime` has none.
+///
+/// It exists for the file format and not for the code: `serde(default)` is what
+/// lets a record written before a field existed still load, instead of turning
+/// the whole history into a parse error. `UNIX_EPOCH` is the honest stand-in —
+/// a record with no date is older than any cutoff, which is what pruning it
+/// should conclude.
+impl Default for Notification {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            app: String::new(),
+            icon: None,
+            summary: String::new(),
+            body: String::new(),
+            urgency: Urgency::Normal,
+            asked: None,
+            tags: Vec::new(),
+            actions: Vec::new(),
+            at: SystemTime::UNIX_EPOCH,
+        }
+    }
 }
 
 impl Notification {
-    /// Builds one from the protocol's fields, applying the policy.
+    /// Builds one from the protocol's fields.
     ///
-    /// `expira_ms`: `-1` = "let the daemon decide", `0` = "never expires".
+    /// `expira_ms` does not enter here: it is [`Notification::asked`], and it
+    /// is set by whoever read the message off the bus.
     #[must_use]
     pub fn fresh_one(
         id: u32,
@@ -78,25 +134,7 @@ impl Notification {
         summary: String,
         body: String,
         urgency: Urgency,
-        expira_ms: i32,
     ) -> Self {
-        // A CRITICAL ONE NEVER EXPIRES ON ITS OWN, even if the application asks.
-        //
-        // The specification lets the client nail down a timeout; section 4.2
-        // decides otherwise, and here that decision wins. A critical battery
-        // warning that disappears on its own is a warning that was not given.
-        let expires = if urgency == Urgency::Critical {
-            None
-        } else {
-            match expira_ms {
-                0 => None,
-                n if n < 0 => Some(Duration::from_secs(match urgency {
-                    Urgency::Low => SECONDS_LOW,
-                    _ => SECONDS_NORMAL,
-                })),
-                n => Some(Duration::from_millis(u64::try_from(n).unwrap_or(0))),
-            }
-        };
         Self {
             id,
             app,
@@ -104,14 +142,30 @@ impl Notification {
             summary,
             body,
             urgency,
-            expires,
+            asked: None,
+            tags: Vec::new(),
+            actions: Vec::new(),
+            at: SystemTime::now(),
         }
     }
 
-    /// One line for the modeline's message region.
+    /// Reads the protocol's `expire_timeout`, in ms.
     ///
-    /// `app: summary`. The body does NOT go in: the modeline has one line, and the body
-    /// may have paragraphs. It stays in the history (section 4.2).
+    /// `-1` = "let the daemon decide"; `0` = "never expires", which this system
+    /// does not have — see [`crate::presentation::Life`]. Both become `None`, meaning "no request".
+    #[must_use]
+    pub fn asking(mut self, expira_ms: i32) -> Self {
+        self.asked = u64::try_from(expira_ms)
+            .ok()
+            .filter(|ms| *ms > 0)
+            .map(Duration::from_millis);
+        self
+    }
+
+    /// One line for the band. `app: summary`.
+    ///
+    /// The body does not go in: it may have paragraphs, and this is one line.
+    /// `Show::Full` draws the body on its own line.
     #[must_use]
     pub fn line(&self) -> String {
         if self.app.is_empty() {
@@ -120,22 +174,117 @@ impl Notification {
             format!("{}: {}", self.app, self.summary)
         }
     }
+
+    /// The file this notification is about, from a `file://` icon.
+    ///
+    /// It is how the compositor hands over a screenshot's path, and it is what
+    /// an action opens. Percent escapes are undone: the URL is built by
+    /// `g_filename_to_uri`, and a path with a space arrives as `%20`.
+    #[must_use]
+    pub fn file(&self) -> Option<std::path::PathBuf> {
+        let url = self.icon.as_deref()?.strip_prefix("file://")?;
+        Some(std::path::PathBuf::from(unescape(url)))
+    }
 }
 
-/// The queue. One showing, the rest waiting, everything kept in the history.
-#[derive(Debug, Default)]
-pub struct Queue {
-    showing: Option<(Notification, Instant)>,
-    pending: VecDeque<Notification>,
-    history: Vec<Notification>,
+/// Undoes `%XX` in a file URL.
+///
+/// Small and here rather than a dependency: this is the only URL this system
+/// ever parses, and it is always one somebody else built from a local path.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let raw = s.as_bytes();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%'
+            && i + 2 < raw.len()
+            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(b as char);
+            i += 3;
+            continue;
+        }
+        out.push(raw[i] as char);
+        i += 1;
+    }
+    out
 }
 
-/// How many notifications the history keeps.
+/// What one beat of the clock did.
+///
+/// # Why the id comes back, and not just "something happened"
+///
+/// Because the specification wants a `NotificationClosed` with a REASON, and
+/// clients act on it: one that sees `Expired` will send another, one that sees
+/// `ByHand` will stop. Without the id there is nobody to tell, and the sender
+/// waits for a signal that never comes — which is how a progress notification
+/// ends up stuck on somebody's screen for ever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Tick {
+    /// Which one left the band because its time ran out.
+    pub expired: Option<u32>,
+    /// Whether anything on screen changed at all.
+    pub changed: bool,
+}
+
+/// What is on the band right now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shown {
+    /// What arrived.
+    pub notification: Notification,
+    /// What was decided about it.
+    pub presentation: Presentation,
+    /// Since when it has been on screen.
+    pub since: Instant,
+}
+
+/// One line of the history.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
+pub struct Record {
+    /// What arrived.
+    pub notification: Notification,
+    /// What was decided about it.
+    pub presentation: Presentation,
+    /// Has the person seen it?
+    ///
+    /// A notification is read when it is dismissed by hand, or when the manager
+    /// is opened on it. Merely EXPIRING does not mark it read — that is the
+    /// whole point of the count surviving the band.
+    pub read: bool,
+}
+
+impl Record {
+    /// Does it count towards the bell?
+    ///
+    /// A suppressed one never does. A badge that counts what the person asked
+    /// never to see is a badge that cannot be brought to zero.
+    #[must_use]
+    pub const fn counts(&self) -> bool {
+        !self.read && !matches!(self.presentation.show, Show::Hidden)
+    }
+}
+
+/// How many records the history keeps in memory.
 ///
 /// A ceiling for MEMORY, not for taste: an application in a loop can generate
-/// thousands per minute, and the history is the only structure that grows with no
-/// natural limit.
-const HISTORY_CEILING: usize = 200;
+/// thousands per minute. The fifteen days are the other limit, and the smaller
+/// of the two wins — see [`crate::store`].
+pub const HISTORY_CEILING: usize = 400;
+
+/// How long a record survives, at most.
+///
+/// The owner's number. It is long enough that "what was that thing on Tuesday?"
+/// is answerable, and short enough that the file stays a file.
+pub const HISTORY_DAYS: u64 = 15;
+
+/// The queue: one on the band, the rest waiting, everything recorded.
+#[derive(Debug, Default)]
+pub struct Queue {
+    showing: Option<Shown>,
+    pending: VecDeque<(Notification, Presentation)>,
+    history: Vec<Record>,
+}
 
 impl Queue {
     /// An empty queue.
@@ -144,223 +293,487 @@ impl Queue {
         Self::default()
     }
 
-    /// Receives a notification.
-    ///
-    /// A **critical** one jumps the queue and takes the place of whoever is on screen — the
-    /// one that leaves goes back to the front of the pending ones, and is not lost.
-    pub fn enqueue(&mut self, n: Notification, now: Instant) {
-        self.history.push(n.clone());
-        if self.history.len() > HISTORY_CEILING {
-            self.history.remove(0);
+    /// Starts from a history that was read off disk.
+    #[must_use]
+    pub fn with_history(history: Vec<Record>) -> Self {
+        Self {
+            history,
+            ..Self::default()
         }
+    }
 
-        let critical = n.urgency == Urgency::Critical;
+    /// Receives a notification with what was decided about it.
+    ///
+    /// A **suppressed** one is recorded and never reaches the band: that is the
+    /// filter doing its job, and the record is what lets the manager show what
+    /// was suppressed.
+    ///
+    /// Otherwise it takes the band if it is free. If it is not, a notification
+    /// of a STRICTLY higher level takes the place of the one that is there, and
+    /// the one that leaves goes back to the FRONT of the queue — jumping the
+    /// queue and losing are different things. Equal levels do not unseat each
+    /// other, or two of them would erase one another in turn.
+    pub fn enqueue(&mut self, n: Notification, p: Presentation, now: Instant) {
+        self.remember(n.clone(), p.clone());
+        if matches!(p.show, Show::Hidden) {
+            return;
+        }
         match self.showing.take() {
-            None => self.showing = Some((n, now)),
-            Some((current, desde)) => {
-                if critical && current.urgency != Urgency::Critical {
-                    self.pending.push_front(current);
-                    self.showing = Some((n, now));
+            None => {
+                self.showing = Some(Shown {
+                    notification: n,
+                    presentation: p,
+                    since: now,
+                });
+            }
+            Some(current) => {
+                if p.level > current.presentation.level {
+                    self.pending
+                        .push_front((current.notification, current.presentation));
+                    self.showing = Some(Shown {
+                        notification: n,
+                        presentation: p,
+                        since: now,
+                    });
                 } else {
-                    self.showing = Some((current, desde));
-                    self.pending.push_back(n);
+                    self.showing = Some(current);
+                    self.insert_by_level(n, p);
                 }
             }
         }
     }
 
-    /// Expires the current one if its time is up and pulls the next.
+    /// Puts it in the queue after everything of at least its level.
     ///
-    /// Returns `true` if something changed — the caller only redraws in that case.
-    pub fn tick(&mut self, now: Instant) -> bool {
-        let Some((current, desde)) = self.showing.as_ref() else {
-            return self.pull_next();
-        };
-        let Some(limit) = current.expires else {
-            return false; // critical, or timeout 0: it stays until dismissed
-        };
-        if now.duration_since(*desde) < limit {
-            return false;
+    /// Stable within a level: two notifications of the same importance keep the
+    /// order they arrived in, which is the order the person expects to read.
+    fn insert_by_level(&mut self, n: Notification, p: Presentation) {
+        let at = self
+            .pending
+            .iter()
+            .position(|(_, q)| q.level < p.level)
+            .unwrap_or(self.pending.len());
+        self.pending.insert(at, (n, p));
+    }
+
+    fn remember(&mut self, n: Notification, p: Presentation) {
+        self.history.push(Record {
+            notification: n,
+            presentation: p,
+            read: false,
+        });
+        if self.history.len() > HISTORY_CEILING {
+            self.history.remove(0);
         }
+    }
+
+    /// Expires the one on the band if its time is up and pulls the next.
+    pub fn tick(&mut self, now: Instant) -> Tick {
+        let Some(current) = self.showing.as_ref() else {
+            return Tick {
+                expired: None,
+                changed: self.pull(now),
+            };
+        };
+        if now.duration_since(current.since) < self.how_long(current) {
+            return Tick {
+                expired: None,
+                changed: false,
+            };
+        }
+        // EXPIRING DOES NOT MARK IT READ. The band is where one is told; the
+        // count is where one is reminded, and the two are not the same event.
+        let id = current.notification.id;
         self.showing = None;
-        self.pull_next();
-        true
-    }
-
-    /// Dismisses by id, whether on screen or in the queue.
-    ///
-    /// Returns `true` if it was found. It is the protocol's `CloseNotification`, and
-    /// also what the user does by hand to a critical one.
-    pub fn dismiss(&mut self, id: u32, now: Instant) -> bool {
-        if self.showing.as_ref().is_some_and(|(n, _)| n.id == id) {
-            self.showing = None;
-            self.pull_at(now);
-            return true;
+        self.pull(now);
+        Tick {
+            expired: Some(id),
+            changed: true,
         }
-        let before = self.pending.len();
-        self.pending.retain(|n| n.id != id);
-        before != self.pending.len()
     }
 
-    /// Dismisses the one on screen, if there is one.
+    /// How long the one on the band gets.
+    ///
+    /// It comes off the presentation and nowhere else. What the sender asked
+    /// for was already folded in when the presentation was built
+    /// (`Presentation::for_arrival`), and a rule may have overruled it since —
+    /// which is the point of the person having filters at all.
+    ///
+    /// A method and not a field so the whole policy stays in one expression:
+    /// the "critical never expires" special case used to live in the
+    /// constructor, and finding it meant reading two files.
+    #[allow(clippy::unused_self)]
+    fn how_long(&self, s: &Shown) -> Duration {
+        s.presentation.life.how_long()
+    }
+
+    /// Marks the one on the band read and takes it off at once.
+    ///
+    /// It is what the clickable circle does, and what `notif-dismiss` does.
     pub fn dismiss_current(&mut self, now: Instant) -> bool {
         match self.showing.take() {
-            Some(_) => {
-                self.pull_at(now);
+            Some(s) => {
+                self.mark_read(s.notification.id);
+                self.pull(now);
                 true
             }
             None => false,
         }
     }
 
-    fn pull_next(&mut self) -> bool {
-        self.pull_at(Instant::now())
+    /// Closes one by id, wherever it is. The protocol's `CloseNotification`.
+    pub fn dismiss(&mut self, id: u32, now: Instant) -> bool {
+        if self
+            .showing
+            .as_ref()
+            .is_some_and(|s| s.notification.id == id)
+        {
+            self.showing = None;
+            self.mark_read(id);
+            self.pull(now);
+            return true;
+        }
+        let before = self.pending.len();
+        self.pending.retain(|(n, _)| n.id != id);
+        if before != self.pending.len() {
+            self.mark_read(id);
+            return true;
+        }
+        false
     }
 
-    fn pull_at(&mut self, now: Instant) -> bool {
+    /// Marks a record read. It is what takes it off the bell's count.
+    pub fn mark_read(&mut self, id: u32) -> bool {
+        let mut touched = false;
+        for r in self.history.iter_mut().filter(|r| r.notification.id == id) {
+            touched |= !r.read;
+            r.read = true;
+        }
+        touched
+    }
+
+    /// Forgets a record: it leaves the history for good.
+    ///
+    /// # Why this exists at all
+    ///
+    /// The history is the record of what happened, and for everything else in
+    /// this system that is the end of the argument — dismissing removes from
+    /// the QUEUE and never from the record. But fifteen days is a long time to
+    /// live with one line somebody does not want, and the alternative was
+    /// waiting for it to age out. It is the person's own record.
+    ///
+    /// It does not touch the band: what is on screen is on screen until it is
+    /// dismissed or expires, and pulling it out from under the eye would be the
+    /// list acting on something the person is reading.
+    pub fn forget(&mut self, id: u32) -> bool {
+        let before = self.history.len();
+        self.history.retain(|r| r.notification.id != id);
+        before != self.history.len()
+    }
+
+    /// Marks everything read.
+    pub fn mark_all_read(&mut self) -> usize {
+        let mut n = 0;
+        for r in self.history.iter_mut().filter(|r| !r.read) {
+            r.read = true;
+            n += 1;
+        }
+        n
+    }
+
+    fn pull(&mut self, now: Instant) -> bool {
         if self.showing.is_some() {
             return false;
         }
         match self.pending.pop_front() {
-            Some(n) => {
-                self.showing = Some((n, now));
+            Some((n, p)) => {
+                self.showing = Some(Shown {
+                    notification: n,
+                    presentation: p,
+                    since: now,
+                });
                 true
             }
             None => false,
         }
     }
 
-    /// The notification on screen right now.
+    /// What is on the band right now.
     #[must_use]
-    pub fn showing(&self) -> Option<&Notification> {
-        self.showing.as_ref().map(|(n, _)| n)
+    pub const fn showing(&self) -> Option<&Shown> {
+        self.showing.as_ref()
     }
 
-    /// How many are waiting their turn. It goes into the notification icon's badge.
+    /// `(which one is on the band, how many there are in all)`.
+    ///
+    /// `None` when there is at most ONE: a counter that says `1/1` tells the
+    /// person nothing and costs three columns of a line that elides. It is what
+    /// the owner asked for, literally — "shown only when there is more than
+    /// one".
+    #[must_use]
+    pub fn position(&self) -> Option<(usize, usize)> {
+        let total = usize::from(self.showing.is_some()) + self.pending.len();
+        (total > 1).then_some((1, total))
+    }
+
+    /// How much of the band's time is left, from 1.0 to 0.0.
+    ///
+    /// It is what the eighths pie draws. `None` when nothing is showing.
+    #[must_use]
+    pub fn fraction_left(&self, now: Instant) -> Option<f32> {
+        let s = self.showing.as_ref()?;
+        let whole = self.how_long(s).as_secs_f32();
+        if whole <= 0.0 {
+            return Some(0.0);
+        }
+        let gone = now.duration_since(s.since).as_secs_f32();
+        Some((1.0 - gone / whole).clamp(0.0, 1.0))
+    }
+
+    /// How many are waiting their turn.
     #[must_use]
     pub fn pending(&self) -> usize {
         self.pending.len()
     }
 
-    /// The history, from oldest to newest.
+    /// How many the bell counts: unread, and not suppressed.
     #[must_use]
-    pub fn history(&self) -> &[Notification] {
+    pub fn unread(&self) -> usize {
+        self.history.iter().filter(|r| r.counts()).count()
+    }
+
+    /// The whole history, oldest first.
+    #[must_use]
+    pub fn history(&self) -> &[Record] {
         &self.history
     }
 
-    /// Is there a critical one waiting or on screen?
+    /// The history, for a store to write.
+    #[must_use]
+    pub fn history_mut(&mut self) -> &mut Vec<Record> {
+        &mut self.history
+    }
+
+    /// Is there anything loud waiting or showing?
     ///
-    /// The modeline highlights that: a critical one in the queue must not look like an
+    /// The bell reads it: something shouting in the queue must not look like an
     /// ordinary notification waiting.
     #[must_use]
-    pub fn has_critical(&self) -> bool {
-        self.showing()
-            .is_some_and(|n| n.urgency == Urgency::Critical)
-            || self.pending.iter().any(|n| n.urgency == Urgency::Critical)
+    pub fn has_loud(&self) -> bool {
+        self.showing.as_ref().is_some_and(|s| s.presentation.loud)
+            || self.pending.iter().any(|(_, p)| p.loud)
     }
+}
+
+/// How many eighths of the pie are left, from a fraction.
+///
+/// Eight steps and never zero while something is still on screen: a pie that
+/// has already emptied says "gone" about something that is still there.
+#[must_use]
+pub fn eighths(fraction: f32) -> u8 {
+    let n = (fraction * 8.0).ceil();
+    if n.is_nan() {
+        return 1;
+    }
+    (n as u8).clamp(1, 8)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::{Life, Verdict};
 
-    fn n(id: u32, u: Urgency) -> Notification {
+    fn p(level: u8, life: Life) -> Presentation {
+        let mut x = Presentation::from_urgency(Urgency::Normal);
+        x.level = level;
+        x.life = life;
+        x
+    }
+
+    fn n(id: u32) -> Notification {
         Notification::fresh_one(
             id,
             "app".into(),
             None,
             format!("resumo {id}"),
             String::new(),
-            u,
-            -1,
+            Urgency::Normal,
         )
     }
 
     #[test]
     fn one_at_a_time() {
-        // Section 4.2: the modeline has ONE message region. Two at the same
-        // time would require stacking, and stacking would require a card (invariant 15).
+        // The band has ONE message region. Two at once would need stacking, and
+        // stacking would need a card (invariant 15).
         let t0 = Instant::now();
         let mut f = Queue::fresh_one();
-        f.enqueue(n(1, Urgency::Normal), t0);
-        f.enqueue(n(2, Urgency::Normal), t0);
-        f.enqueue(n(3, Urgency::Normal), t0);
-        assert_eq!(f.showing().map(|x| x.id), Some(1));
+        for i in 1..=3 {
+            f.enqueue(n(i), p(50, Life::Normal), t0);
+        }
+        assert_eq!(f.showing().map(|s| s.notification.id), Some(1));
         assert_eq!(f.pending(), 2);
     }
 
     #[test]
-    fn a_critical_one_never_expires_on_its_own() {
-        // Even with the application asking for a short timeout. A critical warning that
-        // disappears on its own is a warning that was not given.
-        let pedida = Notification::fresh_one(
-            1,
-            "bateria".into(),
-            None,
-            "3%".into(),
-            String::new(),
-            Urgency::Critical,
-            500,
+    fn nothing_holds_the_band_for_ever() {
+        // The rule this replaced said a critical one never expires. The band
+        // pushes the content up while it is there, so one that never leaves is
+        // a permanent tax on every window — the owner's decision.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        let mut critical = Presentation::from_urgency(Urgency::Critical);
+        critical.level = 90;
+        f.enqueue(n(1), critical, t0);
+        assert!(f.showing().is_some());
+        assert!(
+            f.tick(t0 + Life::Long.how_long() + Duration::from_secs(1))
+                .changed
         );
-        assert_eq!(pedida.expires, None);
-
-        let t0 = Instant::now();
-        let mut f = Queue::fresh_one();
-        f.enqueue(pedida, t0);
-        assert!(!f.tick(t0 + Duration::from_secs(3600)));
-        assert_eq!(f.showing().map(|x| x.id), Some(1));
+        assert!(f.showing().is_none(), "a critica ficou na tela para sempre");
     }
 
     #[test]
-    fn a_normal_one_expires_and_pulls_the_next() {
+    fn the_clock_says_which_one_expired() {
+        // The specification wants a `NotificationClosed` with a reason, and
+        // clients act on it. Without the id there is nobody to tell, and the
+        // sender waits for a signal that never comes.
         let t0 = Instant::now();
         let mut f = Queue::fresh_one();
-        f.enqueue(n(1, Urgency::Normal), t0);
-        f.enqueue(n(2, Urgency::Normal), t0);
-        assert!(!f.tick(t0 + Duration::from_secs(1)));
-        assert!(f.tick(t0 + Duration::from_secs(SECONDS_NORMAL + 1)));
-        assert_eq!(f.showing().map(|x| x.id), Some(2));
+        f.enqueue(n(7), p(50, Life::Quick), t0);
+        assert_eq!(f.tick(t0).expired, None);
+        let beat = f.tick(t0 + Life::Quick.how_long() + Duration::from_secs(1));
+        assert_eq!(beat.expired, Some(7));
+        assert!(beat.changed);
     }
 
     #[test]
-    fn a_critical_one_cuts_the_queue_without_losing_the_current() {
-        // Jumping the queue and losing would be different things: the one that leaves goes back to the
-        // FRONT of the pending ones, so it is next after the critical one.
+    fn what_expired_is_still_unread() {
+        // Leaving the band and being seen are not the same event. The count is
+        // what reminds you afterwards.
         let t0 = Instant::now();
         let mut f = Queue::fresh_one();
-        f.enqueue(n(1, Urgency::Normal), t0);
-        f.enqueue(n(2, Urgency::Normal), t0);
-        f.enqueue(n(9, Urgency::Critical), t0);
-        assert_eq!(f.showing().map(|x| x.id), Some(9));
+        f.enqueue(n(1), p(50, Life::Quick), t0);
+        f.tick(t0 + Duration::from_secs(10));
+        assert_eq!(f.unread(), 1);
+    }
 
+    #[test]
+    fn a_suppressed_one_never_reaches_the_band_nor_the_count() {
+        // The owner's requirement, in both halves: not shown AND not counted.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        let mut hidden = p(50, Life::Normal);
+        hidden.show = Show::Hidden;
+        f.enqueue(n(1), hidden, t0);
+        assert!(f.showing().is_none());
+        assert_eq!(f.unread(), 0);
+        // And it is RECORDED — a filter nobody can audit is a filter nobody
+        // will trust.
+        assert_eq!(f.history().len(), 1);
+    }
+
+    #[test]
+    fn a_higher_level_takes_the_band_without_losing_the_other() {
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+        f.enqueue(n(9), p(90, Life::Long), t0);
+        assert_eq!(f.showing().map(|s| s.notification.id), Some(9));
         f.dismiss_current(t0);
-        assert_eq!(f.showing().map(|x| x.id), Some(1), "a que saiu se perdeu");
+        assert_eq!(
+            f.showing().map(|s| s.notification.id),
+            Some(1),
+            "a que saiu se perdeu"
+        );
+    }
+
+    #[test]
+    fn an_equal_level_does_not_unseat() {
+        // Otherwise two of the same importance would erase one another in turn.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(90, Life::Long), t0);
+        f.enqueue(n(2), p(90, Life::Long), t0);
+        assert_eq!(f.showing().map(|s| s.notification.id), Some(1));
         assert_eq!(f.pending(), 1);
     }
 
     #[test]
-    fn one_critical_does_not_unseat_another() {
-        // Otherwise the second would erase the first, and the first is precisely the
-        // one that must not disappear.
+    fn the_queue_is_ordered_by_level_and_then_by_arrival() {
         let t0 = Instant::now();
         let mut f = Queue::fresh_one();
-        f.enqueue(n(1, Urgency::Critical), t0);
-        f.enqueue(n(2, Urgency::Critical), t0);
-        assert_eq!(f.showing().map(|x| x.id), Some(1));
-        assert_eq!(f.pending(), 1);
-    }
+        f.enqueue(n(1), p(50, Life::Normal), t0); // takes the band
+        f.enqueue(n(2), p(10, Life::Quick), t0);
+        // 80 beats the 50 that is on the band, so it takes its place and the
+        // one that leaves goes to the FRONT of the queue.
+        f.enqueue(n(3), p(80, Life::Normal), t0);
+        // 80 does not beat 80, so this one queues — after its equal, which is
+        // the order the person expects to read.
+        f.enqueue(n(4), p(80, Life::Normal), t0);
 
-    #[test]
-    fn the_history_keeps_what_left_the_screen() {
-        let t0 = Instant::now();
-        let mut f = Queue::fresh_one();
-        for i in 1..=3 {
-            f.enqueue(n(i, Urgency::Normal), t0);
+        let mut seen = vec![f.showing().map(|s| s.notification.id).unwrap()];
+        while f.dismiss_current(t0) {
+            if let Some(s) = f.showing() {
+                seen.push(s.notification.id);
+            }
         }
-        f.dismiss(1, t0);
-        // Dismissing removes from the QUEUE, not from the history: the history is the record
-        // of what happened, and deleting from it would be losing information.
-        assert_eq!(f.history().len(), 3);
+        assert_eq!(seen, vec![3, 4, 1, 2]);
+    }
+
+    #[test]
+    fn the_counter_only_exists_with_more_than_one() {
+        // `1/1` tells nobody anything and costs three columns of a line that
+        // elides.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        assert_eq!(f.position(), None);
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        assert_eq!(f.position(), None);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+        assert_eq!(f.position(), Some((1, 2)));
+    }
+
+    #[test]
+    fn the_pie_empties_but_not_before_it_goes() {
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        assert_eq!(eighths(f.fraction_left(t0).unwrap()), 8);
+        let half = t0 + Life::Normal.how_long() / 2;
+        assert_eq!(eighths(f.fraction_left(half).unwrap()), 4);
+        // Still on screen at the very end: a pie that already emptied says
+        // "gone" about something that is still there.
+        let end = t0 + Life::Normal.how_long();
+        assert_eq!(eighths(f.fraction_left(end).unwrap()), 1);
+    }
+
+    #[test]
+    fn forgetting_takes_it_out_of_the_record_for_good() {
+        // Dismissing removes from the QUEUE and never from the record; this is
+        // the other thing, and it is the person's own record.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+        assert!(f.forget(1));
+        assert_eq!(f.history().len(), 1);
+        assert_eq!(f.history()[0].notification.id, 2);
+        // And forgetting what is not there is not an error, it is nothing.
+        assert!(!f.forget(9));
+    }
+
+    #[test]
+    fn dismissing_marks_it_read_and_the_history_keeps_it() {
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+        f.dismiss_current(t0);
+        assert_eq!(f.unread(), 1);
+        // The history is the record of what happened; deleting from it would be
+        // losing information.
+        assert_eq!(f.history().len(), 2);
     }
 
     #[test]
@@ -368,39 +781,27 @@ mod tests {
         let t0 = Instant::now();
         let mut f = Queue::fresh_one();
         for i in 0..(HISTORY_CEILING as u32 + 50) {
-            f.enqueue(n(i, Urgency::Low), t0);
+            let mut hidden = p(10, Life::Quick);
+            hidden.show = Show::Hidden;
+            f.enqueue(n(i), hidden, t0);
         }
         assert_eq!(f.history().len(), HISTORY_CEILING);
-        // The ceiling drops the OLD ones, not the recent ones.
-        assert_eq!(f.history().last().map(|x| x.id), Some(249));
-    }
-
-    #[test]
-    fn a_zero_timeout_means_never() {
-        let x = Notification::fresh_one(
-            1,
-            "a".into(),
-            None,
-            "b".into(),
-            String::new(),
-            Urgency::Normal,
-            0,
+        // It drops the OLD ones, not the recent ones.
+        assert_eq!(
+            f.history().last().map(|r| r.notification.id),
+            Some(HISTORY_CEILING as u32 + 49)
         );
-        assert_eq!(x.expires, None);
     }
 
     #[test]
     fn an_unknown_urgency_becomes_normal() {
-        // The specification allows future values. Refusing would lose the
-        // whole notification over one field.
         assert_eq!(Urgency::from_protocol(7), Urgency::Normal);
         assert_eq!(Urgency::from_protocol(0), Urgency::Low);
         assert_eq!(Urgency::from_protocol(2), Urgency::Critical);
     }
 
     #[test]
-    fn the_modeline_row_does_not_carry_the_body() {
-        // The body may have paragraphs; the modeline has one line.
+    fn the_bands_line_does_not_carry_the_body() {
         let x = Notification::fresh_one(
             1,
             "git".into(),
@@ -408,8 +809,67 @@ mod tests {
             "push ok".into(),
             "linha 1\nlinha 2".into(),
             Urgency::Normal,
-            -1,
         );
         assert_eq!(x.line(), "git: push ok");
+    }
+
+    #[test]
+    fn the_file_comes_out_of_the_icon_url() {
+        // It is how the compositor hands over a screenshot's path, and it is
+        // what the `edit` action opens.
+        let x = Notification::fresh_one(
+            1,
+            "niri".into(),
+            Some("file:///home/x/Imagens/Captura%20de%20tela.png".into()),
+            "Screenshot captured".into(),
+            String::new(),
+            Urgency::Normal,
+        );
+        assert_eq!(
+            x.file().unwrap().to_str().unwrap(),
+            "/home/x/Imagens/Captura de tela.png"
+        );
+        // A plain icon NAME is not a file, and must not be treated as one.
+        let y = Notification::fresh_one(
+            1,
+            "a".into(),
+            Some("dialog-information".into()),
+            "b".into(),
+            String::new(),
+            Urgency::Normal,
+        );
+        assert_eq!(y.file(), None);
+    }
+
+    #[test]
+    fn a_zero_timeout_is_not_a_request_for_ever() {
+        // The specification's `0` means "never expires". This system has no
+        // such thing, so it is read as "no preference".
+        assert_eq!(n(1).asking(0).asked, None);
+        assert_eq!(n(1).asking(-1).asked, None);
+        assert_eq!(n(1).asking(1500).asked, Some(Duration::from_millis(1500)));
+    }
+
+    #[test]
+    fn a_verdict_reaches_the_queue_through_the_presentation() {
+        // The queue never reads a rule; it is handed the decision. It is the
+        // same split `dbus.rs` declares: that module decides nothing either.
+        let mut x = Presentation::from_urgency(Urgency::Low);
+        Verdict {
+            life: Some(Life::Long),
+            ..Verdict::default()
+        }
+        .over(&mut x);
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), x, t0);
+        assert!(
+            !f.tick(t0 + Life::Normal.how_long() + Duration::from_secs(1))
+                .changed
+        );
+        assert!(
+            f.tick(t0 + Life::Long.how_long() + Duration::from_secs(1))
+                .changed
+        );
     }
 }

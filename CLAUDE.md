@@ -21,8 +21,8 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 11. **Buffers WASM não tocam Wayland, não recebem valores de token, não traduzem.**
 12. **`ronoctua-design` e `ronoctua-glyphdb` compilam para `wasm32-wasip2`.**
 13. **Nenhum dado pessoal** — nem `host.nix`, `facter.json`, `~/.shellrc.local`: nascem NA máquina.
-14. **Nenhuma chrome além do rodapé de duas linhas.** Sem barra, relógio, taskbar, menu iniciar,
-    dock, ícone de desktop ou popup flutuante. Tray e notificações vivem na modeline.
+14. **Nenhuma chrome além do rodapé.** Sem barra, relógio, taskbar, menu iniciar, dock, ícone de
+    desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo.
 15. **Sem cards, sem sombra, sem elevação.**
 16. `noctua` e `ronoctua-distro` definidos em **um único lugar** cada — `nix/modules/base.nix`.
 17. **Sem Docker.**
@@ -47,7 +47,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 ## Como funciona
 
-- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página, e nenhuma chrome (inv. 14). O ponteiro alcança as DUAS linhas, e clique só faz o que tecla faz.
+- **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página abaixo, **faixa de notificação acima**, e nenhuma chrome (inv. 14). Ancorado embaixo, crescer para cima não move a modeline. Clique só faz o que tecla faz.
 - **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER b s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
 - **A fronteira com o niri é só IPC** — `ronoctua-niri` é o único crate que fala `niri-ipc`. **E a
   leader vem de FORA**: em repouso o rodapé não captura teclado, senão nenhum buffer receberia tecla.
@@ -80,6 +80,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **A extensão não deixa rastro em página nenhuma**: zero `web_accessible_resources`,
   `content_scripts`, `externally_connectable`, `host_permissions` e `declarativeNetRequest` — as
   cinco vias de detecção, e há check. Injeta só sob `activeTab`; a chave que dá o id nasce NA máquina (inv. 13). **O app não depende dela** — cada coisa do popup tem tecla, e há check dos DOIS lados.
+- **`LEADER n` é notificação, e TUDO sai de `assets/notifications.nix`** — catálogo, filtros e as chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações); **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e envelope na BORDA DIREITA para marcar lida; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade. Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide — o gerenciador diz qual. Suprimida não aparece **e não conta**. Clicar no sino abre; `n h` no rodapé (duas colunas), `n w` em janela, uma `View` só; na lista, envelope e lixeira por linha (`Espaço` e `d`, que o gerador recusa como letra de ação). 15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
 - **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders`
   FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo:
   `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).

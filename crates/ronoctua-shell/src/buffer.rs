@@ -177,7 +177,7 @@ fn spans_from(
                 return Vec::new();
             };
             vec![ronoctua_render::Span {
-                size: Some(scale_in_px(*scale)),
+                size: ronoctua_render::Size::Px(scale_in_px(*scale)),
                 text: {
                     let s = match text {
                         Text::Data(s) => s.clone(),
@@ -209,7 +209,7 @@ fn spans_from(
         // a line of `─` — a glyph from the font, coherent with invariant 10.
         Command::Rule { line, color } => token_color(color.as_str())
             .map(|color| ronoctua_render::Span {
-                size: None,
+                size: ronoctua_render::Size::Grid,
                 text: "─".repeat(80),
                 column: 0,
                 line: *line,
@@ -234,7 +234,7 @@ fn spans_from(
                 .iter()
                 .enumerate()
                 .map(|(n, content)| ronoctua_render::Span {
-                    size: None,
+                    size: ronoctua_render::Size::Grid,
                     text: content.clone(),
                     column: *column,
                     // `saturating_add`: a grid too tall for the screen

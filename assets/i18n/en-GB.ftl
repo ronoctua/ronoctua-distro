@@ -37,6 +37,15 @@ group-quit = quit
 # reaches the screen is the value here. That separation is why `glifos` used to
 # leak onto an English-language screen: the id WAS the label.
 buffer-example = example
+# THE NATIVE WINDOWS, which are not buffers and reach the same place: the
+# modeline turns any `br.ronoctua.<id>` into `mode-<id>`, and it does not care
+# whether the window is a wasm component or a process of ours.
+mode-files = files
+mode-monitor = monitor
+mode-notifications = notifications
+mode-rescue = rescue
+mode-terminal = terminal
+
 mode-example = example
 buffer-glyphs = glyphs
 mode-glyphs = glyphs
@@ -69,6 +78,73 @@ state-guard = guard
 notif-empty = no notifications
 notif-history = Notifications
 notif-critical = CRITICAL
+
+# The band, above the modeline. The counter only appears with more than one.
+notif-queue-position = { $shown }/{ $total }
+notif-mark-read = mark as read
+
+# THE CATALOGUE — the distro's own notifications, one summary and one body
+# each. For an entry that is REWRITTEN (the compositor's screenshot), these are
+# what reaches the screen. For one we raise ourselves, they are the default
+# text and the entry's name in the manager.
+notif-screenshot-summary = Screen captured
+notif-screenshot-body = The image is on the clipboard and saved to disk.
+notif-memory-killed-summary = Closed to free memory
+notif-memory-killed-body = An application was closed to keep the machine responsive.
+
+# What each notification lets you do.
+notif-action-edit = edit
+notif-action-open = open
+notif-action-folder = folder
+notif-action-copy-path = copy the path
+notif-action-memory-panel = memory panel
+
+# THE FILTERS THE DISTRO SHIPS WITH. The manager lists them by these names.
+notif-rule-important-gets-room = Something important gets room
+notif-rule-small-things-are-quick = Small things go by quickly
+
+# The manager: three lists, and a heading each.
+notif-column-unread = Unread
+notif-column-suppressed = Filtered out
+notif-column-catalogue = Notifications and filters
+notif-read = read
+notif-suppressed-by = filtered out by { $rule }
+notif-decided-by = by { $rule }
+notif-from-catalogue = { $entry }
+notif-default = distro's default
+notif-yours = your adjustment
+notif-nothing-here = nothing here
+notif-yes = yes
+notif-no = no
+notif-knob-show = shows
+notif-knob-life = stays
+notif-window-title = { $pane } — { $n } unread
+notif-window-keys = TAB pane · ↑↓ move · SPACE read · r all · RET adjust · ←→ change
+notif-act-in-the-footer = The action runs from the footer: LEADER n h, then its letter
+
+# How the presentation's fields are named on screen.
+notif-show-hidden = do not show
+notif-show-brief = one line
+notif-show-full = up to three lines
+notif-life-quick = quick
+notif-life-normal = normal
+notif-life-long = long
+notif-loud = attention-grabbing
+notif-level = level
+notif-blink = blink
+notif-vibrate = vibrate
+notif-audio = play a sound
+
+# THE TWO SWITCHES THAT DO NOTHING, and why. A switch that switches nothing off
+# and says nothing is the trap this project has already paid for once.
+notif-inert-vibrate = no haptic device on this machine
+notif-inert-audio = not implemented yet — see docs/PENDING.md
+
+# What the pointer explains on the band.
+hint-notif-bell = click to open the notification manager
+hint-notif-read = mark as read and take it off the screen
+hint-notif-countdown = how long it has left
+hint-notif-action = { $action } — press { $key } in the manager
 
 ## Installer — the six questions (section 7.1)
 
@@ -163,6 +239,11 @@ cmd-workspace-move = Move window to workspace
 ## Notifications, keyboard and help — commands that existed only as an order or a key
 
 cmd-notif-history = Notification history
+cmd-notif-window = Notifications in a window
+cmd-notif-read-all = Mark every notification read
+cmd-notif-read = Mark this notification read
+cmd-notif-forget = Forget this notification
+cmd-notif-act = Run the notification's action
 cmd-notif-dismiss = Dismiss notification
 cmd-keyboard-restore = Restore the keyboard
 group-notification = notification
@@ -654,7 +735,6 @@ echo-network-no-stored = Connected. The password was not stored.
 echo-network-store-failed = Connected, but I could not store the password: { $motivo }
 ## Out of memory
 notif-oom-app = system
-notif-oom-summary = Closed to free memory
 notif-oom-pressure = { $app } was stalling the machine for want of memory.
 notif-oom-used = { $app } filled memory and swap.
 notif-oom-orphan = Something outside your buffers was closed: { $cgroup }

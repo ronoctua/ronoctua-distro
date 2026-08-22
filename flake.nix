@@ -201,6 +201,14 @@
         spaceFile = ./assets/tokens/space.nix;
       };
 
+      # The notification catalogue and the filters the distro ships with
+      # (section 4.2). Same shape as the tokens: declared once in Nix, and what
+      # reads the table cannot invent a field that is not in it.
+      notificationsRs = pkgs.callPackage ./nix/notifications.nix {
+        inherit glyphdb;
+        notificationsFile = ./assets/notifications.nix;
+      };
+
       # The MIME database, from freedesktop's own files into a Rust table.
       #
       # `shared-mime-info` is a BUILD input and never a runtime one: its 75 MiB
@@ -277,6 +285,7 @@
           tokensRs
           i18nRs
           mimeDb
+          notificationsRs
           niriActions
           ;
         inherit (pkgs) xkeyboard_config;
@@ -564,6 +573,7 @@
         # Rust token table, generated from the .nix files.
         tokens-rs = tokensRs;
         mime-db = mimeDb;
+        notifications-rs = notificationsRs;
         niri-actions = niriActions;
         # THE SEVEN COMPONENTS, each buildable on its own.
         #
@@ -581,6 +591,15 @@
 
         # The shell: the two-line footer.
         ronoctua-shell = rust.shell;
+
+        # THE SCREENSHOTS, on a real compositor. `nix build .#shots` leaves the
+        # PNGs in the store — see `nix/shots.nix` for why it is a VM and not a
+        # script on somebody's machine.
+        shots = pkgs.callPackage ./nix/shots.nix {
+          inherit fonts;
+          niri = inputs.niri.packages.${system}.niri;
+          ronoctua-shell = rust.shell;
+        };
 
         iso = self.nixosConfigurations.installer.config.system.build.isoImage;
       };
@@ -757,6 +776,7 @@
           wit
           mimeDb
           tokensRs
+          notificationsRs
           niriActions
           torrentShim
           extension

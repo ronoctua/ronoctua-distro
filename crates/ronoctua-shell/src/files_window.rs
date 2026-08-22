@@ -511,7 +511,7 @@ impl FilesWindow {
         // LINE 0: where one is, as clickable pieces.
         for f in self.view.crumbs() {
             spans.push(ronoctua_render::Span {
-                size: Some(size),
+                size: ronoctua_render::Size::Px(size),
                 text: f.text.clone(),
                 column: margin + f.at,
                 line: 0,
@@ -553,7 +553,7 @@ impl FilesWindow {
             .unwrap_or_default();
         if !second.is_empty() {
             spans.push(ronoctua_render::Span {
-                size: Some(size),
+                size: ronoctua_render::Size::Px(size),
                 text: ronoctua_render::layout::elide_end(&second, self.columns),
                 column: margin,
                 line: 1,
@@ -569,7 +569,7 @@ impl FilesWindow {
         if !self.view.menu_open() && !self.view.showing_detail() {
             for f in &self.view.header(self.columns, &self.texts).fields {
                 spans.push(ronoctua_render::Span {
-                    size: Some(size),
+                    size: ronoctua_render::Size::Px(size),
                     text: f.text.clone(),
                     column: margin + f.at,
                     line: FIRST_OF_LIST,
@@ -615,7 +615,7 @@ impl FilesWindow {
                         c >= f.at && c < f.at + ronoctua_render::layout::width(&f.text)
                     });
                 spans.push(ronoctua_render::Span {
-                    size: Some(size),
+                    size: ronoctua_render::Size::Px(size),
                     text: f.text.clone(),
                     column: margin + f.at,
                     line: y,

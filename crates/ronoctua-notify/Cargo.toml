@@ -13,6 +13,11 @@ publish.workspace = true
 [dependencies]
 zbus.workspace = true
 tracing.workspace = true
+# The history outlives the session and the person's filters outlive a rebuild.
+# Both are files this crate reads and writes — see `store.rs` for why they are
+# two files in two directories.
+serde.workspace = true
+serde_json.workspace = true
 # Step 2 of the chain finds the FILE; these two turn it into pixels. The
 # superpackage is 335,031 SVGs against 53 PNGs, so the vector rasteriser is not
 # optional — see `icon::rasterize`.

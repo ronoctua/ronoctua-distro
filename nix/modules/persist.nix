@@ -82,6 +82,13 @@ in
         # The user's app id -> glyph table (section 4.2): an override read at
         # runtime, with hot reload. Losing this would mean losing customisation.
         "/home/${cfg.user}/.config/ronoctua"
+        # THE NOTIFICATION HISTORY, which is fifteen days of it (section 4.2).
+        #
+        # `$XDG_STATE_HOME`, which is the directory for exactly this: machine
+        # local, machine written, and it outlives a reboot. Without the line the
+        # wipe takes it, and the symptom is a manager that is empty every
+        # morning with nothing saying why.
+        "/home/${cfg.user}/.local/state/ronoctua"
         # SYNCTHING'S STATE — index, device key and the list of folders the
         # person added.
         #

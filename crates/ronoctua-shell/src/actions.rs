@@ -448,6 +448,47 @@ pub fn kdl_of(id: &str) -> Option<serde_json::Value> {
     all_of().into_iter().find(|(k, _)| *k == id).map(|(_, v)| v)
 }
 
+/// `xdg-open`, baked at BUILD time.
+///
+/// It is the same constant `surface.rs` already carries, for the same reason:
+/// it is always installed, it is tiny, and a store path that is always wanted
+/// belongs in the binary. Two constants would be two answers.
+const XDG_OPEN: Option<&str> = option_env!("RONOCTUA_XDG_OPEN");
+
+/// Where the program a notification's action starts lives, if it is installed.
+///
+/// # Two programs, two sources, and that is the whole point
+///
+/// `xdg-open` is BAKED: every profile has it, and the rest of this file already
+/// reads it that way.
+///
+/// `swappy` is read from the ENVIRONMENT, and must be: it lives in the `full`
+/// profile only, and a store path compiled in is a reference the closure
+/// carries whether the switch is on or not — the measured trap `RONOCTUA_ICONS`
+/// carries a comment about in `nix/rust.nix`. The
+/// `screenshot-notification-contract` check holds that line from the Nix side.
+///
+/// # The defect this shape came out of
+///
+/// Both were read from the environment, and `RONOCTUA_XDG_OPEN` only exists at
+/// build time — so at runtime every `Run` action was dropped as "not
+/// installed", and the screenshot's band came out two lines instead of three,
+/// with no actions and nothing failing. It took a screenshot to see.
+///
+/// `None` makes the action DISAPPEAR from the notification rather than fail
+/// when clicked. An offer that does nothing is worse than one never made.
+///
+/// A PATH and never a name: a systemd unit's `PATH` is minimal, and the failure
+/// shows up far from the cause — the trap the `CLAUDE.md` names.
+#[must_use]
+pub fn notification_program(program: ronoctua_notify::Program) -> Option<String> {
+    match program {
+        ronoctua_notify::Program::Open => XDG_OPEN.map(ToOwned::to_owned),
+        ronoctua_notify::Program::Edit => std::env::var("RONOCTUA_SWAPPY").ok(),
+    }
+    .filter(|p| !p.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
