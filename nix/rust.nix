@@ -54,6 +54,7 @@
   bufferLucide,
   bufferMemory,
   bufferTransfers,
+  bufferFormat,
   iconSuperpack,
   lucideFontFile,
   primaryFontFile,
@@ -129,8 +130,8 @@ let
   #
   # Nix addresses a derivation by its INPUTS. With `RONOCTUA_BUFFER_MEMORY` in
   # that env, editing a buffer changed the layer's hash and paid 4m46 of
-  # compilation for a value nothing in it reads — and the five `.wasm` were
-  # direct dependencies of it, so the layer waited for five builds it never
+  # compilation for a value nothing in it reads — and the six `.wasm` were
+  # direct dependencies of it, so the layer waited for six builds it never
   # consumed. The same for a `.ftl`, a token or a font.
   #
   # The split is the fix, and `deps-layer-is-lean` is what keeps it: it reads
@@ -355,7 +356,7 @@ let
   # # The measurement that took them out
   #
   # `option_env!` with a store path is a REFERENCE, and it is charged for where
-  # the compilation happens: with the five here, editing one COMMENT in any
+  # the compilation happens: with the six here, editing one COMMENT in any
   # buffer changed the hash of the whole workspace. Measured, on the four
   # derivations a person waits for:
   #
@@ -371,17 +372,18 @@ let
   #
   # # And why the reference does not simply disappear
   #
-  # Because it must not. Whoever installs this has to get the five components
+  # Because it must not. Whoever installs this has to get the six components
   # WITHOUT compiling them — that is the whole point of the ISO's seed. So the
   # reference moves one derivation UP: `shell` below is what carries it, and
   # what the system, the VMs and the nested loop all run. `iso-carries-the-seed`
-  # and `profile-minimal-closes` name the five, and would say so if they left.
+  # and `profile-minimal-closes` name the six, and would say so if they left.
   bufferComponents = {
     RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
     RONOCTUA_BUFFER_TRANSFERS = "${bufferTransfers}/lib/ronoctua_buffer_transfers.wasm";
+    RONOCTUA_BUFFER_FORMAT = "${bufferFormat}/lib/ronoctua_buffer_format.wasm";
   };
 
   # The dependencies, compiled once.
@@ -446,7 +448,7 @@ rec {
     }
   );
 
-  # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the five components.
+  # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the six components.
   #
   # This is what the module's `ExecStart`, `nix run .#dev` and every VM test
   # point at; `workspace` is what the driven tests and the benchmarks call by
@@ -547,6 +549,18 @@ rec {
   #
   # A `[[bin]]` of `ronoctua-files` and nothing else: it links `rustix`,
   # `anyhow` and this crate's own parsers.
+  # THE VM'S FORMATTER, extracted for the reason the others are: it is three
+  # D-Bus calls, and the workspace it comes out of carries wgpu, the wasm
+  # runtime, the renderer and three embedded fonts. `disks-vm` is its only
+  # caller, and a VM that had to carry all of that to write a filesystem onto a
+  # 64 MiB virtual disk would spend more time booting than testing.
+  formatDisk = pkgs.runCommand "ronoctua-format-disk" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-format-disk $out/bin/
+    chmod +w $out/bin/ronoctua-format-disk
+    patchelf --shrink-rpath $out/bin/ronoctua-format-disk
+  '';
+
   filesRoot = pkgs.runCommand "ronoctua-files-root" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
     mkdir -p $out/bin
     cp ${workspace}/bin/ronoctua-files-root $out/bin/

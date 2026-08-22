@@ -1792,10 +1792,16 @@ impl State {
             // BEFORE this function is reached, so a state change never arrives
             // with the sheet's keys. If it ever did, redrawing is the only right
             // answer — the sheet would already have been left.
+            // WHAT THIS BUFFER DECLARED NO CAPABILITY FOR — see the other
+            // `match` in this file. The WIT is a contract shared by six
+            // components, so an `input` case added for one has to be answered
+            // by all, and here "answered" is "ignored".
             Input::Command(_)
             | Input::Copied(_)
             | Input::Survey(_)
             | Input::Queue(_)
+            | Input::Rack(_)
+            | Input::Formatted(_)
             | Input::EnterState(_) => redraw,
         }
     }
@@ -2378,7 +2384,19 @@ impl State {
                 // survey only reaches whoever declared `capability::system`,
                 // and the arm is explicit so the next case cannot arrive mute.
                 // Neither arrives here: this buffer declared no capability.
-                Input::Survey(_) | Input::Queue(_) | Input::EnterState(_) => vec![],
+                // WHAT THIS BUFFER DECLARED NO CAPABILITY FOR. It is never
+                // sent any of them — the host raises no thread and no clock for
+                // a buffer that did not ask — and the arm exists because the
+                // `match` is exhaustive and the WIT is a contract shared by
+                // six components: an `input` case added for one of them has to
+                // be answered by all, and "answered" here is "ignored".
+                Input::Survey(_)
+                | Input::Queue(_)
+                | Input::Rack(_)
+                | Input::Formatted(_)
+                | Input::EnterState(_) => {
+                    vec![]
+                }
             }
         }
     }

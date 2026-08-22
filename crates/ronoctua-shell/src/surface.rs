@@ -427,6 +427,22 @@ struct Footer {
 
     /// Is the thread already up? See [`Footer::watch_scans`].
     scan_watching: bool,
+    /// Where the notifications persist — the two directories, found ONCE.
+    ///
+    /// Carried and not looked up per write, for the reason `sidebar::Sidebar`
+    /// carries its own: a function that finds `$XDG_CONFIG_HOME` on its own is
+    /// a function `cargo test` can reach, and the sidebar's tests reached one.
+    notes: ronoctua_notify::store::Where,
+    /// Is the disk-watching thread up? It is raised at most once, on the first
+    /// `LEADER .`, and it outlives every open — a stick plugged in with the
+    /// manager closed has to be there when it opens.
+    disks_watching: bool,
+    /// The last reading of the machine's disks.
+    ///
+    /// Kept even with no view on screen, so opening the manager draws the
+    /// sticks that are already in rather than an empty list that fills in a
+    /// moment later.
+    rack: Option<Box<ronoctua_disks::Rack>>,
 
     // --- app finder (`LEADER a`) ---
     /// The apps view, when open.
@@ -1352,7 +1368,7 @@ fn field_at(fields: &[crate::files::Field], cell: u16) -> Option<crate::files::H
     fields
         .iter()
         .rev()
-        .find(|f| cell >= f.at && cell < f.at + ronoctua_render::layout::width(&f.text))
+        .find(|f| f.covers(cell))
         .map(|f| f.hit.clone())
 }
 
@@ -1396,6 +1412,8 @@ pub fn run() -> Result<()> {
     // manager.
     crate::clipboard::watch(envio_copias);
 
+    // THE TWO DIRECTORIES, found once and handed to everything that persists.
+    let notes = ronoctua_notify::store::Where::of_env();
     let mut state = Footer {
         conn: conn.clone(),
         registry: RegistryState::new(&globals),
@@ -1418,13 +1436,13 @@ pub fn run() -> Result<()> {
         buffer_bindings: Vec::new(),
         buffer_pid: None,
         buffer_pending: Vec::new(),
-        notifications: ronoctua_notify::Queue::with_history(ronoctua_notify::store::read_history()),
+        notifications: ronoctua_notify::Queue::with_history(notes.history()),
         book: {
             // THE DISTRO'S, PLUS THE PERSON'S. A broken preferences file leaves
             // the distro's standing rather than taking the shell down — see
             // `store::read_preferences`.
             let mut b = ronoctua_notify::Book::distro();
-            let prefs = ronoctua_notify::store::read_preferences();
+            let prefs = notes.preferences();
             b.mine = prefs.rules;
             b.adjustments = prefs.adjustments;
             b
@@ -1475,6 +1493,9 @@ pub fn run() -> Result<()> {
         network_remember: None,
         scan_sender: None,
         scan_watching: false,
+        notes,
+        disks_watching: false,
+        rack: None,
         catalogue: std::sync::Arc::default(),
         apps_stamp: Vec::new(),
         catalogue_sender: None,
@@ -1718,9 +1739,23 @@ pub fn run() -> Result<()> {
             // listing that only refreshes when a key is pressed is a listing
             // that lies quietly.
             let mudou = state.files.as_ref().is_some_and(crate::files::View::stale);
-            if mudou {
+            // AND THE SIDEBAR'S FILE, on the same tick and for the same reason:
+            // `LEADER a` pins an application without this view being open, and
+            // the window door is a separate process with its own copy. A row
+            // that only appears after a restart is a row somebody thinks did
+            // not get pinned.
+            let barra = state
+                .files
+                .as_ref()
+                .is_some_and(crate::files::View::sidebar_stale);
+            if mudou || barra {
                 if let Some(v) = state.files.as_mut() {
-                    v.reread();
+                    if mudou {
+                        v.reread();
+                    }
+                    if barra {
+                        v.reread_sidebar();
+                    }
                 }
                 state.apply_geometry(state.interactivity());
             }
@@ -1755,7 +1790,7 @@ pub fn run() -> Result<()> {
                 // may have taken it. The height changes with it, and so does
                 // the record on disk.
                 state.after_the_queue_moved();
-            } else if venceu || mudou || piscando || na_faixa {
+            } else if venceu || mudou || barra || piscando || na_faixa {
                 state.draw_and_paint();
             }
             calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
@@ -3396,6 +3431,21 @@ impl Footer {
                     self.clip_qr = None;
                 }
             }
+            // THE LAUNCHER'S OWN KEY, and it only means anything with the
+            // launcher open — which is where its key lives. Reached from `M-x`
+            // with nothing focused it does nothing and says nothing, exactly
+            // like `clipboard-pin` on an empty clipboard: the id exists so the
+            // key is enumerable, and the action is where the state is.
+            "apps-pin" => {
+                let action = self
+                    .apps
+                    .as_ref()
+                    .and_then(crate::apps::Finder::chosen)
+                    .map(|e| crate::apps::Action::Pin(Box::new(e.clone())));
+                if let Some(action) = action {
+                    self.apply_app_action(action);
+                }
+            }
             "clipboard-pin" => {
                 self.clipboard.toggle_pinned(self.clip_cursor);
             }
@@ -3768,6 +3818,7 @@ impl Footer {
             "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
             "transfers-window" => self.open_buffer("RONOCTUA_BUFFER_TRANSFERS"),
+            "format-open" => self.open_buffer("RONOCTUA_BUFFER_FORMAT"),
             "transfers-add" => self.queue_the_clipboard(Wish::plain()),
             "transfers-video" => self.queue_the_clipboard(Wish::media(Want::Video)),
             "transfers-audio" => self.queue_the_clipboard(Wish::media(Want::Audio)),
@@ -4060,6 +4111,55 @@ impl Footer {
                 self.apps = None;
                 self.first_page();
                 self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            // PINNED, AND THE LAUNCHER STAYS OPEN. Pinning is not opening.
+            //
+            // The preferences are read and written HERE rather than through a
+            // `files::View` that may not exist: `LEADER a` is reachable without
+            // the manager ever having been opened, and refusing to pin until it
+            // has been would be a rule with nothing on screen to state it. The
+            // manager notices on its own — it re-reads the file when its mtime
+            // moves, and so does the window, which is another process entirely.
+            Action::Pin(e) => {
+                use ronoctua_files::sidebar::{Item, Target, store};
+                // THE DIRECTORY IS FOUND HERE, once, and handed in — the
+                // crate has no function that finds it on its own any more.
+                // See `sidebar::store` for the defect that removed them.
+                let Some(dir) = store::config_dir() else {
+                    return;
+                };
+                let mut prefs = store::read_from(&dir);
+                let id = format!("app:{}", e.id);
+                if prefs.added.iter().any(|i| i.id == id) {
+                    let m = self.texts.t_with(
+                        ronoctua_i18n::key::FILES_SIDEBAR_PINNED,
+                        &[("name", e.name.as_str())],
+                    );
+                    self.echo_message(m);
+                    self.draw_and_paint();
+                    return;
+                }
+                prefs.added.push(Item {
+                    id,
+                    // THE ID, and never the command: a store path names a build
+                    // that the next collection removes, and an id survives every
+                    // rebuild. The NAME is stored because it is the one label
+                    // that cannot be derived from the target.
+                    target: Target::Application(e.id.clone()),
+                    label: Some(e.name.clone()),
+                });
+                let m = match store::write_to(&dir, &prefs) {
+                    Ok(()) => self.texts.t_with(
+                        ronoctua_i18n::key::FILES_SIDEBAR_PINNED,
+                        &[("name", e.name.as_str())],
+                    ),
+                    Err(err) => self.texts.t_with(
+                        ronoctua_i18n::key::FILES_SIDEBAR_UNWRITABLE,
+                        &[("why", err.to_string().as_str())],
+                    ),
+                };
+                self.echo_message(m);
                 self.draw_and_paint();
             }
             Action::Open(e) => {
@@ -4535,7 +4635,7 @@ impl Footer {
     /// coming down over a file it writes for convenience — is worse than losing
     /// the record.
     fn save_history(&mut self) {
-        if let Err(e) = ronoctua_notify::store::write_history(self.notifications.history_mut()) {
+        if let Err(e) = self.notes.save_history(self.notifications.history_mut()) {
             tracing::warn!(error = %e, "nao consegui gravar o historico de notificacoes");
         }
     }
@@ -4881,7 +4981,7 @@ impl Footer {
                     rules: self.book.mine.clone(),
                     adjustments: self.book.adjustments.clone(),
                 };
-                if let Err(e) = ronoctua_notify::store::write_preferences(&prefs) {
+                if let Err(e) = self.notes.save_preferences(&prefs) {
                     tracing::warn!(error = %e, "nao consegui gravar as preferencias");
                     self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
                 }
@@ -5372,15 +5472,16 @@ impl Footer {
     /// — dozens of rows, built in microseconds.
     fn expansion_len(&self) -> usize {
         if let Some(files) = &self.files
-            && let Some(n) = files.row_count()
+            && let Some(n) = files.row_count(self.screen_columns())
         {
-            if n == 0 {
-                // The "nothing here" line is still a line.
-                return 1;
-            }
+            // NO `n == 0` CASE ANY MORE: `row_count` answers at least one,
+            // because "nothing here" is a sentence that has to be somewhere and
+            // it is now a field of the listing. That `.max(1)` moved INTO the
+            // view, where the window door can reach it too.
+            //
             // TWO chrome lines when it is a plain listing: the path and the
             // header. See `expansion_window`.
-            let plain = !files.menu_open() && !files.showing_detail();
+            let plain = files.plain();
             return n + if plain { 2 } else { 0 };
         }
         // The panel counts without building: `expansion()` would clone every
@@ -5451,14 +5552,14 @@ impl Footer {
             // Every other view's list is short: build it and cut it.
             return self.expansion().into_iter().skip(skip).take(take).collect();
         };
-        let Some(total) = files.row_count() else {
+        let Some(total) = files.row_count(self.screen_columns()) else {
             return self.expansion().into_iter().skip(skip).take(take).collect();
         };
         if total == 0 {
             return self.expansion().into_iter().skip(skip).take(take).collect();
         }
         let width = self.screen_columns();
-        let plain = !files.menu_open() && !files.showing_detail();
+        let plain = files.plain();
         // THE HEADER IS LINE ZERO, so it belongs to the window only when the
         // window starts at the top — and it costs one of the slots.
         // THE TWO LINES THAT ARE NOT THE LISTING, and they cost two of the twelve.
@@ -5483,7 +5584,14 @@ impl Footer {
         let rows = files.rows_from(first, take.saturating_sub(here.len()), width, &self.texts);
         here.into_iter()
             .chain(rows.into_iter().enumerate().map(|(n, r)| ExpansionRow {
-                click: Some(Click::Files(first + n)),
+                // A ROW WITH NOTHING IN IT IS NOT A TARGET.
+                //
+                // The blank line that separates the sidebar's blocks, and any
+                // line past the end of a short listing, used to carry a click —
+                // so the pointer lit a band over empty space and a press there
+                // resolved to a field that was not there. A line that does
+                // nothing should not look like a line that does something.
+                click: (!r.fields.is_empty()).then_some(Click::Files(first + n)),
                 fields: r.fields,
                 ..ExpansionRow::empty_one()
             }))
@@ -5496,14 +5604,12 @@ impl Footer {
         // function is exactly the divergence `ViewState` exists to prevent.
         if let Some(files) = &self.files {
             let width = self.screen_columns();
+            // NO EMPTY-DIRECTORY BRANCH HERE ANY MORE. "Nothing here" is a
+            // field of the listing now (`View::rows_from`), which is what gives
+            // the window door the same sentence — it drew nothing at all for an
+            // empty directory before — and what lets it sit BESIDE a sidebar
+            // instead of replacing it.
             let rows = files.rows(width, &self.texts);
-            if rows.is_empty() {
-                return vec![ExpansionRow {
-                    text: self.texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE),
-                    text_color: tokens::color::TEXT_DIM,
-                    ..ExpansionRow::empty_one()
-                }];
-            }
             // THE PATH AND THE HEADER FIRST — see `files_chrome`, which is the
             // ONE place they are built. They scroll with the list, and that is
             // deliberate: pinning them would mean drawing them outside
@@ -5511,12 +5617,13 @@ impl Footer {
             // both the height and the drawing is what keeps the two from
             // diverging (see `ViewState`). The window door, which has its own
             // painter and room to spare, keeps them pinned.
-            let plain = !files.menu_open() && !files.showing_detail();
+            let plain = files.plain();
             return self
                 .files_chrome(files, width, plain)
                 .into_iter()
                 .chain(rows.into_iter().enumerate().map(|(n, r)| ExpansionRow {
-                    click: Some(Click::Files(n)),
+                    // See `expansion_window`: an empty line is not a target.
+                    click: (!r.fields.is_empty()).then_some(Click::Files(n)),
                     fields: r.fields,
                     ..ExpansionRow::empty_one()
                 }))
@@ -6021,6 +6128,11 @@ impl Footer {
         // the frame that draws.
         let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
         let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
+        let side = crate::files::sidebar_of(
+            home.as_deref(),
+            bin.as_ref(),
+            ronoctua_files::sidebar::store::config_dir(),
+        );
         self.files = Some(crate::files::View::at(
             &start,
             self.roster.clone(),
@@ -6028,7 +6140,32 @@ impl Footer {
             bin,
             self.catalogue.clone(),
             self.texts.clone(),
+            side,
         ));
+        // THE DISKS ARE WATCHED LAZILY, and only once. Raising the thread at
+        // startup would open a bus connection for a view nobody has asked for;
+        // raising it per open would leave one running per open. The same shape
+        // the launcher's rescan already uses.
+        if !self.disks_watching {
+            self.disks_watching = true;
+            let Some(sender) = self.files_sender.clone() else {
+                return;
+            };
+            if let Err(e) = ronoctua_disks::watch(move |rack| {
+                let _ = sender.send(crate::files::Report::Racked(Box::new(rack)));
+            }) {
+                // NOT FATAL, and not silent either: the sidebar reads once when
+                // it opens and simply does not refresh by itself. A stick
+                // plugged in that never appears, with nothing said, is the
+                // silent fallback this project refuses.
+                tracing::warn!(error = %e, "sem vigia de discos");
+                let m = self.texts.t_with(
+                    ronoctua_i18n::key::FILES_DISKS_NOT_WATCHING,
+                    &[("why", e.to_string().as_str())],
+                );
+                self.echo_message(m);
+            }
+        }
         self.first_page();
         self.apply_geometry(KeyboardInteractivity::Exclusive);
     }
@@ -6040,23 +6177,17 @@ impl Footer {
     /// menu that acted on the cursor's row instead would act on something else
     /// entirely.
     fn open_files_menu(&mut self, row: usize) {
+        // ROW AND CELL, and the cell is the half that was missing: without it
+        // a right-click in the sidebar's cells opened the listing's menu about
+        // whatever file shared the line. `View::menu_at` is the one place that
+        // decides, so both doors ask the same question.
         let width = self.screen_columns();
-        let Some(view) = self.files.as_mut() else {
-            return;
-        };
-        // FOCUS, AND ONLY FOCUS. See `files::View::focus_row` for what using
-        // the activating click here did instead. With nothing to focus — an
-        // empty directory — the menu opens anyway, about the directory.
-        let moved = view.focus_row(row);
-        if matches!(moved, crate::files::Step::Nothing) && !view.is_empty() {
-            return;
-        }
-        let _ = width;
-        // THE MENU'S OWN KEY, read from the table. See `files::key_that_runs`.
-        let menu = crate::files::key_that_runs("files-menu")
-            .and_then(|t| self.files.as_mut().map(|v| v.key(t)))
-            .unwrap_or(crate::files::Step::Nothing);
-        self.apply_files_step(menu);
+        let cell = self.cell_under_pointer.unwrap_or(0);
+        let step = self
+            .files
+            .as_mut()
+            .map_or(crate::files::Step::Nothing, |v| v.menu_at(row, cell, width));
+        self.apply_files_step(step);
     }
 
     /// Carries out what the view asked for.
@@ -6116,6 +6247,36 @@ impl Footer {
                     return;
                 };
                 let (program, args) = crate::apps::command_for(&entry, &path);
+                self.open_foreign(&program, &args, entry.working_directory.as_deref());
+                return;
+            }
+            // AN APPLICATION PINNED TO THE SIDEBAR, by its id. Through the
+            // launcher's own `command_for` and never a second reader of a
+            // `.desktop` file's `Exec` — the format has quoting rules and field
+            // codes, and two parsers of it is two places to get them wrong.
+            //
+            // An id the catalogue no longer has is an application uninstalled
+            // since the row was pinned, and it SAYS so: a row pressed that does
+            // nothing is the silent failure this project refuses.
+            // FORMATTING IS A BUFFER, and this door only opens it. The
+            // questions — which filesystem, what name, are you sure — belong
+            // on a surface with room for them and with its own state, not on a
+            // menu row; and the work belongs to the host, which re-checks that
+            // the volume is one the running system does not need.
+            Doing::Format(id) => {
+                self.open_buffer_about("RONOCTUA_BUFFER_FORMAT", Some(&id));
+                return;
+            }
+            Doing::Launch(which) => {
+                let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned() else {
+                    let m = self.texts.t_with(
+                        ronoctua_i18n::key::FILES_SIDEBAR_GONE,
+                        &[("name", which.as_str())],
+                    );
+                    self.echo_message(m);
+                    return;
+                };
+                let (program, args) = crate::apps::command_for(&entry, std::path::Path::new(""));
                 self.open_foreign(&program, &args, entry.working_directory.as_deref());
                 return;
             }
@@ -6237,6 +6398,39 @@ impl Footer {
                 }
             }
             crate::files::Report::Failed(why) => self.echo_message(why),
+            // A REFUSAL WITH A NAME, turned into a sentence here — where the
+            // language bundle is. `AlreadyMounted` is the odd one: something
+            // else mounted it between the reading and the press, so the honest
+            // thing is to re-read and let the row become what it now is.
+            crate::files::Report::Refused(which, why) => {
+                if matches!(which, ronoctua_disks::Refusal::AlreadyMounted) {
+                    if let Some(v) = self.files.as_mut() {
+                        v.reread();
+                    }
+                } else if let Some(v) = self.files.as_ref() {
+                    let e = v.refusal_said(which, &why);
+                    let m = self.texts.t_with(e.key, &e.borrowed());
+                    self.echo_message(m);
+                }
+            }
+            crate::files::Report::Mounted(at) => {
+                if let Some(v) = self.files.as_mut() {
+                    v.mounted(&at);
+                }
+            }
+            crate::files::Report::Racked(rack) => {
+                // ONLY WHEN THERE IS A VIEW TO PUT IT IN. The thread goes on
+                // reading whatever is on screen — that is the point, a stick
+                // plugged in before `LEADER .` has to be there when it opens —
+                // but repainting for a region nobody is looking at is work
+                // spent on nothing.
+                let Some(v) = self.files.as_mut() else {
+                    self.rack = Some(rack);
+                    return;
+                };
+                v.racked(&rack);
+                self.rack = Some(rack);
+            }
         }
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
@@ -6406,6 +6600,12 @@ impl Footer {
         // ONLY WHAT SCROLLS HAS A BAR. On a paginated list it would be a
         // continuous control for content that moves in jumps — and what says
         // where you are there is the counter.
+        // NOT WHILE A MENU, A QUESTION OR A SHEET IS UP. The bar is about a
+        // list one scrolls; over a menu it painted a marker on the right edge
+        // of rows that do not scroll, which is chrome about nothing.
+        if self.files.as_ref().is_some_and(|v| !v.plain()) {
+            return false;
+        }
         self.navigation() == Navigation::Scroll && self.expansion_len() > self.grid().per_page()
     }
 
@@ -6656,9 +6856,21 @@ impl Footer {
     /// environment) is the same for all of them, and copying it per buffer
     /// would give copies that diverge the day one of them gains a step.
     fn open_buffer(&mut self, variable: &str) {
+        self.open_buffer_about(variable, None);
+    }
+
+    /// The same, with something for the buffer to be ABOUT.
+    ///
+    /// It travels as the third argument, in the slot `host_it` already keeps
+    /// for the file an editor buffer opens — one mechanism, and the buffer
+    /// receives it as data it did not go looking for. A buffer has no
+    /// filesystem and no bus (invariant 11); what it can be given is a name.
+    fn open_buffer_about(&mut self, variable: &str, about: Option<&str>) {
         match (std::env::current_exe(), buffer_component(variable)) {
             (Ok(me), Some(w)) => {
-                self.open_foreign(&me.to_string_lossy(), &["buffer".to_owned(), w], None)
+                let mut args = vec!["buffer".to_owned(), w];
+                args.extend(about.map(ToOwned::to_owned));
+                self.open_foreign(&me.to_string_lossy(), &args, None)
             }
             (_, None) => {
                 tracing::error!(variable, "a variavel do componente nao esta no ambiente");
@@ -6898,10 +7110,13 @@ impl Footer {
         // by then the path itself is showing it.
         .or_else(|| {
             let v = self.files.as_ref()?;
-            if v.menu_open() || v.showing_detail() || v.filtering() {
+            if !v.plain() || v.filtering() {
                 return None;
             }
-            Some(crate::files::hint(&self.texts))
+            Some(crate::files::hint_of(
+                &self.texts,
+                v.split(self.screen_columns()) > 0,
+            ))
         })
         // AND THE TRANSFER PANEL'S, for the same reason: its keys are chords
         // that nothing on the row spells out, and a panel whose only way to
@@ -6974,6 +7189,25 @@ impl Footer {
                     .and_then(|i| visible.get(i))
                     .and_then(|l| l.description.clone())
             })
+            // AND A MENU ROW UNDER THE CURSOR SAYS WHAT IT ACTUALLY DOES.
+            //
+            // ASKED FOR FROM THE SCREEN, and the request named the gap exactly:
+            // the rows are written for somebody who is starting out, and
+            // somebody who already knows what they want has nowhere to read
+            // which call, which options, what can be undone. So each action
+            // carries a second sentence, and it arrives by MOVING THE CURSOR —
+            // not by pointing, which is what every other explanation on this
+            // line has required and which the owner's own rule forbids being
+            // the only way ("whatever the mouse can do the keyboard can do").
+            //
+            // Above the pointer's own answer in this chain, because a menu
+            // covers the listing: with one open, what is under the pointer is
+            // the row the pointer is on and what is under the CURSOR is the
+            // choice about to be made.
+            .or_else(|| {
+                let e = self.files.as_ref()?.cursor_explains()?;
+                Some(self.texts.t_with(e.key, &e.borrowed()))
+            })
             // THE FILE MANAGER'S FIELDS ANSWER PER CELL, and this is the whole
             // of the "tooltip" the owner asked for: pointing at the `w` of a
             // group says, on this line, what that bit means for THIS entry —
@@ -6990,7 +7224,7 @@ impl Footer {
                     .fields
                     .iter()
                     .rev()
-                    .find(|f| cell >= f.at && cell < f.at + layout::width(&f.text) + 1)?;
+                    .find(|f| f.covers(cell))?;
                 let e = e.explain.clone()?;
                 Some(self.texts.t_with(e.key, &e.borrowed()))
             })
@@ -7233,10 +7467,8 @@ impl Footer {
                     // the focused row already makes.
                     let on_this_row = self.row_under_pointer == Some(i);
                     for f in &line.fields {
-                        let under = on_this_row
-                            && self
-                                .cell_under_pointer
-                                .is_some_and(|c| c >= f.at && c < f.at + layout::width(&f.text));
+                        let under =
+                            on_this_row && self.cell_under_pointer.is_some_and(|c| f.covers(c));
                         spans.push(ronoctua_render::Span {
                             size: ronoctua_render::Size::Grid,
                             text: f.text.clone(),
@@ -7559,13 +7791,31 @@ impl Footer {
             // the list of quads, so the bar stays on top of it.
             if let Some((base, y_grade)) = realce_do_ponteiro {
                 let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                // AND IT STOPS AT THE SIDEBAR'S EDGE.
+                //
+                // The manager's row is ONE grid column holding two lists, so a
+                // band the width of the column would light the sidebar row
+                // beside whatever the pointer is actually on — two rows lit,
+                // neither of them the answer to "what am I about to click".
+                // Which side is decided by where the pointer IS.
+                let (band_at, band_wide) = self.files.as_ref().map_or((base, grid.width), |v| {
+                    let split = v.split(columns);
+                    match self.cell_under_pointer {
+                        Some(c) if split > 0 && c < split => (base, split),
+                        _ if split > 0 => (
+                            base.saturating_add(split + 1),
+                            grid.width.saturating_sub(split + 1),
+                        ),
+                        _ => (base, grid.width),
+                    }
+                });
                 fundos.push(ronoctua_render::quad::Quad {
-                    x: f32::from(base) * cell,
+                    x: f32::from(band_at) * cell,
                     y: f32::from(first_of_expansion + y_grade) * line_height,
                     // THE WIDTH OF THE GRID'S COLUMN, and not that of the screen:
                     // with the shortcut list in three columns, a full-screen band
                     // would light the three neighboring lines together.
-                    width: f32::from(grid.width) * cell,
+                    width: f32::from(band_wide) * cell,
                     height: line_height,
                     color: tokens::color::SURFACE_SELECTION,
                 });
@@ -7585,6 +7835,24 @@ impl Footer {
                     color: tokens::color::RULE_DEFAULT,
                 });
                 fundos.extend(qr_quads);
+            }
+
+            // AND THE ONE BETWEEN THE SIDEBAR AND THE LISTING, which is the
+            // same kind of thing: a one-pixel rule inside the same surface.
+            // Separation by whitespace and a rule, never by a container
+            // (invariant 15) — there is no panel here, only a line.
+            if let Some(v) = self.files.as_ref() {
+                let split = v.split(columns);
+                if split > 0 {
+                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                    fundos.push(ronoctua_render::quad::Quad {
+                        x: f32::from(split) * cell,
+                        y: f32::from(first_of_expansion) * line_height,
+                        width: 1.0,
+                        height: grid.lines as f32 * line_height,
+                        color: tokens::color::RULE_DEFAULT,
+                    });
+                }
             }
 
             // THE SCROLLBAR, hidden until the mouse passes over it.

@@ -91,6 +91,12 @@ pub enum Effect {
     /// Requires [`Capability::System`]. Not [`Effect::Command`]: that one is a
     /// registry id and carries no argument, and "close pid 4321" needs one.
     Ask(Demand),
+    /// Write a filesystem. Needs [`Capability::Disks`].
+    ///
+    /// THE ONE EFFECT THAT DESTROYS SOMETHING NOBODY GETS BACK, and it is not
+    /// folded into [`Effect::Ask`] for that reason: the reader should see it
+    /// named, and the capability gate should have one arm to point at.
+    Format(Plan),
     /// "I am in this state now", after changing on my own.
     ///
     /// Typing a letter into the icon browser enters its search, and nobody
@@ -149,6 +155,13 @@ pub enum Capability {
     /// other touches a queue the host owns. A buffer that wants both asks for
     /// both.
     Transfers,
+    /// Receiving [`Input::Rack`] and asking for a device to be formatted.
+    ///
+    /// The heaviest of the five, and the reason it is not folded into
+    /// [`Capability::System`]: that one ends processes and sweeps the store,
+    /// which is recoverable. This one writes a filesystem over a disk. A buffer
+    /// asks for exactly the power it uses.
+    Disks,
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +347,132 @@ pub struct Survey {
     pub scanning: bool,
     /// How far it got, in per mille.
     pub progress: u16,
+}
+
+/// One disk the machine has, as the host last read it.
+///
+/// **THE FIELD ORDER IS THE WIT'S ORDER.** `wasmtime` zips a record
+/// POSITIONALLY and only then compares names, so a field moved on one side
+/// alone fails when the function is CALLED, with a message about a name. There
+/// is a test that walks both shapes field by field.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Device {
+    /// The id the host gave it — opaque here, a udisks object path there.
+    ///
+    /// Never drawn: that path embeds the drive's SERIAL NUMBER, and this
+    /// repository is public (invariant 13).
+    pub id: String,
+    /// What to call it, already chosen by the host.
+    pub name: String,
+    /// `/dev/sda2`.
+    pub node: String,
+    /// `vfat`, `ntfs`, `btrfs` — or empty, which is a partition with nothing on
+    /// it yet, and a REASON to format rather than a failure.
+    pub kind: String,
+    /// How big, in bytes. The buffer has no formatter.
+    pub bytes: u64,
+    /// Is a filesystem from it mounted right now?
+    pub mounted: bool,
+    /// Can the drive it sits on be pulled out?
+    pub removable: bool,
+    /// Why it must not be touched — the mount point or the word that decided,
+    /// already resolved. Empty means it is spare.
+    pub needed: String,
+    /// Is this the whole disk rather than one partition of it?
+    pub whole: bool,
+}
+
+/// Every disk the machine has.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Rack {
+    /// The devices, already filtered and already judged by the host.
+    pub devices: Vec<Device>,
+}
+
+/// What became of the last [`Effect::Format`].
+///
+/// The same channel `Input::Copied` opened, and for the same reason: an effect
+/// that acts on the machine has to answer, or the buffer can only show an
+/// optimistic "done!" — which lies exactly when it matters.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Outcome {
+    /// Did it work?
+    pub done: bool,
+    /// What went wrong, already a sentence — empty when [`Self::done`].
+    pub trouble: String,
+}
+
+/// A filesystem this build can actually create.
+///
+/// Not "what exists": what the slimmed udisks carries a `mkfs` for. XFS is
+/// deliberately absent, and the buffer says so rather than leaving a gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Recipe {
+    /// vfat — opens on every computer there is.
+    #[default]
+    Universal,
+    /// exfat — the same, without the four-gigabyte file limit.
+    LargeFiles,
+    /// ntfs — what Windows writes.
+    Windows,
+    /// ext4 — the ordinary Linux one.
+    Linux,
+    /// btrfs — snapshots and checksums.
+    Modern,
+}
+
+impl Recipe {
+    /// The name `mkfs` knows it by.
+    ///
+    /// The one place this enum meets a filesystem's real name, so the buffer
+    /// never carries one — a component that knew the string `vfat` would be a
+    /// component with an opinion about disks.
+    #[must_use]
+    pub const fn filesystem(self) -> &'static str {
+        match self {
+            Self::Universal => "vfat",
+            Self::LargeFiles => "exfat",
+            Self::Windows => "ntfs",
+            Self::Linux => "ext4",
+            Self::Modern => "btrfs",
+        }
+    }
+
+    /// From the WIT's name. `None` for one this build does not know.
+    #[must_use]
+    pub fn of_wit_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "universal" => Self::Universal,
+            "large-files" => Self::LargeFiles,
+            "windows" => Self::Windows,
+            "linux" => Self::Linux,
+            "modern" => Self::Modern,
+            _ => return None,
+        })
+    }
+}
+
+/// What to write on a disk, and on which.
+///
+/// # Why an effect of its own and not another [`Request`]
+///
+/// Because a [`Demand`] is a verb plus an INDEX, and that fits every request
+/// there is. Formatting is not that: it carries a filesystem, a name and
+/// whether the partition table goes too. Bending `Demand` to hold them would
+/// put three disk-shaped fields on the record every other buffer sends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Plan {
+    /// The device, by the id the host gave in the last [`Rack`].
+    ///
+    /// Never one the buffer built: the host checks it against that list, and
+    /// refuses one the running system needs whatever the buffer says.
+    pub device: String,
+    /// What to write.
+    pub recipe: Recipe,
+    /// What to call it. Empty means no name, which is ordinary.
+    pub label: String,
+    /// Wipe the partition table and lay down a single partition first.
+    pub whole_disk: bool,
 }
 
 /// What the buffer asks the host to do.
@@ -1155,6 +1294,17 @@ pub enum Input {
     /// clock: the host is subscribed to the queue's socket on a thread, and a
     /// copy that moves no byte for a minute sends nothing in that minute.
     Queue(Queue),
+    /// Every disk the machine has. Only for a buffer that declared
+    /// [`Capability::Disks`].
+    ///
+    /// It arrives UNREQUESTED, like the survey and the queue: the host watches
+    /// udisks on a thread and hands over a fresh reading whenever something
+    /// moves. A buffer that did not ask for the capability gets no thread and
+    /// no reading, which is what makes the absence structural rather than
+    /// promised.
+    Rack(Rack),
+    /// What became of the format the buffer asked for.
+    Formatted(Outcome),
 }
 
 #[cfg(test)]

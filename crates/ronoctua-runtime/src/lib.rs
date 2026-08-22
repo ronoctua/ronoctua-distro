@@ -406,6 +406,17 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         ),
         Input::Survey(s) => ("survey", Some(val_of_survey(s))),
         Input::Queue(q) => ("queue", Some(val_of_queue(q))),
+        Input::Rack(r) => ("rack", Some(val_of_rack(r))),
+        Input::Formatted(o) => (
+            "formatted",
+            Some(wasmtime::component::Val::Record(vec![
+                ("done".into(), wasmtime::component::Val::Bool(o.done)),
+                (
+                    "trouble".into(),
+                    wasmtime::component::Val::String(o.trouble.clone()),
+                ),
+            ])),
+        ),
     };
     Val::Variant(caso.to_owned(), carga.map(Box::new))
 }
@@ -553,6 +564,38 @@ fn val_of_queue(q: &ronoctua_protocol::Queue) -> wasmtime::component::Val {
     Val::Record(vec![("jobs".into(), Val::List(jobs))])
 }
 
+/// The rack, as a `Val` the guest can receive.
+///
+/// # The order of the fields is the WIT's order, and it is not style
+///
+/// `wasmtime` lowers a `Val::Record` by zipping it POSITIONALLY against the
+/// WIT's fields and only then compares the names. A field moved here without
+/// being moved there fails when the function is CALLED, with a message about a
+/// name — which is why there is a test walking both shapes field by field.
+fn val_of_rack(r: &ronoctua_protocol::Rack) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    let devices = r
+        .devices
+        .iter()
+        .map(|d| {
+            Val::Record(vec![
+                ("id".into(), Val::String(d.id.clone())),
+                ("name".into(), Val::String(d.name.clone())),
+                ("node".into(), Val::String(d.node.clone())),
+                ("kind".into(), Val::String(d.kind.clone())),
+                ("bytes".into(), Val::U64(d.bytes)),
+                ("mounted".into(), Val::Bool(d.mounted)),
+                ("removable".into(), Val::Bool(d.removable)),
+                ("needed".into(), Val::String(d.needed.clone())),
+                ("whole".into(), Val::Bool(d.whole)),
+            ])
+        })
+        .collect();
+
+    Val::Record(vec![("devices".into(), Val::List(devices))])
+}
+
 /// The survey, as a `Val` the guest can receive.
 ///
 /// # The order of the fields is the WIT's order, and it is not style
@@ -637,6 +680,51 @@ fn val_of_survey(s: &ronoctua_protocol::Survey) -> wasmtime::component::Val {
 /// Unknown request = `None`, like every other unknown case in this file: a
 /// component built against a newer WIT is still useful for what the host
 /// understands, and a request it cannot perform is better refused than guessed.
+/// The plan behind `effect::format`.
+///
+/// # A field missing here is a refusal, never a default
+///
+/// Every other lift in this file tolerates a gap: a missing label draws an
+/// empty string and nobody is hurt. This one writes a filesystem over somebody's
+/// disk, so an unreadable field returns `None` and the effect never happens —
+/// a `whole-disk` that failed to lift would otherwise read as `false` and
+/// silently format the wrong thing.
+fn plan_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::Plan> {
+    use wasmtime::component::Val;
+
+    let Some(Val::Record(fields)) = v else {
+        return None;
+    };
+    let get = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+
+    let Some(Val::String(device)) = get("device") else {
+        return None;
+    };
+    let Some(Val::Enum(recipe)) = get("recipe") else {
+        return None;
+    };
+    let Some(recipe) = ronoctua_protocol::Recipe::of_wit_name(recipe) else {
+        // A NAME THIS BUILD CANNOT WRITE. The WIT gained a case and the host
+        // did not learn it, which on a disk is the one place to stop rather
+        // than guess a neighbour.
+        tracing::warn!(recipe, "sistema de arquivos desconhecido");
+        return None;
+    };
+    let Some(Val::String(label)) = get("label") else {
+        return None;
+    };
+    let Some(Val::Bool(whole_disk)) = get("whole-disk") else {
+        return None;
+    };
+
+    Some(ronoctua_protocol::Plan {
+        device: device.clone(),
+        recipe,
+        label: label.clone(),
+        whole_disk: *whole_disk,
+    })
+}
+
 fn demand_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::Demand> {
     use ronoctua_protocol::Request as R;
     use wasmtime::component::Val;
@@ -714,6 +802,7 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 // neighbours were written to prevent.
                 "save" => text().map(Effect::Save),
                 "ask" => demand_from(carga.as_deref()).map(Effect::Ask),
+                "format" => plan_from(carga.as_deref()).map(Effect::Format),
                 "state-changed" => text().map(Effect::StateChanged),
                 otherwise => {
                     tracing::warn!(effect = otherwise, "efeito desconhecido");
@@ -779,6 +868,7 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
                 Val::Enum(n) if n == "vector" => Some(prot::Capability::Vector),
                 Val::Enum(n) if n == "system" => Some(prot::Capability::System),
                 Val::Enum(n) if n == "transfers" => Some(prot::Capability::Transfers),
+                Val::Enum(n) if n == "disks" => Some(prot::Capability::Disks),
                 // AN UNKNOWN CAPABILITY DISAPPEARS HERE, and that is the
                 // quietest failure in this file: the buffer declared it, the
                 // host did not learn to read it, and every gated effect is then
@@ -1071,6 +1161,104 @@ mod tests {
             field(&readings[0], "of"),
             Some(&wasmtime::component::Val::Enum("ram-total".to_owned()))
         );
+    }
+
+    #[test]
+    fn the_rack_has_the_wit_shape_field_by_field() {
+        // THE LIST BELOW IS THE `.wit`'s ORDER, COPIED BY HAND, for the same
+        // reason as the queue's above — and with more at stake: two fields of
+        // this record are `bool`, and a pair of booleans swapped positionally
+        // still lowers CLEANLY. `mounted` and `removable` traded would draw an
+        // eject glyph on a mounted system volume and no complaint anywhere.
+        let r = ronoctua_protocol::Rack {
+            devices: vec![ronoctua_protocol::Device {
+                id: "/org/freedesktop/UDisks2/block_devices/sda2".to_owned(),
+                name: "MISO_EFI".to_owned(),
+                node: "/dev/sda2".to_owned(),
+                kind: "vfat".to_owned(),
+                bytes: 41_943_040,
+                mounted: false,
+                removable: true,
+                needed: String::new(),
+                whole: false,
+            }],
+        };
+        let v = val_of_rack(&r);
+
+        assert_eq!(shape(&v), ["devices"]);
+        let wasmtime::component::Val::List(devices) = field(&v, "devices").expect("devices") else {
+            panic!("devices nao e lista")
+        };
+        assert_eq!(
+            shape(&devices[0]),
+            [
+                "id",
+                "name",
+                "node",
+                "kind",
+                "bytes",
+                "mounted",
+                "removable",
+                "needed",
+                "whole"
+            ]
+        );
+
+        // AND THE TWO BOOLEANS ARE READ BACK BY NAME, which is the half the
+        // shape check cannot do: the shape would still pass with the values
+        // swapped, because both fields are the same type.
+        assert_eq!(
+            field(&devices[0], "mounted"),
+            Some(&wasmtime::component::Val::Bool(false))
+        );
+        assert_eq!(
+            field(&devices[0], "removable"),
+            Some(&wasmtime::component::Val::Bool(true))
+        );
+    }
+
+    #[test]
+    fn a_plan_missing_a_field_is_refused_rather_than_defaulted() {
+        use wasmtime::component::Val;
+
+        let whole = |b: bool| {
+            Val::Record(vec![
+                ("device".into(), Val::String("sda".into())),
+                ("recipe".into(), Val::Enum("universal".into())),
+                ("label".into(), Val::String("PENDRIVE".into())),
+                ("whole-disk".into(), Val::Bool(b)),
+            ])
+        };
+
+        // The whole plan crosses, and `whole-disk` keeps the value it was given.
+        let got = plan_from(Some(&whole(true))).expect("plano completo");
+        assert_eq!(got.device, "sda");
+        assert_eq!(got.recipe.filesystem(), "vfat");
+        assert_eq!(got.label, "PENDRIVE");
+        assert!(got.whole_disk);
+
+        // AND THE GAP IS A REFUSAL. `Plan` derives `Default`, so the tempting
+        // shape here is `unwrap_or_default()` — which would turn a `whole-disk`
+        // that failed to cross into `false` and format a partition where the
+        // buffer asked for a disk, or the reverse. There is no safe default for
+        // a field that decides how much gets erased.
+        let short = Val::Record(vec![
+            ("device".into(), Val::String("sda".into())),
+            ("recipe".into(), Val::Enum("universal".into())),
+            ("label".into(), Val::String("PENDRIVE".into())),
+        ]);
+        assert!(plan_from(Some(&short)).is_none());
+
+        // A filesystem this build cannot write is refused too, and not rounded
+        // to a neighbour: `xfs` is exactly the case the slim udisks has no
+        // `mkfs` for.
+        let unknown = Val::Record(vec![
+            ("device".into(), Val::String("sda".into())),
+            ("recipe".into(), Val::Enum("xfs".into())),
+            ("label".into(), Val::String(String::new())),
+            ("whole-disk".into(), Val::Bool(false)),
+        ]);
+        assert!(plan_from(Some(&unknown)).is_none());
     }
 
     #[test]

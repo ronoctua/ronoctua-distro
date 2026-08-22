@@ -78,6 +78,20 @@ pub struct Action {
     pub id: &'static str,
     /// The text key, always `files-<id>`.
     pub label: &'static str,
+    /// What it does, for somebody who already knows what they want.
+    ///
+    /// # The same row answering two people
+    ///
+    /// [`Self::label`] is written for whoever is looking for a verb: *"apagar
+    /// de vez"*. This is written for whoever wants to know exactly what will
+    /// happen: which call, which flags, what is recoverable. It reaches the
+    /// message line when the row is under the CURSOR — not only under the
+    /// pointer, because the owner's rule is that whatever the mouse can do the
+    /// keyboard can do, and until this existed the explanations were a thing
+    /// only a mouse could ask for.
+    ///
+    /// Always `{prefix}-does-<id>`, so the check can find both halves.
+    pub does: &'static str,
     /// The key that runs it, in the menu's own keymap.
     pub key: &'static str,
     /// When it is offered.
@@ -104,6 +118,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "open",
             label: key::FILES_OPEN,
+            does: key::FILES_DOES_OPEN,
             key: "RET",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -112,6 +127,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "open-with",
             label: key::FILES_OPEN_WITH,
+            does: key::FILES_DOES_OPEN_WITH,
             key: "o",
             applies: Applies::File,
             tier: Tier::Free,
@@ -120,6 +136,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "terminal",
             label: key::FILES_TERMINAL,
+            does: key::FILES_DOES_TERMINAL,
             key: "t",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -129,6 +146,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "root-terminal",
             label: key::FILES_ROOT_TERMINAL,
+            does: key::FILES_DOES_ROOT_TERMINAL,
             key: "!",
             applies: Applies::Always,
             tier: Tier::Password,
@@ -138,6 +156,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "copy-path",
             label: key::FILES_COPY_PATH,
+            does: key::FILES_DOES_COPY_PATH,
             key: "y",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -146,6 +165,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "copy",
             label: key::FILES_COPY,
+            does: key::FILES_DOES_COPY,
             key: "c",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -154,6 +174,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "cut",
             label: key::FILES_CUT,
+            does: key::FILES_DOES_CUT,
             key: "x",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -162,6 +183,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "paste",
             label: key::FILES_PASTE,
+            does: key::FILES_DOES_PASTE,
             key: "p",
             applies: Applies::Pasteable,
             tier: Tier::Free,
@@ -170,7 +192,37 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "rename",
             label: key::FILES_RENAME,
+            does: key::FILES_DOES_RENAME,
             key: "r",
+            applies: Applies::Always,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        // --- where one starts from -----------------------------------
+        //
+        // `s` for sidebar, and it was free. It respects marks like the rest, so
+        // six folders marked put six rows there in one press.
+        Action {
+            id: "pin",
+            label: key::FILES_PIN,
+            does: key::FILES_DOES_PIN,
+            key: "s",
+            // A FOLDER OR A FILE, both. A file on the sidebar opens with
+            // whatever opens its type, which is what somebody who keeps one
+            // document open all day wants — and refusing it would be refusing
+            // it for a reason nothing on screen states.
+            applies: Applies::Always,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        // The way back for a row that was hidden. It is `Always` and it is
+        // about the SIDEBAR rather than about the entry — which is why it
+        // cannot be a key on a row: the row is not drawn.
+        Action {
+            id: "unhide",
+            label: key::FILES_UNHIDE,
+            does: key::FILES_DOES_UNHIDE,
+            key: "S",
             applies: Applies::Always,
             tier: Tier::Free,
             confirms: false,
@@ -179,6 +231,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "info",
             label: key::FILES_INFO,
+            does: key::FILES_DOES_INFO,
             key: "i",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -187,6 +240,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "mode",
             label: key::FILES_MODE,
+            does: key::FILES_DOES_MODE,
             key: "m",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -195,6 +249,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "owner",
             label: key::FILES_OWNER,
+            does: key::FILES_DOES_OWNER,
             key: "O",
             applies: Applies::Always,
             tier: Tier::Password,
@@ -203,6 +258,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "group",
             label: key::FILES_GROUP,
+            does: key::FILES_DOES_GROUP,
             key: "G",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -217,6 +273,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "compress",
             label: key::FILES_COMPRESS,
+            does: key::FILES_DOES_COMPRESS,
             key: "z",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -225,6 +282,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "extract",
             label: key::FILES_EXTRACT,
+            does: key::FILES_DOES_EXTRACT,
             key: "u",
             applies: Applies::Under("application/zip"),
             tier: Tier::Free,
@@ -233,6 +291,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "extract-tar",
             label: key::FILES_EXTRACT_TAR,
+            does: key::FILES_DOES_EXTRACT_TAR,
             key: "U",
             applies: Applies::Under("application/x-tar"),
             tier: Tier::Free,
@@ -246,6 +305,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "restore",
             label: key::FILES_RESTORE,
+            does: key::FILES_DOES_RESTORE,
             key: "R",
             applies: Applies::InTrash,
             tier: Tier::Free,
@@ -254,6 +314,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "trash",
             label: key::FILES_TRASH,
+            does: key::FILES_DOES_TRASH,
             key: "d",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -262,6 +323,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "delete",
             label: key::FILES_DELETE,
+            does: key::FILES_DOES_DELETE,
             key: "D",
             applies: Applies::Always,
             tier: Tier::Free,
@@ -270,6 +332,7 @@ pub fn all_of() -> &'static [Action] {
         Action {
             id: "shred",
             label: key::FILES_SHRED,
+            does: key::FILES_DOES_SHRED,
             key: "Z",
             applies: Applies::File,
             tier: Tier::Free,

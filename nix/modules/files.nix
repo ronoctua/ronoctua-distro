@@ -43,6 +43,26 @@ let
   # newline, a colon and a space, and any single-line encoding is a parser
   # waiting to disagree with its writer.
   staging = "/run/ronoctua-files/staged";
+
+  # THE SIDEBAR'S DEFAULTS, resolved from keys to names.
+  #
+  # `nix/files-sidebar.nix` names WHICH directories, by key; `nix/user-dirs.nix`
+  # says where each key points, relative to home. Resolving here rather than in
+  # either of them is what keeps both files free of the other's concern — and
+  # what makes a key that names nothing a build error instead of an empty row.
+  dirs = import ../user-dirs.nix;
+  chosen = import ../files-sidebar.nix;
+  nameOf =
+    key:
+    if key == "start" then
+      import ../files-start.nix
+    else if dirs ? ${key} then
+      dirs.${key}
+    else
+      throw "ronoctua: nix/files-sidebar.nix cita \"${key}\", que nao existe em nix/user-dirs.nix";
+  # COLON-SEPARATED, the habit `XDG_DATA_DIRS` already set. None of these is a
+  # path, so none of them can contain a colon: they are names relative to home.
+  sidebar = lib.concatStringsSep ":" (map nameOf chosen);
 in
 {
   options.ronoctua.files = {
@@ -63,6 +83,22 @@ in
         Uma opcao e nao um literal no Rust porque a pasta em que alguem guarda o
         que faz e preferencia DA MAQUINA (invariante 13), e porque escrever um
         caminho absoluto aqui seria pessoal.
+      '';
+    };
+
+    sidebar = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      # ONE PLACE, and by KEY — see `nix/files-sidebar.nix` and
+      # `nix/user-dirs.nix`. The nested loop reads the same two files.
+      default = lib.splitString ":" sidebar;
+      description = ''
+        Com que pastas a barra lateral do gerenciador nasce, RELATIVAS a home —
+        nomes, nunca caminhos, pelo mesmo motivo de `start`.
+
+        Quem ajusta a barra depois nao mexe aqui: o que a pessoa acrescenta,
+        oculta ou remove vive em `$XDG_CONFIG_HOME/ronoctua/files-sidebar.json`
+        e vence esta lista. Uma pasta daqui que nao exista na maquina nao vira
+        linha, e isso nao e erro.
       '';
     };
   };
@@ -133,5 +169,12 @@ in
     # WHERE IT OPENS. A session variable and not a baked constant, so changing
     # it is a rebuild and not a recompile.
     environment.sessionVariables.RONOCTUA_FILES_START = cfg.start;
+
+    # AND WHAT THE SIDEBAR STARTS WITH, for the same reason and by the same
+    # route. `dev-exports-before-it-starts` demands the nested loop export it
+    # BEFORE the footer comes up: a variable that arrives late is a variable
+    # that did not arrive, and a missing one here is a fallback and not an
+    # error — the sidebar would simply come up with no places in it.
+    environment.sessionVariables.RONOCTUA_FILES_SIDEBAR = lib.concatStringsSep ":" cfg.sidebar;
   };
 }

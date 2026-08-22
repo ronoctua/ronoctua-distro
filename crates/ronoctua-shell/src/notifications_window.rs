@@ -139,6 +139,7 @@ pub fn host_it() -> Result<()> {
         view: crate::notifications::View::fresh(),
         records: Vec::new(),
         book: ronoctua_notify::Book::distro(),
+        notes: ronoctua_notify::store::Where::of_env(),
         texts,
         row_under_pointer: None,
         offset: 0,
@@ -185,6 +186,13 @@ struct NotificationsWindow {
     records: Vec<ronoctua_notify::Record>,
     /// The catalogue, the distro's filters and the person's.
     book: ronoctua_notify::Book,
+    /// Where this process persists — the two directories, found ONCE.
+    ///
+    /// A SEPARATE PROCESS from the footer, with its own copy of both files;
+    /// carrying the roots rather than finding them per write is what keeps a
+    /// test from reaching the real home. See `sidebar::Sidebar`'s `store` for
+    /// the incident that made it a rule.
+    notes: ronoctua_notify::store::Where,
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
     row_under_pointer: Option<usize>,
     /// The first visible row. A window has no page: it scrolls, like the
@@ -199,8 +207,8 @@ impl NotificationsWindow {
     /// Compares before drawing: repainting on a beat that found nothing new is
     /// a frame spent to put the same pixels back.
     fn reread(&mut self) {
-        let fresh = ronoctua_notify::store::read_history();
-        let prefs = ronoctua_notify::store::read_preferences();
+        let fresh = self.notes.history();
+        let prefs = self.notes.preferences();
         let same = fresh == self.records
             && prefs.adjustments == self.book.adjustments
             && prefs.rules == self.book.mine;
@@ -285,7 +293,7 @@ impl NotificationsWindow {
                     rules: self.book.mine.clone(),
                     adjustments: self.book.adjustments.clone(),
                 };
-                if let Err(e) = ronoctua_notify::store::write_preferences(&prefs) {
+                if let Err(e) = self.notes.save_preferences(&prefs) {
                     tracing::warn!(error = %e, "nao consegui gravar as preferencias");
                 }
             }
@@ -294,7 +302,7 @@ impl NotificationsWindow {
     }
 
     fn save_history(&mut self) {
-        if let Err(e) = ronoctua_notify::store::write_history(&mut self.records) {
+        if let Err(e) = self.notes.save_history(&mut self.records) {
             tracing::warn!(error = %e, "nao consegui gravar o historico");
         }
     }

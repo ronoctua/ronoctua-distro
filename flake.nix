@@ -294,6 +294,7 @@
         bufferLucide = buffers.lucide;
         bufferMemory = buffers.memory;
         bufferTransfers = buffers.transfers;
+        bufferFormat = buffers.format;
         inherit iconSuperpack ghosttyVt torrentShim;
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
@@ -466,6 +467,10 @@
         # The file manager's privileged half: one unit, one polkit rule, and
         # where it opens. Everything else about it needs no configuration.
         ./nix/modules/files.nix
+        # The other half of the manager's sidebar: udisks2, and no polkit rule
+        # of our own. After `files.nix` because it is that view's second half
+        # and nothing else in the system reads it.
+        ./nix/modules/disks.nix
         # The queue of everything that takes a while, and the unit that owns
         # it. After `files.nix` because what it runs is that crate's work.
         ./nix/modules/transfers.nix
@@ -587,6 +592,7 @@
         buffer-lucide = buffers.lucide;
         buffer-memory = buffers.memory;
         buffer-transfers = buffers.transfers;
+        buffer-format = buffers.format;
         i18n-rs = i18nRs;
 
         # The shell: the two-line footer.
@@ -1104,9 +1110,43 @@
 
           failed=0
 
+          # FILES AND DIRECTORIES ARE NOT THE SAME ARGUMENT TO `fd`.
+          #
+          # `fd` search paths must be DIRECTORIES: given a file it prints
+          # "is not a directory" and exits non-zero. That error was being
+          # swallowed (`2>/dev/null || true`), the file list came back empty,
+          # the Rust half was skipped because `paths[0]` was not `.`, and the
+          # whole thing exited 0 — so `nix fmt tests/checks.nix` reported
+          # success having formatted nothing, and `nix fmt --check` on an
+          # unformatted file PASSED. Found by formatting a file twice and
+          # watching the `fmt` check fail anyway.
+          #
+          # Mixed arguments were worse than useless: the directory was walked,
+          # the file was dropped, and nothing said which half had been done.
+          dirs=()
+          files=()
+          for a in "''${paths[@]}"; do
+            if [ -d "$a" ]; then
+              dirs+=("$a")
+            elif [ -e "$a" ]; then
+              files+=("$a")
+            else
+              echo "nix fmt: nao existe: $a" >&2
+              failed=1
+            fi
+          done
+
           # --- Nix ---------------------------------------------------------
-          mapfile -t nix_files < <(fd --type f --extension nix --hidden \
-            --exclude .git . "''${paths[@]}" 2>/dev/null || true)
+          nix_files=()
+          if [ ''${#dirs[@]} -gt 0 ]; then
+            mapfile -t nix_files < <(fd --type f --extension nix --hidden \
+              --exclude .git . "''${dirs[@]}")
+          fi
+          for f in ''${files[@]+"''${files[@]}"}; do
+            case "$f" in
+              *.nix) nix_files+=("$f") ;;
+            esac
+          done
           if [ ''${#nix_files[@]} -gt 0 ]; then
             if [ "$check" = true ]; then
               nixfmt --check "''${nix_files[@]}" || failed=1
@@ -1116,9 +1156,13 @@
           fi
 
           # --- Rust --------------------------------------------------------
-          # Only when run over the tree: formatting a single `.nix` file must
-          # not reformat every crate as a side effect.
-          if [ "''${paths[0]}" = "." ] && [ -f Cargo.toml ]; then
+          # Only when a DIRECTORY was asked for: formatting a single `.nix` file
+          # must not reformat every crate as a side effect.
+          #
+          # It used to compare `paths[0]` with the literal `.`, so `nix fmt "$PWD"`
+          # and `nix fmt ./` formatted no Rust at all and looked like a
+          # whole-tree run — the same silence, one argument away.
+          if [ ''${#dirs[@]} -gt 0 ] && [ -f Cargo.toml ]; then
             if [ "$check" = true ]; then
               cargo fmt --all -- --check || failed=1
             else

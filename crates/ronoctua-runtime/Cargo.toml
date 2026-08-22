@@ -63,6 +63,15 @@ path = "src/bin/memory.rs"
 name = "ronoctua-test-transfers"
 path = "src/bin/transfers.rs"
 
+[[bin]]
+# The sixth, for formatting a disk. The criterion only it has: TWO REFUSALS
+# that are invisible from the host, because from out there a refusal and a
+# crash both look like no plan. A device the running system needs is drawn and
+# `Enter` on it goes nowhere; and the first `Enter` on the confirmation screen
+# goes BACK, because `no` is the row the cursor starts on.
+name = "ronoctua-test-format"
+path = "src/bin/format.rs"
+
 [dependencies]
 ronoctua-protocol = { path = "../ronoctua-protocol" }
 wasmtime.workspace = true

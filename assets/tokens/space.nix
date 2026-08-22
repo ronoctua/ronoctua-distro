@@ -52,6 +52,42 @@
   files = {
     gutter = 1;
     edgeRight = 1;
+
+    # FROM THIS WIDTH ON, THE SIDEBAR IS OFFERED — the shape
+    # `notifications.twoColumnsFrom` below already has, and the same number
+    # serves BOTH doors, which is what makes "one implementation, two doors"
+    # true of the layout and not only of the code.
+    #
+    # The arithmetic, and it is arithmetic and not taste. A listing needs
+    # `gutter` 1 + icon 2 + gap 1 + the name's floor 12 + `edgeRight` 1 = 17
+    # cells before it says anything at all. A sidebar needs a glyph, a cell of
+    # air and a name — `screenshot` is ten — plus the rule and the air beside
+    # it. Below 48 the two coexist only by leaving the listing with nothing but
+    # names; at 48 it still holds the icon, the name and the size beside a
+    # sidebar, which is the narrowest arrangement worth having.
+    #
+    # It is a PREFERENCE, and not what holds: what holds is that nothing leaks
+    # off the screen, and `files::sidebar_columns` withdraws the sidebar
+    # entirely when honouring it would push a column past the edge.
+    sidebarFrom = 48;
+
+    # THE AIR ON EITHER SIDE OF THE SIDEBAR, and it is two numbers because they
+    # are two different jobs — the same reason `gutter` and `edgeRight` above
+    # are two.
+    #
+    # THIS FILE HAS NOW BEEN WRITTEN ABOUT THIS DEFECT THREE TIMES, which is why
+    # it gets said plainly: a glyph flush against a border does not read as a
+    # glyph at the edge, it reads as a glyph that was CUT OFF. `modeline.edgeRight`
+    # says it about the unread counter; `files.edgeRight` says it about the date
+    # column; and the sidebar still shipped with its icon at cell zero and its
+    # eject glyph against the rule. The window door never had the defect only
+    # because it pays `buffer.marginX` on top of everything.
+    #
+    # `sidebarGutter` is the cell BEFORE the sidebar's glyph — the screen's own
+    # edge. `sidebarEject` is the air BEFORE the eject glyph, so it does not
+    # touch the rule that separates the two lists.
+    sidebarGutter = 1;
+    sidebarEject = 1;
   };
 
   # The TRANSFER queue's row, in cells.

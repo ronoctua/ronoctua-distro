@@ -74,6 +74,28 @@ pkgs.testers.runNixOSTest {
     FOOTER = ${toString footerPx}
 
 
+    def expansion_text():
+        """What the expanded region says, read back off the screen.
+
+        The height answers "did the region change"; this answers "what is IN
+        it", and some questions are only the second kind — a filter that
+        narrows to one file and one that narrows to none leave the region
+        exactly as tall.
+        """
+        w, h, x, y = niri_geometry()
+        alt = footer_height()
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
+            # Only what is BELOW the footer's two glued lines, which is the
+            # same crop the which-key subtest uses and for the same reason.
+            f"-crop {w}x{alt - FOOTER}+0+{h - alt + FOOTER} +repage "
+            "-colorspace gray -negate -resize 400% /tmp/expansao.png"
+        )
+        return machine.succeed(
+            "${pkgs.tesseract}/bin/tesseract /tmp/expansao.png stdout --psm 6 2>/dev/null"
+        ).strip()
+
     def footer_height():
         """How many px from the bottom up differ from niri's background.
 
@@ -505,14 +527,34 @@ pkgs.testers.runNixOSTest {
         # Narrowing to NOTHING also makes the region shorter, so "it got
         # shorter" alone would pass on a filter that matches nothing — which is
         # exactly what happened while this test was being written, with the
-        # manager opening somewhere else entirely. A query that matches one file
-        # has to leave MORE on screen than one that matches none.
+        # manager opening somewhere else entirely.
+        #
+        # THIS USED TO COMPARE HEIGHTS, and it cannot any more. A query that
+        # matched nothing used to drop the path line and the header along with
+        # the rows, which made the region one line tall — and took the QUERY off
+        # the screen with them, because the query lives at the end of the path.
+        # Whoever mistyped a letter could no longer see what they had typed. So
+        # "nothing here" became a line of the LISTING, beside the path and the
+        # header that name it, and both queries now leave the region the same
+        # height. The question was never about height: it is whether the file is
+        # ON SCREEN, and that is what is asked here.
         press_key("Escape")
         wait_for_height(opened)
-        empty = type_and_settle("qqq", opened)
-        assert matched > empty, (
-            f"`zzz` deixou {matched} px e `qqq` deixou {empty} px: o filtro nao "
-            "casou nada — so esvaziou a lista."
+        type_and_settle("zzz", opened)
+        with_match = expansion_text()
+        press_key("Escape")
+        wait_for_height(opened)
+        type_and_settle("qqq", opened)
+        without = expansion_text()
+        print(f"OCR com `zzz`: {with_match!r}\nOCR com `qqq`: {without!r}")
+        assert "zzz" in with_match.lower(), (
+            f"`zzz` casa `zzz-unico.txt` e o arquivo nao esta na tela: {with_match!r}"
+        )
+        assert "zzz-unico" not in without.lower(), (
+            f"`qqq` nao casa nada e a lista continuou mostrando: {without!r}"
+        )
+        assert "alfa" not in with_match.lower(), (
+            f"`zzz` deixou os `alfa-*.txt` na tela: o filtro nao estreitou: {with_match!r}"
         )
         press_key("Escape")
         wait_for_height(opened)

@@ -3303,6 +3303,314 @@ O `tests/extension-vm.nix` confere o que é conferível — a chave existe, o `.
 da política é o id do `.crx`, e a lista do host nomeia exatamente ele — e o `docs/PENDING.md` registra
 que o último passo é do dono, num navegador de verdade.
 
+
+### A barra lateral — de onde se parte, e o que ela custou descobrir
+
+O gerenciador tinha uma vista só. Para chegar a `~/main/temp` digitava-se o caminho; um pendrive
+montado não aparecia em lugar nenhum, e um desmontado não existia para o sistema inteiro — não
+havia `udisks2`, nem regra udev, nem `boot.supportedFilesystems` em parte alguma do repositório.
+
+#### A barra não é uma segunda lista, e essa decisão pagou por si mesma
+
+Uma barra lateral parece pedir uma segunda coluna de `ExpansionRow`, e teria custado deslocamento em
+duas dimensões, um segundo `last_offset` e um `Grid` que deixa de ser de uma coluna. O que ela é, em
+vez disso: **`Field`s a mais na MESMA `Row`**. A linha *n* leva o item *n* da barra nas células antes
+do corte e a linha *n* da listagem depois dele.
+
+Com isso não mudou NADA em `grid()`, `row_at`, `cell_at`, no despacho de `Click::Files`, no `at()` da
+janela, no `offset`, nas páginas nem na barra de rolagem. `Row::field_at` já andava **da direita para
+a esquerda** — uma decisão tomada por outro motivo, para que um clique no vão depois de um campo
+pertencesse a ele — e é ela que faz uma célula abaixo do corte achar um campo da barra e uma acima
+achar um da listagem, sem aritmética de fronteira em lugar nenhum.
+
+**O que muda é `Layout`, e num campo só.** `layout_beside(width, from)` resolve as colunas contra
+`width - from` — a largura da LISTAGEM — e só então desloca; resolver contra a largura inteira e
+deslocar depois deixaria a última coluna cair fora da borda, que é a única coisa que nunca cede.
+E `Layout.from` é onde a marca vai. **Deixá-la na célula zero foi o defeito que o teste pegou**: ela
+fica embaixo da última letra de um lugar da barra, e clicar nela marca outra coisa.
+
+**Um segundo, do mesmo tipo, e pior**: o `header` continuava chamando o layout sem a barra. Os nomes
+das colunas apareceriam sobre a barra, nomeando colunas que estavam em outro lugar, e clicar num
+ordenaria pela coluna que por acaso estivesse embaixo da palavra. Nenhum dos dois seria visto por um
+teste que olhasse o ESTADO — os dois foram pegos comparando **o que seria desenhado**, que é a lição
+que este arquivo já registrava sobre o cursor invisível.
+
+#### Uma fonte para as dez pastas, e a que faltava
+
+Os quatro padrões pedidos eram `~/main`, `~/main/temp`, `~/main/prj` e uma pasta de capturas. Os três
+primeiros **já eram da distro**: `xdg.userDirs` os define, e `projects` é `main/prj`, no singular.
+Escrevê-los de novo numa lista da barra seria um segundo lugar dizendo onde ficam os projetos, e no
+dia em que um mudasse nada avisaria que o outro não mudou.
+
+Então `nix/user-dirs.nix` passou a ser a tabela — nomes RELATIVOS à home, pelo mesmo motivo que
+`nix/files-start.nix` já dava: um caminho absoluto nomearia a máquina de alguém, e o repositório é
+público. `nix/modules/home.nix` monta o `xdg.userDirs` dela, e `nix/files-sidebar.nix` nomeia quais
+entram na barra **por chave**, nunca por caminho.
+
+**A quarta pasta não existia, e as capturas estavam caindo fora da distro.** Nada escrevia
+`screenshot-path`, então o niri usava o padrão dele —
+`~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png` —, um caminho que contradiz o próprio
+`XDG_PICTURES_DIR` desta distro (`main/media/image`) e que nada criava. Uma barra apontando para uma
+pasta de capturas apontaria para o vazio para sempre. Hoje `screenshot` é a décima entrada da tabela,
+o niri escreve nela, o `xdg.userDirs` a CRIA (o `createDirectories` cobre o `extraConfig`), e
+`screenshots-land-in-a-declared-directory` compara as duas pontas — porque o defeito não era nenhuma
+das duas estar errada, era as duas poderem divergir.
+
+#### Ocultar não é remover, e as duas frases são diferentes
+
+Uma linha que a distro manda vem do Nix e voltaria no próximo start. "Removê-la" seria uma promessa
+que o reinício quebra — a classe de falha calada que este projeto recusa em todo o resto. Então ela é
+**ocultada**, fica no arquivo, e o seletor de ocultas a traz de volta; o que a pessoa acrescentou é
+**removido** de verdade. `Gone` diz qual dos dois aconteceu, porque a frase na tela difere.
+
+**E o `add` tem de olhar as ocultas PRIMEIRO.** Uma linha oculta não está em `rows` (o `assemble` a
+tira) nem em `added` (um padrão nunca esteve), então uma verificação nesses dois diz "é nova" e
+empurra uma segunda cópia — que o `assemble` volta a ocultar sob o mesmo ajuste. A linha seria
+acrescentada, em duplicata, e continuaria fora da tela.
+
+#### `cargo test` escreveu na configuração de quem o rodou
+
+Este é o defeito mais caro da barra, e ele chegou à tela do dono: o gerenciador
+abriu **sem barra nenhuma**, numa build que a tinha compilada.
+
+A persistência achava o `$XDG_CONFIG_HOME` sozinha. Os testes da vista apertam a
+tecla que esconde a barra e a que fixa um arquivo — porque é assim que se prova
+que uma tecla faz algo —, e cada uma delas chamava `save_sidebar`. O resultado
+foi o `~/.config/ronoctua/files-sidebar.json` REAL com um caminho de `/tmp`
+fixado e `showing: false`.
+
+**A regra que isso quebrou já estava escrita neste crate, e com o motivo certo.**
+`trash::Bin` recebe a raiz como parâmetro porque *"dois testes ajustando a mesma
+variável de ambiente disputam, e o que perde põe um arquivo na lixeira do
+outro"*; `who::Roster` recebe o caminho do `passwd`; `when::Zone`, o do
+`localtime`. A barra foi a primeira coisa do crate a ler o ambiente por conta
+própria.
+
+O conserto não foi documentar: foi **apagar as duas funções que achavam a home**.
+`store::read()` e `store::write()` não existem mais — só `read_from(dir)` e
+`write_to(dir)`, e o `Sidebar` carrega o diretório que recebeu, ou `None`. Uma
+barra sem destino escreve nada e não tem `stamp`; é isso que todo teste constrói,
+e `a_sidebar_with_no_store_writes_absolutely_nothing` prova que a pasta continua
+vazia depois de esconder e fixar. Quem chama o `config_dir()` é o APLICATIVO,
+uma vez, e entrega a resposta.
+
+O sintoma merece registro à parte, porque é o que torna a classe cara: **nada
+falhou**. Os testes passaram, os checks passaram, a build tinha a
+funcionalidade, e a única coisa errada estava num arquivo de configuração que
+ninguém pensa em olhar.
+
+#### O `HintIgnore` do udisks colidiu com o pedido, e a saída já existia
+
+O pedido nomeava `/boot` e as duas partições do pendrive. A medição diz que o udisks marca as DUAS
+partições EFI — a `/boot` pelo GUID do GPT, e a de 4 MiB do pendrive pelo tipo `0xef` do MBR — com
+`HintIgnore`. Honrar o hint contraria o pedido; ignorá-lo põe uma ESP de 4 MiB na barra de alguém.
+
+A saída não foi um mecanismo novo: `HintIgnore` virou `Volume.quiet`, e `quiet` anda sob o gesto que
+já governa os dotfiles. *"Escondido pela única regra que o Unix tem: o nome começa com ponto"* tem
+aqui o gêmeo exato — **discreto pela única regra que o udisks tem** —, e é o `C-h` que já existia.
+
+#### Nenhuma regra polkit nossa, e isso inverte o padrão do repositório
+
+`files.nix`, `rescue.nix` e `memory.nix` escrevem uma regra estreita **porque a unidade é NOSSA** e
+mais ninguém a autoriza. O udisks não é nosso: ele traz ações que já separam removível de sistema
+pelo `HintSystem` — `filesystem-mount` é `allow_active: yes`, `filesystem-mount-system` é
+`auth_admin_keep`. Uma regra nossa só poderia ALARGAR isso, e seria um segundo lugar para manter em
+dia com ids de ação de terceiros, que o polkit interpreta em runtime — id defasado é silêncio.
+Por isso o check é o INVERSO do `files-polkit-is-narrow`, e ele confere as duas pontas: que o udisks
+está ligado, que não escrevemos regra nenhuma, e que **as quatro regras que devem existir continuam
+existindo** — sem essa última ele passaria numa árvore onde todas foram apagadas.
+
+**E não há agente polkit na sessão gráfica.** O único da distro é o `pkttyagent`, no console de
+resgate; o `pkexec` traz o dele para dentro do terminal que abre. Então uma ação `auth_admin_keep`
+não tem a quem perguntar, e sem `auth.no_user_interaction` o polkit ESPERA um agente que nunca vai se
+registrar: a linha é apertada e não acontece nada, para sempre. Com a opção, a recusa volta na hora e
+tem NOME, que é o que a transforma numa frase. Volume de sistema, por isso, não oferece montar —
+oferece o terminal root que o gerenciador já tem, que é como este repositório já entrega trabalho
+privilegiado.
+
+#### 212 MiB de Python para um sistema de arquivos que esta distro não usa
+
+O fecho do `udisks2` é **538,3 MiB**, e `nix why-depends --all` dá um caminho só até o maior pedaço:
+`udisks → xfsprogs-bin (305,4 MiB) → python3-env (258,0 MiB)`, que é o `xfs_scrub`. Aritmética de
+conjuntos sobre o fecho diz que 18 caminhos e 212 MiB são alcançáveis por ele e por mais ninguém —
+contra 40 MiB do `libblockdev` e menos de 1 MiB de cada um dos outros. **Tirar só o `xfsprogs` é
+quase todo o ganho**, e mexer no resto custaria uma decisão a defender por quase nada.
+
+Medido depois do `override`: **343,2 MiB**, zero `xfsprogs`, zero Python, e `exfat`, `ntfs3g`,
+`dosfstools`, `e2fsprogs`, `btrfs-progs` e `util-linux` todos no `PATH` forçado do `udisksd`. É de
+graça porque **montar XFS é operação do kernel**: o que sai com ele é verificar, reparar,
+redimensionar e escrever XFS, verbos que nenhuma tela tem — e `disks-tools-are-pinned` recusa,
+**contra o código**, o dia em que um deles for acrescentado ao proxy.
+
+Um deles saiu dessa lista depois, e a saída é decisão e não afrouxamento: **`format` existe**, porque
+escrever um sistema de arquivos passou a ser coisa que esta distro faz. O que continua proibido é
+`check`, `repair`, `resize`, `set_label` e `take_ownership` — os verbos cujo ajudante o override
+levou embora, e oferecer um que silenciosamente não funciona para XFS é exatamente a falha calada que
+o check existe para pegar. O mesmo check passou a cobrar o INVERSO também: que `Recipe::filesystem`
+nomeie os cinco que este build escreve e nenhum outro, porque a tela DIZ que o XFS não está aqui — e
+uma receita chamada `xfs` faria daquela linha uma mentira.
+
+O `boot.supportedFilesystems` que o módulo liga quase não faz nada, e o módulo DIZ isso: o
+`force-path.patch` do nixpkgs faz o `udisksd` sobrescrever o próprio `PATH`, então o
+`system.fsPackages` nunca chega nele. A linha fica pela outra porta, que é real — um `mount` digitado
+por uma pessoa no terminal usa o `PATH` do sistema —, e custa zero de fecho.
+
+#### Sinal, e não relógio
+
+Plugar um pendrive é um EVENTO, com a mão de alguém atrás. O `stale()` do gerenciador faz um `stat`
+por segundo porque mtime é *estado*; isto não é. E duas razões decidem sozinhas: o relógio do rodapé
+**só dispara com o gerenciador aberto** — plugar antes de abrir é o caso comum, não a borda — e a
+janela **não tem relógio nenhum**, só o Wayland e o canal de `Report`.
+
+A thread manda o `Rack` INTEIRO, e não um cutucão: plugar um pendrive emite quatro
+`InterfacesAdded` em milissegundos, e um cutucão faria o laço que desenha dar quatro
+`GetManagedObjects`. Assim o barramento só é tocado nessa thread, e a última mensagem vence. E chega
+às DUAS portas sem fonte de evento nova nenhuma, porque as duas já carregavam `files::Report`.
+
+#### O `ronoctua-files` não conhece o `ronoctua-disks`, e é de propósito
+
+A barra modela o que alguém CONFIGUROU — pasta, arquivo, aplicativo, lixeira. Um dispositivo é
+descoberto, não configurado. Modelá-lo ali faria o `ronoctua-files` depender do `ronoctua-disks`, e
+esse crate constrói o `ronoctua-files-root`: seria um cliente D-Bus dentro de um binário que roda
+como root, e uma segunda fronteira num crate cujo motivo de existir é ter UMA. O hospedeiro tem os
+dois e emenda as linhas por `devices_are`.
+
+### Formatar — `LEADER s f`, e a mesma porta pelo menu da barra
+
+#### Por que é um buffer, e não linhas de menu
+
+Porque são três perguntas e uma delas apaga um disco. Uma linha de menu tem espaço para um verbo;
+isto precisa de espaço para dizer o que cada escolha significa, de um lugar para digitar um nome, e
+de uma tela inteira dedicada a *"isto apaga tudo o que está aí"*. Cabe num `xdg_toplevel` porque é
+o que um buffer é (invariante 4), e a barra lateral só ABRE — a decisão fica na superfície que tem
+espaço para explicá-la.
+
+#### Linguagem simples é conteúdo, e mora no `.ftl`
+
+A linha do vfat diz *"abre em qualquer computador — pendrive, câmera, televisão"*. Não diz FAT32.
+Quem já sabe que é FAT32 não perde nada; quem não sabe recebe uma resposta em vez de uma palavra para
+procurar. E o **XFS aparece na lista, desabilitado, dizendo que esta distro não traz o programa que o
+cria** — omitir sem dizer seria alguém procurando numa tela uma coisa que não está lá, que é a falha
+calada que este repositório recusa em todo canto.
+
+Não há campo para digitar em pergunta nenhuma: são listas, e o cursor anda com as setas. O único
+lugar onde uma tecla é uma letra é o NOME, e ele cabe em **onze**, que é o limite do vfat e o mais
+apertado dos cinco. Um número para todos em vez de cinco, e a razão é que o número é MOSTRADO: *"até
+11 letras"* é regra que se segue, e um limite que mudasse conforme o cursor anda na lista de cima
+seria regra que se mexe.
+
+#### Duas pessoas, a mesma linha — o segundo registro
+
+O rótulo é para quem não sabe o que é FAT32 e não deveria precisar saber. Mas quem sabe também usa
+esta distro, e para essa pessoa *"abre em qualquer computador"* é uma frase que **esconde** a
+resposta. Escolher um dos dois públicos seria escolher errado nos dois casos.
+
+A saída é uma linha só, sob o cursor, na cor mais discreta que existe: `vfat (FAT32) · até 4 GiB
+por arquivo · sem dono nem permissão`. Quem está começando nunca precisa ler; quem já sabe nunca
+precisa adivinhar qual das cinco linhas é a que quer. E ela **acompanha o cursor**, que é o que a
+separa de uma legenda: numa tela de escolha, a informação é sobre a linha que está prestes a ser
+escolhida, ou não é sobre nada.
+
+Nas três telas ela responde a mesma pergunta com o vocabulário de cada uma: na lista, o tamanho
+EXATO em bytes — `32.0 GiB` é o que se lê, `34359738368 B` é o que se COMPARA com o que o fabricante
+imprimiu no pendrive; na escolha, o sistema de arquivos de verdade e seus limites; e na confirmação,
+o gesto inteiro — qual sistema, em qual nó, com qual nome, que é o mais perto que se chega do comando
+que a pessoa teria digitado.
+
+**O nome técnico é CHAVE e não literal no componente.** `vfat` é um fato sobre discos, e um
+componente com opinião sobre discos deixou de ser um desenho (invariante 11). É também CONTEÚDO —
+quanto do limite vale a pena nomear, como chamar o FAT32 na frente de alguém — e conteúdo mora no
+`.ftl`, nos dois idiomas, onde o check enxerga.
+
+#### E o mesmo em TODO menu, pelo TECLADO
+
+O mecanismo já existia e estava pela metade: `files::Field` carrega uma `Explanation`, e o rodapé a
+põe na linha de mensagem quando o **ponteiro** repousa sobre o campo. Só o ponteiro — o que
+contradizia a regra do dono de que *o que o mouse faz, o teclado faz*, e deixava toda explicação do
+gerenciador fora do alcance de quem não usa mouse.
+
+Agora cada ação das duas tabelas (`menu.rs` e `sidebar_menu.rs`) carrega uma segunda chave,
+`{prefixo}-does-<id>`, e `View::cursor_explains()` a entrega para a linha de mensagem **das duas
+portas**. `apagar de vez` passa a dizer *"unlink(2) ou rmdir(2) direto: sem lixeira e sem volta"*;
+`picotar` diz *"sobrescreve antes de apagar; num btrfs com cópia-na-escrita isso não garante nada"*,
+que é uma ressalva verdadeira que nenhum rótulo caberia; `ejetar com segurança` diz *"desmonta e
+corta a energia do disco (Drive.PowerOff)"*.
+
+**Só com menu aberto, e é decisão.** Na listagem uma linha é um registro com colunas, e escolher uma
+das colunas para explicar porque o cursor está em algum lugar da linha seria escolher ao acaso — é
+para isso que o caminho por campo do ponteiro existe, e ele continua. Num menu a distinção não
+aparece: todo campo da linha carrega a mesma resposta, porque a linha É uma escolha.
+
+O prefixo é `-does-` e não `-detail-` porque `files-detail-` já era da ficha da entrada, e colidia em
+`mode`, `owner` e `size` — a colisão apareceu no `i18n-complete`, que recusa chave repetida.
+
+#### As duas recusas, e por que elas têm driver próprio
+
+De fora do componente, uma recusa e um componente que morreu são a mesma coisa: nenhum plano chegou.
+Por isso `format-driven` carrega as duas:
+
+1. **Disco de que o sistema precisa é DESENHADO**, cinza, com o motivo escrito no fim da própria
+   linha — e o `Enter` nele não anda. Nem cinza-e-depois-aceito, nem aceito-e-recusado-três-telas-
+   depois. Ele está na lista porque quem procura o próprio disco tem de ACHÁ-LO e então ler por quê;
+   uma lista que o omitisse mandaria a pessoa procurar uma linha que não existe, e a próxima coisa
+   que ela pega é um terminal, que não pergunta nada.
+2. **O primeiro `Enter` da confirmação VOLTA**, porque `não` é a primeira linha e onde o cursor
+   começa. Quem chegou ali apertando `Enter` e aperta de novo no ritmo vai para trás. Apagar um disco
+   custa uma tecla deliberada a mais, que é o preço certo.
+
+#### Não existe estado `working`
+
+Havia, no primeiro rascunho, e o `states-driven` o derrubou: todo estado declarado é oferecido no
+`SPC b s`, então um `working` escolhível poria *"escrevendo no disco"* na modeline com nada sendo
+escrito. A espera acontece **na lista**, com a linha de mensagem dizendo o que está em curso — que
+também é onde ela deve acontecer, porque a linha que está sendo formatada está ali e vai mudar
+sozinha.
+
+#### O alvo é um id que o buffer RECEBEU, e o hospedeiro pergunta três vezes
+
+O `Plan` nomeia o id que veio no último `Rack`. Do lado do hospedeiro, `buffer.rs` pergunta: mandei
+este id; mandei-o como ALVO (um volume que o sistema precisa vai na lista, com `writable = false`);
+e ele **ainda é um alvo** — `needed()` é reavaliado contra o volume, porque entre a leitura e a
+tecla alguém pode ter montado o disco em `/mnt` ou o administrador pode ter editado o `fstab`. Três
+perguntas e não uma, porque o buffer é um binário separado: guarda que mora dentro da coisa guardada
+vale até alguém escrever um segundo buffer.
+
+O que está montado desce ANTES, e a topologia é resolvida no hospedeiro, que a tem: para uma
+partição é ela mesma; para um disco inteiro é toda partição DELE, achada pelo `Drive` e nunca
+tirando um dígito do nó — `/dev/nvme0n1` termina em um e é um disco. Sem isso, o gesto mais comum de
+todos — preparar um pendrive em que alguém acabou de clicar — falharia com `DeviceBusy`.
+
+E `tear-down` **nunca** é passado ao udisks, embora ele desmonte sozinho: ele também **remove as
+entradas de `fstab` do dispositivo**. Formatar um pendrive não pode editar a configuração de boot da
+máquina como efeito colateral.
+
+#### `dos` até 2 TiB, e o byte ao lado do sistema de arquivos
+
+Disco inteiro ganha tabela nova mais UMA partição, em uma chamada só
+(`CreatePartitionAndFormat`) — duas deixariam uma janela em que a partição existe sem sistema de
+arquivos, e uma releitura dentro dessa janela mostra uma linha que ninguém abre. A tabela é `dos`
+até 2 TiB e `gpt` acima, porque *"abre em qualquer computador"* inclui a câmera e o som do carro, e
+esses leem MBR.
+
+O `update-partition-type` não é enfeite: sem ele uma partição MBR com vfat sai tipada `0x83`, Linux.
+O sistema de arquivos está certo e o byte ao lado está errado — o Windows não oferece abrir o
+pendrive, e nada em lugar nenhum diz por quê. `disks-vm` mede o tipo da partição depois de formatar,
+que é a única maneira de saber.
+
+#### O que só a VM prova
+
+`Manager::format` são três chamadas D-Bus com uma **corrida** entre elas: `Block.Format` escreve a
+tabela, e a interface `PartitionTable` só aparece no objeto por um uevent que ainda não aconteceu.
+Um teste com barramento simulado provaria a ordem dos argumentos, que nunca esteve em dúvida. O que
+precisa de udisks de verdade é que a interface CHEGUE — daí o laço limitado de vinte tentativas de
+100 ms, e daí o `ronoctua-format-disk`, um `[[bin]]` extraído por conta própria (`nix/rust.nix`)
+para a VM não carregar wgpu, o runtime wasm e três fontes embutidas só para fazer três chamadas.
+
+E a política do upstream ganhou duas asserções junto das de montar, porque é ela que torna a tela
+possível: `modify-device` é `yes` para sessão ativa — formatar um pendrive não pede senha — e
+`modify-device-system` é `auth_admin_keep`, que nesta sessão não tem quem responda. **As recusas do
+buffer estão NA FRENTE dessas duas**: são o desenho, não a execução.
+
 ---
 
 ## 6. Rede, área de transferência e serviços

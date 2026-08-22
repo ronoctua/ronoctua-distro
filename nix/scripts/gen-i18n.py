@@ -144,7 +144,12 @@ def main() -> int:
     lines.append("}")
     lines.append("")
     lines.append("/// Every existing key, in order. Used by the checks and by `M-x`.")
-    lines.append(f"pub const ALL_KEYS: [&str; {len(todas)}] = [")
+    # `static` AND NOT `const`, and the reason is how big this has grown: a
+    # `const` array is INLINED at every use site, so a thousand-odd keys become
+    # a thousand-odd copies of the table in the binary. Clippy started refusing
+    # it when the list crossed its threshold, and it is right — a `static` is
+    # one copy, and every reader here takes it by reference.
+    lines.append(f"pub static ALL_KEYS: [&str; {len(todas)}] = [")
     for c in todas:
         lines.append(f'    "{c}",')
     lines.append("];")

@@ -129,6 +129,26 @@ vídeo que não baixa, não como erro do gerador.
   pagar isso por uma sonda que hoje não é usada.
 - acabou quando: ou o aviso some, ou está escrito aqui que ele parou de bastar
 
+### 0.15. Apagar num pendrive não tem lixeira · pequeno, e é uma decisão adiada
+
+`trash.rs` recusa atravessar sistema de arquivos com `EXDEV` em vez de copiar, e a recusa está
+certa: mover para a lixeira promete ser instantâneo, e copiar quarenta gigas atrás desse gesto seria
+a promessa quebrada. O que faltava era a pessoa saber POR QUE dois caminhos estavam em sistemas
+diferentes — e a barra lateral resolve isso, porque agora o pendrive está na tela com linha própria.
+
+**A barra melhorou a recusa em vez de criar a necessidade de substituí-la**, e é por isso que isto
+fica aqui em vez de ter entrado junto. O que falta é o `$topdir/.Trash-$uid` da especificação, e ele
+tem um modo de falhar que é próprio de removível: apagar escreve o arquivo de volta NO pendrive, e
+quem desconecta em seguida acha que liberou espaço. Some a isso que num vfat não há dono, então
+`.Trash-$uid` e o `$topdir/.Trash` da especificação respondem diferente a "quem pode ler isto".
+
+Custo real: um teste honesto precisa de um SEGUNDO sistema de arquivos, o que quer dizer VM — e as
+quatro provas que `trash.rs` tem hoje rodam contra uma árvore temporária, sem barramento e sem
+máquina.
+
+- acabou quando: apagar um arquivo num pendrive o põe em `$topdir/.Trash-$uid`, o gerenciador o
+  lista de volta, e desmontar não deixa a lixeira num volume que não está mais lá
+
 ### 0.2. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
 
 Desistir pelo painel desenrola e remove o que foi escrito; `systemctl --user stop` não — o processo

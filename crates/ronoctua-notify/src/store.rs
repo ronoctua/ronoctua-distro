@@ -26,12 +26,79 @@
 //! JSON: none of those are reasons for the desktop not to come up. Everything
 //! here degrades to "no history" and logs why.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::presentation::Verdict;
 use crate::queue::{HISTORY_CEILING, HISTORY_DAYS, Record};
 use crate::rule::Rule;
+
+/// Where a process persists its notifications — and `None` means it does not.
+///
+/// TWO DIRECTORIES because there are two lifetimes: the history is state (what
+/// happened, machine-written, pruned to fifteen days) and the preferences are
+/// configuration (what the person chose). The module header says why they are
+/// two files; this is the pair of roots, carried rather than found.
+///
+/// `None` on either half means that half is not written, and that is what every
+/// test builds. It is the same shape as `sidebar::Sidebar`'s `store`, added
+/// there after the sidebar's own tests wrote into somebody's real home.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Where {
+    /// `$XDG_CONFIG_HOME/ronoctua`, for the preferences.
+    pub config: Option<PathBuf>,
+    /// `$XDG_STATE_HOME/ronoctua`, for the history.
+    pub state: Option<PathBuf>,
+}
+
+impl Where {
+    /// The pair the APPLICATION uses, found once from the environment.
+    #[must_use]
+    pub fn of_env() -> Self {
+        Self {
+            config: config_dir(),
+            state: state_dir(),
+        }
+    }
+
+    /// The person's filters, or the distro's when there is nowhere to read.
+    #[must_use]
+    pub fn preferences(&self) -> Preferences {
+        self.config
+            .as_deref()
+            .map_or_else(Preferences::default, read_preferences_from)
+    }
+
+    /// The history, already pruned, or nothing.
+    #[must_use]
+    pub fn history(&self) -> Vec<Record> {
+        self.state
+            .as_deref()
+            .map_or_else(Vec::new, read_history_from)
+    }
+
+    /// Writes the filters. Writing nowhere is not a failure.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be created, or the file cannot be written.
+    pub fn save_preferences(&self, p: &Preferences) -> std::io::Result<()> {
+        self.config
+            .as_deref()
+            .map_or(Ok(()), |d| write_preferences_to(d, p))
+    }
+
+    /// Writes the history, pruning it first. Writing nowhere is not a failure.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be created, or the file cannot be written.
+    pub fn save_history(&self, records: &mut Vec<Record>) -> std::io::Result<()> {
+        self.state
+            .as_deref()
+            .map_or(Ok(()), |d| write_history_to(d, records))
+    }
+}
 
 /// The file the history is written to, under `$XDG_STATE_HOME/ronoctua`.
 pub const HISTORY_FILE: &str = "notifications.json";
@@ -72,12 +139,23 @@ pub struct Preferences {
     pub adjustments: std::collections::BTreeMap<String, Verdict>,
 }
 
-/// Reads the person's preferences. A missing or broken file is an empty one.
+/// Reads the person's preferences from an explicit directory.
+///
+/// **A PARAMETER, and it used not to be.** These four functions found
+/// `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` for themselves, which is the shape
+/// that let the file manager's sidebar tests write into the real configuration
+/// of whoever ran `cargo test` — a `/tmp` path pinned and the sidebar switched
+/// off, on a build that had the feature compiled in. Nothing had bitten here
+/// only because no test reaches these yet; any future one that builds a
+/// `Footer` would have.
+///
+/// It is the rule the rest of this project already states: every root is a
+/// parameter (`trash::Bin`, `who::Roster`, `when::Zone`, `sidebar::Sidebar`),
+/// and [`config_dir`] is what the APPLICATION calls, once, before handing the
+/// answer in.
 #[must_use]
-pub fn read_preferences() -> Preferences {
-    let Some(path) = config_dir().map(|d| d.join(PREFERENCES_FILE)) else {
-        return Preferences::default();
-    };
+pub fn read_preferences_from(dir: &Path) -> Preferences {
+    let path = dir.join(PREFERENCES_FILE);
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Preferences::default();
     };
@@ -110,19 +188,16 @@ pub fn read_preferences() -> Preferences {
 /// # Errors
 ///
 /// When the directory cannot be created or the file cannot be written.
-pub fn write_preferences(p: &Preferences) -> std::io::Result<()> {
-    let dir = config_dir().ok_or_else(|| std::io::Error::other("sem HOME nem XDG_CONFIG_HOME"))?;
-    std::fs::create_dir_all(&dir)?;
+pub fn write_preferences_to(dir: &Path, p: &Preferences) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(p)?;
     write_atomically(&dir.join(PREFERENCES_FILE), &text)
 }
 
 /// Reads the history, already pruned to [`HISTORY_DAYS`].
 #[must_use]
-pub fn read_history() -> Vec<Record> {
-    let Some(path) = state_dir().map(|d| d.join(HISTORY_FILE)) else {
-        return Vec::new();
-    };
+pub fn read_history_from(dir: &Path) -> Vec<Record> {
+    let path = dir.join(HISTORY_FILE);
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
@@ -150,10 +225,9 @@ pub fn read_history() -> Vec<Record> {
 /// # Errors
 ///
 /// When the directory cannot be created or the file cannot be written.
-pub fn write_history(records: &mut Vec<Record>) -> std::io::Result<()> {
+pub fn write_history_to(dir: &Path, records: &mut Vec<Record>) -> std::io::Result<()> {
     prune(records, SystemTime::now());
-    let dir = state_dir().ok_or_else(|| std::io::Error::other("sem HOME nem XDG_STATE_HOME"))?;
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string(records)?;
     write_atomically(&dir.join(HISTORY_FILE), &text)
 }
@@ -210,6 +284,62 @@ mod tests {
     }
 
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// A directory of this test's own, removed when it ends.
+    struct Tree {
+        root: std::path::PathBuf,
+    }
+
+    impl Tree {
+        fn fresh(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("ronoctua-notes-{name}"));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn nowhere_to_write_is_not_a_failure_and_writes_nothing() {
+        // THE DEFECT THIS PREVENTS reached the owner's machine through the
+        // sidebar, not through here — but the shape was identical, and it was
+        // one future test away. `read_preferences` and `write_preferences`
+        // found `$XDG_CONFIG_HOME` for themselves, so any test that built a
+        // `Footer` would have written into somebody's real home.
+        let tree = Tree::fresh("sem-destino");
+        let nowhere = Where::default();
+        assert!(nowhere.preferences().rules.is_empty());
+        assert!(nowhere.history().is_empty());
+        nowhere.save_preferences(&Preferences::default()).unwrap();
+        nowhere.save_history(&mut Vec::new()).unwrap();
+        assert!(std::fs::read_dir(&tree.root).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_named_pair_writes_there_and_reads_it_back() {
+        let tree = Tree::fresh("com-destino");
+        let notes = Where {
+            config: Some(tree.root.join("config")),
+            state: Some(tree.root.join("state")),
+        };
+        let mut prefs = Preferences::default();
+        prefs.adjustments.insert("x".to_owned(), Verdict::default());
+        notes.save_preferences(&prefs).unwrap();
+        assert_eq!(notes.preferences().adjustments.len(), 1);
+
+        // TWO DIRECTORIES, and both files are called `notifications.json` —
+        // which is why a wrong root would silently cross-contaminate rather
+        // than fail. The history's directory must hold the history and nothing
+        // else.
+        assert!(tree.root.join("config").join(PREFERENCES_FILE).exists());
+        assert!(!tree.root.join("state").join(HISTORY_FILE).exists());
+    }
 
     #[test]
     fn fifteen_days_and_not_a_day_more() {

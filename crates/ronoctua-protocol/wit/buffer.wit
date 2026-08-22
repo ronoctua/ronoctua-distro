@@ -197,6 +197,12 @@ interface types {
         // inventing a syntax and the host parsing it — which is the shape this
         // file refuses everywhere else.
         ask(demand),
+        // Write a filesystem. Needs `capability::disks`.
+        //
+        // THE ONE EFFECT THAT DESTROYS SOMETHING NOBODY GETS BACK, which is why
+        // it is not folded into `ask`: the reader of this file should see it
+        // named, and the capability gate should have one arm to point at.
+        format(plan),
         // "I AM IN THIS STATE NOW", after changing on my own.
         //
         // Typing a letter into the icon browser enters its search; nobody
@@ -265,6 +271,27 @@ interface types {
         // was given — it cannot invent one that means anything, because the
         // host checks the id against the list it just sent.
         transfers,
+        // Receiving `input::rack` and asking for a disk to be formatted.
+        //
+        // # Why a third one, and not `system`
+        //
+        // Because it is the largest power any buffer has ever asked for: it
+        // ends with a partition being overwritten, and no other capability can
+        // destroy anything a person cannot get back. `system` closes processes
+        // and sweeps the store — both recoverable; `transfers` cancels a copy
+        // that can be started again. Folding this into either would hand that
+        // reach to the memory panel, which asked for neither.
+        //
+        // # What it does NOT open
+        //
+        // The same as the other two: no filesystem, no socket, no clock, no
+        // parser. The devices arrive already read, already filtered and already
+        // judged — including WHICH ONES THE RUNNING SYSTEM NEEDS — and the
+        // buffer names an id it was given. The host checks that id against the
+        // list it just sent AND refuses one the system needs, because a guard
+        // that lives only inside the thing being guarded holds until somebody
+        // writes a second buffer.
+        disks,
     }
 
     // ------------------------------------------------------------------
@@ -458,6 +485,34 @@ interface types {
         sweep-jobs,
     }
 
+    // WHAT TO WRITE ON A DISK, and on which.
+    //
+    // # Why an effect of its own and not another `request`
+    //
+    // Because a `demand` is a verb plus an INDEX, and that shape fits every
+    // request there is: pause job seven, close consumer three. Formatting is
+    // not that — it carries a choice of filesystem, a name, and whether the
+    // partition table goes too. Bending `demand` to hold them would put three
+    // disk-shaped fields on the record every other buffer sends, and a record
+    // whose fields are ignored by most of its senders is a record nobody can
+    // read.
+    record plan {
+        // The device, by the id the host gave it in the last `rack`. Never one
+        // the buffer built: the host checks it against that list, and refuses
+        // one the running system needs whatever the buffer says.
+        device: string,
+        // What to write.
+        recipe: recipe,
+        // What to call it. Empty means no name, which is ordinary.
+        label: string,
+        // Wipe the partition table and lay down a single partition first.
+        //
+        // The gesture ninety percent of formatting is — "prepare this
+        // pendrive" — as ONE choice rather than three. It is refused for
+        // anything that is not a whole disk.
+        whole-disk: bool,
+    }
+
     record demand {
         what: request,
         // WHICH consumer, as a 1-based index into the list of the last survey;
@@ -557,6 +612,105 @@ interface types {
 
     record queue {
         jobs: list<job>,
+    }
+
+    // ============================================================
+    // DISKS — what the formatting buffer draws, and never reads.
+    // ============================================================
+
+    // WHY THE BUFFER GETS A LIST AND NOT A WAY TO ASK.
+    //
+    // A component has no bus, no filesystem and no parser (invariant 11), and
+    // giving it one would be giving it the machine. The host reads udisks,
+    // applies the rules — what is a holder, what is quiet, what is somebody
+    // else's loop — and hands over what is left, already cut and already
+    // decided. The buffer draws it and names an id it was GIVEN; the host
+    // checks that id against the list it just sent.
+    //
+    // WHAT IS NOT CUT IS WHAT THE RUNNING SYSTEM NEEDS. It arrives with
+    // `needed` filled in, and it is drawn: somebody looking for their disk has
+    // to FIND it and then read why it is not on offer. Omitting it would send
+    // them looking for a row that is not there, and the next thing they reach
+    // for is a terminal, which asks nothing.
+    record device {
+        // The id the host gave it. Opaque HERE and a udisks object path over
+        // there — the buffer must not take it apart, and cannot: a device with
+        // no partition table has no number to parse out of it.
+        //
+        // It is never drawn: a udisks object path embeds the drive's SERIAL
+        // NUMBER, and this repository is public (invariant 13).
+        id: string,
+        // What to call it. Already chosen by the host: the label when there is
+        // one, the device node otherwise.
+        name: string,
+        // `/dev/sda2`. Shown because it is what somebody compares against what
+        // `lsblk` told them.
+        node: string,
+        // `vfat`, `ntfs`, `btrfs` — or empty, which is a partition with nothing
+        // on it yet. Empty is a REASON to format, not a failure.
+        kind: string,
+        // How big, in bytes. The buffer has no formatter; the host sends the
+        // number and the SENTENCE is built from a text key.
+        bytes: u64,
+        // Is a filesystem from it mounted right now?
+        mounted: bool,
+        // Can the drive it sits on be pulled out?
+        removable: bool,
+        // WHY THIS ONE MUST NOT BE TOUCHED, already resolved and already
+        // translated — the mount point, or the word that decided. Empty means
+        // it is spare.
+        //
+        // The buffer uses it to not offer, and the HOST refuses anyway. A guard
+        // that lives only in the thing being guarded is a guard that holds
+        // until somebody writes a second buffer.
+        needed: string,
+        // Is this the whole disk rather than one partition of it?
+        //
+        // The difference decides which questions are worth asking: a whole disk
+        // can be given a fresh partition table, and a partition cannot.
+        whole: bool,
+    }
+
+    // WHAT BECAME OF THE LAST `effect::format`.
+    //
+    // The same channel `copied(bool)` opened and for the same reason: an effect
+    // that acts on the machine has to answer, or the buffer can only show an
+    // optimistic "done!" — which lies exactly when it matters. A format that
+    // worked shows up on its own, in the next `rack`; one that was REFUSED
+    // shows up nowhere, and this is the only way the person hears about it.
+    record outcome {
+        // Did it work?
+        done: bool,
+        // What went wrong, ALREADY a sentence — empty when `done`.
+        //
+        // Built on the host from the refusal's NAME, because udisks' prose is
+        // upstream's to reword and this buffer has no bundle to look a key up
+        // in (invariant 11).
+        trouble: string,
+    }
+
+    // Every disk the machine has, as the host last read it.
+    record rack {
+        devices: list<device>,
+    }
+
+    // A filesystem this build can actually CREATE.
+    //
+    // The list is not "what exists": it is what the slimmed udisks carries a
+    // `mkfs` for. XFS is deliberately absent — its tooling is 212 MiB, most of
+    // it a Python environment for `xfs_scrub`, and this distro is btrfs. The
+    // buffer SAYS so rather than leaving a gap somebody has to guess about.
+    enum recipe {
+        // vfat. Opens on every computer there is.
+        universal,
+        // exfat. Like the above, without the four-gigabyte file limit.
+        large-files,
+        // ntfs. What Windows writes.
+        windows,
+        // ext4. The ordinary Linux one.
+        linux,
+        // btrfs. Snapshots and checksums; what this distro runs on.
+        modern,
     }
 
     // A key binding, declared as DATA (section 7.9). The buffer never
@@ -750,6 +904,11 @@ interface types {
         // queue's own socket on a thread, and a copy that moves no byte for a
         // minute sends nothing in that minute.
         queue(queue),
+        // Every disk the machine has. Only for whoever declared
+        // `capability::disks`; a buffer that did not gets no thread and no
+        // signal, which is what makes the absence structural.
+        rack(rack),
+        formatted(outcome),
     }
 }
 
@@ -771,6 +930,9 @@ interface view {
         survey, request, demand,
         // And the queue's, for the same reason.
         engine, stage, errand, amount, job, queue,
+        // And the disks'. `device` and `recipe` are reachable only from inside
+        // `rack` and `plan`, which is precisely the case this list exists for.
+        device, rack, recipe, plan, outcome,
         // And the state's — `state` is only reachable from inside `descriptor`,
         // which is exactly the case this list exists for.
         tone, buffer-state

@@ -1,0 +1,23 @@
+# A workspace of its own, like every buffer: the component is built for
+# `wasm32-wasip2`, and as a member of the host's workspace `rust-lld` would
+# refuse the version script with an error that mentions wasm nowhere.
+[workspace]
+
+[package]
+name = "ronoctua-buffer-format"
+description = "Formatar um disco: escolher o alvo, escolher para que serve, e confirmar."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.46", features = ["macros"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

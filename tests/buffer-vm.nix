@@ -21,6 +21,7 @@
   fonts,
   bufferExample,
   bufferGlyphs,
+  bufferFormat,
 }:
 
 let
@@ -49,6 +50,16 @@ pkgs.testers.runNixOSTest {
 
     hardware.graphics.enable = true;
     services.dbus.enable = true;
+
+    # FOR THE LAST SUBTEST, and only for it. The formatting buffer is the one
+    # whose rows come off a BUS rather than out of an embedded table, so it is
+    # the one where "the window opened and drew nothing" is a real outcome —
+    # which is exactly what happened to the file manager's sidebar once, and was
+    # found on somebody's screen instead of here.
+    services.udisks2.enable = true;
+    # A disk of its own, so there is something on the list that is not the VM's
+    # root. Virtio, so the kernel calls it fixed — the drawing does not care.
+    virtualisation.emptyDiskImages = [ 64 ];
   };
 
   testScript = ''
@@ -203,5 +214,159 @@ pkgs.testers.runNixOSTest {
             + journal[-2000:]
         )
         print(f"Ctrl+V entregou: {pasted!r}")
+
+    with subtest("o buffer de formatar desenha discos que vieram do BARRAMENTO"):
+        # THE ONE CHAIN NO OTHER TEST CLOSES, and the reason it is worth a
+        # subtest of its own: every other buffer draws something it carries —
+        # a glyph table, a counter. This one draws what udisks said, a moment
+        # ago, over D-Bus. Between the two there is a capability the host has to
+        # honour, a thread it has to raise, a record it has to lower field by
+        # field, and a sentence it has to word in the person's language.
+        #
+        # `format-driven` proves the component's half against a rack handed to
+        # it. What it cannot prove is that a rack ever ARRIVES — a capability
+        # the host forgot to read comes back as an empty list, the screen says
+        # "no disk here to format", and nothing anywhere reports an error. That
+        # is the shape of the defect that reached the owner's screen last time.
+        machine.succeed("systemctl stop glyphs || true")
+        machine.succeed("systemctl stop buffer || true")
+        machine.sleep(1)
+
+        machine.succeed(
+            "systemd-run --unit=format ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=LANG=pt_BR.UTF-8 "
+            "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_disks=debug "
+            "${ronoctua-shell}/bin/ronoctua-shell buffer "
+            "${bufferFormat}/lib/ronoctua_buffer_format.wasm"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u format --no-pager | grep -q 'buffer desenhado no xdg_toplevel'",
+            timeout=60,
+        )
+        # The rack has to have crossed. Before it does, the screen legitimately
+        # says it has nothing — so waiting for the DRAW alone would measure the
+        # empty state and pass.
+        machine.wait_until_succeeds(
+            "journalctl -u format --no-pager | grep -q 'input=Rack'",
+            timeout=60,
+        )
+        machine.sleep(2)
+
+        journal = machine.succeed("journalctl -u format --no-pager")
+        for bad in ["desenhar o frame falhou", "panicked", "sem udisks2"]:
+            assert bad not in journal, f"o buffer de formatar reportou: {bad}"
+
+        # WHAT THE READING CARRIED, ASKED OF THE JOURNAL AND NOT OF THE PIXEL.
+        #
+        # The split is deliberate and it was learned here. The OCR below cannot
+        # tell "this row was not drawn" from "this row was drawn and tesseract
+        # could not read it" — with two rows and a highlight band under one of
+        # them it drops a line, and an assertion that cannot tell those apart is
+        # an assertion that will one day be wrong in whichever direction is
+        # convenient.
+        #
+        # So the CONTENT is checked where it is exact, and the pixel is asked
+        # only what only it can answer.
+        rack = [ln for ln in journal.splitlines() if "input=Rack" in ln]
+        assert rack, "nenhuma leitura de disco chegou ao componente"
+        last = rack[-1]
+        # THE MACHINE'S OWN ROOT IS ON THE LIST, carrying the sentence that says
+        # why it is not on offer. Both halves matter: omitted, somebody hunts
+        # for a row that is not there; offered without the reason, the only
+        # signal left is a colour.
+        assert "/dev/vda" in last, (
+            f"a raiz da maquina sumiu da leitura em vez de vir recusada:\n{last}"
+        )
+        assert "mora em" in last or "lives at" in last, (
+            f"a raiz atravessou sem o motivo escrito ao lado:\n{last}"
+        )
+        # AND THE STICK IS THERE, spare, because a screen that only ever shows
+        # what it refuses is a screen nobody can use.
+        assert "/dev/vdb" in last, f"o disco vazio nao chegou ao componente:\n{last}"
+        # AND NOTHING OF ZERO BYTES. Measured here first: udisks publishes a
+        # floppy node and EIGHT unattached loop devices, and every one of them
+        # came out as a row — nine lines of noise in front of the two disks the
+        # machine has.
+        assert "loop" not in last, f"os loops vazios voltaram para a lista:\n{last}"
+        assert "bytes: 0" not in last, (
+            f"um dispositivo de zero bytes esta na lista:\n{last}"
+        )
+
+        w, h, x, y = niri_geometry()
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/fmt.xwd")
+        machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/fmt.xwd -crop {w}x{h}+{x}+{y} +repage "
+            "-colorspace gray -negate -resize 200% /tmp/fmt.png"
+        )
+        read_back = machine.succeed(
+            "${pkgs.tesseract}/bin/tesseract /tmp/fmt.png stdout --psm 6 2>/dev/null"
+        ).strip()
+        print(f"OCR do buffer de formatar: {read_back!r}")
+        lowered = read_back.lower()
+
+        # AND WHAT ONLY THE PIXEL ANSWERS: that the window opened, the renderer
+        # drew, and the key the component sent came out translated. This is the
+        # shape of the defect that reached the owner's screen last time — a
+        # surface that was built, wired and tested, and drew nothing.
+        assert "formatar" in lowered, (
+            f"o titulo nao saiu traduzido na tela: {read_back!r}"
+        )
+        assert "/dev/" in read_back, (
+            "o buffer abriu e desenhou, mas nenhum disco chegou ao pixel: "
+            f"{read_back!r}"
+        )
+        assert "nenhum disco" not in lowered, (
+            f"a tela continua dizendo que nao ha disco algum: {read_back!r}"
+        )
+
+        # AND BOTH ROWS ARE REALLY THERE, read by moving the cursor.
+        #
+        # One reading cannot settle this. The OCR drops the line under the
+        # cursor's highlight band — with two rows and a wide band, tesseract
+        # takes it for an image region — so a single screenshot always shows one
+        # row and never says whether the other was drawn or merely missed.
+        #
+        # Moving the cursor swaps WHICH row is unreadable, so the union of two
+        # readings covers both. It also proves the arrow reached the component
+        # through niri, which nothing else here does.
+        def nodes_on_screen(tag):
+            machine.succeed(f"${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/{tag}.xwd")
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/{tag}.xwd -crop {w}x{h}+{x}+{y} "
+                f"+repage -colorspace gray -negate -resize 200% /tmp/{tag}.png"
+            )
+            said = machine.succeed(
+                f"${pkgs.tesseract}/bin/tesseract /tmp/{tag}.png stdout --psm 6 2>/dev/null"
+            ).strip()
+            print(f"OCR {tag}: {said!r}")
+            return said
+
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
+        machine.sleep(2)
+        moved = nodes_on_screen("fmt2")
+        both = read_back + "\n" + moved
+        for node in ["/dev/vda", "/dev/vdb"]:
+            assert node in both, (
+                f"{node} nao apareceu em nenhuma das duas leituras — a linha "
+                f"nao esta na tela:\n{both!r}"
+            )
+
+        # AND THE SECOND REGISTER IS ON THE PIXEL, following the cursor.
+        #
+        # ASKED FOR FROM THE SCREEN: the rows are written for somebody starting
+        # out, and somebody who already knows what they want had nowhere to read
+        # what the option actually does. The two readings above are the proof
+        # that it MOVES — with the cursor on the empty stick the line talks
+        # about partition tables, and with it on the machine's root it talks
+        # about why udisks would refuse. A caption could not do both.
+        assert "tabela" in read_back.lower(), (
+            "com o cursor no disco livre, a linha tecnica nao diz o que vai ser "
+            f"escrito nele: {read_back!r}"
+        )
+        assert "montado pelo sistema" in moved.lower(), (
+            "com o cursor na raiz, a linha tecnica nao diz por que ela nao serve: "
+            f"{moved!r}"
+        )
   '';
 }

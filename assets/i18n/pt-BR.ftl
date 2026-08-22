@@ -44,6 +44,8 @@ buffer-memory = memória
 mode-memory = memória
 buffer-transfers = transferências
 mode-transfers = transferências
+buffer-format = formatar
+mode-format = formatar
 buffer-unicode = unicode
 mode-unicode = unicode
 buffer-no-name = *sem nome*
@@ -61,6 +63,8 @@ state-sheet = ficha
 state-detail = detalhe
 state-full = completo
 state-guard = proteção
+state-choose = escolha
+state-confirm = confirmação
 
 ## Notifications
 
@@ -748,6 +752,7 @@ cmd-exemplo-reiniciar = Reiniciar o exemplo
 ## O painel de memoria — LEADER s m
 
 cmd-memory-open = Memória do sistema
+cmd-format-open = Formatar um disco
 cmd-memory-full = Visão completa
 cmd-memory-guard = Proteção contra travamento
 cmd-memory-tab = Alternar RAM e disco
@@ -1048,6 +1053,7 @@ files-up = subir
 files-enter = abrir, ou entrar na pasta
 files-parent = subir uma pasta
 files-hint = digite para filtrar · { $key } abre o menu de ações
+files-hint-sidebar = digite para filtrar · { $key } abre o menu · { $side } vai para a barra
 files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
 files-yes = sim, aplicar
 files-no = não, deixar como está
@@ -1076,11 +1082,152 @@ files-measure = medir a pasta, ou examinar o arquivo
 files-type-is = { $named }
 files-type-disagrees = o nome diz { $named }, o conteúdo diz { $found }
 
+cmd-apps-pin = Pôr o aplicativo na barra lateral do gerenciador
 cmd-files-open = Gerenciador de arquivos
 cmd-files-window = Gerenciador de arquivos, em janela
 group-file = arquivo
 
 files-nothing-here = esta pasta está vazia
+
+# A BARRA LATERAL — de onde se parte.
+#
+# As cinco primeiras sao ids de `OF_THE_VIEW` e de `menu.rs`; o
+# `files-actions-have-text` as cobra a partir do id, sozinho.
+files-sidebar = esconder ou mostrar a barra lateral
+files-sidebar-focus = ir para a barra lateral, e voltar
+files-eject = desmontar o dispositivo
+files-unpin = tirar da barra lateral
+files-pin = pôr na barra lateral
+files-unhide = trazer de volta uma linha oculta da barra
+files-sidebar-hidden-ask = Trazer qual de volta?
+files-sidebar-trash = lixeira
+files-sidebar-open = abrir { $name }
+files-sidebar-mount = montar { $name } e entrar
+files-sidebar-unmount = desmontar { $name }
+files-sidebar-launch = rodar { $name }
+files-sidebar-pinned = { $name } está na barra lateral agora
+files-sidebar-hidden = { $name } saiu da barra — { $key } traz de volta
+files-sidebar-gone = { $name } não está mais na barra lateral
+files-sidebar-only = esta tecla age numa linha da barra — { $key } vai até lá
+files-sidebar-nothing-hidden = não há nada oculto para trazer de volta
+files-sidebar-unwritable = não consegui salvar a barra lateral: { $why }
+files-mount-failed = não consegui montar { $name }: { $why }
+files-mount-no-driver = este sistema não lê um sistema de arquivos { $type }
+files-mount-needs-admin = { $name } é do sistema; { $key } abre um terminal root
+files-unmount-busy = { $name } está em uso — feche o que está aberto ali
+files-unmount-needed = { $name } é onde o sistema mora ({ $why }); desmontar não é oferecido
+
+# O MENU DA BARRA LATERAL. Cada id vira `sidebar-<id>`, e o check cobra os dois.
+sidebar-open = abrir
+sidebar-mount = montar
+sidebar-unmount = desmontar
+sidebar-eject = ejetar com segurança
+sidebar-information = informações
+sidebar-unpin = tirar da barra lateral
+sidebar-format = formatar
+sidebar-menu-on = o que fazer com { $name }
+sidebar-fact-where = montado em
+sidebar-fact-node = dispositivo
+sidebar-fact-kind = sistema de arquivos
+sidebar-fact-size = tamanho
+sidebar-fact-drive = disco
+sidebar-fact-needed = é onde o sistema mora
+sidebar-not-mounted = não está montado
+# POR QUE UM DISCO NÃO É OFERECIDO PARA FORMATAR. A frase é montada no
+# hospedeiro e atravessa pronta: o buffer não tem pacote de idioma (inv. 11).
+format-needed-at = o sistema mora em { $at }
+format-needed-fstab = o /etc/fstab manda montar este no boot
+format-needed-swap = é a memória de troca do sistema
+format-refused-busy = { $name } está em uso — feche o que está aberto ali e tente de novo
+format-refused-admin = { $name } é do sistema, e não dá para pedir permissão aqui
+format-refused-other = não consegui formatar { $name }: { $why }
+# O BUFFER DE FORMATAR — `LEADER s f`. Três perguntas, cada uma respondida com
+# as setas e o Enter. A linguagem é deliberadamente simples: a linha do vfat diz
+# para que serve, não como se chama. Quem já sabe que é FAT32 não perde nada;
+# quem não sabe recebe uma resposta em vez de uma palavra para procurar.
+format-title = Formatar um disco
+format-empty = nenhum disco para formatar aqui
+format-hint-list = ↑↓ escolher · Enter continuar · Esc fechar
+format-hint-choose = ↑↓ escolher · escreva um nome · Enter continuar · Esc voltar
+format-hint-confirm = ↑↓ escolher · Enter responder · Esc voltar
+format-whole = o disco inteiro
+format-part = uma parte do disco
+format-blank = vazio
+format-choose-title = Para que este disco vai servir?
+format-recipe-universal = abre em qualquer computador — pendrive, câmera, televisão
+format-recipe-large = igual, mas aceita arquivos grandes (acima de 4 GB)
+format-recipe-windows = para usar no Windows
+format-recipe-linux = para usar no Linux
+format-recipe-modern = para o Linux, guardando fotografias do disco
+format-recipe-missing = XFS não está aqui: esta distro não traz o programa que o cria
+format-name = nome
+format-name-limit = até 11 letras ou números
+format-confirm-title = Isto apaga tudo o que está aí
+format-confirm-whole = o disco inteiro será apagado, com todas as suas partes
+format-confirm-part = esta parte do disco será apagada
+format-confirm-no = não, voltar
+format-confirm-yes = sim, apagar e formatar
+format-working = escrevendo no disco — não desligue o computador nem tire o disco
+format-done = pronto
+# A LINHA DE DETALHE — o mesmo buffer respondendo a uma segunda pessoa.
+#
+# As linhas de cima são para quem não sabe o que é FAT32 e não deveria precisar
+# saber. Estas são para quem sabe: o nome de verdade, os limites, e o que o
+# gesto vai fazer com o disco. Uma linha, sob o cursor, na cor mais discreta que
+# existe — quem está começando nunca precisa ler, e quem já sabe nunca precisa
+# adivinhar.
+format-tech-universal = vfat (FAT32) · até 4 GiB por arquivo · sem dono nem permissão
+format-tech-large = exFAT · sem limite prático de arquivo · sem dono nem permissão
+format-tech-windows = NTFS · dono e permissão do Windows · escrita pelo ntfs-3g
+format-tech-linux = ext4 · dono e permissão Unix · com journal
+format-tech-modern = Btrfs · subvolumes, snapshots, checksum e compressão
+format-tech-missing = XFS · o mkfs.xfs não está instalado nesta distro
+format-tech-whole = tabela de partições nova (dos até 2 TiB, gpt acima) e UMA partição
+format-tech-part = só esta partição é reescrita; a tabela do disco não muda
+format-tech-needed = montado pelo sistema em execução · o udisks recusaria, e esta tela nem oferece
+format-tech-nothing = nenhum disco sob o cursor
+# O SEGUNDO REGISTRO DE CADA AÇÃO — o que ela FAZ, para quem já sabe o que quer.
+#
+# O rótulo é para quem procura um verbo ("apagar de vez"); esta linha é para
+# quem quer saber exatamente o que vai acontecer: qual chamada, quais opções, o
+# que dá para desfazer. Aparece na linha de mensagem quando a linha está sob o
+# CURSOR — não só sob o ponteiro, porque o que o mouse faz o teclado faz.
+files-does-open = abre no aplicativo padrão do tipo MIME; pasta entra na listagem
+files-does-open-with = escolhe entre os `.desktop` que declaram este tipo MIME
+files-does-terminal = abre o terminal nesta pasta, como você
+files-does-root-terminal = abre o terminal como root, pelo pkexec
+files-does-copy-path = põe o caminho absoluto na área de transferência; não abre nada
+files-does-copy = marca para copiar; colar cria a cópia pela fila, que sobrevive ao rodapé
+files-does-cut = marca para mover; no mesmo sistema de arquivos é rename(2), instantâneo
+files-does-paste = executa o que foi marcado; entre sistemas de arquivos é cópia e depois remoção
+files-does-rename = renomeia no lugar com rename(2); não atravessa sistema de arquivos
+files-does-pin = acrescenta uma linha à barra lateral, gravada em $XDG_CONFIG_HOME
+files-does-unhide = passa a listar também o que começa com ponto
+files-does-info = tamanho, dono, modo, tempos e tipo; não toca no conteúdo
+files-does-mode = altera os bits de permissão com chmod(2)
+files-does-owner = altera o dono com chown(2); pergunta a senha de root
+files-does-group = altera o grupo com chown(2)
+files-does-compress = cria um arquivo compactado pela fila, sem bloquear a listagem
+files-does-extract = extrai para uma pasta com o nome do arquivo
+files-does-extract-tar = extrai o tar aqui mesmo, sem criar pasta
+files-does-restore = devolve ao caminho de origem que a lixeira gravou
+files-does-trash = move para a lixeira XDG; não atravessa sistema de arquivos
+files-does-delete = unlink(2) ou rmdir(2) direto: sem lixeira e sem volta
+files-does-shred = sobrescreve antes de apagar; num btrfs com cópia-na-escrita isso não garante nada
+
+# E os do menu da barra lateral, que falam com o udisks.
+sidebar-does-open = entra na pasta; se for dispositivo desmontado, abre a ficha dele
+sidebar-does-mount = Filesystem.Mount do udisks2 — ele escolhe o ponto e as opções
+sidebar-does-unmount = Filesystem.Unmount sem forçar: recusa se algo ainda estiver aberto ali
+sidebar-does-eject = desmonta e corta a energia do disco (Drive.PowerOff): é o que deixa tirar
+sidebar-does-information = rótulo, nó, sistema de arquivos, tamanho e disco
+sidebar-does-unpin = tira a linha; padrão da distro volta oculto, o seu é removido
+sidebar-does-format = abre o buffer de formatar já apontado para este alvo
+
+
+
+
+files-disks-not-watching = os discos não vão se atualizar sozinhos: { $why }
 files-nothing-to-choose = não há nada para escolher
 files-copied = copiado
 files-not-copied = não consegui copiar

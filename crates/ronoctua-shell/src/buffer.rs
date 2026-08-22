@@ -398,6 +398,9 @@ struct Host {
     /// The same, for [`ronoctua_protocol::Capability::Transfers`]: a
     /// subscription to the queue's socket, and the ids it may act on.
     queue: Option<Queue>,
+    /// The same, for [`ronoctua_protocol::Capability::Disks`]: a subscription
+    /// to udisks, and the devices it may write over.
+    disks: Option<Disks>,
     /// The states the descriptor declared, in order. The first is the base.
     ///
     /// Never empty: [`ronoctua_protocol::Descriptor::validate`] refuses an empty
@@ -528,6 +531,66 @@ struct Queue {
 impl Queue {
     const fn fresh() -> Self {
         Self { known: Vec::new() }
+    }
+}
+
+/// What a buffer with [`ronoctua_protocol::Capability::Disks`] may act on.
+struct Disks {
+    /// The ids of the last devices delivered, and whether each may be WRITTEN.
+    ///
+    /// A pair and not a set, and the second half is the whole point: a volume
+    /// the running system needs IS sent — somebody looking for their disk has
+    /// to find it — and it is sent with `false`. The gate is therefore not
+    /// "did I send this id" but "did I send it as a target", which is a
+    /// different question and the one that matters.
+    known: Vec<(String, bool)>,
+    /// The last whole reading, kept for one thing: finding what else is mounted
+    /// on the drive about to be wiped.
+    ///
+    /// It cannot be re-derived from `known`, which carries ids and no topology
+    /// — and asking udisks again at the moment of formatting would be reading
+    /// the machine a second time to answer a question already answered.
+    rack: Option<ronoctua_disks::Rack>,
+    /// Where a worker thread puts what became of a format.
+    ///
+    /// `None` until the loop is running, because the channel cannot exist
+    /// before there is a loop to hang it on.
+    ///
+    /// IT CARRIES THE FACT AND NOT THE SENTENCE. `Texts` holds a parsed Fluent
+    /// bundle and is not `Send`, so a thread cannot word its own refusal — and
+    /// it should not: the wording belongs where the bundle is, which is the
+    /// same split `files::Report::Refused` already makes.
+    said: Option<calloop_channel::Sender<Verdict>>,
+}
+
+/// What a format came back as.
+enum Verdict {
+    /// It was written.
+    Done,
+    /// udisks refused, by NAME — and its own prose alongside, because
+    /// "could not format" alone does not say "something has a file open on it".
+    ///
+    /// # The disk's name travels WITH the refusal
+    ///
+    /// It was a field on the host at first, set before the thread started. That
+    /// is a place two formats can collide: the second overwrites it, and the
+    /// first comes back to be worded with the wrong disk in the sentence. It
+    /// also went stale by construction — the format may be what changed the
+    /// label. Carried here, the name is the one the person pressed.
+    Refused {
+        which: ronoctua_disks::Refusal,
+        why: String,
+        name: String,
+    },
+}
+
+impl Disks {
+    const fn fresh() -> Self {
+        Self {
+            known: Vec::new(),
+            rack: None,
+            said: None,
+        }
     }
 }
 
@@ -821,11 +884,20 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .capabilities
         .contains(&ronoctua_protocol::Capability::Transfers)
         .then(Queue::fresh);
+    // And the same for the disks: no capability, no udisks thread and no bus
+    // connection. THE HEAVIEST OF THE THREE, and the one whose absence is worth
+    // the most: a buffer that never asked has no way to reach a disk at all,
+    // rather than a check it might get past.
+    let disks = d
+        .capabilities
+        .contains(&ronoctua_protocol::Capability::Disks)
+        .then(Disks::fresh);
 
     let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut state = Host {
         system,
         queue,
+        disks,
         states: d.states.clone(),
         current: std::sync::Arc::clone(&current),
         escape: Escape::default(),
@@ -980,6 +1052,59 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         }
     }
 
+    // THE DISKS' SUBSCRIPTION, and it is not a clock either.
+    //
+    // udisks says when something moved — a stick in, a partition mounted, a
+    // filesystem written. Polling it on a timer would ask a bus twenty times a
+    // second for an answer that changes twice an hour, and would still be late
+    // the one time it mattered.
+    if state.disks.is_some() {
+        let (send, readings) = calloop_channel::channel::<ronoctua_disks::Rack>();
+        if cycle
+            .handle()
+            .insert_source(readings, |event, (), state: &mut Host| {
+                if let calloop_channel::Event::Msg(rack) = event {
+                    state.rack_arrived(rack);
+                }
+            })
+            .is_ok()
+        {
+            if let Err(e) = ronoctua_disks::watch(move |rack| {
+                let _ = send.send(rack);
+            }) {
+                // NOT FATAL, and said out loud. The screen opens empty and
+                // stays empty, which is wrong — but a buffer that refused to
+                // start would say even less about why.
+                tracing::error!(error = %e, "sem udisks2; o buffer abre sem discos");
+            }
+        } else {
+            tracing::warn!("nao consegui pendurar o canal dos discos");
+        }
+
+        // AND THE WAY BACK, which is a second channel and not the same one.
+        //
+        // What comes down this one is the VERDICT on a format: a fresh reading
+        // says the disk changed, and says nothing at all when udisks refused.
+        // Without it a refusal is a log line, and on screen the buffer would go
+        // on showing the question it already asked.
+        let (said, verdicts) = calloop_channel::channel::<Verdict>();
+        if cycle
+            .handle()
+            .insert_source(verdicts, |event, (), state: &mut Host| {
+                if let calloop_channel::Event::Msg(verdict) = event {
+                    state.format_said(&verdict);
+                }
+            })
+            .is_ok()
+        {
+            if let Some(d) = state.disks.as_mut() {
+                d.said = Some(said);
+            }
+        } else {
+            tracing::warn!("nao consegui pendurar o canal do veredito de formatar");
+        }
+    }
+
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |e| {
@@ -994,6 +1119,52 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         let _ = std::fs::remove_file(path);
     }
     Ok(())
+}
+
+/// The work itself, off the loop that draws.
+///
+/// A free function and not a method because it runs on another thread: every
+/// decision it needed has already been made, and it carries the answers rather
+/// than the `Host` they came from.
+fn run_format(
+    device: &str,
+    filesystem: &'static str,
+    label: &str,
+    whole: bool,
+    unmount_first: &[String],
+    name: &str,
+) -> Verdict {
+    let refused = |which, why: String| Verdict::Refused {
+        which,
+        why,
+        name: name.to_owned(),
+    };
+
+    let manager = match ronoctua_disks::Manager::fresh() {
+        Ok(m) => m,
+        Err(e) => return refused(ronoctua_disks::Refusal::Other, e.to_string()),
+    };
+
+    // THE FIRST REFUSAL STOPS THE REST. Carrying on after one partition
+    // refused to come down would format a disk with a filesystem still mounted
+    // from it — which is the write-half-done this repository already refuses
+    // once, in `Doing::Eject`.
+    for at in unmount_first {
+        if let Err(e) = manager.unmount(at) {
+            return refused(ronoctua_disks::refusal(&e), e.to_string());
+        }
+    }
+
+    match manager.format(device, filesystem, label, whole) {
+        Ok(()) => {
+            tracing::info!(device, filesystem, whole, "formatado");
+            Verdict::Done
+        }
+        Err(e) => {
+            tracing::error!(device, error = %e, "formatar FALHOU");
+            refused(ronoctua_disks::refusal(&e), e.to_string())
+        }
+    }
 }
 
 /// PUBLISHES THIS BUFFER'S KEYMAP, and takes commands back.
@@ -1686,6 +1857,24 @@ impl Host {
                     }
                     self.ask(demand);
                 }
+                // THE HEAVIEST EFFECT THERE IS, and the gate reads like the
+                // one above it for a reason: the capability is checked here,
+                // once, and says WHICH one was missing. What it does NOT check
+                // here is the target — that is `format`'s job, because the
+                // answer needs the rack and the rack is not in this scope.
+                ronoctua_protocol::Effect::Format(plan) => {
+                    if !self
+                        .capabilities
+                        .contains(&ronoctua_protocol::Capability::Disks)
+                    {
+                        tracing::error!(
+                            capability = ?ronoctua_protocol::Capability::Disks,
+                            "formatar recusado: o buffer nao declarou a capacidade"
+                        );
+                        continue;
+                    }
+                    self.format(&plan);
+                }
                 ronoctua_protocol::Effect::Close => self.quit = true,
                 // THE COMPONENT SAYS WHERE IT IS, and this is the ONLY place the
                 // host writes that down — whether the change came from a key
@@ -1888,6 +2077,180 @@ impl Host {
             q.known.extend(queue.jobs.iter().map(|j| j.id));
         }
         self.deliver(&ronoctua_protocol::Input::Queue(queue));
+    }
+
+    /// A fresh reading of the disks arrived.
+    ///
+    /// The whole rack, every time, for the same reason the queue is: the buffer
+    /// holds nothing that could go out of step, and a machine has a dozen block
+    /// devices — sending them all costs less than being wrong about which one
+    /// changed.
+    fn rack_arrived(&mut self, rack: ronoctua_disks::Rack) {
+        let mut over = crate::disks::rack_of(&rack, ronoctua_files::who::my_uid(), &self.texts);
+
+        // WHAT THIS BUFFER WAS OPENED ABOUT GOES FIRST.
+        //
+        // The sidebar's format row opens this window naming a device, and that
+        // device is what the person was looking at when they pressed. The
+        // buffer puts the cursor on the first row it is given, so ORDERING is
+        // all it takes — and ordering is already the host's business here: the
+        // WIT says the list arrives cut and decided, and "most relevant first"
+        // is the ordinary meaning of that.
+        //
+        // Not a field on the record, and not a second `input` case: either
+        // would be a way for the host to move a cursor the buffer owns, and a
+        // cursor with two owners is one that jumps under somebody's hand while
+        // they are choosing which disk to erase.
+        if let Some(about) = self.file.as_ref().map(|p| p.to_string_lossy().into_owned())
+            && let Some(at) = over.devices.iter().position(|d| d.id == about)
+        {
+            let chosen = over.devices.remove(at);
+            over.devices.insert(0, chosen);
+        }
+        if let Some(d) = self.disks.as_mut() {
+            d.known.clear();
+            d.known.extend(
+                over.devices
+                    .iter()
+                    .map(|dev| (dev.id.clone(), dev.needed.is_empty())),
+            );
+            d.rack = Some(rack);
+        }
+        self.deliver(&ronoctua_protocol::Input::Rack(over));
+    }
+
+    /// Writes a filesystem, once the target checks out.
+    ///
+    /// # The three questions, and why they are all asked HERE
+    ///
+    /// Did I send this id; did I send it as a TARGET; and is it still one. The
+    /// buffer asked the person twice before getting this far, and none of that
+    /// counts: the buffer is a separate binary and a guard that lives inside
+    /// the thing being guarded holds until somebody writes a second one.
+    fn format(&mut self, plan: &ronoctua_protocol::Plan) {
+        let Some(d) = self.disks.as_ref() else {
+            return;
+        };
+        // ONE LOOKUP ANSWERS BOTH: an id that was never sent is absent, and one
+        // sent as un-writable is present and `false`. Two different mistakes,
+        // and neither is a person's — so they are logged and not shown.
+        match d.known.iter().find(|(id, _)| id == &plan.device) {
+            None => {
+                tracing::error!(
+                    device = %plan.device,
+                    "formatar recusado: dispositivo que nao foi enviado"
+                );
+                return;
+            }
+            Some((_, false)) => {
+                tracing::error!(
+                    device = %plan.device,
+                    "formatar recusado: o sistema em execucao precisa deste"
+                );
+                return;
+            }
+            Some((_, true)) => {}
+        }
+
+        // AND THE JUDGEMENT IS MADE AGAIN, against the volume rather than
+        // against the string. `known` was written when the rack was sent, and
+        // between then and now somebody may have mounted the disk over `/mnt`
+        // or the administrator may have edited `fstab`. The reading is the same
+        // one the sidebar reads, and it is the last word.
+        let rack = d.rack.as_ref();
+        let target = rack.and_then(|r| r.volumes.iter().find(|v| v.at == plan.device));
+        let Some(target) = target else {
+            tracing::error!(device = %plan.device, "formatar recusado: sumiu da leitura");
+            return;
+        };
+        if let Some(why) = ronoctua_disks::needed(target) {
+            tracing::error!(
+                device = %plan.device,
+                why = ?why,
+                "formatar recusado: o sistema em execucao passou a precisar deste"
+            );
+            return;
+        }
+
+        // WHAT HAS TO COME DOWN FIRST, resolved here where the topology is.
+        //
+        // udisks refuses to write over a mounted filesystem, and it is right
+        // to. For a partition that is the partition itself; for a whole disk it
+        // is every partition ON it, which is the case that would otherwise fail
+        // with `DeviceBusy` on the most ordinary gesture there is — a stick
+        // somebody just clicked into, being prepared.
+        //
+        // Resolved through the DRIVE and never by trimming a digit off the
+        // device node: `/dev/nvme0n1` ends in one and is a disk.
+        let mut first = Vec::new();
+        if let Some(r) = rack {
+            if plan.whole_disk {
+                let drive = ronoctua_disks::attached_to(target, &r.volumes).map(str::to_owned);
+                first.extend(
+                    r.volumes
+                        .iter()
+                        .filter(|v| v.mounted())
+                        .filter(|v| {
+                            drive.is_some()
+                                && ronoctua_disks::attached_to(v, &r.volumes) == drive.as_deref()
+                        })
+                        .map(|v| v.at.clone()),
+                );
+            } else if target.mounted() {
+                first.push(target.at.clone());
+            }
+        }
+
+        let Some(said) = d.said.clone() else {
+            tracing::error!("sem canal de veredito; formatar nao foi pedido");
+            return;
+        };
+        let device = plan.device.clone();
+        let filesystem = plan.recipe.filesystem();
+        let label = plan.label.clone();
+        let whole = plan.whole_disk;
+        // THE NAME IS TAKEN NOW and travels with the answer. By the time a
+        // refusal is worded the disk may carry a different label — the format
+        // may be what changed it — and a message naming what it is NOW would be
+        // about something the person never pressed.
+        let name = target.name().to_owned();
+
+        // A THREAD, and for the reason mounting already goes to one: mkfs on a
+        // sixty-gigabyte stick is seconds of work, and waiting for it inside
+        // the loop that draws freezes the screen for all of them.
+        if let Err(e) = std::thread::Builder::new()
+            .name("ronoctua-format".to_owned())
+            .spawn(move || {
+                let _ = said.send(run_format(
+                    &device, filesystem, &label, whole, &first, &name,
+                ));
+            })
+        {
+            tracing::error!(error = %e, "nao consegui subir a thread de formatar");
+        }
+    }
+
+    /// A format came back; the buffer is told, in words.
+    fn format_said(&mut self, verdict: &Verdict) {
+        let outcome = match verdict {
+            Verdict::Done => ronoctua_protocol::Outcome {
+                done: true,
+                trouble: String::new(),
+            },
+            Verdict::Refused { which, why, name } => {
+                use ronoctua_disks::Refusal;
+                let key = match which {
+                    Refusal::Busy => ronoctua_i18n::key::FORMAT_REFUSED_BUSY,
+                    Refusal::NeedsAdmin => ronoctua_i18n::key::FORMAT_REFUSED_ADMIN,
+                    _ => ronoctua_i18n::key::FORMAT_REFUSED_OTHER,
+                };
+                ronoctua_protocol::Outcome {
+                    done: false,
+                    trouble: self.texts.t_with(key, &[("name", name), ("why", why)]),
+                }
+            }
+        };
+        self.deliver(&ronoctua_protocol::Input::Formatted(outcome));
     }
 
     /// Passes one of the buffer's demands on to the unit, once the id checks out.

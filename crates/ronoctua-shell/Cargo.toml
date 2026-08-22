@@ -37,6 +37,11 @@ ronoctua-term = { path = "../ronoctua-term" }
 # The ONLY border with /proc, the cgroups and systemd's memory policy — the
 # same arrangement as `ronoctua-network`: the shell asks, it reads.
 ronoctua-files = { path = "../ronoctua-files" }
+# THE DISK BORDER. It enters HERE and not in `ronoctua-files`, which builds the
+# root-privileged helper: pulling zbus in there would put a D-Bus client inside
+# a binary that runs as root, and would give that crate a second border. The
+# host owns both and splices the device rows into the sidebar.
+ronoctua-disks = { path = "../ronoctua-disks" }
 # The queue. The shell asks it for work and listens for the list; it never
 # copies anything itself.
 ronoctua-transfers = { path = "../ronoctua-transfers" }

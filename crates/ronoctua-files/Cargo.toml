@@ -24,6 +24,19 @@ tracing.workspace = true
 # `chown`, `getgroups` and `statfs`. `rustix` and not `libc` for the reason the
 # workspace already gives: the API is safe, and this crate forbids `unsafe`.
 rustix = { workspace = true, features = [ "fs", "process" ] }
+# THE SIDEBAR'S FILE, and this crate builds a ROOT BINARY, so the line deserves
+# a word. `serde` is code and not a store reference, so neither
+# `files-runs-by-path` nor the `${../.}` trap `CLAUDE.md` records is affected —
+# `ronoctua-files-root` gets a few kilobytes and no new closure.
+#
+# `ronoctua-disks` is the dependency that was refused for exactly that reason.
+# The sidebar draws devices, but what it MODELS here is only what a person
+# configured — a folder, a file, an application, the trash. A device is
+# discovered, not configured, and pulling that crate in would put zbus and a
+# D-Bus connection inside a binary that runs as root, and would give this crate
+# a second border. The host owns both and splices them; see `sidebar::Sidebar`.
+serde = { workspace = true, features = [ "derive" ] }
+serde_json.workspace = true
 
 # THE PRIVILEGED HELPER, as its own binary.
 #

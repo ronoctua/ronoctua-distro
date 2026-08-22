@@ -210,6 +210,363 @@ let
     echo "OK: os dois configs do niri sao validos"
   '';
 
+  # A CAPTURE LANDS IN A DIRECTORY THE DISTRO DECLARED.
+  #
+  # # What went wrong without this
+  #
+  # Nothing wrote `screenshot-path`, so niri used its own default —
+  # `~/Pictures/Screenshots/…`, from `niri-config/src/misc.rs`. This distro has
+  # no `~/Pictures`: its `XDG_PICTURES_DIR` is `main/media/image`. So every
+  # capture went to a directory the system never declared, never created and
+  # nothing could point at — and it was silent, because a compositor writing a
+  # PNG somewhere is not an error anywhere.
+  #
+  # # Why it reads BOTH files
+  #
+  # Because the defect this replaces is the two DRIFTING, not either one being
+  # wrong on its own. `nix/user-dirs.nix` is what makes the directory (through
+  # `xdg.userDirs`, whose `createDirectories` covers `extraConfig` too), and the
+  # niri config is what writes into it. Checking only that `screenshot-path`
+  # exists would go green on a path pointing anywhere at all.
+  #
+  # It reads the GENERATED config, and not `nix/modules/niri.nix` — the check is
+  # against the code, not against the criterion. A `screenshot-path` written
+  # into the module and lost on its way through `configNiri`'s `sed` would still
+  # be in the source.
+  screenshots-land-in-a-declared-directory =
+    mkCheck "screenshots-land-in-a-declared-directory" [ pkgs.python3 ]
+      ''
+        python3 - <<'FIM'
+        import pathlib, re, sys
+
+        config = pathlib.Path(
+          "${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}"
+        ).read_text()
+
+        line = re.search(r'^\s*screenshot-path\s+"([^"]+)"', config, re.M)
+        if not line:
+            print("ERRO: o config do niri nao tem `screenshot-path`.", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       Sem ele o niri usa o padrao DELE, ~/Pictures/Screenshots/,", file=sys.stderr)
+            print("       que esta distro nao declara e nao cria. A captura sai, e", file=sys.stderr)
+            print("       nenhum erro aparece em lugar nenhum.", file=sys.stderr)
+            raise SystemExit(1)
+        written = line.group(1)
+
+        # The name the distro declares, from the ONE file that holds it. Read as
+        # text and not evaluated: this check has no Nix to call, and the entry is a
+        # plain string.
+        table = pathlib.Path("${../nix/user-dirs.nix}").read_text()
+        entry = re.search(r'^\s*screenshot\s*=\s*"([^"]+)"\s*;', table, re.M)
+        if not entry:
+            print("ERRO: nix/user-dirs.nix nao tem a entrada `screenshot`.", file=sys.stderr)
+            raise SystemExit(1)
+        declared = entry.group(1)
+
+        wanted = f"~/{declared}/"
+        if not written.startswith(wanted):
+            print("ERRO: a captura nao cai na pasta declarada.", file=sys.stderr)
+            print("", file=sys.stderr)
+            print(f"       niri escreve em: {written}", file=sys.stderr)
+            print(f"       a distro declara: {wanted}", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       As duas saem de nix/user-dirs.nix de proposito: e o", file=sys.stderr)
+            print("       arquivo que CRIA a pasta, por xdg.userDirs, e o que a", file=sys.stderr)
+            print("       barra lateral do gerenciador aponta.", file=sys.stderr)
+            raise SystemExit(1)
+
+        # And the name has to say WHEN, or a second capture overwrites the first.
+        if "%" not in written:
+            print("ERRO: o nome da captura nao tem strftime nenhum.", file=sys.stderr)
+            print(f"       {written} — a segunda captura apaga a primeira.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print(f"OK: a captura cai em {wanted}, que a distro declara e cria")
+        FIM
+      '';
+
+  # THE DISKS MODULE ADDS NO POLKIT RULE OF ITS OWN.
+  #
+  # # Why the assertion is INVERTED here, and only here
+  #
+  # `files-polkit-is-narrow`, `rescue-polkit-is-narrow` and
+  # `transfers-unit-is-narrow` all demand a rule, because in those three the
+  # UNIT IS OURS and nobody else authorises it. udisks2 is not ours: it ships
+  # actions that already split on `HintSystem`, so a removable device mounts
+  # with no password and an internal one asks. A rule of ours could only WIDEN
+  # that, and it would be a second place to keep in step with somebody else's
+  # action ids — which polkit parses at runtime, so a stale one is silent.
+  #
+  # # The four halves, and why each is needed
+  #
+  # Without (1) this goes green on a module that does nothing at all. Without
+  # (3) the rule could be smuggled into another module. Without (4) it goes
+  # green on a tree where every polkit rule in the project was deleted, which is
+  # the failure mode of every "assert the absence of something" check.
+  disks-adds-no-polkit-rule-of-its-own =
+    mkCheck "disks-adds-no-polkit-rule-of-its-own" [ pkgs.python3 ]
+      ''
+        python3 - <<'FIM'
+        import pathlib, re, sys
+
+        modules = pathlib.Path("${../nix/modules}")
+        disks = (modules / "disks.nix").read_text()
+        wrong = []
+
+        # 1. THE MODULE ACTUALLY TURNS UDISKS ON.
+        if not re.search(r"^\s*enable = true;", disks, re.M):
+            wrong.append("nix/modules/disks.nix nao liga o udisks2")
+        if "services.udisks2" not in disks:
+            wrong.append("nix/modules/disks.nix nao fala de services.udisks2")
+
+        # 2. AND WRITES NO RULE.
+        if "polkit" in disks and "extraConfig" in disks:
+            wrong.append("nix/modules/disks.nix escreve uma regra polkit")
+
+        # 3. NOR DOES ANY OTHER MODULE NAME A UDISKS ACTION.
+        for f in sorted(modules.glob("*.nix")):
+            body = f.read_text()
+            if "org.freedesktop.udisks2." in body.lower():
+                wrong.append(f"{f.name} nomeia uma acao do udisks2 numa regra polkit")
+
+        # 4. AND THE FOUR RULES THAT SHOULD EXIST STILL DO.
+        #    An "assert the absence" check that never asserts a presence goes
+        #    green on an empty tree.
+        for name in ["files.nix", "rescue.nix", "memory.nix", "keyboard.nix"]:
+            body = (modules / name).read_text()
+            if "polkit.addRule" not in body:
+                wrong.append(f"{name} perdeu a regra polkit que DEVE ter")
+
+        if wrong:
+            print("ERRO: a postura de privilegio dos discos mudou.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       O udisks2 ja separa removivel de sistema pelo HintSystem,", file=sys.stderr)
+            print("       e a regra dele e mais estreita do que qualquer uma nossa.", file=sys.stderr)
+            raise SystemExit(1)
+        print("OK: udisks2 ligado, nenhuma regra nossa, e as quatro que existem continuam la")
+        FIM
+      '';
+
+  # THE TOOL LIST OF UDISKS IS PINNED, AND SO IS WHAT WE ASK OF IT.
+  #
+  # # What this is protecting
+  #
+  # `nix/modules/disks.nix` builds udisks with `xfsprogs` replaced by an empty
+  # directory. Measured: 305,4 MiB, of which 258,0 is a python3 env reached by
+  # exactly one path — `udisks → xfsprogs-bin → python3-env`, for `xfs_scrub`.
+  # The distro is btrfs and no pendrive is XFS.
+  #
+  # That override is free ONLY because mounting is a kernel operation and this
+  # crate asks udisks for four verbs, none of which is checking, repairing,
+  # resizing or formatting. The day somebody proxies one of those, the override
+  # silently stops being free and starts being a feature that does not work.
+  #
+  # # Why it reads the CODE
+  #
+  # Because a comment saying "we do not format" is not a guarantee. This greps
+  # the proxy module for method declarations, which is the rule
+  # `switches-that-do-nothing-say-so` states: the comments do not count.
+  disks-tools-are-pinned = mkCheck "disks-tools-are-pinned" [ pkgs.python3 pkgs.binutils ] ''
+    python3 - <<'FIM'
+    import pathlib, re, sys
+
+    module = pathlib.Path("${../nix/modules/disks.nix}").read_text()
+    proxies = pathlib.Path("${../crates/ronoctua-disks/src/udisks.rs}").read_text()
+    wrong = []
+
+    # 1. THE ONE OVERRIDE IS STILL THERE. A nixpkgs bump that re-adds the
+    #    258 MiB of Python has to fail here, and not on somebody's ISO.
+    if not re.search(r"xfsprogs\s*=\s*pkgs\.emptyDirectory\s*;", module):
+        wrong.append("o override de xfsprogs saiu de nix/modules/disks.nix")
+
+    # 2. AND IT IS STILL THE ONLY ONE. A tool quietly dropped is a
+    #    `mount.<type>` quietly missing, which is a stick that will not mount
+    #    and nothing saying why.
+    block = re.search(r"pkgs\.udisks\.override\s*\{(.*?)\n  \};", module, re.S)
+    if not block:
+        wrong.append("nao achei o bloco `pkgs.udisks.override` em disks.nix")
+    else:
+        named = set(re.findall(r"^\s*(\w+)\s*=", block.group(1), re.M))
+        extra = named - {"xfsprogs"}
+        if extra:
+            wrong.append(f"disks.nix sobrescreve mais do que xfsprogs: {sorted(extra)}")
+
+    # 3. WHAT WE ASK OF UDISKS, AND WHAT WE MUST NOT.
+    def declared(name):
+        return re.search(rf"^\s*fn {name}\(", proxies, re.M) is not None
+
+    # `format` USED TO BE ON THIS LIST, and moving it off is a decision and not
+    # a relaxation: writing a filesystem is a thing this distro now does, from a
+    # buffer whose whole design is the two refusals in front of it. What stays
+    # forbidden is everything that would REPAIR or RENAME a filesystem — those
+    # are the verbs whose helper the xfsprogs override took away, and offering
+    # one that silently does nothing for XFS is the failure this check exists
+    # for.
+    for verb in ["check", "repair", "resize", "set_label", "take_ownership"]:
+        if declared(verb):
+            wrong.append(
+                f"udisks.rs declara `{verb}`, que o override de xfsprogs torna impossivel"
+            )
+
+    # 4. AND THE FIVE THAT EXIST STILL DO, or this goes green on an empty file.
+    for verb in ["mount", "unmount", "eject", "power_off", "format"]:
+        if not declared(verb):
+            wrong.append(f"udisks.rs perdeu `{verb}`, que a barra lateral usa")
+
+    # 5. AND THE FIVE THIS BUILD CAN WRITE ARE THE FIVE IT OFFERS.
+    #
+    #    THE SENTENCE ON SCREEN IS WHAT IS BEING CHECKED. The buffer draws a
+    #    row saying XFS is not here because the program that writes it is not
+    #    installed; a `Recipe` that named `xfs` would make that row a lie AND
+    #    produce a refusal from udisks with nothing on screen predicting it.
+    protocol = pathlib.Path("${../crates/ronoctua-protocol/src/lib.rs}").read_text()
+    body = re.search(r"pub const fn filesystem\(self\)[^\n]*\n(.*?)\n    \}", protocol, re.S)
+    if not body:
+        wrong.append("nao achei `Recipe::filesystem` no protocolo")
+    else:
+        offered = set(re.findall(r'=> "([a-z0-9]+)"', body.group(1)))
+        if offered != {"vfat", "exfat", "ntfs", "ext4", "btrfs"}:
+            wrong.append(f"os sistemas oferecidos mudaram: {sorted(offered)}")
+
+    if wrong:
+        print("ERRO: o que pedimos ao udisks2 e o que ele carrega discordam.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: so xfsprogs sai, os cinco verbos existem, e o XFS nao e oferecido")
+    FIM
+
+    # AND THE BUILT PACKAGE AGREES WITH THE OVERRIDE.
+    #
+    # The two halves above read SOURCE. This one reads the artefact, and it is
+    # the half that catches a bump: nixpkgs patches `udisksd` to OVERWRITE its
+    # own `PATH` with a `makeBinPath` of the tools it was built against, so
+    # that string IS what udisks can reach at runtime. `system.fsPackages`
+    # never reaches it, which is why `boot.supportedFilesystems` does almost
+    # nothing and the module says so.
+    #
+    # It lives here and not in `disks-vm` because it is a property of the
+    # DERIVATION and not of a booted machine: a check that needs no VM fails in
+    # seconds instead of in minutes.
+    forced=$(strings ${slimUdisks}/libexec/udisks2/udisksd \
+      | grep -E '^/nix/store/.*/bin(:|$)' | head -1)
+    [ -n "$forced" ] || {
+      echo "ERRO: nao achei o PATH forcado dentro do udisksd." >&2
+      echo "      Sem ele o patch do nixpkgs mudou, e o override de" >&2
+      echo "      xfsprogs deixa de significar o que este check afirma." >&2
+      exit 1; }
+
+    case "$forced" in
+      *xfsprogs*)
+        echo "ERRO: o xfsprogs voltou ao PATH do udisksd, e com ele 212 MiB." >&2
+        echo "      Medido: 305,4 MiB de xfsprogs-bin, dos quais 258,0 sao um" >&2
+        echo "      ambiente python3 para o xfs_scrub — e esta distro e btrfs." >&2
+        exit 1 ;;
+    esac
+
+    for ajudante in exfat ntfs3g dosfstools util-linux; do
+      case "$forced" in
+        *"$ajudante"*) ;;
+        *)
+          echo "ERRO: $ajudante saiu do PATH do udisksd." >&2
+          echo "      Um pendrive formatado assim deixa de montar, e o" >&2
+          echo "      sintoma e uma linha da barra lateral que nao faz nada." >&2
+          exit 1 ;;
+      esac
+    done
+    echo "OK: o PATH forcado do udisksd nao tem xfsprogs e tem os quatro ajudantes"
+  '';
+
+  # PERSISTENCE TAKES ITS ROOT AS A PARAMETER.
+  #
+  # # The defect this exists for, and it reached the owner's screen
+  #
+  # The file manager's sidebar persisted through a function that found
+  # `$XDG_CONFIG_HOME` for itself. Its unit tests press the key that hides the
+  # sidebar and the key that pins a file — because that is how one proves a key
+  # does something — so `cargo test` wrote into the REAL configuration of
+  # whoever ran it, leaving a `/tmp` path pinned and `showing: false`. The
+  # symptom was a file manager with no sidebar on a build that had one, and
+  # NOTHING FAILED: every test green, every check green, and the only wrong
+  # thing in a file nobody thinks to look at.
+  #
+  # The rule was already written, in the very crate that broke it: `trash::Bin`
+  # takes its root because "two tests setting the same environment variable
+  # race, and the one that loses puts a file in the other's trash".
+  #
+  # # Why the shape, and not a sweep of `$HOME` after the suite
+  #
+  # A check that ran the suite and looked at the home afterwards would only
+  # catch the crates that have such a test TODAY. This catches the shape: a
+  # function that reads or writes must not also be the one that decides where.
+  persistence-takes-its-root-as-a-parameter =
+    mkCheck "persistence-takes-its-root-as-a-parameter" [ pkgs.python3 ]
+      ''
+        python3 - <<'FIM'
+        import pathlib, re, sys
+
+        # WHERE THE ENVIRONMENT MAY BE READ AT ALL. Both are named for what they
+        # are — a lookup, not a read — and the application calls them, once.
+        FINDERS = ("config_dir()", "state_dir()")
+        # What makes a function one that persists.
+        TOUCHES = (
+            "fs::write", "fs::read_to_string", "create_dir_all", "fs::rename",
+            "File::create", "File::open",
+        )
+        # The lookups themselves, and the constructor that exists to gather them.
+        ALLOWED = ("config_dir", "state_dir", "of_env")
+
+        crates = pathlib.Path("${../crates}")
+        bad = []
+        for f in sorted(crates.rglob("*.rs")):
+            body = f.read_text()
+            for m in re.finditer(r"\n(\s*)(?:pub )?(?:const )?fn (\w+)", body):
+                indent, name = m.group(1), m.group(2)
+                if name in ALLOWED:
+                    continue
+                rest = body[m.end():]
+                stop = re.search("\n" + indent + "}\n", rest)
+                inside = rest[: stop.start()] if stop else rest
+                if not any(w in inside for w in TOUCHES):
+                    continue
+                found = [w for w in FINDERS if w in inside]
+                if found:
+                    bad.append(
+                        f"{f.relative_to(crates)}: `{name}` escreve E acha o "
+                        f"diretorio ({', '.join(found)})"
+                    )
+
+        if bad:
+            print("ERRO: persistencia que acha a propria raiz.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for b in bad:
+                print("       " + b, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       Uma funcao que le ou escreve NAO decide onde. Quem acha", file=sys.stderr)
+            print("       o diretorio e o aplicativo, uma vez, e entrega a", file=sys.stderr)
+            print("       resposta — senao `cargo test` escreve na casa de quem o", file=sys.stderr)
+            print("       roda, que foi o que aconteceu com a barra lateral.", file=sys.stderr)
+            raise SystemExit(1)
+
+        # AND OS LOCALIZADORES CONTINUAM EXISTINDO. Without this the check goes
+        # green on a tree where persistence was deleted altogether.
+        finders = sum(
+            1
+            for f in crates.rglob("*.rs")
+            for w in ("fn config_dir(", "fn state_dir(")
+            if w in f.read_text()
+        )
+        if finders < 2:
+            print("ERRO: nao achei as funcoes que localizam os diretorios.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: nada que persiste acha a propria raiz ({finders} localizadoras)")
+        FIM
+      '';
+
   # THE KEYBOARD LAYOUT REALLY EXISTS.
   #
   # # Why this needs a check
@@ -283,6 +640,7 @@ let
     XDG_PICTURES_DIR=/home/noctua/main/media/image
     XDG_PROJECTS_DIR=/home/noctua/main/prj
     XDG_PUBLICSHARE_DIR=/home/noctua/main/share/public
+    XDG_SCREENSHOT_DIR=/home/noctua/main/media/screenshot
     XDG_TEMPLATES_DIR=/home/noctua/templates
     XDG_VIDEOS_DIR=/home/noctua/main/media/video"
 
@@ -304,7 +662,7 @@ let
     done || missing=1
     [ "$missing" = 0 ] || exit 1
 
-    echo "OK: os nove diretorios da secao 2 chegam ao user-dirs.dirs"
+    echo "OK: os dez diretorios da secao 2 chegam ao user-dirs.dirs"
   '';
 
   # THE LOCALE AND THE TIMEZONE EXIST, and the check is where that gets asked.
@@ -1099,9 +1457,9 @@ let
   # modeline naming a screen that is not up. That is not hypothetical: it was
   # planted, and the first version of the driver PRINTED it and exited zero.
   #
-  # All six and not one chosen buffer, because the contract is the same for all
-  # of them and the six were written in a single pass — which is the pass whose
-  # mistakes land in whichever file the writer got tired on.
+  # All seven and not one chosen buffer, because the contract is the same for
+  # all of them and six of the seven were written in a single pass — which is
+  # the pass whose mistakes land in whichever file the writer got tired on.
   states-driven = mkCheck "states-driven" [ ] ''
     ${rust.workspace}/bin/ronoctua-test-states \
       ${buffers.lucide}/lib/ronoctua_buffer_lucide.wasm \
@@ -1109,6 +1467,7 @@ let
       ${buffers.unicode}/lib/ronoctua_buffer_unicode.wasm \
       ${buffers.memory}/lib/ronoctua_buffer_memory.wasm \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm \
+      ${buffers.format}/lib/ronoctua_buffer_format.wasm \
       ${buffers.example}/lib/ronoctua_buffer_example.wasm
   '';
 
@@ -1194,6 +1553,21 @@ let
   transfers-instance-fast = mkCheck "transfers-instance-fast" [ ] ''
     ${rust.workspace}/bin/ronoctua-bench-instance \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm 200
+  '';
+
+  # FORMATTING A DISK, driven the way the host drives it.
+  #
+  # The two things it proves are the two the host cannot see: from out there a
+  # refusal and a crashed component both look like no plan arriving.
+  format-driven = mkCheck "format-driven" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-format \
+      ${buffers.format}/lib/ronoctua_buffer_format.wasm \
+      ${../assets/i18n}
+  '';
+
+  format-instance-fast = mkCheck "format-instance-fast" [ ] ''
+    ${rust.workspace}/bin/ronoctua-bench-instance \
+      ${buffers.format}/lib/ronoctua_buffer_format.wasm 200
   '';
 
   # ===================================================================
@@ -1921,7 +2295,14 @@ let
           echo "ERRO: nenhuma linha na tabela de acoes — o grep casa o que?" >&2
           exit 1
         }
-        keys=$(for i in $ids; do echo "files-$i"; done | sort -u)
+        # TWO KEYS PER ROW, and the second is the one that would rot quietly.
+        #
+        # `files-<id>` is the label, and it is missing loudly: the row draws its
+        # own key on screen. `files-does-<id>` is the technical answer that
+        # reaches the message line under the cursor, and a missing one shows up
+        # only when somebody happens to rest on that row — which is precisely
+        # the register that was added for people who go looking.
+        keys=$(for i in $ids; do echo "files-$i"; echo "files-does-$i"; done | sort -u)
 
         for k in $keys; do
           for language in pt-BR en-GB; do
@@ -1932,11 +2313,37 @@ let
           done
         done
 
+        # AND THE SIDEBAR'S OWN MENU, which is a second table for a second kind
+        # of subject: `menu.rs` is about an `Entry` in a directory, and every
+        # one of its `Applies` asks a question only an entry can answer. The
+        # rule is the same one — `sidebar-<id>` derived from the id — and so is
+        # the reason it is derived and not grepped: the label is a constant.
+        side=$(grep -oE '^ *id: "[a-z0-9-]+"' "$src"/sidebar_menu.rs \
+          | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$side" ] || {
+          echo "ERRO: nenhuma linha no menu da barra lateral." >&2
+          exit 1
+        }
+        sidekeys=$(for i in $side; do echo "sidebar-$i"; echo "sidebar-does-$i"; done | sort -u)
+        for k in $sidekeys; do
+          for language in pt-BR en-GB; do
+            grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
+              echo "ERRO: falta $k em $language.ftl — a linha do menu da barra" >&2
+              echo "      mostraria a chave crua." >&2
+              failed=1
+            }
+          done
+        done
+
         # AND THE VIEW'S OWN KEYS, which live in a second table for the reason
         # `leader::OF_CLIPBOARD_VIEW` gives: a key that only exists inside a
         # `match` arm is a key nothing can enumerate.
+        # A TRAILING HYPHEN IS A PREFIX AND NOT A KEY. The file also contains
+        # `"files-does-"` — a test asserting that the technical explanation
+        # comes from the right table — and grepping it as a key sent this check
+        # looking for a translation of the empty string.
         view=$(grep -ohE '"files-[a-z0-9-]+"' ${../crates/ronoctua-shell/src}/files.rs \
-          | tr -d '"' | sort -u)
+          | tr -d '"' | grep -vE -- '-$' | sort -u)
         for k in $view; do
           for language in pt-BR en-GB; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
@@ -1947,7 +2354,7 @@ let
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$keys" "$view" | tr ' ' '\n' | sort -u | wc -l) chaves, nos dois idiomas"
+        echo "OK: $(echo "$keys" "$sidekeys" "$view" | tr ' ' '\n' | sort -u | wc -l) chaves, nos dois idiomas"
       '';
 
   # NOTHING THE MOUSE DOES IS OUT OF THE KEYBOARD'S REACH.
@@ -2992,6 +3399,7 @@ let
     ronoctua-shell = rust.shell;
     bufferExample = buffers.example;
     bufferGlyphs = buffers.glyphs;
+    bufferFormat = buffers.format;
   };
 
   # The memory panel on screen. A file of its own and not one more subtest of
@@ -3036,6 +3444,26 @@ let
   # The file manager's privileged half: the unit, the polkit rule, and the
   # refusals the helper makes before it acts. Only a booted machine answers any
   # of them.
+  # The disk border's other half: what only a booted machine answers — that
+  # udisks is D-Bus activatable, that its udev rules arrived, that upstream's
+  # polkit defaults are still the two numbers the design rests on, and that a
+  # SYSTEM volume refuses with a name instead of hanging. The removable half is
+  # proved against a real pendrive; see the file for why neither can do both.
+  # The slimmed udisks the disks module installs — the same expression, so the
+  # check reads the artefact the system actually gets and not a lookalike.
+  slimUdisks = self.nixosConfigurations.vm.config.services.udisks2.package;
+
+  disksVm = import ./disks-vm.nix {
+    inherit pkgs lib;
+    formatDisk = rust.formatDisk;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      niri = inputs.niri;
+      shell = rust.shell;
+      filesRoot = rust.filesRoot;
+    };
+  };
+
   filesVm = import ./files-vm.nix {
     inherit pkgs lib;
     ronoctua = {
@@ -5034,6 +5462,7 @@ let
                   -ronoctua-buffer-unicode- \
                   -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
                   -ronoctua-buffer-transfers- \
+                  -ronoctua-buffer-format- \
                   -noctua-icon-theme- \
                   -noctua-iosevka-ttf-nerdfonts-; do
         grep -q -e "$ours" ${seed}/store-paths || {
@@ -5107,7 +5536,7 @@ let
       # And what the reduced profile may NEVER lose, or it stops being this
       # system rather than becoming a smaller one.
       #
-      # THE FIVE COMPONENTS ARE ON THAT LIST for the same reason the superpack
+      # THE SIX COMPONENTS ARE ON THAT LIST for the same reason the superpack
       # is on the one above, and by the same mechanism: they no longer arrive by
       # carriage inside the binary (`nix/rust.nix`), they arrive through the
       # wrapper. If the module ever points at the unwrapped workspace again, the
@@ -5117,7 +5546,8 @@ let
                   -networkmanager- -systemd- \
                   -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
-                  -ronoctua-buffer-memory- -ronoctua-buffer-transfers-; do
+                  -ronoctua-buffer-memory- -ronoctua-buffer-transfers- \
+                  -ronoctua-buffer-format-; do
         grep -q -i -e "$kept" ${minimal}/store-paths || {
           echo "ERRO: o perfil reduzido perdeu $kept, que faz parte da distro" >&2
           failed=1
@@ -5290,7 +5720,7 @@ let
 
     # What the SHELL reads at runtime and no build bakes. A variable that
     # arrives late is a variable that did not arrive.
-    AT_RUNTIME = ["RONOCTUA_ICONS", "RONOCTUA_FILES_START"]
+    AT_RUNTIME = ["RONOCTUA_ICONS", "RONOCTUA_FILES_START", "RONOCTUA_FILES_SIDEBAR"]
 
     text = pathlib.Path("${../nix/dev.nix}").read_text()
     lines = text.splitlines()
@@ -5592,6 +6022,13 @@ let
       files-actions-have-text
       files-everything-has-a-key
       files-runs-by-path
+      # And the sidebar's device half: the border with udisks2, the polkit
+      # posture we depend on and do not write, and the refusal that must not
+      # hang.
+      disksVm
+      disks-adds-no-polkit-rule-of-its-own
+      disks-tools-are-pinned
+      screenshots-land-in-a-declared-directory
       files-polkit-is-narrow
       files-closure-has-no-mime-db
       files-columns-degrade
@@ -5623,6 +6060,7 @@ let
       rescue-staging-agrees
       ;
     files-vm = filesVm;
+    disks-vm = disksVm;
     transfers-vm = transfersVm;
     extension-vm = extensionVm;
     inherit
@@ -5656,6 +6094,10 @@ let
       niri-config-valid
       fontconfig-nested-finds-font
       xdg-user-dirs
+      screenshots-land-in-a-declared-directory
+      disks-adds-no-polkit-rule-of-its-own
+      disks-tools-are-pinned
+      persistence-takes-its-root-as-a-parameter
       browser-has-no-keyring
       ;
     notify-vm = notifyVm;
@@ -5694,6 +6136,8 @@ let
       memory-driven
       transfers-instance-fast
       transfers-driven
+      format-instance-fast
+      format-driven
       torrent-layout-matches-cxx
       torrent-speaks-v2
       extension-has-no-fingerprint
@@ -5942,6 +6386,8 @@ let
       memory-driven
       transfers-instance-fast
       transfers-driven
+      format-instance-fast
+      format-driven
       renderer-loads-three-faces
       # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
       # in the pixel, and the footer still responding with the application open —

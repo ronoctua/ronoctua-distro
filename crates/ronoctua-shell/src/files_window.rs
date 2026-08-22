@@ -108,6 +108,17 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     // listing at the instant the work was HANDED OVER — showing the directory
     // as it was before the copy, and never again.
     crate::transfers::listen_as_reports(sender.clone());
+    // AND THE DISKS, on the same channel. This process has its own `calloop`
+    // loop and no clock at all, so a signal is the only way a stick plugged in
+    // while the window is open can ever appear in it.
+    if let Err(e) = ronoctua_disks::watch({
+        let s = sender.clone();
+        move |rack| {
+            let _ = s.send(crate::files::Report::Racked(Box::new(rack)));
+        }
+    }) {
+        tracing::warn!(error = %e, "sem vigia de discos");
+    }
     alca.insert_source(reports, |event, (), state: &mut FilesWindow| {
         if let channel::Event::Msg(r) = event {
             state.reported(r);
@@ -121,13 +132,20 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     // 68 ms, measured — once, at startup, like the launcher's.
     let catalogue = std::sync::Arc::new(ronoctua_apps::scan(&language()));
     let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
+    let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
+    let side = crate::files::sidebar_of(
+        home.as_deref(),
+        bin.as_ref(),
+        ronoctua_files::sidebar::store::config_dir(),
+    );
     let view = crate::files::View::at(
         &where_,
         ronoctua_files::who::Roster::read_from(&ronoctua_files::who::Files::default()),
         ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
-        ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref()),
+        bin,
         catalogue.clone(),
         texts.clone(),
+        side,
     );
 
     let mut state = FilesWindow {
@@ -274,6 +292,38 @@ impl FilesWindow {
                         self.paint();
                         return;
                     }
+                    // AN APPLICATION FROM THE SIDEBAR, through the launcher's
+                    // own `command_for` — never a second reader of a `.desktop`
+                    // file's `Exec`. Same arm as the footer's, same reason.
+                    Doing::Launch(which) => {
+                        if let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned()
+                        {
+                            let (program, args) =
+                                crate::apps::command_for(&entry, std::path::Path::new(""));
+                            self.spawn(&program, &args, entry.working_directory.as_deref());
+                        } else {
+                            self.message = Some(self.texts.t_with(
+                                ronoctua_i18n::key::FILES_SIDEBAR_GONE,
+                                &[("name", which.as_str())],
+                            ));
+                        }
+                        self.paint();
+                        return;
+                    }
+                    // FORMATTING OPENS THE BUFFER, from this door too — and
+                    // through the same re-exec every other window uses.
+                    Doing::Format(id) => {
+                        if let Ok(me) = std::env::current_exe()
+                            && let Ok(w) = std::env::var("RONOCTUA_BUFFER_FORMAT")
+                            && !w.is_empty()
+                        {
+                            self.spawn(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
+                        } else {
+                            self.message = Some(self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER));
+                        }
+                        self.paint();
+                        return;
+                    }
                     Doing::Terminal(dir) => {
                         if let Ok(me) = std::env::current_exe() {
                             self.spawn(
@@ -388,6 +438,26 @@ impl FilesWindow {
             crate::files::Report::Done => self.view.reread(),
             crate::files::Report::Measured(name, bytes) => self.view.measured(&name, bytes),
             crate::files::Report::Failed(why) => self.message = Some(why),
+            crate::files::Report::Refused(which, why) => {
+                if matches!(which, ronoctua_disks::Refusal::AlreadyMounted) {
+                    self.view.reread();
+                } else {
+                    let e = self.view.refusal_said(which, &why);
+                    self.message = Some(self.texts.t_with(e.key, &e.borrowed()));
+                }
+            }
+            crate::files::Report::Mounted(at) => self.view.mounted(&at),
+            crate::files::Report::Racked(rack) => {
+                // AND THE SIDEBAR'S FILE, HERE. This process has no clock — a
+                // disk signal is the only thing that wakes it on its own — so
+                // the cheapest honest moment to notice that the footer pinned
+                // something is when a disk moves. It is one `stat`, and it is
+                // not the whole answer: see `DEVELOPMENT.md`.
+                if self.view.sidebar_stale() {
+                    self.view.reread_sidebar();
+                }
+                self.view.racked(&rack);
+            }
         }
         self.paint();
     }
@@ -541,15 +611,35 @@ impl FilesWindow {
         // asked for, and behind the pointer's description it was unreachable in
         // the one situation it exists for — the hand on the mouse, the pointer
         // resting on the row that was just clicked.
+        // AND WHAT THE MENU ROW UNDER THE CURSOR ACTUALLY DOES.
+        //
+        // The same second register the footer's door gained, and the same
+        // reason: the rows are written for somebody starting out, and somebody
+        // who already knows has nowhere to read which call and what can be
+        // undone. It arrives by moving the CURSOR — the explanations here have
+        // needed a pointer until now, and the owner's rule is that whatever the
+        // mouse can do the keyboard can do.
+        //
+        // Behind the message and ahead of the pointer, exactly as over there: a
+        // menu covers the listing, so with one open the pointer is resting on a
+        // row and the cursor is on the choice about to be made.
+        let does = self
+            .view
+            .cursor_explains()
+            .map(|e| self.texts.t_with(e.key, &e.borrowed()));
         let second = self
             .message
             .clone()
+            .or(does)
             .or(explained)
             // WITH NOTHING TYPED AND NOTHING TO SAY, the hint. Typing is not a
             // key and so has no line in the manual; without this the one
             // gesture the list is built around is the one thing nothing on
             // screen mentions.
-            .or_else(|| (!self.view.filtering()).then(|| crate::files::hint(&self.texts)))
+            .or_else(|| {
+                (!self.view.filtering())
+                    .then(|| crate::files::hint_of(&self.texts, self.view.split(self.columns) > 0))
+            })
             .unwrap_or_default();
         if !second.is_empty() {
             spans.push(ronoctua_render::Span {
@@ -566,7 +656,7 @@ impl FilesWindow {
         // footer. Not drawn over the menu, the picker or the detail sheet:
         // none of those has columns.
         let line_px = tokens::metrics::line_height(size);
-        if !self.view.menu_open() && !self.view.showing_detail() {
+        if self.view.plain() {
             for f in &self.view.header(self.columns, &self.texts).fields {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Px(size),
@@ -586,6 +676,22 @@ impl FilesWindow {
         let rows = self
             .view
             .rows_from(self.offset, self.room(), self.columns, &self.texts);
+        // WHERE THE SIDEBAR ENDS, asked once for the whole frame. It is what
+        // the rule is drawn at and what decides which half the hover band
+        // covers; asking twice would be two answers on the day one of them was
+        // edited.
+        let split = self.view.split(self.columns);
+        if split > 0 {
+            let cell = tokens::metrics::cell_width(size);
+            quads.push(ronoctua_render::quad::Quad {
+                x: f32::from(margin) * cell + f32::from(split) * cell,
+                y: f32::from(FIRST_OF_LIST + 1) * line_px,
+                width: 1.0,
+                #[allow(clippy::cast_precision_loss)]
+                height: self.room() as f32 * line_px,
+                color: tokens::color::RULE_DEFAULT,
+            });
+        }
         for (n, row) in rows.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
             let y = FIRST_OF_LIST + 1 + n as u16;
@@ -597,11 +703,28 @@ impl FilesWindow {
             // A flat quad, no border and no radius, which is why it does not
             // violate invariant 15.
             if self.row_under_pointer == Some(self.offset + n) {
-                quads.push(ronoctua_render::quad::Quad {
-                    x: 0.0,
-                    y: f32::from(y) * line_px,
+                // AND IT STOPS AT THE SIDEBAR'S EDGE, exactly as in the footer:
+                // the line holds two lists, so a band the width of the window
+                // would light the sidebar row beside whatever the pointer is
+                // really on. Which side it is is decided by where the pointer
+                // is, and the arithmetic is `sidebar_columns` — the same
+                // function the rows were built with, because a second answer
+                // here is a band that does not line up with what it lights.
+                let cell = tokens::metrics::cell_width(size);
+                let margin_px = f32::from(margin) * cell;
+                let (at, wide) = match (split, self.cell_under_pointer) {
+                    (0, _) => (0.0, self.width as f32),
+                    (s, Some(c)) if c < s => (margin_px, f32::from(s) * cell),
                     #[allow(clippy::cast_precision_loss)]
-                    width: self.width as f32,
+                    (s, _) => {
+                        let from = margin_px + f32::from(s + 1) * cell;
+                        (from, (self.width as f32 - from).max(0.0))
+                    }
+                };
+                quads.push(ronoctua_render::quad::Quad {
+                    x: at,
+                    y: f32::from(y) * line_px,
+                    width: wide,
                     height: line_px,
                     color: tokens::color::SURFACE_SELECTION,
                 });
@@ -611,9 +734,7 @@ impl FilesWindow {
                 // the line above has a visible subject. A colour and not a
                 // box — invariant 15.
                 let under = self.row_under_pointer == Some(self.offset + n)
-                    && self.cell_under_pointer.is_some_and(|c| {
-                        c >= f.at && c < f.at + ronoctua_render::layout::width(&f.text)
-                    });
+                    && self.cell_under_pointer.is_some_and(|c| f.covers(c));
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Px(size),
                     text: f.text.clone(),
@@ -987,18 +1108,12 @@ impl FilesWindow {
         if row == usize::MAX {
             return;
         }
-        // FOCUS, AND ONLY FOCUS. See `files::View::focus_row`. With nothing to
-        // focus — an empty directory — the menu opens anyway, about it.
-        if matches!(self.view.focus_row(row), crate::files::Step::Nothing) && !self.view.is_empty()
-        {
-            return;
-        }
-        // THE MENU'S OWN KEY, read from the table. See `files::key_that_runs`.
-        let Some(t) = crate::files::key_that_runs("files-menu") else {
-            return;
-        };
-        let menu = self.view.key(t);
-        self.apply(menu);
+        // ROW AND CELL, through the view's one decision — see
+        // `files::View::menu_at`. This door had the same defect as the footer:
+        // it kept the row and threw the cell away.
+        let cell = self.cell_under_pointer.unwrap_or(0);
+        let step = self.view.menu_at(row, cell, self.columns);
+        self.apply(step);
     }
 }
 

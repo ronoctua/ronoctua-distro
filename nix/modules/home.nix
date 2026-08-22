@@ -28,6 +28,14 @@ let
   cfg = config.ronoctua;
   home = "/home/${cfg.user}";
 
+  # THE TEN DIRECTORIES, from the ONE file that holds them.
+  #
+  # Names relative to home; the `${home}/` goes on here. Written out again in
+  # this file, the sidebar of the file manager and the compositor's
+  # `screenshot-path` would each have their own idea of where projects live —
+  # see `nix/user-dirs.nix` for who else reads it.
+  dirs = import ../user-dirs.nix;
+
   # The template as a FILE, not a heredoc. A heredoc's terminator has to sit in
   # column 0, and `nix fmt` reindents the whole activation script — which turns
   # the marker into text and the script into a shell that never returns.
@@ -88,7 +96,7 @@ in
         ".bashrc".source = ../../assets/shell/bashrc.bash;
       };
 
-      # THE NINE DIRECTORIES, section 2.
+      # THE TEN DIRECTORIES, section 2. The names come from `nix/user-dirs.nix`.
       #
       # `xdg.userDirs` writes `~/.config/user-dirs.dirs`, which is what a file
       # dialog, a browser download and `xdg-open` actually read. Setting the
@@ -96,23 +104,37 @@ in
       xdg.userDirs = {
         enable = true;
         createDirectories = true;
-        desktop = "${home}/main/temp";
-        documents = "${home}/main/archive";
-        download = "${home}/main/temp";
-        music = "${home}/main/media/audio-music";
-        pictures = "${home}/main/media/image";
-        publicShare = "${home}/main/share/public";
-        templates = "${home}/templates";
-        videos = "${home}/main/media/video";
+        desktop = "${home}/${dirs.desktop}";
+        documents = "${home}/${dirs.documents}";
+        download = "${home}/${dirs.download}";
+        music = "${home}/${dirs.music}";
+        pictures = "${home}/${dirs.pictures}";
+        publicShare = "${home}/${dirs.publicShare}";
+        templates = "${home}/${dirs.templates}";
+        videos = "${home}/${dirs.videos}";
 
         # `XDG_PROJECTS_DIR` is not in the freedesktop spec — `xdg-user-dirs-update`
         # does not know it and no third-party tool will read it. home-manager
         # writes it anyway, and it defaults to `~/Projects`: leaving it alone
         # would have put a directory nobody asked for in the generated file.
+        projects = "${home}/${dirs.projects}";
+
+        # AND THE TENTH, WHICH HOME-MANAGER HAS NO OPTION FOR.
         #
-        # Through `extraConfig` it comes out as `XDG_XDG_PROJECTS_DIR_DIR`,
-        # because that attribute already builds the key around what it is given.
-        projects = "${home}/main/prj";
+        # The key here is NAKED: the module builds `XDG_<key>_DIR` around what
+        # it is given, so `SCREENSHOT` comes out as `XDG_SCREENSHOT_DIR`. Written
+        # as `XDG_SCREENSHOT_DIR` it would come out `XDG_XDG_SCREENSHOT_DIR_DIR`.
+        #
+        # And `createDirectories` above covers `extraConfig` too, which is the
+        # whole reason this line exists rather than a `tmpfiles` rule: writing it
+        # is what MAKES the directory. Until now the distro declared nowhere for
+        # a capture to land, so niri used its own default (`~/Pictures/…`) —
+        # a path that contradicts `pictures` right above it, and that nothing
+        # created. `nix/modules/niri.nix` reads the same entry for
+        # `screenshot-path`, and a check compares the two.
+        extraConfig = {
+          SCREENSHOT = "${home}/${dirs.screenshot}";
+        };
       };
 
       programs.starship = {

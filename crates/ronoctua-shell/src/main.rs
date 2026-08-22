@@ -47,6 +47,7 @@ mod band;
 mod buffer;
 mod clipboard;
 mod daemon;
+mod disks;
 mod files;
 mod files_window;
 mod foreign;

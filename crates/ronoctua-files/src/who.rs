@@ -164,6 +164,18 @@ impl Roster {
     }
 }
 
+/// Whose session this is.
+///
+/// `rustix` and not `libc`, for the reason the crate gives everywhere: the API
+/// is safe and this crate forbids `unsafe`. It is here rather than in the
+/// caller because "who am I" belongs beside "who is everybody" — and because
+/// the sidebar needs it to tell a loop device the person attached themselves
+/// from one somebody else did.
+#[must_use]
+pub fn my_uid() -> u32 {
+    rustix::process::getuid().as_raw()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

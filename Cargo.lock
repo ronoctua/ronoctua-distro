@@ -2512,6 +2512,15 @@ name = "ronoctua-cmd"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-disks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tracing",
+ "zbus",
+]
+
+[[package]]
 name = "ronoctua-files"
 version = "0.1.0"
 dependencies = [
@@ -2520,6 +2529,8 @@ dependencies = [
  "ronoctua-i18n",
  "ronoctua-tokens",
  "rustix 1.1.4",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
@@ -2647,6 +2658,7 @@ dependencies = [
  "ronoctua-apps",
  "ronoctua-clipboard",
  "ronoctua-cmd",
+ "ronoctua-disks",
  "ronoctua-files",
  "ronoctua-i18n",
  "ronoctua-keymap",

@@ -1,0 +1,30 @@
+[package]
+name = "ronoctua-disks"
+description = "A unica fronteira com o udisks2: discos, particoes e pendrives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# zbus only enters `udisks.rs`. The rules — what is a volume and what is a
+# holder, how a volume finds its drive, which rows are quiet — live in `lib.rs`
+# and do not import it: that is what makes it possible to test the nine rows of
+# a real machine without bringing up any bus at all.
+#
+# THE ONE `[[bin]]`, and it is not a daemon: nothing here is. It exists for
+# `disks-vm`, which is the only place `format` can be exercised at all — the
+# call has a race inside it that a mock cannot have.
+[[bin]]
+name = "ronoctua-format-disk"
+path = "src/bin/format-disk.rs"
+
+[dependencies]
+zbus.workspace = true
+anyhow.workspace = true
+# The watching thread outlives whoever asked for it, and when udisks2 goes away
+# there is nobody to return an error to — so it says so to the log instead.
+tracing.workspace = true
+
+[lints]
+workspace = true

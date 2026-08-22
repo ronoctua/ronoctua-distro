@@ -152,4 +152,13 @@ in
     name = "transfers";
     src = ../buffers/transfers;
   };
+
+  # Formatting a disk, in three questions — `LEADER s f`. Embeds nothing and
+  # reads nothing: the devices arrive through `input::rack`, already read, cut
+  # and judged by the host. What it declares is `capability::disks`, which is
+  # the heaviest of the five and the reason the other six do not have it.
+  format = buffer {
+    name = "format";
+    src = ../buffers/format;
+  };
 }

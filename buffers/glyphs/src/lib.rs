@@ -2114,7 +2114,19 @@ impl State {
                 // and the arm is explicit so the next case cannot arrive mute.
                 // Not this buffer's: it declared no capability, so neither
                 // ever arrives — the arm exists because the match is exhaustive.
-                Input::Survey(_) | Input::Queue(_) | Input::EnterState(_) => vec![],
+                // WHAT THIS BUFFER DECLARED NO CAPABILITY FOR. It is never
+                // sent any of them — the host raises no thread and no clock for
+                // a buffer that did not ask — and the arm exists because the
+                // `match` is exhaustive and the WIT is a contract shared by
+                // six components: an `input` case added for one of them has to
+                // be answered by all, and "answered" here is "ignored".
+                Input::Survey(_)
+                | Input::Queue(_)
+                | Input::Rack(_)
+                | Input::Formatted(_)
+                | Input::EnterState(_) => {
+                    vec![]
+                }
             }
         }
     }

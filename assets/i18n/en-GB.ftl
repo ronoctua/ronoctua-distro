@@ -55,6 +55,8 @@ buffer-memory = memory
 mode-memory = memory
 buffer-transfers = transfers
 mode-transfers = transfers
+buffer-format = format
+mode-format = format
 buffer-unicode = unicode
 mode-unicode = unicode
 buffer-no-name = *no name*
@@ -72,6 +74,8 @@ state-sheet = sheet
 state-detail = detail
 state-full = full
 state-guard = guard
+state-choose = choice
+state-confirm = confirmation
 
 ## Notifications
 
@@ -748,6 +752,7 @@ cmd-exemplo-reiniciar = Restart the example
 ## The memory panel — LEADER s m
 
 cmd-memory-open = System memory
+cmd-format-open = Format a disk
 cmd-memory-full = Full overview
 cmd-memory-guard = Freeze protection
 cmd-memory-tab = Switch RAM and disk
@@ -1050,6 +1055,7 @@ files-up = up
 files-enter = open, or enter the directory
 files-parent = up one directory
 files-hint = type to filter · { $key } opens the action menu
+files-hint-sidebar = type to filter · { $key } opens the menu · { $side } goes to the sidebar
 files-no-root-helper = changing the owner needs the installed system — the ronoctua-files-root unit is not here
 files-yes = yes, apply it
 files-no = no, leave it as it is
@@ -1078,11 +1084,153 @@ files-measure = measure the directory, or examine the file
 files-type-is = { $named }
 files-type-disagrees = the name says { $named }, the content says { $found }
 
+cmd-apps-pin = Put the application on the file manager's sidebar
 cmd-files-open = File manager
 cmd-files-window = File manager, in a window
 group-file = file
 
 files-nothing-here = this directory is empty
+
+# THE SIDEBAR — where one starts from.
+#
+# The first five are ids of `OF_THE_VIEW` and of `menu.rs`;
+# `files-actions-have-text` derives them from the id on its own.
+files-sidebar = hide or show the sidebar
+files-sidebar-focus = go to the sidebar, and back
+files-eject = unmount the device
+files-unpin = take it off the sidebar
+files-pin = put on the sidebar
+files-unhide = bring back a hidden sidebar row
+files-sidebar-hidden-ask = Bring which one back?
+files-sidebar-trash = trash
+files-sidebar-open = open { $name }
+files-sidebar-mount = mount { $name } and go in
+files-sidebar-unmount = unmount { $name }
+files-sidebar-launch = run { $name }
+files-sidebar-pinned = { $name } is on the sidebar now
+files-sidebar-hidden = { $name } is hidden — { $key } brings it back
+files-sidebar-gone = { $name } is no longer on the sidebar
+files-sidebar-only = this key acts on a sidebar row — { $key } goes there
+files-sidebar-nothing-hidden = there is nothing hidden to bring back
+files-sidebar-unwritable = could not save the sidebar: { $why }
+files-mount-failed = could not mount { $name }: { $why }
+files-mount-no-driver = this system cannot read a { $type } filesystem
+files-mount-needs-admin = { $name } belongs to the system; { $key } opens a root terminal
+files-unmount-busy = { $name } is in use — close what is open on it
+files-unmount-needed = { $name } is where the system lives ({ $why }); unmounting is not offered
+
+# THE SIDEBAR'S MENU. Each id becomes `sidebar-<id>`, and a check compares both.
+sidebar-open = open
+sidebar-mount = mount
+sidebar-unmount = unmount
+sidebar-eject = eject safely
+sidebar-information = information
+sidebar-unpin = take off the sidebar
+sidebar-format = format
+sidebar-menu-on = what to do with { $name }
+sidebar-fact-where = mounted at
+sidebar-fact-node = device
+sidebar-fact-kind = filesystem
+sidebar-fact-size = size
+sidebar-fact-drive = drive
+sidebar-fact-needed = this is where the system lives
+sidebar-not-mounted = not mounted
+# WHY A DISK IS NOT ON OFFER TO FORMAT. The sentence is built on the host and
+# crosses ready-made: the buffer has no language bundle (inv. 11).
+format-needed-at = the system lives at { $at }
+format-needed-fstab = /etc/fstab mounts this one at boot
+format-needed-swap = it is the system's swap
+format-refused-busy = { $name } is in use — close what is open on it and try again
+format-refused-admin = { $name } belongs to the system, and permission cannot be asked for here
+format-refused-other = could not format { $name }: { $why }
+# THE FORMAT BUFFER — `LEADER s f`. Three questions, each answered with the
+# arrows and Enter. The language is deliberately plain: the vfat row says what
+# it is for, not what it is called. Somebody who knows it is FAT32 loses
+# nothing; somebody who does not gets an answer instead of a word to look up.
+format-title = Format a disk
+format-empty = no disk here to format
+format-hint-list = ↑↓ choose · Enter continue · Esc close
+format-hint-choose = ↑↓ choose · type a name · Enter continue · Esc back
+format-hint-confirm = ↑↓ choose · Enter answer · Esc back
+format-whole = the whole disk
+format-part = one part of the disk
+format-blank = empty
+format-choose-title = What will this disk be used for?
+format-recipe-universal = opens on any computer — pendrive, camera, television
+format-recipe-large = the same, but takes large files (over 4 GB)
+format-recipe-windows = for use on Windows
+format-recipe-linux = for use on Linux
+format-recipe-modern = for Linux, keeping snapshots of the disk
+format-recipe-missing = XFS is not here: this distro does not carry the program that writes it
+format-name = name
+format-name-limit = up to 11 letters or numbers
+format-confirm-title = This erases everything on it
+format-confirm-whole = the whole disk will be erased, with every part of it
+format-confirm-part = this part of the disk will be erased
+format-confirm-no = no, go back
+format-confirm-yes = yes, erase and format
+format-working = writing to the disk — do not switch off or pull it out
+format-done = done
+# THE DETAIL LINE — the same buffer answering a second person.
+#
+# The rows above are for somebody who does not know what FAT32 is and should not
+# have to. These are for somebody who does: the real name, the limits, and what
+# the gesture is going to do to the disk. One line, under the cursor, in the
+# dimmest colour there is — a beginner never has to read it, and an expert never
+# has to guess.
+format-tech-universal = vfat (FAT32) · up to 4 GiB per file · no owner or permissions
+format-tech-large = exFAT · no practical file size limit · no owner or permissions
+format-tech-windows = NTFS · Windows owner and permissions · written by ntfs-3g
+format-tech-linux = ext4 · Unix owner and permissions · journalled
+format-tech-modern = Btrfs · subvolumes, snapshots, checksums and compression
+format-tech-missing = XFS · mkfs.xfs is not installed in this distro
+format-tech-part = only this partition is rewritten; the disk's table does not change
+format-tech-whole = a fresh partition table (dos up to 2 TiB, gpt above) and ONE partition
+format-tech-needed = mounted by the running system · udisks would refuse, and this screen does not even offer
+format-tech-nothing = no disk under the cursor
+# EACH ACTION'S SECOND REGISTER — what it DOES, for somebody who already knows.
+#
+# The label is for whoever is looking for a verb ("delete for good"); this line
+# is for whoever wants to know exactly what will happen: which call, which
+# options, what can be undone. It reaches the message line when the row is under
+# the CURSOR — not only under the pointer, because whatever the mouse can do the
+# keyboard can do.
+files-does-open = opens in the MIME type's default application; a folder is entered
+files-does-open-with = choose among the `.desktop` files that declare this MIME type
+files-does-terminal = opens the terminal in this folder, as you
+files-does-root-terminal = opens the terminal as root, through pkexec
+files-does-copy-path = puts the absolute path on the clipboard; opens nothing
+files-does-copy = marks for copying; pasting runs it through the queue, which outlives the footer
+files-does-cut = marks for moving; on the same filesystem it is rename(2), instant
+files-does-paste = runs what was marked; across filesystems it is a copy and then a removal
+files-does-rename = renames in place with rename(2); does not cross filesystems
+files-does-pin = adds a row to the sidebar, written to $XDG_CONFIG_HOME
+files-does-unhide = also lists what begins with a dot
+files-does-info = size, owner, mode, times and type; does not touch the contents
+files-does-mode = changes the permission bits with chmod(2)
+files-does-owner = changes the owner with chown(2); asks for the root password
+files-does-group = changes the group with chown(2)
+files-does-compress = builds an archive through the queue, without blocking the listing
+files-does-extract = extracts into a folder named after the archive
+files-does-extract-tar = extracts the tar right here, with no folder
+files-does-restore = puts it back at the origin path the trash recorded
+files-does-trash = moves it to the XDG trash; does not cross filesystems
+files-does-delete = unlink(2) or rmdir(2) straight away: no trash, no way back
+files-does-shred = overwrites before deleting; on copy-on-write btrfs that guarantees nothing
+
+# And the sidebar menu's, which talk to udisks.
+sidebar-does-open = enters the folder; for an unmounted device it opens its sheet
+sidebar-does-mount = udisks2's Filesystem.Mount — it picks the point and the options
+sidebar-does-unmount = Filesystem.Unmount, never forced: it refuses while something is open
+sidebar-does-eject = unmounts and cuts the drive's power (Drive.PowerOff): what makes it safe to pull
+sidebar-does-information = label, node, filesystem, size and drive
+sidebar-does-unpin = removes the row; a distro default comes back hidden, yours is removed
+sidebar-does-format = opens the formatting buffer already pointed at this target
+
+
+
+
+files-disks-not-watching = the disks will not refresh on their own: { $why }
 files-nothing-to-choose = there is nothing to choose from
 files-copied = copied
 files-not-copied = could not copy

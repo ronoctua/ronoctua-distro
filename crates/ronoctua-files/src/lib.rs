@@ -37,6 +37,8 @@ pub mod listing;
 pub mod menu;
 pub mod mime;
 pub mod mode;
+pub mod sidebar;
+pub mod sidebar_menu;
 pub mod size;
 pub mod trash;
 pub mod watch;

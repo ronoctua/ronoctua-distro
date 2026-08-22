@@ -412,6 +412,18 @@ let
       # `usable_actions` in the shell.
       export RONOCTUA_SWAPPY="${swappy}/bin/swappy"
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
+      # AND WHAT THE SIDEBAR STARTS WITH — the same two files the installed
+      # system resolves, for the same reason: there is no NixOS here to read an
+      # option from. Keys into `nix/user-dirs.nix`, resolved to names relative
+      # to home; a name whose directory is not on this machine just does not
+      # become a row.
+      export RONOCTUA_FILES_SIDEBAR="${
+        let
+          userDirs = import ./user-dirs.nix;
+          nameOf = key: if key == "start" then import ./files-start.nix else userDirs.${key};
+        in
+        lib.concatStringsSep ":" (map nameOf (import ./files-sidebar.nix))
+      }"
 
       # Which binary: the store's until the first recompilation, yours after that.
       # That way startup is instant and does not need `cargo` just to have a look.

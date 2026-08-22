@@ -54,6 +54,16 @@ pub enum Action {
     /// The entry comes BY VALUE because the launcher closes along with it: returning
     /// an index would make the host consult a list it has just discarded.
     Open(Box<ronoctua_apps::DesktopEntry>),
+    /// Put it on the file manager's sidebar, and STAY OPEN.
+    ///
+    /// Pinning is not opening: somebody putting three applications there means
+    /// to put three, and a launcher that closed after each would make them type
+    /// the sequence again twice.
+    ///
+    /// By value for the same reason as [`Action::Open`] — but what is stored is
+    /// the ID, which survives a rebuild, and never the command, whose store
+    /// path is a build that gets collected.
+    Pin(Box<ronoctua_apps::DesktopEntry>),
 }
 
 /// The launcher's state while it is open.
@@ -183,6 +193,23 @@ impl Finder {
     /// memory notices.
     pub fn key(&mut self, t: ronoctua_keymap::Key) -> Action {
         use crate::minibuffer::Gesture;
+        // PINNING COMES FIRST, before `gesture_of` turns every bare letter into
+        // a letter of the query. It is the same reason the file manager's own
+        // commands carry a modifier: in a list of NAMES the letter is text, so
+        // anything that is a command has to be something a name never is.
+        //
+        // `C-s` for sidebar. In the manager's menu the same idea is a bare `s`,
+        // because there the letter is not query — one idea, two notations, and
+        // the alternative was `C-s` in both, which costs the menu its one-letter
+        // key for a gesture nobody reaches from there anyway.
+        if crate::leader::OF_LAUNCHER_VIEW
+            .iter()
+            .any(|(notation, _)| ronoctua_keymap::Key::parse(notation).is_ok_and(|k| k == t))
+        {
+            return self
+                .chosen()
+                .map_or(Action::Nothing, |e| Action::Pin(Box::new(e.clone())));
+        }
         match crate::minibuffer::gesture_of(t) {
             Gesture::Cancel => Action::Closed,
             Gesture::Down => self.move_by(1),

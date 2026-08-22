@@ -270,6 +270,15 @@
   cpu = "md-chip";
   memory = "md-memory";
   disk = "md-harddisk";
+  # A DRIVE ONE CAN PULL OUT, in the file manager's sidebar. It is a different
+  # DRAWING and not a different colour, because the difference between an
+  # internal disk and a stick is the first thing one looks for in that list —
+  # and colour there is already carrying "is it mounted".
+  disk-removable = "md-usb_flash_drive";
+  # Unmounting, on the sidebar's row. Material rather than Codicon for the
+  # reason the file's other blocks give: the family has no eject glyph, and
+  # drawing one out of what is left gives a symbol that means nothing.
+  eject = "md-eject";
   power = "md-power";
 
   # ===================================================================

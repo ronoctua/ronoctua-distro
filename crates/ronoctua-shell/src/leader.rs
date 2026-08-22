@@ -912,6 +912,15 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "transfers-window",
             label: key::CMD_TRANSFERS_WINDOW,
         },
+        // FORMATTING A DISK, in a window of its own (`LEADER s f`). It is also
+        // the second door of one thing: the sidebar's own menu reaches the same
+        // buffer with the row already chosen, and this reaches it with the list
+        // open. Neither is a menu (invariant 14) — both are the same three
+        // questions, entered at different points.
+        Command {
+            id: "format-open",
+            label: key::CMD_FORMAT_OPEN,
+        },
         // AND THE EIGHT THAT PUT SOMETHING IN. What they read is the clipboard,
         // because an address is copied and never typed — see
         // `Footer::queue_the_clipboard`.
@@ -967,6 +976,15 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "clipboard-remove",
             label: key::CMD_CLIPBOARD_REMOVE,
+        },
+        // THE LAUNCHER'S ONE KEY OF ITS OWN. Every other key in `LEADER a` is
+        // `gesture_of`'s — the arrows, `Esc`, `RET` — and those are the same
+        // everywhere. This one is the launcher's, so it is a command, in a
+        // table, reachable and listed. A key living only inside a `match` is a
+        // key nothing can enumerate: not `M-x`, not the manual, not a check.
+        Command {
+            id: "apps-pin",
+            label: key::CMD_APPS_PIN,
         },
         Command {
             id: "clipboard-pin",
@@ -1208,6 +1226,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // against freezing and no screen ever said so; this is where it
         // becomes something one can look at, and loosen.
         ("s m", "memory-open", None),
+        // `LEADER s f` — formatting a disk. Under `s` because it is about the
+        // SYSTEM's hardware and sits beside the memory panel, and `f` is free
+        // there: the file manager's `f` is a prefix of its own, one level up.
+        ("s f", "format-open", None),
         ("q q", "session-quit", None),
         // `LEADER :` — `M-x`'s key in Doom, which is where the concept
         // comes from. It used to be `x`, which in Doom is the scratch buffer and not the locator.
@@ -1397,6 +1419,15 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 ///
 /// Declared as DATA, and not hidden in a `match`, for the same reason as the
 /// chords: the list is what the manual and the check read.
+/// The launcher's own key: put the focused application on the file manager's
+/// sidebar.
+///
+/// `C-` and not a bare letter, for the reason the manager's own table gives at
+/// length: in a list of NAMES the letter is query, so anything that is a
+/// command has to be something a name never is. In the manager's MENU the same
+/// idea is a bare `s`, because a menu row is not a list of names.
+pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
+
 pub const OF_CLIPBOARD_VIEW: &[(&str, &str)] = &[
     ("RET", "clipboard-copy-of-new"),
     ("d", "clipboard-remove"),
@@ -1441,6 +1472,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             // The alternative leader is not a command: it fires the sequence.
             .filter(|id| *id != crate::actions::LEADER_ALTERNATE),
     );
+    out.extend(OF_LAUNCHER_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_CLIPBOARD_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::notifications::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_NETWORK_VIEW.iter().map(|(_, id)| *id));
@@ -2018,6 +2050,7 @@ mod tests {
             // like the file manager's.
             "transfers-open",
             "transfers-window",
+            "format-open",
             "transfers-add",
             "transfers-video",
             "transfers-audio",
@@ -2030,6 +2063,7 @@ mod tests {
             // six have keys INSIDE the view, and that is why they go through
             // `reachable` — all seven need an action, otherwise they would appear in the
             // list and do nothing.
+            "apps-pin",
             "clipboard-open",
             "clipboard-copy-of-new",
             "clipboard-remove",
