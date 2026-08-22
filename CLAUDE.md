@@ -139,10 +139,37 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`; `xorg.libX11` → `libx11`; `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. **Atributo dinâmico em duas sentenças** é erro de avaliação: um attrset só.
 - **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
 
+## Como trabalhar — o dono cobrou o TEMPO duas vezes, e a causa era sempre a mesma
+
+Estas regras existem porque tarefas de poucas linhas levaram mais de uma hora. Elas não são sobre
+pressa: são sobre não gastar relógio no que não prova nada. **Valem para qualquer agente**, e por
+isso moram aqui, no único arquivo que chega sozinho ao contexto.
+
+- **ENTREGUE A CORREÇÃO E A TELA; O CHECK É OFERTA.** Faça o que foi pedido, mostre o PNG, e **pare**
+  — dizendo qual check você acrescentaria, o que ele pega e quanto custa. Quem decide o escopo é o
+  dono. Não vale para o que o pedido claramente inclui, nem para deixar sem conserto um check que
+  você ACABOU de ver falhar: aí é reportar, não seguir em frente.
+- **SÓ OS CHECKS DO QUE MUDOU** (drivers do que você tocou, `nix fmt -- --check`, `english-names`:
+  ~3 min). O `most` são **16 minutos** e fica para antes do commit; o `gate` é do dono. E **congele a
+  árvore antes de disparar bateria** — o Nix a fotografa na avaliação, e editar um comentário no meio
+  obriga a refazer tudo. Diga sempre no relatório qual recorte rodou e qual não.
+- **ITERE NO `cargo`, NUNCA NO NIX.** Tocar `crates/ronoctua-protocol` invalida `rust.workspace`, de
+  que **todo** driver depende: cada rodada paga um build release do workspace. Lógica nova nasce com
+  `#[cfg(test)]` ao lado e roda em `cargo test -p <crate>` (segundos). Ao Nix, uma vez — ele prova a
+  travessia do WIT e o pixel, não serve para descobrir semântica.
+- **`nix run .#png` ANTES DA PALAVRA "PRONTO".** Verde não é prova, e desde que olhar custa 0,2 s não
+  há desculpa. Teste que compara ESTADO não vê espaço em branco, sobreposição nem faixa de seleção.
+- **ARQUIVO NOVO PRECISA DE `git add -N`** — o que o git não rastreia não entra na fonte do flake, e
+  o erro aparece como "can't find bin" minutos depois.
+- **O que eu subo, eu encerro** (daemon de teste, VM, processo solto), depois de conferir que não é
+  trabalho de verdade — e sem tocar no que é do dono.
+
 ## Documentação — seis arquivos, em pt-BR (o resto é inglês — inv. 18)
 
-- `CLAUDE.md` — este. **Teto de 150 linhas** (`docs-exist`); corte antes de acrescentar. Sem log de
-  progresso, changelog nem narrativa. `docs/ARCHITECTURE.md` — o porquê do que não se deve refazer.
+- `CLAUDE.md` — este. **Não tem teto de linhas** desde 2026-08-22, e por decisão do dono: é o único
+  que chega sozinho ao contexto, então é aqui que regra de trabalho mora. O que o teto defendia
+  continua valendo e agora é de quem escreve: **corte antes de acrescentar**. Sem log de progresso,
+  changelog nem narrativa. `docs/ARCHITECTURE.md` — o porquê do que não se deve refazer.
 - `docs/PENDING.md` — o que falta. **Ao concluir, remova de lá**: se mudar como o sistema funciona,
   escreva uma linha aqui ou no ARCHITECTURE; se não, só apague. `README.md` é placeholder, por decisão.
 - `INSTALL.md` (disco) e `DEVELOPMENT.md` (ambiente): NÃO liste atalho — a leader os mostra. **Release

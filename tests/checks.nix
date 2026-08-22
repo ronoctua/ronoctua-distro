@@ -5740,11 +5740,19 @@ let
     echo "OK: ISO cabe em pendrive"
   '';
 
-  # The FOUR documents exist, and the `CLAUDE.md` fits in its ceiling.
+  # THE SIX DOCUMENTS EXIST.
   #
-  # The 150-line ceiling is not aesthetics: the `CLAUDE.md` is the only file
-  # that goes into every agent's context on its own. Going past the ceiling
-  # does not make it more informative — it makes it less read.
+  # There WAS a 150-line ceiling on the `CLAUDE.md`, on the reasoning that it is
+  # the only file that goes into every agent's context on its own, and that
+  # going past the ceiling does not make it more informative — it makes it less
+  # read. The owner removed it, and the reason is the other half of that same
+  # sentence: it being the only file that arrives on its own is exactly why the
+  # working rules have to live in it. A rule kept somewhere cheaper is a rule
+  # that reaches an agent who thought to go looking, which is the ones who did
+  # not need it.
+  #
+  # What the ceiling was really defending is still true and is now nobody's
+  # check: length costs attention. Whoever writes here cuts before adding.
   #
   # `PENDING.md` is on the list because the "what is missing" half disappears
   # if it is not demanded: a project with no place for a pending item to live
@@ -5756,13 +5764,7 @@ let
       test -s "$f" || { echo "ERRO: $f ausente ou vazio" >&2; exit 1; }
     done
 
-    lines=$(wc -l < ${../CLAUDE.md})
-    echo "CLAUDE.md: $lines linhas"
-    if [ "$lines" -gt 150 ]; then
-      echo "ERRO: CLAUDE.md passou do teto de 150 linhas." >&2
-      echo "      'Se passar, corte antes de acrescentar.'" >&2
-      exit 1
-    fi
+    echo "CLAUDE.md: $(wc -l < ${../CLAUDE.md}) linhas"
 
     # The PENDING.md must not become a changelog. Its rule is "on finishing,
     # remove it"; a struck-through or done-marked item is the start of the rot.
@@ -5774,7 +5776,7 @@ let
       exit 1
     fi
 
-    echo "OK: os seis documentos existem; CLAUDE.md dentro do teto"
+    echo "OK: os seis documentos existem, e o PENDING nao virou changelog"
   '';
 
   architecture-sections = mkCheck "architecture-sections" [ pkgs.python3 ] ''
