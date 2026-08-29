@@ -2745,6 +2745,7 @@ dependencies = [
  "ronoctua-brain",
  "ronoctua-clipboard",
  "ronoctua-cmd",
+ "ronoctua-design",
  "ronoctua-disks",
  "ronoctua-files",
  "ronoctua-i18n",

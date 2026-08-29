@@ -100,6 +100,37 @@ impl Column {
     /// Fixed for everything but the name, which takes what is left. `Modified`
     /// is sixteen because that is `2026-08-20 14:32` exactly, and a date column
     /// that elides is a date column that lies about the year.
+    /// The name this column crosses to `ronoctua_design::Table` under.
+    ///
+    /// A `&'static str` because that crate carries no buffer's and no shell's
+    /// vocabulary — it resolves ids, and the caller finds its own field again.
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Icon => "icon",
+            Self::Name => "name",
+            Self::Perms => "perms",
+            Self::Owner => "owner",
+            Self::Group => "group",
+            Self::Size => "size",
+            Self::Modified => "modified",
+        }
+    }
+
+    /// The column an id names, if it is one of ours.
+    fn of_id(id: &str) -> Option<Self> {
+        [
+            Self::Icon,
+            Self::Name,
+            Self::Perms,
+            Self::Owner,
+            Self::Group,
+            Self::Size,
+            Self::Modified,
+        ]
+        .into_iter()
+        .find(|c| c.id() == id)
+    }
+
     const fn width(self) -> u16 {
         match self {
             // THE GLYPH, AND NOTHING ELSE. The air is the columns' own `gap`,
@@ -336,10 +367,7 @@ pub fn sidebar_columns(width: u16, showing: bool, content: u16) -> u16 {
     // label, and without it one badly named pendrive would swallow the table.
     let ceiling = (width / 3).max(SIDE_FLOOR);
     let wanted = (SIDE_GUTTER + content + EDGE_RIGHT).clamp(SIDE_FLOOR, ceiling);
-    // What a listing needs before it says anything: the gutter, the icon and
-    // its gap, the name's floor, and the right edge.
-    let listing_floor = GUTTER + Column::Icon.width() + 1 + NAME_FLOOR + EDGE_RIGHT;
-    if width.saturating_sub(wanted + RULE) < listing_floor {
+    if width.saturating_sub(wanted + RULE) < listing_floor() {
         return 0;
     }
     wanted
@@ -416,6 +444,24 @@ pub enum Doable {
 /// sidebar is decided first, so turning a panel on never moves the places one
 /// navigates by. `wanted` is how many panels are on — one or two.
 #[must_use]
+/// What a listing needs before it says anything.
+///
+/// The gutter, the icon and its gap, the name's floor, and the right edge.
+///
+/// # Why it has a name
+///
+/// Because it was written out twice — once in [`sidebar_columns`] and once in
+/// [`right_columns`] — with a comment on the second saying "the same
+/// expression `sidebar_columns` uses, and it has to be the same or the two
+/// edges disagree about what a listing is". A comment saying two things have
+/// to be equal is not what makes them equal.
+///
+/// The two edges ask the same question — *is there still a listing left?* — so
+/// there is one answer to ask.
+fn listing_floor() -> u16 {
+    GUTTER + Column::Icon.width() + 1 + NAME_FLOOR + EDGE_RIGHT
+}
+
 pub fn right_columns(width: u16, showing: bool, wanted: u16) -> u16 {
     if !showing || wanted == 0 || width < ronoctua_tokens::space::FILES_PANELSFROM {
         return 0;
@@ -428,12 +474,7 @@ pub fn right_columns(width: u16, showing: bool, wanted: u16) -> u16 {
         .saturating_mul(wanted)
         .saturating_add(RULE.saturating_mul(wanted))
         .saturating_add(EDGE_RIGHT);
-    // What a listing needs before it says anything: the gutter, the icon and
-    // its gap, the name's floor, and the right edge. The same expression
-    // `sidebar_columns` uses, and it has to be the same or the two edges
-    // disagree about what a listing is.
-    let listing_floor = GUTTER + Column::Icon.width() + 1 + NAME_FLOOR + EDGE_RIGHT;
-    if width.saturating_sub(take) < listing_floor {
+    if width.saturating_sub(take) < listing_floor() {
         return 0;
     }
     take
@@ -993,57 +1034,20 @@ pub fn picture_in(
 #[must_use]
 pub fn layout_beside(width: u16, from: u16, to: u16, details: bool) -> Layout {
     let width = width.saturating_sub(from).saturating_sub(to);
-    let mut wanted = vec![
-        Column::Icon,
-        Column::Name,
-        Column::Perms,
-        Column::Owner,
-        Column::Group,
-        Column::Size,
-        Column::Modified,
-    ];
-    if !details {
-        wanted.retain(|c| !matches!(c, Column::Perms | Column::Owner | Column::Group));
-    }
-    // One cell of separation between columns, which is the whole of the
-    // separation: no rule, no box (invariant 15).
-    let gap = 1u16;
-    let fixed = |cols: &[Column]| -> u16 {
-        cols.iter()
-            .filter(|c| !matches!(c, Column::Name))
-            .map(|c| c.width() + gap)
-            .sum()
-    };
-    // BOTH EDGES COME OFF BEFORE ANYTHING IS DECIDED. They are not columns and
-    // they never give way: a table whose last column is flush against the
-    // screen reads as cut off, whatever else fits.
-    let usable = |w: u16| w.saturating_sub(GUTTER).saturating_sub(EDGE_RIGHT);
-    for giving in GIVE_WAY {
-        if usable(width).saturating_sub(fixed(&wanted)) >= NAME_FLOOR {
-            break;
-        }
-        wanted.retain(|c| *c != giving);
-    }
-    // PHASE TWO: the floor gives way, and the name takes whatever is left.
+    // THE ARITHMETIC IS `ronoctua_design::Table`'S, and this function is now
+    // the LISTING's statement about itself.
     //
-    // `NAME_FLOOR` is a PREFERENCE — twelve cells is where a name stops
-    // identifying anything — and a preference is not what holds when the screen
-    // is smaller than it. What holds is that nothing leaks, which is the same
-    // two-phase shape `layout::resolve` uses on the modeline.
-    // The name takes what is left, and at least one cell: a listing with no
-    // name column at all would be a table about files that does not say which.
-    let for_name = usable(width).saturating_sub(fixed(&wanted)).max(1);
-
-    // Drawn left to right: icon, name, then the fixed block. The name comes
-    // early because it is what the eye scans; the facts one looks UP sit in a
-    // column that always starts at the same cell, which is what makes them
-    // comparable between rows.
-    let mut columns = Vec::new();
-    // THE FIRST CELL IS NOT A COLUMN. It is where the mark goes, and it is the
-    // air between the icon and the screen's edge — without it the glyph touches
-    // the border and reads as clipped. It is the same `modeline.edgeLeft` the
-    // rest of the footer already leaves.
-    let mut at = GUTTER;
+    // The two phases were written out here — a give-way loop, then a floor
+    // that is a preference and a rule that is not — and written out again for
+    // the sidebar, and a third time for the panels. That crate's own head says
+    // it is this function generalised, and it has been since it was written;
+    // what was missing was this call.
+    //
+    // What stays here is what is ABOUT files: which columns exist, how wide a
+    // date is, and the order in which they give way. A date column is eleven
+    // cells because a date is eleven cells, and that is not the design
+    // system's business.
+    let mut table = ronoctua_design::Table::across(width).inset(GUTTER, EDGE_RIGHT);
     for c in [
         Column::Icon,
         Column::Name,
@@ -1053,17 +1057,38 @@ pub fn layout_beside(width: u16, from: u16, to: u16, details: bool) -> Layout {
         Column::Size,
         Column::Modified,
     ] {
-        if !wanted.contains(&c) {
+        // THE THREE ONE LOOKS UP ARE REMOVED BEFORE THE LOOP, and never
+        // filtered out of a finished layout: removed here their cells go to
+        // the name, filtered afterwards they would be a hole where the column
+        // used to be.
+        if !details && matches!(c, Column::Perms | Column::Owner | Column::Group) {
             continue;
         }
-        let w = if matches!(c, Column::Name) {
-            for_name
-        } else {
-            c.width()
-        };
-        columns.push((c, from + at, w));
-        at += w + gap;
+        // THE RANK IS `GIVE_WAY` READ BACKWARDS. The first to go is the one
+        // that gives way soonest, which is the highest rank over there; the
+        // name is in neither list, and a column that never gives way is a
+        // column with nothing to say about the order.
+        #[allow(clippy::cast_possible_truncation)]
+        let rank = GIVE_WAY
+            .iter()
+            .position(|g| *g == c)
+            .map_or(0, |n| (GIVE_WAY.len() - n) as u8);
+        table = table.with(ronoctua_design::Column {
+            id: c.id(),
+            width: if matches!(c, Column::Name) {
+                ronoctua_design::table::Width::Fill { floor: NAME_FLOOR }
+            } else {
+                ronoctua_design::table::Width::Fixed(c.width())
+            },
+            rank,
+        });
     }
+    let columns = table
+        .resolve()
+        .fields()
+        .iter()
+        .filter_map(|f| Column::of_id(f.id).map(|c| (c, from + f.at, f.width)))
+        .collect();
     Layout { columns, from }
 }
 
@@ -1291,12 +1316,7 @@ impl Section {
         cell: f32,
         line_px: f32,
     ) -> Option<(f32, f32, f32, f32)> {
-        if self.total <= self.lines || self.lines == 0 {
-            return None;
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let (total, lines, offset) = (self.total as f32, self.lines as f32, self.offset as f32);
-        // THE TRACK IS PIXELS, AND IT ENDS WHERE THE SURFACE DOES.
+        // THE TRACK IS PIXELS, AND IT ENDS WHERE THE BAND DOES.
         //
         // It used to be `lines × line_px`, and a surface is not a whole number
         // of lines: `lines` is `floor(height / line_px)`, so the track stopped
@@ -1304,39 +1324,46 @@ impl Section {
         // the thumb stopped there too. The owner photographed the gap under
         // the facts' bar twice and said, correctly, that it was still there.
         //
-        // The residue is not distributed and not rounded away: the band's
-        // bottom IS the number the door measured, and the thumb's travel is
-        // computed inside it.
-        //
         // AND THE BAND IS THE SECTION'S OWN, never the whole surface's.
         //
-        // Reaching for `bottom` unconditionally was the first shape of this
+        // Reaching for `bottom` unconditionally was the first shape of that
         // fix, and it was too wide: down in the STRIP the panels have lines of
         // their own BELOW the listing, so the listing's band ends where the
         // strip begins. Handed the surface, the listing's thumb walked out of
         // its column and into the facts' box, which the owner watched it do.
         //
-        // The residue is at most one line by construction — `lines` is
-        // `floor(height / line_px)` — so a band ending within one line of the
-        // surface is the LAST band in its column and takes what is left over;
-        // one ending a whole line or more above it has something underneath.
+        // The residue is at most one line by construction, so a band ending
+        // within one line of the surface is the LAST band in its column and
+        // takes what is left over; one ending a whole line or more above it
+        // has something underneath.
         let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
-        let natural = band_top + lines * line_px;
+        #[allow(clippy::cast_precision_loss)]
+        let natural = band_top + self.lines as f32 * line_px;
         let band_bottom = if bottom - natural < line_px {
             bottom
         } else {
             natural
         };
         let band = (band_bottom - band_top).max(line_px);
-        let tall = (lines / total * band).max(line_px);
-        // THE LAST PAGE PUTS THE THUMB AT THE BOTTOM, and never half way: the
-        // owner dragged one to its end and it stopped in the middle of its
-        // own column, because the travel was measured over the whole list
-        // instead of over what is left after the thumb.
-        let travel = (band - tall).max(0.0);
-        let last = (total - lines).max(1.0);
-        let from = (offset / last).min(1.0) * travel;
+        // AND THE THUMB ITSELF IS `ronoctua_design::Scroll`.
+        //
+        // Where it is drawn and where it is grabbed were two sums in this
+        // shell, in three places, and the differences between them were the
+        // defects the owner reported with the mouse in his hand. There is one
+        // now, and it crosses to the buffers, which have lists too.
+        let (from, tall) = self.scroll().thumb(band, line_px)?;
         Some((right - cell, band_top + from, cell, tall))
+    }
+
+    /// This section as a list that may not fit.
+    #[must_use]
+    pub const fn scroll(&self) -> ronoctua_design::Scroll {
+        ronoctua_design::Scroll {
+            total: self.total,
+            lines: self.lines,
+            offset: self.offset,
+            top: self.top,
+        }
     }
 
     /// Whether a point of the region is inside this section.
@@ -5614,14 +5641,27 @@ impl View {
             // saying there is none. There is nothing to put a bar on.
             Pane::Preview => return false,
         };
-        let last = total.saturating_sub(room);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        let to = ((fraction.clamp(0.0, 1.0) * last as f64).round() as usize).min(last);
         let _ = width;
+        // THROUGH `Scroll::offset_at`, which is `thumb`'s own inverse.
+        //
+        // The mapping used to be written out here as `fraction * last`, and
+        // that is not the inverse of what was DRAWN: the thumb has a length,
+        // so the offsets are spread over `track - thumb` and not over the
+        // track. Dragging to the end landed half way down the column, which
+        // the owner reported after trying it with the mouse.
+        //
+        // The unit is one, which is what makes the track a pure ratio: the
+        // door has already turned pixels into a fraction of the band, and
+        // this side has no pixels to turn them back into.
+        let bar = ronoctua_design::Scroll {
+            total,
+            lines: room,
+            offset: 0,
+            top: 0,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let at = fraction.clamp(0.0, 1.0) as f32;
+        let to = bar.offset_at(at, 1.0, 0.0);
         match pane {
             Pane::Sidebar => self.side_offset = to,
             Pane::Listing => self.list_offset = to,
@@ -7160,7 +7200,22 @@ mod tests {
 
     #[test]
     fn the_name_never_gives_way_however_narrow_it_gets() {
-        for width in 1..=200u16 {
+        // FROM TWO, AND THE CHANGE IS DELIBERATE.
+        //
+        // At ONE column there is no listing at all now. The gutter and the
+        // right edge take that cell between them, so the name's old `.max(1)`
+        // put a cell where there was none and the row leaked — which this file
+        // used to pin as a known exception. `ronoctua_design::Table` does not
+        // have the exception: if not even one column places, the layout is
+        // empty, because drawing into a window that narrow IS the leak.
+        //
+        // "Nothing leaks" is the rule that never gives way, and this was the
+        // one place in the shell that broke it.
+        //
+        // The first width that holds a listing is therefore the two edges plus
+        // one cell for the name, spelled from the tokens rather than as a
+        // literal that would have to be found again when one of them moves.
+        for width in (GUTTER + EDGE_RIGHT + 1)..=200u16 {
             let l = layout_beside(width, 0, 0, true);
             assert!(
                 l.find(Column::Name).is_some(),
@@ -8355,16 +8410,20 @@ mod tests {
         let mut v = view_at(&dir);
         v.reread();
         let b = bundle();
-        // THE FLOOR IS `.max(1)` ON THE NAME, and it is deliberate: "a listing
-        // with no name column at all would be a table about files that does not
-        // say which". Below the gutter plus the edge plus one cell there is
-        // nowhere for that one cell to go, so it leaks — and has since long
-        // before there was a sidebar. Pinned here so the next person does not
-        // read the sidebar's own test as an accusation against the sidebar.
+        // AND IT LEAKS NOWHERE, which it did not always.
+        //
+        // At one column it used to: the name's `.max(1)` put a cell where the
+        // gutter and the edge had already taken the only one there was. That
+        // exception is gone with `ronoctua_design::Table` — a width that holds
+        // no column holds no row — so the list is empty rather than short.
         let leaks: Vec<u16> = (1..=120u16)
             .filter(|w| rightmost(&v.drawn(*w, &b)) > *w)
             .collect();
-        assert_eq!(leaks, vec![1], "the listing alone leaks at {leaks:?}");
+        assert_eq!(
+            leaks,
+            Vec::<u16>::new(),
+            "the listing alone leaks at {leaks:?}"
+        );
     }
 
     #[test]
@@ -8425,11 +8484,23 @@ mod tests {
                 "at {width} columns the bar pushed something to {}",
                 rightmost(&rows)
             );
-            // AND THE NAME SURVIVES. A sidebar that took its quarter and left
-            // a table of unreadable names would have its priorities backwards.
+            // AND THE NAME SURVIVES WHEREVER THERE IS A LISTING AT ALL. A
+            // sidebar that took its quarter and left a table of unreadable
+            // names would have its priorities backwards.
+            //
+            // "Wherever there is one" is asked of the LAYOUT and not of the
+            // drawn fields: at a width that holds no column the listing is
+            // empty, and an empty listing has not lost a name — see
+            // `the_name_never_gives_way_however_narrow_it_gets` for why that
+            // stopped being an exception. Asking the rows instead answered
+            // about the sidebar's own fields, which are not the listing's.
+            let split = v.split(width);
+            let listing = layout_beside(width, split, 0, true);
             assert!(
-                rows.iter()
-                    .any(|r| r.fields.iter().any(|f| matches!(f.hit, Hit::Name(_)))),
+                listing.columns.is_empty()
+                    || rows
+                        .iter()
+                        .any(|r| r.fields.iter().any(|f| matches!(f.hit, Hit::Name(_)))),
                 "at {width} columns the listing lost its name"
             );
             let side = cell_of(&rows, &Hit::Sidebar(0)).is_some();
@@ -10224,7 +10295,11 @@ mod tests {
             let leaks: Vec<u16> = (1..=240u16)
                 .filter(|w| rightmost(&v.drawn(*w, &b)) > *w)
                 .collect();
-            assert_eq!(leaks, vec![1], "com {sidebar} lugares, vazou em {leaks:?}");
+            assert_eq!(
+                leaks,
+                Vec::<u16>::new(),
+                "with {sidebar} places, it leaked at {leaks:?}"
+            );
             // AND THE STRIP TOO, which is drawn from the same boxes and would
             // be the half nobody looked at.
             let strip_leaks: Vec<u16> = (1..=240u16)

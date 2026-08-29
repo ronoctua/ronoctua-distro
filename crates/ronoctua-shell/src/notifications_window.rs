@@ -133,6 +133,7 @@ pub fn host_it() -> Result<()> {
         columns: 80,
         lines: 24,
         quit: false,
+        owed: false,
         gpu: None,
         text: None,
         quads: None,
@@ -154,6 +155,8 @@ pub fn host_it() -> Result<()> {
     let signal = cycle.get_signal();
     cycle
         .run(None, &mut state, |e| {
+            // THE ONE PLACE THAT KNOWS THE BATCH IS OVER.
+            e.settle();
             if e.quit {
                 signal.stop();
             }
@@ -178,6 +181,20 @@ struct NotificationsWindow {
     columns: u16,
     lines: u16,
     quit: bool,
+    /// Whether a frame is owed.
+    ///
+    /// # Why nothing here paints straight away
+    ///
+    /// Because presentation blocks on the vertical blank, and a handler that
+    /// paints is a handler that waits for the monitor. A drag delivers motion
+    /// as fast as the device reports it, so painting per event turned the
+    /// gesture into a walk: the list crawled through its rows instead of
+    /// arriving where the pointer already was.
+    ///
+    /// The shape is `files_window`'s, and the reason is `Footer::owes_paint`'s
+    /// before that. A hundred events in one batch come out as ONE frame, drawn
+    /// from the last of them.
+    owed: bool,
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
     quads: Option<ronoctua_render::quad::Quads>,
@@ -218,7 +235,7 @@ impl NotificationsWindow {
         self.records = fresh;
         self.book.mine = prefs.rules;
         self.book.adjustments = prefs.adjustments;
-        self.paint();
+        self.ask_paint();
     }
 
     /// How many rows fit under the two fixed lines.
@@ -298,7 +315,7 @@ impl NotificationsWindow {
                 }
             }
         }
-        self.paint();
+        self.ask_paint();
     }
 
     fn save_history(&mut self) {
@@ -359,6 +376,23 @@ impl NotificationsWindow {
             Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
         }
         self.gpu = Some(g);
+    }
+
+    /// Asks for a frame. It is drawn when the event queue empties.
+    ///
+    /// See the `owed` field for why nothing here presents directly.
+    const fn ask_paint(&mut self) {
+        self.owed = true;
+    }
+
+    /// Draws the owed frame, if one is owed.
+    ///
+    /// Called from the event loop's callback — the one place that knows the
+    /// batch is finished.
+    fn settle(&mut self) {
+        if std::mem::take(&mut self.owed) {
+            self.paint();
+        }
     }
 
     fn paint(&mut self) {
@@ -558,7 +592,7 @@ impl WindowHandler for NotificationsWindow {
             g.resize(self.width, self.height);
         }
         self.recount();
-        self.paint();
+        self.ask_paint();
     }
 }
 
@@ -744,7 +778,7 @@ impl PointerHandler for NotificationsWindow {
                 self.apply(errand);
                 return;
             }
-            self.paint();
+            self.ask_paint();
             return;
         }
         if wheel.abs() >= 1.0 {
@@ -766,11 +800,11 @@ impl PointerHandler for NotificationsWindow {
             )
             .unwrap_or(0)
             .min(last);
-            self.paint();
+            self.ask_paint();
             return;
         }
         if before != self.row_under_pointer {
-            self.paint();
+            self.ask_paint();
         }
     }
 }

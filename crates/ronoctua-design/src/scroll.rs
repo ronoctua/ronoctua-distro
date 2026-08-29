@@ -1,0 +1,217 @@
+//! A scrollbar, as arithmetic — the same one on both sides of the wall.
+//!
+//! # Why this is here and not in the shell
+//!
+//! Because it was in the shell three times. The manager drew its bar with one
+//! sum and looked for it with another; the footer had a third for the eight
+//! views that are not the manager; and each door of the manager had written its
+//! own half of the drag. Every one of those was the same six lines, and the
+//! defects the owner reported were the differences between them: a thumb that
+//! moved in one door and refused in the other, one that stopped half way down
+//! its own track, and one that ran past the bottom of the column it belonged
+//! to.
+//!
+//! # Why it crosses to the guest side
+//!
+//! Because a buffer has lists too, and nothing about a track is about pixels.
+//! [`Scroll`] counts in whatever unit it is handed: give it a track in cells
+//! and it answers in cells, give it one in pixels and it answers in pixels.
+//! That is what lets the host measure a surface the compositor gave — where
+//! the residue lives — and a component measure a grid, from one implementation.
+//!
+//! Invariant 11 is not bent by this: no token value crosses, and the caller
+//! brings its own unit.
+
+/// A list that does not fit, and where its thumb goes.
+///
+/// `total` is how many rows exist, `lines` how many are shown, `offset` which
+/// row is first. `top` is how far down the band starts, in lines, for a section
+/// that does not begin at the top of its column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scroll {
+    /// How many rows the list has.
+    pub total: usize,
+    /// How many of them are on screen.
+    pub lines: usize,
+    /// Which row is the first one drawn.
+    pub offset: usize,
+    /// How many lines above this band belong to something else.
+    pub top: usize,
+}
+
+impl Scroll {
+    /// Whether there is anything to scroll.
+    ///
+    /// A bar over a list that fits is a control that does nothing, and the
+    /// whole shell agrees on that: no bar is drawn.
+    #[must_use]
+    pub const fn cut(&self) -> bool {
+        self.total > self.lines && self.lines > 0
+    }
+
+    /// The thumb: how far down it starts and how long it is, in the track's
+    /// own unit.
+    ///
+    /// `track` is the whole band, from the top of this section to its bottom —
+    /// and its bottom is the CALLER's business, because only the caller knows
+    /// whether anything sits underneath.
+    ///
+    /// # Two defects, written down
+    ///
+    /// The length is `lines / total` of the track and never less than one
+    /// unit, or a long list produces a thumb too small to grab.
+    ///
+    /// The travel is measured over `track - thumb` and never over the whole
+    /// track: with the whole track, the last page put the thumb's TOP at the
+    /// bottom, so it hung off the end — and, clamped, it stopped half way down
+    /// its own column. The owner dragged one to its end and watched it stop in
+    /// the middle.
+    #[must_use]
+    pub fn thumb(&self, track: f32, unit: f32) -> Option<(f32, f32)> {
+        if !self.cut() || track <= 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let (total, lines, offset) = (self.total as f32, self.lines as f32, self.offset as f32);
+        let tall = (lines / total * track).max(unit);
+        let travel = (track - tall).max(0.0);
+        let last = (total - lines).max(1.0);
+        let from = (offset / last).min(1.0) * travel;
+        Some((from, tall))
+    }
+
+    /// Which offset a point in the track means.
+    ///
+    /// The inverse of [`Scroll::thumb`], and it has to be: where a bar is drawn
+    /// is where it is grabbed. `at` is measured from the top of the band, in
+    /// the same unit as `track`.
+    #[must_use]
+    pub fn offset_at(&self, at: f32, track: f32, unit: f32) -> usize {
+        if !self.cut() || track <= 0.0 {
+            return 0;
+        }
+        let Some((_, tall)) = self.thumb(track, unit) else {
+            return 0;
+        };
+        let travel = (track - tall).max(0.0);
+        let last = self.total.saturating_sub(self.lines);
+        if travel <= 0.0 {
+            return last;
+        }
+        // THE POINT IS THE THUMB'S CENTRE, and not its top. Grabbing a bar
+        // puts the pointer somewhere inside it, and a caller that hands in
+        // where the pointer IS wants the thumb to sit under the pointer —
+        // which is what makes the bottom of the track the last page.
+        let fraction = ((at - tall / 2.0) / travel).clamp(0.0, 1.0);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let n = (fraction * last as f32).round() as usize;
+        n.min(last)
+    }
+
+    /// Whether a point inside the band is on the thumb.
+    #[must_use]
+    pub fn holds(&self, at: f32, track: f32, unit: f32) -> bool {
+        self.thumb(track, unit)
+            .is_some_and(|(from, tall)| at >= from && at < from + tall)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Scroll;
+
+    /// WHERE IT DRAWS IS WHERE IT IS GRABBED — the law the plan names, and the
+    /// one no grep can see.
+    ///
+    /// The manager's bar was drawn by one sum and looked for by another, in
+    /// both doors. It moved in one and refused in the other, and the owner
+    /// tried it with the mouse in each.
+    #[test]
+    fn where_it_draws_is_where_it_is_grabbed() {
+        let (track, unit) = (520.0f32, 26.0f32);
+        for total in [13usize, 40, 200, 6_000] {
+            for lines in [4usize, 12, 20] {
+                if total <= lines {
+                    continue;
+                }
+                let last = total - lines;
+                for offset in [0, 1, last / 2, last] {
+                    let s = Scroll {
+                        total,
+                        lines,
+                        offset,
+                        top: 0,
+                    };
+                    let (from, tall) = s.thumb(track, unit).expect("the list is cut");
+                    let centre = from + tall / 2.0;
+                    assert_eq!(
+                        s.offset_at(centre, track, unit),
+                        offset,
+                        "total={total} lines={lines} offset={offset}: the thumb's own \
+                         centre came back as another offset"
+                    );
+                    assert!(
+                        s.holds(centre, track, unit),
+                        "the centre is not on the thumb"
+                    );
+                }
+            }
+        }
+    }
+
+    /// THE LAST PAGE PUTS THE THUMB AT THE BOTTOM, and never half way.
+    #[test]
+    fn the_end_of_the_track_is_the_last_page() {
+        let (track, unit) = (400.0f32, 26.0f32);
+        let s = Scroll {
+            total: 500,
+            lines: 10,
+            offset: 490,
+            top: 0,
+        };
+        let (from, tall) = s.thumb(track, unit).expect("the list is cut");
+        assert!(
+            (from + tall - track).abs() < 0.001,
+            "the thumb ends at {} and the track at {track}",
+            from + tall
+        );
+        assert_eq!(
+            s.offset_at(track, track, unit),
+            490,
+            "the bottom is the last page"
+        );
+    }
+
+    /// A THUMB IS ALWAYS BIG ENOUGH TO GRAB.
+    #[test]
+    fn a_very_long_list_still_has_something_to_hold() {
+        let (track, unit) = (300.0f32, 26.0f32);
+        let s = Scroll {
+            total: 200_000,
+            lines: 11,
+            offset: 199_000,
+            top: 0,
+        };
+        let (from, tall) = s.thumb(track, unit).expect("the list is cut");
+        assert!(tall >= unit - 0.001, "the thumb vanished: {tall}");
+        assert!(from + tall <= track + 0.001, "the thumb left the track");
+    }
+
+    /// AND A LIST THAT FITS HAS NO BAR AT ALL.
+    #[test]
+    fn a_whole_list_has_no_thumb() {
+        let s = Scroll {
+            total: 4,
+            lines: 10,
+            offset: 0,
+            top: 0,
+        };
+        assert!(!s.cut());
+        assert_eq!(s.thumb(400.0, 26.0), None);
+        assert!(!s.holds(10.0, 400.0, 26.0));
+    }
+}

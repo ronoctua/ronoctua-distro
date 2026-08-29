@@ -296,56 +296,32 @@ struct FilesWindow {
 }
 
 impl FilesWindow {
+    // EVERY ONE OF THESE IS `Geometry`'S ANSWER, and none of them is a second
+    // one.
+    //
+    // They used to be the arithmetic itself, and that is what made this door
+    // untestable: the numbers lived on a struct that owns a Wayland
+    // connection. They are one line each now — the door asks the value and
+    // the value answers — so the same question put by a test and by a frame
+    // cannot come back different.
+
+    /// The two rooms this door gives, for whatever asks about a bar.
+    fn rooms(&self) -> crate::files::Room {
+        self.geometry().rooms()
+    }
+
+    /// How many lines the PANELS are given — what the facts scroll inside.
+    fn panel_room(&self) -> usize {
+        self.geometry().panel_room()
+    }
+
     /// How many rows of listing fit.
     ///
     /// One less than the region, because the header takes a line and it is
     /// drawn from the same arithmetic the hit test uses — a room that counted
     /// the header would put the last row under the window's edge.
-    ///
-    /// AND THE STRIP COMES OFF THE BOTTOM. It is pinned under the listing and
-    /// does not scroll, so the rows it takes are rows the listing does not
-    /// have; counting them would put the last entry underneath the preview.
-    /// The surface's bottom edge, in pixels.
-    ///
-    /// The PIXEL and not `lines * line_height`: the line height here is 26,5
-    /// px and the product of a line count by it lands short of the edge, which
-    /// is why every divider in this window stopped one or two pixels above the
-    /// bottom of the screen.
-    fn bottom(&self) -> f32 {
-        self.metric().bottom()
-    }
-
-    /// Where the LISTING's region ends: the strip's rule when there is a strip
-    /// under it, and the surface's own bottom when there is not.
-    fn list_bottom(&self, line_px: f32) -> f32 {
-        let strip = self.view.panes(self.columns).strip;
-        if strip > 0 {
-            f32::from(FIRST_OF_REGION + u16::try_from(self.room()).unwrap_or(0)) * line_px
-        } else {
-            self.bottom()
-        }
-    }
-
-    /// The two rooms this door gives, for whatever asks about a bar.
-    fn rooms(&self) -> crate::files::Room {
-        crate::files::Room {
-            list: self.list_room(),
-            panel: self.panel_room(),
-        }
-    }
-
-    /// How many lines the PANELS are given — what the facts scroll inside.
-    fn panel_room(&self) -> usize {
-        let panes = self.view.panes(self.columns);
-        if panes.strip > 0 {
-            usize::from(panes.strip)
-        } else {
-            self.room()
-        }
-    }
-
     fn list_room(&self) -> usize {
-        self.room().saturating_sub(usize::from(self.chrome_lines()))
+        self.geometry().list_room()
     }
 
     /// How many lines the listing's chrome takes — two, or none at all when a
@@ -354,9 +330,13 @@ impl FilesWindow {
         if self.view.plain() { CHROME_LINES } else { 0 }
     }
 
+    /// How many lines the region has.
+    ///
+    /// AND THE STRIP COMES OFF THE BOTTOM. It is pinned under the listing and
+    /// does not scroll, so the rows it takes are rows the listing does not
+    /// have; counting them would put the last entry underneath the preview.
     fn room(&self) -> usize {
-        let strip = self.view.panes(self.columns).strip;
-        usize::from(self.lines.saturating_sub(FIRST_OF_REGION + strip))
+        self.geometry().room()
     }
 
     /// What the manager should be asked about the file under the cursor.
@@ -672,49 +652,20 @@ impl FilesWindow {
             .hit(self.columns, self.room(), line, cell, &self.texts)
     }
 
-    /// EVERY SECTION'S SCROLLBAR, as rectangles — the drawing's and the
-    /// pointer's one answer. See `files::Section::bar_box`.
-    fn bars(
-        &self,
-        sections: &[crate::files::Section],
-        cell: f32,
-        line_px: f32,
-    ) -> Vec<(crate::files::Pane, (f32, f32, f32, f32))> {
-        let panes = self.view.panes(self.columns);
-        #[allow(clippy::cast_precision_loss)]
-        let edge = self.width as f32;
-        let top = self.metric().y_of(FIRST_OF_REGION);
-        // WHERE THE SURFACE ENDS, and not where the last whole line does. See
-        // `files::Section::bar_box`: the difference is the residue, and the
-        // residue is the white space under the facts' bar.
-        let bottom = self.metric().bottom();
-        sections
-            .iter()
-            .filter_map(|sec| {
-                let (x, wide) = crate::files::section_px(
-                    panes,
-                    sec.pane,
-                    CONTENT_MARGIN,
-                    self.columns,
-                    cell,
-                    edge,
-                )?;
-                sec.bar_box(x + wide, top, bottom, cell, line_px)
-                    .map(|r| (sec.pane, r))
-            })
-            .collect()
-    }
-
     /// Which section's bar a POINT is on — the same rectangles that were drawn.
     fn bar_at_point(&self, x: f64, y: f64) -> Option<crate::files::Pane> {
-        let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
-        let cell = f64::from(crate::chrome::Door::Window.cell_width());
+        // THE SAME RECTANGLES THE FRAME DREW, from the same value. Asking
+        // `Geometry` here and in `frame()` is what makes "where it is drawn"
+        // and "where it is grabbed" one answer instead of two that agree by
+        // habit.
+        let geo = self.geometry();
+        let (cell, line_px) = (geo.metric.cell(), geo.metric.line());
         let chrome = self.view.chrome_rows(self.columns, &self.texts);
         let sections = self
             .view
-            .sections(&chrome, self.room(), self.columns, &self.texts);
-        #[allow(clippy::cast_possible_truncation)]
-        self.bars(&sections, cell as f32, line_px as f32)
+            .sections(&chrome, geo.room(), self.columns, &self.texts);
+        let panes = self.view.panes(self.columns);
+        geo.bars(panes, &sections, cell, line_px)
             .into_iter()
             .find(|(_, r)| {
                 let (bx, by, bw, bh) = *r;
@@ -815,363 +766,60 @@ impl FilesWindow {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let size = tokens::font::SIZE_LARGE;
-        let margin = CONTENT_MARGIN;
-        let mut spans: Vec<ronoctua_render::Span> = Vec::new();
-        let mut quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
+        let painted = frame(&mut self.scene());
+        self.present(painted);
+    }
 
-        // LINE 0 IS THE ONE LINE THAT IS NOT A COLUMN'S.
-        //
-        // The owner asked for this order: *"the shortcut line goes first,
-        // isolated at the top, and the path and filter line is folded into
-        // the top of the listing column"*. It is the footer's
-        // arrangement, where the hint line is the minibuffer's — above the
-        // region and belonging to none of its columns — and the path is inside.
-        //
-        // So the path is not drawn here any more: it goes through
-        // `files::View::region_rows` as the LISTING's chrome, which is what
-        // leaves the sidebar and the panels their own first line instead of a
-        // blank one under somebody else's path.
-        //
-        // LINE 0: what is typed, what the pointer explains, or what went wrong.
-        //
-        // The pointer's explanation WINS, which is the same precedence the
-        // footer's message line uses: pointing at something is a question, and
-        // a question asked now beats a message from before.
-        // WHAT THE POINTER IS ON says it itself: `View::hit` resolved the
-        // section, the row inside it and the field in one answer, so this line
-        // no longer guesses which list the `y` belonged to.
-        let explained = self
-            .under_pointer
-            .as_ref()
-            .and_then(|t| t.explain.clone())
-            .map(|e| self.texts.t_with(e.key, &e.borrowed()));
-        // THE QUERY IS NOT HERE. It goes at the end of the path, on the line
-        // above — see `files::View::crumbs`. This line is for what the pointer
-        // is resting on and what the last action said, and while the query
-        // shared it the two took turns erasing each other.
-        // THE MESSAGE COMES FIRST, for the reason the footer's own precedence
-        // now gives: it is what the manager has to SAY about an action just
-        // asked for, and behind the pointer's description it was unreachable in
-        // the one situation it exists for — the hand on the mouse, the pointer
-        // resting on the row that was just clicked.
-        // AND WHAT THE MENU ROW UNDER THE CURSOR ACTUALLY DOES.
-        //
-        // The same second register the footer's door gained, and the same
-        // reason: the rows are written for somebody starting out, and somebody
-        // who already knows has nowhere to read which call and what can be
-        // undone. It arrives by moving the CURSOR — the explanations here have
-        // needed a pointer until now, and the owner's rule is that whatever the
-        // mouse can do the keyboard can do.
-        //
-        // Behind the message and ahead of the pointer, exactly as over there: a
-        // menu covers the listing, so with one open the pointer is resting on a
-        // row and the cursor is on the choice about to be made.
-        let does = self
-            .view
-            .cursor_explains()
-            .map(|e| self.texts.t_with(e.key, &e.borrowed()));
-        let second = self
-            .message
-            .clone()
-            .or(does)
-            .or(explained)
-            // WITH NOTHING TYPED AND NOTHING TO SAY, the hint. Typing is not a
-            // key and so has no line in the manual; without this the one
-            // gesture the list is built around is the one thing nothing on
-            // screen mentions.
-            .or_else(|| {
-                (!self.view.filtering())
-                    .then(|| crate::files::hint_of(&self.texts, self.view.split(self.columns) > 0))
-            })
-            .unwrap_or_default();
-        if !second.is_empty() {
-            spans.push(ronoctua_render::Span {
-                size: ronoctua_render::Size::Px(size),
-                text: ronoctua_render::layout::elide_end(&second, self.columns),
-                column: margin,
-                line: 0,
-                color: tokens::color::TEXT_SECONDARY,
-                edge: false,
-            });
+    /// The window's arithmetic, as a value.
+    ///
+    /// # Why this is a struct and not eight methods on the window
+    ///
+    /// Because a method on `FilesWindow` cannot be tested: the window owns a
+    /// Wayland `Connection`, a `Window` and a `Gpu`, and there is no way to
+    /// stand one up in a unit test. That is the whole reason this file had
+    /// ZERO of them while `files.rs` had three hundred and forty-seven — and
+    /// it is also why five of the defects the owner reported were reported
+    /// from his screen rather than caught here.
+    ///
+    /// [`Geometry`] is a plain value: a frame, how many columns the margins
+    /// leave, and the two numbers the view asks for. Everything the door
+    /// decides about WHERE follows from it, so everything the door decides
+    /// about where can be asserted on.
+    fn geometry(&self) -> Geometry {
+        let panes = self.view.panes(self.columns);
+        Geometry {
+            metric: self.metric(),
+            columns: self.columns,
+            strip: panes.strip,
+            chrome: self.chrome_lines(),
         }
+    }
 
-        // THE HEADER, on the line above the listing. It names the columns and
-        // says which one is sorting; clicking it sorts, as it does in the
-        // footer. Not drawn over the menu, the picker or the detail sheet:
-        // none of those has columns.
-        let line_px = tokens::metrics::line_height(size);
+    /// Everything a frame is made of, borrowed out of the window.
+    fn scene(&mut self) -> Scene<'_> {
+        let geo = self.geometry();
+        Scene {
+            geo,
+            message: self.message.clone(),
+            cell_under_pointer: self.cell_under_pointer,
+            under_pointer: self.under_pointer.as_ref(),
+            view: &mut self.view,
+            texts: &self.texts,
+        }
+    }
 
-        // THE LISTING — only the rows that fit, and not the whole directory.
-        //
-        // The same reason the footer door has: building a row costs a mode's
-        // nine cells, a size, a date, an owner and a group, and this window
-        // draws `room()` of them. See `files::View::rows_from` for the numbers.
-        // THE LISTING'S OWN CHROME, handed to `region_rows` rather than drawn
-        // above the whole region: the path and the header are the listing's,
-        // and the other three columns start at the region's first line.
-        let chrome = self.view.chrome_rows(self.columns, &self.texts);
-        // THE SECTIONS, each painted on its own rail.
-        //
-        // Nothing here composes a line out of four columns' fields. Every
-        // section says where it is and what it holds, and this loop draws it
-        // there — so a section's length, its offset and its top reach no other
-        // section, by construction rather than by care.
-        // A MODAL VIEW IS ONE LIST — the menu, the picker and the detail sheet
-        // cover the listing, so there are no columns to lay out. See
-        // `files::View::modal_rows`.
-        let sections = if self.view.plain() {
-            self.view
-                .sections(&chrome, self.room(), self.columns, &self.texts)
-        } else {
-            vec![crate::files::Section {
-                pane: crate::files::Pane::Listing,
-                from: 0,
-                to: self.columns,
-                top: 0,
-                lines: self.room(),
-                offset: self.view.list_offset(),
-                total: self.room(),
-                above: 0,
-                content: self.view.modal_rows(
-                    self.view.list_offset(),
-                    self.room(),
-                    self.columns,
-                    &self.texts,
-                ),
-            }]
-        };
-        // WHERE THE SIDEBAR ENDS, asked once for the whole frame. It is what
-        // the rule is drawn at and what decides which half the hover band
-        // covers; asking twice would be two answers on the day one of them was
-        // edited.
-        let split = self.view.split(self.columns);
-        // THE WHOLE DIVISION, asked once for the frame. `split` is the sidebar's
-        // half of it and the band needs the panels' half too — see
-        // `files::band_of`, which is where both doors' arithmetic lives.
-        let panes_now = self.view.panes(self.columns);
-        if split > 0 {
-            let cell = tokens::metrics::cell_width(size);
-            // THE LINE SITS IN THE MIDDLE OF THE CELL RESERVED FOR IT — see
-            // `files::rule_x`. Drawn at the cell's left edge, as it was, the
-            // whole cell became air on the listing's side and none at all on
-            // the sidebar's.
-            quads.push(crate::chrome::divider(
-                crate::files::rule_x(split, margin, cell),
-                self.metric().y_of(FIRST_OF_REGION),
-                self.list_bottom(line_px),
-            ));
-        }
-        // THE BAND, once per line that the pointer is on — and it is the
-        // POINTER's section that decides which line, so a band never lights a
-        // row of a list the pointer is not over.
-        if let Some(t) = self.under_pointer.as_ref()
-            && let Some(sec) = sections.iter().find(|s| s.pane == t.pane)
-            && let Some(line) = sec.line_of(t.row)
-        {
-            #[allow(clippy::cast_possible_truncation)]
-            let y = FIRST_OF_REGION + line as u16;
-            let cell = tokens::metrics::cell_width(size);
-            // THE SECTION'S OWN EDGES, in pixels.
-            //
-            // `band_of` answers for the sidebar and the listing, which is what
-            // it was written for; down in the strip the panels are neither, and
-            // it fell through to the listing's bounds. The section already says
-            // where it begins and ends, so it is asked — and a band lights the
-            // column the pointer is in, never the one beside it.
-            #[allow(clippy::cast_precision_loss)]
-            let (at, wide) = match t.pane {
-                crate::files::Pane::Preview | crate::files::Pane::Info if sec.top > 0 => {
-                    crate::files::panel_px(
-                        panes_now,
-                        if matches!(t.pane, crate::files::Pane::Preview) {
-                            crate::files::Panel::Preview
-                        } else {
-                            crate::files::Panel::Info
-                        },
-                        margin,
-                        self.columns,
-                        cell,
-                        self.width as f32,
-                    )
-                    .unwrap_or((0.0, 0.0))
-                }
-                _ => crate::files::band_of(
-                    panes_now,
-                    margin,
-                    self.columns,
-                    self.cell_under_pointer,
-                    cell,
-                    self.width as f32,
-                ),
-            };
-            quads.push(ronoctua_render::quad::Quad {
-                x: at,
-                y: f32::from(y) * line_px,
-                width: wide,
-                height: line_px,
-                color: tokens::color::SURFACE_SELECTION,
-            });
-        }
-        for sec in &sections {
-            for (i, line) in sec.content.iter().enumerate() {
-                #[allow(clippy::cast_possible_truncation)]
-                let y = FIRST_OF_REGION + (sec.top + i) as u16;
-                let lit = self
-                    .under_pointer
-                    .as_ref()
-                    .is_some_and(|t| t.pane == sec.pane && sec.line_of(t.row) == Some(sec.top + i));
-                for f in &line.fields {
-                    // THE FIELD UNDER THE POINTER LIGHTS UP, so the sentence on
-                    // the line above has a visible subject. A colour and not a
-                    // box — invariant 15.
-                    let under = lit && self.cell_under_pointer.is_some_and(|c| f.covers(c));
-                    spans.push(ronoctua_render::Span {
-                        size: ronoctua_render::Size::Px(size),
-                        text: f.text.clone(),
-                        column: margin + f.at,
-                        line: y,
-                        color: if under {
-                            tokens::color::STATE_ACCENT
-                        } else {
-                            f.color
-                        },
-                        edge: false,
-                    });
-                }
-            }
-        }
-
-        // THE PANELS' VERTICAL RULES, and the horizontal one over the strip.
-        //
-        // Quads, exactly like the sidebar's: a one-pixel line inside the same
-        // surface. There is no panel, no border and no shadow (invariant 15) —
-        // separation by whitespace and a rule is the only separation this
-        // project has.
-        let panes = panes_now;
-        let cell = tokens::metrics::cell_width(size);
-        let strip_top = FIRST_OF_REGION + u16::try_from(self.room()).unwrap_or(0);
-        if panes.right > 0 || panes.strip > 0 {
-            // WHERE THEY START AND WHERE THEY STOP, and the stop is the
-            // SURFACE'S — never a count of lines times a fractional line
-            // height, which is what left every one of them short of the edge.
-            let (rule_from, rule_to) = if panes.right > 0 {
-                (
-                    self.metric().y_of(FIRST_OF_REGION),
-                    self.list_bottom(line_px),
-                )
-            } else {
-                (self.metric().y_of(strip_top), self.bottom())
-            };
-            for at in panes.rules(self.columns) {
-                quads.push(crate::chrome::divider(
-                    crate::files::rule_x(at, margin, cell),
-                    rule_from,
-                    rule_to,
-                ));
-            }
-        }
-        // EVERY SECTION'S BAR, from the section itself.
-        //
-        // Three of these were written out by hand, each with its own idea of
-        // where its column ends, and the pointer test had a fourth. The owner
-        // found every disagreement: the facts' bar unreachable in one door, the
-        // listing's unreachable in the other, one drawn a cell past the border
-        // and gone off screen, and a thumb that stopped half way down its own
-        // column. `Section::bar_box` is the rectangle now — drawn here, and
-        // tested against by `FilesWindow::bar_at_point`.
-        #[allow(clippy::cast_precision_loss)]
-        for (sec, rect) in self.bars(&sections, cell, line_px) {
-            let _ = sec;
-            quads.push(ronoctua_render::quad::Quad {
-                x: rect.0,
-                y: rect.1,
-                width: rect.2,
-                height: rect.3,
-                color: tokens::color::RULE_STRONG,
-            });
-        }
-        if panes.strip > 0 {
-            // THE LINE THAT SAYS WHERE THE LISTING ENDS. Without it the strip's
-            // first row reads as one more entry that happens to say something
-            // else.
-            #[allow(clippy::cast_precision_loss)]
-            quads.push(crate::chrome::rule(
-                self.width as f32,
-                self.metric().y_of(strip_top),
-            ));
-            // AND THE STRIP'S ROWS ARE THE SECTIONS' OWN, drawn in the loop
-            // above at their own `top`. Drawing them a second time here is
-            // what put the facts under the header AND at the bottom at once.
-        }
-
-        // THE PICTURE, fitted into the preview's box without stretching.
-        //
-        // A textured quad on the SAME surface — no window and no popup
-        // (invariant 14), no border, radius or shadow (invariant 15). A
-        // deformed photograph is worse than a small one: whoever looks does not
-        // know whether what is skewed is the image or the panel.
-        // `preview_box` is asked as the QUESTION "is there a preview at all";
-        // where it goes is `files::panel_px`'s answer, in pixels.
-        let picture = panes.preview_box(self.columns).and_then(|_| {
-            let key = self.view.preview_key()?.to_owned();
-            let rgba = self.view.preview_pixels()?;
-            // THE PANELS' OWN ROWS, and never the whole surface: this door
-            // puts three lines above the listing — the path, the message and
-            // the header — and a picture centred in a box that included them
-            // would sit a line and a half too high. `files::panel_band` is the
-            // one place that arithmetic lives, and the footer had it wrong.
-            // ONLY THE TOP is wanted here: where the box ENDS is the surface's
-            // business, argued at `height` below.
-            let (top, _) =
-                crate::files::panel_band(FIRST_OF_REGION, strip_top - FIRST_OF_REGION, panes.strip);
-            #[allow(clippy::cast_precision_loss)]
-            let (box_x, box_wide) = crate::files::panel_px(
-                panes,
-                crate::files::Panel::Preview,
-                margin,
-                self.columns,
-                cell,
-                self.width as f32,
-            )?;
-            // AND THE AIR ON ALL FOUR SIDES IS THE VIEW'S. `fit_into` centres
-            // and that was never the whole promise: whichever dimension is the
-            // tight one comes out exactly as long as the box, which in this
-            // door was the vertical one — the picture centred AND against the
-            // top edge. See `files::picture_in`.
-            Some((
-                key,
-                crate::files::picture_in(
-                    ronoctua_render::image::Area {
-                        // THE REGION'S RAILS, not the text's — see
-                        // `files::panel_px`. The box is what lies between the
-                        // rules, and where there is no rule it is the window's
-                        // own edge.
-                        x: box_x,
-                        y: f32::from(top) * line_px,
-                        width: box_wide,
-                        // TO THE SURFACE'S BOTTOM, and not `tall * line_px`.
-                        //
-                        // The strip is the last thing this door draws, and a
-                        // count of lines times a line height falls short of the
-                        // edge — the same arithmetic that left every divider
-                        // one pixel high of it. Here it left a whole line: the
-                        // box was four lines while the region under the rule
-                        // was five, so the picture was centred in the top four
-                        // fifths of it and read as pushed up. Measured on the
-                        // window door: 5 px of air above and 28 below.
-                        //
-                        // `tall` still decides where the box BEGINS, through
-                        // `top`; what it may not decide is where the surface
-                        // ends, because it does not know.
-                        height: (self.bottom() - f32::from(top) * line_px).max(0.0),
-                    },
-                    rgba.width,
-                    rgba.height,
-                ),
-            ))
-        });
-
+    /// The half that owns the GPU, and the only half that cannot be tested.
+    ///
+    /// It takes what [`frame`] produced and does nothing but hand it over:
+    /// no arithmetic, no decision about where anything goes. That division is
+    /// the point — a defect in this function is a defect in wgpu's arguments,
+    /// and a defect anywhere else has a test that can reach it.
+    fn present(&mut self, painted: Painted) {
+        let Painted {
+            spans,
+            quads,
+            picture,
+        } = painted;
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
@@ -1232,6 +880,487 @@ impl FilesWindow {
         if let Err(e) = self.conn.flush() {
             tracing::warn!(error = %e, "the flush failed");
         }
+    }
+}
+
+/// What a frame is made of, before anything knows about a GPU.
+pub(crate) struct Painted {
+    /// Every run of text, in the grid's own coordinates.
+    pub spans: Vec<ronoctua_render::Span>,
+    /// Every rectangle: bands, rules, dividers and the scrollbars.
+    pub quads: Vec<ronoctua_render::quad::Quad>,
+    /// The preview's texture and where it goes, when there is one.
+    pub picture: Option<(String, ronoctua_render::image::Area)>,
+}
+
+/// The window's geometry: one home for every number about WHERE.
+///
+/// See [`FilesWindow::geometry`] for why it is a value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Geometry {
+    /// The surface, through the frame that owns the two rails.
+    pub metric: crate::chrome::Frame,
+    /// How many columns the content's margins leave.
+    pub columns: u16,
+    /// How many lines the bottom strip takes, or zero when the panels are
+    /// columns on the right.
+    pub strip: u16,
+    /// How many lines the listing's own chrome takes — two, or none at all
+    /// when a menu, a picker or a sheet is up.
+    pub chrome: u16,
+}
+
+impl Geometry {
+    /// How many lines the region has, the strip already taken off it.
+    pub fn room(&self) -> usize {
+        usize::from(
+            self.metric
+                .lines()
+                .max(1)
+                .saturating_sub(FIRST_OF_REGION + self.strip),
+        )
+    }
+
+    /// How many rows of listing fit: the region, less the listing's chrome.
+    pub fn list_room(&self) -> usize {
+        self.room().saturating_sub(usize::from(self.chrome))
+    }
+
+    /// How many lines the PANELS are given — what the facts scroll inside.
+    pub fn panel_room(&self) -> usize {
+        if self.strip > 0 {
+            usize::from(self.strip)
+        } else {
+            self.room()
+        }
+    }
+
+    /// The two rooms this door gives, for whatever asks about a bar.
+    pub fn rooms(&self) -> crate::files::Room {
+        crate::files::Room {
+            list: self.list_room(),
+            panel: self.panel_room(),
+        }
+    }
+
+    /// Where the LISTING's region ends: the strip's rule when there is a strip
+    /// under it, and the surface's own bottom when there is not.
+    pub fn list_bottom(&self, line_px: f32) -> f32 {
+        if self.strip > 0 {
+            f32::from(FIRST_OF_REGION + u16::try_from(self.room()).unwrap_or(0)) * line_px
+        } else {
+            self.metric.bottom()
+        }
+    }
+
+    /// EVERY SECTION'S SCROLLBAR, as rectangles — the drawing's and the
+    /// pointer's one answer. See `files::Section::bar_box`.
+    pub fn bars(
+        &self,
+        panes: crate::files::Panes,
+        sections: &[crate::files::Section],
+        cell: f32,
+        line_px: f32,
+    ) -> Vec<(crate::files::Pane, (f32, f32, f32, f32))> {
+        let edge = self.metric.width;
+        let top = self.metric.y_of(FIRST_OF_REGION);
+        // WHERE THE SURFACE ENDS, and not where the last whole line does. See
+        // `files::Section::bar_box`: the residue is the difference, and only
+        // the last band in a column may take it.
+        let bottom = self.metric.bottom();
+        sections
+            .iter()
+            .filter_map(|sec| {
+                let (x, wide) = crate::files::section_px(
+                    panes,
+                    sec.pane,
+                    CONTENT_MARGIN,
+                    self.columns,
+                    cell,
+                    edge,
+                )?;
+                sec.bar_box(x + wide, top, bottom, cell, line_px)
+                    .map(|r| (sec.pane, r))
+            })
+            .collect()
+    }
+}
+
+/// Everything a frame is drawn FROM, borrowed for the length of one.
+pub(crate) struct Scene<'a> {
+    /// The arithmetic.
+    pub geo: Geometry,
+    /// The manager, which owns every offset and every list.
+    pub view: &'a mut crate::files::View,
+    /// The interface's words.
+    pub texts: &'a ronoctua_i18n::Texts,
+    /// What the last action had to say, if anything.
+    pub message: Option<String>,
+    /// Which cell of the region the pointer is over.
+    pub cell_under_pointer: Option<u16>,
+    /// What the pointer is resting on, already resolved by `View::hit`.
+    pub under_pointer: Option<&'a crate::files::Target>,
+}
+
+/// One frame, as spans and rectangles. No Wayland, no wgpu, no `self`.
+pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
+    let size = tokens::font::SIZE_LARGE;
+    let margin = CONTENT_MARGIN;
+    let mut spans: Vec<ronoctua_render::Span> = Vec::new();
+    let mut quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
+
+    // LINE 0 IS THE ONE LINE THAT IS NOT A COLUMN'S.
+    //
+    // The owner asked for this order: *"the shortcut line goes first,
+    // isolated at the top, and the path and filter line is folded into
+    // the top of the listing column"*. It is the footer's
+    // arrangement, where the hint line is the minibuffer's — above the
+    // region and belonging to none of its columns — and the path is inside.
+    //
+    // So the path is not drawn here any more: it goes through
+    // `files::View::region_rows` as the LISTING's chrome, which is what
+    // leaves the sidebar and the panels their own first line instead of a
+    // blank one under somebody else's path.
+    //
+    // LINE 0: what is typed, what the pointer explains, or what went wrong.
+    //
+    // The pointer's explanation WINS, which is the same precedence the
+    // footer's message line uses: pointing at something is a question, and
+    // a question asked now beats a message from before.
+    // WHAT THE POINTER IS ON says it itself: `View::hit` resolved the
+    // section, the row inside it and the field in one answer, so this line
+    // no longer guesses which list the `y` belonged to.
+    let explained = s
+        .under_pointer
+        .as_ref()
+        .and_then(|t| t.explain.clone())
+        .map(|e| s.texts.t_with(e.key, &e.borrowed()));
+    // THE QUERY IS NOT HERE. It goes at the end of the path, on the line
+    // above — see `files::View::crumbs`. This line is for what the pointer
+    // is resting on and what the last action said, and while the query
+    // shared it the two took turns erasing each other.
+    // THE MESSAGE COMES FIRST, for the reason the footer's own precedence
+    // now gives: it is what the manager has to SAY about an action just
+    // asked for, and behind the pointer's description it was unreachable in
+    // the one situation it exists for — the hand on the mouse, the pointer
+    // resting on the row that was just clicked.
+    // AND WHAT THE MENU ROW UNDER THE CURSOR ACTUALLY DOES.
+    //
+    // The same second register the footer's door gained, and the same
+    // reason: the rows are written for somebody starting out, and somebody
+    // who already knows has nowhere to read which call and what can be
+    // undone. It arrives by moving the CURSOR — the explanations here have
+    // needed a pointer until now, and the owner's rule is that whatever the
+    // mouse can do the keyboard can do.
+    //
+    // Behind the message and ahead of the pointer, exactly as over there: a
+    // menu covers the listing, so with one open the pointer is resting on a
+    // row and the cursor is on the choice about to be made.
+    let does = s
+        .view
+        .cursor_explains()
+        .map(|e| s.texts.t_with(e.key, &e.borrowed()));
+    let second = s
+        .message
+        .clone()
+        .or(does)
+        .or(explained)
+        // WITH NOTHING TYPED AND NOTHING TO SAY, the hint. Typing is not a
+        // key and so has no line in the manual; without this the one
+        // gesture the list is built around is the one thing nothing on
+        // screen mentions.
+        .or_else(|| {
+            (!s.view.filtering())
+                .then(|| crate::files::hint_of(s.texts, s.view.split(s.geo.columns) > 0))
+        })
+        .unwrap_or_default();
+    if !second.is_empty() {
+        spans.push(ronoctua_render::Span {
+            size: ronoctua_render::Size::Px(size),
+            text: ronoctua_render::layout::elide_end(&second, s.geo.columns),
+            column: margin,
+            line: 0,
+            color: tokens::color::TEXT_SECONDARY,
+            edge: false,
+        });
+    }
+
+    // THE HEADER, on the line above the listing. It names the columns and
+    // says which one is sorting; clicking it sorts, as it does in the
+    // footer. Not drawn over the menu, the picker or the detail sheet:
+    // none of those has columns.
+    let line_px = tokens::metrics::line_height(size);
+
+    // THE LISTING — only the rows that fit, and not the whole directory.
+    //
+    // The same reason the footer door has: building a row costs a mode's
+    // nine cells, a size, a date, an owner and a group, and this window
+    // draws `room()` of them. See `files::View::rows_from` for the numbers.
+    // THE LISTING'S OWN CHROME, handed to `region_rows` rather than drawn
+    // above the whole region: the path and the header are the listing's,
+    // and the other three columns start at the region's first line.
+    let chrome = s.view.chrome_rows(s.geo.columns, s.texts);
+    // THE SECTIONS, each painted on its own rail.
+    //
+    // Nothing here composes a line out of four columns' fields. Every
+    // section says where it is and what it holds, and this loop draws it
+    // there — so a section's length, its offset and its top reach no other
+    // section, by construction rather than by care.
+    // A MODAL VIEW IS ONE LIST — the menu, the picker and the detail sheet
+    // cover the listing, so there are no columns to lay out. See
+    // `files::View::modal_rows`.
+    let sections = if s.view.plain() {
+        s.view
+            .sections(&chrome, s.geo.room(), s.geo.columns, s.texts)
+    } else {
+        vec![crate::files::Section {
+            pane: crate::files::Pane::Listing,
+            from: 0,
+            to: s.geo.columns,
+            top: 0,
+            lines: s.geo.room(),
+            offset: s.view.list_offset(),
+            total: s.geo.room(),
+            above: 0,
+            content: s
+                .view
+                .modal_rows(s.view.list_offset(), s.geo.room(), s.geo.columns, s.texts),
+        }]
+    };
+    // WHERE THE SIDEBAR ENDS, asked once for the whole frame. It is what
+    // the rule is drawn at and what decides which half the hover band
+    // covers; asking twice would be two answers on the day one of them was
+    // edited.
+    let split = s.view.split(s.geo.columns);
+    // THE WHOLE DIVISION, asked once for the frame. `split` is the sidebar's
+    // half of it and the band needs the panels' half too — see
+    // `files::band_of`, which is where both doors' arithmetic lives.
+    let panes_now = s.view.panes(s.geo.columns);
+    if split > 0 {
+        let cell = tokens::metrics::cell_width(size);
+        // THE LINE SITS IN THE MIDDLE OF THE CELL RESERVED FOR IT — see
+        // `files::rule_x`. Drawn at the cell's left edge, as it was, the
+        // whole cell became air on the listing's side and none at all on
+        // the sidebar's.
+        quads.push(crate::chrome::divider(
+            crate::files::rule_x(split, margin, cell),
+            s.geo.metric.y_of(FIRST_OF_REGION),
+            s.geo.list_bottom(line_px),
+        ));
+    }
+    // THE BAND, once per line that the pointer is on — and it is the
+    // POINTER's section that decides which line, so a band never lights a
+    // row of a list the pointer is not over.
+    if let Some(t) = s.under_pointer.as_ref()
+        && let Some(sec) = sections.iter().find(|s| s.pane == t.pane)
+        && let Some(line) = sec.line_of(t.row)
+    {
+        #[allow(clippy::cast_possible_truncation)]
+        let y = FIRST_OF_REGION + line as u16;
+        let cell = tokens::metrics::cell_width(size);
+        // THE SECTION'S OWN EDGES, in pixels.
+        //
+        // `band_of` answers for the sidebar and the listing, which is what
+        // it was written for; down in the strip the panels are neither, and
+        // it fell through to the listing's bounds. The section already says
+        // where it begins and ends, so it is asked — and a band lights the
+        // column the pointer is in, never the one beside it.
+        #[allow(clippy::cast_precision_loss)]
+        let (at, wide) = match t.pane {
+            crate::files::Pane::Preview | crate::files::Pane::Info if sec.top > 0 => {
+                crate::files::panel_px(
+                    panes_now,
+                    if matches!(t.pane, crate::files::Pane::Preview) {
+                        crate::files::Panel::Preview
+                    } else {
+                        crate::files::Panel::Info
+                    },
+                    margin,
+                    s.geo.columns,
+                    cell,
+                    s.geo.metric.width,
+                )
+                .unwrap_or((0.0, 0.0))
+            }
+            _ => crate::files::band_of(
+                panes_now,
+                margin,
+                s.geo.columns,
+                s.cell_under_pointer,
+                cell,
+                s.geo.metric.width,
+            ),
+        };
+        quads.push(ronoctua_render::quad::Quad {
+            x: at,
+            y: f32::from(y) * line_px,
+            width: wide,
+            height: line_px,
+            color: tokens::color::SURFACE_SELECTION,
+        });
+    }
+    for sec in &sections {
+        for (i, line) in sec.content.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let y = FIRST_OF_REGION + (sec.top + i) as u16;
+            let lit = s
+                .under_pointer
+                .as_ref()
+                .is_some_and(|t| t.pane == sec.pane && sec.line_of(t.row) == Some(sec.top + i));
+            for f in &line.fields {
+                // THE FIELD UNDER THE POINTER LIGHTS UP, so the sentence on
+                // the line above has a visible subject. A colour and not a
+                // box — invariant 15.
+                let under = lit && s.cell_under_pointer.is_some_and(|c| f.covers(c));
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::Px(size),
+                    text: f.text.clone(),
+                    column: margin + f.at,
+                    line: y,
+                    color: if under {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        f.color
+                    },
+                    edge: false,
+                });
+            }
+        }
+    }
+
+    // THE PANELS' VERTICAL RULES, and the horizontal one over the strip.
+    //
+    // Quads, exactly like the sidebar's: a one-pixel line inside the same
+    // surface. There is no panel, no border and no shadow (invariant 15) —
+    // separation by whitespace and a rule is the only separation this
+    // project has.
+    let panes = panes_now;
+    let cell = tokens::metrics::cell_width(size);
+    let strip_top = FIRST_OF_REGION + u16::try_from(s.geo.room()).unwrap_or(0);
+    if panes.right > 0 || panes.strip > 0 {
+        // WHERE THEY START AND WHERE THEY STOP, and the stop is the
+        // SURFACE'S — never a count of lines times a fractional line
+        // height, which is what left every one of them short of the edge.
+        let (rule_from, rule_to) = if panes.right > 0 {
+            (
+                s.geo.metric.y_of(FIRST_OF_REGION),
+                s.geo.list_bottom(line_px),
+            )
+        } else {
+            (s.geo.metric.y_of(strip_top), s.geo.metric.bottom())
+        };
+        for at in panes.rules(s.geo.columns) {
+            quads.push(crate::chrome::divider(
+                crate::files::rule_x(at, margin, cell),
+                rule_from,
+                rule_to,
+            ));
+        }
+    }
+    // EVERY SECTION'S BAR, from the section itself.
+    //
+    // Three of these were written out by hand, each with its own idea of
+    // where its column ends, and the pointer test had a fourth. The owner
+    // found every disagreement: the facts' bar unreachable in one door, the
+    // listing's unreachable in the other, one drawn a cell past the border
+    // and gone off screen, and a thumb that stopped half way down its own
+    // column. `Section::bar_box` is the rectangle now — drawn here, and
+    // tested against by `FilesWindow::bar_at_point`.
+    #[allow(clippy::cast_precision_loss)]
+    for (sec, rect) in s.geo.bars(panes, &sections, cell, line_px) {
+        let _ = sec;
+        quads.push(ronoctua_render::quad::Quad {
+            x: rect.0,
+            y: rect.1,
+            width: rect.2,
+            height: rect.3,
+            color: tokens::color::RULE_STRONG,
+        });
+    }
+    if panes.strip > 0 {
+        // THE LINE THAT SAYS WHERE THE LISTING ENDS. Without it the strip's
+        // first row reads as one more entry that happens to say something
+        // else.
+        #[allow(clippy::cast_precision_loss)]
+        quads.push(crate::chrome::rule(
+            s.geo.metric.width,
+            s.geo.metric.y_of(strip_top),
+        ));
+        // AND THE STRIP'S ROWS ARE THE SECTIONS' OWN, drawn in the loop
+        // above at their own `top`. Drawing them a second time here is
+        // what put the facts under the header AND at the bottom at once.
+    }
+
+    // THE PICTURE, fitted into the preview's box without stretching.
+    //
+    // A textured quad on the SAME surface — no window and no popup
+    // (invariant 14), no border, radius or shadow (invariant 15). A
+    // deformed photograph is worse than a small one: whoever looks does not
+    // know whether what is skewed is the image or the panel.
+    // `preview_box` is asked as the QUESTION "is there a preview at all";
+    // where it goes is `files::panel_px`'s answer, in pixels.
+    let picture = panes.preview_box(s.geo.columns).and_then(|_| {
+        let key = s.view.preview_key()?.to_owned();
+        let rgba = s.view.preview_pixels()?;
+        // THE PANELS' OWN ROWS, and never the whole surface: this door
+        // puts three lines above the listing — the path, the message and
+        // the header — and a picture centred in a box that included them
+        // would sit a line and a half too high. `files::panel_band` is the
+        // one place that arithmetic lives, and the footer had it wrong.
+        // ONLY THE TOP is wanted here: where the box ENDS is the surface's
+        // business, argued at `height` below.
+        let (top, _) =
+            crate::files::panel_band(FIRST_OF_REGION, strip_top - FIRST_OF_REGION, panes.strip);
+        #[allow(clippy::cast_precision_loss)]
+        let (box_x, box_wide) = crate::files::panel_px(
+            panes,
+            crate::files::Panel::Preview,
+            margin,
+            s.geo.columns,
+            cell,
+            s.geo.metric.width,
+        )?;
+        // AND THE AIR ON ALL FOUR SIDES IS THE VIEW'S. `fit_into` centres
+        // and that was never the whole promise: whichever dimension is the
+        // tight one comes out exactly as long as the box, which in this
+        // door was the vertical one — the picture centred AND against the
+        // top edge. See `files::picture_in`.
+        Some((
+            key,
+            crate::files::picture_in(
+                ronoctua_render::image::Area {
+                    // THE REGION'S RAILS, not the text's — see
+                    // `files::panel_px`. The box is what lies between the
+                    // rules, and where there is no rule it is the window's
+                    // own edge.
+                    x: box_x,
+                    y: f32::from(top) * line_px,
+                    width: box_wide,
+                    // TO THE SURFACE'S BOTTOM, and not `tall * line_px`.
+                    //
+                    // The strip is the last thing this door draws, and a
+                    // count of lines times a line height falls short of the
+                    // edge — the same arithmetic that left every divider
+                    // one pixel high of it. Here it left a whole line: the
+                    // box was four lines while the region under the rule
+                    // was five, so the picture was centred in the top four
+                    // fifths of it and read as pushed up. Measured on the
+                    // window door: 5 px of air above and 28 below.
+                    //
+                    // `tall` still decides where the box BEGINS, through
+                    // `top`; what it may not decide is where the surface
+                    // ends, because it does not know.
+                    height: (s.geo.metric.bottom() - f32::from(top) * line_px).max(0.0),
+                },
+                rgba.width,
+                rgba.height,
+            ),
+        ))
+    });
+    Painted {
+        spans,
+        quads,
+        picture,
     }
 }
 
@@ -1704,3 +1833,306 @@ impl ProvidesRegistryState for FilesWindow {
 
 smithay_client_toolkit::delegate_registry!(FilesWindow);
 smithay_client_toolkit::delegate_dispatch2!(FilesWindow);
+
+#[cfg(test)]
+mod tests {
+    use super::{FIRST_OF_REGION, Geometry, Scene, frame};
+    use std::path::Path;
+
+    /// A frame of THIS door at a surface, so no test writes `(12.0, 26.5)` by
+    /// hand.
+    ///
+    /// Those literals are the same disease one register down: the door's
+    /// geometry with a third home, in the test file. Eight assertions in
+    /// `files.rs` carried them; here there is one place, and when a token
+    /// moves the tests move with it.
+    fn a_frame(width_px: f32, height_px: f32) -> crate::chrome::Frame {
+        crate::chrome::Frame::of(
+            crate::chrome::Door::Window,
+            width_px,
+            height_px,
+            FIRST_OF_REGION,
+        )
+    }
+
+    fn a_geometry(width_px: f32, height_px: f32, strip: u16, chrome: u16) -> Geometry {
+        Geometry {
+            metric: a_frame(width_px, height_px),
+            columns: 60,
+            strip,
+            chrome,
+        }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-window-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the test directory");
+        dir
+    }
+
+    fn a_view(dir: &Path) -> crate::files::View {
+        let mut prefs = ronoctua_files::sidebar::Preferences::fresh();
+        prefs.showing = false;
+        crate::files::View::at(
+            dir,
+            ronoctua_files::who::Roster::default(),
+            ronoctua_files::when::Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            std::rc::Rc::new(ronoctua_i18n::Texts::from_env()),
+            ronoctua_files::sidebar::Sidebar::of(&[], None, None, prefs, None),
+        )
+    }
+
+    /// EVERY HEIGHT, AND ESPECIALLY THE ONES THAT ARE NOT WHOLE LINES.
+    ///
+    /// The plan names this one as a law no grep can see: a surface is
+    /// `floor(height / line)` lines plus a residue, and every geometry defect
+    /// this door was asked to fix lived in that residue. A window is resized by
+    /// dragging, so the residue is the common case and not the corner one.
+    #[test]
+    fn the_bottom_is_the_surface_and_never_a_count_of_lines() {
+        let mut checked = 0;
+        for h in (200..=1200).step_by(7) {
+            #[allow(clippy::cast_precision_loss)]
+            let height = h as f32;
+            for strip in [0u16, 4] {
+                let geo = a_geometry(900.0, height, strip, 2);
+                let line = geo.metric.line();
+                if geo.metric.lines() <= FIRST_OF_REGION + strip {
+                    continue;
+                }
+                checked += 1;
+
+                // THE REGION AND THE STRIP TOGETHER NEVER PASS THE SURFACE.
+                let used =
+                    f32::from(FIRST_OF_REGION + strip).mul_add(line, geo.room() as f32 * line);
+                assert!(
+                    used <= geo.metric.bottom() + 0.001,
+                    "h={height}: the lines add up to {used} on a surface of {}",
+                    geo.metric.bottom()
+                );
+
+                // AND WHAT IS LEFT UNDER THEM IS LESS THAN A LINE. A whole
+                // line left over is a line nobody draws — the blank strip the
+                // owner photographed under the facts.
+                assert!(
+                    geo.metric.bottom() - used < line,
+                    "h={height}: {} px are left under the last line, and a line is {line}",
+                    geo.metric.bottom() - used
+                );
+
+                // AND THE LISTING'S OWN BOTTOM IS THE STRIP'S RULE, or the
+                // surface when there is no strip.
+                let list = geo.list_bottom(line);
+                if strip == 0 {
+                    assert!(
+                        (list - geo.metric.bottom()).abs() < 0.001,
+                        "h={height}: with no strip the listing has to end at the surface"
+                    );
+                } else {
+                    assert!(
+                        list < geo.metric.bottom(),
+                        "h={height}: the listing ran into the strip"
+                    );
+                }
+            }
+        }
+        assert!(checked > 200, "only {checked} heights were exercised");
+    }
+
+    /// The four rooms are one arithmetic, and they agree with each other.
+    #[test]
+    fn the_rooms_come_apart_the_way_the_lines_do() {
+        let geo = a_geometry(900.0, 800.0, 4, 2);
+        assert_eq!(
+            geo.list_room(),
+            geo.room() - 2,
+            "the chrome takes two lines"
+        );
+        assert_eq!(geo.panel_room(), 4, "with a strip the panels are the strip");
+        assert_eq!(geo.rooms().list, geo.list_room());
+        assert_eq!(geo.rooms().panel, geo.panel_room());
+
+        // WITHOUT A STRIP the panels are columns, and they get the region.
+        let beside = a_geometry(900.0, 800.0, 0, 2);
+        assert_eq!(beside.panel_room(), beside.room());
+    }
+
+    /// WHERE A BAR IS DRAWN IS WHERE IT IS GRABBED, which is the law the plan
+    /// names and the defect the owner reported in both doors.
+    #[test]
+    fn a_bar_is_inside_its_own_column_and_its_own_band() {
+        let dir = scratch("bars");
+        for n in 0..80 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let texts = ronoctua_i18n::Texts::from_env();
+        let mut view = a_view(&dir);
+        // THE PANELS ARE ON BY DEFAULT — `View::at` says so, and this test
+        // is about the strip they make when they do not fit as columns.
+        view.reread();
+
+        // BOTH ARRANGEMENTS, and the test says which is which.
+        //
+        // The first draft used one width and it happened to be a width where
+        // the panels are COLUMNS — so the strip, which is where the listing's
+        // band stops early, was never exercised at all. With `strip == 0`
+        // every band ends at the surface and the assertion below cannot tell a
+        // right answer from a wrong one.
+        let mut with_a_strip = 0;
+        for columns in [53u16, 120] {
+            // A HEIGHT THAT IS NOT A WHOLE NUMBER OF LINES, on purpose.
+            let geo = {
+                let panes = view.panes(columns);
+                if panes.strip > 0 {
+                    with_a_strip += 1;
+                }
+                Geometry {
+                    metric: a_frame(900.0, 777.0),
+                    columns,
+                    strip: panes.strip,
+                    chrome: 2,
+                }
+            };
+            let (cell, line_px) = (geo.metric.cell(), geo.metric.line());
+            // AT THE END OF EVERY LIST, and not only at the top.
+            //
+            // At offset zero a thumb is at the start of its track, and a track
+            // that runs too far is indistinguishable from one that does not: the
+            // defect only shows at the LAST offset. The first draft measured at
+            // zero and stayed green with the regression planted back in.
+            for pane in [crate::files::Pane::Listing, crate::files::Pane::Info] {
+                let _ = view.drag_to(pane, 1.0, geo.columns, geo.rooms());
+            }
+            let chrome = view.chrome_rows(geo.columns, &texts);
+            let sections = view.sections(&chrome, geo.room(), geo.columns, &texts);
+            let panes = view.panes(geo.columns);
+            let bars = geo.bars(panes, &sections, cell, line_px);
+            assert!(!bars.is_empty(), "eighty files and not one bar");
+
+            for (pane, (bx, by, bw, bh)) in bars {
+                let sec = sections
+                    .iter()
+                    .find(|s| s.pane == pane)
+                    .expect("the bar belongs to a section");
+                let (x, wide) = crate::files::section_px(
+                    panes,
+                    pane,
+                    super::CONTENT_MARGIN,
+                    geo.columns,
+                    cell,
+                    geo.metric.width,
+                )
+                .expect("the section has a box");
+                assert!(
+                    bx >= x - 0.5 && bx + bw <= x + wide + 0.5,
+                    "{pane:?}: the bar ({bx}..{}) left its column ({x}..{})",
+                    bx + bw,
+                    x + wide
+                );
+                assert!(
+                    bx + bw <= geo.metric.width + 0.5,
+                    "{pane:?}: the bar went past the surface's edge"
+                );
+
+                // AND INSIDE ITS BAND, top and bottom — measured against the
+                // DOOR's boundary and not against `bar_box`'s own arithmetic
+                // written out again.
+                //
+                // It was written out again in the first draft, and that made the
+                // assertion tautological: planting the defect back into `bar_box`
+                // left this test green, because it was asking the function whether
+                // it agreed with itself. The listing and the sidebar end where the
+                // strip begins; the panels down in the strip end at the surface.
+                let band_top = geo.metric.y_of(FIRST_OF_REGION)
+                    + f32::from(u16::try_from(sec.top).unwrap_or(0)) * line_px;
+                let floor = match pane {
+                    crate::files::Pane::Listing | crate::files::Pane::Sidebar => {
+                        geo.list_bottom(line_px)
+                    }
+                    _ => geo.metric.bottom(),
+                };
+                assert!(
+                    by >= band_top - 0.5,
+                    "{pane:?}: the bar rose out of its band"
+                );
+                assert!(
+                    by + bh <= floor + 0.5,
+                    "{pane:?}: the bar ends at {} and its band ends at {floor}",
+                    by + bh
+                );
+            }
+        }
+        assert_eq!(
+            with_a_strip, 1,
+            "one of the two widths has to put the panels below"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE PURE HALF DRAWS NOTHING OFF THE SURFACE.
+    ///
+    /// This is the assertion the door could not make while `paint()` was one
+    /// function: it needed a GPU to reach the arithmetic. `frame()` needs
+    /// nothing but a view and a frame, so what it produces can be measured.
+    #[test]
+    fn a_frame_draws_nothing_past_the_surface() {
+        let dir = scratch("frame");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let texts = ronoctua_i18n::Texts::from_env();
+        let mut view = a_view(&dir);
+        view.reread();
+
+        // TWO SURFACES, and neither a whole number of lines.
+        for (w, h) in [(900.0f32, 777.0f32), (640.0, 483.0)] {
+            let panes = view.panes(60);
+            let geo = Geometry {
+                metric: a_frame(w, h),
+                columns: 60,
+                strip: panes.strip,
+                chrome: 2,
+            };
+            let painted = frame(&mut Scene {
+                geo,
+                view: &mut view,
+                texts: &texts,
+                message: None,
+                cell_under_pointer: None,
+                under_pointer: None,
+            });
+            assert!(!painted.spans.is_empty(), "{w}x{h}: nothing was drawn");
+            for q in &painted.quads {
+                assert!(
+                    q.y + q.height <= geo.metric.bottom() + 0.5,
+                    "{w}x{h}: a quad ends at {} and the surface at {}",
+                    q.y + q.height,
+                    geo.metric.bottom()
+                );
+                assert!(
+                    q.x + q.width <= geo.metric.width + 0.5,
+                    "{w}x{h}: a quad ends at {} and the surface is {} wide",
+                    q.x + q.width,
+                    geo.metric.width
+                );
+                assert!(
+                    q.y >= -0.5 && q.x >= -0.5,
+                    "{w}x{h}: a quad started off the surface"
+                );
+            }
+            for span in &painted.spans {
+                assert!(
+                    span.line < geo.metric.lines(),
+                    "{w}x{h}: a span is on line {} and the surface holds {}",
+                    span.line,
+                    geo.metric.lines()
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

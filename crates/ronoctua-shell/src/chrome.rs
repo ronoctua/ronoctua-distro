@@ -172,52 +172,64 @@ impl Frame {
         }
     }
 
+    /// The arithmetic, which lives in the design system.
+    ///
+    /// # Why the conversion is not written here any more
+    ///
+    /// Because it is not this door's, nor this shell's: it is the same
+    /// conversion for the footer, for each window, and for anything drawn
+    /// later. It was written out here and had begun to be written out again
+    /// beside its callers — which is the shape every defect in this file
+    /// started as.
+    ///
+    /// What stays on this side is the only thing that genuinely differs: which
+    /// DOOR, and therefore what a cell and a line measure. `ronoctua-design`
+    /// takes those two as values because it has no tokens and may not have any
+    /// (invariant 11).
+    fn rail(self) -> ronoctua_design::rails::Frame {
+        ronoctua_design::rails::Frame::of(
+            self.door.cell_width(),
+            tokens::metrics::line_height(self.door.size()),
+            self.width,
+            self.height,
+            self.first,
+        )
+    }
+
     /// How wide a cell is, in pixels.
     #[must_use]
     pub fn cell(self) -> f32 {
-        self.door.cell_width()
+        self.rail().cell
     }
 
     /// How tall a line is, in pixels.
     #[must_use]
     pub fn line(self) -> f32 {
-        tokens::metrics::line_height(self.door.size())
+        self.rail().line
     }
 
     /// How many whole cells the surface holds.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn columns(self) -> u16 {
-        let cell = self.cell();
-        if cell <= 0.0 {
-            return 0;
-        }
-        // `as` on a non-negative float IS floor, and it saturates rather than
-        // wrapping — which is what a width in pixels needs.
-        (self.width / cell) as u16
+        self.rail().columns()
     }
 
     /// How many whole lines the surface holds.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn lines(self) -> u16 {
-        let line = self.line();
-        if line <= 0.0 {
-            return 0;
-        }
-        (self.height / line) as u16
+        self.rail().lines()
     }
 
     /// The pixel a column begins at, counted from the LEFT.
     #[must_use]
     pub fn x_of(self, column: u16) -> f32 {
-        f32::from(column) * self.cell()
+        self.rail().x_of(column)
     }
 
     /// The pixel a line begins at.
     #[must_use]
     pub fn y_of(self, line: u16) -> f32 {
-        f32::from(line) * self.line()
+        self.rail().y_of(line)
     }
 
     /// The surface's bottom edge, in pixels. The TRUE one.
@@ -226,43 +238,16 @@ impl Frame {
         self.height
     }
 
-    /// How much of a cell a point may be short of a boundary and still count as
-    /// being on it.
-    ///
-    /// # Why an epsilon is not sloppiness here
-    ///
-    /// Because `x_of` and `column_at` have to be each other's inverse, and in
-    /// `f32` they are not: `7 * 10.8` comes back as `75.599998`, and dividing
-    /// that by `10.8` gives `6.9999998`, which floors to **six**. A press on the
-    /// first pixel of a cell resolved to the cell before it — the exact shape of
-    /// "the click landed on one thing while the screen showed another".
-    ///
-    /// Found by `a_point_lands_on_the_cell_it_was_drawn_in` while it was being
-    /// written, which is the only reason it is not a defect reported from a
-    /// screen. A ten-thousandth of a cell is a thousand times smaller than any
-    /// pointer can resolve and a thousand times larger than the error.
-    const SNAP: f32 = 1e-4;
-
     /// Which column a pixel is in.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn column_at(self, x: f32) -> u16 {
-        let cell = self.cell();
-        if cell <= 0.0 || x < 0.0 {
-            return 0;
-        }
-        (x / cell + Self::SNAP) as u16
+        self.rail().column_at(x)
     }
 
     /// Which line a pixel is on, or `None` above the surface.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn line_at(self, y: f32) -> Option<u16> {
-        let line = self.line();
-        if line <= 0.0 || y < 0.0 {
-            return None;
-        }
-        Some((y / line + Self::SNAP) as u16)
+        self.rail().line_at(y)
     }
 }
 

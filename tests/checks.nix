@@ -2019,6 +2019,358 @@ let
   # rather than with a count. This check is what keeps the ninth site from being
   # written the old way — which is the whole of what the owner asked for: not
   # that the lines be fixed, but that they stop coming back.
+  # ONE OFFSET PER LIST, and the list owns it.
+  #
+  # The manager kept `View::first` in a `Cell` and each door kept a second copy
+  # to push in through `set_first`. Three homes for one number, synchronised by
+  # hand — and the two the owner reported came straight out of it: the wheel
+  # moved a copy the next frame overwrote, and the window's cursor was compared
+  # against one height while its wheel used another.
+  #
+  # Naming the dead spellings is what makes this cheap. They cannot come back
+  # by accident, only by somebody typing them again.
+  one-offset-per-list = mkCheck "one-offset-per-list" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    files = (home / "files.rs").read_text()
+    window = (home / "files_window.rs").read_text()
+    surface = (home / "surface.rs").read_text()
+    wrong = []
+
+    # THE SETTER IS GONE. It is what let a door hold the number.
+    if re.search(r"\bfn\s+set_first\b", files):
+        wrong.append("files.rs declares `set_first` again")
+    for name, text in (("files_window.rs", window), ("surface.rs", surface)):
+        if ".set_first(" in text:
+            wrong.append(name + " pushes an offset in through `set_first`")
+
+    # AND THE FIELD IS A FIELD, not a cell somebody can write through a
+    # shared reference.
+    if re.search(r"\bfirst:\s*Cell<", files):
+        wrong.append("files.rs keeps the listing's offset in a `Cell`")
+    if not re.search(r"\blist_offset:\s*usize\b", files):
+        wrong.append("files.rs no longer owns `list_offset`")
+
+    # AND THE WINDOW HAS NO SECOND COPY.
+    if re.search(r"^\s*offset:\s*usize,\s*$", window, re.M):
+        wrong.append("files_window.rs took an `offset` field back")
+
+    if wrong:
+        print("ERROR: the listing's offset has more than one home again.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A number with two homes is synchronised by hand, and the", file=sys.stderr)
+        print("       hand forgets. See `files::View::list_offset`.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: one offset per list, and the view owns it")
+    PY
+  '';
+
+  # EVERY LIST CAN BE DRAGGED, and a door may not answer "not mine".
+  #
+  # `View::wheel` and `View::drag_to` used to have `Pane::Listing => false`,
+  # and `false` meant two different things at once — "I did nothing" and "this
+  # is not mine to move". Each door read the second meaning and wrote its own
+  # half, which is how the touchpad gesture and the drag came to be dead in one
+  # door and alive in the other.
+  #
+  # The preview is the one honest refusal: it is a picture, and a picture does
+  # not scroll.
+  every-list-can-be-dragged = mkCheck "every-list-can-be-dragged" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    files = pathlib.Path("${self}/crates/ronoctua-shell/src/files.rs").read_text()
+    wrong = []
+
+    def body_of(name):
+        m = re.search(r"\n    pub fn " + name + r"\b", files)
+        if not m:
+            return None
+        i = m.start()
+        depth, j, seen = 0, files.index("{", i), False
+        for k in range(j, len(files)):
+            if files[k] == "{":
+                depth += 1
+                seen = True
+            elif files[k] == "}":
+                depth -= 1
+                if seen and depth == 0:
+                    return files[i:k]
+        return files[i:]
+
+    for name in ("wheel", "drag_to"):
+        body = body_of(name)
+        if body is None:
+            wrong.append("`" + name + "` is gone from files.rs")
+            continue
+        for m in re.finditer(r"Pane::(\w+)\s*=>[^\n]*\bfalse\b", body):
+            if m.group(1) != "Preview":
+                wrong.append(
+                    "`" + name + "` answers `false` for `Pane::" + m.group(1) + "`"
+                )
+        for m in re.finditer(r"Pane::(\w+)\s*=>\s*return false", body):
+            if m.group(1) != "Preview":
+                wrong.append(
+                    "`" + name + "` returns `false` for `Pane::" + m.group(1) + "`"
+                )
+
+    if wrong:
+        print("ERROR: a list answers that it is not the one to move.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       `false` there means 'I did nothing', and a door that reads", file=sys.stderr)
+        print("       it as 'not mine' writes the gesture a second time. The", file=sys.stderr)
+        print("       preview is the one refusal: a picture does not scroll.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: every list moves through the view, and only the picture refuses")
+    PY
+  '';
+
+  # ONE REPAINT MODEL, in every window.
+  #
+  # Presentation blocks on the vertical blank. A handler that paints is a
+  # handler that waits for the monitor, and a drag delivers motion as fast as
+  # the device reports it — so painting per event turned the owner's drag into
+  # a walk: the listing crawled through every entry instead of arriving where
+  # the pointer already was.
+  #
+  # The cure is one line of vocabulary in three files: a handler marks a frame
+  # OWED, and the loop's callback — the one place that knows the batch is
+  # finished — draws it once. This check is what keeps the fourth window from
+  # being written the old way.
+  one-frame-model = mkCheck "one-frame-model" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    windows = sorted(home.glob("*_window.rs"))
+    if len(windows) < 3:
+        print(f"ERROR: only {len(windows)} windows found; the glob stopped matching.",
+              file=sys.stderr)
+        raise SystemExit(1)
+
+    wrong = []
+    for f in windows:
+        text = f.read_text()
+        if not re.search(r"\bfn\s+ask_paint\b", text):
+            wrong.append(f"{f.name} has no `ask_paint`")
+        if not re.search(r"\bfn\s+settle\b", text):
+            wrong.append(f"{f.name} has no `settle`")
+
+        # AND THE DEBT IS TAKEN ONCE, in the loop's callback.
+        takes = len(re.findall(r"std::mem::take\(&mut self\.owed\)", text))
+        if takes != 1:
+            wrong.append(f"{f.name} takes the debt {takes} times, and it may be taken once")
+        if not re.search(r"\.run\(None[^)]*\|(\w+)\|\s*\{\s*(?://[^\n]*\n\s*)*\1\.settle\(\)", text):
+            wrong.append(f"{f.name} does not drain the debt where the queue empties")
+
+        # AND NO HANDLER PAINTS WHERE IT STANDS. `settle` is the ONE caller,
+        # and the span is found by matching braces rather than by guessing how
+        # many lines back it might be — the first draft guessed, and reported
+        # `settle`'s own call three times.
+        span = None
+        m = re.search(r"\bfn\s+settle\s*\(&mut self\)\s*\{", text)
+        if m:
+            depth, start = 0, m.end() - 1
+            for k in range(start, len(text)):
+                if text[k] == "{":
+                    depth += 1
+                elif text[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        span = (start, k)
+                        break
+        for hit in re.finditer(r"self\.paint\(\);", text):
+            if span and span[0] <= hit.start() <= span[1]:
+                continue
+            line = text.count("\n", 0, hit.start()) + 1
+            wrong.append(f"{f.name}:{line} paints where it stands")
+
+    if wrong:
+        print("ERROR: a window paints from a handler instead of owing a frame.",
+              file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Presentation waits for the vertical blank, so a handler that", file=sys.stderr)
+        print("       paints makes the gesture wait for the monitor. Mark the frame", file=sys.stderr)
+        print("       OWED and let the loop's callback draw it once.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {len(windows)} windows, one repaint model, drained where the queue empties")
+    PY
+  '';
+
+  # A COUNT OF LINES IS NOT A BOTTOM EDGE.
+  #
+  # `lines` is `floor(height / line_px)`, so a surface is that many whole lines
+  # PLUS a residue of less than one. Every geometry defect this shell has been
+  # asked to fix lived in that residue, and the same wrong sentence produced
+  # all of them: `let bottom = lines * line_px`.
+  #
+  # It cost three separate reports — a rule that stopped short of the edge, a
+  # scrollbar with a strip of background under its thumb, and a picture centred
+  # in a box a line shorter than the panel it was in. The bottom comes from
+  # `Frame::bottom()`, which is the number the compositor gave.
+  #
+  # AND THE PIXEL RAIL IS THE HOST'S. `ronoctua-design::rails` is behind the
+  # `host` feature because a component counts in cells and has no surface;
+  # compiling it into one would put a unit there that nothing on that side can
+  # mean (invariants 4 and 11).
+  one-pixel-rail = mkCheck "one-pixel-rail" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    # `chrome.rs` DEFINES the conversion, and `files.rs` states the one rule
+    # about which band may take the residue — with the reasoning beside it.
+    allowed = {"chrome.rs"}
+    wrong = []
+    naming = re.compile(
+        r"\blet\s+(?:mut\s+)?(\w*(?:bottom|_px|edge|floor))\s*(?::[^=]*)?=\s*([^;]+);"
+    )
+    # TWO SEPARATE QUESTIONS, and not one regex spanning them. The first
+    # draft tried to match the count and the multiplication in one pattern
+    # with the punctuation between them spelled out — and
+    # `f32::from(self.metric.lines()) * line_px` has an open parenthesis it
+    # did not allow, so the plant that was supposed to prove this check bites
+    # walked straight past. Whether a line COUNT appears and whether it is
+    # multiplied by a line HEIGHT are two questions; asking them separately
+    # cannot be defeated by what sits between.
+    a_count = re.compile(r"\b(?:lines|rows|tall|room|height)\w*\b")
+    a_multiple = re.compile(r"\*\s*line(?:_px|_height)?\b")
+
+    for f in sorted(home.glob("*.rs")):
+        if f.name in allowed:
+            continue
+        # PRODUCTION ONLY. A test builds a surface that is deliberately NOT a
+        # whole number of lines — `line_px + lines * line_px + line_px * 0.4`
+        # is the fixture that proves the residue exists, and forbidding it
+        # there would forbid the proof.
+        text = f.read_text().split("#[cfg(test)]")[0]
+        for m in naming.finditer(text):
+            name, value = m.group(1), " ".join(m.group(2).split())
+            if not (a_count.search(value) and a_multiple.search(value)):
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            wrong.append(f"{f.name}:{line}  `{name}` = {value[:60]}")
+
+    # AND THE RAIL STAYS ON THE HOST'S SIDE.
+    design = pathlib.Path("${self}/crates/ronoctua-design/src")
+    lib = (design / "lib.rs").read_text()
+    if not re.search(r'#\[cfg\(feature = "host"\)\]\s*\npub mod rails;', lib):
+        wrong.append("ronoctua-design/src/lib.rs: `rails` is no longer behind `host`")
+    # THE RAIL BY ITS OWN NAME, and not any `Frame`. `buffers/transfers` has a
+    # local `type Frame = Screen<Wit>` and it is not this one — a bare `Frame`
+    # forbade a buffer's own alias, which is none of this check's business.
+    rail = re.compile(r"\brails::|(?:ronoctua_)?design::Frame\b")
+    for f in sorted(pathlib.Path("${self}/buffers").rglob("src/*.rs")):
+        if rail.search(f.read_text()):
+            wrong.append(f"buffers/{f.parent.parent.name}: a buffer names the pixel rail")
+
+    if wrong:
+        print("ERROR: an edge was computed as a count of lines.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A surface is `floor(height / line)` lines plus a residue of", file=sys.stderr)
+        print("       less than one, and the product lands short of the edge. Ask", file=sys.stderr)
+        print("       `chrome::Frame::bottom()`, which is the number the compositor", file=sys.stderr)
+        print("       gave and the one the shell may not argue with.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: no edge in the shell is a count of lines")
+    PY
+  '';
+
+  # ONE SCROLLBAR, and one arithmetic behind it.
+  #
+  # The manager's bar was DRAWN by one sum and LOOKED FOR by another, in both
+  # doors — so it moved in one and refused in the other, and the owner tried it
+  # with the mouse in each. `Section::bar_box` is the rectangle now: the painter
+  # asks it and the pointer asks it.
+  #
+  # AND THE OTHER EIGHT VIEWS TOO. The footer's generic bar is still a separate
+  # RECTANGLE — it belongs to the region, not to a section, and putting those
+  # eight views on sections is its own work — but it is no longer a separate
+  # ARITHMETIC: it asks `Scroll` for the thumb and `Scroll::offset_at` for the
+  # drag, which is where its own copy of the defect lived. It had the same one
+  # the manager was reported for, over eight views nobody had dragged.
+  one-scrollbar = mkCheck "one-scrollbar" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    files = (home / "files.rs").read_text()
+    wrong = []
+
+    # THE RECTANGLE HAS ONE DEFINITION.
+    if len(re.findall(r"\bfn\s+bar_box\b", files)) != 1:
+        wrong.append("files.rs does not have exactly one `bar_box`")
+    # THE TWO THAT WERE DELETED, by name. `Panes::listing_bar` is NOT one of
+    # them and is not a bar: it answers which COLUMN the bar goes in, which is
+    # a `u16`. The rectangle test below is what catches a real second one.
+    for gone in ("facts_bar", "panel_bar"):
+        for f in sorted(home.glob("*.rs")):
+            if re.search(r"\bfn\s+" + gone + r"\b", f.read_text()):
+                wrong.append(f"{f.name} grew a second bar, `{gone}`")
+
+    # AND NOBODY ELSE BUILDS ONE. A thumb is a rectangle whose height is a
+    # fraction of a track; whoever writes that sum has written a second bar.
+    thumb = re.compile(r"(?:lines|room|shown)\w*\s*/\s*(?:total|amount)\w*\s*\*")
+    for f in sorted(home.glob("*.rs")):
+        if f.name == "files.rs":
+            continue
+        text = f.read_text()
+        for m in thumb.finditer(text):
+            line = text.count("\n", 0, m.start()) + 1
+            wrong.append(f"{f.name}:{line} computes a thumb of its own")
+
+    # AND EVERY BAR IN THE SHELL COMES FROM `Scroll`, directly or through
+    # `bar_box` — which is itself `Scroll` with the band's bottom worked out
+    # first. Whoever paints `RULE_STRONG` has to have asked one of the two.
+    #
+    # The first draft demanded the NAME in every such file, and
+    # `files_window.rs` does not have it: it asks `Geometry::bars`, which asks
+    # `bar_box`, which asks `Scroll`. Demanding the name there would have
+    # forced a second call whose only purpose was to satisfy this check.
+    for f in sorted(home.glob("*.rs")):
+        text = f.read_text()
+        if "RULE_STRONG" not in text:
+            continue
+        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbars\(", text):
+            wrong.append(f.name + " paints a thumb without asking `Scroll`")
+
+    # AND THE TWO CANNOT DRAW AT ONCE: the footer's generic bar closes over
+    # the manager being shut. Without this the manager gets two.
+    # COMMENTS STRIPPED FIRST. `has_bar`'s own comment names the call it
+    # makes, so a plant that replaced the CODE with `false` and left the call
+    # quoted beside it left this check green.
+    surface = re.sub(r"//[^\n]*", "", (home / "surface.rs").read_text())
+    if not re.search(r"fn has_bar\b[^}]*files\.is_some\(\)", surface, re.S):
+        wrong.append("surface.rs: `has_bar` no longer stands down for the manager")
+
+    if wrong:
+        print("ERROR: the scrollbar has more than one arithmetic again.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Drawn by one sum and grabbed by another is how it came to", file=sys.stderr)
+        print("       move in one door and refuse in the other. See", file=sys.stderr)
+        print("       `files::Section::bar_box`.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: one rectangle for the manager's bar, and the generic one stands down")
+    PY
+  '';
+
   separators-come-from-chrome = mkCheck "separators-come-from-chrome" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
@@ -6987,7 +7339,7 @@ let
             ${lib.concatMapStringsSep "\n" (n: ''echo "       ${n}" >&2'') ghosts}
             echo "      A dead line there excludes nothing — it only looks as if it does," >&2
             echo "      and the check it was meant to hold back comes back into the everyday" >&2
-            echo "      dia sem ninguem perceber." >&2
+            echo "      round with nobody noticing." >&2
             exit 1
           ''
       }
@@ -7001,7 +7353,7 @@ let
             exit 1
           ''
       }
-      echo "OK: ${toString (builtins.length everyday)} no .#most, ${toString (builtins.length slow)} so no .#gate"
+      echo "OK: ${toString (builtins.length everyday)} in .#most, ${toString (builtins.length slow)} only in .#gate"
     '';
 
   # THE SAME QUESTION, FOR THE SHORT LOOP.
@@ -7103,6 +7455,11 @@ let
       buffers-use-the-design-crate
       separators-come-from-chrome
       sections-do-not-share-a-line
+      one-offset-per-list
+      every-list-can-be-dragged
+      one-frame-model
+      one-pixel-rail
+      one-scrollbar
       inspect-keys-exist
       update-has-one-list
       update-names-agree
@@ -7590,6 +7947,11 @@ let
       buffers-use-the-design-crate
       separators-come-from-chrome
       sections-do-not-share-a-line
+      one-offset-per-list
+      every-list-can-be-dragged
+      one-frame-model
+      one-pixel-rail
+      one-scrollbar
       inspect-keys-exist
       update-has-one-list
       update-names-agree

@@ -39,6 +39,12 @@ ronoctua-notify = { path = "../ronoctua-notify" }
 ronoctua-apps = { path = "../ronoctua-apps" }
 ronoctua-clipboard = { path = "../ronoctua-clipboard" }
 ronoctua-protocol = { path = "../ronoctua-protocol" }
+# THE TWO RAILS AND THE SCROLLBAR, from the crate that owns the vocabulary.
+#
+# The default features are the host's, which is what brings `rails` — the
+# pixel side. A buffer takes this same crate with `default-features = false`
+# and gets the cell side only; see `ronoctua-design`'s own manifest.
+ronoctua-design = { path = "../ronoctua-design" }
 ronoctua-runtime = { path = "../ronoctua-runtime" }
 ronoctua-term = { path = "../ronoctua-term" }
 # The ONLY border with /proc, the cgroups and systemd's memory policy — the

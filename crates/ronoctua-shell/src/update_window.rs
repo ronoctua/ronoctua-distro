@@ -895,6 +895,7 @@ pub fn host_it() -> Result<()> {
         columns: 80,
         lines: 24,
         quit: false,
+        owed: false,
         gpu: None,
         text: None,
         quads: None,
@@ -918,11 +919,9 @@ pub fn host_it() -> Result<()> {
     cycle
         .run(None, &mut state, |state| {
             // THE FRAME OWED, once the queue is empty. A thousand lines of a
-            // rebuild arriving in one burst are one paint, not a thousand.
-            if state.scrollback.owes_a_frame() {
-                state.follow_the_tail();
-                state.paint();
-            }
+            // rebuild arriving in one burst are one paint, not a thousand —
+            // and so is a held key, which is what `settle` added.
+            state.settle();
             if state.quit {
                 signal.stop();
             }
@@ -952,6 +951,19 @@ struct UpdateWindow {
     columns: u16,
     lines: u16,
     quit: bool,
+    /// Whether a frame is owed.
+    ///
+    /// # Why nothing here paints straight away
+    ///
+    /// The scrollback already had this shape for the lines a rebuild pours in
+    /// — a thousand of them in one burst are one paint. The HANDLERS did not:
+    /// a key and a click painted where they stood, and presentation blocks on
+    /// the vertical blank, so a held key waited for the monitor once per
+    /// repeat.
+    ///
+    /// Now there is one debt for both, drained in the one place that knows the
+    /// batch is finished. Same shape as `files_window` and `Footer`.
+    owed: bool,
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
     quads: Option<ronoctua_render::quad::Quads>,
@@ -1028,7 +1040,7 @@ impl UpdateWindow {
         }
         self.stamp = now;
         self.verdicts = Verdicts::read();
-        self.paint();
+        self.ask_paint();
     }
 
     /// Columns and rows from the size in pixels.
@@ -1117,7 +1129,7 @@ impl UpdateWindow {
             Sym::Char('G') => self.output_up = 0,
             _ => return,
         }
-        self.paint();
+        self.ask_paint();
     }
 
     fn assemble_gpu(&mut self) {
@@ -1168,6 +1180,22 @@ impl UpdateWindow {
             Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
         }
         self.gpu = Some(g);
+    }
+
+    /// Asks for a frame. It is drawn when the event queue empties.
+    const fn ask_paint(&mut self) {
+        self.owed = true;
+    }
+
+    /// Draws the owed frame, if one is owed — the scrollback's debt included.
+    fn settle(&mut self) {
+        if self.scrollback.owes_a_frame() {
+            self.follow_the_tail();
+            self.owed = true;
+        }
+        if std::mem::take(&mut self.owed) {
+            self.paint();
+        }
     }
 
     fn paint(&mut self) {
@@ -1399,7 +1427,7 @@ impl WindowHandler for UpdateWindow {
             g.resize(self.width, self.height);
         }
         self.recount();
-        self.paint();
+        self.ask_paint();
     }
 }
 
@@ -1588,7 +1616,7 @@ impl PointerHandler for UpdateWindow {
         // of movement, and painting per pixel would spend the GPU drawing the
         // same thing.
         if before != (self.row_under_pointer, self.cursor, self.output_up) {
-            self.paint();
+            self.ask_paint();
         }
     }
 }

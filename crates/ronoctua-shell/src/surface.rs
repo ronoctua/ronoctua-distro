@@ -6707,10 +6707,23 @@ impl Footer {
         if gap <= 0.0 {
             return;
         }
-        let fraction = ((y - start) / gap).clamp(0.0, 1.0);
-        self.scroll_offset_to(
-            ((total as f64 * fraction) as usize).min(last_offset(total, ceiling)),
-        );
+        // `Scroll::offset_at`, the inverse of what was DRAWN.
+        //
+        // `total * fraction` is not that inverse: the thumb has a length, so
+        // the offsets are spread over `track - thumb`. Written this way the
+        // bottom of the track was not the last page, and the pointer and the
+        // thumb drifted apart as the list grew.
+        let bar = ronoctua_design::Scroll {
+            total,
+            lines: ceiling,
+            offset: 0,
+            top: 0,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let at = (y - start) as f32;
+        #[allow(clippy::cast_possible_truncation)]
+        let to = bar.offset_at(at, gap as f32, line_height as f32);
+        self.scroll_offset_to(to.min(last_offset(total, ceiling)));
     }
 
     /// Which line of the page is at height `y` of the surface.
@@ -8927,20 +8940,36 @@ impl Footer {
             // second-order information: it shows up for whoever went looking
             // for it with the mouse, and does not take screen from whoever did not.
             if bar_showing {
+                // THROUGH `ronoctua_design::Scroll`, which is the manager's own
+                // arithmetic and now this one's.
+                //
+                // It used to be written out here, and wrongly in the same way
+                // the manager's was before it moved: the position was
+                // `offset / total` and the travel the WHOLE track, so the last
+                // page put the thumb's top at the bottom and, clamped, half way
+                // down. The owner reported that with the mouse in the manager;
+                // the other eight views had it too and nobody had dragged one.
+                //
+                // `offset_at` is this call's inverse, and `drag_to` uses it —
+                // which is what makes where it is drawn where it is grabbed.
                 let start = f32::from(first_of_expansion) * line_height;
                 let gap = grid.lines as f32 * line_height;
-                let proportion = grid.lines as f32 / expansion_total as f32;
-                let position = offset as f32 / expansion_total as f32;
-                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
-                backgrounds.push(ronoctua_render::quad::Quad {
-                    x: self.bar_x(f64::from(width)) as f32,
-                    y: start + gap * position,
-                    width: cell,
-                    // A floor of one line: with two hundred lines of content the
-                    // thumb would have less than a pixel and would vanish.
-                    height: (gap * proportion).max(line_height),
-                    color: tokens::color::RULE_STRONG,
-                });
+                let bar = ronoctua_design::Scroll {
+                    total: expansion_total,
+                    lines: grid.lines,
+                    offset,
+                    top: 0,
+                };
+                if let Some((from, tall)) = bar.thumb(gap, line_height) {
+                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: self.bar_x(f64::from(width)) as f32,
+                        y: start + from,
+                        width: cell,
+                        height: tall,
+                        color: tokens::color::RULE_STRONG,
+                    });
+                }
             }
 
             let Some(screen) = self.screens.get_mut(index) else {
