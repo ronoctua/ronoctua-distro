@@ -3269,7 +3269,7 @@ impl PointerHandler for Footer {
                     if let Some(pane) = section {
                         self.dragging_section = Some(pane);
                         self.drag_section_to(pane, e.position.1);
-                    } else if self.on_thumb(e.position.0) {
+                    } else if self.on_thumb(e.position.0, e.position.1) {
                         self.dragging = true;
                         self.drag_to(e.position.1);
                     } else {
@@ -6645,26 +6645,74 @@ impl Footer {
             .collect()
     }
 
-    /// Is the pointer over the scrollbar?
+    /// The region, as a list that may not fit.
     ///
-    /// The bar is the last cell of the width, and it only exists when there is
-    /// something to scroll. The width comes from the first configured screen —
-    /// the bar is drawn on all of them, and whoever clicks is on one of them.
-    fn on_thumb(&self, x: f64) -> bool {
-        if !self.has_bar() {
-            return false;
+    /// The eight views that are not the manager share one list and one offset,
+    /// so there is one of these. The manager keeps four of its own — see
+    /// `files::Section::scroll`.
+    fn region_scroll(&self) -> ronoctua_design::Scroll {
+        ronoctua_design::Scroll {
+            total: self.expansion_len(),
+            lines: self.grid().lines,
+            offset: self.current_offset(),
+            top: 0,
         }
-        let Some(width) = self
-            .screens
+    }
+
+    /// THE GENERIC BAR'S TRACK — its column and its band — as ONE rectangle.
+    ///
+    /// # Why a rectangle and not a column
+    ///
+    /// Because `on_thumb` tested the COLUMN alone, and the bar's column runs
+    /// the whole height of the surface: pressing the last cell of the modeline
+    /// — or of the minibuffer, or of the notification band — started a drag of
+    /// a list that is nowhere near the pointer. The manager's own bars have
+    /// been a rectangle tested in both axes since `Section::bar_box`; this one
+    /// had not caught up.
+    ///
+    /// Pressing the track ABOVE or BELOW the thumb still jumps: that is this
+    /// door's documented behaviour, and the rectangle is the track rather than
+    /// the thumb for exactly that reason.
+    ///
+    /// `None` when there is nothing to scroll.
+    fn region_track(&self, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
+        if !self.has_bar() {
+            return None;
+        }
+        let f = crate::chrome::Frame::of(
+            crate::chrome::Door::Footer,
+            width,
+            height,
+            self.first_of_expansion(),
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let column = self.bar_x(f64::from(width)) as f32;
+        Some(region_track_of(
+            f,
+            self.region_scroll(),
+            self.first_of_expansion(),
+            column,
+        ))
+    }
+
+    /// The first configured screen's size, which is the one the pointer is on.
+    fn pointer_screen(&self) -> Option<(f32, f32)> {
+        #[allow(clippy::cast_precision_loss)]
+        self.screens
             .iter()
             .find(|t| t.configured && t.width > 0)
-            .map(|t| f64::from(t.width))
-        else {
+            .map(|t| (t.width as f32, t.height as f32))
+    }
+
+    /// Is the pointer on the scrollbar's track?
+    fn on_thumb(&self, x: f64, y: f64) -> bool {
+        let Some((w, h)) = self.pointer_screen() else {
             return false;
         };
-        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
-        let at = self.bar_x(width);
-        x >= at && x < at + cell
+        let Some((bx, by, bw, bh)) = self.region_track(w, h) else {
+            return false;
+        };
+        x >= f64::from(bx) && x < f64::from(bx + bw) && y >= f64::from(by) && y < f64::from(by + bh)
     }
 
     /// WHICH COLUMN THE EXPANSION'S SCROLLBAR SITS IN, in pixels.
@@ -6699,44 +6747,30 @@ impl Footer {
     /// inside the handle it was grabbed" — with a handle of one or two lines,
     /// it is worth less than the line of code that would implement it.
     fn drag_to(&mut self, y: f64) {
-        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-        let ceiling = self.expansion_ceiling();
-        let total = self.expansion_len();
-        let start = f64::from(self.first_of_expansion()) * line_height;
-        let bar = ronoctua_design::Scroll {
-            total,
-            lines: ceiling,
-            offset: 0,
-            top: 0,
+        let Some((w, h)) = self.pointer_screen() else {
+            return;
         };
-        // THE SAME TRACK THE THUMB WAS DRAWN IN, and by the same call.
+        // THE TRACK THE THUMB WAS DRAWN IN, asked of the same function.
         //
         // It was `ceiling * line_height` here and `grid.lines * line_height`
         // where the thumb is painted — two answers to "how long is this
         // track", which is how a bar comes to be grabbed where it is not
-        // drawn. `Scroll::track` is the one answer, and it is where the
-        // leftover under the last whole line gets an owner.
-        #[allow(clippy::cast_possible_truncation)]
-        let surface_bottom = self
-            .screens
-            .iter()
-            .find(|t| t.configured && t.height > 0)
-            .map_or(0.0, |t| t.height as f32);
-        #[allow(clippy::cast_possible_truncation)]
-        let gap = f64::from(bar.track(start as f32, surface_bottom, line_height as f32));
-        if gap <= 0.0 {
+        // drawn.
+        let Some((_, top, _, track)) = self.region_track(w, h) else {
             return;
-        }
+        };
+        let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+        let ceiling = self.expansion_ceiling();
+        let total = self.expansion_len();
         // `Scroll::offset_at`, the inverse of what was DRAWN.
         //
         // `total * fraction` is not that inverse: the thumb has a length, so
-        // the offsets are spread over `track - thumb`. Written this way the
+        // the offsets are spread over `track - thumb`. Written that way the
         // bottom of the track was not the last page, and the pointer and the
         // thumb drifted apart as the list grew.
         #[allow(clippy::cast_possible_truncation)]
-        let at = (y - start) as f32;
-        #[allow(clippy::cast_possible_truncation)]
-        let to = bar.offset_at(at, gap as f32, line_height as f32);
+        let at = (y as f32) - top;
+        let to = self.region_scroll().offset_at(at, track, line_height);
         self.scroll_offset_to(to.min(last_offset(total, ceiling)));
     }
 
@@ -8026,7 +8060,6 @@ impl Footer {
                 offset / grid.per_page().max(1) + 1
             )
         });
-        let expansion_total = self.expansion_len();
         // THE DESCRIPTION OF THE ITEM UNDER THE CURSOR.
         //
         // The list shows the COMMAND; the whole sentence shows up here, on the
@@ -9000,28 +9033,20 @@ impl Footer {
                 //
                 // `offset_at` is this call's inverse, and `drag_to` uses it —
                 // which is what makes where it is drawn where it is grabbed.
-                let start = f32::from(first_of_expansion) * line_height;
-                let bar = ronoctua_design::Scroll {
-                    total: expansion_total,
-                    lines: grid.lines,
-                    offset,
-                    top: 0,
-                };
-                // AND THE TRACK ENDS AT THE SURFACE, by the same rule the
-                // manager's bands use.
+                // THE SAME RECTANGLE THE POINTER IS TESTED AGAINST.
                 //
-                // It was `grid.lines * line_height` — a count of rows times a
-                // fractional row height, which is the sentence every geometry
-                // defect in this project started as. The expansion is the LAST
-                // thing this surface draws, so the leftover under the last
-                // whole line is its, and the thumb reaches the bottom edge
-                // instead of stopping a fraction of a line above it.
-                let track = bar.track(start, bottom, line_height);
-                if let Some((from, tall)) = bar.thumb(track, line_height) {
-                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                // `region_track` gives the column and the band; `Scroll` gives
+                // the thumb inside it. Painting from one arithmetic and
+                // grabbing by another is how this bar came to be draggable
+                // from the modeline's last cell, and how its thumb stopped a
+                // fraction of a line above the edge.
+                #[allow(clippy::cast_precision_loss)]
+                if let Some((bx, top, cell, track)) = self.region_track(width as f32, bottom)
+                    && let Some((from, tall)) = self.region_scroll().thumb(track, line_height)
+                {
                     backgrounds.push(ronoctua_render::quad::Quad {
-                        x: self.bar_x(f64::from(width)) as f32,
-                        y: start + from,
+                        x: bx,
+                        y: top + from,
                         width: cell,
                         height: tall,
                         color: tokens::color::RULE_STRONG,
@@ -9165,6 +9190,33 @@ impl Footer {
 /// For the same reason as `screen_difference`: the rule is arithmetic, and
 /// what wraps it — `wl_output`, `LayerSurface` — does not exist outside a
 /// compositor. Separated, it is testable on screens this computer does not have.
+/// The generic bar's track — its column and its band — as one rectangle.
+///
+/// Free, and that is the point: `Footer` owns a Wayland connection, a `Gpu` and
+/// a keymap, so nothing about it can be stood up in a test. This defect is one
+/// of POSITION, and position is arithmetic — the same reason
+/// [`expansion_ceiling`] below is a free function.
+///
+/// The band starts at the expansion's first LINE and never at the surface's
+/// top: the modeline, the minibuffer, the brain's line and the notification
+/// band are above it, and the bar's column runs past all four. Testing the
+/// column alone is what made the modeline's last cell a handle for a list
+/// nowhere near it.
+fn region_track_of(
+    f: crate::chrome::Frame,
+    bar: ronoctua_design::Scroll,
+    first: u16,
+    column_x: f32,
+) -> (f32, f32, f32, f32) {
+    let top = f.y_of(first);
+    (
+        column_x,
+        top,
+        f.cell(),
+        bar.track(top, f.bottom(), f.line()),
+    )
+}
+
 fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
     let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
     let per_screen = screen_height.map_or(usize::MAX, |h| {
@@ -9480,6 +9532,60 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+
+    /// THE BAR'S TRACK STARTS AT THE EXPANSION, and not at the top of the
+    /// surface.
+    ///
+    /// The pointer test used to be the COLUMN alone, and that column runs the
+    /// whole height: the notification band, the modeline, the minibuffer and
+    /// the brain's line are all above the expansion and all have a last cell.
+    /// Pressing any of them started a drag of a list nowhere near the pointer.
+    #[test]
+    fn the_bars_track_is_the_expansion_and_nothing_above_it() {
+        // A surface that is not a whole number of lines, which is every real
+        // one.
+        for first in 1..=5u16 {
+            let f = crate::chrome::Frame::of(crate::chrome::Door::Footer, 900.0, 317.4, first);
+            // THE EXPANSION IS WHAT IS LEFT UNDER THE FOUR LINES ABOVE IT.
+            // `Footer::region_scroll` reads `grid().lines`, which is exactly
+            // that; a fixture that put fewer rows there would be asking about
+            // a band this door never draws.
+            let bar = ronoctua_design::Scroll {
+                total: 200,
+                lines: usize::from(f.lines() - first),
+                offset: 0,
+                top: 0,
+            };
+            let (x, y, w, h) = super::region_track_of(f, bar, first, 888.0);
+            assert!(
+                (y - f.y_of(first)).abs() < 0.001,
+                "first={first}: the track starts at {y} and the region at {}",
+                f.y_of(first)
+            );
+            assert!(
+                y > 0.0,
+                "first={first}: the track reached the surface's top"
+            );
+            // AND IT ENDS AT THE SURFACE. The expansion is the last thing this
+            // door draws, so the leftover under the last whole line is its.
+            assert!(
+                (y + h - f.bottom()).abs() < 0.001,
+                "first={first}: the track ends at {} and the surface at {}",
+                y + h,
+                f.bottom()
+            );
+            assert_eq!(x, 888.0, "the column is the caller's");
+            assert!((w - f.cell()).abs() < 0.001, "the bar is one cell wide");
+
+            // AND A POINT ON THE MODELINE IS NOT ON IT.
+            let on_the_line_above = f.y_of(first - 1) + 1.0;
+            assert!(
+                on_the_line_above < y,
+                "first={first}: line {} is inside the track",
+                first - 1
+            );
+        }
+    }
     /// The focused buffer's keymap narrows like the rest of the which-key does.
     ///
     /// One row per distinct next key, a group when the sequence continues, a
