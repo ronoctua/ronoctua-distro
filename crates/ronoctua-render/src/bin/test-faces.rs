@@ -56,7 +56,7 @@ fn advance(fs: &mut FontSystem, s: &str) -> Result<f32> {
             return Ok(g.w);
         }
     }
-    bail!("{s:?} nao moldou nenhum glifo")
+    bail!("{s:?} shaped no glyph at all")
 }
 
 /// Which face drew the first glyph of `s`, and which glyph.
@@ -82,7 +82,7 @@ fn who_draws(fs: &mut FontSystem, s: &str) -> Result<(String, u16)> {
             return Ok((family, g.glyph_id));
         }
     }
-    bail!("{s:?} nao moldou nenhum glifo")
+    bail!("{s:?} shaped no glyph at all")
 }
 
 fn main() -> Result<()> {
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
     if n != FACES {
         bail!("o banco tem {n} faces e devia ter {FACES}");
     }
-    let familias: Vec<String> = db
+    let families: Vec<String> = db
         .faces()
         .map(|f| {
             f.families
@@ -104,35 +104,35 @@ fn main() -> Result<()> {
                 .map_or_else(String::new, |(name, _)| name.clone())
         })
         .collect();
-    println!("faces: {familias:?}");
+    println!("faces: {families:?}");
 
     let mut fs = FontSystem::new_with_locale_and_db("en-GB".to_owned(), db);
 
     // 1. PLAIN TEXT goes to the primary face.
     let (family, _) = who_draws(&mut fs, "A")?;
     if family != tokens::font::FAMILY_MONO {
-        bail!("a letra `A` foi desenhada por `{family}`, e nao pela face primaria");
+        bail!("the letter `A` was drawn by `{family}`, and not by the primary face");
     }
 
     // 2. THE EMOJI falls on the emoji face, by codepoint fallback.
     let (family, glyph) = who_draws(&mut fs, "\u{1F600}")?;
     if !family.to_lowercase().contains("emoji") {
-        bail!("o emoji foi desenhado por `{family}`");
+        bail!("the emoji was drawn by `{family}`");
     }
     if glyph == 0 {
-        bail!("o emoji caiu em `.notdef` — a face de emoji nao responde por ele");
+        bail!("the emoji fell through to `.notdef` — the emoji face does not answer for it");
     }
 
     // 3. THE LUCIDE ICON falls on the Lucide face, also by codepoint.
     let (family, glyph) = who_draws(&mut fs, &REMAPPED.to_string())?;
     if !family.to_lowercase().contains("lucide") {
         bail!(
-            "U+{:04X} foi desenhado por `{family}`, e nao pela face da Lucide",
+            "U+{:04X} was drawn by `{family}`, and not by Lucide's face",
             REMAPPED as u32
         );
     }
     if glyph == 0 {
-        bail!("o icone da Lucide caiu em `.notdef`");
+        bail!("the Lucide icon fell through to `.notdef`");
     }
 
     // 4. THE COLLISION'S WITNESS.
@@ -145,9 +145,9 @@ fn main() -> Result<()> {
     let (family, _) = who_draws(&mut fs, &COLLIDED.to_string())?;
     if family != tokens::font::FAMILY_MONO {
         bail!(
-            "U+{:04X} foi desenhado por `{family}`, e nao pela Iosevka.\n\
-             A premissa do remapeamento da Lucide mudou: releia \
-             nix/lucidegen.nix antes de mexer.",
+            "U+{:04X} was drawn by `{family}`, and not by Iosevka.\n\
+             The premise of Lucide's remapping changed: reread \
+             nix/lucidegen.nix before touching it.",
             COLLIDED as u32
         );
     }
@@ -174,9 +174,9 @@ fn main() -> Result<()> {
         let (family, _) = who_draws(&mut fs, &s)?;
         if !family.to_lowercase().contains("emoji") {
             bail!(
-                "`{name}` (U+{cp:04X}) foi desenhado por `{family}`.\n\
-                 A face primária voltou a ter os codepoints de presença de \
-                 emoji, e eles saem em monocromático ao lado dos coloridos."
+                "`{name}` (U+{cp:04X}) was drawn by `{family}`.\n\
+                 The primary face has emoji-presentation codepoints again, \
+                 and they come out monochrome beside the coloured ones."
             );
         }
     }
@@ -191,16 +191,16 @@ fn main() -> Result<()> {
         ("cerquilha", 0x23u32),
         ("zero", 0x30),
         ("copyright", 0xA9),
-        ("marca registrada", 0x2122),
-        ("seta à esquerda", 0x2190),
+        ("mark registered", 0x2122),
+        ("left arrow", 0x2190),
     ] {
         let s = char::from_u32(cp).unwrap_or('?').to_string();
         let (family, glyph) = who_draws(&mut fs, &s)?;
         if family != tokens::font::FAMILY_MONO || glyph == 0 {
             bail!(
-                "`{name}` (U+{cp:04X}) saiu da face primária (foi para \
-                 `{family}`, glifo {glyph}). O corte levou junto o que era de \
-                 presença de TEXTO."
+                "`{name}` (U+{cp:04X}) left the primary face (it went to \
+                 `{family}`, glyph {glyph}). The cut took with it what had \
+                 TEXT presentation."
             );
         }
     }
@@ -230,22 +230,24 @@ fn main() -> Result<()> {
     }
     if worst.0 > cell * 1.1 {
         bail!(
-            "U+{:04X} avanca {:.2} px numa celula de {cell:.2} px.\n\
-             O `surface::COLUNAS_DO_ICONE` reserva uma celula de tinta, e o \n\
-             nome do aplicativo sera escrito por cima do icone.",
+            "U+{:04X} advances {:.2} px in a cell of {cell:.2} px.\n\
+             `surface::ICON_COLUMNS` reserves one cell of ink, and the \n\
+             application's name would be written on top of the icon.",
             worst.1 as u32,
             worst.0
         );
     }
     println!(
-        "OK: o icone mais largo avanca {:.2} px numa celula de {cell:.2} px",
+        "OK: the widest icon advances {:.2} px in a cell of {cell:.2} px",
         worst.0
     );
 
-    println!("OK: {FACES} faces — texto na Iosevka, emoji na de emoji, icone na da Lucide");
-    println!("OK: os 75 de presença de emoji são da face de emoji, e `#`/`©` não foram junto");
+    println!("OK: {FACES} faces — text on Iosevka, emoji on the emoji one, icon on Lucide's");
     println!(
-        "OK: a Iosevka ainda responde por U+{:04X}, que e por que a Lucide foi remapeada",
+        "OK: the 75 emoji-presentation ones are on the emoji face, and `#`/`©` did not go with them"
+    );
+    println!(
+        "OK: Iosevka still answers for U+{:04X}, which is why Lucide was remapped",
         COLLIDED as u32
     );
     Ok(())

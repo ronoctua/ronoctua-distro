@@ -113,7 +113,7 @@ writeShellApplication {
       sleep 0.5
     done
     if [ -z "$display" ]; then
-      echo "ERRO: o compositor aninhado nao subiu." >&2
+      echo "ERROR: the nested compositor did not come up." >&2
       tail -20 "$niri_log" >&2
       exit 1
     fi
@@ -128,7 +128,7 @@ writeShellApplication {
           ${ronoctua-shell}/bin/ronoctua-shell > "$1" 2>&1 &
       footer_proc=$!
       for _ in $(seq 90); do
-        if grep -q 'alvo da 5.2' "$1" 2>/dev/null; then return 0; fi
+        if grep -q "5.2's target" "$1" 2>/dev/null; then return 0; fi
         kill -0 "$footer_proc" 2>/dev/null || return 1
         sleep 0.5
       done
@@ -136,13 +136,13 @@ writeShellApplication {
     }
 
     echo
-    echo "== primeiro frame: $startups subidas =="
+    echo "== first frame: $startups start-ups =="
     for i in $(seq "$startups"); do
-      if start_footer "$dir/subida-$i.log"; then
-        echo "  subida $i ok"
+      if start_footer "$dir/startup-$i.log"; then
+        echo "  startup $i ok"
       else
-        echo "  subida $i FALHOU" >&2
-        tail -5 "$dir/subida-$i.log" >&2
+        echo "  startup $i FAILED" >&2
+        tail -5 "$dir/startup-$i.log" >&2
       fi
       # The last one stays up for the which-key phase.
       if [ "$i" != "$startups" ]; then
@@ -171,10 +171,10 @@ writeShellApplication {
     # QUOTES around the value: `tracing` adds them on a `Debug` field. It is
     # already in CLAUDE.md, and it has already cost one measurement round.
     PATTERN = re.compile(r'marco="([a-z-]+)" ms=([0-9.]+)')
-    TARGETS = {"primeiro-frame": 200.0, "which-key": 16.7}
+    TARGETS = {"first-frame": 200.0, "which-key": 16.7}
 
     d = {}
-    for f in sorted(pathlib.Path(sys.argv[1]).glob("subida-*.log")):
+    for f in sorted(pathlib.Path(sys.argv[1]).glob("startup-*.log")):
         for item_name, ms in PATTERN.findall(f.read_text(errors="replace")):
             d.setdefault(item_name, []).append(float(ms))
 
@@ -182,32 +182,32 @@ writeShellApplication {
         print("ERRO: nenhum marco no log", file=sys.stderr)
         raise SystemExit(1)
 
-    print("== alvos da secao 5.2 ==")
+    print("== section 5.2's targets ==")
     failed = False
     for item_name, target_path in TARGETS.items():
         v = sorted(d.get(item_name, []))
         if not v:
-            print(f"  {item_name}: nao medido", file=sys.stderr)
+            print(f"  {item_name}: not measured", file=sys.stderr)
             failed = True
             continue
         p99 = v[min(len(v) - 1, int(len(v) * 0.99))]
         ok = p99 <= target_path
         failed = failed or not ok
         print(
-            f"  {'OK ' if ok else 'NAO'} {item_name:15s} n={len(v):3d}"
+            f"  {'OK ' if ok else 'NO '} {item_name:15s} n={len(v):3d}"
             f"  p50={st.median(v):8.1f}  p99={p99:8.1f}"
-            f"  max={v[-1]:8.1f} ms   (alvo {target_path} ms)"
+            f"  max={v[-1]:8.1f} ms   (target {target_path} ms)"
         )
     print()
-    print("Medido ate `Queue::present`, que no Wayland faz attach+commit: e o")
-    print("instante em que o frame sai das NOSSAS maos. Falta o compositor")
-    print("compor e o painel varrer, o que nao depende de nos.")
+    print("Measured up to `Queue::present`, which on Wayland does attach+commit: it is")
+    print("the instant the frame leaves OUR hands. Still to come are the compositor")
+    print("composing and the panel scanning out, which do not depend on us.")
     raise SystemExit(1 if failed else 0)
     PY
   '';
 
   meta = {
-    description = "Mede os alvos de frame da secao 5.2 em hardware real";
+    description = "Measures section 5.2's frame targets on real hardware";
     platforms = lib.platforms.linux;
   };
 }

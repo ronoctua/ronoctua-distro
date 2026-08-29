@@ -38,8 +38,9 @@
   # The two whole systems side by side, to compare what goes into each profile.
   # `full` carries Android Studio: 1.47 GB of download the first time.
   "profile-minimal-closes"
-  # The ISO, measured at 3712 MiB.
-  "iso-fits-usb-stick"
+  # The ISO, measured at 3712 MiB. It has no ceiling any more — see the
+  # check itself — but building the image is still building an installation.
+  "iso-is-measured"
   "iso-has-no-toolchain"
   "iso-carries-the-seed"
   # These two read the `toplevel` of the VM's system — cheap to evaluate,

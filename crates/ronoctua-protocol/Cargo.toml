@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-protocol"
-description = "Display list e tipos da fronteira buffer <-> host (secoes 7.8 e 7.9)."
+description = "Display list and the types of the buffer <-> host boundary (sections 7.8 and 7.9)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -25,17 +25,17 @@ use anyhow::{Context as _, Result, bail};
 fn main() -> Result<()> {
     let node = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-format-disk <no> <sistema-de-arquivos> [rotulo]")?;
+        .context("usage: ronoctua-format-disk <node> <filesystem> [label]")?;
     let filesystem = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-format-disk <no> <sistema-de-arquivos> [rotulo]")?;
+        .context("usage: ronoctua-format-disk <node> <filesystem> [label]")?;
     let label = std::env::args().nth(3).unwrap_or_default();
 
     let manager = ronoctua_disks::Manager::fresh()?;
     let rack = manager.read()?;
     let Some(target) = rack.volumes.iter().find(|v| v.node == node) else {
         bail!(
-            "o udisks2 nao conhece {node}; conhece {:?}",
+            "udisks2 does not know {node}; it knows {:?}",
             rack.volumes.iter().map(|v| &v.node).collect::<Vec<_>>()
         );
     };
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
     // THE SAME GUARD THE HOST APPLIES, and it is here so that a mistyped node
     // in a test script cannot erase the machine the test is running on.
     if let Some(why) = ronoctua_disks::needed(target) {
-        bail!("{node} e um volume de que o sistema precisa ({why:?})");
+        bail!("{node} is a volume the system needs ({why:?})");
     }
 
     manager

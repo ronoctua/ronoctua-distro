@@ -18,9 +18,57 @@
   unicodedb,
   lucidedb,
   wit ? ../crates/ronoctua-protocol/wit,
+  protocolCrate ? ../crates/ronoctua-protocol,
+  designCrate ? ../crates/ronoctua-design,
 }:
 
 let
+  # THE MIRRORED TREE NEEDS A WORKSPACE ROOT, and finding out cost a build.
+  #
+  # A buffer now depends on `crates/ronoctua-design`, which depends on
+  # `crates/ronoctua-protocol` — and the protocol's manifest says
+  # `version.workspace = true`. Inside the derivation there is no root to
+  # inherit from, and cargo fails with
+  #
+  #   error inheriting `edition` from workspace root manifest's
+  #   `workspace.package.edition` ... failed to find a workspace root
+  #
+  # which names neither the crate nor the field that caused it.
+  #
+  # A STUB, and not a copy of the repository's root: that one lists
+  # twenty-three members, twenty-one of which are not in this tree, and cargo
+  # refuses a member it cannot load before it looks at anything else.
+  #
+  # `exclude = [ "buffers" ]` because a buffer carries its own `[workspace]`
+  # and must go on being its own root — the reason is at the top of this file,
+  # and in the root manifest of the repository.
+  #
+  # The values are the repository's, and they are duplicated on purpose rather
+  # than read: this file cannot import a `Cargo.toml`, and a wrong `edition`
+  # here fails the build immediately and loudly, which is the failure mode a
+  # duplicate is allowed to have.
+  workspaceRoot = builtins.toFile "Cargo.toml" ''
+    [workspace]
+    resolver = "2"
+    members = [ "crates/ronoctua-protocol", "crates/ronoctua-design" ]
+    exclude = [ "buffers" ]
+
+    [workspace.package]
+    version = "0.1.0"
+    edition = "2024"
+    rust-version = "1.90"
+    license = "MIT"
+    publish = false
+
+    [workspace.lints.rust]
+    unsafe_code = "warn"
+    missing_docs = "warn"
+
+    [workspace.lints.clippy]
+    needless_collect = "warn"
+    redundant_clone = "warn"
+  '';
+
   # WHAT OF A BUFFER GOES INTO THE STORE.
   #
   # It used to be `src = ../buffers/<name>` — a raw path, unfiltered. Whatever
@@ -39,7 +87,14 @@ let
       fileset = lib.fileset.unions [
         (lib.fileset.fileFilter (f: f.hasExt "rs") src)
         (src + "/Cargo.toml")
-        (src + "/Cargo.lock")
+        # MAYBE MISSING, since the mirror also copies two workspace MEMBERS.
+        #
+        # A buffer is its own workspace and has a lockfile; `ronoctua-protocol`
+        # and `ronoctua-design` are members of the repository's workspace and
+        # have none. `lib.fileset.unions` refuses a path that does not exist,
+        # naming the file and not the caller — so the possibility is declared
+        # here rather than discovered from a trace two derivations away.
+        (lib.fileset.maybeMissing (src + "/Cargo.lock"))
       ];
     };
 
@@ -64,10 +119,24 @@ let
         # keeps `../../crates/ronoctua-protocol/wit` true in both.
         unpackPhase = ''
           runHook preUnpack
-          mkdir -p buffers/${name} crates/ronoctua-protocol
+          mkdir -p buffers/${name} crates
           cp -r ${src}/. buffers/${name}/
-          cp -r ${wit} crates/ronoctua-protocol/wit
+          # THE TWO CRATES A BUFFER LINKS, in full and not just the WIT.
+          #
+          # `ronoctua-design` is the layout vocabulary and it is a path
+          # dependency; it in turn depends on `ronoctua-protocol`, whose CODE
+          # (not only its `wit/`) is what the arithmetic is written against.
+          # The `wit` argument stays separate because it is also what
+          # `wit_bindgen::generate!` reads by literal path.
+          cp -r ${onlySources protocolCrate}/. crates/ronoctua-protocol/
+          cp -r ${onlySources designCrate}/. crates/ronoctua-design/
+          cp ${workspaceRoot} Cargo.toml
+          # WRITABLE BEFORE THE WIT GOES IN, and the order is not cosmetic: a
+          # `cp -r` out of the store carries the store's read-only mode, so the
+          # directory just created cannot be written into and the next line
+          # fails with `Permission denied` on a path it did not create.
           chmod -R +w .
+          cp -r ${wit} crates/ronoctua-protocol/wit
           cd buffers/${name}
           runHook postUnpack
         '';
@@ -98,7 +167,7 @@ let
         '';
 
         meta = {
-          description = "Buffer nativo ${name} (componente wasm32-wasip2)";
+          description = "Native buffer ${name} (wasm32-wasip2 component)";
           platforms = lib.platforms.linux;
         };
       }
@@ -151,6 +220,17 @@ in
   transfers = buffer {
     name = "transfers";
     src = ../buffers/transfers;
+  };
+
+  # THE BRAIN — `LEADER s b`. The eighth, and the first whose data is not a
+  # reading of the machine but a POLICY: when a task may run, what it would
+  # run, and what happened last time. It embeds nothing and reads nothing; the
+  # whole `mind` arrives through `input::mind`, and what it declares is
+  # `capability::brain`, which exists separately from `system` because this one
+  # ends with the machine rebuilding its own operating system.
+  brain = buffer {
+    name = "brain";
+    src = ../buffers/brain;
   };
 
   # Formatting a disk, in three questions — `LEADER s f`. Embeds nothing and

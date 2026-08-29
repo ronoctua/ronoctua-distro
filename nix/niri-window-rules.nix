@@ -32,16 +32,16 @@ runCommand "ronoctua-window-rules.kdl" { } ''
   # the symptom would be "the monitor stopped floating" — with no error
   # anywhere, and looking like a niri regression.
   if [ ! -s $out ]; then
-    echo "ERRO: export-niri-window-rules nao emitiu nada." >&2
+    echo "ERROR: export-niri-window-rules emitted nothing." >&2
     exit 1
   fi
   grep -q 'open-floating true' $out || {
-    echo "ERRO: a regra saiu sem \`open-floating\`; a janela do monitor" >&2
-    echo "      abriria lado a lado, o que parece o atalho funcionando." >&2
+    echo "ERROR: the rule came out with no \`open-floating\`; the monitor's window" >&2
+    echo "      would open side by side, which looks like the shortcut working." >&2
     exit 1; }
   # `grep -F`: the regex in there is a raw KDL string full of backslashes, and
   # reading it as a pattern would match something else — or nothing.
   grep -qF 'br\.ronoctua\.monitor' $out || {
-    echo "ERRO: a regra nao casa o app id do monitor." >&2
+    echo "ERROR: the rule does not match the monitor's app id." >&2
     exit 1; }
 ''

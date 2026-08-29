@@ -144,8 +144,8 @@ def main() -> int:
     codepoints = list(dict.fromkeys(REPERTOIRE))  # dedup preserving order
     if len(codepoints) > 512:
         print(
-            f"ERRO: repertorio tem {len(codepoints)} codepoints; o PSF2 do console "
-            f"aceita no maximo 512. Corte o repertorio em REPERTOIRE.",
+            f"ERROR: the repertoire has {len(codepoints)} codepoints; the console's PSF2 "
+            f"takes at most 512. Cut the repertoire in REPERTOIRE.",
             file=sys.stderr,
         )
         return 1
@@ -178,11 +178,11 @@ def main() -> int:
 
     blank = sum(1 for g in glyphs if not any(g))
     print(
-        f"{args.output.name}: {len(glyphs)} glifos, {width}x{args.height}, "
-        f"{charsize} bytes/glifo, {len(unicode_table)} bytes de tabela unicode"
+        f"{args.output.name}: {len(glyphs)} glyphs, {width}x{args.height}, "
+        f"{charsize} bytes/glyph, {len(unicode_table)} bytes of unicode table"
     )
     if blank:
-        print(f"  aviso: {blank} glifos vazios (codepoint ausente na fonte)")
+        print(f"  warning: {blank} empty glyphs (the codepoint is missing from the font)")
 
     return 0
 

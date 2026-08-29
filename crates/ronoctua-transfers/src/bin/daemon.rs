@@ -33,7 +33,9 @@ fn main() -> Result<()> {
         Some("open") => open(),
         Some("browser") => ronoctua_transfers::browser::serve_stdio(),
         Some(other) => {
-            anyhow::bail!("nao sei fazer `{other}`; use `open <endereco>`, `browser`, ou nada")
+            anyhow::bail!(
+                "I do not know how to do `{other}`; use `open <address>`, `browser`, or nothing"
+            )
         }
     }
 }
@@ -46,7 +48,7 @@ fn main() -> Result<()> {
 fn open() -> Result<()> {
     let address = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-transfers open <magnet|arquivo.torrent|endereco>")?;
+        .context("usage: ronoctua-transfers open <magnet|file.torrent|address>")?;
     let work = ronoctua_transfers::where_to::work_for(
         &address,
         ronoctua_transfers::where_to::landing(),
@@ -58,5 +60,5 @@ fn open() -> Result<()> {
         ronoctua_transfers::where_to::Wish::plain(),
     );
     ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work })
-        .context("a fila de transferencias nao aceitou o pedido")
+        .context("the transfer queue did not take the request")
 }

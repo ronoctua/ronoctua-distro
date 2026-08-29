@@ -67,7 +67,7 @@ async function tell(message) {
     const answer = await chrome.runtime.sendNativeMessage(HOST, message);
     return answer && answer.ok === true;
   } catch (e) {
-    console.warn('[ronoctua] a fila nao respondeu', e);
+    console.warn('[ronoctua] the queue did not answer', e);
     return false;
   }
 }
@@ -94,7 +94,7 @@ chrome.downloads.onCreated.addListener(async (item) => {
     await chrome.downloads.cancel(item.id);
     await chrome.downloads.erase({ id: item.id });
   } catch (e) {
-    console.warn('[ronoctua] nao consegui limpar o download do navegador', e);
+    console.warn('[ronoctua] could not clear the browser download', e);
   }
   note(TEXT.extSent);
 });
@@ -204,7 +204,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
           });
           reply({ media: (found && found.result) || [] });
         } catch (e) {
-          console.warn('[ronoctua] nao consegui olhar a aba', e);
+          console.warn('[ronoctua] could not look at the tab', e);
           reply({ media: [] });
         }
         return;

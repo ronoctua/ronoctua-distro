@@ -4,7 +4,7 @@
 
 [package]
 name = "ronoctua-buffer-example"
-description = "Buffer nativo minimo, para provar a fronteira do marco 7."
+description = "A minimal native buffer, to prove milestone 7's boundary."
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
@@ -16,7 +16,15 @@ publish = false
 crate-type = [ "cdylib" ]
 
 [dependencies]
-wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ] }
+# THE LAYOUT VOCABULARY, and the bindings with it.
+#
+# `wit-bindgen` is NOT a dependency here any more: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` macro, so there is ONE generated
+# binding set for the seven buffers instead of seven. That is what makes "one
+# heading" enforceable rather than agreed.
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
+] }
 
 [lints.rust]
 # The same ones as the host's workspace, repeated because this is another

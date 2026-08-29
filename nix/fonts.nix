@@ -76,7 +76,7 @@ let
       given = lib.attrNames fontAssets;
     in
     lib.throwIf (wanted != given) ''
-      nix/fonts.nix: `fontAssets` e `variants` divergem.
+      nix/fonts.nix: `fontAssets` and `variants` diverge.
         variants:   ${lib.concatStringsSep ", " wanted}
         fontAssets: ${lib.concatStringsSep ", " given}
     '' fontAssets;
@@ -91,7 +91,7 @@ let
   ];
 
   meta = {
-    description = "Iosevka customizada da ronoctua-distro";
+    description = "ronoctua-distro's customised Iosevka";
     homepage = "https://github.com/be5invis/Iosevka";
     license = lib.licenses.ofl;
     platforms = lib.platforms.all;
@@ -136,8 +136,8 @@ let
           echo "--- extraindo ${dir} ---"
           tar --zstd -xf ${asset} -C noctua-iosevka
           test -d "noctua-iosevka/${dir}" || {
-            echo "ERRO: ${builtins.baseNameOf asset} nao trouxe o diretorio '${dir}'." >&2
-            echo "      O asset do Release mudou de forma; refaca-o com" >&2
+            echo "ERROR: ${builtins.baseNameOf asset} did not bring the '${dir}' directory." >&2
+            echo "      The Release asset changed shape; rebuild it with" >&2
             echo "      nix run .#fonts-release e atualize o flake.lock." >&2
             exit 1
           }
@@ -227,28 +227,28 @@ let
     pname = "noctua-iosevka-ttf-nerdfonts";
     dir = "TTF-nerdfonts";
     target = "truetype";
-    description = "noctua-iosevka, 135 faces TTF com patch do Nerd Fonts — a fonte do sistema";
+    description = "noctua-iosevka, 135 TTF faces patched with Nerd Fonts — the system font";
   };
 
   noctua-iosevka-ttf = mkFontPkg {
     pname = "noctua-iosevka-ttf";
     dir = "TTF";
     target = "truetype";
-    description = "noctua-iosevka, 135 faces TTF sem patch";
+    description = "noctua-iosevka, 135 unpatched TTF faces";
   };
 
   noctua-iosevka-woff2-nerdfonts = mkFontPkg {
     pname = "noctua-iosevka-woff2-nerdfonts";
     dir = "WOFF2-nerdfonts";
     target = "woff2";
-    description = "noctua-iosevka, 135 faces WOFF2 com patch — conteudo web local";
+    description = "noctua-iosevka, 135 patched WOFF2 faces — local web content";
   };
 
   noctua-iosevka-woff2 = mkFontPkg {
     pname = "noctua-iosevka-woff2";
     dir = "WOFF2";
     target = "woff2";
-    description = "noctua-iosevka, 135 faces WOFF2 sem patch";
+    description = "noctua-iosevka, 135 unpatched WOFF2 faces";
   };
 
   # The ISO's subset. Section 6.2 says "nothing is discarded", and that holds
@@ -259,7 +259,7 @@ let
     dir = "TTF-nerdfonts";
     target = "truetype";
     only = coreFaces;
-    description = "noctua-iosevka, 4 faces RIBBI — ISO, initrd, TTY e instalador";
+    description = "noctua-iosevka, 4 RIBBI faces — ISO, initrd, TTY and installer";
   };
 
   # ---------------------------------------------------------------------
@@ -287,7 +287,7 @@ let
     '';
     dontInstall = true;
     meta = meta // {
-      description = "Fonte de console PSF2 gerada da noctua-iosevka real";
+      description = "PSF2 console font generated from the real noctua-iosevka";
     };
   };
 
@@ -300,7 +300,7 @@ let
       noctua-iosevka-woff2
     ];
     meta = meta // {
-      description = "noctua-iosevka completa — 540 faces, as quatro variantes";
+      description = "noctua-iosevka complete — 540 faces, all four variants";
     };
   };
 in

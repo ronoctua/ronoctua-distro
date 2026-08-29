@@ -57,13 +57,13 @@ pub fn limits_of(adapter: &wgpu::Adapter) -> wgpu::Limits {
 ///
 /// The `max(1)` is the other end: a zero-dimension surface is also invalid,
 /// and a compositor can send zero while the window is minimised.
-fn fits(v: u32, ceiling: u32, eixo: &'static str) -> u32 {
+fn fits(v: u32, ceiling: u32, axis: &'static str) -> u32 {
     if v > ceiling {
         tracing::warn!(
-            eixo,
-            pedido = v,
+            axis,
+            request = v,
             ceiling,
-            "a superficie passou do que a GPU aceita; o conteudo vai sair cortado"
+            "the surface went past what the GPU takes; the content will come out cut"
         );
     }
     v.clamp(1, ceiling)
@@ -105,8 +105,8 @@ impl Gpu {
     ///
     /// An earlier unmeasured mark is OVERWRITTEN on purpose: if the leader
     /// opens twice before a frame comes out, what matters is the last one.
-    pub fn mark_as(&mut self, name: &'static str, desde: std::time::Instant) {
-        self.milestone = Some((name, desde));
+    pub fn mark_as(&mut self, name: &'static str, since: std::time::Instant) {
+        self.milestone = Some((name, since));
     }
 
     /// Builds the context over handles already validated by the caller.
@@ -155,7 +155,7 @@ impl Gpu {
 
         // Instance, surface and adapter move together: switching backend
         // forces redoing all three, because the surface belongs to the instance.
-        let tentar = |backends: wgpu::Backends| {
+        let attempt = |backends: wgpu::Backends| {
             let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
             d.backends = backends;
             let instance = wgpu::Instance::new(d);
@@ -182,20 +182,20 @@ impl Gpu {
             Some((instance, surface, adapter))
         };
 
-        let (_instance, surface, adapter) = match tentar(wgpu::Backends::VULKAN) {
+        let (_instance, surface, adapter) = match attempt(wgpu::Backends::VULKAN) {
             Some(v) => v,
             None => {
-                tracing::warn!("sem adaptador Vulkan; tentando o backend GL");
-                tentar(wgpu::Backends::GL).context(
-                    "nenhum adaptador grafico serve, nem por Vulkan nem por GL.\n\
+                tracing::warn!("no Vulkan adapter; trying the GL backend");
+                attempt(wgpu::Backends::GL).context(
+                    "no graphics adapter will do, neither by Vulkan nor by GL.\n\
                      \n\
-                     O rodape desenha com wgpu sobre Vulkan (secao 7.7). Num\n\
-                     ambiente sem GPU, o lavapipe do Mesa funciona — e o que\n\
-                     os testes usam.",
+                     The footer draws with wgpu over Vulkan (section 7.7). On a\n\
+                     machine with no GPU, Mesa's lavapipe works — it is what\n\
+                     the tests use.",
                 )?
             }
         };
-        step("instancia-superficie-adaptador", &mut t);
+        step("instance-surface-adapter", &mut t);
 
         let limits = limits_of(&adapter);
         let ceiling = limits.max_texture_dimension_2d;
@@ -207,7 +207,7 @@ impl Gpu {
                 required_limits: limits,
                 ..Default::default()
             }))
-            .context("o adaptador nao entregou dispositivo")?;
+            .context("the adapter handed over no device")?;
         step("request-device", &mut t);
 
         let caps = surface.get_capabilities(&adapter);
@@ -218,7 +218,7 @@ impl Gpu {
             formatos = ?caps.formats,
             alpha = ?caps.alpha_modes,
             present = ?caps.present_modes,
-            "capacidades da superficie"
+            "the surface's capabilities"
         );
         let format_of = caps
             .formats
@@ -230,8 +230,8 @@ impl Gpu {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: format_of,
-            width: fits(width, ceiling, "largura"),
-            height: fits(height, ceiling, "altura"),
+            width: fits(width, ceiling, "width"),
+            height: fits(height, ceiling, "height"),
             // `Fifo` = vsync. The footer does not animate; drawing more than the
             // refresh rate would only burn battery (section 2 targets laptops).
             present_mode: wgpu::PresentMode::Fifo,
@@ -260,7 +260,7 @@ impl Gpu {
             adapter = ?adapter.get_info().name,
             backend = ?adapter.get_info().backend,
             format_of = ?format_of,
-            "contexto grafico pronto"
+            "graphics context ready"
         );
 
         Ok(Self {
@@ -279,8 +279,8 @@ impl Gpu {
         if width == 0 || height == 0 {
             return;
         }
-        self.config.width = fits(width, self.ceiling, "largura");
-        self.config.height = fits(height, self.ceiling, "altura");
+        self.config.width = fits(width, self.ceiling, "width");
+        self.config.height = fits(height, self.ceiling, "height");
         self.surface.configure(&self.device, &self.config);
     }
 
@@ -319,12 +319,12 @@ impl Gpu {
             }
             otherwise @ (wgpu::CurrentSurfaceTexture::Outdated
             | wgpu::CurrentSurfaceTexture::Lost) => {
-                tracing::debug!(reason = ?otherwise, "superficie desatualizada; reconfigurando");
+                tracing::debug!(reason = ?otherwise, "the surface is out of date; reconfiguring");
                 self.surface.configure(&self.device, &self.config);
                 return Ok(());
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                anyhow::bail!("a superficie wgpu ficou invalida");
+                anyhow::bail!("the wgpu surface went invalid");
             }
         };
         self.skipped = 0;
@@ -334,13 +334,13 @@ impl Gpu {
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("rodape"),
+                label: Some("footer"),
             });
 
         {
             let [r, g, b, a] = tokens::color::SURFACE_CHROME.to_linear();
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("limpar"),
+                label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -383,11 +383,11 @@ impl Gpu {
         self.queue.present(frame);
 
         // After the `present`, and not before: it is what delivers the frame.
-        if let Some((name, desde)) = self.milestone.take() {
+        if let Some((name, since)) = self.milestone.take() {
             tracing::info!(
                 milestone = name,
-                ms = desde.elapsed().as_secs_f64() * 1000.0,
-                "alvo da 5.2 medido (ate `present`, sem compositor nem varredura)"
+                ms = since.elapsed().as_secs_f64() * 1000.0,
+                "5.2's target measured (up to `present`, no compositor and no scan-out)"
             );
         }
 

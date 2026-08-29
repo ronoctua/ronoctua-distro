@@ -55,7 +55,7 @@ stdenvNoCC.mkDerivation {
   dontInstall = true;
 
   meta = {
-    description = "Iosevka do renderer, sem os codepoints que sao da face de emoji";
+    description = "The renderer's Iosevka, without the codepoints that belong to the emoji face";
     platforms = lib.platforms.all;
   };
 }

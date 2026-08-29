@@ -72,7 +72,7 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
-    with subtest("o buffer sobe e o componente renderiza"):
+    with subtest("the buffer comes up and the component renders"):
         machine.succeed(
             "systemd-run --unit=buffer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -84,7 +84,7 @@ pkgs.testers.runNixOSTest {
         )
         try:
             machine.wait_until_succeeds(
-                "journalctl -u buffer --no-pager | grep -q 'componente renderizou'",
+                "journalctl -u buffer --no-pager | grep -q 'component rendered'",
                 timeout=60,
             )
         except Exception:
@@ -98,39 +98,39 @@ pkgs.testers.runNixOSTest {
         # would pass with a blank window.
         assert "commands=3" in journal, journal
 
-    with subtest("o COMPOSITOR ve uma janela, nao uma regiao nossa"):
+    with subtest("the COMPOSITOR sees a window, not a region of ours"):
         # The proof of invariant 4. A buffer drawn inside our surface would not
         # show up here.
         machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'janelas: 1'",
+            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
             timeout=30,
         )
         out_text = machine.succeed(f"${ronoctua-shell}/bin/niri-contract {sock}")
         print(out_text)
-        assert "focada: Some" in out_text, out_text
+        assert "focused: Some" in out_text, out_text
 
-    with subtest("o buffer desenhou na janela"):
+    with subtest("the buffer drew in the window"):
         machine.wait_until_succeeds(
-            "journalctl -u buffer --no-pager | grep -q 'buffer desenhado no xdg_toplevel'",
+            "journalctl -u buffer --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
             timeout=60,
         )
         journal = machine.succeed("journalctl -u buffer --no-pager")
-        for bad in ["desenhar o frame falhou", "preparar texto falhou", "panicked"]:
+        for bad in ["drawing the frame failed", "preparing the text failed", "panicked"]:
             assert bad not in journal, f"o buffer reportou: {bad}"
 
-    with subtest("a chave do componente saiu TRADUZIDA na tela"):
+    with subtest("the component's key came out TRANSLATED on screen"):
         # The whole chain: component -> DisplayList -> i18n -> tokens -> wgpu ->
         # pixel. The component sends `cmd-mx-open`; in pt-BR that is
         # "Executar comando…", and that is what the OCR has to read.
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         # THE WHOLE WINDOW, and not a crop at the top: whoever decides where the
         # window goes is niri (invariant 4), and it does not put it at (0,0) —
         # its column has a width of its own and the window is centered in it.
         # Cropping by an assumed position is assuming layout, which is precisely
         # what the invariant forbids the shell to do.
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
             "-colorspace gray -negate -resize 200% /tmp/buffer.png"
         )
         read_back = machine.succeed(
@@ -138,13 +138,13 @@ pkgs.testers.runNixOSTest {
         ).strip()
         print(f"OCR: {read_back!r}")
         assert "executar" in read_back.lower(), (
-            f"a chave nao saiu traduzida na tela; OCR leu {read_back!r}"
+            f"the key did not come out translated on screen; OCR read {read_back!r}"
         )
 
-    with subtest("COPIAR copia de verdade, na area de transferencia do sistema"):
+    with subtest("COPY really copies, into the system's clipboard"):
         # THE DEFECT THIS CATCHES, and that nobody saw for months.
         #
-        # `Efeito::Copiar` reached the host and became a `tracing::info!`. The
+        # `Effect::Copy` reached the host and became a `tracing::info!`. The
         # glyph browser's nine copy formats NEVER put anything anywhere, and the
         # feature looked finished — the worst failure mode this project knows.
         #
@@ -160,7 +160,7 @@ pkgs.testers.runNixOSTest {
             "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm"
         )
         machine.wait_until_succeeds(
-            "journalctl -u glyphs --no-pager | grep -q 'buffer desenhado no xdg_toplevel'",
+            "journalctl -u glyphs --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
             timeout=90,
         )
 
@@ -190,10 +190,10 @@ pkgs.testers.runNixOSTest {
         # the order of the list with no search depends on the database, and nailing
         # the name down would make the test fail on a font update for the wrong reason.
         assert "-" in pasted and pasted.isascii() and len(pasted) > 3, (
-            f"o que foi colado nao parece nome de glifo: {pasted!r}"
+            f"what was pasted does not look like a glyph name: {pasted!r}"
         )
 
-    with subtest("Ctrl+V le a area de transferencia e entrega ao buffer"):
+    with subtest("Ctrl+V reads the clipboard and hands it to the buffer"):
         # The other side of the same thing. `Ctrl+V` fell into the host's Ctrl
         # guard and did NOTHING — and there was no way of telling that from
         # "there was nothing copied", which was exactly the owner's doubt.
@@ -210,12 +210,12 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u glyphs --no-pager")
         target_path = f'input=Paste("{pasted}")'
         assert target_path in journal, (
-            f"`Ctrl+V` nao entregou o texto ao buffer; esperava {target_path!r} no log:\n"
+            f"`Ctrl+V` did not hand the text to the buffer; expected {target_path!r} in the log:\n"
             + journal[-2000:]
         )
         print(f"Ctrl+V entregou: {pasted!r}")
 
-    with subtest("o buffer de formatar desenha discos que vieram do BARRAMENTO"):
+    with subtest("the format buffer draws disks that came from the BUS"):
         # THE ONE CHAIN NO OTHER TEST CLOSES, and the reason it is worth a
         # subtest of its own: every other buffer draws something it carries —
         # a glyph table, a counter. This one draws what udisks said, a moment
@@ -241,7 +241,7 @@ pkgs.testers.runNixOSTest {
             "${bufferFormat}/lib/ronoctua_buffer_format.wasm"
         )
         machine.wait_until_succeeds(
-            "journalctl -u format --no-pager | grep -q 'buffer desenhado no xdg_toplevel'",
+            "journalctl -u format --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
             timeout=60,
         )
         # The rack has to have crossed. Before it does, the screen legitimately
@@ -254,7 +254,7 @@ pkgs.testers.runNixOSTest {
         machine.sleep(2)
 
         journal = machine.succeed("journalctl -u format --no-pager")
-        for bad in ["desenhar o frame falhou", "panicked", "sem udisks2"]:
+        for bad in ["drawing the frame failed", "panicked", "sem udisks2"]:
             assert bad not in journal, f"o buffer de formatar reportou: {bad}"
 
         # WHAT THE READING CARRIED, ASKED OF THE JOURNAL AND NOT OF THE PIXEL.
@@ -269,28 +269,28 @@ pkgs.testers.runNixOSTest {
         # So the CONTENT is checked where it is exact, and the pixel is asked
         # only what only it can answer.
         rack = [ln for ln in journal.splitlines() if "input=Rack" in ln]
-        assert rack, "nenhuma leitura de disco chegou ao componente"
+        assert rack, "no disk reading reached the component"
         last = rack[-1]
         # THE MACHINE'S OWN ROOT IS ON THE LIST, carrying the sentence that says
         # why it is not on offer. Both halves matter: omitted, somebody hunts
         # for a row that is not there; offered without the reason, the only
         # signal left is a colour.
         assert "/dev/vda" in last, (
-            f"a raiz da maquina sumiu da leitura em vez de vir recusada:\n{last}"
+            f"the machine's root went away from the reading instead of coming refused:\n{last}"
         )
         assert "mora em" in last or "lives at" in last, (
-            f"a raiz atravessou sem o motivo escrito ao lado:\n{last}"
+            f"the root crossed over with no reason written beside it:\n{last}"
         )
         # AND THE STICK IS THERE, spare, because a screen that only ever shows
         # what it refuses is a screen nobody can use.
-        assert "/dev/vdb" in last, f"o disco vazio nao chegou ao componente:\n{last}"
+        assert "/dev/vdb" in last, f"the empty disk did not reach the component:\n{last}"
         # AND NOTHING OF ZERO BYTES. Measured here first: udisks publishes a
         # floppy node and EIGHT unattached loop devices, and every one of them
         # came out as a row — nine lines of noise in front of the two disks the
         # machine has.
-        assert "loop" not in last, f"os loops vazios voltaram para a lista:\n{last}"
+        assert "loop" not in last, f"the empty loops came back into the list:\n{last}"
         assert "bytes: 0" not in last, (
-            f"um dispositivo de zero bytes esta na lista:\n{last}"
+            f"a device of zero bytes is in the list:\n{last}"
         )
 
         w, h, x, y = niri_geometry()
@@ -302,7 +302,7 @@ pkgs.testers.runNixOSTest {
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/fmt.png stdout --psm 6 2>/dev/null"
         ).strip()
-        print(f"OCR do buffer de formatar: {read_back!r}")
+        print(f"OCR of the format buffer: {read_back!r}")
         lowered = read_back.lower()
 
         # AND WHAT ONLY THE PIXEL ANSWERS: that the window opened, the renderer
@@ -310,14 +310,14 @@ pkgs.testers.runNixOSTest {
         # shape of the defect that reached the owner's screen last time — a
         # surface that was built, wired and tested, and drew nothing.
         assert "formatar" in lowered, (
-            f"o titulo nao saiu traduzido na tela: {read_back!r}"
+            f"the title did not come out translated on screen: {read_back!r}"
         )
         assert "/dev/" in read_back, (
-            "o buffer abriu e desenhou, mas nenhum disco chegou ao pixel: "
+            "the buffer opened and drew, but no disk reached the pixel: "
             f"{read_back!r}"
         )
         assert "nenhum disco" not in lowered, (
-            f"a tela continua dizendo que nao ha disco algum: {read_back!r}"
+            f"the screen still says there is no disk at all: {read_back!r}"
         )
 
         # AND BOTH ROWS ARE REALLY THERE, read by moving the cursor.
@@ -348,8 +348,8 @@ pkgs.testers.runNixOSTest {
         both = read_back + "\n" + moved
         for node in ["/dev/vda", "/dev/vdb"]:
             assert node in both, (
-                f"{node} nao apareceu em nenhuma das duas leituras — a linha "
-                f"nao esta na tela:\n{both!r}"
+                f"{node} did not appear in either reading — the row "
+                f"is not on screen:\n{both!r}"
             )
 
         # AND THE SECOND REGISTER IS ON THE PIXEL, following the cursor.
@@ -361,11 +361,11 @@ pkgs.testers.runNixOSTest {
         # about partition tables, and with it on the machine's root it talks
         # about why udisks would refuse. A caption could not do both.
         assert "tabela" in read_back.lower(), (
-            "com o cursor no disco livre, a linha tecnica nao diz o que vai ser "
-            f"escrito nele: {read_back!r}"
+            "with the cursor on the free disk, the technical line does not say what is going to be "
+            f"written on it: {read_back!r}"
         )
         assert "montado pelo sistema" in moved.lower(), (
-            "com o cursor na raiz, a linha tecnica nao diz por que ela nao serve: "
+            "with the cursor on the root, the technical line does not say why it does not do: "
             f"{moved!r}"
         )
   '';

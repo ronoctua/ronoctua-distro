@@ -425,7 +425,7 @@ mod tests {
         }
         for (i, a) in seen.iter().enumerate() {
             for b in seen.iter().skip(i + 1) {
-                assert_ne!(a.0, b.0, "duas celulas com a mesma chave: {a:?} e {b:?}");
+                assert_ne!(a.0, b.0, "two cells with the same key: {a:?} and {b:?}");
             }
         }
     }
@@ -454,7 +454,7 @@ mod tests {
         let dir = 0o040_755;
         let of_file = explain(cells(file)[3], file, "ana", "users");
         let of_dir = explain(cells(dir)[3], dir, "ana", "users");
-        assert_eq!(of_file.key, of_dir.key, "e a mesma posicao");
+        assert_eq!(of_file.key, of_dir.key, "it is the same position");
         assert!(of_file.args.contains(&("kind", "file".to_owned())));
         assert!(of_dir.args.contains(&("kind", "dir".to_owned())));
     }

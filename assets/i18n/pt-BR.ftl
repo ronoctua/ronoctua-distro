@@ -48,6 +48,9 @@ buffer-format = formatar
 mode-format = formatar
 buffer-unicode = unicode
 mode-unicode = unicode
+buffer-brain = cérebro
+mode-brain = cérebro
+mode-update = atualização
 buffer-no-name = *sem nome*
 mode-unknown = desconhecido
 
@@ -65,6 +68,7 @@ state-full = completo
 state-guard = proteção
 state-choose = escolha
 state-confirm = confirmação
+state-update = atualização
 
 ## Notifications
 
@@ -97,7 +101,7 @@ notif-rule-important-gets-room = O que é importante ganha espaço
 notif-rule-small-things-are-quick = Coisa pequena passa rápido
 
 # O gerenciador: três listas, e um título para cada.
-notif-column-unread = Não lidas
+notif-column-happened = Recebidas
 notif-column-suppressed = Filtradas
 notif-column-catalogue = Notificações e filtros
 notif-read = lida
@@ -194,16 +198,16 @@ inst-keys-edit = Enter segue · Esc volta · Ctrl+C sai
 inst-keys-choose = ↑↓ escolhem · Enter segue · Esc volta
 inst-keys-review = Enter executa · Esc volta · Ctrl+C sai
 inst-keys-quit = Ctrl+C sai
-echo-no-on = { $sequencia } não está ligado a nada
+echo-no-on = { $sequence } não está ligado a nada
 # Same sequence, other case. Shown when the case IS the reason nothing
 # matched — Caps Lock or Shift. Without it the screen names the consequence
 # and hides the cause.
-echo-no-on-box = { $sequencia } não está ligado — { $outra } está
+echo-no-on-box = { $sequence } não está ligado — { $other } está
 echo-cancelled = Cancelado
 echo-no-window = Nenhuma janela em foco
-echo-no-action = { $comando } ainda não faz nada
+echo-no-action = { $command } ainda não faz nada
 echo-no-buffer = O navegador de glifos não foi construído
-echo-no-opened = Não consegui abrir { $programa }
+echo-no-opened = Não consegui abrir { $program }
 cmd-window-left = Focar à esquerda
 cmd-window-right = Focar à direita
 cmd-window-up = Focar acima
@@ -241,7 +245,7 @@ cmd-notif-dismiss = Dispensar a notificação
 cmd-keyboard-restore = Restaurar o teclado
 group-notification = notificação
 echo-keyboard-restored = Teclado restaurado
-echo-keyboard-failed = Não consegui restaurar o teclado: { $motivo }
+echo-keyboard-failed = Não consegui restaurar o teclado: { $reason }
 
 ## Help — the shortcut manual (LEADER h s)
 
@@ -685,18 +689,18 @@ network-connecting = conectando…
 network-wired = cabo
 network-saved = salva
 network-open = aberta
-network-password = Senha de { $rede }
+network-password = Senha de { $network }
 network-password-help = Guardada pelo NetworkManager, fora do repositório.
 
 # ECHOES — what the minibuffer says after the action.
-echo-network-connected = Conectado a { $rede }
-echo-network-failed = Não consegui conectar a { $rede }: { $motivo }
+echo-network-connected = Conectado a { $network }
+echo-network-failed = Não consegui conectar a { $network }: { $reason }
 echo-network-disconnected = Desconectado
-echo-network-forgotten = { $rede } esquecida
+echo-network-forgotten = { $network } esquecida
 echo-network-radio-on = Rádio Wi-Fi ligado
 echo-network-radio-off = Rádio Wi-Fi desligado
-echo-network-link = { $rede } · { $banda } · { $taxa } · sinal { $sinal }
-echo-network-link-wired = { $rede } · { $taxa }
+echo-network-link = { $network } · { $band } · { $rate } · sinal { $signal }
+echo-network-link-wired = { $network } · { $rate }
 echo-network-no-link = Sem conexão
 echo-network-unavailable = O NetworkManager não está respondendo
 
@@ -709,9 +713,9 @@ cmd-syncthing-resume = Retomar a sincronização
 group-syncthing = syncthing
 syncthing-line = Syncthing
 syncthing-idle = em dia
-syncthing-syncing = sincronizando { $porcento }%
+syncthing-syncing = sincronizando { $percent }%
 syncthing-stopped = parado
-echo-syncthing-state = { $conectados } conectados · { $porcento }% · ↑{ $envio } ↓{ $recepcao }
+echo-syncthing-state = { $connected } conectados · { $percent }% · ↑{ $up } ↓{ $down }
 echo-syncthing-stopped = O Syncthing não está respondendo
 echo-syncthing-paused = Sincronização pausada
 echo-syncthing-resumed = Sincronização retomada
@@ -731,12 +735,12 @@ inst-step-wifi = Gravar o perfil da rede Wi-Fi
 ## Network — the password sealed in the TPM (psk-flags)
 
 # The one-key question, after the connection succeeds.
-network-remember = Lembrar { $rede }?  s = sim · n = não
+network-remember = Lembrar { $network }?  s = sim · n = não
 # The list marker: tells "saved in NetworkManager" apart from "the password exists".
 network-no-tpm = no TPM
-echo-network-stored = Senha de { $rede } selada no TPM
+echo-network-stored = Senha de { $network } selada no TPM
 echo-network-no-stored = Conectado. A senha não ficou guardada.
-echo-network-store-failed = Conectado, mas não consegui guardar a senha: { $motivo }
+echo-network-store-failed = Conectado, mas não consegui guardar a senha: { $reason }
 ## Falta de memoria
 notif-oom-app = sistema
 notif-oom-pressure = O { $app } estava deixando a maquina travada por falta de memoria.
@@ -745,7 +749,7 @@ notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }
 
 ## O keymap do buffer em foco
 which-buffer = Buffer em foco
-hint-state = Estado: { $estado } — clique gira, Esc volta, Esc+setas escolhe
+hint-state = Estado: { $state } — clique gira, Esc volta, Esc+setas escolhe
 which-state = Estado do buffer em foco
 cmd-exemplo-reiniciar = Reiniciar o exemplo
 
@@ -853,11 +857,11 @@ rescue-failed = falhou
 rescue-confirm = A mesma tecla de novo confirma; Esc cancela.
 rescue-needs-password = pede a sua senha
 rescue-read-only = leitura
-rescue-generated-by = Gerado por { $origem }. Editar aqui some no próximo rebuild.
+rescue-generated-by = Gerado por { $source }. Editar aqui some no próximo rebuild.
 rescue-no-windows = O compositor não respondeu — ou não há janela nenhuma.
 rescue-empty = nada a mostrar
 rescue-back = Sair do terminal devolve esta tela.
-rescue-generation = geração { $numero }
+rescue-generation = geração { $number }
 rescue-door-console = console
 rescue-door-window = janela
 
@@ -1052,8 +1056,36 @@ files-down = descer
 files-up = subir
 files-enter = abrir, ou entrar na pasta
 files-parent = subir uma pasta
-files-hint = digite para filtrar · { $key } abre o menu de ações
-files-hint-sidebar = digite para filtrar · { $key } abre o menu · { $side } vai para a barra
+files-hint = digite para filtrar · { $key } abre o menu de ações · { $preview } prévia · { $info } informações
+files-hint-sidebar = digite para filtrar · { $key } abre o menu · { $side } vai para a barra · { $preview } prévia · { $info } informações
+# The panels. `no-room` is what the toggle says when it turns one on at a width
+# that cannot hold it: the state flips anyway and the screen says why, which is
+# the shape `files-sidebar-only` already has. `says` is one fact in full on the
+# message line — a panel is twenty-four cells and a path is two hundred
+# characters, so the row that had to be cut is the row somebody wants to read.
+files-panel-no-room = não há espaço para o painel nesta largura — ele precisa de { $cells } colunas
+files-fact-says = { $label }: { $value }
+# THE SECOND HALF OF THE HINT LINE, appended to whichever of the two above is
+# on screen. Two keys that are in no registry and no manual, so this line is
+# the only thing that says they exist — the lesson `C-o` already cost. The
+# separator lives here and not in the Rust: a `·` written in the code would be
+# a visual literal, which is what invariant 9 is about.
+files-hint-more = · { $columns } mostra permissões, dono e grupo · { $facts } rola os fatos
+# THE THIRD SENTENCE OF THE HINT LINE — the four sections and the two keys
+# that walk them. Its own line and not a longer `files-hint-more` for the same
+# reason that one is not a longer `files-hint`: the halves are about different
+# things. BOTH keys are named, because somebody told only about the way forward
+# has to guess that there is a way back.
+files-hint-panes = · { $next } vai para a próxima seção, { $back } para a anterior
+# WHAT THE PREVIEW SAYS WHEN THERE IS NO PICTURE. Not a refusal — those come
+# from `ronoctua-inspect` and win when there is one — but the answer for a
+# directory, a broken link, and a file nothing has been asked about. It used to
+# be a large icon of the file's type, which said what the listing's own icon
+# column already said and made an empty panel look full.
+files-no-preview = sem prévia
+# AND WHAT THE FACTS KEY SAYS WHEN THERE IS NOTHING TO SCROLL. From the
+# outside, a key that refuses and a key that is dead look the same.
+files-facts-all-shown = todos os fatos já estão à vista
 files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
 files-yes = sim, aplicar
 files-no = não, deixar como está
@@ -1078,6 +1110,8 @@ files-first = ir para o primeiro
 files-last = ir para o último
 files-menu = menu de ações
 files-measure = medir a pasta, ou examinar o arquivo
+files-pane-next = ir para a próxima seção
+files-pane-previous = voltar para a seção anterior
 
 files-type-is = { $named }
 files-type-disagrees = o nome diz { $named }, o conteúdo diz { $found }
@@ -1093,6 +1127,10 @@ files-nothing-here = esta pasta está vazia
 #
 # As cinco primeiras sao ids de `OF_THE_VIEW` e de `menu.rs`; o
 # `files-actions-have-text` as cobra a partir do id, sozinho.
+files-preview = mostrar ou esconder a previa
+files-facts = mostrar ou esconder os fatos
+files-facts-scroll = virar para a proxima pagina de fatos
+files-columns = mostrar ou esconder as permissoes, o dono e o grupo
 files-sidebar = esconder ou mostrar a barra lateral
 files-sidebar-focus = ir para a barra lateral, e voltar
 files-eject = desmontar o dispositivo
@@ -1268,6 +1306,75 @@ files-detail-broken = aponta para (não existe)
 files-restore = devolver de onde veio
 files-no-trash = não sei onde fica a lixeira; nada foi movido
 
+# ===================================================================
+# WHAT IS INSIDE A FILE — the preview and the facts panel
+#
+# `ronoctua-inspect` is the border with a file's CONTENT, and it does not
+# translate: it answers with a text KEY and its arguments, and whoever holds
+# the bundle turns the pair into a sentence (invariant 8). Every number below
+# arrives as DATA — what is written here is only the words around it.
+# ===================================================================
+
+# WHY THERE IS NO PICTURE. Drawn where the picture would be, centred under the
+# type's glyph, so each one has to say whether there is anything to be done
+# about it: "it failed" is not an answer, it is the absence of one.
+files-preview-none = este tipo de arquivo não tem imagem dentro
+files-preview-missing = { $program } não está instalado, e é ele que lê este formato
+files-preview-too-big = grande demais para uma prévia ({ $amount })
+files-preview-failed = o que voltou não era uma imagem — o arquivo pode estar quebrado
+files-preview-slow = passou de { $seconds } s e foi parado — não é o tamanho, é algo travado
+
+# THE PANEL'S LEFT COLUMN. Short nouns, and short on purpose: the column is as
+# wide as the widest label here, so a needless word costs every other row.
+files-fact-dimensions = dimensões
+files-fact-duration = duração
+files-fact-container = formato
+files-fact-video = vídeo
+files-fact-audio = áudio
+files-fact-rate = quadros
+files-fact-sampling = amostragem
+files-fact-channels = canais
+files-fact-bitrate = taxa de bits
+files-fact-title = título
+files-fact-artist = artista
+files-fact-album = álbum
+files-fact-camera = câmera
+files-fact-lens = lente
+files-fact-taken = feita em
+files-fact-iso = ISO
+files-fact-shutter = obturador
+files-fact-aperture = abertura
+files-fact-focal = focal
+files-fact-place = lugar
+files-fact-pages = páginas
+
+# AND THE RIGHT ONE, when the number needs a word around it. A unit is language
+# business — where it goes, and whether it is a word at all.
+files-value-pixels = { $width } × { $height }
+files-value-fps = { $fps } fps
+files-value-hertz = { $khz } kHz
+# ONE, TWO, OR A COUNT. Which numbers earn a word of their own is a decision of
+# the LANGUAGE, and this is the shape Fluent has for it — `$n` has to arrive as
+# a NUMBER (`Arg::Number`), or every branch but the last is unreachable.
+files-value-channels = { $n ->
+        [1] mono
+        [2] estéreo
+       *[other] { $n } canais
+    }
+files-value-kbps = { $kbps } kbit/s
+files-value-millimetres = { $mm } mm
+files-value-seconds = { $s } s
+files-value-coordinates = { $lat }, { $lon }
+# THE PHOTOGRAPH CARRIES A PLACE AND THIS SCREEN IS NOT PRINTING IT. What
+# somebody needs before sending a picture to a stranger is not "hidden": it is
+# that the file still knows, and that sending the file sends the place too.
+files-value-place-withheld = gravado no arquivo, não mostrado aqui — vai junto se a foto for enviada
+# The other selector, and a plural one: in pt-BR `one` covers 0 as well.
+files-value-pages = { $n ->
+        [one] { $n } página
+       *[other] { $n } páginas
+    }
+
 # === A fila de transferências — `LEADER t` =================================
 #
 # Sete operações iam para uma thread sem dizer nada na tela: colar, apagar,
@@ -1411,3 +1518,217 @@ ext-send-link = baixar este link pela ronoctua
 ext-send-media = baixar a mídia desta página
 ext-as-me = como você — não é anônimo
 ext-anonymous = anônimo
+
+
+# ===================================================================
+# ONE CLICK UPDATES EVERYTHING — the sequence in `assets/updates.nix`
+#
+# The sequence is declared once and generated from there: the table, the two
+# runners, and this list of keys. `gen-updates.py` derives `update-<id>` and
+# `update-does-<id>` from every step's id and emits them to `keys.txt`, so a
+# step with no sentence in both languages cannot be written.
+#
+# The order below is the SEQUENCE'S order, which is the declaration's order —
+# there is no `order` field, on purpose, and sorting these alphabetically would
+# put back the second source the table exists to remove.
+# ===================================================================
+cmd-system-update = Atualizar o sistema
+cmd-system-update-rehearsal = Ensaiar a atualização
+
+# EACH STEP'S NAME, and under it the line that reaches the message line when the
+# cursor is on it — the same `{prefix}-does-<id>` shape the file manager and
+# the format buffer use. The name is what it is called; the line under it is
+# what it really runs, and what it costs to be wrong about.
+update-flake-update = buscar as versões novas
+update-does-flake-update = nix flake update em /etc/nixos: adianta os inputs pinados e não mexe em nada além do flake.lock. Precisa de rede, e no ISO o /etc/nixos é só leitura — ali o passo é pulado e diz isso.
+update-system-rebuild = reconstruir o sistema
+update-does-system-rebuild = nixos-rebuild switch, pela unidade que já existe: compila, e pode trazer um kernel que nunca deu boot. A volta é a geração anterior, no menu de boot. Se falhar, a sequência para aqui.
+update-store-collect-garbage = coletar o lixo do store
+update-does-store-collect-garbage = nix-collect-garbage sem --delete-older-than: apaga o que nada referencia, e as gerações antigas ficam — apagá-las no mesmo fôlego seria apagar a volta.
+update-store-optimise = deduplicar o store
+update-does-store-optimise = nix store optimise: arquivos iguais viram hard link. Roda depois da coleta, senão otimizaria justamente o que estava para ser apagado.
+update-old-generations = remover as gerações antigas
+update-does-old-generations = nix-collect-garbage --delete-older-than 30d: apaga a volta. Depois dele o menu de boot não tem para onde voltar, e é por isso que ele vem desligado.
+update-journal-vacuum = aparar o journal
+update-does-journal-vacuum = journalctl --vacuum-size=256M: joga fora o registro mais antigo, inclusive o desta atualização — que é a resposta para "por que o rebuild falhou?". Vem desligado.
+update-font-cache = refazer o cache de fontes
+update-does-font-cache = fc-cache -rf: refaz do zero e ignora as datas, porque um rebuild pode ter mudado as fontes e um cache velho com data nova é exatamente o caso que traz alguém aqui.
+update-tldr-cache = atualizar as páginas do tldr
+update-does-tldr-cache = tldr --update, como você: a unidade semanal as baixa como `nobody`, e o cache vai parar numa pasta que ninguém lê. Precisa de rede; sem ela o passo é pulado, em vez de esperar o timeout e chamar isso de falha.
+update-rust-toolchains = atualizar os toolchains do Rust
+update-does-rust-toolchains = rustup update: atualiza os canais que já estão em ~/.rustup, e não instala nenhum. Aqui o Rust vem do flake, então essa pasta não existe e o passo é pulado dizendo isso — ele é para a máquina onde você pôs o rustup à mão.
+update-node-global = atualizar os pacotes globais do npm
+update-does-node-global = npm update --global: move o que já está no prefixo global e não instala nada. O node vem do flake; o prefixo global, não — sem essa pasta o passo é pulado e diz isso.
+update-pnpm-global = atualizar os pacotes globais do pnpm
+update-does-pnpm-global = pnpm update --global: o pnpm tem o store global dele, que não é o do npm — por isso são dois passos, e não um. Sem a pasta dele o passo é pulado e diz isso.
+update-python-tools = atualizar as ferramentas do uv
+update-does-python-tools = uv tool upgrade --all: sobe de versão as ferramentas que estão em $XDG_DATA_HOME/uv/tools, uma venv cada, e não acrescenta nenhuma. O uv vem do flake; elas, não — sem essa pasta o passo é pulado e diz isso.
+
+# WHY A STEP WAS SKIPPED. The path or the name it is about travels beside the
+# sentence as data (`Needs::about()`), which is why none of these names one.
+update-needs-always = nada pode tornar este passo inaplicável
+update-needs-binary = este programa não está no seu PATH
+update-needs-directory = esta pasta não existe
+update-needs-writable-file = este arquivo não existe, ou não dá para escrever nele
+update-needs-network = o NetworkManager diz que esta máquina não está conectada
+
+# WHAT A FAILURE DOES TO THE REST OF THE SEQUENCE. Two answers and no third:
+# this runs from a unit, and there is nobody to ask.
+update-on-failure-stop = se falhar, a sequência para aqui
+update-on-failure-carry-on = se falhar, a sequência segue para o próximo passo
+
+# THE FOUR CLASSES A STEP CAN BE. They decide the order laws, and the view
+# groups by them.
+update-kind-move-inputs = move os inputs pinados
+update-kind-apply-configuration = aplica a configuração
+update-kind-refresh-cache = refaz um cache
+update-kind-reclaim-space = recupera espaço em disco
+
+
+# ===================================================================
+# A TELA DO CÉREBRO — LEADER s b, e uma janela só dela
+#
+# O que a máquina faz SOZINHA, quando, e no que deu da última vez. Nenhuma
+# frase daqui escreve uma data: o buffer as desenha em ISO, porque um
+# componente não traduz (inv. 11) e *19 ago* contra *19 Aug* é exatamente o que
+# ele não pode inventar. O que está escrito abaixo são as palavras EM VOLTA dos
+# números, nunca os números.
+#
+# SÃO DOIS REGISTROS, e o segundo é a razão da tela existir. `brain-hold-*` diz
+# o que uma rodada está ESPERANDO — máquina ocupada, não rodada quebrada — e
+# `brain-why-*` diz por que uma não aconteceu de jeito nenhum. Nenhum dos dois
+# diz que alguém foi perguntado e não respondeu: o caminho da atualização nunca
+# pergunta, e o `updates-never-ask` é o check que prova. Motivo nesta tela é da
+# máquina, ou é decisão que o dono tomou de propósito.
+# ===================================================================
+cmd-brain-open = O que a máquina faz sozinha
+cmd-brain-run = Rodar agora
+cmd-brain-rehearse = Ensaiar, sem mudar nada
+cmd-brain-abort = Interromper
+cmd-brain-proceed = Começar já, sem a contagem
+cmd-brain-toggle-step = Ligar ou desligar este passo
+cmd-brain-reset-steps = Voltar aos passos que a distro traz
+cmd-brain-interval = De quanto em quanto tempo
+cmd-brain-window = Em que parte do dia
+cmd-brain-switch = Ligar ou desligar esta tarefa
+
+brain-title = O que a máquina faz sozinha
+brain-nothing = não há nada que a máquina faça sozinha
+brain-hint = Enter abre · m r roda agora · m e ensaia · m o liga e desliga
+brain-hint-update = m t liga o passo · m i a cada · m w quando · m a interrompe · Esc volta
+
+# OS TRÊS BLOCOS da página de trás, e os rótulos na beirada esquerda deles.
+# Aquela coluna tem dezesseis células e a unidade ao lado tem dez: são curtos
+# porque as colunas são, e uma palavra mais longa aqui é uma palavra que alguém
+# lê com o fim cortado.
+brain-steps = o que roda
+brain-when = quando roda
+brain-doing = agora
+brain-outcome = resultado
+brain-last = a última vez
+brain-every = a cada
+brain-days = dias
+brain-part = parte do dia
+brain-next = próxima
+brain-waiting = motivo
+brain-soon = começa em
+brain-failed-at = parou no passo
+brain-rehearsal = um ensaio — não muda nada
+brain-never = nunca
+brain-changed = você mudou
+brain-needs-root = roda como root, com a permissão da máquina inteira
+
+# A ÚNICA TAREFA QUE EXISTE, e sob o cursor a linha discreta dizendo o que
+# aquilo quer dizer de verdade — a regra que os menus do formatador já seguem,
+# em que toda linha carrega um segundo registro.
+brain-task-system-update = Atualizar o sistema
+brain-task-system-update-does = a máquina traz o próprio software para frente e monta o sistema novo como entrada de boot, sem trocar: nada muda debaixo de uma sessão aberta, e quem passa a valer é o próximo boot — uma hora que você escolhe.
+
+# OS PASSOS DELA, na ordem em que rodam. O comando de verdade anda ao lado de
+# cada um como dado, sob o cursor, então estes dizem PARA QUE o passo serve, e
+# não o que ele digita.
+
+# ONDE A TAREFA ESTÁ AGORA. São catorze células na última coluna da página
+# inicial, então é uma frase curta cada.
+brain-standing-idle = esperando
+brain-standing-queued = na fila
+brain-standing-running = rodando
+
+# E COMO A ÚLTIMA RODADA TERMINOU. `falhou` é a palavra honesta para uma rodada
+# que não chegou ao fim; se foi defeito ou decisão é trabalho do motivo, na
+# linha logo abaixo.
+brain-outcome-skipped = não rodou
+brain-outcome-done = deu certo
+brain-outcome-failed = falhou
+
+# O QUE A RODADA ESTÁ ESPERANDO — as frases mais importantes desta tela. NADA
+# QUEBROU E NADA SE PERDEU: a hora chegou, a máquina não estava em condição, e
+# ela espera a próxima. Cada uma diz o que está no caminho, que é justamente
+# aquilo que alguém poderia resolver se quisesse.
+brain-hold-ram = RAM ocupada
+brain-hold-cpu = CPU ocupada
+brain-hold-battery = na bateria
+brain-hold-busy = outra rodando
+brain-hold-network = sem rede
+brain-hold-asleep = dormindo
+
+# E POR QUE UMA NÃO ACONTECEU DE JEITO NENHUM. As duas primeiras vão numa
+# coluna de dezessete células, ao lado do nome da linha; as outras têm a
+# largura de uma frase. `aborted` NÃO é erro — é o dono tendo decidido, e a
+# tela concordando com ele.
+brain-why-off = desligada
+brain-why-no-systemctl = sem systemd aqui
+brain-why-runaway = parou de dar notícia e a espera acabou — pode muito bem ainda estar rodando
+brain-why-aborted = você interrompeu — nada deu errado
+brain-why-postponed = você disse agora não, e a próxima hora mudou
+
+# EM QUE PARTE DO DIA ela pode começar. As horas são os mesmos dígitos em
+# qualquer língua; as palavras em volta, não.
+brain-part-any = a qualquer hora, assim que a máquina estiver livre
+brain-part-night = madrugada, das 02:00 às 05:00
+brain-part-morning = manhã, das 08:00 às 12:00
+brain-part-afternoon = tarde, das 13:00 às 18:00
+brain-part-evening = noite, das 19:00 às 23:00
+
+# A FAIXA SOB O MINIBUFFER — uma linha, e só enquanto uma contagem corre.
+#
+# Não é a tela do cérebro: é o aviso que chega sem ninguém ter pedido, numa
+# linha própria abaixo do par (invariante 14 — é a mesma superfície crescendo,
+# não um popup). Três frases, porque é o que cabe: o que está para acontecer, e
+# as duas respostas a isso.
+#
+# O nome da própria tarefa carrega o sujeito — `brain-task-<id>` —, então uma
+# tarefa acrescentada amanhã herda esta frase em vez de precisar de uma sua.
+brain-band-soon = { $task } — começa em { $seconds } s
+brain-band-abort = agora não
+brain-band-proceed = agora
+hint-brain-countdown = quanto falta para começar
+
+# E O QUE CUSTA CADA UMA DAS DUAS RESPOSTAS. `agora não` não é "nunca": a
+# corrida sai da fila e a próxima hora muda, que é a única coisa que de fato
+# para uma contagem — tirar da fila apenas a devolveria na batida seguinte, e a
+# pessoa responderia à mesma pergunta a cada meio minuto.
+echo-brain-postponed = Agora não — ela volta na próxima hora dela
+echo-brain-proceeding = Começando agora
+echo-brain-idle = Não há nada para acontecer
+echo-brain-unreachable = O cérebro não está respondendo
+
+# A ATUALIZAÇÃO OLHADA DE PERTO — a marca na modeline e a janela que ela abre.
+#
+# A marca aparece só enquanto algo roda, e some sozinha. A janela existe
+# separada dela porque uma marca que só se pode clicar é uma marca que o
+# teclado não alcança.
+cmd-update-watch = Acompanhar a atualização
+hint-update-mark = clique para ver a atualização acontecer
+echo-update-queued = Entrou na fila — começa quando a máquina estiver livre
+echo-update-started = A atualização começou
+echo-update-nowhere = Não há nada aqui que consiga começá-la
+update-hint = ↑↓ um passo · C-j C-k a saída · G o fim · Esc fecha
+update-no-output = ainda não disse nada
+update-verdict-ran = deu certo
+update-verdict-failed = falhou
+update-verdict-off = desligado
+update-verdict-skipped = não se aplica
+update-verdict-rehearsed = só ensaiou
+update-verdict-stopped = parou aqui
+update-verdict-pending = ainda vem

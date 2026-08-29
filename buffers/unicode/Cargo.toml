@@ -9,17 +9,38 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
 publish = false
-description = "Navegador de simbolos Unicode — buffer nativo"
+description = "Unicode symbol browser — a native buffer"
 
 [lib]
 crate-type = ["cdylib"]
 
-# A SINGLE dependency. Every extra crate enters the component, and the component is
+# A SINGLE dependency — and it is now the LAYOUT VOCABULARY, bindings included.
+#
+# `wit-bindgen` is not named here any more: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` a component needs, so the three
+# browsers share ONE generated binding set instead of three. That is what lets
+# a helper be shared at all — `glyphs`'s `Command` and this one's were different
+# Rust types of the same shape, which is why the grid's arithmetic came to exist
+# in three copies with three sets of constants.
+#
+# Every extra crate still enters the component, and the component is
 # instantiated on every buffer opening (a 5 ms budget, section 5.2).
 [dependencies]
-wit-bindgen = { version = "0.46", default-features = false, features = [
-  "macros",
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
 ] }
+
+# THE FRAME'S OWN TYPE, FOR THE TESTS ONLY — it never enters the component.
+#
+# `Screen::check()` already asks the host's two questions, and it answers with a
+# sentence. What needs the protocol is reading the frame BACK: how many rules
+# there are and on which rows, and whether a translated key was drawn at a
+# glyph's size. `ronoctua-design` builds a real `DisplayList`, and this is the
+# crate that spells one — it is already in the lockfile as that crate's own
+# dependency, so nothing new is vendored and nothing new is compiled for
+# `wasm32-wasip2`.
+[dev-dependencies]
+ronoctua-protocol = { path = "../../crates/ronoctua-protocol" }
 
 [lints.rust]
 unsafe_code = "warn"

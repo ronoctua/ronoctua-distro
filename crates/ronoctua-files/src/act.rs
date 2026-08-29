@@ -35,7 +35,7 @@ pub enum Trouble {
 impl std::fmt::Display for Trouble {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Missing(v) => write!(f, "{v} nao foi definida em nix/rust.nix"),
+            Self::Missing(v) => write!(f, "{v} was not set in nix/rust.nix"),
         }
     }
 }
@@ -51,7 +51,7 @@ impl std::error::Error for Trouble {}
 /// between a rename that usually refuses and one that always destroys.
 pub fn rename(from: &Path, to: &Path) -> Result<()> {
     if to.symlink_metadata().is_ok() {
-        bail!("ja existe algo em {}", to.display());
+        bail!("there is already something at {}", to.display());
     }
     std::fs::rename(from, to)
         .with_context(|| format!("renomear {} para {}", from.display(), to.display()))
@@ -169,7 +169,7 @@ pub fn chmod(path: &Path, mode: u32) -> Result<()> {
         .map(|m| m.is_symlink())
         .unwrap_or(false)
     {
-        bail!("um link simbolico nao tem permissao propria; mude a do alvo");
+        bail!("a symbolic link has no permission of its own; change the target's");
     }
     std::fs::set_permissions(path, PermissionsExt::from_mode(mode & 0o7777))
         .with_context(|| format!("mudar a permissao de {}", path.display()))
@@ -191,7 +191,7 @@ pub fn chgrp(path: &Path, gid: u32) -> Result<()> {
         // drew is that it is the entry the listing drew.
         rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
     )
-    .with_context(|| format!("mudar o grupo de {}", path.display()))
+    .with_context(|| format!("change the group of {}", path.display()))
 }
 
 /// What the privileged unit knows how to do. Four verbs, and no more.
@@ -271,7 +271,8 @@ impl Staged {
     /// system means the unit's `RuntimeDirectory` was never created.
     pub fn write_into(&self, staging: &Path) -> Result<()> {
         use std::os::unix::ffi::OsStrExt;
-        std::fs::create_dir_all(staging).with_context(|| format!("criar {}", staging.display()))?;
+        std::fs::create_dir_all(staging)
+            .with_context(|| format!("create {}", staging.display()))?;
         std::fs::write(staging.join("verb"), self.verb.word())?;
         std::fs::write(staging.join("path"), self.path.as_os_str().as_bytes())?;
         std::fs::write(staging.join("value"), &self.value)?;
@@ -288,7 +289,7 @@ impl Staged {
         let word = std::fs::read_to_string(staging.join("verb")).context("ler o verbo")?;
         let verb = Verb::of_word(word.trim())
             .with_context(|| format!("verbo desconhecido: {}", word.trim()))?;
-        let raw = std::fs::read(staging.join("path")).context("ler o caminho")?;
+        let raw = std::fs::read(staging.join("path")).context("read the path")?;
         let value = std::fs::read_to_string(staging.join("value")).unwrap_or_default();
         Ok(Self {
             verb,
@@ -400,9 +401,9 @@ pub(crate) fn free_name(wanted: &Path) -> PathBuf {
         .map(|s| format!(".{}", s.to_string_lossy()))
         .unwrap_or_default();
     for n in 1..10_000u32 {
-        // `copia` and not `copy`: this is a NAME on the person's disk, and the
-        // rest of the interface speaks their language.
-        let candidate = wanted.with_file_name(format!("{stem} (copia {n}){extension}"));
+        // A NAME on the person's disk, in the same English the rest of what
+        // this module writes to disk is in.
+        let candidate = wanted.with_file_name(format!("{stem} (copy {n}){extension}"));
         if candidate.symlink_metadata().is_err() {
             return candidate;
         }
@@ -428,7 +429,7 @@ mod tests {
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ronoctua-act-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("criar diretorio de teste");
+        std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
     }
 
@@ -438,7 +439,7 @@ mod tests {
         std::fs::write(root.join("a"), b"a").unwrap();
         std::fs::write(root.join("b"), b"b").unwrap();
         let e = rename(&root.join("a"), &root.join("b")).unwrap_err();
-        assert!(e.to_string().contains("ja existe"), "{e}");
+        assert!(e.to_string().contains("already something at"), "{e}");
         assert_eq!(std::fs::read(root.join("b")).unwrap(), b"b");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -449,40 +450,46 @@ mod tests {
         // target. A twelve-byte shortcut into a gigabyte, behind a gesture
         // that promised to copy what the row showed.
         let root = scratch("link");
-        std::fs::write(root.join("alvo"), b"conteudo grande").unwrap();
-        std::os::unix::fs::symlink("alvo", root.join("atalho")).unwrap();
-        std::fs::create_dir(root.join("destino")).unwrap();
+        std::fs::write(root.join("target"), b"large content").unwrap();
+        std::os::unix::fs::symlink("target", root.join("shortcut")).unwrap();
+        std::fs::create_dir(root.join("destination")).unwrap();
 
-        let landed = copy_into(&root.join("atalho"), &root.join("destino")).unwrap();
+        let landed = copy_into(&root.join("shortcut"), &root.join("destination")).unwrap();
         let meta = std::fs::symlink_metadata(&landed).unwrap();
-        assert!(meta.is_symlink(), "copiou o alvo em vez do link");
-        assert_eq!(std::fs::read_link(&landed).unwrap(), PathBuf::from("alvo"));
+        assert!(
+            meta.is_symlink(),
+            "it copied the target instead of the link"
+        );
+        assert_eq!(
+            std::fs::read_link(&landed).unwrap(),
+            PathBuf::from("target")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_copy_into_the_same_directory_gets_a_name_of_its_own() {
         let root = scratch("same");
-        std::fs::write(root.join("notas.txt"), b"x").unwrap();
-        let landed = copy_into(&root.join("notas.txt"), &root).unwrap();
-        assert_ne!(landed, root.join("notas.txt"));
-        assert!(landed.to_string_lossy().contains("copia"));
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        let landed = copy_into(&root.join("notes.txt"), &root).unwrap();
+        assert_ne!(landed, root.join("notes.txt"));
+        assert!(landed.to_string_lossy().contains("copy"));
         // And the extension survives, so the type is still recognisable.
         assert_eq!(landed.extension().unwrap(), "txt");
-        assert!(root.join("notas.txt").exists(), "o original sumiu");
+        assert!(root.join("notes.txt").exists(), "the original went away");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_tree_is_copied_whole() {
         let root = scratch("tree");
-        std::fs::create_dir_all(root.join("origem/dentro")).unwrap();
-        std::fs::write(root.join("origem/dentro/f.txt"), b"fundo").unwrap();
-        std::fs::create_dir(root.join("destino")).unwrap();
-        copy_into(&root.join("origem"), &root.join("destino")).unwrap();
+        std::fs::create_dir_all(root.join("source/inside")).unwrap();
+        std::fs::write(root.join("source/inside/f.txt"), b"deep").unwrap();
+        std::fs::create_dir(root.join("destination")).unwrap();
+        copy_into(&root.join("source"), &root.join("destination")).unwrap();
         assert_eq!(
-            std::fs::read(root.join("destino/origem/dentro/f.txt")).unwrap(),
-            b"fundo"
+            std::fs::read(root.join("destination/source/inside/f.txt")).unwrap(),
+            b"deep"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -490,8 +497,8 @@ mod tests {
     #[test]
     fn shredding_leaves_nothing_and_takes_the_name_with_it() {
         let root = scratch("shred");
-        let file = root.join("senhas-do-banco.txt");
-        std::fs::write(&file, b"segredo".repeat(5000)).unwrap();
+        let file = root.join("bank-passwords.txt");
+        std::fs::write(&file, b"secret".repeat(5000)).unwrap();
         shred(&file, PASSES).unwrap();
         assert!(!file.exists());
         // And no directory entry is left carrying the old name.
@@ -500,23 +507,26 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert!(left.is_empty(), "sobrou {left:?}");
+        assert!(left.is_empty(), "{left:?} was left over");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn shredding_a_directory_is_refused_and_a_link_is_only_unlinked() {
         let root = scratch("shred-refuse");
-        std::fs::create_dir(root.join("pasta")).unwrap();
-        let e = shred(&root.join("pasta"), 1).unwrap_err();
-        assert!(e.to_string().contains("pasta"), "{e}");
+        std::fs::create_dir(root.join("folder")).unwrap();
+        let e = shred(&root.join("folder"), 1).unwrap_err();
+        assert!(e.to_string().contains("folder"), "{e}");
 
         // THE DEFECT THIS CATCHES: overwriting THROUGH a link, which destroys
         // the target while the person is looking at the shortcut.
-        std::fs::write(root.join("alvo"), b"nao pode sumir").unwrap();
-        std::os::unix::fs::symlink("alvo", root.join("atalho")).unwrap();
-        shred(&root.join("atalho"), 1).unwrap();
-        assert_eq!(std::fs::read(root.join("alvo")).unwrap(), b"nao pode sumir");
+        std::fs::write(root.join("target"), b"it cannot go away").unwrap();
+        std::os::unix::fs::symlink("target", root.join("shortcut")).unwrap();
+        shred(&root.join("shortcut"), 1).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("target")).unwrap(),
+            b"it cannot go away"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -527,7 +537,7 @@ mod tests {
         // with its writer about where a field ends is a privileged operation
         // acting on the wrong path.
         let root = scratch("staged");
-        let awkward = PathBuf::from("/tmp/um\narquivo: com espaco");
+        let awkward = PathBuf::from("/tmp/one\nfile: with a space");
         let s = Staged {
             verb: Verb::Chown,
             path: awkward.clone(),

@@ -41,7 +41,7 @@
     # The buffers' content. LARGER than the footer on purpose: the footer is
     # peripheral reference, the buffer is what one reads.
     large = 20;
-    # THE RUN that asks for `escala: grande` — today only the glyph in the browser.
+    # THE RUN that asks for `scale: large` — today only the glyph in the browser.
     #
     # There the content IS the icon's shape: a 20 px glyph is a text
     # character, and what one is looking for in a grid of 10,473 is the DRAWING. At 40 px the
@@ -63,7 +63,7 @@
     # the stroke's thickness, whether it is outlined or filled.
     #
     # 116 is exactly FOUR cell lines (4 x 20 x 1.45). The run
-    # occupies a whole number of cells, as the grid's `ALTURA: 2` already does
+    # occupies a whole number of cells, as the grid's `HEIGHT: 2` already does
     # — without that, whatever comes below the glyph falls on top of it.
     xxlarge = 116;
   };

@@ -54,7 +54,7 @@ let
   # Two common words and with NO digit and no hyphen: the OCR confuses `1`/`l`,
   # `0`/`O` and eats hyphens in a small monospaced font. What is asserted is that
   # the text crossed over, and not that tesseract is good.
-  needle = "terminal funcionando";
+  needle = "terminal working";
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-terminal";
@@ -92,7 +92,7 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}", config="${configFloating}")
     sock = socket_of("niri")
 
-    with subtest("o terminal sobe com o motor VT numa thread propria"):
+    with subtest("the terminal comes up with the VT engine on a thread of its own"):
         machine.succeed(
             "systemd-run --unit=term ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -104,38 +104,38 @@ pkgs.testers.runNixOSTest {
         )
         try:
             machine.wait_until_succeeds(
-                "journalctl -u term --no-pager | grep -q 'terminal aberto'",
+                "journalctl -u term --no-pager | grep -q 'terminal opened'",
                 timeout=60,
             )
         except Exception:
             print(machine.execute("journalctl -u term --no-pager")[1])
             raise
         journal = machine.succeed("journalctl -u term --no-pager")
-        # The engine's name comes from INSIDE the thread (`Terminal::nome`). If the
+        # The engine's name comes from INSIDE the thread (`Terminal::name`). If the
         # thread had not come up, there would be no name here at all.
         #
         # WITH QUOTES: `tracing` quotes a `Debug` value, and `engine=alacritty`
         # without them does not match. It is the trap already recorded in the CLAUDE.md.
         assert 'engine="alacritty"' in journal, journal
 
-    with subtest("o COMPOSITOR ve uma janela, nao uma regiao nossa"):
+    with subtest("the COMPOSITOR sees a window, not a region of ours"):
         # Invariant 4: a terminal drawn inside our surface would not show up in
         # niri's IPC.
         machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'janelas: 1'",
+            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
             timeout=30,
         )
 
     with subtest("o terminal desenhou"):
         machine.wait_until_succeeds(
-            "journalctl -u term --no-pager | grep -q 'terminal desenhado no xdg_toplevel'",
+            "journalctl -u term --no-pager | grep -q 'terminal drawn on the xdg_toplevel'",
             timeout=60,
         )
         journal = machine.succeed("journalctl -u term --no-pager")
-        for bad in ["desenhar o frame falhou", "preparar texto falhou", "panicked"]:
+        for bad in ["drawing the frame failed", "preparing the text failed", "panicked"]:
             assert bad not in journal, f"o terminal reportou: {bad}"
 
-    with subtest("o que se digita chega ao programa e volta para a tela"):
+    with subtest("what is typed reaches the program and comes back to the screen"):
         # With no window manager nobody calls `XSetInputFocus`: the injected key
         # would be lost with no error, no log, nowhere.
         focus_niri()
@@ -151,27 +151,27 @@ pkgs.testers.runNixOSTest {
         # LOG is the right signal — sleeping a fixed time would be a race.
         machine.wait_until_succeeds(
             "journalctl -u term --no-pager | "
-            "grep -c 'terminal desenhado no xdg_toplevel' | awk '$1 > 1'",
+            "grep -c 'terminal drawn on the xdg_toplevel' | awk '$1 > 1'",
             timeout=60,
         )
 
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
             "-colorspace gray -negate -resize 200% /tmp/term.png"
         )
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/term.png stdout --psm 6 2>/dev/null"
         ).strip()
         print(f"OCR: {read_back!r}")
-        # `funcionando` on its own: it is the longer and less ambiguous word of the
+        # `working` on its own: it is the longer and less ambiguous word of the
         # pair, and requiring both would turn an OCR error into a terminal error.
-        assert "funcionando" in read_back.lower(), (
-            f"o que foi digitado nao chegou a tela; OCR leu {read_back!r}"
+        assert "working" in read_back.lower(), (
+            f"what was typed did not reach the screen; OCR read {read_back!r}"
         )
 
-    with subtest("o monitor abre FLUTUANTE, e o terminal comum nao"):
+    with subtest("the monitor opens FLOATING, and the ordinary terminal does not"):
         import json
 
         # `LANG`: btop REFUSES to start without a UTF-8 locale — it prints
@@ -203,14 +203,14 @@ pkgs.testers.runNixOSTest {
         open_now = windows()
         print(json.dumps(open_now, indent=1))
         assert open_now["br.ronoctua.monitor"]["is_floating"], (
-            "a regra gerada nao fez o monitor flutuar; ele abriu lado a lado — "
-            "que e exatamente como um atalho funcionando se parece"
+            "the generated rule did not make the monitor float; it opened side by side — "
+            "which is exactly what a working shortcut looks like"
         )
         # AND THE ORDINARY TERMINAL DOES NOT FLOAT. Without this the test would
         # pass just as well with a rule matching every window, which is the
         # mistake `LEADER b t` would pay for.
         assert not open_now["br.ronoctua.terminal"]["is_floating"], (
-            "a regra pegou o terminal comum tambem"
+            "the rule caught the ordinary terminal too"
         )
 
     with subtest("o resgate abre FLUTUANTE, com identidade propria"):
@@ -242,13 +242,13 @@ pkgs.testers.runNixOSTest {
             raise
         with_rescue = windows()
         assert with_rescue["br.ronoctua.rescue"]["is_floating"], (
-            "a regra gerada nao fez o resgate flutuar; ele abriu lado a lado"
+            "the generated rule did not make the rescue float; it opened side by side"
         )
         # AND IT IS STILL THERE. A console that draws once and dies is
         # indistinguishable from one that works, in a screenshot.
         machine.sleep(5)
         assert "br.ronoctua.rescue" in windows(), (
-            "a janela do resgate sumiu: o programa dentro dela morreu.\n"
+            "the rescue's window went away: the program inside it died.\n"
             + machine.execute("journalctl -u resgate --no-pager")[1]
         )
 
@@ -260,11 +260,11 @@ pkgs.testers.runNixOSTest {
         machine.sleep(8)
         still = windows()
         assert "br.ronoctua.monitor" in still, (
-            "a janela do monitor sumiu: o programa dentro dela morreu.\n"
+            "the monitor's window went away: the program inside it died.\n"
             + machine.execute("journalctl -u monitor --no-pager")[1]
         )
         journal = machine.succeed("journalctl -u monitor --no-pager")
-        for bad in ["panicked", "desenhar o frame falhou"]:
+        for bad in ["panicked", "drawing the frame failed"]:
             assert bad not in journal, f"o monitor reportou: {bad}"
   '';
 }

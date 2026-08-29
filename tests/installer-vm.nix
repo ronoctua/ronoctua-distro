@@ -75,8 +75,8 @@ let
     RONOCTUA_INST_PROFILE = "minimal";
     RONOCTUA_INST_KEYBOARD = "gb";
     RONOCTUA_INST_HOSTNAME = "noctua-teste";
-    RONOCTUA_INST_PASSWORD = "senha-de-teste";
-    RONOCTUA_INST_PASSPHRASE = "frase-secreta-de-teste";
+    RONOCTUA_INST_PASSWORD = "test-password";
+    RONOCTUA_INST_PASSPHRASE = "test-passphrase";
   };
   exports = lib.concatStringsSep " " (
     lib.mapAttrsToList (name: value: "${name}=${lib.escapeShellArg value}") answers
@@ -163,7 +163,7 @@ pkgs.testers.runNixOSTest {
         # A root that does not exist, so that anything reading it fails loudly
         # rather than quietly booting this node instead of the installed system.
         virtualisation.fileSystems."/" = {
-          device = "/dev/disk/by-label/nao-existe-e-nunca-sera-usado";
+          device = "/dev/disk/by-label/does-not-exist-and-never-will";
           fsType = "ext4";
         };
       };
@@ -173,7 +173,7 @@ pkgs.testers.runNixOSTest {
     installer.start()
     installer.wait_for_unit("multi-user.target")
 
-    with subtest("o instalador roda ate o fim, e a saida vem junto se nao rodar"):
+    with subtest("the installer runs to the end, and the output comes along if it does not"):
         # `< /dev/null` is not tidiness: with a terminal on stdin the binary
         # enters the TUI and waits for a key forever. And the output goes to a
         # file so that a failure arrives with its reason attached.
@@ -189,9 +189,9 @@ pkgs.testers.runNixOSTest {
         # even starts.
         printed = installer.execute("cat /tmp/install.log")[1]
         print(printed)
-        assert status == 0, f"o instalador saiu com {status}:\n{printed}"
+        assert status == 0, f"the installer exited with {status}:\n{printed}"
 
-    with subtest("ele escreveu o que so ele escreve"):
+    with subtest("it wrote what only it writes"):
         # The generated `host.nix`, with the answers in it. `installer-dryrun`
         # reads the same file; what is new here is that it exists ON DISK,
         # written by a step that ran.
@@ -202,8 +202,8 @@ pkgs.testers.runNixOSTest {
         assert 'ronoctua.disk = "/dev/vda"' in host
 
         # NO SECRET IN IT (section 9): this file goes to backup.
-        assert "senha-de-teste" not in host
-        assert "frase-secreta-de-teste" not in host
+        assert "test-password" not in host
+        assert "test-passphrase" not in host
 
         # The password hash IS written, and into `/persist`, because
         # `mutableUsers = false` means the activator reads it during the install
@@ -215,22 +215,22 @@ pkgs.testers.runNixOSTest {
         # machine about to reboot into the installed system.
         installer.fail("test -e /tmp/disko-luks.key")
 
-    with subtest("o resume_offset saiu do swapfile, e nao de um palpite"):
+    with subtest("the resume_offset came out of the swapfile, and not out of a guess"):
         # Computed AFTER the swap file exists, and the one answer the installer
         # produces instead of asking. Zero would be accepted by the kernel and
         # would fail in use rather than at boot.
         offset = installer.succeed(
             "grep -o 'resume_offset=[0-9]*' /mnt/etc/nixos/host.nix || true"
         ).strip()
-        assert offset and not offset.endswith("=0"), f"resume_offset invalido: {offset!r}"
+        assert offset and not offset.endswith("=0"), f"invalid resume_offset: {offset!r}"
 
     installer.shutdown()
 
-    with subtest("e o que ele instalou BOOTA"):
+    with subtest("and what it installed BOOTS"):
         # The half that makes this more than a longer `installer-dryrun`.
         machine.start()
         machine.wait_for_console_text("[Pp]assphrase for|[Ee]nter passphrase")
-        machine.send_console("frase-secreta-de-teste\n")
+        machine.send_console("test-passphrase\n")
         machine.wait_for_unit("multi-user.target")
 
         # It is the machine the answers described, and not this node.

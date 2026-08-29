@@ -44,7 +44,10 @@ use ronoctua_tokens as tokens;
 mod actions;
 mod apps;
 mod band;
+// THE BRAIN'S LINE, under the minibuffer, and the thread that feeds it.
+mod brain;
 mod buffer;
+mod chrome;
 mod clipboard;
 mod daemon;
 mod disks;
@@ -63,6 +66,9 @@ mod surface;
 mod syncthing;
 mod terminal;
 mod transfers;
+// `LEADER s u`, the animated mark on the modeline, and the window that watches
+// a run happen. It knows no step: the sequence is `assets/updates.nix`.
+mod update_window;
 
 /// The layer-shell surface's namespace.
 ///
@@ -87,7 +93,7 @@ fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         // It tells an ALREADY-RUNNING footer. It is the compositor that sees the
         // leader's key — see the top of `leader.rs`.
-        Some("leader") => return leader::send_it("leader").context("avisar a leader"),
+        Some("leader") => return leader::send_it("leader").context("tell the leader"),
         // RUNNING A COMMAND BY NAME, from outside the process.
         //
         // It is what section 13 asks for — every feature addressable by name
@@ -102,7 +108,7 @@ fn main() -> Result<()> {
             let mut args = std::env::args().skip(2);
             let id = args
                 .next()
-                .context("uso: ronoctua-shell command <id> [argumento]")?;
+                .context("usage: ronoctua-shell command <id> [argument]")?;
             let rest: Vec<String> = args.collect();
             let line = if rest.is_empty() {
                 format!("command {id}")
@@ -124,7 +130,7 @@ fn main() -> Result<()> {
                 .nth(2)
                 .context("uso: ronoctua-shell buffer-keymap <pid>")?
                 .parse::<u32>()
-                .context("o pid tem de ser um numero")?;
+                .context("the pid has to be a number")?;
             for (keys, id) in leader::buffer_keymap(pid).context("ler o keymap do buffer")? {
                 println!("{keys} {id}");
             }
@@ -136,7 +142,7 @@ fn main() -> Result<()> {
                 .next()
                 .context("uso: ronoctua-shell buffer-command <pid> <id>")?
                 .parse::<u32>()
-                .context("o pid tem de ser um numero")?;
+                .context("the pid has to be a number")?;
             let id = args
                 .next()
                 .context("uso: ronoctua-shell buffer-command <pid> <id>")?;
@@ -148,7 +154,7 @@ fn main() -> Result<()> {
         Some("buffer") => {
             let path = std::env::args()
                 .nth(2)
-                .context("uso: ronoctua-shell buffer <componente.wasm> [arquivo]")?;
+                .context("usage: ronoctua-shell buffer <component.wasm> [file]")?;
             // THE FILE IS OPTIONAL, and belongs to the HOST. The component never
             // learns a path: it receives the content through `Input::Paste` and
             // asks to write with `Effect::Save`, which is what lets an editor
@@ -168,9 +174,9 @@ fn main() -> Result<()> {
         Some("export-niri-binds") => {
             let prefix = std::env::args()
                 .nth(2)
-                .context("uso: ronoctua-shell export-niri-binds <prefixo>")?;
-            for acorde in actions::acordes_completos() {
-                for (key, kdl) in acorde.binds {
+                .context("usage: ronoctua-shell export-niri-binds <prefix>")?;
+            for chord in actions::full_chords() {
+                for (key, kdl) in chord.binds {
                     // `Shift+1` becomes `Mod+Shift+1`: the prefix goes in
                     // front, and the Shift already came with the key.
                     println!("    {prefix}+{key}{} {{ {kdl}; }}", repeat_of(&kdl));
@@ -202,19 +208,19 @@ fn main() -> Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (display, rest) = args
                 .split_first()
-                .context("uso: ronoctua-shell satellite <display> <programa> [args]")?;
+                .context("usage: ronoctua-shell satellite <display> <program> [args]")?;
             let display: u8 = display
                 .parse()
-                .with_context(|| format!("`{display}` nao e numero de display"))?;
+                .with_context(|| format!("`{display}` is not a display number"))?;
             let (program, args) = rest
                 .split_first()
-                .context("uso: ronoctua-shell satellite <display> <programa> [args]")?;
+                .context("usage: ronoctua-shell satellite <display> <program> [args]")?;
             return foreign::satellite_of(display, program, args).context("satellite");
         }
         // A terminal in a window of its own. With no argument it starts `$SHELL`;
         // with one, it runs what is asked — and it is what the VM test uses so as not
         // to depend on some shell's prompt.
-        // `ronoctua-shell files [caminho]` — the manager in a window of its
+        // `ronoctua-shell files [path]` — the manager in a window of its
         // own. The SAME `files::View` the footer draws from: what differs is
         // only the window and the events of it, which is what makes "one
         // implementation, two doors" true rather than claimed.
@@ -223,11 +229,21 @@ fn main() -> Result<()> {
         // the window and its events, which is what makes "one implementation,
         // two doors" true rather than claimed.
         Some("notifications") => {
-            return notifications_window::host_it().context("hospedar o gerenciador");
+            return notifications_window::host_it().context("host the manager");
         }
         Some("files") => {
             let where_ = std::env::args().nth(2).map(std::path::PathBuf::from);
-            return files_window::host_it(where_.as_deref()).context("hospedar o gerenciador");
+            return files_window::host_it(where_.as_deref()).context("host the manager");
+        }
+        // `ronoctua-shell update` — the update, live, in a window of its own.
+        //
+        // It is the door the modeline's mark opens, and it takes no argument
+        // BECAUSE it may name no step: what it draws is the declared table the
+        // brain already carries and the two journals the units write. It opens
+        // with nothing running too — a run that has finished is exactly when
+        // somebody wants to read what it did.
+        Some("update") => {
+            return update_window::host_it().context("hospedar a atualizacao");
         }
         Some("terminal") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -245,7 +261,7 @@ fn main() -> Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (program, rest) = args
                 .split_first()
-                .context("uso: ronoctua-shell monitor <programa> [args]")?;
+                .context("usage: ronoctua-shell monitor <program> [args]")?;
             return terminal::host_monitor(program, rest).context("hospedar o monitor");
         }
         // THE RESCUE CONSOLE, and a third identity for the same terminal.
@@ -259,7 +275,7 @@ fn main() -> Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (program, rest) = args
                 .split_first()
-                .context("uso: ronoctua-shell rescue <programa> [args]")?;
+                .context("usage: ronoctua-shell rescue <program> [args]")?;
             return terminal::host_rescue(program, rest).context("hospedar o resgate");
         }
         // It checks the keymap without bringing anything up. It exists so whoever edits their own
@@ -273,20 +289,20 @@ fn main() -> Result<()> {
             // and by name only — giving them keys would spend the whole keymap on
             // what is almost never used. It is the only exception, and it is
             // recognisable by its prefix.
-            let orfaos: Vec<&str> = registry
+            let orphans: Vec<&str> = registry
                 .all_ones()
                 .map(|c| c.id)
                 .filter(|id| !id.starts_with("niri-") && !reachable.contains(id))
                 .collect();
             anyhow::ensure!(
-                orfaos.is_empty(),
-                "comandos sem tecla nenhuma (nem sequencia, nem acorde, nem emergencia): {}",
-                orfaos.join(", ")
+                orphans.is_empty(),
+                "commands with no key at all (no sequence, no chord, no emergency): {}",
+                orphans.join(", ")
             );
             println!(
-                "keymap OK: {} ligacoes, {} acordes, {} comandos, todos alcancaveis",
+                "keymap OK: {} bindings, {} chords, {} commands, all reachable",
                 tree.amount(),
-                actions::acordes().len(),
+                actions::chords().len(),
                 registry.amount()
             );
             return Ok(());
@@ -299,11 +315,11 @@ fn main() -> Result<()> {
         size = tokens::font::SIZE_BASE,
         cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE),
         line = tokens::metrics::line_height(tokens::font::SIZE_BASE),
-        rodape = tokens::metrics::footer_height(tokens::font::SIZE_BASE),
-        "subindo o rodape"
+        footer = tokens::metrics::footer_height(tokens::font::SIZE_BASE),
+        "bringing the footer up"
     );
 
-    surface::run().context("a superficie do rodape falhou")
+    surface::run().context("the footer's surface failed")
 }
 
 /// The bind's `repeat` property, when it needs to be stated.
@@ -392,6 +408,7 @@ pub fn segments(
     state: &str,
     unread: usize,
     transfer: Option<&str>,
+    update: Option<&str>,
 ) -> Vec<Segment> {
     let mut out = vec![
         // 2. Never disappears: the only indicator that something is pending.
@@ -452,6 +469,37 @@ pub fn segments(
             // The icon and two digits. Below that there is no segment worth
             // having: `6…` is not a percentage.
             min_cols: 5,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // 5. THE UPDATE, and it is a mark rather than a measurement.
+    //
+    // One cell, one glyph, and it ANIMATES — see `update_window::FRAMES`. It
+    // appears while the machine is bringing its own software forward and goes
+    // away the moment it is not, which is why it is `removable` like the
+    // transfer and unlike the bell.
+    //
+    // # Why it gives way BEFORE the transfer and not after
+    //
+    // Because a rebuild is announced everywhere else too: it has the brain's
+    // own line under the minibuffer, its own screen, its own window and its
+    // own journal. A copy at 62% has this segment and a panel. On a line too
+    // narrow for both, the one with fewer other ways of being seen stays.
+    //
+    // And it never outranks the BELL, which is the only indicator that
+    // something is pending and the one thing on this line that must be the
+    // last to go.
+    if let Some(u) = update {
+        out.push(Segment {
+            id: "update",
+            text: u.to_owned(),
+            priority: 5,
+            // One glyph. There is nothing narrower that still says anything,
+            // and there is nothing wider worth saying here: a percentage of a
+            // rebuild is a number nobody can compute honestly.
+            min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
@@ -530,11 +578,18 @@ mod tests {
         for columns in [20_u16, 40, 80, 200] {
             for c in layout::resolve(
                 columns,
-                &segments(&name, "ghostty", "search", 99, Some("\u{ebcb} 62%")),
+                &segments(
+                    &name,
+                    "ghostty",
+                    "search",
+                    99,
+                    Some("\u{ebcb} 62%"),
+                    Some(&crate::update_window::frame_of(u64::from(columns)).to_string()),
+                ),
             ) {
                 assert!(
                     c.column + layout::width(&c.text) <= columns,
-                    "'{}' vaza com {columns} colunas",
+                    "'{}' leaks at {columns} columns",
                     c.id
                 );
             }
@@ -553,13 +608,13 @@ mod tests {
         // ONE, and not two: two is `segmentGap`, which is what separates one
         // segment from the next — using it inside a segment would say the bell
         // and the number are two different things.
-        let s = segments("", "", "", 3, None);
+        let s = segments("", "", "", 3, None, None);
         let notif = s.iter().find(|x| x.id == "notif").unwrap();
         let cells: Vec<&str> = notif.text.split(' ').collect();
         assert_eq!(
             cells.len(),
             2,
-            "{:?} nao e glifo, espaco, numero",
+            "{:?} is not a glyph, a space, a number",
             notif.text
         );
         assert_eq!(cells[1], "3");
@@ -567,8 +622,8 @@ mod tests {
 
     #[test]
     fn the_bell_gains_a_dot_when_something_is_unread() {
-        let with = segments("", "", "", 1, None);
-        let without = segments("", "", "", 0, None);
+        let with = segments("", "", "", 1, None, None);
+        let without = segments("", "", "", 0, None, None);
         let of = |v: &[Segment]| {
             v.iter()
                 .find(|x| x.id == "notif")
@@ -583,11 +638,50 @@ mod tests {
     }
 
     #[test]
+    fn the_update_mark_is_a_column_only_while_something_runs() {
+        // IT COSTS NOTHING AT REST. The bell has to be able to say "nothing is
+        // waiting" and therefore never disappears; this one appears because
+        // something is happening, and at rest it would be a column spent on a
+        // still glyph on every screen in the session, forever.
+        let quiet = segments("a.rs", "rust", "", 0, None, None);
+        assert!(!quiet.iter().any(|s| s.id == "update"));
+        let busy = segments(
+            "a.rs",
+            "rust",
+            "",
+            0,
+            None,
+            Some(&crate::update_window::frame_of(0).to_string()),
+        );
+        let mark = busy
+            .iter()
+            .find(|s| s.id == "update")
+            .expect("the mark has to be there");
+        // One glyph, and it is one of the twelve — never the countdown's pie,
+        // which answers the opposite question.
+        assert_eq!(layout::width(&mark.text), 1);
+        assert!(
+            crate::update_window::FRAMES.contains(&mark.text.chars().next().unwrap()),
+            "the mark did not come from the clock's lap"
+        );
+        // AND THE BELL OUTLIVES IT on every width worth drawing. A screen too
+        // narrow for both keeps the only indicator that something is pending.
+        for columns in [20_u16, 30, 40, 80] {
+            let placed = layout::resolve(columns, &busy);
+            let has = |id: &str| placed.iter().any(|p| p.id == id);
+            assert!(has("notif"), "the bell went away at {columns} columns");
+            if has("update") {
+                assert!(has("notif"), "the mark survived the bell");
+            }
+        }
+    }
+
+    #[test]
     fn the_icons_come_from_a_token() {
         // Invariant 9: no icon codepoint outside the tokens. If
         // someone writes a literal here, this test does not catch it — but the
         // generator has already guaranteed that the token exists in the font.
-        let s = segments("arq.rs", "rust", "", 0, None);
+        let s = segments("arq.rs", "rust", "", 0, None, None);
         let notif = s.iter().find(|x| x.id == "notif").unwrap();
         assert!(notif.text.starts_with(tokens::icon::NOTIFICATION));
     }

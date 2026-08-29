@@ -39,9 +39,9 @@ pub fn all_of() -> Vec<(&'static str, serde_json::Value)> {
         ("window-screen-full", json!({ "FullscreenWindow": {} })),
         ("window-center", json!({ "CenterColumn": {} })),
         // TOGGLE FLOATING was only a chord, with the KDL written by hand
-        // in a `um(...)` — the only shortcut in the system with no command behind it.
+        // by hand — the only shortcut in the system with no command behind it.
         // It came in here because "nothing key-only" (section 13), and the
-        // `todo_acorde_vem_de_um_comando` test stops another from using the same hole.
+        // `only_a_chord_with_an_argument_escapes_the_action_table` test stops another from using the same hole.
         ("window-float", json!({ "ToggleWindowFloating": {} })),
         ("window-consume", json!({ "ConsumeOrExpelWindowRight": {} })),
         ("window-expel", json!({ "ConsumeOrExpelWindowLeft": {} })),
@@ -146,7 +146,7 @@ fn of_command(shows: &'static str, key: &str, id: &'static str) -> Chord {
     let kdl = kdl_of(id)
         .as_ref()
         .and_then(config_name)
-        .unwrap_or_else(|| panic!("o acorde `{key}` aponta para `{id}`, que nao existe"));
+        .unwrap_or_else(|| panic!("the chord `{key}` points at `{id}`, which does not exist"));
     Chord {
         shows,
         command: id,
@@ -183,7 +183,7 @@ fn range_of(shows: &'static str, command: &'static str, prefix: &str) -> Chord {
     // THE ACTION COMES FROM THE TABLE, and not from a string here. It was written by hand, and
     // it was the last KDL in the system with nothing checking that the action exists.
     let action = with_argument(command).unwrap_or_else(|| {
-        panic!("a faixa `{shows}` aponta para `{command}`, que nao leva argumento")
+        panic!("the band `{shows}` points at `{command}`, which takes no argument")
     });
     Chord {
         shows,
@@ -209,7 +209,7 @@ fn shell_path() -> String {
 /// The key comes WITHOUT the modifier's prefix: it is `Mod` in production and `Alt`
 /// in the nested loop, and whoever knows that is whoever generates the config.
 #[must_use]
-pub fn acordes() -> Vec<Chord> {
+pub fn chords() -> Vec<Chord> {
     vec![
         // --- focus: arrows AND hjkl, both forms ---
         of_command("←", "Left", "window-left"),
@@ -248,7 +248,7 @@ pub fn acordes() -> Vec<Chord> {
         //
         // It TAKES the key from niri's own default: upstream binds
         // `Mod+Escape` to `toggle-keyboard-shortcuts-inhibit`, and ours comes
-        // first, so the deduplication in `acordes_completos` drops that one. The
+        // first, so the deduplication in `full_chords` drops that one. The
         // action is not lost — like the other 140, it is reachable by name
         // (`LEADER :`), which is what that exception exists for.
         through_shell("ESC", "Escape", "monitor-btop"),
@@ -296,9 +296,9 @@ fn canonical_key(key: &str) -> String {
 const PREFIXES: [&str; 2] = ["Mod", "Alt"];
 
 #[must_use]
-pub fn acordes_completos() -> Vec<Chord> {
-    let mut out = acordes();
-    let mut usadas: std::collections::BTreeSet<String> = out
+pub fn full_chords() -> Vec<Chord> {
+    let mut out = chords();
+    let mut used: std::collections::BTreeSet<String> = out
         .iter()
         .flat_map(|a| a.binds.iter().map(|(t, _)| canonical_key(t)))
         .collect();
@@ -309,13 +309,13 @@ pub fn acordes_completos() -> Vec<Chord> {
     // on the same key does not "lose to ours": it breaks the whole file.
     for (key, _, _) in emergency() {
         for p in PREFIXES {
-            usadas.insert(canonical_key(key));
+            used.insert(canonical_key(key));
             // And in the form the chord would have with each prefix.
             if let Some(rest) = canonical_key(key)
                 .strip_prefix(&format!("{}+", p.to_lowercase()))
                 .map(str::to_owned)
             {
-                usadas.insert(rest);
+                used.insert(rest);
             }
         }
     }
@@ -324,7 +324,7 @@ pub fn acordes_completos() -> Vec<Chord> {
         // COLLISION: ours stays. Two lines on the same key in the KDL make
         // niri REFUSE the config — and a refused config is the compositor falling back
         // to its own default, with none of our shortcuts.
-        if !usadas.insert(canonical_key(b.key)) {
+        if !used.insert(canonical_key(b.key)) {
             continue;
         }
         out.push(Chord {
@@ -500,7 +500,7 @@ mod tests {
         for (id, _) in super::all_of() {
             assert!(
                 !id.contains('.'),
-                "`{id}` ainda tem ponto; o id do comando e kebab puro"
+                "`{id}` still has a dot; a command id is pure kebab"
             );
             assert!(
                 !id.is_empty()
@@ -509,7 +509,7 @@ mod tests {
                     && id
                         .chars()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
-                "`{id}` nao e um id em kebab-case"
+                "`{id}` is not a kebab-case id"
             );
         }
     }
@@ -522,8 +522,8 @@ mod tests {
         for (id, action) in super::all_of() {
             let obj = action
                 .as_object()
-                .unwrap_or_else(|| panic!("{id} nao e objeto"));
-            assert_eq!(obj.len(), 1, "{id} tem {} nomes, esperava 1", obj.len());
+                .unwrap_or_else(|| panic!("{id} is not an object"));
+            assert_eq!(obj.len(), 1, "{id} has {} names, expected 1", obj.len());
         }
     }
 
@@ -533,18 +533,22 @@ mod tests {
         // table is the test. What is asserted here is the rest: no chord
         // comes out without a bind (it would become a line in the list that does nothing) and
         // none comes out without a label (it would become `[key]` on screen).
-        for a in super::acordes() {
-            assert!(!a.binds.is_empty(), "o acorde `{}` nao gera bind", a.shows);
-            assert!(!a.shows.is_empty(), "acorde sem tecla para mostrar");
+        for a in super::chords() {
+            assert!(
+                !a.binds.is_empty(),
+                "the chord `{}` generates no bind",
+                a.shows
+            );
+            assert!(!a.shows.is_empty(), "a chord with no key to show");
             assert!(
                 a.label().starts_with(ronoctua_cmd::KEY_PREFIX_OF),
-                "o rotulo de `{}` nao e uma chave de comando: {}",
+                "the label of `{}` is not a command key: {}",
                 a.shows,
                 a.label()
             );
             for (key, kdl) in &a.binds {
-                assert!(!key.is_empty(), "bind sem tecla em `{}`", a.shows);
-                assert!(!kdl.is_empty(), "bind sem acao em `{}`", a.shows);
+                assert!(!key.is_empty(), "a bind with no key in `{}`", a.shows);
+                assert!(!kdl.is_empty(), "a bind with no action in `{}`", a.shows);
             }
         }
     }
@@ -555,25 +559,25 @@ mod tests {
         // `focus-workspace 3` requires an argument and there is no equivalent null action.
         // That exception has to stay restricted to it: a null chord with its own KDL
         // would be the `T` back again, under another name.
-        for a in super::acordes() {
-            let nulo = super::kdl_of(a.command)
+        for a in super::chords() {
+            let null = super::kdl_of(a.command)
                 .as_ref()
                 .and_then(super::config_name);
             for (key, kdl) in &a.binds {
                 if kdl.starts_with("spawn ") {
                     continue; // it goes through our binary — see `through_shell`.
                 }
-                match &nulo {
+                match &null {
                     Some(n) => assert_eq!(
                         kdl, n,
-                        "o acorde `{key}` diverge da acao do comando `{}`",
+                        "the chord `{key}` diverges from the action of the command `{}`",
                         a.command
                     ),
                     None => assert!(
                         kdl.split_whitespace().count() > 1,
-                        "o acorde `{key}` tem KDL proprio (`{kdl}`) sem argumento: \
-                         ou o comando `{}` entra em `todas()`, ou ele nao devia \
-                         existir so como tecla",
+                        "the chord `{key}` has KDL of its own (`{kdl}`) with no argument: \
+                 either the command `{}` goes into `every()`, or it should not \
+                 exist as a key alone",
                         a.command
                     ),
                 }
@@ -585,14 +589,14 @@ mod tests {
     fn no_chord_repeats_a_key() {
         // Two chords on the same key give two identical binds in the KDL: niri
         // accepts it, the last one wins, and the first disappears with no warning.
-        let mut keys: Vec<String> = super::acordes_completos()
+        let mut keys: Vec<String> = super::full_chords()
             .into_iter()
             .flat_map(|a| a.binds.into_iter().map(|(t, _)| t))
             .collect();
         let before = keys.len();
         keys.sort();
         keys.dedup();
-        assert_eq!(keys.len(), before, "ha tecla de acorde repetida");
+        assert_eq!(keys.len(), before, "there is a repeated chord key");
     }
 
     #[test]
@@ -626,14 +630,14 @@ mod tests {
         // in `cargo test`; that one catches the case where the generated table is
         // right and the action is refused anyway (a missing argument).
         for (id, action) in super::all_of() {
-            let name = super::config_name(&action).expect("acao com nome");
+            let name = super::config_name(&action).expect("an action with a name");
             assert!(
                 ronoctua_niri::action_exists(&name),
-                "`{id}` manda `{name}`, que nao esta na tabela do niri pinado"
+                "`{id}` sends `{name}`, which is not in the pinned niri's table"
             );
         }
         // And the range chords, which assemble the KDL without going through `all_of()`.
-        for a in super::acordes() {
+        for a in super::chords() {
             for (_, kdl) in &a.binds {
                 let Some(name) = kdl.split_whitespace().next() else {
                     continue;
@@ -643,7 +647,7 @@ mod tests {
                 }
                 assert!(
                     ronoctua_niri::action_exists(name),
-                    "o acorde `{}` manda `{name}`, que o niri pinado nao tem",
+                    "the chord `{}` sends `{name}`, which the pinned niri does not have",
                     a.shows
                 );
             }
@@ -657,6 +661,10 @@ mod tests {
         let before = ids.len();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), before, "ha id repetido na tabela de acoes");
+        assert_eq!(
+            ids.len(),
+            before,
+            "there is a repeated id in the action table"
+        );
     }
 }

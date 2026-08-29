@@ -57,7 +57,7 @@ def read_globs(path: Path) -> list[tuple[int, str, str, bool]]:
             continue
         parts = line.split(":")
         if len(parts) < 3:
-            print(f"{path}: linha nao reconhecida: {line!r}", file=sys.stderr)
+            print(f"{path}: unrecognised line: {line!r}", file=sys.stderr)
             raise SystemExit(1)
         weight, mime, pattern = parts[0], parts[1], parts[2]
         flags = parts[3].split(",") if len(parts) > 3 else []
@@ -77,7 +77,7 @@ def read_magic(path: Path) -> list[tuple[int, str, list[dict]]]:
     """
     raw = path.read_bytes()
     if not raw.startswith(b"MIME-Magic\0\n"):
-        print(f"{path}: nao comeca com o cabecalho MIME-Magic", file=sys.stderr)
+        print(f"{path}: does not start with the MIME-Magic header", file=sys.stderr)
         raise SystemExit(1)
     at = len(b"MIME-Magic\0\n")
     out: list[tuple[int, str, list[dict]]] = []
@@ -89,7 +89,7 @@ def read_magic(path: Path) -> list[tuple[int, str, list[dict]]]:
             at = end + 2  # past `]` and the newline
             continue
         if not out:
-            print(f"{path}: regra antes de qualquer secao, em {at}", file=sys.stderr)
+            print(f"{path}: a rule before any section, at {at}", file=sys.stderr)
             raise SystemExit(1)
 
         start = at
@@ -187,9 +187,9 @@ def main() -> int:
     stated = (mime_dir / "version").read_text(encoding="utf-8").strip()
     if stated != args.version:
         print(
-            f"ERRO: o pacote diz versao {stated} e o Nix pinou {args.version}.\n"
-            "       As tabelas foram geradas contra a versao pinada; a divergencia\n"
-            "       tem de ser olhada, nao seguida.",
+            f"ERROR: the package says version {stated} and Nix pinned {args.version}.\n"
+            "       The tables were generated against the pinned version; the divergence\n"
+            "       has to be looked at, not followed.",
             file=sys.stderr,
         )
         return 1
@@ -215,7 +215,7 @@ def main() -> int:
         if entry is None:
             nonlocal failed
             print(
-                f"ERRO: {why} aponta para o token `{token}`, que nao existe em "
+                f"ERROR: {why} points at the token `{token}`, which does not exist in "
                 "assets/tokens/icons.nix",
                 file=sys.stderr,
             )
@@ -236,8 +236,8 @@ def main() -> int:
     used = {name for _, name in generic}
     for name in sorted(used - set(of_generic)):
         print(
-            f"ERRO: o freedesktop usa o icone generico `{name}` e "
-            "assets/icons/mime-glyphs.nix nao responde por ele",
+            f"ERROR: freedesktop uses the generic icon `{name}` and "
+            "assets/icons/mime-glyphs.nix does not answer for it",
             file=sys.stderr,
         )
         failed = True
@@ -248,8 +248,8 @@ def main() -> int:
         mime = row["mime"]
         if mime not in types:
             print(
-                f"ERRO: `exact` nomeia o tipo `{mime}`, que nao existe na base. "
-                "Uma linha que nao casa com nada parece proposital e ninguem audita.",
+                f"ERROR: `exact` names the type `{mime}`, which does not exist in the database. "
+                "A line that matches nothing looks deliberate and nobody audits it.",
                 file=sys.stderr,
             )
             failed = True
@@ -264,14 +264,14 @@ def main() -> int:
         mime = row["mime"]
         if mime in types:
             print(
-                f"ERRO: `ours` inventa `{mime}`, que a base JA TEM. "
+                f"ERROR: `ours` invents `{mime}`, which the database ALREADY HAS. "
                 "Ele pertence a `exact`.",
                 file=sys.stderr,
             )
             failed = True
             continue
         if not MIME.match(mime):
-            print(f"ERRO: `{mime}` nao tem a forma de um tipo MIME", file=sys.stderr)
+            print(f"ERROR: `{mime}` is not shaped like a MIME type", file=sys.stderr)
             failed = True
             continue
         ch = token_char(row["token"], f"ours `{mime}`")
@@ -289,9 +289,9 @@ def main() -> int:
     for name, got, floor in floors:
         if got < floor:
             print(
-                f"ERRO: `{name}` veio com {got} linhas, abaixo do piso de {floor}. "
-                "Um leitor que parou de entender o formato devolve poucas linhas, "
-                "e isso se le como base pequena em vez de leitor quebrado.",
+                f"ERROR: `{name}` came with {got} rows, below the floor of {floor}. "
+                "A reader that stopped understanding the format gives back few rows, "
+                "and that reads as a small base rather than a broken reader.",
                 file=sys.stderr,
             )
             failed = True
@@ -425,8 +425,8 @@ def main() -> int:
 
     Path(args.out).write_text("\n".join(out), encoding="utf-8")
     print(
-        f"OK: {len(globs)} globs, {len(magic)} regras de magic, {len(subclass)} subclasses, "
-        f"{len(generic)} genericos -> {args.out}"
+        f"OK: {len(globs)} globs, {len(magic)} magic rules, {len(subclass)} subclasses, "
+        f"{len(generic)} generics -> {args.out}"
     )
     return 0
 

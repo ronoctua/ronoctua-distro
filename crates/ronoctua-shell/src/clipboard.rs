@@ -74,33 +74,33 @@ struct Watcher {
 /// It is the same criterion as the control socket and niri's IPC.
 pub fn watch(channel: Sender<ronoctua_clipboard::Entry>) -> bool {
     let Ok(conn) = Connection::connect_to_env() else {
-        tracing::warn!("sem conexao Wayland para a vigia do clipboard");
+        tracing::warn!("no Wayland connection for the clipboard watcher");
         return false;
     };
-    let Ok((globais, mut fila)) = registry_queue_init::<Watcher>(&conn) else {
-        tracing::warn!("registry do Wayland recusado na vigia do clipboard");
+    let Ok((globals, mut queue)) = registry_queue_init::<Watcher>(&conn) else {
+        tracing::warn!("the Wayland registry was refused in the clipboard watcher");
         return false;
     };
-    let qh = fila.handle();
+    let qh = queue.handle();
 
-    let manager: ZwlrDataControlManagerV1 = match globais.bind(&qh, 1..=2, ()) {
+    let manager: ZwlrDataControlManagerV1 = match globals.bind(&qh, 1..=2, ()) {
         Ok(g) => g,
         Err(e) => {
             // A compositor with no `zwlr_data_control` has no way of offering a
             // history to anyone — and it is honest to say so in the log instead of
             // staying silent waiting for events that never come.
-            tracing::warn!(error = %e, "o compositor nao expoe zwlr_data_control; sem historico");
+            tracing::warn!(error = %e, "the compositor does not expose zwlr_data_control; no history");
             return false;
         }
     };
-    let seat: wl_seat::WlSeat = match globais.bind(&qh, 1..=9, ()) {
+    let seat: wl_seat::WlSeat = match globals.bind(&qh, 1..=9, ()) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(error = %e, "sem seat para a vigia do clipboard");
+            tracing::warn!(error = %e, "no seat for the clipboard watcher");
             return false;
         }
     };
-    let _dispositivo = manager.get_data_device(&seat, &qh, ());
+    let _device = manager.get_data_device(&seat, &qh, ());
 
     let mut state = Watcher {
         channel: Some(channel),
@@ -110,26 +110,26 @@ pub fn watch(channel: Sender<ronoctua_clipboard::Entry>) -> bool {
         .name("clipboard".into())
         .spawn(move || {
             loop {
-                if fila.blocking_dispatch(&mut state).is_err() {
-                    tracing::info!("a vigia do clipboard encerrou");
+                if queue.blocking_dispatch(&mut state).is_err() {
+                    tracing::info!("the clipboard watcher shut down");
                     return;
                 }
             }
         })
-        .expect("a thread da vigia nao pode falhar em nascer");
+        .expect("the watcher's thread cannot fail to be born");
     true
 }
 
 impl Watcher {
     /// Reads the offer that became the selection and sends it through the channel.
-    fn collect_from(&mut self, oferta: &ZwlrDataControlOfferV1, conn: &Connection) {
-        let kinds = self.kinds.remove(oferta).unwrap_or_default();
+    fn collect_from(&mut self, offer: &ZwlrDataControlOfferV1, conn: &Connection) {
+        let kinds = self.kinds.remove(offer).unwrap_or_default();
 
         // A SECRET DOES NOT GET PAST HERE. It is the only point where the filter
         // has the right answer: after reading, the text has already existed in the
         // process's memory. See `ronoctua_clipboard::Entry::is_secret`.
         if ronoctua_clipboard::Entry::is_secret(&kinds) {
-            tracing::debug!("copia de gerenciador de senha ignorada");
+            tracing::debug!("a copy from a password manager is ignored");
             return;
         }
         // IMAGE BEFORE TEXT.
@@ -146,34 +146,34 @@ impl Watcher {
         let Some(kind) = kind else {
             // The log records WHAT was refused: "nothing shows up" and "we refused
             // this type" are fixed in different places.
-            tracing::debug!(?kinds, "copia de tipo nao suportado ignorada");
+            tracing::debug!(?kinds, "a copy of an unsupported type is ignored");
             return;
         };
         let is_image = ronoctua_clipboard::image::TYPES.contains(&kind);
 
-        let Ok((leitura, escrita)) = std::io::pipe() else {
-            tracing::warn!("nao consegui abrir o cano para ler a selecao");
+        let Ok((read_end, write_end)) = std::io::pipe() else {
+            tracing::warn!("could not open the pipe to read the selection");
             return;
         };
-        oferta.receive(kind.to_owned(), escrita.as_fd());
+        offer.receive(kind.to_owned(), write_end.as_fd());
         // CLOSE OUR WRITE END before reading. While it exists here, the EOF never
         // arrives — and the read would wait forever.
-        drop(escrita);
+        drop(write_end);
         // FLUSH: the `receive` only asks; without sending the request, the other
         // side writes nothing.
         if let Err(e) = conn.flush() {
-            tracing::warn!(error = %e, "flush antes de ler a selecao falhou");
+            tracing::warn!(error = %e, "the flush before reading the selection failed");
             return;
         }
 
         // BYTES, and not `read_to_string`. An image is not UTF-8, and reading it as
         // text would discard it with an error that looks like a read failure.
         let mut raw = Vec::new();
-        let mut leitura = leitura;
-        if let Err(e) = leitura.read_to_end(&mut raw) {
+        let mut read_end = read_end;
+        if let Err(e) = read_end.read_to_end(&mut raw) {
             // Whoever copied may have died before writing. It is not the user's
             // fault.
-            tracing::debug!(error = %e, "nao consegui ler a selecao");
+            tracing::debug!(error = %e, "could not read the selection");
             return;
         }
 
@@ -183,7 +183,7 @@ impl Watcher {
             match String::from_utf8(raw) {
                 Ok(t) => ronoctua_clipboard::Content::Text(t),
                 Err(_) => {
-                    tracing::debug!(kind, "a selecao dizia ser texto e nao e UTF-8");
+                    tracing::debug!(kind, "the selection claimed to be text and is not UTF-8");
                     return;
                 }
             }
@@ -234,7 +234,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for Watcher {
 impl Dispatch<ZwlrDataControlOfferV1, ()> for Watcher {
     fn event(
         state: &mut Self,
-        oferta: &ZwlrDataControlOfferV1,
+        offer: &ZwlrDataControlOfferV1,
         event: zwlr_data_control_offer_v1::Event,
         (): &(),
         _: &Connection,
@@ -243,7 +243,7 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for Watcher {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
             state
                 .kinds
-                .entry(oferta.clone())
+                .entry(offer.clone())
                 .or_default()
                 .push(mime_type);
         }

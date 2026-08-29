@@ -63,7 +63,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = {
-    description = "A extensao do navegador: manda download para a fila, e nao aumenta a impressao digital";
+    description = "The browser extension: sends a download to the queue, and does not enlarge the fingerprint";
     platforms = lib.platforms.all;
   };
 }

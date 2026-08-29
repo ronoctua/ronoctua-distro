@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-rescue"
-description = "O console de resgate — Ctrl+Alt+Del, duas portas."
+description = "The rescue console — Ctrl+Alt+Del, two doors."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

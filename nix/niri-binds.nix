@@ -27,7 +27,7 @@
   # Returns a file with the binds, ready to go inside the config's
   # `binds { … }` block.
   #
-  # `prefixo` is `Mod` in production and `Alt` in the nested loop — `Mod` belongs
+  # `prefix` is `Mod` in production and `Alt` in the nested loop — `Mod` belongs
   # to the host's compositor when running inside another one.
   forPrefix =
     prefix:
@@ -38,7 +38,7 @@
       # silence would give a config with no chords — and the symptom would be "the
       # arrows stopped working", with no error anywhere.
       if [ ! -s $out ]; then
-        echo "ERRO: export-niri-binds nao emitiu nada." >&2
+        echo "ERROR: export-niri-binds emitted nothing." >&2
         exit 1
       fi
 
@@ -49,8 +49,8 @@
       # inert until the second key arrives. The sequence's trigger is
       # `${prefix}+Space`, a chord like the others.
       if grep -qE '^ *${prefix} *(repeat=[a-z]+ *)?\{' $out; then
-        echo "ERRO: ha bind na leader SOZINHA; segurar a leader deixaria de" >&2
-        echo "      ser inerte e roubaria o foco da janela." >&2
+        echo "ERROR: there is a bind on the leader ALONE; holding the leader would stop" >&2
+        echo "      be inert and would steal the window's focus." >&2
         exit 1
       fi
 
@@ -66,12 +66,12 @@
       # it claims to have checked.
       for press_key in Ctrl+Alt+L Ctrl+Shift+L Ctrl+Alt+Escape Ctrl+Alt+Delete; do
         if ! grep -qF "    $press_key " $out; then
-          echo "ERRO: o bind de emergencia $press_key nao saiu." >&2
+          echo "ERROR: the emergency bind $press_key did not come out." >&2
           exit 1
         fi
         if grep -qF "${prefix}+$press_key " $out; then
-          echo "ERRO: $press_key saiu com o prefixo da leader, e ele existe" >&2
-          echo "      exatamente para funcionar quando a leader nao funciona." >&2
+          echo "ERROR: $press_key came out with the leader's prefix, and it exists" >&2
+          echo "      exactly so as to work when the leader does not." >&2
           exit 1
         fi
       done
@@ -80,7 +80,7 @@
       # would give a `warn` in the footer's log and nothing on screen — at the moment
       # when one can least afford to guess what happened.
       grep -q 'keyboard-restore' $out || {
-        echo "ERRO: o bind de emergencia nao chama \`keyboard-restore\`." >&2
+        echo "ERROR: the emergency bind does not call \`keyboard-restore\`." >&2
         exit 1; }
     '';
 }

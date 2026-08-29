@@ -216,6 +216,15 @@ interface types {
         // other, rather than putting a word on the modeline that no key can
         // return from.
         state-changed(string),
+        // Remember this preference. Needs `capability::brain`.
+        //
+        // NOT an `ask`: that one is a verb plus an index and carries no value,
+        // and "every seven days" is a value. See `setting`.
+        //
+        // The buffer still touches no disk (invariant 11): it says what it
+        // wants remembered and the HOST writes the file, the same way `save`
+        // is how a file editor writes.
+        tune(setting),
     }
 
     // Capabilities a buffer may ASK for in the descriptor. The host refuses whoever
@@ -292,6 +301,25 @@ interface types {
         // that lives only inside the thing being guarded holds until somebody
         // writes a second buffer.
         disks,
+        // Receiving `input::mind`, and asking the brain to run something or to
+        // remember a preference.
+        //
+        // # Why a fourth one, and not `system`
+        //
+        // Because `system` means "how much memory, who is eating it, do
+        // something about it", and this one ends with the machine REBUILDING
+        // ITS OWN OPERATING SYSTEM. Folding it in would hand that reach to the
+        // memory panel, which asked for neither. It is the same argument
+        // `transfers` and `disks` already make above, one step further along.
+        //
+        // # What it does NOT open
+        //
+        // The same as the other three: no filesystem, no socket, no clock, no
+        // parser. The whole mind arrives already read, already decided and
+        // already formatted — including the DATES, which the component cannot
+        // compute, having no zone. It names an id it was given, and the host
+        // checks it against the list it just sent.
+        brain,
     }
 
     // ------------------------------------------------------------------
@@ -483,6 +511,19 @@ interface types {
         forget-job,
         // Drop every finished job at once. `target` is ignored.
         sweep-jobs,
+
+        // The brain, for whoever declared `capability::brain`. `target` is a
+        // 1-BASED index into the last `mind`'s task list — never a name the
+        // buffer built: the host checks it against the list it just sent.
+        run-task,
+        // The same, changing nothing — the `nix run .#install` idiom.
+        rehearse-task,
+        // Stop what is running, or take it out of the queue.
+        abort-task,
+        // Do not wait the announcement out; start now. `target` is ignored.
+        proceed,
+        // Not now — it comes back at its next moment. `target` is ignored.
+        postpone,
     }
 
     // WHAT TO WRITE ON A DISK, and on which.
@@ -715,6 +756,232 @@ interface types {
 
     // A key binding, declared as DATA (section 7.9). The buffer never
     // captures a key imperatively.
+    // ============================================================
+    // THE BRAIN — what the machine does by itself, for whoever declared
+    // `capability::brain`.
+    //
+    // THE FIELD ORDER OF EVERY RECORD BELOW IS THE ORDER `ronoctua-runtime`
+    // LOWERS IT IN. `wasmtime` zips a record POSITIONALLY against the WIT and
+    // only then compares names — a field moved on one side alone fails when the
+    // function is CALLED, with a message about a name.
+    // ============================================================
+
+    // WHAT a reading of the pulse measures.
+    enum vital {
+        // RAM in use, in per cent of the total.
+        ram-used,
+        // Stall waiting for memory, in per mille of a ten-second window.
+        memory-stall,
+        // Stall waiting for a processor, in the same unit.
+        cpu-stall,
+        // Running off the battery: `1` for yes, `0` for no.
+        on-battery,
+    }
+
+    record vital-sign {
+        of: vital,
+        amount: u16,
+    }
+
+    // How busy the machine is, as the gate last read it.
+    //
+    // A LIST and not a record with a field per reading, for the reason
+    // `survey.readings` is one: what the machine does not measure does not
+    // report, and zero is a real reading. A kernel with no `/proc/pressure/cpu`
+    // simply has no `cpu-stall` here, and the screen draws a dash instead of a
+    // number nobody took.
+    record pulse {
+        at: u64,
+        signs: list<vital-sign>,
+    }
+
+    enum standing {
+        idle,
+        queued,
+        running,
+    }
+
+    // What is in the way. `none` is not a failure being hidden: it is what a
+    // row says when nothing is holding it, the same shape `guard-mode::unknown`
+    // has.
+    enum hold-kind {
+        none,
+        ram,
+        cpu,
+        battery,
+        busy,
+        network,
+        asleep,
+    }
+
+    // `skipped` FIRST, and deliberately the harmless one: a record built from a
+    // file that lost a field must not read as "it worked".
+    enum outcome-kind {
+        skipped,
+        done,
+        failed,
+    }
+
+    // Which stretch of the person's day a task prefers. The hours each one
+    // covers are the brain's, with the reason written beside them.
+    enum day-part {
+        any,
+        night,
+        morning,
+        afternoon,
+        evening,
+    }
+
+    record step-outcome {
+        id: string,
+        ok: bool,
+        seconds: u32,
+        trouble: string,
+    }
+
+    // One run, as the journal keeps it.
+    //
+    // `run-record` and NOT `run`: the layout vocabulary every component now
+    // imports (`ronoctua-design`) already has a `Run` — one line of a screen —
+    // and a buffer that imported both would resolve one of them silently. The
+    // name is longer at the one place it is written and unambiguous everywhere
+    // it is read, which is the same argument `buffer-state` makes.
+    record run-record {
+        began: u64,
+        ended: u64,
+        // WHEN IT RAN, already formatted by the host, in ISO. The component has
+        // no zone and no calendar (invariant 11), so the number is for the
+        // arithmetic this side does and the text is for the date it cannot
+        // compute.
+        when-text: string,
+        outcome: outcome-kind,
+        // The step it failed at, by id. Empty when there is none.
+        at: string,
+        // A WORD of the brain's own — `runaway`, `aborted`, `off` — drawn
+        // through `brain-why-<word>`. Empty when the reason came from the
+        // machine, in which case `trouble` carries it. They are two fields
+        // because they are drawn differently: one through the bundle, the other
+        // exactly as it arrived.
+        why: string,
+        // What the machine said, verbatim. Empty when it said nothing.
+        trouble: string,
+        steps: list<step-outcome>,
+    }
+
+    // One thing a task runs, as the screen draws it.
+    record task-step {
+        id: string,
+        // What it really runs. DATA — a command line is not translated.
+        command: string,
+        needs-root: bool,
+        on: bool,
+        // Whether that differs from what the distro ships.
+        changed: bool,
+    }
+
+    record task-state {
+        // English, kebab-case. `brain-task-<id>` names it on screen.
+        id: string,
+        standing: standing,
+        enabled: bool,
+        interval-days: u16,
+        part-of-day: day-part,
+        // The next moment it will be considered, in epoch seconds. `0` when
+        // there is none — it is switched off, or it only runs when asked.
+        next: u64,
+        // The same moment, already formatted. Empty when there is none.
+        next-text: string,
+        hold: hold-kind,
+        // Why it is not due at all, as a word. Empty when it is.
+        why-not: string,
+        // Whether `last` means anything: a record cannot be absent, and
+        // `began: 0` would be a moment in 1970.
+        ran: bool,
+        last: run-record,
+        steps: list<task-step>,
+    }
+
+    // The warning that something is about to happen.
+    //
+    // `task` EMPTY means there is none — the same shape `mind.running` uses.
+    // What crosses is the DEADLINE and never a ticking number: whoever draws
+    // already beats a one-second clock, and a daemon that pushed a digit every
+    // second would wake three processes to redraw one.
+    record announcement {
+        task: string,
+        total-seconds: u16,
+        deadline: u64,
+        why: string,
+    }
+
+    // How busy is too busy — the general gate, as the person set it.
+    record gate {
+        ram-ceiling-pct: u16,
+        cpu-stall-per-mille: u16,
+        abort-on-battery: bool,
+    }
+
+    // Everything the brain knows, all at once.
+    //
+    // Whole and never a delta, for the reason `queue` is whole: a delta needs
+    // both sides to agree on what they last saw, and what is being agreed about
+    // here is when the machine will rebuild itself.
+    record mind {
+        // The daemon's clock, in epoch seconds. It crosses because the
+        // component has none (invariant 11): a countdown is `deadline - now`,
+        // and without the second number the first is a moment this side cannot
+        // place.
+        now: u64,
+        pulse: pulse,
+        tasks: list<task-state>,
+        queue: list<string>,
+        // What is running, by id. Empty when nothing is.
+        running: string,
+        // The task whose next run is a rehearsal. Empty when none is.
+        rehearsing: string,
+        announcement: announcement,
+        gate: gate,
+        // The cadences one key steps through, in days.
+        //
+        // The LADDER crosses instead of living in the component, because which
+        // steps are worth having is a policy with its reason written in
+        // `ronoctua-brain` — and a screen that stepped by one would take
+        // twenty-three presses to get from a month to a week.
+        cadence: list<u16>,
+    }
+
+    // One step, switched on or off by the id the last `mind` gave.
+    record step-switch {
+        id: string,
+        on: bool,
+    }
+
+    // WHICH preference, and its VALUE.
+    variant knob {
+        interval-days(u16),
+        part-of-day(day-part),
+        enabled(bool),
+        step(step-switch),
+        // Every step back to what the distro ships. It carries nothing: there
+        // is one default and it is the flake's.
+        reset-steps,
+    }
+
+    // A preference the person changed.
+    //
+    // # Why it is not a `demand`
+    //
+    // Because a `demand` is a verb plus an INDEX, and that shape fits every
+    // request there is: pause job seven, close consumer three. A preference is
+    // not that — it carries a VALUE the person chose. Bending `demand` to hold
+    // one would put brain-shaped fields on the record every other buffer sends,
+    // which is the argument `plan` already carries a few hundred lines above.
+    record setting {
+        // Which task it belongs to, by the id the last `mind` gave.
+        task: string,
+        knob: knob,
+    }
+
     record binding {
         // The sequence, like `m f s`. Only under `SPC m`: the host REFUSES at load time
         // whoever tries to bind under a global prefix.
@@ -909,6 +1176,12 @@ interface types {
         // signal, which is what makes the absence structural.
         rack(rack),
         formatted(outcome),
+        // What the machine is going to do by itself, ALREADY READ. Only for
+        // whoever declared `capability::brain`.
+        //
+        // Like `queue`, nobody pressed it: the host is subscribed to the
+        // brain's own socket on a thread, and what arrives is the whole mind.
+        mind(mind),
     }
 }
 
@@ -935,7 +1208,13 @@ interface view {
         device, rack, recipe, plan, outcome,
         // And the state's — `state` is only reachable from inside `descriptor`,
         // which is exactly the case this list exists for.
-        tone, buffer-state
+        tone, buffer-state,
+        // And the brain's. `vital-sign`, `run-record`, `task-step` and the rest are
+        // reachable only from inside `mind`, which is precisely the case this
+        // list exists for.
+        vital, vital-sign, pulse, standing, hold-kind, outcome-kind, day-part,
+        step-outcome, run-record, task-step, task-state, announcement, gate, mind,
+        step-switch, knob, setting
     };
 
     // Who the buffer is: name, mode, keymap, commands and modeline segments.

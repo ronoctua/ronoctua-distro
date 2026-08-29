@@ -93,7 +93,7 @@ impl Default for Sort {
 /// nothing at all.
 pub fn read_dir_at(dir: &Path, sort: Sort) -> Result<Vec<Entry>> {
     let handle =
-        std::fs::read_dir(dir).with_context(|| format!("nao consegui listar {}", dir.display()))?;
+        std::fs::read_dir(dir).with_context(|| format!("could not list {}", dir.display()))?;
     let mut out: Vec<Entry> = handle
         .flatten()
         .filter_map(|e| {
@@ -248,7 +248,7 @@ mod tests {
         // among the files it is unreachable by the gesture it exists for.
         let mut link = entry("atalho", Kind::Symlink, 12, 0);
         link.aims_at = Some(Kind::Directory);
-        let mut list = vec![entry("arquivo", Kind::File, 1, 0), link];
+        let mut list = vec![entry("file", Kind::File, 1, 0), link];
         sort_entries(&mut list, Sort::default());
         assert_eq!(list[0].name, "atalho");
     }
@@ -313,10 +313,7 @@ mod tests {
     fn the_start_falls_back_instead_of_failing() {
         let home = std::env::temp_dir();
         // A name that is not there lands in the home, never on an error.
-        assert_eq!(
-            start_at(Some(&home), Some("nao-existe-em-lugar-nenhum")),
-            home
-        );
+        assert_eq!(start_at(Some(&home), Some("does-not-exist-anywhere")), home);
         assert_eq!(start_at(None, Some("main")), PathBuf::from("/"));
     }
 
@@ -331,9 +328,9 @@ mod tests {
             seen.push(o);
             o = o.next();
         }
-        assert_eq!(o, Order::Name, "o ciclo nao fechou");
+        assert_eq!(o, Order::Name, "the cycle did not close");
         for wanted in Order::ALL {
-            assert!(seen.contains(&wanted), "a tecla nunca alcanca {wanted:?}");
+            assert!(seen.contains(&wanted), "the key never reaches {wanted:?}");
         }
     }
 }

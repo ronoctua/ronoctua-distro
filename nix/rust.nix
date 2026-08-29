@@ -26,6 +26,8 @@
   # The notification catalogue and filters (section 4.2), generated from
   # `assets/notifications.nix` in the same shape as the tokens.
   notificationsRs,
+  # The update sequence, generated from `assets/updates.nix`.
+  updatesRs,
   mimeDb,
   i18nRs,
   niriActions,
@@ -55,6 +57,7 @@
   bufferMemory,
   bufferTransfers,
   bufferFormat,
+  bufferBrain,
   iconSuperpack,
   lucideFontFile,
   primaryFontFile,
@@ -161,6 +164,14 @@ let
     # first is missing, instead of generating a fallback that would mask the error.
     RONOCTUA_TOKENS_RS = "${tokensRs}/tokens.rs";
     RONOCTUA_NOTIFICATIONS_RS = "${notificationsRs}/notifications.rs";
+    # THE UPDATE SEQUENCE, and the brain reads it rather than declaring one.
+    #
+    # `assets/updates.nix` is the ONE place the sequence lives. The brain used
+    # to carry three steps of its own, with their own ids and their own copies
+    # of the command lines — and they were DISJOINT from the twelve the table
+    # declares, so a run that stopped at `flake-update` drew a bracketed key on
+    # screen. Two files saying what the update does is one file too many.
+    RONOCTUA_UPDATES_RS = "${updatesRs}/updates.rs";
     # The directory, not a file: the crate embeds the generated `keys.rs` AND the
     # `.ftl` files it came from.
     RONOCTUA_I18N_DIR = "${i18nRs}";
@@ -240,7 +251,7 @@ let
     # knowing — see `ronoctua_niri::run_through_client`.
     RONOCTUA_NIRI = "${niri}/bin/niri";
     RONOCTUA_XWAYLAND_SATELLITE = "${xwayland-satellite}/bin/xwayland-satellite";
-    # WHAT COPIES. `Efeito::Copiar` was a `tracing::info!` and nothing more: the
+    # WHAT COPIES. `Effect::Copy` was a `tracing::info!` and nothing more: the
     # glyph browser's nine copy formats never put anything on the
     # clipboard.
     #
@@ -317,7 +328,7 @@ let
     # than the rest of `nix/modules/archives.nix` put together, and one
     # command line then serves `.tar.zst`, `.tar.gz` and `.zip` — the three the
     # menu offers. Its own program is 440 KB; what its closure adds beyond what
-    # the system already carries is measured by `iso-fits-usb-stick`, not
+    # the system already carries is measured by `iso-is-measured`, not
     # assumed.
     RONOCTUA_BSDTAR = "${libarchive}/bin/bsdtar";
     # The discard pass of an overwriting delete — the one step that reaches the
@@ -330,7 +341,7 @@ let
     RONOCTUA_PKEXEC = "${polkit}/bin/pkexec";
     # THE ICON SUPERPACKAGE — the PIXMAP step of section 4.2's chain, for a
     # FOREIGN application that brings its own `Icon=`. It had existed since the
-    # icons milestone and never had a path into the Rust: `Cadeia` has the field
+    # icons milestone and never had a path into the Rust: `Chain` has the field
     # `superpacote` and nobody filled it in.
     #
     # Invariant 10 still stands: what consults it is the HOST, and no
@@ -384,6 +395,7 @@ let
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
     RONOCTUA_BUFFER_TRANSFERS = "${bufferTransfers}/lib/ronoctua_buffer_transfers.wasm";
     RONOCTUA_BUFFER_FORMAT = "${bufferFormat}/lib/ronoctua_buffer_format.wasm";
+    RONOCTUA_BUFFER_BRAIN = "${bufferBrain}/lib/ronoctua_buffer_brain.wasm";
   };
 
   # The dependencies, compiled once.
@@ -590,6 +602,21 @@ rec {
     chmod +w $out/bin/ronoctua-transfers
     # The graphics rpath belongs to the footer; this program opens no window.
     patchelf --shrink-rpath $out/bin/ronoctua-transfers
+  '';
+
+  # THE BRAIN'S DAEMON, extracted the same way and for the same reason.
+  #
+  # It decides WHEN something runs; it draws nothing, opens no window and loads
+  # no component. Shipping `workspace` to a unit with no screen would put the
+  # renderer, wgpu and the wasm runtime in its closure — a derivation references
+  # what its BYTES cite, and `brain-unit-is-narrow` is what measures that this
+  # stayed true.
+  brain = pkgs.runCommand "ronoctua-brain" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-brain $out/bin/
+    chmod +w $out/bin/ronoctua-brain
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-brain
   '';
 
   # Tests. A separate derivation so it can say WHAT broke.

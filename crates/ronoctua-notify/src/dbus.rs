@@ -203,7 +203,7 @@ impl Server {
             // that need a file all vanish, this line is the difference between
             // "the sender did not send one" and "we did not read it".
             icon = n.icon.as_deref().unwrap_or("-"),
-            "notificacao recebida"
+            "notification received"
         );
 
         // A send error only happens with the main loop already dead. There is nothing
@@ -270,10 +270,10 @@ impl Server {
 pub fn listen(channel: Sender<Event>) -> bool {
     let (pronto_tx, pronto_rx) = std::sync::mpsc::channel();
 
-    let nascimento = std::thread::Builder::new()
+    let birth = std::thread::Builder::new()
         .name("notificacoes".into())
         .spawn(move || {
-            let servidor = Server {
+            let server = Server {
                 channel,
                 next_id: Arc::new(AtomicU32::new(1)),
                 _guard: Mutex::new(()),
@@ -281,7 +281,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
 
             let connection = zbus::blocking::connection::Builder::session()
                 .and_then(|b| b.name(NAME))
-                .and_then(|b| b.serve_at(PATH, servidor))
+                .and_then(|b| b.serve_at(PATH, server))
                 .and_then(zbus::blocking::connection::Builder::build);
 
             match connection {
@@ -307,14 +307,14 @@ pub fn listen(channel: Sender<Event>) -> bool {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        "sem daemon de notificacoes (outro ja no barramento?)"
+                        "no notification daemon (is another already on the bus?)"
                     );
                     let _ = pronto_tx.send(false);
                 }
             }
         });
 
-    if nascimento.is_err() {
+    if birth.is_err() {
         return false;
     }
     // It waits for the verdict: returning `true` before knowing would make the caller
@@ -335,7 +335,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
 pub fn action_was_invoked(id: u32, action: &str) {
     let Some(c) = BUS.get() else { return };
     if let Err(e) = c.emit_signal(None::<&str>, PATH, NAME, "ActionInvoked", &(id, action)) {
-        tracing::warn!(id, action, error = %e, "nao consegui avisar a acao");
+        tracing::warn!(id, action, error = %e, "could not report the action");
     }
 }
 
@@ -348,6 +348,6 @@ pub fn notification_was_closed(id: u32, reason: Closed) {
     let Some(c) = BUS.get() else { return };
     let n = reason as u32;
     if let Err(e) = c.emit_signal(None::<&str>, PATH, NAME, "NotificationClosed", &(id, n)) {
-        tracing::warn!(id, reason = n, error = %e, "nao consegui avisar o fechamento");
+        tracing::warn!(id, reason = n, error = %e, "could not announce the closing");
     }
 }

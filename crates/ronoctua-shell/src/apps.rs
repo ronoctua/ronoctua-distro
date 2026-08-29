@@ -314,7 +314,7 @@ fn in_table(table: &[(&str, char)], key: &str) -> Option<char> {
 ///
 /// The thread is named because an anonymous thread parked in `read` is what
 /// nobody can identify in a `perf`.
-pub fn scan(language: &str, envio: calloop::channel::Sender<Catalogue>) {
+pub fn scan(language: &str, sender: calloop::channel::Sender<Catalogue>) {
     // THE LANGUAGE GOES TO THE THREAD, and is not read in there: `Texts` lives in the
     // `Footer`, and the desktop entry's language is the same as the interface's — two
     // reads of the environment could diverge if someone changed the variable.
@@ -327,13 +327,13 @@ pub fn scan(language: &str, envio: calloop::channel::Sender<Catalogue>) {
             tracing::info!(
                 apps = list.len(),
                 ms = start.elapsed().as_millis(),
-                "catalogo de aplicativos varrido"
+                "application catalogue scanned"
             );
             // A closed channel = the footer left. Nothing to deliver.
-            let _ = envio.send(Arc::new(list));
+            let _ = sender.send(Arc::new(list));
         });
     if let Err(e) = born {
-        tracing::error!(error = %e, "nao consegui criar a thread de varredura");
+        tracing::error!(error = %e, "could not create the scan thread");
     }
 }
 
@@ -417,26 +417,26 @@ fn for_renderer(r: ronoctua_notify::icon::Rgba) -> ronoctua_render::image::Rgba 
 /// while nobody asks.
 #[must_use]
 pub fn painter(
-    envio: calloop::channel::Sender<Painting>,
+    sender: calloop::channel::Sender<Painting>,
 ) -> Option<std::sync::mpsc::Sender<Request>> {
-    let (fila, requests) = std::sync::mpsc::channel::<Request>();
+    let (queue, requests) = std::sync::mpsc::channel::<Request>();
     let root = superpack().map(std::path::PathBuf::from);
     let born = std::thread::Builder::new()
-        .name("ronoctua-icones".to_owned())
+        .name("ronoctua-icons".to_owned())
         .spawn(move || {
             while let Ok(p) = requests.recv() {
                 let rgba = ronoctua_notify::icon::rasterize(root.as_deref(), &p.icon, p.side)
                     .map(for_renderer);
-                if envio.send(Painting { icon: p.icon, rgba }).is_err() {
+                if sender.send(Painting { icon: p.icon, rgba }).is_err() {
                     // A closed channel = the footer left.
                     return;
                 }
             }
         });
     match born {
-        Ok(_) => Some(fila),
+        Ok(_) => Some(queue),
         Err(e) => {
-            tracing::error!(error = %e, "nao consegui criar a thread de icones");
+            tracing::error!(error = %e, "could not create the icons thread");
             None
         }
     }
@@ -517,7 +517,7 @@ pub fn command_for(
     if args.iter().any(|a| a.contains('%')) {
         // Should not happen: `assemble` consumed the codes at scan time. If it
         // ever does, appending is still better than passing a literal `%f`.
-        tracing::debug!(id = %entry.id, "sobrou codigo de campo no comando");
+        tracing::debug!(id = %entry.id, "a field code was left over in the command");
     }
     args.extend(open);
     (program, args)
@@ -614,7 +614,7 @@ mod tests {
         type_in(&mut l, "descricao");
         assert!(
             l.result().is_empty(),
-            "casou pela descricao: {:?}",
+            "it matched by description: {:?}",
             l.result()
         );
     }
@@ -624,7 +624,7 @@ mod tests {
         let mut l = Finder::fresh(catalogue());
         type_in(&mut l, "firefox");
         let Action::Open(e) = l.key(t(Sym::Enter)) else {
-            panic!("nao devolveu o aplicativo");
+            panic!("it did not give back the application");
         };
         assert_eq!(e.command.0, "firefox");
         assert_eq!(l.key(t(Sym::Esc)), Action::Closed);
@@ -642,7 +642,11 @@ mod tests {
     #[test]
     fn the_cursor_neither_goes_past_the_ends_nor_ends_outside_on_filtering() {
         let mut l = Finder::fresh(catalogue());
-        assert_eq!(l.key(t(Sym::Up)), Action::Nothing, "subiu do topo");
+        assert_eq!(
+            l.key(t(Sym::Up)),
+            Action::Nothing,
+            "it came up from the top"
+        );
         for _ in 0..l.result().len() + 3 {
             l.key(t(Sym::Down));
         }
@@ -676,20 +680,20 @@ mod tests {
             "alguem caiu no generico: {glyphs:?}"
         );
         // Four different categories have to give four different glyphs.
-        let unicos: std::collections::BTreeSet<char> = glyphs.iter().copied().collect();
-        assert_eq!(unicos.len(), 4, "glifos repetidos: {glyphs:?}");
+        let unique: std::collections::BTreeSet<char> = glyphs.iter().copied().collect();
+        assert_eq!(unique.len(), 4, "repeated glyphs: {glyphs:?}");
     }
 
     /// THE TABLE'S ORDER decides: `Network;WebBrowser` matches both, and what
     /// has to win is the specific one.
     #[test]
     fn the_specific_category_beats_the_generic_one() {
-        let navegador = input_of("x", "X", &["Network", "WebBrowser"]);
+        let browser = input_of("x", "X", &["Network", "WebBrowser"]);
         let network = input_of("y", "Y", &["Network"]);
         assert_ne!(
-            glyph_of(&navegador),
+            glyph_of(&browser),
             glyph_of(&network),
-            "o navegador saiu com o glifo de rede"
+            "the browser came out with the network glyph"
         );
     }
 
@@ -703,7 +707,7 @@ mod tests {
     fn the_svg_rasterises_at_the_requested_size() {
         let r =
             ronoctua_notify::icon::from_svg(SVG.as_bytes(), 18, ronoctua_notify::icon::Fit::Fill)
-                .expect("o SVG nao rasterizou");
+                .expect("the SVG did not rasterise");
         assert_eq!((r.width, r.height), (18, 18));
         assert_eq!(r.pixels.len(), 18 * 18 * 4);
     }
@@ -718,7 +722,7 @@ mod tests {
     fn the_colour_does_not_arrive_premultiplied_by_alpha() {
         let r =
             ronoctua_notify::icon::from_svg(SVG.as_bytes(), 18, ronoctua_notify::icon::Fit::Fill)
-                .expect("o SVG nao rasterizou");
+                .expect("the SVG did not rasterise");
         // A pixel well inside the painted half, far from the antialiased edge.
         let i = (9 * 18 + 4) * 4;
         assert_eq!(
@@ -736,14 +740,14 @@ mod tests {
     #[test]
     fn an_invalid_file_does_not_bring_the_footer_down() {
         assert!(
-            ronoctua_notify::icon::from_svg(b"nao sou svg", 18, ronoctua_notify::icon::Fit::Fill)
+            ronoctua_notify::icon::from_svg(b"i am not svg", 18, ronoctua_notify::icon::Fit::Fill)
                 .is_none()
         );
         assert!(ronoctua_notify::icon::from_raster(b"nem png", 18).is_none());
         assert!(
             ronoctua_notify::icon::from_svg(SVG.as_bytes(), 0, ronoctua_notify::icon::Fit::Fill)
                 .is_none(),
-            "lado zero"
+            "a side of zero"
         );
     }
 

@@ -66,18 +66,18 @@ fn key() -> Option<String> {
 }
 
 /// One call to the API. Gives back the response's body.
-fn call(metodo: &str, path: &str) -> Option<String> {
+fn call(method: &str, path: &str) -> Option<String> {
     let key = key()?;
     let address: std::net::SocketAddr = ADDRESS.parse().ok()?;
     let mut stream = TcpStream::connect_timeout(&address, PATIENCE).ok()?;
     stream.set_read_timeout(Some(PATIENCE)).ok()?;
     stream.set_write_timeout(Some(PATIENCE)).ok()?;
 
-    let pedido = format!(
-        "{metodo} {path} HTTP/1.1\r\nHost: {ADDRESS}\r\n\
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {ADDRESS}\r\n\
          X-API-Key: {key}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
     );
-    stream.write_all(pedido.as_bytes()).ok()?;
+    stream.write_all(request.as_bytes()).ok()?;
 
     let mut answer = String::new();
     stream.read_to_string(&mut answer).ok()?;
@@ -110,12 +110,12 @@ fn connected(json: &str) -> usize {
 /// and not an error: Syncthing may be stopped, and the screen says so.
 #[must_use]
 pub fn state() -> Option<State> {
-    let conexoes = call("GET", "/rest/system/connections")?;
+    let connections = call("GET", "/rest/system/connections")?;
     Some(State {
-        connected: connected(&conexoes),
+        connected: connected(&connections),
         percent: completeness().unwrap_or(0),
-        sent: number_of(&conexoes, "outBytesTotal").unwrap_or(0),
-        received: number_of(&conexoes, "inBytesTotal").unwrap_or(0),
+        sent: number_of(&connections, "outBytesTotal").unwrap_or(0),
+        received: number_of(&connections, "inBytesTotal").unwrap_or(0),
     })
 }
 
@@ -171,7 +171,7 @@ mod tests {
         let j = r#"{"inBytesTotal":70123,"outBytesTotal":44220000000}"#;
         assert_eq!(number_of(j, "inBytesTotal"), Some(70_123));
         assert_eq!(number_of(j, "outBytesTotal"), Some(44_220_000_000));
-        assert_eq!(number_of(j, "naoExiste"), None);
+        assert_eq!(number_of(j, "doesNotExist"), None);
     }
 
     #[test]

@@ -38,7 +38,7 @@ import uharfbuzz as hb
 from fontTools.ttLib import TTFont
 
 # THE LEXICON'S CONTRACT IS SHARED with the glyph generator.
-from lexicon import search_forms, palavras, translate
+from lexicon import search_forms, words_of, translate
 
 # The base a combining mark is drawn on top of.
 #
@@ -70,7 +70,7 @@ DOTTED_CIRCLE = "◌"
 # English (invariant 18). The SECOND is the Portuguese search tag: whoever types
 # `family:simbolo` still finds it, because a search tag is interface text
 # and not a name. The third is the label.
-FAMILIAS = {
+FAMILIES = {
     "L": ("letter", "letra", "Letra"),
     "N": ("number", "numero", "Número"),
     "S": ("symbol", "simbolo", "Símbolo"),
@@ -97,7 +97,7 @@ def seguro(s: str) -> str:
 
 
 def die(msg: str) -> None:
-    print(f"ERRO: {msg}", file=sys.stderr)
+    print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -115,22 +115,22 @@ def check_version(ucd: pathlib.Path, expected: str) -> None:
     It is the same guard the glyph generator applies to Nerd Fonts, for the same
     reason and with the same severity.
     """
-    cabecalho = (ucd / "Blocks.txt").read_text(encoding="utf-8").splitlines()[0]
-    m = re.search(r"Blocks-(\d+\.\d+\.\d+)\.txt", cabecalho)
+    header = (ucd / "Blocks.txt").read_text(encoding="utf-8").splitlines()[0]
+    m = re.search(r"Blocks-(\d+\.\d+\.\d+)\.txt", header)
     if not m:
-        die(f"o cabecalho do Blocks.txt nao declara versao: {cabecalho!r}")
+        die(f"the header of Blocks.txt does not declare a version: {header!r}")
     found_one = m.group(1)
     if found_one != expected:
-        print("ERRO: a versao do Unicode Character Database divergiu.", file=sys.stderr)
-        print(f"       esperada (flake):  {expected}", file=sys.stderr)
+        print("ERROR: the Unicode Character Database version diverged.", file=sys.stderr)
+        print(f"       expected (flake):  {expected}", file=sys.stderr)
         print(f"       encontrada (UCD):  {found_one}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       A base do navegador de simbolos sai daqui. Subir a versao", file=sys.stderr)
-        print("       muda quais caracteres existem e como eles se chamam —", file=sys.stderr)
+        print("       The symbol browser's database comes from here. Raising the version", file=sys.stderr)
+        print("       changes which characters exist and what they are called —", file=sys.stderr)
         print("       atualize a constante em nix/unicodegen.nix de proposito,", file=sys.stderr)
-        print("       e confira a cobertura de traducao depois.", file=sys.stderr)
+        print("       and check the translation coverage afterwards.", file=sys.stderr)
         sys.exit(1)
-    print(f"OK: Unicode {expected} — o UCD e o flake concordam")
+    print(f"OK: Unicode {expected} — the UCD and the flake agree")
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ def shape_to_one_glyph(font_file: pathlib.Path, emojis: list[dict]) -> list[str]
 # The FIRST element is the ID — it builds `unicode-group-<id>` and that is why it is
 # English (invariant 18). The other two are SEARCH: English tags and the Portuguese
 # label, and both still find the whole group.
-GRUPOS_EMOJI = {
+EMOJI_GROUPS = {
     "Smileys & Emotion": ("faces", "smileys emotion carinhas", "Carinhas e emoções"),
     "People & Body": ("people", "people body pessoas", "Pessoas e corpo"),
     "Animals & Nature": ("nature", "animals nature natureza", "Animais e natureza"),
@@ -298,7 +298,7 @@ GRUPOS_EMOJI = {
 # label one reads has to find, when typed into the search, the whole tone.
 # The FIRST element is the ID (it builds `unicode-tone-<id>`, hence English); the second
 # is the Portuguese search form; the third, the label.
-TONS = {
+TONES = {
     0x1F3FB: ("light", "claro", "Clara"),
     0x1F3FC: ("medium-light", "medio-claro", "Clara média"),
     0x1F3FD: ("medium", "medio", "Média"),
@@ -315,8 +315,8 @@ def tom_de(seq: list[int]) -> str:
     whoever searches for a tone wants to see the emoji that uses it, and it does.
     """
     for cp in seq:
-        if cp in TONS:
-            return TONS[cp][0]
+        if cp in TONES:
+            return TONES[cp][0]
     return ""
 
 
@@ -332,7 +332,7 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
     for e in emojis:
         raw_text = "".join(chr(c) for c in e["seq"])
         a_pt, a_en = annotation(pt, raw_text), annotation(en, raw_text)
-        gid, g_en, g_pt = GRUPOS_EMOJI.get(e["group"], ("other", "other outro", "Outro"))
+        gid, g_en, g_pt = EMOJI_GROUPS.get(e["group"], ("other", "other outro", "Outro"))
 
         name = seguro(a_en.get("name") or e["name"])
         # The tags: the name and the CLDR keywords in both languages, plus the
@@ -353,15 +353,15 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
         # the panel shows has to find, when typed into the search, the whole tone.
         # The CLDR already writes "pele clara" in the name, but not in every language
         # nor in every sequence — relying on that would be relying on luck.
-        tom = tom_de(e["seq"])
-        if tom:
+        tone = tom_de(e["seq"])
+        if tone:
             # The id is ALREADY the English form; the two Portuguese ones — label and unaccented
             # form — go in together, for the same reason as the families.
-            t_id, t_pt, t_rotulo = next(v for v in TONS.values() if v[0] == tom)
+            t_id, t_pt, t_label = next(v for v in TONES.values() if v[0] == tone)
             tags_en |= {t_id, "skin", "tone"}
-            tags_pt |= {t_rotulo.lower(), t_pt, "pele", "tom"}
-        tags_en |= {w for k in tags_en for w in palavras(k)}
-        tags_pt |= {w for k in tags_pt for w in palavras(k)}
+            tags_pt |= {t_label.lower(), t_pt, "pele", "tone"}
+        tags_en |= {w for k in tags_en for w in words_of(k)}
+        tags_pt |= {w for k in tags_pt for w in words_of(k)}
 
         not_in.append(
             {
@@ -376,7 +376,7 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
                 "subgroup": seguro(e["subgroup"]),
                 # The TONE, only when there is one. Present in every record it would mean writing
                 # "nenhum" 2,048 times in a database that is already 2.4 MB.
-                "tone": tom,
+                "tone": tone,
                 "block": "",
                 "decomp": "",
                 "width": 2,
@@ -434,7 +434,7 @@ def build_index(
             continue
 
         category = fields[2]
-        family, fam_pt, fam_rotulo = FAMILIAS.get(category[0], ("other", "outro", "Outro"))
+        family, fam_pt, fam_label = FAMILIES.get(category[0], ("other", "outro", "Outro"))
         block = block_of(cp, block_list)
         other_names = apelidos.get(cp, [])
 
@@ -459,9 +459,9 @@ def build_index(
         # `Arrows` block are already called `… ARROW …`, so "seta" finds them by
         # name. Whoever wants the whole block has the `block:` filter, which matches the
         # real field instead of hoping the word happened to land in the tag.
-        tokens = palavras(name)
-        for outro in other_names:
-            tokens += palavras(outro)
+        tokens = words_of(name)
+        for other in other_names:
+            tokens += words_of(other)
         tags_en, tags_pt, has_pt = translate(tokens, lexicon, no_translation)
         tags_en.add(family)
         # THE TWO PORTUGUESE FORMS: the accented LABEL, which is what the panel
@@ -470,7 +470,7 @@ def build_index(
         # breaks the other — the first version of this line sent only the label, and
         # inverting the tuple swapped it for the unaccented form with nothing
         # warning beyond the check.
-        tags_pt.add(fam_rotulo.lower())
+        tags_pt.add(fam_label.lower())
         tags_pt.add(fam_pt)
 
         # WHAT THE GRID DRAWS, in CODEPOINTS and not in text.
@@ -528,7 +528,7 @@ def build_index(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ucd", type=pathlib.Path, required=True, help="share/unicode do UCD")
-    ap.add_argument("--font", type=pathlib.Path, required=True, help="a fonte NAO patcheada")
+    ap.add_argument("--font", type=pathlib.Path, required=True, help="the UNPATCHED font")
     ap.add_argument("--lexicon", type=pathlib.Path, required=True)
     ap.add_argument("--emoji-test", type=pathlib.Path, required=True)
     ap.add_argument("--cldr", type=pathlib.Path, required=True, help="common/ do CLDR")
@@ -562,23 +562,23 @@ def main() -> int:
     lexicon = tomllib.loads(args.lexicon.read_text(encoding="utf-8"))
     lines, st = build_index(args.ucd, cmap, advance, lexicon, cmap_emoji, ja_e_emoji)
     if not emojis:
-        die("o emoji-test.txt nao rendeu nenhum emoji fully-qualified")
+        die("emoji-test.txt yielded no fully-qualified emoji at all")
 
     # THE SHAPING GUARD, before anything else: a sequence that does not become
     # ONE glyph appears decomposed on screen, and `cmap` does not answer that.
     bads = shape_to_one_glyph(args.font_emoji, emojis)
     if bads:
         print("", file=sys.stderr)
-        print(f"ERRO: {len(bads)} emoji nao moldam em UM glifo nesta fonte.", file=sys.stderr)
+        print(f"ERROR: {len(bads)} emoji do not shape into ONE glyph in this font.", file=sys.stderr)
         print("", file=sys.stderr)
         for r in bads[:12]:
             print(f"       {r}", file=sys.stderr)
         if len(bads) > 12:
             print(f"       … e mais {len(bads) - 12}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Eles apareceriam DECOMPOSTOS — 👩💻 em vez de 👩‍💻 — porque a", file=sys.stderr)
-        print("       fonte nao tem a ligadura. O `cmap` nao responde isso: os", file=sys.stderr)
-        print("       codepoints estao todos la.", file=sys.stderr)
+        print("       They would show up DECOMPOSED — 👩💻 instead of 👩‍💻 — because the", file=sys.stderr)
+        print("       font does not have the ligature. `cmap` does not answer that: the", file=sys.stderr)
+        print("       codepoints are all there.", file=sys.stderr)
         sys.exit(1)
 
     pt = ler_cldr(args.cldr, "pt")
@@ -590,15 +590,15 @@ def main() -> int:
     ]
     if no_cldr:
         die(
-            f"{len(no_cldr)} emoji sem palavras-chave em portugues no CLDR "
-            f"(ex.: {no_cldr[:5]}). Quem procura em portugues nao os acha."
+            f"{len(no_cldr)} emoji with no Portuguese keyword in the CLDR "
+            f"(e.g. {no_cldr[:5]}). Anyone searching in Portuguese does not find them."
         )
     lines.extend(emoji_lines(emojis, pt, en))
     st["emoji"] = len(emojis)
     st["total"] = len(lines)
 
     if not lines:
-        die("a base saiu VAZIA — a fonte e o UnicodeData.txt nao se cruzaram")
+        die("the database came out EMPTY — the font and UnicodeData.txt did not meet")
 
     args.out.mkdir(parents=True, exist_ok=True)
     # COMPACT `separators`, and not the default. The default puts `", "` between the
@@ -618,50 +618,50 @@ def main() -> int:
     coverage = 100.0 * traduzidas / total if total else 0.0
 
     raw_text = [
-        "# Cobertura da base de simbolos Unicode",
+        "# Unicode symbol database coverage",
         "",
-        "Gerado por `nix/scripts/gen-unicodedb.py`. Nao editar a mao.",
+        "Generated by `nix/scripts/gen-unicodedb.py`. Do not edit by hand.",
         "",
         f"- Unicode: **{args.ucd_version}**",
-        f"- Caracteres na base: **{st['total']}**",
+        f"- Characters in the database: **{st['total']}**",
         f"- Emoji: **{st.get('emoji', 0)}**",
-        f"- Blocos representados: **{st['blocks']}**",
-        f"- Marcas combinantes (avanco zero): **{st['combining']}**",
-        f"- Largura dupla: **{st['wide']}**",
-        f"- Sem NENHUMA palavra em portugues: **{len(st['no_pt'])}**",
+        f"- Blocks represented: **{st['blocks']}**",
+        f"- Combining marks (zero advance): **{st['combining']}**",
+        f"- Double width: **{st['wide']}**",
+        f"- With NO Portuguese word at all: **{len(st['no_pt'])}**",
         "",
-        "## Por familia",
+        "## By family",
         "",
-        "| familia | caracteres |",
+        "| family | characters |",
         "|---|---:|",
     ]
     for fam, n in st["families"].most_common():
         raw_text.append(f"| `{fam}` | {n} |")
     raw_text += [
         "",
-        f"## Traducao de tags: {coverage:.1f}%",
+        f"## Tag translation: {coverage:.1f}%",
         "",
-        f"Piso exigido: **>= {args.min_coverage}%**.",
+        f"Required floor: **>= {args.min_coverage}%**.",
         "",
-        "## Palavras sem traducao, por frequencia",
+        "## Untranslated words, by frequency",
         "",
-        "Esta e a fila para crescer `assets/lexicon/tags.en-pt.toml`.",
-        "Traduzir nesta ordem, nao na ordem que vier — o mesmo lexico serve",
+        "This is the queue for growing `assets/lexicon/tags.en-pt.toml`.",
+        "Translate in this order, not in whatever order comes along — the same lexicon serves",
         "os dois navegadores.",
         "",
-        "| palavra | ocorrencias |",
+        "| word | occurrences |",
         "|---|---:|",
     ]
-    for palavra, n in st["untranslated"].most_common(80):
-        raw_text.append(f"| `{palavra}` | {n} |")
+    for word, n in st["untranslated"].most_common(80):
+        raw_text.append(f"| `{word}` | {n} |")
     if len(st["untranslated"]) > 80:
-        raw_text.append(f"| … | mais {len(st['untranslated']) - 80} palavras |")
+        raw_text.append(f"| … | {len(st['untranslated']) - 80} more words |")
     (args.out / "coverage.md").write_text("\n".join(raw_text) + "\n", encoding="utf-8")
 
     print(
-        f"OK: {st['total']} caracteres indexados "
-        f"({st.get('emoji', 0)} emoji, {st['blocks']} blocos, "
-        f"{st['combining']} combinantes, {st['wide']} largos)"
+        f"OK: {st['total']} characters indexed "
+        f"({st.get('emoji', 0)} emoji, {st['blocks']} blocks, "
+        f"{st['combining']} combining, {st['wide']} wide)"
     )
 
     # --- THE TWO GUARDS ----------------------------------------------------
@@ -673,8 +673,8 @@ def main() -> int:
     if len(st["no_pt"]) > args.cap_no_pt:
         print("", file=sys.stderr)
         print(
-            f"ERRO: {len(st['no_pt'])} caracteres sem NENHUMA tag em portugues, "
-            f"e o teto e {args.cap_no_pt}.",
+            f"ERROR: {len(st['no_pt'])} characters with NO Portuguese tag at all, "
+            f"and the ceiling is {args.cap_no_pt}.",
             file=sys.stderr,
         )
         print("", file=sys.stderr)
@@ -683,26 +683,26 @@ def main() -> int:
         if len(st["no_pt"]) > 12:
             print(f"       … e mais {len(st['no_pt']) - 12}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Quem procura em portugues NAO acha estes caracteres.", file=sys.stderr)
-        print("       Traduza as palavras deles em assets/lexicon/tags.en-pt.toml", file=sys.stderr)
-        print("       — a fila, por frequencia, esta no coverage.md que este", file=sys.stderr)
+        print("       Anyone searching in Portuguese does NOT find these characters.", file=sys.stderr)
+        print("       Translate their words in assets/lexicon/tags.en-pt.toml", file=sys.stderr)
+        print("       — the queue, by frequency, is in the coverage.md this", file=sys.stderr)
         print("       mesmo build gera.", file=sys.stderr)
         sys.exit(1)
 
     if coverage < args.min_coverage:
         print("", file=sys.stderr)
         print(
-            f"ERRO: cobertura de traducao em {coverage:.1f}%, "
-            f"abaixo do piso de {args.min_coverage}%.",
+            f"ERROR: translation coverage at {coverage:.1f}%, "
+            f"below the floor of {args.min_coverage}%.",
             file=sys.stderr,
         )
-        print("       A fila de trabalho, por frequencia, esta no coverage.md.", file=sys.stderr)
+        print("       The work queue, by frequency, is in coverage.md.", file=sys.stderr)
         sys.exit(1)
 
     print(
-        f"OK: traducao de tags em {coverage:.1f}% "
-        f"({len(st['untranslated'])} palavras distintas sem traducao, "
-        f"{len(st['no_pt'])} caracteres sem portugues)"
+        f"OK: tag translation at {coverage:.1f}% "
+        f"({len(st['untranslated'])} distinct words with no translation, "
+        f"{len(st['no_pt'])} characters with no Portuguese)"
     )
     return 0
 

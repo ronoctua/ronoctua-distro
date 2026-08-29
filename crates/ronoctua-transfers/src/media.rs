@@ -187,7 +187,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
         identity,
     } = &work
     else {
-        tracing::error!("o motor de midia recebeu trabalho que nao e midia");
+        tracing::error!("the media engine got a job that is not media");
         shared.touch(id, |j| j.stage = Stage::Failed);
         return;
     };
@@ -197,7 +197,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     if !media_afoot() {
         shared.touch(id, |j| {
             j.stage = Stage::Failed;
-            j.trouble = Some("esta instalacao nao tem o yt-dlp".to_owned());
+            j.trouble = Some("this installation does not have yt-dlp".to_owned());
         });
         return;
     }
@@ -263,7 +263,7 @@ fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>
 
     let mut child = command
         .spawn()
-        .with_context(|| format!("nao consegui rodar {program}"))?;
+        .with_context(|| format!("could not run {program}"))?;
     let pid = child.id();
     shared.touch(id, |j| j.stage = Stage::Running);
 
@@ -413,7 +413,7 @@ fn reader<R: std::io::Read + Send + 'static>(
             }
         });
     if let Err(e) = built {
-        tracing::warn!(error = %e, "nao consegui subir a thread de leitura do yt-dlp");
+        tracing::warn!(error = %e, "could not start the yt-dlp reading thread");
     }
 }
 
@@ -444,25 +444,25 @@ mod tests {
         // yt-dlp writes `NA` until it knows, and a fragmented stream never
         // learns the exact total. Zero is what the row means by "not known".
         let line = "RONOCTUA\t512\tNA\t2048\tvideo.mkv";
-        let beat = beat_of(line).expect("é uma linha de progresso");
+        let beat = beat_of(line).expect("it is a progress row");
         assert_eq!(beat.done, 512);
         // The estimate stands in for the exact one, and only then.
         assert_eq!(beat.total, 2048);
 
-        let neither = beat_of("RONOCTUA\t512\tNA\tNA\tvideo.mkv").expect("ainda é uma");
+        let neither = beat_of("RONOCTUA\t512\tNA\tNA\tvideo.mkv").expect("it is still one");
         assert_eq!(neither.total, 0);
     }
 
     #[test]
     fn the_exact_total_beats_the_estimate() {
         // Otherwise the bar jumps the moment the exact figure arrives.
-        let beat = beat_of("RONOCTUA\t10\t100\t97\tv.mkv").expect("linha");
+        let beat = beat_of("RONOCTUA\t10\t100\t97\tv.mkv").expect("a line");
         assert_eq!(beat.total, 100);
     }
 
     #[test]
     fn the_three_menu_items_ask_for_three_different_things() {
-        let into = Path::new("/onde/vai");
+        let into = Path::new("/where/it/goes");
 
         let video = arguments(
             "https://exemplo/v",
@@ -476,7 +476,7 @@ mod tests {
             video
                 .windows(2)
                 .any(|w| w == ["--merge-output-format", "mkv"]),
-            "o contêiner é MKV, senão o yt-dlp desce de qualidade para caber"
+            "the container is MKV, otherwise yt-dlp drops quality to fit"
         );
 
         let audio = arguments(
@@ -499,7 +499,7 @@ mod tests {
         );
         assert!(
             subs.iter().any(|a| a == "--skip-download"),
-            "legenda não baixa mídia nenhuma"
+            "a subtitle downloads no media at all"
         );
         assert!(subs.iter().any(|a| a == "--write-auto-subs"));
 
@@ -529,24 +529,24 @@ mod tests {
             )
             .join("sweep-parts");
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("criar o diretorio");
-        let theirs = dir.join("de-outro.mkv.part");
-        std::fs::write(&theirs, b"x").expect("escrever");
+        std::fs::create_dir_all(&dir).expect("create the directory");
+        let theirs = dir.join("somebody-elses.mkv.part");
+        std::fs::write(&theirs, b"x").expect("write");
 
         let before = parts_now(&dir);
-        let mine = dir.join("meu.mkv.part");
-        std::fs::write(&mine, b"y").expect("escrever");
-        std::fs::write(dir.join("meu.mkv.ytdl"), b"z").expect("escrever");
+        let mine = dir.join("mine.mkv.part");
+        std::fs::write(&mine, b"y").expect("write");
+        std::fs::write(dir.join("mine.mkv.ytdl"), b"z").expect("write");
         // And something that is not a partial file at all.
         let done = dir.join("pronto.mkv");
-        std::fs::write(&done, b"w").expect("escrever");
+        std::fs::write(&done, b"w").expect("write");
 
         sweep_parts(&dir, &before);
 
-        assert!(theirs.exists(), "o pedaco do outro trabalho foi apagado");
-        assert!(done.exists(), "um arquivo pronto foi apagado");
-        assert!(!mine.exists(), "o proprio pedaco ficou para tras");
-        assert!(!dir.join("meu.mkv.ytdl").exists());
+        assert!(theirs.exists(), "the other job's piece was deleted");
+        assert!(done.exists(), "a finished file was deleted");
+        assert!(!mine.exists(), "its own piece was left behind");
+        assert!(!dir.join("mine.mkv.ytdl").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -555,17 +555,17 @@ mod tests {
         // A URL cannot start with a dash, but a caller could hand one over. The
         // separator is what keeps it an argument.
         let args = arguments(
-            "-nao-sou-flag",
-            Path::new("/onde/vai"),
+            "-i-am-not-a-flag",
+            Path::new("/where/it/goes"),
             Want::Video,
             Identity::Anonymous,
             &Cookies::Nowhere,
         );
-        assert_eq!(args.last().map(String::as_str), Some("-nao-sou-flag"));
+        assert_eq!(args.last().map(String::as_str), Some("-i-am-not-a-flag"));
         assert_eq!(
             args.get(args.len() - 2).map(String::as_str),
             Some("--"),
-            "sem o fim-de-opcoes, um endereco com traco vira flag"
+            "without the end-of-options, an address with a dash becomes a flag"
         );
     }
 }

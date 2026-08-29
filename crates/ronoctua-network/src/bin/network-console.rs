@@ -61,11 +61,11 @@ fn main() -> Result<()> {
         .init();
 
     if graphical_session()? {
-        tracing::info!("há sessão gráfica; a pergunta tem lugar melhor");
+        tracing::info!("there is a graphical session; the question has a better place");
         return Ok(());
     }
 
-    let manager = Manager::fresh().context("sem NetworkManager no barramento")?;
+    let manager = Manager::fresh().context("no NetworkManager on the bus")?;
 
     // WAIT FIRST, ASK LATER — and poll instead of sleeping the whole time, so a
     // machine that connects in three seconds does not hold a boot for
@@ -73,19 +73,19 @@ fn main() -> Result<()> {
     let deadline = Instant::now() + SETTLE;
     while Instant::now() < deadline {
         if connected(&manager) {
-            tracing::info!("a rede subiu sozinha");
+            tracing::info!("the network came up on its own");
             return Ok(());
         }
         std::thread::sleep(Duration::from_secs(3));
     }
 
     let Some(ssid) = target(&manager) else {
-        tracing::info!("nenhuma rede conhecida ao alcance; nada a perguntar");
+        tracing::info!("no known network in range; nothing to ask");
         return Ok(());
     };
 
     let Some(password) = ask(&ssid)? else {
-        tracing::info!(%ssid, "ninguém respondeu");
+        tracing::info!(%ssid, "nobody answered");
         return Ok(());
     };
 
@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     // footer uses, so it is sealed in the TPM exactly like any other.
     manager
         .connect(&ssid, Some(&password), true)
-        .with_context(|| format!("conectar em `{ssid}`"))?;
+        .with_context(|| format!("connect to `{ssid}`"))?;
     tracing::info!(%ssid, "conectado pelo console");
     Ok(())
 }
@@ -112,7 +112,7 @@ fn graphical_session() -> Result<bool> {
         return Ok(false);
     }
     for entry in std::fs::read_dir(dir).context("ler as sessões do logind")? {
-        let path = entry.context("entrada de sessão")?.path();
+        let path = entry.context("session entry")?.path();
         // The directory also holds `*.ref` files, which are not session state.
         if path.extension().is_some() {
             continue;
@@ -180,14 +180,14 @@ fn ask(ssid: &str) -> Result<Option<String>> {
         // place holding it with a different lifetime.
         .arg("--echo=no")
         .arg("--no-tty")
-        .arg(format!("Senha do Wi-Fi `{ssid}`:"))
+        .arg(format!("Wi-Fi password for `{ssid}`:"))
         .output()
-        .context("systemd-ask-password nao rodou")?;
+        .context("systemd-ask-password did not run")?;
 
     if !out.status.success() {
         // A timeout is not a failure: it is nobody there, which is the expected
         // outcome of a machine that booted alone.
-        tracing::info!(status = ?out.status, "a pergunta no console nao foi respondida");
+        tracing::info!(status = ?out.status, "the question on the console was not answered");
         return Ok(None);
     }
     let password = String::from_utf8_lossy(&out.stdout).trim_end().to_owned();

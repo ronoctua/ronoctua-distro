@@ -109,16 +109,16 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
-    PHRASE = "frase-secreta-de-teste-12345"
+    PHRASE = "test-passphrase-12345"
 
 
     def pcr(n):
-        """O valor de um PCR, so os digitos."""
+        """A PCR's value, the digits alone."""
         out_text = machine.succeed(f"tpm2_pcrread sha256:{n}")
         for line in out_text.splitlines():
             if line.strip().startswith(f"{n} ") or line.strip().startswith(f"{n}:"):
                 return line.split("0x")[1].strip()
-        raise AssertionError(f"nao achei o PCR {n} em:\n{out_text}")
+        raise AssertionError(f"could not find PCR {n} in:\n{out_text}")
 
 
     ZERO = "0" * 64
@@ -126,7 +126,7 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
 
-    with subtest("o primeiro boot esta em setup mode, sem Secure Boot"):
+    with subtest("the first boot is in setup mode, with no Secure Boot"):
         # It is the factory state of an OVMF with no key. If it already came with
         # Secure Boot on, the enrollment below would be unnecessary — and the test
         # would be proving something else.
@@ -134,7 +134,7 @@ pkgs.testers.runNixOSTest {
         print(state)
         assert "Secure Boot: disabled" in state, state
 
-    with subtest("inscreve as chaves no firmware"):
+    with subtest("enrols the keys into the firmware"):
         # `sbctl` reads from its own bank in `/var/lib/sbctl`, and the keys arrived
         # through `/etc/secureboot` as LINKS to the store — which is read-only. It
         # needs writable copies, otherwise it stops at "permission denied" in a
@@ -155,7 +155,7 @@ pkgs.testers.runNixOSTest {
         ))
         print(machine.succeed("sbctl status 2>&1 || true"))
 
-    with subtest("depois de reiniciar, o Secure Boot esta LIGADO"):
+    with subtest("after a restart, Secure Boot is ON"):
         machine.shutdown()
         machine.start()
         machine.wait_for_unit("multi-user.target")
@@ -163,16 +163,16 @@ pkgs.testers.runNixOSTest {
         print(state)
         assert "Secure Boot: enabled" in state, state
 
-    with subtest("o firmware mediu a UKI: PCR 7 e 11 tem valor"):
+    with subtest("the firmware measured the UKI: PCRs 7 and 11 have a value"):
         p7, p11 = pcr(7), pcr(11)
         print(f"PCR 7 = {p7}\nPCR 11 = {p11}")
-        assert p7 != ZERO, "o PCR 7 esta zerado: o firmware nao mediu o Secure Boot"
+        assert p7 != ZERO, "PCR 7 is zeroed: the firmware did not measure Secure Boot"
         assert p11 != ZERO, (
-            "o PCR 11 esta zerado: a UKI nao foi medida, e `tpm2-measure-pcr` "
-            "vai ficar inerte"
+            "PCR 11 is zeroed: the UKI was not measured, and `tpm2-measure-pcr` "
+            "will stay inert"
         )
 
-    with subtest("destravar ESTENDE o PCR 15"):
+    with subtest("unlocking EXTENDS PCR 15"):
         machine.succeed(
             f"echo -n '{PHRASE}' | cryptsetup luksFormat --type luks2 "
             "--pbkdf argon2id --pbkdf-force-iterations 4 --pbkdf-memory 32768 "
@@ -185,13 +185,13 @@ pkgs.testers.runNixOSTest {
         )
         after = pcr(15)
         machine.succeed("systemd-cryptsetup detach medido")
-        print(f"PCR 15 antes  = {prior}\nPCR 15 depois = {after}")
+        print(f"PCR 15 before = {prior}\nPCR 15 after  = {after}")
         assert prior != after, (
-            "o PCR 15 nao mudou mesmo com UKI medida — o selamento nao "
-            "protegeria contra troca de disco"
+            "PCR 15 did not change even with a measured UKI — the sealing does not "
+            "would protect against a disk swap"
         )
 
-    with subtest("um segredo selado no PCR 15 so abre com o volume CERTO"):
+    with subtest("a secret sealed in PCR 15 only opens with the RIGHT volume"):
         # WHAT PCR 15 REALLY PROTECTS.
         #
         # Copying the whole LUKS header is not forging: it is CLONING. The clone has
@@ -218,14 +218,14 @@ pkgs.testers.runNixOSTest {
 
         # A secret sealed IN THAT state.
         machine.succeed(
-            "echo -n 'conteudo-do-segredo' | systemd-creds encrypt "
-            "--with-key=tpm2 --tpm2-pcrs=15 - /var/segredo.cred"
+            "echo -n 'secret-content' | systemd-creds encrypt "
+            "--with-key=tpm2 --tpm2-pcrs=15 - /var/secret.cred"
         )
-        decrypted = machine.succeed("systemd-creds decrypt /var/segredo.cred -").strip()
-        assert decrypted == "conteudo-do-segredo", decrypted
+        decrypted = machine.succeed("systemd-creds decrypt /var/secret.cred -").strip()
+        assert decrypted == "secret-content", decrypted
         machine.succeed("systemd-cryptsetup detach vol-a")
 
-    with subtest("com OUTRO volume, o mesmo segredo NAO abre"):
+    with subtest("with ANOTHER volume, the same secret does NOT open"):
         machine.shutdown()
         machine.start()
         machine.wait_for_unit("multi-user.target")
@@ -233,23 +233,23 @@ pkgs.testers.runNixOSTest {
         # Volume B: another disk, another key. It is what an attacker puts in
         # place of yours.
         machine.succeed(
-            "echo -n 'chave-do-atacante' | cryptsetup luksFormat --type luks2 "
+            "echo -n 'attackers-key' | cryptsetup luksFormat --type luks2 "
             "--pbkdf argon2id --pbkdf-force-iterations 4 --pbkdf-memory 32768 "
             "/dev/vdb -"
         )
         machine.succeed(
-            "echo -n 'chave-do-atacante' | systemd-cryptsetup attach vol-b /dev/vdb "
+            "echo -n 'attackers-key' | systemd-cryptsetup attach vol-b /dev/vdb "
             "/dev/stdin headless=yes,tpm2-measure-pcr=yes"
         )
         pcr_b = pcr(15)
-        print(f"PCR 15 com o volume B = {pcr_b}")
+        print(f"PCR 15 with volume B = {pcr_b}")
         assert pcr_b != pcr_a, (
-            "o PCR 15 nao distingue os volumes — o selamento nao amarraria "
-            "nada a identidade do disco"
+            "PCR 15 does not tell the volumes apart — the sealing would not tie "
+            "nothing to the disk's identity"
         )
 
         # And volume A's secret does not open. That is the proof.
-        machine.fail("systemd-creds decrypt /var/segredo.cred - 2>/dev/null")
+        machine.fail("systemd-creds decrypt /var/secret.cred - 2>/dev/null")
         machine.succeed("systemd-cryptsetup detach vol-b")
   '';
 }

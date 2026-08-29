@@ -422,7 +422,7 @@ mod tests {
             assert_eq!(
                 a.label,
                 format!("{KEY_PREFIX_OF}{}", a.id),
-                "a linha `{}` mostra o texto de outra",
+                "the row `{}` shows another one's text",
                 a.id
             );
         }
@@ -432,7 +432,7 @@ mod tests {
     fn no_two_rows_share_a_key_or_an_id() {
         for (i, a) in all_of().iter().enumerate() {
             for b in all_of().iter().skip(i + 1) {
-                assert_ne!(a.key, b.key, "`{}` e `{}` na mesma tecla", a.id, b.id);
+                assert_ne!(a.key, b.key, "`{}` and `{}` on the same key", a.id, b.id);
                 assert_ne!(a.id, b.id, "id repetido: {}", a.id);
             }
         }
@@ -443,11 +443,11 @@ mod tests {
         // The owner's rule, mechanised: whatever the mouse can do the keyboard
         // can do. A row with no key would be reachable only by pointing at it.
         for a in all_of() {
-            assert!(!a.key.is_empty(), "a linha `{}` nao tem tecla", a.id);
+            assert!(!a.key.is_empty(), "the row `{}` has no key", a.id);
             assert!(!a.id.is_empty());
             assert!(
                 a.id.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
-                "o id `{}` nao e kebab-case",
+                "the id `{}` is not kebab-case",
                 a.id
             );
         }
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn a_directory_is_not_offered_what_cannot_be_done_to_it() {
-        let dir = entry("pasta", Kind::Directory);
+        let dir = entry("folder", Kind::Directory);
         let offered: Vec<_> = for_entry(&dir, mime::DIRECTORY, false, false)
             .iter()
             .map(|a| a.id)
@@ -487,7 +487,7 @@ mod tests {
         // confirmation; offering it here would be a promise this refuses.
         assert!(
             !offered.contains(&"shred"),
-            "ofereceu sobrescrever uma pasta"
+            "it offered to overwrite a folder"
         );
         assert!(!offered.contains(&"open-with"));
         assert!(offered.contains(&"open"));
@@ -499,13 +499,13 @@ mod tests {
         // The row is written for `application/zip` and reaches everything that
         // descends from it — which is what makes a future row for a specific
         // format one line instead of a new branch.
-        let file = entry("documento.odt", Kind::File);
+        let file = entry("document.odt", Kind::File);
         let odt = "application/vnd.oasis.opendocument.text";
         assert!(
             for_entry(&file, odt, false, false)
                 .iter()
                 .any(|a| a.id == "extract"),
-            "um .odt E um zip, e nada ofereceu"
+            "an .odt IS a zip, and nothing offered it"
         );
 
         let png = entry("foto.png", Kind::File);
@@ -556,7 +556,7 @@ mod tests {
             assert_eq!(
                 a.tier == Tier::Password,
                 expected,
-                "`{}` pede senha e nao devia (ou o contrario)",
+                "`{}` asks for a password and should not (or the other way round)",
                 a.id
             );
         }
@@ -568,7 +568,7 @@ mod tests {
             assert_eq!(by_key(a.key).map(|r| r.id), Some(a.id));
             assert_eq!(by_id(a.id).map(|r| r.key), Some(a.key));
         }
-        assert!(by_key("nao-existe").is_none());
-        assert!(by_id("nao-existe").is_none());
+        assert!(by_key("does-not-exist").is_none());
+        assert!(by_id("does-not-exist").is_none());
     }
 }

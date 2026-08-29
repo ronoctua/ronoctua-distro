@@ -109,14 +109,15 @@ impl Runtime {
         // size counts against the deserialisation time.
         c.debug_info(false);
 
-        let engine = wasmtime::Engine::new(&c).context("configuracao recusada pelo wasmtime")?;
+        let engine =
+            wasmtime::Engine::new(&c).context("the configuration was refused by wasmtime")?;
 
         // The linker is built ONCE and reused. Building it per instance would put
         // the resolution of hundreds of WASI imports inside the 5 ms
         // budget — and it is work that does not change between instances.
         let mut linker = wasmtime::component::Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
-            .context("nao consegui ligar o WASI ao linker")?;
+            .context("could not wire WASI into the linker")?;
 
         Ok(Self { engine, linker })
     }
@@ -138,7 +139,7 @@ impl Runtime {
     pub fn precompile(&self, wasm: &[u8]) -> Result<Vec<u8>> {
         self.engine
             .precompile_component(wasm)
-            .context("nao consegui pre-compilar o componente")
+            .context("could not pre-compile the component")
     }
 
     /// Loads an already-compiled `.cwasm`.
@@ -158,7 +159,7 @@ impl Runtime {
         // by our own build.
         #[allow(unsafe_code)]
         unsafe { wasmtime::component::Component::deserialize(&self.engine, cwasm) }
-            .context("o .cwasm nao casa com esta versao do wasmtime")
+            .context("the .cwasm does not match this version of wasmtime")
     }
 
     /// Instantiates an already-loaded component.
@@ -183,7 +184,7 @@ impl Runtime {
         let mut store = wasmtime::Store::new(&self.engine, state);
         self.linker
             .instantiate(&mut store, component)
-            .context("nao consegui instanciar o componente")?;
+            .context("could not instantiate the component")?;
         Ok(store)
     }
 }
@@ -223,10 +224,10 @@ impl Instance {
         let func = self
             .instance
             .get_func(&mut self.store, self.init)
-            .context("`init` nao e funcao")?;
+            .context("`init` is not a function")?;
         let mut out = [Val::Bool(false)];
         func.call(&mut self.store, &[], &mut out)
-            .context("o `init` do componente falhou")?;
+            .context("the component's `init` failed")?;
         func.post_return(&mut self.store)?;
         descriptor_of(&out[0])
     }
@@ -247,7 +248,7 @@ impl Instance {
         let func = self
             .instance
             .get_func(&mut self.store, self.render)
-            .context("`render` nao e funcao")?;
+            .context("`render` is not a function")?;
         // Dynamic `Val` and not a typed `bindgen!`: the host has to load
         // ANY component that fulfils the world, including one written by a
         // third party and compiled elsewhere. Binding the types at compile time
@@ -268,7 +269,7 @@ impl Instance {
         ]);
         let mut out = [Val::Bool(false)];
         func.call(&mut self.store, &[ctx], &mut out)
-            .context("o `render` do componente falhou")?;
+            .context("the component's `render` failed")?;
         func.post_return(&mut self.store)?;
         display_list_from(&out[0])
     }
@@ -290,10 +291,10 @@ impl Instance {
         let func = self
             .instance
             .get_func(&mut self.store, self.event)
-            .context("`evento` nao e funcao")?;
+            .context("`event` is not a function")?;
         let mut out = [Val::Bool(false)];
         func.call(&mut self.store, &[val_of_input(e)], &mut out)
-            .context("o `evento` do componente falhou")?;
+            .context("the component's `event` failed")?;
         func.post_return(&mut self.store)?;
         Ok(effects_from(&out[0]))
     }
@@ -312,15 +313,15 @@ impl Runtime {
         let instance = self
             .linker
             .instantiate(&mut store, component)
-            .context("nao consegui instanciar o componente")?;
+            .context("could not instantiate the component")?;
 
         let vision = instance
             .get_export_index(&mut store, None, "ronoctua:buffer/view@0.1.0")
-            .context("o componente nao exporta `ronoctua:buffer/view@0.1.0`")?;
+            .context("the component does not export `ronoctua:buffer/view@0.1.0`")?;
         let export = |store: &mut wasmtime::Store<State>, name: &str| {
             instance
                 .get_export_index(store, Some(&vision), name)
-                .with_context(|| format!("a interface `visao` nao exporta `{name}`"))
+                .with_context(|| format!("the `view` interface does not export `{name}`"))
         };
         let init = export(&mut store, "init")?;
         let render = export(&mut store, "render")?;
@@ -367,7 +368,7 @@ impl Runtime {
 
     fn instantiate_with(
         &self,
-        _componente: &wasmtime::component::Component,
+        _component: &wasmtime::component::Component,
     ) -> Result<wasmtime::Store<State>> {
         let state = State {
             wasi: WasiCtxBuilder::new().build(),
@@ -382,10 +383,10 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
     use ronoctua_protocol::Input;
     use wasmtime::component::Val;
 
-    let (caso, carga) = match e {
+    let (case, payload) = match e {
         Input::Command(id) => ("command", Some(Val::String(id.clone()))),
         Input::EnterState(id) => ("enter-state", Some(Val::String(id.clone()))),
-        // `caractere`, and not `char`: see the comment in the `.wit`.
+        // `character`, and not `char`: see the comment in the `.wit`.
         Input::Char(c) => ("character", Some(Val::Char(*c))),
         Input::Up => ("up", None),
         Input::Down => ("down", None),
@@ -407,6 +408,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         Input::Survey(s) => ("survey", Some(val_of_survey(s))),
         Input::Queue(q) => ("queue", Some(val_of_queue(q))),
         Input::Rack(r) => ("rack", Some(val_of_rack(r))),
+        Input::Mind(m) => ("mind", Some(val_of_mind(m))),
         Input::Formatted(o) => (
             "formatted",
             Some(wasmtime::component::Val::Record(vec![
@@ -418,7 +420,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
             ])),
         ),
     };
-    Val::Variant(caso.to_owned(), carga.map(Box::new))
+    Val::Variant(case.to_owned(), payload.map(Box::new))
 }
 
 /// The name a `gauge` has in the WIT.
@@ -530,6 +532,67 @@ const fn amount_name(a: ronoctua_protocol::Amount) -> &'static str {
     match a {
         A::Bytes => "bytes",
         A::Items => "items",
+    }
+}
+
+/// The name a `vital` has in the WIT.
+///
+/// A `match` and not a table, like `gauge_name`: it is EXHAUSTIVE, so a vital
+/// added to the protocol without a name here does not compile. A table would
+/// let it through and the reading would simply never arrive.
+const fn vital_name(v: ronoctua_protocol::Vital) -> &'static str {
+    use ronoctua_protocol::Vital as V;
+    match v {
+        V::RamUsed => "ram-used",
+        V::MemoryStall => "memory-stall",
+        V::CpuStall => "cpu-stall",
+        V::OnBattery => "on-battery",
+    }
+}
+
+/// The name a `standing` has in the WIT.
+const fn standing_name(s: ronoctua_protocol::Standing) -> &'static str {
+    use ronoctua_protocol::Standing as S;
+    match s {
+        S::Idle => "idle",
+        S::Queued => "queued",
+        S::Running => "running",
+    }
+}
+
+/// The name a `hold-kind` has in the WIT.
+const fn hold_kind_name(h: ronoctua_protocol::HoldKind) -> &'static str {
+    use ronoctua_protocol::HoldKind as H;
+    match h {
+        H::None => "none",
+        H::Ram => "ram",
+        H::Cpu => "cpu",
+        H::Battery => "battery",
+        H::Busy => "busy",
+        H::Network => "network",
+        H::Asleep => "asleep",
+    }
+}
+
+/// The name an `outcome-kind` has in the WIT.
+const fn outcome_kind_name(o: ronoctua_protocol::OutcomeKind) -> &'static str {
+    use ronoctua_protocol::OutcomeKind as O;
+    match o {
+        O::Skipped => "skipped",
+        O::Done => "done",
+        O::Failed => "failed",
+    }
+}
+
+/// The name a `day-part` has in the WIT.
+const fn day_part_name(d: ronoctua_protocol::DayPart) -> &'static str {
+    use ronoctua_protocol::DayPart as D;
+    match d {
+        D::Any => "any",
+        D::Night => "night",
+        D::Morning => "morning",
+        D::Afternoon => "afternoon",
+        D::Evening => "evening",
     }
 }
 
@@ -675,6 +738,149 @@ fn val_of_survey(s: &ronoctua_protocol::Survey) -> wasmtime::component::Val {
     ])
 }
 
+/// The mind, as a `Val` the guest can receive.
+///
+/// # The order of the fields is the WIT's order, and it is not style
+///
+/// `wasmtime` lowers a `Val::Record` by zipping it POSITIONALLY against the
+/// WIT's fields and only then compares the names (`values.rs`, `lower`). A field
+/// moved here without being moved there fails when the function is CALLED, with
+/// a message about a name — never at compile time. There is a test at the end of
+/// this file walking the shape, and it matters more here than anywhere else in
+/// this file: `task-state` has three booleans and two strings in a row, and any
+/// pair of them traded still lowers CLEANLY.
+fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    let signs = m
+        .pulse
+        .signs
+        .iter()
+        .map(|s| {
+            Val::Record(vec![
+                ("of".into(), Val::Enum(vital_name(s.of).to_owned())),
+                ("amount".into(), Val::U16(s.amount)),
+            ])
+        })
+        .collect();
+
+    let tasks = m
+        .tasks
+        .iter()
+        .map(|t| {
+            let outcomes = t
+                .last
+                .steps
+                .iter()
+                .map(|o| {
+                    Val::Record(vec![
+                        ("id".into(), Val::String(o.id.clone())),
+                        ("ok".into(), Val::Bool(o.ok)),
+                        ("seconds".into(), Val::U32(o.seconds)),
+                        ("trouble".into(), Val::String(o.trouble.clone())),
+                    ])
+                })
+                .collect();
+            let steps = t
+                .steps
+                .iter()
+                .map(|s| {
+                    Val::Record(vec![
+                        ("id".into(), Val::String(s.id.clone())),
+                        ("command".into(), Val::String(s.command.clone())),
+                        ("needs-root".into(), Val::Bool(s.needs_root)),
+                        ("on".into(), Val::Bool(s.on)),
+                        ("changed".into(), Val::Bool(s.changed)),
+                    ])
+                })
+                .collect();
+            Val::Record(vec![
+                ("id".into(), Val::String(t.id.clone())),
+                (
+                    "standing".into(),
+                    Val::Enum(standing_name(t.standing).to_owned()),
+                ),
+                ("enabled".into(), Val::Bool(t.enabled)),
+                ("interval-days".into(), Val::U16(t.interval_days)),
+                (
+                    "part-of-day".into(),
+                    Val::Enum(day_part_name(t.part_of_day).to_owned()),
+                ),
+                ("next".into(), Val::U64(t.next)),
+                ("next-text".into(), Val::String(t.next_text.clone())),
+                ("hold".into(), Val::Enum(hold_kind_name(t.hold).to_owned())),
+                ("why-not".into(), Val::String(t.why_not.clone())),
+                ("ran".into(), Val::Bool(t.ran)),
+                (
+                    "last".into(),
+                    Val::Record(vec![
+                        ("began".into(), Val::U64(t.last.began)),
+                        ("ended".into(), Val::U64(t.last.ended)),
+                        ("when-text".into(), Val::String(t.last.when_text.clone())),
+                        (
+                            "outcome".into(),
+                            Val::Enum(outcome_kind_name(t.last.outcome).to_owned()),
+                        ),
+                        ("at".into(), Val::String(t.last.at.clone())),
+                        ("why".into(), Val::String(t.last.why.clone())),
+                        ("trouble".into(), Val::String(t.last.trouble.clone())),
+                        ("steps".into(), Val::List(outcomes)),
+                    ]),
+                ),
+                ("steps".into(), Val::List(steps)),
+            ])
+        })
+        .collect();
+
+    Val::Record(vec![
+        ("now".into(), Val::U64(m.now)),
+        (
+            "pulse".into(),
+            Val::Record(vec![
+                ("at".into(), Val::U64(m.pulse.at)),
+                ("signs".into(), Val::List(signs)),
+            ]),
+        ),
+        ("tasks".into(), Val::List(tasks)),
+        (
+            "queue".into(),
+            Val::List(m.queue.iter().map(|id| Val::String(id.clone())).collect()),
+        ),
+        ("running".into(), Val::String(m.running.clone())),
+        ("rehearsing".into(), Val::String(m.rehearsing.clone())),
+        (
+            "announcement".into(),
+            Val::Record(vec![
+                ("task".into(), Val::String(m.announcement.task.clone())),
+                (
+                    "total-seconds".into(),
+                    Val::U16(m.announcement.total_seconds),
+                ),
+                ("deadline".into(), Val::U64(m.announcement.deadline)),
+                ("why".into(), Val::String(m.announcement.why.clone())),
+            ]),
+        ),
+        (
+            "gate".into(),
+            Val::Record(vec![
+                ("ram-ceiling-pct".into(), Val::U16(m.gate.ram_ceiling_pct)),
+                (
+                    "cpu-stall-per-mille".into(),
+                    Val::U16(m.gate.cpu_stall_per_mille),
+                ),
+                (
+                    "abort-on-battery".into(),
+                    Val::Bool(m.gate.abort_on_battery),
+                ),
+            ]),
+        ),
+        (
+            "cadence".into(),
+            Val::List(m.cadence.iter().copied().map(Val::U16).collect()),
+        ),
+    ])
+}
+
 /// A `demand` coming back from the guest.
 ///
 /// Unknown request = `None`, like every other unknown case in this file: a
@@ -707,7 +913,7 @@ fn plan_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::
         // A NAME THIS BUILD CANNOT WRITE. The WIT gained a case and the host
         // did not learn it, which on a disk is the one place to stop rather
         // than guess a neighbour.
-        tracing::warn!(recipe, "sistema de arquivos desconhecido");
+        tracing::warn!(recipe, "an unknown filesystem");
         return None;
     };
     let Some(Val::String(label)) = get("label") else {
@@ -722,6 +928,76 @@ fn plan_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::
         recipe,
         label: label.clone(),
         whole_disk: *whole_disk,
+    })
+}
+
+/// The setting behind `effect::tune`.
+///
+/// # THE FIRST VARIANT THIS FILE LIFTS FROM INSIDE A RECORD
+///
+/// Every other payload on the effect path is a string, an enum or a flat record
+/// of them. `knob` is a `variant`, and a variant has a case name AND a payload
+/// whose type depends on it — so the two have to be read together. Reading the
+/// name and then trusting the payload's type is how `interval-days(7)` would
+/// become `enabled(true)` with nothing said.
+///
+/// # A field missing here is a refusal, never a default
+///
+/// The same rule as `plan_from`, and for a nearby reason: what is being
+/// remembered is when the machine rebuilds its own operating system. A
+/// `part-of-day` that failed to lift would default to `any` and move a rebuild
+/// out of the small hours into the middle of somebody's afternoon — a change
+/// nobody asked for and nobody would connect to the key they pressed.
+fn setting_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::Setting> {
+    use ronoctua_protocol::Knob;
+    use wasmtime::component::Val;
+
+    let Some(Val::Record(fields)) = v else {
+        return None;
+    };
+    let get = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+
+    let Some(Val::String(task)) = get("task") else {
+        return None;
+    };
+    let Some(Val::Variant(case, payload)) = get("knob") else {
+        return None;
+    };
+
+    let knob = match (case.as_str(), payload.as_deref()) {
+        ("interval-days", Some(Val::U16(days))) => Knob::IntervalDays(*days),
+        ("part-of-day", Some(Val::Enum(part))) => {
+            let Some(part) = ronoctua_protocol::DayPart::of_wit_name(part) else {
+                // A NAME THIS BUILD CANNOT READ. The WIT gained a case and the
+                // host did not learn it; rounding it to a neighbour would put
+                // the rebuild in a stretch of the day nobody chose.
+                tracing::warn!(part, "parte do dia desconhecida");
+                return None;
+            };
+            Knob::PartOfDay(part)
+        }
+        ("enabled", Some(Val::Bool(on))) => Knob::Enabled(*on),
+        ("step", Some(Val::Record(f))) => {
+            let g = |name: &str| f.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+            let (Some(Val::String(id)), Some(Val::Bool(on))) = (g("id"), g("on")) else {
+                return None;
+            };
+            Knob::Step(ronoctua_protocol::StepSwitch {
+                id: id.clone(),
+                on: *on,
+            })
+        }
+        // It carries nothing: there is one default and it is the flake's.
+        ("reset-steps", None) => Knob::ResetSteps,
+        (otherwise, _) => {
+            tracing::warn!(knob = otherwise, "preferencia desconhecida");
+            return None;
+        }
+    };
+
+    Some(ronoctua_protocol::Setting {
+        task: task.clone(),
+        knob,
     })
 }
 
@@ -753,8 +1029,13 @@ fn demand_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol
         "cancel-job" => R::CancelJob,
         "forget-job" => R::ForgetJob,
         "sweep-jobs" => R::SweepJobs,
+        "run-task" => R::RunTask,
+        "rehearse-task" => R::RehearseTask,
+        "abort-task" => R::AbortTask,
+        "proceed" => R::Proceed,
+        "postpone" => R::Postpone,
         otherwise => {
-            tracing::warn!(request = otherwise, "pedido desconhecido");
+            tracing::warn!(request = otherwise, "an unknown request");
             return None;
         }
     };
@@ -780,14 +1061,14 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
     items
         .iter()
         .filter_map(|x| {
-            let Val::Variant(caso, carga) = x else {
+            let Val::Variant(case, payload) = x else {
                 return None;
             };
-            let text = || match carga.as_deref() {
+            let text = || match payload.as_deref() {
                 Some(Val::String(s)) => Some(s.clone()),
                 _ => None,
             };
-            match caso.as_str() {
+            match case.as_str() {
                 "redraw" => Some(Effect::Redraw),
                 "copy" => text().map(Effect::Copy),
                 "command" => text().map(Effect::Command),
@@ -801,11 +1082,17 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 // key that does nothing. Which is exactly what this arm's
                 // neighbours were written to prevent.
                 "save" => text().map(Effect::Save),
-                "ask" => demand_from(carga.as_deref()).map(Effect::Ask),
-                "format" => plan_from(carga.as_deref()).map(Effect::Format),
+                "ask" => demand_from(payload.as_deref()).map(Effect::Ask),
+                "format" => plan_from(payload.as_deref()).map(Effect::Format),
                 "state-changed" => text().map(Effect::StateChanged),
+                // THE ARM THAT `save` DID NOT HAVE, written in the same commit
+                // as the effect. Its neighbour above spent a release as a
+                // `warn` in a log nobody reads while `SPC m s` looked like a
+                // key that does nothing; there is a test at the end of this
+                // file so that `tune` cannot become the second one.
+                "tune" => setting_from(payload.as_deref()).map(Effect::Tune),
                 otherwise => {
-                    tracing::warn!(effect = otherwise, "efeito desconhecido");
+                    tracing::warn!(effect = otherwise, "an unknown effect");
                     None
                 }
             }
@@ -819,14 +1106,14 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
     use wasmtime::component::Val;
 
     let Val::Record(fields) = v else {
-        anyhow::bail!("`init` nao devolveu record");
+        anyhow::bail!("`init` did not give back a record");
     };
     let field = |n: &str| fields.iter().find(|(k, _)| k == n).map(|(_, v)| v);
-    let texto_de = |v: Option<&Val>| match v {
+    let text_of = |v: Option<&Val>| match v {
         Some(Val::String(s)) => s.clone(),
         _ => String::new(),
     };
-    let lista_de_str = |v: Option<&Val>| -> Vec<String> {
+    let list_of_str = |v: Option<&Val>| -> Vec<String> {
         match v {
             Some(Val::List(l)) => l
                 .iter()
@@ -869,6 +1156,7 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
                 Val::Enum(n) if n == "system" => Some(prot::Capability::System),
                 Val::Enum(n) if n == "transfers" => Some(prot::Capability::Transfers),
                 Val::Enum(n) if n == "disks" => Some(prot::Capability::Disks),
+                Val::Enum(n) if n == "brain" => Some(prot::Capability::Brain),
                 // AN UNKNOWN CAPABILITY DISAPPEARS HERE, and that is the
                 // quietest failure in this file: the buffer declared it, the
                 // host did not learn to read it, and every gated effect is then
@@ -914,11 +1202,11 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
     };
 
     Ok(prot::Descriptor {
-        name: texto_de(field("name")),
-        mode: texto_de(field("mode")),
+        name: text_of(field("name")),
+        mode: text_of(field("mode")),
         states,
         keymap,
-        commands: lista_de_str(field("commands")),
+        commands: list_of_str(field("commands")),
         // Modeline segments arrive once the modeline consumes them; the
         // shape is already in the WIT so there is no protocol change later.
         segments: Vec::new(),
@@ -937,18 +1225,20 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
     use wasmtime::component::Val;
 
     let Val::List(commands) = v else {
-        anyhow::bail!("`render` nao devolveu lista");
+        anyhow::bail!("`render` did not give back a list");
     };
 
     let mut list = prot::DisplayList::fresh_one();
     for c in commands {
-        let Val::Variant(caso, carga) = c else {
+        let Val::Variant(case, payload) = c else {
             continue;
         };
-        let Some(carga) = carga.as_deref() else {
+        let Some(payload) = payload.as_deref() else {
             continue;
         };
-        let Val::Record(fields) = carga else { continue };
+        let Val::Record(fields) = payload else {
+            continue;
+        };
         let field = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, v)| v);
 
         let u16_de = |v: Option<&Val>| match v {
@@ -961,7 +1251,7 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
         // (`text-primary`), which is the same name the token generator
         // emits on both sides. A case that does not exist never gets here:
         // the guest cannot produce it, because over there it is an enum.
-        let cor_de = |v: Option<&Val>| -> prot::Color {
+        let color_of = |v: Option<&Val>| -> prot::Color {
             match v {
                 Some(Val::Enum(name)) => prot::Color(name.clone().into()),
                 // There is no `unwrap_or` with a pretty default: a colour that
@@ -971,10 +1261,10 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
             }
         };
 
-        match caso.as_str() {
+        match case.as_str() {
             "grid" => {
                 let g = |n: &str| fields.iter().find(|(k, _)| k == n).map(|(_, v)| v);
-                let linhas_txt = match g("lines") {
+                let text_lines = match g("lines") {
                     Some(Val::List(l)) => l
                         .iter()
                         .filter_map(|x| match x {
@@ -987,8 +1277,8 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                 list.push(prot::Command::Grid {
                     line: u16_de(g("line")),
                     column: u16_de(g("column")),
-                    lines: linhas_txt,
-                    color: cor_de(g("color")),
+                    lines: text_lines,
+                    color: color_of(g("color")),
                 });
             }
             "text" => {
@@ -1008,7 +1298,7 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     line: u16_de(field("line")),
                     column: u16_de(field("column")),
                     text: content,
-                    color: cor_de(field("color")),
+                    color: color_of(field("color")),
                     scale: match field("scale") {
                         Some(Val::Enum(n)) if n == "large" => prot::Scale::Large,
                         Some(Val::Enum(n)) if n == "small" => prot::Scale::Small,
@@ -1023,11 +1313,11 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
             }
             "rule" => list.push(prot::Command::Rule {
                 line: u16_de(field("line")),
-                color: cor_de(field("color")),
+                color: color_of(field("color")),
             }),
             "selection" => list.push(prot::Command::Selection {
                 line: u16_de(field("line")),
-                color: cor_de(field("color")),
+                color: color_of(field("color")),
             }),
             "svg" => {
                 // AN EMPTY SVG IS NOT A COMMAND. It would reach the rasteriser, which
@@ -1046,11 +1336,14 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     lines: u16_de(field("lines")),
                     columns: u16_de(field("columns")),
                     svg: svg.clone(),
-                    color: cor_de(field("color")),
+                    color: color_of(field("color")),
                 });
             }
             otherwise => {
-                tracing::warn!(command = otherwise, "comando desconhecido na display list")
+                tracing::warn!(
+                    command = otherwise,
+                    "an unknown command in the display list"
+                )
             }
         }
     }
@@ -1147,12 +1440,12 @@ mod tests {
 
         let wasmtime::component::Val::List(readings) = field(&v, "readings").expect("readings")
         else {
-            panic!("readings nao e lista")
+            panic!("readings is not a list")
         };
         assert_eq!(shape(&readings[0]), ["of", "bytes"]);
         let wasmtime::component::Val::List(consumers) = field(&v, "consumers").expect("consumers")
         else {
-            panic!("consumers nao e lista")
+            panic!("consumers is not a list")
         };
         assert_eq!(shape(&consumers[0]), ["kind", "name", "bytes", "hint"]);
 
@@ -1187,7 +1480,7 @@ mod tests {
 
         assert_eq!(shape(&v), ["devices"]);
         let wasmtime::component::Val::List(devices) = field(&v, "devices").expect("devices") else {
-            panic!("devices nao e lista")
+            panic!("devices is not a list")
         };
         assert_eq!(
             shape(&devices[0]),
@@ -1231,7 +1524,7 @@ mod tests {
         };
 
         // The whole plan crosses, and `whole-disk` keeps the value it was given.
-        let got = plan_from(Some(&whole(true))).expect("plano completo");
+        let got = plan_from(Some(&whole(true))).expect("a full plan");
         assert_eq!(got.device, "sda");
         assert_eq!(got.recipe.filesystem(), "vfat");
         assert_eq!(got.label, "PENDRIVE");
@@ -1287,7 +1580,7 @@ mod tests {
 
         assert_eq!(shape(&v), ["jobs"]);
         let wasmtime::component::Val::List(jobs) = field(&v, "jobs").expect("jobs") else {
-            panic!("jobs nao e lista")
+            panic!("jobs is not a list")
         };
         assert_eq!(
             shape(&jobs[0]),
@@ -1359,7 +1652,7 @@ mod tests {
             ("capabilities".into(), Val::List(vec![])),
         ]);
 
-        let got = descriptor_of(&d).expect("descritor");
+        let got = descriptor_of(&d).expect("descriptor");
         assert_eq!(
             got.states
                 .iter()
@@ -1389,7 +1682,10 @@ mod tests {
             name: "x".to_owned(),
             ..Descriptor::default()
         };
-        assert!(none.validate().is_err(), "sem estado nenhum tem de recusar");
+        assert!(
+            none.validate().is_err(),
+            "no state at all has to be refused"
+        );
 
         let wrong_base = Descriptor {
             name: "x".to_owned(),
@@ -1401,7 +1697,7 @@ mod tests {
         };
         assert!(
             wrong_base.validate().is_err(),
-            "base fora de `normal` tem de recusar: e por esse id que a cor decide"
+            "a base other than `normal` has to be refused: the colour decides by that id"
         );
 
         let same_letter = Descriptor {
@@ -1418,7 +1714,7 @@ mod tests {
         };
         assert!(
             same_letter.validate().is_err(),
-            "duas letras iguais deixam um estado inalcancavel sob `SPC b s`"
+            "two identical letters leave a state unreachable under `SPC b s`"
         );
 
         let good = Descriptor {
@@ -1493,15 +1789,333 @@ mod tests {
     }
 
     #[test]
+    fn the_mind_has_the_wit_shape_field_by_field() {
+        // THE LISTS BELOW ARE THE `.wit`'s ORDER, COPIED BY HAND, for the same
+        // reason as the rack's above — and with more at stake than any of them:
+        // `task-state` carries `enabled`, `ran` and three step booleans, and
+        // `run-record` carries four strings in a row. Any pair of them traded
+        // lowers CLEANLY and comes out on screen as a task that is off when it
+        // is on, or a failure attributed to the wrong step.
+        let m = ronoctua_protocol::Mind {
+            now: 1_770_000_000,
+            pulse: ronoctua_protocol::Pulse {
+                at: 1_769_999_940,
+                signs: vec![ronoctua_protocol::VitalSign {
+                    of: ronoctua_protocol::Vital::CpuStall,
+                    amount: 37,
+                }],
+            },
+            tasks: vec![ronoctua_protocol::TaskState {
+                id: "update".to_owned(),
+                standing: ronoctua_protocol::Standing::Queued,
+                enabled: true,
+                interval_days: 7,
+                part_of_day: ronoctua_protocol::DayPart::Night,
+                next: 1_770_010_000,
+                next_text: "2026-02-02 03:00".to_owned(),
+                hold: ronoctua_protocol::HoldKind::Battery,
+                why_not: String::new(),
+                ran: true,
+                last: ronoctua_protocol::RunRecord {
+                    began: 1_769_900_000,
+                    ended: 1_769_900_600,
+                    when_text: "2026-02-01 03:00".to_owned(),
+                    outcome: ronoctua_protocol::OutcomeKind::Failed,
+                    at: "build".to_owned(),
+                    why: String::new(),
+                    trouble: "error: attribute missing".to_owned(),
+                    steps: vec![ronoctua_protocol::StepOutcome {
+                        id: "build".to_owned(),
+                        ok: false,
+                        seconds: 600,
+                        trouble: "error: attribute missing".to_owned(),
+                    }],
+                },
+                steps: vec![ronoctua_protocol::TaskStep {
+                    id: "build".to_owned(),
+                    command: "nix build .#system".to_owned(),
+                    needs_root: false,
+                    on: true,
+                    changed: false,
+                }],
+            }],
+            queue: vec!["update".to_owned()],
+            running: String::new(),
+            rehearsing: "update".to_owned(),
+            announcement: ronoctua_protocol::Announcement {
+                task: "update".to_owned(),
+                total_seconds: 60,
+                deadline: 1_770_000_060,
+                why: "due".to_owned(),
+            },
+            gate: ronoctua_protocol::Gate {
+                ram_ceiling_pct: 80,
+                cpu_stall_per_mille: 200,
+                abort_on_battery: true,
+            },
+            cadence: vec![1, 3, 7, 14, 30],
+        };
+        let v = val_of_mind(&m);
+
+        assert_eq!(
+            shape(&v),
+            [
+                "now",
+                "pulse",
+                "tasks",
+                "queue",
+                "running",
+                "rehearsing",
+                "announcement",
+                "gate",
+                "cadence"
+            ]
+        );
+        assert_eq!(shape(field(&v, "pulse").expect("pulse")), ["at", "signs"]);
+        assert_eq!(
+            shape(field(&v, "announcement").expect("announcement")),
+            ["task", "total-seconds", "deadline", "why"]
+        );
+        assert_eq!(
+            shape(field(&v, "gate").expect("gate")),
+            ["ram-ceiling-pct", "cpu-stall-per-mille", "abort-on-battery"]
+        );
+
+        let wasmtime::component::Val::List(signs) =
+            field(field(&v, "pulse").expect("pulse"), "signs").expect("signs")
+        else {
+            panic!("signs is not a list")
+        };
+        assert_eq!(shape(&signs[0]), ["of", "amount"]);
+        assert_eq!(
+            field(&signs[0], "of"),
+            Some(&wasmtime::component::Val::Enum("cpu-stall".to_owned()))
+        );
+
+        let wasmtime::component::Val::List(tasks) = field(&v, "tasks").expect("tasks") else {
+            panic!("tasks is not a list")
+        };
+        assert_eq!(
+            shape(&tasks[0]),
+            [
+                "id",
+                "standing",
+                "enabled",
+                "interval-days",
+                "part-of-day",
+                "next",
+                "next-text",
+                "hold",
+                "why-not",
+                "ran",
+                "last",
+                "steps"
+            ]
+        );
+        let last = field(&tasks[0], "last").expect("last");
+        assert_eq!(
+            shape(last),
+            [
+                "began",
+                "ended",
+                "when-text",
+                "outcome",
+                "at",
+                "why",
+                "trouble",
+                "steps"
+            ]
+        );
+        let wasmtime::component::Val::List(outcomes) = field(last, "steps").expect("outcomes")
+        else {
+            panic!("the registry's steps are not a list")
+        };
+        assert_eq!(shape(&outcomes[0]), ["id", "ok", "seconds", "trouble"]);
+        let wasmtime::component::Val::List(steps) = field(&tasks[0], "steps").expect("steps")
+        else {
+            panic!("steps is not a list")
+        };
+        assert_eq!(
+            shape(&steps[0]),
+            ["id", "command", "needs-root", "on", "changed"]
+        );
+
+        // AND THE BOOLEANS ARE READ BACK BY NAME, which is the half the shape
+        // check cannot do: it would still pass with any two of them swapped,
+        // because they are the same type. `enabled` and `ran` traded would draw
+        // a task that never ran as switched off.
+        assert_eq!(
+            field(&tasks[0], "enabled"),
+            Some(&wasmtime::component::Val::Bool(true))
+        );
+        assert_eq!(
+            field(&steps[0], "needs-root"),
+            Some(&wasmtime::component::Val::Bool(false))
+        );
+        assert_eq!(
+            field(&steps[0], "on"),
+            Some(&wasmtime::component::Val::Bool(true))
+        );
+        assert_eq!(
+            field(&outcomes[0], "ok"),
+            Some(&wasmtime::component::Val::Bool(false))
+        );
+
+        // The enums cross by NAME, in the WIT's kebab.
+        assert_eq!(
+            field(&tasks[0], "part-of-day"),
+            Some(&wasmtime::component::Val::Enum("night".to_owned()))
+        );
+        assert_eq!(
+            field(&tasks[0], "hold"),
+            Some(&wasmtime::component::Val::Enum("battery".to_owned()))
+        );
+        assert_eq!(
+            field(last, "outcome"),
+            Some(&wasmtime::component::Val::Enum("failed".to_owned()))
+        );
+    }
+
+    /// THE NET `save` DID NOT HAVE, and the reason this one exists at all.
+    ///
+    /// `effects_from` had no arm for `save`: the editor emitted it, the case
+    /// fell into `otherwise`, and the whole failure was a `warn!` in a log
+    /// nobody reads while `SPC m s` looked like a key that does nothing. A
+    /// variant added to the protocol does NOT make the lift fail to compile —
+    /// nothing here matches on `Effect` exhaustively — so the only thing
+    /// standing between `tune` and that same silence is this test.
+    #[test]
+    fn tuning_is_an_effect_the_host_can_actually_build() {
+        use ronoctua_protocol::{Effect, Knob, Setting, StepSwitch};
+        use wasmtime::component::Val;
+
+        let tune = |knob: Val| {
+            Val::List(vec![Val::Variant(
+                "tune".to_owned(),
+                Some(Box::new(Val::Record(vec![
+                    ("task".into(), Val::String("update".into())),
+                    ("knob".into(), knob),
+                ]))),
+            )])
+        };
+        let of = |knob: Knob| {
+            vec![Effect::Tune(Setting {
+                task: "update".to_owned(),
+                knob,
+            })]
+        };
+
+        // EVERY CASE OF THE VARIANT, because a `knob` is lifted by matching the
+        // case name AND the payload's type together: one case reached by an arm
+        // that reads the wrong type comes back as nothing, which on screen is a
+        // key that does not answer.
+        assert_eq!(
+            effects_from(&tune(Val::Variant(
+                "interval-days".to_owned(),
+                Some(Box::new(Val::U16(7)))
+            ))),
+            of(Knob::IntervalDays(7))
+        );
+        assert_eq!(
+            effects_from(&tune(Val::Variant(
+                "part-of-day".to_owned(),
+                Some(Box::new(Val::Enum("night".to_owned())))
+            ))),
+            of(Knob::PartOfDay(ronoctua_protocol::DayPart::Night))
+        );
+        assert_eq!(
+            effects_from(&tune(Val::Variant(
+                "enabled".to_owned(),
+                Some(Box::new(Val::Bool(false)))
+            ))),
+            of(Knob::Enabled(false))
+        );
+        assert_eq!(
+            effects_from(&tune(Val::Variant(
+                "step".to_owned(),
+                Some(Box::new(Val::Record(vec![
+                    ("id".into(), Val::String("collect-garbage".into())),
+                    ("on".into(), Val::Bool(false)),
+                ])))
+            ))),
+            of(Knob::Step(StepSwitch {
+                id: "collect-garbage".to_owned(),
+                on: false,
+            }))
+        );
+        assert_eq!(
+            effects_from(&tune(Val::Variant("reset-steps".to_owned(), None))),
+            of(Knob::ResetSteps)
+        );
+
+        // AND THE GAPS ARE REFUSALS, not defaults. A `part-of-day` this build
+        // cannot read would otherwise fall back to `any` and move a rebuild out
+        // of the small hours into the middle of somebody's afternoon.
+        assert!(
+            effects_from(&tune(Val::Variant(
+                "part-of-day".to_owned(),
+                Some(Box::new(Val::Enum("siesta".to_owned())))
+            )))
+            .is_empty()
+        );
+        assert!(
+            effects_from(&tune(Val::Variant(
+                "knob-from-the-future".to_owned(),
+                Some(Box::new(Val::U16(1)))
+            )))
+            .is_empty()
+        );
+        // The case name is right and the payload is not: refused, and never
+        // read as some other case that happens to take that type.
+        assert!(
+            effects_from(&tune(Val::Variant(
+                "interval-days".to_owned(),
+                Some(Box::new(Val::Bool(true)))
+            )))
+            .is_empty()
+        );
+    }
+
+    /// The brain's requests come back whole, behind their own capability.
+    #[test]
+    fn a_brain_request_needs_the_brain_capability() {
+        use ronoctua_protocol::{Capability, Demand, Effect, Request};
+        use wasmtime::component::Val;
+
+        let asked = Val::Record(vec![
+            ("what".into(), Val::Enum("rehearse-task".to_owned())),
+            ("target".into(), Val::U64(1)),
+        ]);
+        assert_eq!(
+            demand_from(Some(&asked)),
+            Some(Demand {
+                what: Request::RehearseTask,
+                target: 1,
+            })
+        );
+        // And it is gated behind `brain` and not `system` — the memory panel
+        // asked for neither, and this one ends with the machine rebuilding its
+        // own operating system.
+        assert_eq!(
+            Effect::Ask(Demand {
+                what: Request::RunTask,
+                target: 1,
+            })
+            .requires(),
+            Some(Capability::Brain)
+        );
+    }
+
+    #[test]
     fn an_invalid_cwasm_fails_with_a_useful_message() {
         let r = Runtime::fresh().unwrap();
         // `unwrap_err` would require `Debug` on the `Ok`, and `Component` does not have it.
-        let Err(e) = r.load(b"nao sou um cwasm") else {
-            panic!("o wasmtime aceitou bytes que nao sao um .cwasm")
+        let Err(e) = r.load(b"I am not a cwasm") else {
+            panic!("wasmtime accepted bytes that are not a .cwasm")
         };
         assert!(
             format!("{e}").contains("wasmtime"),
-            "a mensagem nao ajuda: {e}"
+            "the message does not help: {e}"
         );
     }
 }

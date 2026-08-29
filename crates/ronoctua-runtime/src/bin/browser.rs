@@ -67,7 +67,7 @@ struct Vision {
     ///
     /// It is what makes it possible to test the click without repeating the component's grid
     /// geometry here: one clicks where it said it put the glyph. A copy of the
-    /// arithmetic (`PASSO`, `HEIGHT`, starting row) would lie the day the
+    /// arithmetic (`STEP`, `HEIGHT`, starting row) would lie the day the
     /// header gained a line.
     positions: Vec<(u16, u16)>,
 }
@@ -114,10 +114,10 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
     // a TAG where the name was expected — and the symptom was the source-set filter
     // "letting through" a glyph that was never wrong. What decides is the
     // COLUMN, and that is why the reading is positional.
-    let ultima_linha = cells.keys().next_back().map(|(l, _)| *l);
+    let last_line = cells.keys().next_back().map(|(l, _)| *l);
     let mut focus = None;
     let mut tags = None;
-    if let Some(l) = ultima_linha {
+    if let Some(l) = last_line {
         let on_line: Vec<(u16, String)> = cells
             .range((l, 0)..=(l, u16::MAX))
             .map(|((_, c), s)| (*c, s.clone()))
@@ -143,10 +143,10 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
     // It used to be `/search  (N of M)` stuck on the left. It changed because the counter
     // competed for the eye with what matters on screen — the icons' shape — and
     // because the `/` became a actual magnifying glass, which is an icon token.
-    let (_, cab) = header.context("o `render` nao emitiu contador na linha 0")?;
+    let (_, cab) = header.context("`render` emitted no counter on line 0")?;
     let (n, m) = cab
         .split_once('/')
-        .with_context(|| format!("contador fora do formato `N / M`: {cab}"))?;
+        .with_context(|| format!("the counter is not in the `N / M` shape: {cab}"))?;
 
     Ok(Vision {
         total_filtered: n.trim().parse().context("contagem de resultados")?,
@@ -194,7 +194,7 @@ fn query(inst: &mut ronoctua_runtime::Instance, q: &str) -> Result<Vision> {
 fn run_by_id(inst: &mut ronoctua_runtime::Instance, id: &str) -> Result<Vision> {
     let effects = inst.event(&Input::Command(id.to_owned()))?;
     if effects.is_empty() {
-        bail!("o comando `{id}` nao pediu efeito nenhum — ele chegou ao buffer?");
+        bail!("the command `{id}` asked for no effect — did it reach the buffer?");
     }
     read(&inst.render(80, ROWS, heights())?)
 }
@@ -208,11 +208,11 @@ fn clear(inst: &mut ronoctua_runtime::Instance) -> Result<()> {
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-test-browser <componente.wasm> <dir-i18n>")?;
+        .context("usage: ronoctua-test-browser <component.wasm> <i18n-dir>")?;
     let i18n = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-test-browser <componente.wasm> <dir-i18n>")?;
-    let wasm = std::fs::read(&path).with_context(|| format!("nao consegui ler {path}"))?;
+        .context("usage: ronoctua-test-browser <component.wasm> <i18n-dir>")?;
+    let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
 
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
@@ -230,15 +230,15 @@ fn main() -> Result<()> {
         PANEL,
     ] {
         if !d.commands.iter().any(|c| c == id) {
-            bail!("`{id}` nao esta na lista de comandos do descritor");
+            bail!("`{id}` is not in the descriptor's command list");
         }
         if !d.keymap.iter().any(|l| l.command == id) {
-            bail!("`{id}` nao tem tecla: ninguem o alcanca pelo which-key");
+            bail!("`{id}` has no key: nobody reaches it through which-key");
         }
     }
     // The host refuses whoever binds outside `SPC m`; better to find out here.
     if let Err(e) = d.validate() {
-        bail!("o descritor do navegador nao passa na guarda da secao 7.9: {e}");
+        bail!("the browser's descriptor does not pass the section 7.9 guard: {e}");
     }
     // EVERY COMMAND HAS A KEY IN BOTH LANGUAGES. The buffer writes the `cmd-`
     // prefix as a literal because it does not depend on the host's crate
@@ -249,19 +249,19 @@ fn main() -> Result<()> {
         for id in &d.commands {
             let key = format!("cmd-{id}");
             if !table.contains_key(&key) {
-                bail!("`{key}` nao existe em {language}.ftl");
+                bail!("`{key}` does not exist in {language}.ftl");
             }
         }
     }
     println!(
-        "descritor {} comandos, todos com tecla e chave",
+        "descriptor {} commands, all with a key and a text key",
         d.commands.len()
     );
 
     let base = query(&mut inst, "")?;
     if base.total_filtered != base.total_in_db {
         bail!(
-            "busca vazia devia mostrar a base inteira: {} de {}",
+            "an empty search should show the whole database: {} of {}",
             base.total_filtered,
             base.total_in_db
         );
@@ -273,76 +273,76 @@ fn main() -> Result<()> {
     // no check saw it, because none looked at the RESULT.
     if base.total_in_db < 10_000 {
         bail!(
-            "a base tem {} glifos; sao 10.473. O parser do buffer nao dividiu \
+            "the database has {} glyphs; there are 10,473. The buffer's parser did not split \
              os registros — ver o `split` em `carregar`",
             base.total_in_db
         );
     }
-    println!("base: {} glifos", base.total_in_db);
+    println!("database: {} glyphs", base.total_in_db);
 
     // ---- 1. source set ----
     let fa = query(&mut inst, "fa:")?;
     if fa.total_filtered == 0 || fa.total_filtered >= base.total_in_db {
         bail!(
-            "`fa:` nao restringiu: {} de {}",
+            "`fa:` did not narrow: {} out of {}",
             fa.total_filtered,
             base.total_in_db
         );
     }
     let names = names_while_stepping(&mut inst, 30)?;
     if names.is_empty() {
-        bail!("`fa:` nao mostrou nome nenhum no foco");
+        bail!("`fa:` showed no name at all in focus");
     }
-    if let Some(mau) = names.iter().find(|n| !n.starts_with("fa-")) {
-        bail!("`fa:` deixou passar um glifo de outro conjunto: {mau}");
+    if let Some(bad) = names.iter().find(|n| !n.starts_with("fa-")) {
+        bail!("`fa:` let a glyph of another set through: {bad}");
     }
-    println!("conjunto  andou por    -> {} nomes, todos fa-", names.len());
-    println!("conjunto  `fa:`        -> {}", fa.total_filtered);
+    println!("set       walked over  -> {} names, all fa-", names.len());
+    println!("set       `fa:`        -> {}", fa.total_filtered);
 
     // The free term applies WITHIN the set. If the filter swallowed the search,
     // this count would equal the one above — and nobody would notice.
     let fa_folder = query(&mut inst, "fa:folder")?;
     if fa_folder.total_filtered == 0 || fa_folder.total_filtered >= fa.total_filtered {
         bail!(
-            "`fa:folder` nao restringiu dentro do conjunto: {} contra {}",
+            "`fa:folder` did not narrow within the set: {} against {}",
             fa_folder.total_filtered,
             fa.total_filtered
         );
     }
     let names = names_while_stepping(&mut inst, 30)?;
-    if let Some(mau) = names
+    if let Some(bad) = names
         .iter()
         .find(|n| !n.starts_with("fa-") || !n.contains("folder"))
     {
-        bail!("`fa:folder` deixou passar {mau}");
+        bail!("`fa:folder` deixou passar {bad}");
     }
-    println!("conjunto  `fa:folder`  -> {}", fa_folder.total_filtered);
+    println!("set       `fa:folder`  -> {}", fa_folder.total_filtered);
 
     // ---- 2. Unicode block ----
     let block = query(&mut inst, "bloco:f0")?;
     if block.total_filtered == 0 || block.total_filtered >= base.total_in_db {
-        bail!("`bloco:f0` nao restringiu: {}", block.total_filtered);
+        bail!("`bloco:f0` did not narrow: {}", block.total_filtered);
     }
-    if let Some(mau) = block
+    if let Some(bad) = block
         .glyphs
         .iter()
         .find(|c| !format!("{:x}", **c as u32).starts_with("f0"))
     {
-        bail!("`bloco:f0` deixou passar U+{:04X}", *mau as u32);
+        bail!("`bloco:f0` let U+{:04X} through", *bad as u32);
     }
-    println!("bloco     `bloco:f0`   -> {}", block.total_filtered);
+    println!("block     `bloco:f0`   -> {}", block.total_filtered);
 
     // ---- 3. tag ----
     let tag = query(&mut inst, "tag:folder")?;
     if tag.total_filtered == 0 || tag.total_filtered >= base.total_in_db {
-        bail!("`tag:folder` nao restringiu: {}", tag.total_filtered);
+        bail!("`tag:folder` did not narrow: {}", tag.total_filtered);
     }
     // The tag is bilingual (section 6.5): the same query in pt has to find
     // something. If only English worked, the curated overlay would not be being
     // read — and that would go unnoticed in every English search.
     let tag_pt = query(&mut inst, "tag:pasta")?;
     if tag_pt.total_filtered == 0 {
-        bail!("`tag:pasta` nao achou nada: as tags em pt-BR nao chegaram");
+        bail!("`tag:pasta` found nothing: the pt-BR tags did not arrive");
     }
     println!(
         "tag       `tag:folder` -> {}   `tag:pasta` -> {}",
@@ -352,14 +352,14 @@ fn main() -> Result<()> {
     // ---- 4. in use as a token, through the NAMED command ----
     let tok = run_by_id(&mut inst, "glyphs-filter-token")?;
     if tok.total_filtered == 0 || tok.total_filtered >= base.total_in_db {
-        bail!("`token:` nao restringiu: {}", tok.total_filtered);
+        bail!("`token:` did not narrow: {}", tok.total_filtered);
     }
-    println!("token     comando      -> {}", tok.total_filtered);
+    println!("token     command      -> {}", tok.total_filtered);
 
     // ---- 5. assigned to an app id, through the NAMED command ----
     let app = run_by_id(&mut inst, "glyphs-filter-app")?;
     if app.total_filtered == 0 {
-        bail!("`app:` nao achou nada: a tabela de tray nao chegou na base");
+        bail!("`app:` found nothing: the tray table did not reach the database");
     }
     // Every glyph assigned to an app id IS an icon token — the tray
     // table points at TOKENS, never at a raw glyph (a `gen-glyphdb.py`
@@ -367,12 +367,12 @@ fn main() -> Result<()> {
     // one of the two fields had stopped being computed.
     if app.total_filtered > tok.total_filtered {
         bail!(
-            "mais glifos atribuidos a app id ({}) do que tokens ({})",
+            "more glyphs assigned to an app id ({}) than tokens ({})",
             app.total_filtered,
             tok.total_filtered
         );
     }
-    println!("app id    comando      -> {}", app.total_filtered);
+    println!("app id    command      -> {}", app.total_filtered);
 
     // ---- the filter command takes the value from the focused glyph ----
     // Without this, `m f c` would have to come with a set written into the code — and the
@@ -381,19 +381,19 @@ fn main() -> Result<()> {
     for c in "md-".chars() {
         inst.event(&Input::Char(c))?;
     }
-    let conj = run_by_id(&mut inst, "glyphs-filter-set")?;
+    let set_filter = run_by_id(&mut inst, "glyphs-filter-set")?;
     let names = names_while_stepping(&mut inst, 20)?;
-    if let Some(mau) = names.iter().find(|n| !n.starts_with("md-")) {
-        bail!("`glyphs-filter-set` nao pegou o conjunto do glifo em foco: {mau}");
+    if let Some(bad) = names.iter().find(|n| !n.starts_with("md-")) {
+        bail!("`glyphs-filter-set` did not take the set of the focused glyph: {bad}");
     }
-    println!("conjunto  do foco      -> {}", conj.total_filtered);
+    println!("set       of the focus -> {}", set_filter.total_filtered);
 
     // ---- clearing returns the whole database ----
-    let volta = query(&mut inst, "")?;
-    if volta.total_filtered != base.total_in_db {
+    let back = query(&mut inst, "")?;
+    if back.total_filtered != base.total_in_db {
         bail!(
-            "limpar nao voltou a base inteira: {} de {}",
-            volta.total_filtered,
+            "clearing did not bring back the whole database: {} of {}",
+            back.total_filtered,
             base.total_in_db
         );
     }
@@ -413,27 +413,27 @@ fn main() -> Result<()> {
     let (line, column) = *screen
         .positions
         .get(TARGET)
-        .context("o render nao emitiu glifos suficientes para testar o clique")?;
+        .context("the render did not emit enough glyphs to test the click")?;
 
     // The expected name, obtained by WALKING there — the path already known to
     // work. Comparing the click against the keyboard is what makes the test about
     // the click, and not about the glyph database.
-    let andando = names_while_stepping(&mut inst, TARGET)?;
-    let expected = andando
+    let running = names_while_stepping(&mut inst, TARGET)?;
+    let expected = running
         .get(TARGET)
-        .context("a navegacao lateral nao chegou ao alvo")?
+        .context("the sideways navigation did not reach the target")?
         .clone();
 
     clear(&mut inst)?;
     if inst.event(&Input::Click { column, line })?.is_empty() {
-        bail!("o clique em ({column},{line}) nao pediu redesenho — ele chegou ao buffer?");
+        bail!("the click at ({column},{line}) asked for no redraw — did it reach the buffer?");
     }
     let after = read(&inst.render(80, ROWS, heights())?)?;
-    let focus = after.focus.context("sem glifo em foco depois do clique")?;
+    let focus = after.focus.context("no glyph in focus after the click")?;
     if focus != expected {
-        bail!("o clique em ({column},{line}) focou `{focus}`, e ali estava desenhado `{expected}`");
+        bail!("the click at ({column},{line}) focused `{focus}`, and `{expected}` was drawn there");
     }
-    println!("clique    ({column},{line})       -> {focus}");
+    println!("click    ({column},{line})       -> {focus}");
 
     // ---- and a click OUTSIDE the grid does not move the cursor ----
     //
@@ -441,13 +441,13 @@ fn main() -> Result<()> {
     // search field would jump the cursor to the first glyph — a movement
     // nobody asked for, in the middle of something else.
     if !inst.event(&Input::Click { column: 0, line: 0 })?.is_empty() {
-        bail!("um clique no cabecalho mexeu no cursor");
+        bail!("a click on the header moved the cursor");
     }
-    let parado = read(&inst.render(80, ROWS, heights())?)?;
-    if parado.focus.as_deref() != Some(focus.as_str()) {
+    let stopped = read(&inst.render(80, ROWS, heights())?)?;
+    if stopped.focus.as_deref() != Some(focus.as_str()) {
         bail!(
-            "o clique no cabecalho moveu o foco de `{focus}` para {:?}",
-            parado.focus
+            "the click on the header moved the focus from `{focus}` to {:?}",
+            stopped.focus
         );
     }
 
@@ -462,7 +462,7 @@ fn main() -> Result<()> {
     // copy of the arithmetic here would lie the day the header changed.
     clear(&mut inst)?;
     let header = inst.render(80, ROWS, heights())?;
-    let (linha_do_icone, coluna_do_icone) = header
+    let (icon_line, icon_column) = header
         .commands
         .iter()
         .find_map(|c| match c {
@@ -474,10 +474,10 @@ fn main() -> Result<()> {
             } if n == FILTER_ICON => Some((*line, *column)),
             _ => None,
         })
-        .context("o cabecalho nao emitiu o icone de filtro")?;
+        .context("the header did not emit the filter icon")?;
     // TO THE RIGHT OF THE COUNTER, and not on top of it: it is where the owner asked for it, and it is
     // the only corner of the line that does not compete for space with what one reads.
-    let (col_contador, counter) = header
+    let (counter_column, counter) = header
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -490,31 +490,31 @@ fn main() -> Result<()> {
             _ => None,
         })
         .max_by_key(|(c, _)| *c)
-        .context("o cabecalho nao emitiu o contador")?;
-    let fim_do_contador = col_contador + u16::try_from(counter.chars().count()).unwrap_or(0);
-    if linha_do_icone != 0 || coluna_do_icone < fim_do_contador {
+        .context("the header did not emit the counter")?;
+    let counter_end = counter_column + u16::try_from(counter.chars().count()).unwrap_or(0);
+    if icon_line != 0 || icon_column < counter_end {
         bail!(
-            "o icone de filtro saiu em ({coluna_do_icone},{linha_do_icone}) e o contador termina \
-             na coluna {fim_do_contador}: ele tem de ficar A DIREITA do contador, na linha da busca"
+            "the filter icon came out at ({icon_column},{icon_line}) and the counter ends \
+             at column {counter_end}: it has to sit TO THE RIGHT of the counter, on the search's line"
         );
     }
-    println!("filtro    icone         -> coluna {coluna_do_icone}, depois do contador");
+    println!("filter    icon          -> column {icon_column}, after the counter");
 
     // CLICKING THE ICON OPENS THE PANEL.
-    let antes_do_painel = read(&inst.render(80, ROWS, heights())?)?;
+    let before_the_panel = read(&inst.render(80, ROWS, heights())?)?;
     if inst
         .event(&Input::Click {
-            column: coluna_do_icone,
-            line: linha_do_icone,
+            column: icon_column,
+            line: icon_line,
         })?
         .is_empty()
     {
-        bail!("clicar no icone de filtro nao pediu redesenho — o painel nao abriu");
+        bail!("clicking the filter icon asked for no redraw — the panel did not open");
     }
     let open = inst.render(80, ROWS, heights())?;
     let options = panel_of(&open);
     if options.is_empty() {
-        bail!("o painel abriu sem nenhuma opcao de conjunto");
+        bail!("the panel opened with no set option at all");
     }
     // THE THREE EXAMPLES FROM THE REQUEST, plus "no filter" — which is the way
     // back: a panel that only knows how to restrict is a trap.
@@ -522,12 +522,12 @@ fn main() -> Result<()> {
         let key = format!("{SET_PREFIX_OF}{example}");
         if !options.iter().any(|(k, ..)| *k == key) {
             bail!(
-                "o painel nao ofereceu `{key}`. As opcoes saem da BASE, entao\n\
-                 ou o conjunto sumiu dela ou o painel parou de percorre-la."
+                "the panel did not offer `{key}`. The options come out of the DATABASE, so\n\
+                 either the set went away from it or the panel stopped walking it."
             );
         }
     }
-    println!("filtro    painel        -> {} conjuntos", options.len());
+    println!("filter    panel         -> {} sets", options.len());
 
     // EVERY OPTION HAS A KEY IN BOTH LANGUAGES, AND FITS THE BUDGET.
     //
@@ -541,60 +541,60 @@ fn main() -> Result<()> {
         for (key, _, _, budget) in &options {
             let Some(text) = table.get(key) else {
                 bail!(
-                    "a opcao `{key}` do painel nao existe em {language}.ftl — ela sairia\n\
-                     na tela como `[{key}]`, que e o fallback silencioso de sempre."
+                    "the panel's option `{key}` does not exist in {language}.ftl — it would come out\n\
+                     on screen as `[{key}]`, which is the usual silent fallback."
                 );
             };
             if text.chars().count() > usize::from(*budget) {
                 bail!(
-                    "em {language}, a opcao `{key}` = {text:?} tem {} celulas e o painel\n\
-                     reservou {budget}. Ela vai sair CORTADA em qualquer janela.",
+                    "in {language}, the option `{key}` = {text:?} is {} cells and the panel\n\
+                     reserved {budget}. It will come out CUT in any window.",
                     text.chars().count()
                 );
             }
         }
         println!(
-            "filtro    {language:8}      -> as {} opcoes cabem",
+            "filter    {language:8}      -> the {} options fit",
             options.len()
         );
     }
 
     // THE PANEL PUSHES THE GRID DOWN — and the click GOES WITH IT.
     //
-    // This is the defect the `Painel` structure exists to prevent: the row
+    // This is the defect the `Panel` structure exists to prevent: the row
     // the grid starts on was written in two places, the drawing and the
     // click's arithmetic. The panel opening would be enough for one of them to fall behind
     // and the click to start hitting the row above.
     let with_panel = read(&open)?;
-    let (linha_antes, _) = *antes_do_painel
+    let (line_before, _) = *before_the_panel
         .positions
         .first()
-        .context("a grade fechada nao desenhou glifo nenhum")?;
-    let (linha_depois, _) = *with_panel
+        .context("the closed grid drew no glyph at all")?;
+    let (line_after, _) = *with_panel
         .positions
         .first()
-        .context("a grade com o painel aberto nao desenhou glifo nenhum")?;
-    if linha_depois <= linha_antes {
+        .context("with the panel open the grid drew no glyph at all")?;
+    if line_after <= line_before {
         bail!(
-            "a grade comecava na linha {linha_antes} e com o painel aberto comeca na \
-             {linha_depois}: o painel esta desenhando POR CIMA dela"
+            "the grid used to start on line {line_before} and with the panel open it starts on \
+             {line_after}: the panel is drawing ON TOP of it"
         );
     }
     const PANEL_TARGET: usize = 3;
     let (line, column) = *with_panel
         .positions
         .get(PANEL_TARGET)
-        .context("a grade com o painel aberto nao tem glifos suficientes")?;
+        .context("with the panel open the grid does not have enough glyphs")?;
     inst.event(&Input::Click { column, line })?;
-    let focado = drawn_focus(&inst.render(80, ROWS, heights())?)
-        .context("nenhum glifo saiu em foco depois do clique")?;
-    if focado != (line, column) {
+    let focused = drawn_focus(&inst.render(80, ROWS, heights())?)
+        .context("no glyph came out in focus after the click")?;
+    if focused != (line, column) {
         bail!(
-            "com o painel aberto, o clique em ({column},{line}) pos o foco em {focado:?}.\n\
-             A conta do clique nao acompanhou a linha em que a grade comeca."
+            "with the panel open, the click at ({column},{line}) put the focus on {focused:?}.\n\
+             The click's arithmetic did not follow the line the grid starts on."
         );
     }
-    println!("filtro    grade desceu  -> o clique acerta em ({column},{line})");
+    println!("filter    grid moved    -> the click lands at ({column},{line})");
 
     // CHOOSING A SET FILTERS BY IT — and by what is written there.
     //
@@ -602,37 +602,37 @@ fn main() -> Result<()> {
     // left are `md-` glyphs. Without this, a one-index error between the drawing
     // and the click would give the neighbouring set, and the screen would stay coherent
     // with itself while saying the wrong thing.
-    let (_, linha_md, coluna_md, _) = options
+    let (_, md_line, md_column, _) = options
         .iter()
         .find(|(k, ..)| k == &format!("{SET_PREFIX_OF}md"))
-        .context("o painel nao tem a opcao do Material Design")?;
+        .context("the panel does not have the Material Design option")?;
     if inst
         .event(&Input::Click {
-            column: *coluna_md,
-            line: *linha_md,
+            column: *md_column,
+            line: *md_line,
         })?
         .is_empty()
     {
-        bail!("clicar numa opcao do painel nao pediu redesenho");
+        bail!("clicking an option in the panel asked for no redraw");
     }
     let chosen = read(&inst.render(80, ROWS, heights())?)?;
-    let foco_md = chosen
+    let md_focus = chosen
         .focus
         .clone()
-        .context("depois de escolher o conjunto nao ha glifo em foco")?;
-    if !foco_md.starts_with("md-") {
-        bail!("escolher `Material Design` no painel deixou `{foco_md}` em foco");
+        .context("after choosing the set there is no glyph in focus")?;
+    if !md_focus.starts_with("md-") {
+        bail!("choosing `Material Design` in the panel left `{md_focus}` in focus");
     }
-    let por_prefixo = query(&mut inst, "md:")?;
-    if chosen.total_filtered != por_prefixo.total_filtered {
+    let by_prefix = query(&mut inst, "md:")?;
+    if chosen.total_filtered != by_prefix.total_filtered {
         bail!(
-            "o painel filtrou {} glifos e `md:` filtra {}",
+            "the panel filtered {} glyphs and `md:` filters {}",
             chosen.total_filtered,
-            por_prefixo.total_filtered
+            by_prefix.total_filtered
         );
     }
     println!(
-        "filtro    escolha       -> {} glifos, todos md-",
+        "filter    choice        -> {} glyphs, all md-",
         chosen.total_filtered
     );
 
@@ -643,44 +643,44 @@ fn main() -> Result<()> {
     // list would cost the query one was building.
     inst.event(&Input::Command(PANEL.to_owned()))?;
     if panel_of(&inst.render(80, ROWS, heights())?).is_empty() {
-        bail!("o comando `{PANEL}` nao abriu o painel — ele so existe para o mouse?");
+        bail!("the command `{PANEL}` did not open the panel — does it only exist for the mouse?");
     }
     inst.event(&Input::Cancel)?;
     let closed = inst.render(80, ROWS, heights())?;
     if !panel_of(&closed).is_empty() {
-        bail!("o `Esc` nao fechou o painel");
+        bail!("`Esc` did not close the panel");
     }
-    if read(&closed)?.total_filtered != por_prefixo.total_filtered {
-        bail!("o `Esc` fechou o painel E limpou a busca junto");
+    if read(&closed)?.total_filtered != by_prefix.total_filtered {
+        bail!("`Esc` closed the panel AND cleared the search along with it");
     }
-    println!("filtro    esc           -> fecha o painel, e a busca fica");
+    println!("filter    esc           -> closes the panel, and the search stays");
 
     // ---- `Tab` OPENS AND CLOSES THE FILTERS ----
     //
     // The cheapest key on the screen for the panel. What this test guards, besides
     // opening and closing, is that it does NOT GO INTO THE SEARCH: without a case of its own in the
-    // protocol `Tab` falls into the host's `_` and arrives as `caractere('\t')`, which
+    // protocol `Tab` falls into the host's `_` and arrives as `character('\t')`, which
     // the buffer pushes into the field. It is invisible — and the search's `trim` on top of that
     // keeps the COUNT from changing, so only the invitation gives it away.
     clear(&mut inst)?;
     if inst.event(&Input::Toggle)?.is_empty() {
-        bail!("`Tab` nao pediu redesenho — o painel nao abriu");
+        bail!("`Tab` asked for no redraw — the panel did not open");
     }
     if panel_of(&inst.render(80, ROWS, heights())?).is_empty() {
-        bail!("`Tab` nao abriu o painel de filtros");
+        bail!("`Tab` did not open the filter panel");
     }
     inst.event(&Input::Toggle)?;
     let closed = inst.render(80, ROWS, heights())?;
     if !panel_of(&closed).is_empty() {
-        bail!("o segundo `Tab` nao fechou o painel");
+        bail!("the second `Tab` did not close the panel");
     }
     // THE INVITATION HAS TO BE ON SCREEN. It only appears with the search EMPTY: if
     // `Tab` had gone into the field, the buffer would emit what was typed
     // (`Text::Data`) instead of the key, and the tab would sit there unseen.
     if !keys_of(&closed).iter().any(|(k, _)| k == "glyphs-search") {
         bail!(
-            "depois de dois `Tab` o campo nao mostra mais o convite: a tecla entrou\n\
-             na busca como caractere, e uma tabulacao no campo e invisivel."
+            "after two `Tab`s the field no longer shows the invitation: the key went\n\
+             into the search as a character, and a tab in the field is invisible."
         );
     }
     // AND WITH A SEARCH IN PROGRESS it does not lose it: toggling the panel is a gesture over
@@ -691,10 +691,10 @@ fn main() -> Result<()> {
     let after = read(&inst.render(80, ROWS, heights())?)?.total_filtered;
     if after != only_folder {
         bail!(
-            "dois `Tab` sobre a busca `folder` mudaram o resultado de {only_folder} para {after}"
+            "two `Tab`s over the search `folder` changed the result from {only_folder} to {after}"
         );
     }
-    println!("filtro    tab           -> abre, fecha, e nao toca na busca");
+    println!("filter    tab           -> opens, closes, and does not touch the search");
 
     // THE LABEL ONE READS FINDS, WHEN TYPED, THE WHOLE SET.
     //
@@ -713,23 +713,23 @@ fn main() -> Result<()> {
             if prefix == "all" {
                 continue;
             }
-            let label = table.get(key).context("rotulo conferido acima")?;
-            let so_o_conjunto = query(&mut inst, &format!("{prefix}:"))?.total_filtered;
+            let label = table.get(key).context("label checked above")?;
+            let set_only = query(&mut inst, &format!("{prefix}:"))?.total_filtered;
             clear(&mut inst)?;
             // PASTING, and not typing: it is one query instead of one per
             // character, and the result is the same (already proved further below).
             inst.event(&Input::Paste(label.clone()))?;
             let by_name = read(&inst.render(80, ROWS, heights())?)?.total_filtered;
-            if by_name < so_o_conjunto {
+            if by_name < set_only {
                 bail!(
-                    "em {language}, o painel mostra {label:?} e buscar por isso acha {by_name}\n\
-                     glifos — o conjunto `{prefix}` tem {so_o_conjunto}. O nome no `.ftl` e o\n\
-                     nome no `SETS` do gen-glyphdb.py divergiram, e a tela esta ensinando uma\n\
-                     palavra que a busca nao conhece."
+                    "in {language}, the panel shows {label:?} and searching for that finds {by_name}\n\
+                     glyphs — the set `{prefix}` has {set_only}. The name in the `.ftl` and the\n\
+                     name in gen-glyphdb.py's `SETS` diverged, and the screen is teaching a\n\
+                     word the search does not know."
                 );
             }
         }
-        println!("filtro    {language:8}      -> todo rotulo acha o conjunto dele");
+        println!("filter    {language:8}      -> every label finds its own set");
     }
     clear(&mut inst)?;
 
@@ -754,10 +754,10 @@ fn main() -> Result<()> {
             _ => None,
         })
     };
-    let lupa = icon("search").context("o cabecalho nao emitiu a lupa")?;
-    let filtro = icon(FILTER_ICON).context("o cabecalho nao emitiu o icone de filtro")?;
+    let magnifier = icon("search").context("the header did not emit the magnifier")?;
+    let filter = icon(FILTER_ICON).context("the header did not emit the filter icon")?;
     // The footer's glyph: the `Data` run with the largest row in column zero.
-    let rodape = screen
+    let footer = screen
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -772,9 +772,9 @@ fn main() -> Result<()> {
         })
         .max_by_key(|(l, _)| *l)
         .map(|(_, e)| e)
-        .context("o rodape nao emitiu o glifo em foco")?;
+        .context("the footer did not emit the focused glyph")?;
     // The search: the only run that comes out as a KEY in the header.
-    let busca = screen
+    let search = screen
         .commands
         .iter()
         .find_map(|c| match c {
@@ -785,8 +785,8 @@ fn main() -> Result<()> {
             } if k == "glyphs-search" => Some(*scale),
             _ => None,
         })
-        .context("o cabecalho nao emitiu o convite da busca")?;
-    let contador_escala = screen
+        .context("the header did not emit the search invitation")?;
+    let counter_scale = screen
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -801,30 +801,32 @@ fn main() -> Result<()> {
         })
         .max_by_key(|(c, _)| *c)
         .map(|(_, e)| e)
-        .context("o cabecalho nao emitiu o contador")?;
+        .context("the header did not emit the counter")?;
 
-    if lupa != filtro || filtro != rodape {
+    if magnifier != filter || filter != footer {
         bail!(
-            "a lupa saiu em {lupa:?}, o filtro em {filtro:?} e o glifo do rodape em \
-             {rodape:?} — os tres sao a MESMA coisa na tela e tem de ter o mesmo corpo"
+            "the magnifier came out at {magnifier:?}, the filter at {filter:?} and the footer's glyph at \
+             {footer:?} — the three are the SAME thing on screen and have to have the same body"
         );
     }
-    if order(lupa) <= order(busca) {
-        bail!("o icone saiu em {lupa:?} e o texto em {busca:?}: o icone tem de ser MAIOR");
-    }
-    if busca != ronoctua_protocol::Scale::Base {
+    if order(magnifier) <= order(search) {
         bail!(
-            "o campo de busca saiu em {busca:?}. Ele e a mesma coisa que o minibuffer,\n\
-             e o corpo dele e o do SISTEMA — nao o do conteudo do buffer."
+            "the icon came out at {magnifier:?} and the text at {search:?}: the icon has to be BIGGER"
         );
     }
-    if order(contador_escala) >= order(busca) {
+    if search != ronoctua_protocol::Scale::Base {
         bail!(
-            "o contador saiu em {contador_escala:?} e a busca em {busca:?}: o contador\n\
-             se le de relance, e tem de ser MENOR do que o que se le com atencao."
+            "the search field came out at {search:?}. It is the same thing as the minibuffer,\n\
+             and its body is the SYSTEM's — not the buffer's content's."
         );
     }
-    println!("escalas   icone/texto   -> {lupa:?} / {busca:?} / {contador_escala:?}");
+    if order(counter_scale) >= order(search) {
+        bail!(
+            "the counter came out at {counter_scale:?} and the search at {search:?}: the counter\n\
+             is read at a glance, and has to be SMALLER than what is read with attention."
+        );
+    }
+    println!("scales    icon/text     -> {magnifier:?} / {search:?} / {counter_scale:?}");
 
     // ---- THE SPACING: ADJACENT BLOCKS, and no blank line ----
     //
@@ -837,55 +839,55 @@ fn main() -> Result<()> {
     // The rule is now the inverse, and it is what gets asserted: the blocks are
     // ADJACENT, and the only white left over is what does not fit in a row.
     let a = heights();
-    let regua = screen
+    let rule = screen
         .commands
         .iter()
         .find_map(|c| match c {
             Command::Rule { line, .. } => Some(*line),
             _ => None,
         })
-        .context("a tela nao emitiu regua nenhuma")?;
-    if regua != a.large {
+        .context("the screen emitted no rule at all")?;
+    if rule != a.large {
         bail!(
-            "o cabecalho ocupa {} celulas e a regua saiu na linha {regua}: sao {} linhas em \
-             branco entre os dois",
+            "the header takes {} cells and the rule came out on line {rule}: that is {} blank \
+             lines between the two",
             a.large,
-            regua.saturating_sub(a.large)
+            rule.saturating_sub(a.large)
         );
     }
     let vision = read(&screen)?;
-    let (primeira_fileira, _) = *vision
+    let (first_row, _) = *vision
         .positions
         .first()
-        .context("a grade nao desenhou glifo nenhum")?;
-    if primeira_fileira != regua + 1 {
+        .context("the grid drew no glyph at all")?;
+    if first_row != rule + 1 {
         bail!(
-            "a regua esta na linha {regua} e a grade so comeca na {primeira_fileira}: \
-             linha em branco entre as duas"
+            "the rule is on line {rule} and the grid only starts on {first_row}: \
+             a blank line between the two"
         );
     }
     // THE ROWS ARE ADJACENT: two consecutive rows are exactly the glyph's box
     // apart. It was the blank line between them that the owner saw.
-    let linhas_distintas: Vec<u16> = {
+    let distinct_lines: Vec<u16> = {
         let mut l: Vec<u16> = vision.positions.iter().map(|(line, _)| *line).collect();
         l.dedup();
         l
     };
-    if let Some(&segunda) = linhas_distintas.get(1)
-        && segunda - primeira_fileira != a.large
+    if let Some(&second) = distinct_lines.get(1)
+        && second - first_row != a.large
     {
         bail!(
-            "duas fileiras seguidas distam {} celulas e a caixa do glifo tem {}: ha linha \
-             em branco entre elas",
-            segunda - primeira_fileira,
+            "two consecutive rows are {} cells apart and the glyph's box is {}: there is a blank \
+             line between them",
+            second - first_row,
             a.large
         );
     }
-    let (ultima_fileira, _) = *vision
+    let (last_row, _) = *vision
         .positions
         .last()
-        .context("a grade nao desenhou glifo nenhum")?;
-    let linha_do_rodape = screen
+        .context("the grid drew no glyph at all")?;
+    let footer_line = screen
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -893,31 +895,31 @@ fn main() -> Result<()> {
             _ => None,
         })
         .max()
-        .context("a tela nao emitiu texto nenhum")?;
+        .context("the screen emitted no text at all")?;
     // ANCHORED TO THE BOTTOM: the footer block ends exactly where the window
     // ends. A row left over AFTER it is the empty strip the owner saw.
-    if linha_do_rodape + a.large != ROWS {
+    if footer_line + a.large != ROWS {
         bail!(
-            "o rodape comeca na linha {linha_do_rodape} e ocupa {} celulas numa janela de \
-             {ROWS}: sobram {} linhas vazias DEPOIS dele",
+            "the footer starts on line {footer_line} and takes {} cells in a window of \
+             {ROWS}: {} empty lines are left AFTER it",
             a.large,
-            ROWS.saturating_sub(linha_do_rodape + a.large)
+            ROWS.saturating_sub(footer_line + a.large)
         );
     }
     // AND THE REMAINDER ABOVE IT IS SMALLER THAN ONE ROW. If another row of icons
     // fitted there, it had to have been used — it was by not using it that the screen
     // ended up with a useless gap above the footer.
-    let left_over = linha_do_rodape.saturating_sub(ultima_fileira + a.large);
+    let left_over = footer_line.saturating_sub(last_row + a.large);
     if left_over >= a.large {
         bail!(
-            "sobram {left_over} celulas entre a ultima fileira e o rodape, e uma fileira ocupa \
-             {}: cabia mais uma fileira de icones ali",
+            "{left_over} cells are left between the last row and the footer, and one row takes \
+             {}: another row of icons would have fitted there",
             a.large
         );
     }
     println!(
-        "espacos   regua {regua} · grade {primeira_fileira}..{ultima_fileira} · rodape \
-         {linha_do_rodape} de {ROWS} (sobra {left_over})"
+        "spacing   rule {rule} · grid {first_row}..{last_row} · footer \
+         {footer_line} de {ROWS} (sobra {left_over})"
     );
 
     // ---- the search finds by TAG, in both languages and with or without accents ----
@@ -933,20 +935,20 @@ fn main() -> Result<()> {
     // is not in the emitted part. The test would end up measuring the ordering instead
     // of the tag matching. With the set, the result fits on screen and the
     // answer is about what one wants to know.
-    let acha = |inst: &mut ronoctua_runtime::Instance, q: &str| -> Result<bool> {
+    let finds = |inst: &mut ronoctua_runtime::Instance, q: &str| -> Result<bool> {
         query(inst, &format!("cod:{q}"))?;
         let names = names_while_stepping(inst, 40)?;
         Ok(names.iter().any(|n| n == "cod-location"))
     };
     for q in ["location", "map", "mapa", "localização", "localizacao"] {
-        if !acha(&mut inst, q)? {
+        if !finds(&mut inst, q)? {
             bail!(
-                "buscar `{q}` nao acha `cod-location`.\n\
-                 As tags bilingues existem para isto: nome, sinonimo em ingles,\n\
-                 traducao em portugues e a forma sem acento."
+                "searching `{q}` does not find `cod-location`.\n\
+                 The bilingual tags exist for this: name, English synonym,\n\
+                 the Portuguese translation and the accent-free form."
             );
         }
-        println!("busca     {q:14} -> cod-location");
+        println!("search    {q:14} -> cod-location");
     }
 
     // And the converse, because a search that finds EVERYTHING finds nothing: a term
@@ -954,7 +956,7 @@ fn main() -> Result<()> {
     let nothing = query(&mut inst, "xyzzyquux")?;
     if nothing.total_filtered != 0 {
         bail!(
-            "uma consulta sem sentido devolveu {} glifos",
+            "a nonsense query gave back {} glyphs",
             nothing.total_filtered
         );
     }
@@ -964,11 +966,11 @@ fn main() -> Result<()> {
     let com_tags = read(&inst.render(80, ROWS, heights())?)?;
     let tags = com_tags
         .tags
-        .context("o rodape nao emitiu as tags do glifo em foco")?;
+        .context("the footer did not emit the focused glyph's tags")?;
     if tags.trim().is_empty() {
-        bail!("o trecho de tags saiu vazio");
+        bail!("the tags run came out empty");
     }
-    println!("tags      no rodape    -> {tags}");
+    println!("tags      in the footer -> {tags}");
 
     // ---- and in a NARROW window they disappear, without taking the name with them ----
     //
@@ -992,8 +994,8 @@ fn main() -> Result<()> {
         })
         .max_by_key(|(l, _, _)| *l)
         .map(|(l, _, _)| l)
-        .context("o render de 24 colunas nao emitiu texto nenhum")?;
-    let na_ultima: Vec<_> = list
+        .context("the 24-column render emitted no text at all")?;
+    let on_the_last: Vec<_> = list
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -1007,18 +1009,18 @@ fn main() -> Result<()> {
         .collect();
     // TWO: the focused glyph and its name. It is the tags that disappear — and the glyph
     // stays, because it is a single character and answers "which one is it" on its own.
-    if na_ultima.len() != 2 {
+    if on_the_last.len() != 2 {
         bail!(
-            "numa janela de 24 colunas a ultima linha tem {} trechos, esperava 2 \
-             (o glifo e o nome): {:?}",
-            na_ultima.len(),
-            na_ultima
+            "in a 24-column window the last line has {} runs, expected 2 \
+             (the glyph and the name): {:?}",
+            on_the_last.len(),
+            on_the_last
         );
     }
-    if na_ultima[1].trim().is_empty() {
-        bail!("numa janela estreita o NOME do glifo sumiu junto com as tags");
+    if on_the_last[1].trim().is_empty() {
+        bail!("in a narrow window the glyph's NAME went away along with the tags");
     }
-    println!("tags      janela 24    -> omitidas, e o nome ficou");
+    println!("tags      window 24    -> omitted, and the name stayed");
 
     // ---- ENTER OPENS THE SHEET, and it REPLACES the content ----
     //
@@ -1031,20 +1033,20 @@ fn main() -> Result<()> {
     let chosen = before
         .focus
         .clone()
-        .context("sem glifo em foco antes da ficha")?;
+        .context("no glyph in focus before the sheet")?;
 
     if inst.event(&Input::Confirm)?.is_empty() {
-        bail!("Enter na grade nao pediu efeito nenhum — a ficha nao abriu");
+        bail!("Enter on the grid asked for no effect — the sheet did not open");
     }
     let sheet = texts_of(&inst.render(80, ROWS, heights())?);
     // The grid emitted the counter `N / M` on row 0. On the sheet it does not exist.
     if sheet.iter().any(|(_, _, t)| t.contains(" / ")) {
-        bail!("a ficha ainda tem o contador da grade — ela nao SUBSTITUIU o conteudo");
+        bail!("the sheet still has the grid's counter — it did not REPLACE the content");
     }
     if !sheet.iter().any(|(_, _, t)| t == &chosen) {
-        bail!("a ficha nao traz o nome do glifo escolhido (`{chosen}`)");
+        bail!("the sheet does not carry the chosen glyph's name (`{chosen}`)");
     }
-    println!("ficha     abriu         -> {chosen}");
+    println!("sheet     opened        -> {chosen}");
 
     // ---- and it brings what was asked for: identity, use and the nine formats ----
     let everything: String = sheet
@@ -1054,7 +1056,7 @@ fn main() -> Result<()> {
         .join("\n");
     for expected in ["U+", "codicons"] {
         if !everything.contains(expected) {
-            bail!("a ficha nao mostra `{expected}`:\n{everything}");
+            bail!("the sheet does not show `{expected}`:\n{everything}");
         }
     }
     // The VALUES of each format, and not only the labels: a label with no value
@@ -1071,17 +1073,17 @@ fn main() -> Result<()> {
             } => s.chars().next(),
             _ => None,
         })
-        .context("a ficha nao emitiu o glifo grande na linha 0")?;
+        .context("the sheet did not emit the big glyph on line 0")?;
     for expected in [
         format!("U+{:04X}", target as u32),
         format!("nf nf-{chosen}"),
         format!("\\u{{{:x}}}", target as u32),
     ] {
         if !everything.contains(&expected) {
-            bail!("a ficha nao traz o valor `{expected}`:\n{everything}");
+            bail!("the sheet does not carry the value `{expected}`:\n{everything}");
         }
     }
-    println!("ficha     valores       -> codepoint, classe CSS e escape");
+    println!("sheet     values        -> codepoint, CSS class and escape");
 
     // ---- down + Enter copies the SECOND option, and not the first ----
     //
@@ -1095,42 +1097,42 @@ fn main() -> Result<()> {
             ronoctua_protocol::Effect::Copy(s) => Some(s.clone()),
             _ => None,
         })
-        .context("Enter na ficha nao pediu Copiar")?;
+        .context("Enter on the sheet did not ask for Copy")?;
     if copied != target.to_string() {
-        bail!("a segunda opcao devia copiar o GLIFO (`{target}`), e copiou `{copied}`");
+        bail!("the second option should copy the GLYPH (`{target}`), and it copied `{copied}`");
     }
-    println!("ficha     baixo+enter   -> copiou o glifo, e nao o nome");
+    println!("sheet     down+enter    -> copied the glyph, and not the name");
 
     // ---- the arrows switch GLYPH without leaving the sheet ----
     inst.event(&Input::Right)?;
-    let vizinha = texts_of(&inst.render(80, ROWS, heights())?);
-    if vizinha.iter().any(|(_, _, t)| t == &chosen) {
-        bail!("`->` nao trocou o glifo da ficha");
+    let neighbour = texts_of(&inst.render(80, ROWS, heights())?);
+    if neighbour.iter().any(|(_, _, t)| t == &chosen) {
+        bail!("`->` did not change the sheet's glyph");
     }
-    if vizinha.iter().any(|(_, _, t)| t.contains(" / ")) {
-        bail!("`->` saiu da ficha e voltou para a grade");
+    if neighbour.iter().any(|(_, _, t)| t.contains(" / ")) {
+        bail!("`->` left the sheet and went back to the grid");
     }
     inst.event(&Input::Left)?;
-    println!("ficha     setas         -> troca de glifo sem sair");
+    println!("sheet     arrows        -> changes glyph without leaving");
 
     // ---- Esc goes back, and the search and the cursor stay where they were ----
     inst.event(&Input::Cancel)?;
     let after = read(&inst.render(80, ROWS, heights())?)?;
     if after.focus != before.focus {
         bail!(
-            "voltar mudou o glifo em foco: {:?} -> {:?}",
+            "going back changed the focused glyph: {:?} -> {:?}",
             before.focus,
             after.focus
         );
     }
     if after.total_filtered != before.total_filtered {
         bail!(
-            "voltar mudou a busca: {} -> {}",
+            "going back changed the search: {} -> {}",
             before.total_filtered,
             after.total_filtered
         );
     }
-    println!("ficha     esc           -> voltou com a busca e o cursor intactos");
+    println!("sheet     esc           -> came back with the search and cursor intact");
 
     // ---- THE GLYPH FITS THE RESERVED SPACE, and slack is left over ----
     //
@@ -1148,8 +1150,8 @@ fn main() -> Result<()> {
     clear(&mut inst)?;
     inst.event(&Input::Confirm)?;
     let a = heights();
-    let lista_da_ficha = inst.render(80, ROWS, a)?;
-    let glyph = lista_da_ficha
+    let sheet_list = inst.render(80, ROWS, a)?;
+    let glyph = sheet_list
         .commands
         .iter()
         .find_map(|c| match c {
@@ -1160,9 +1162,9 @@ fn main() -> Result<()> {
             } => Some(*line),
             _ => None,
         })
-        .context("a ficha nao emitiu o glifo na escala Enorme")?;
+        .context("the sheet did not emit the glyph at the Huge scale")?;
     // The FIRST thing drawn below the glyph — a rule or text.
-    let abaixo = lista_da_ficha
+    let below = sheet_list
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -1177,8 +1179,8 @@ fn main() -> Result<()> {
             _ => None,
         })
         .min()
-        .context("a ficha nao desenhou nada abaixo do glifo")?;
-    let gap = abaixo - glyph;
+        .context("the sheet drew nothing below the glyph")?;
+    let gap = below - glyph;
     // THE BOX, and not one cell beyond it.
     //
     // The box already carries the air: `1.45 at` of box against `0.60 at` of ink
@@ -1187,27 +1189,27 @@ fn main() -> Result<()> {
     // glyph as above it, and that is what the owner saw as disproportion.
     if gap < a.huge {
         bail!(
-            "o glifo comeca na linha {glyph} e a proxima coisa vem na {abaixo}: {gap} celulas.\n\
-             A caixa da escala `enorme` ocupa {} — ele vai sair CORTADO por baixo.",
+            "the glyph starts on line {glyph} and the next thing comes on {below}: {gap} cells.\n\
+             The `huge` scale's box takes {} — it will come out CUT underneath.",
             a.huge
         );
     }
     if gap > a.huge {
         bail!(
-            "o glifo ocupa {} celulas e a proxima coisa so vem {gap} depois: sobra branco\n\
-             embaixo dele. O ar entre blocos ja vem na caixa da linha.",
+            "the glyph takes {} cells and the next thing only comes {gap} later: blank space is left\n\
+             below it. The air between blocks already comes in the line's box.",
             a.huge
         );
     }
     println!(
-        "ficha     folga do glifo -> {gap} celulas para uma escala de {}",
+        "sheet     glyph air     -> {gap} cells for a scale of {}",
         a.huge
     );
 
     // ---- in a SHORT window the glyph does not use the Huge scale ----
     inst.event(&Input::Confirm)?;
     let low = inst.render(80, 8, heights())?;
-    let enormes = low
+    let huge = low
         .commands
         .iter()
         .filter(|c| {
@@ -1220,11 +1222,11 @@ fn main() -> Result<()> {
             )
         })
         .count();
-    if enormes != 0 {
-        bail!("numa janela de 8 linhas o glifo ainda pediu a escala Enorme");
+    if huge != 0 {
+        bail!("in an 8-line window the glyph still asked for the Huge scale");
     }
     inst.event(&Input::Cancel)?;
-    println!("ficha     janela baixa  -> o glifo cede a escala");
+    println!("sheet     short window  -> the glyph gives up its scale");
 
     // ---- EVERY SHEET LABEL FITS THE BUDGET, in both languages ----
     //
@@ -1241,51 +1243,52 @@ fn main() -> Result<()> {
     inst.event(&Input::Confirm)?;
     let keys = keys_of(&inst.render(80, ROWS, heights())?);
     if keys.is_empty() {
-        bail!(
-            "a ficha nao emitiu nenhuma chave de texto — o invariante 8 exige que os rotulos sejam chave"
-        );
+        bail!("the sheet emitted no text key — invariant 8 requires the labels to be keys");
     }
     for language in ["pt-BR", "en-GB"] {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in &keys {
             let Some(text) = table.get(key) else {
-                bail!("a chave `{key}` da ficha nao existe em {language}.ftl");
+                bail!("the sheet's key `{key}` does not exist in {language}.ftl");
             };
             let fits = usize::from(*budget);
             if text.chars().count() > fits {
                 bail!(
-                    "em {language}, o rotulo `{key}` = {text:?} tem {} celulas e o buffer\n\
-                     reservou {fits}. Ele vai sair CORTADO em qualquer janela.",
+                    "in {language}, the label `{key}` = {text:?} is {} cells and the buffer\n\
+                     reserved {fits}. It will come out CUT in any window.",
                     text.chars().count()
                 );
             }
         }
-        println!("rotulos   {language:8}      -> os {} cabem", keys.len());
+        println!("labels    {language:8}      -> the {} fit", keys.len());
     }
 
     // ---- COPYING GIVES FEEDBACK ON SCREEN ----
     //
     // Without this, pressing Enter on an option did not change a pixel: there was no way
     // to tell "it copied" from "the key never even arrived".
-    let antes_do_aviso = texts_of(&inst.render(80, ROWS, heights())?).len();
+    let before_the_notice = texts_of(&inst.render(80, ROWS, heights())?).len();
     inst.event(&Input::Confirm)?;
     // The host answers with the verdict; here we simulate both.
     if inst.event(&Input::Copied(true))?.is_empty() {
-        bail!("o veredito da copia nao pediu redesenho — a ficha nao mostra nada");
+        bail!("the copy's verdict asked for no redraw — the sheet shows nothing");
     }
-    let com_aviso = keys_of(&inst.render(80, ROWS, heights())?);
-    if !com_aviso.iter().any(|(k, _)| k == "glyphs-sheet-copied") {
-        bail!("depois de copiar, a ficha nao mostra a confirmacao");
+    let with_notice = keys_of(&inst.render(80, ROWS, heights())?);
+    if !with_notice.iter().any(|(k, _)| k == "glyphs-sheet-copied") {
+        bail!("after copying, the sheet does not show the confirmation");
     }
     // AND THE NOTICE GOES AWAY on the next key: a "copied" that stays becomes decoration, and
     // on the next copy nobody knows whether it is new or old.
     inst.event(&Input::Down)?;
-    let sem_aviso = keys_of(&inst.render(80, ROWS, heights())?);
-    if sem_aviso.iter().any(|(k, _)| k == "glyphs-sheet-copied") {
-        bail!("o aviso de copia ficou na tela depois da tecla seguinte");
+    let without_notice = keys_of(&inst.render(80, ROWS, heights())?);
+    if without_notice
+        .iter()
+        .any(|(k, _)| k == "glyphs-sheet-copied")
+    {
+        bail!("the copy notice stayed on screen after the next key");
     }
-    let _ = antes_do_aviso;
-    println!("ficha     feedback      -> confirma, e sai na tecla seguinte");
+    let _ = before_the_notice;
+    println!("sheet     feedback      -> confirms, and goes on the next key");
 
     // AND THE FAILURE SHOWS UP, with a different face. Copying silently and not copying
     // silently are indistinguishable — that is how the copy went months without
@@ -1293,15 +1296,15 @@ fn main() -> Result<()> {
     inst.event(&Input::Copied(false))?;
     let failed = keys_of(&inst.render(80, ROWS, heights())?);
     if !failed.iter().any(|(k, _)| k == "glyphs-sheet-copy-failed") {
-        bail!("a ficha nao mostra nada quando a copia FALHA");
+        bail!("the sheet shows nothing when the copy FAILS");
     }
-    println!("ficha     falha         -> aparece, e diferente do sucesso");
+    println!("sheet     failure       -> shows, and differs from success");
 
     // ---- PASTING GOES INTO THE SEARCH ----
     inst.event(&Input::Cancel)?;
     clear(&mut inst)?;
     if inst.event(&Input::Paste("folder".into()))?.is_empty() {
-        bail!("colar nao pediu redesenho — o texto nao entrou na busca");
+        bail!("pasting asked for no redraw — the text did not reach the search");
     }
     let pasted = read(&inst.render(80, ROWS, heights())?)?;
     let only_folder = query(&mut inst, "folder")?;
@@ -1312,7 +1315,7 @@ fn main() -> Result<()> {
             only_folder.total_filtered
         );
     }
-    println!("colar     `folder`      -> mesma busca de quem digita");
+    println!("paste     `folder`      -> the same search as typing it");
 
     // ---- PASTING THE GLYPH ITSELF FINDS THE GLYPH ----
     //
@@ -1327,7 +1330,7 @@ fn main() -> Result<()> {
     query(&mut inst, "cod-location")?;
     let expected = read(&inst.render(80, ROWS, heights())?)?
         .focus
-        .context("sem glifo em foco para copiar")?;
+        .context("no glyph in focus to copy")?;
     inst.event(&Input::Confirm)?; // opens the sheet
     inst.event(&Input::Down)?; // the second option is the GLYPH
     let copied = inst
@@ -1337,39 +1340,44 @@ fn main() -> Result<()> {
             ronoctua_protocol::Effect::Copy(s) => Some(s.clone()),
             _ => None,
         })
-        .context("copiar o glifo nao pediu Copiar")?;
+        .context("copying the glyph did not ask for Copy")?;
     inst.event(&Input::Cancel)?;
 
     clear(&mut inst)?;
     inst.event(&Input::Paste(copied.clone()))?;
-    let achado = read(&inst.render(80, ROWS, heights())?)?;
-    if achado.total_filtered == 0 {
-        bail!("colar o glifo `{copied}` nao achou nada");
+    let found_at = read(&inst.render(80, ROWS, heights())?)?;
+    if found_at.total_filtered == 0 {
+        bail!("pasting the glyph `{copied}` found nothing");
     }
-    let focus = achado
+    let focus = found_at
         .focus
-        .context("colar o glifo nao deixou nada em foco")?;
+        .context("pasting the glyph left nothing in focus")?;
     if focus != expected {
-        bail!("colar o glifo `{copied}` achou `{focus}`, e ele e o `{expected}`");
+        bail!("pasting the glyph `{copied}` found `{focus}`, and it is the `{expected}`");
     }
     println!(
-        "colar     o glifo       -> {focus} (de {} resultados)",
-        achado.total_filtered
+        "paste     the glyph     -> {focus} (of {} results)",
+        found_at.total_filtered
     );
 
     // AND IT COMES FIRST, even pasted in the middle of other text: whoever pastes
     // drags whitespace along, and the question is still the glyph.
     clear(&mut inst)?;
     inst.event(&Input::Paste(format!(" {copied} ")))?;
-    let sujo = read(&inst.render(80, ROWS, heights())?)?;
-    if sujo.focus.as_deref() != Some(expected.as_str()) {
-        bail!("colar o glifo com espacos em volta achou {:?}", sujo.focus);
+    let dirty = read(&inst.render(80, ROWS, heights())?)?;
+    if dirty.focus.as_deref() != Some(expected.as_str()) {
+        bail!(
+            "pasting the glyph with spaces around it found {:?}",
+            dirty.focus
+        );
     }
     println!("colar     com espacos   -> {expected}");
 
-    println!("OK: os cinco filtros da secao 6.5 restringem, o estado persiste,");
-    println!("    o clique acerta, a busca por tag funciona nos dois idiomas,");
-    println!("    a ficha abre, copia, avisa, navega e volta, e colar o glifo o acha");
+    println!("OK: the five filters of section 6.5 narrow, the state persists,");
+    println!("    the click lands, search by tag works in both languages,");
+    println!(
+        "    the sheet opens, copies, warns, navigates and returns, and pasting the glyph finds it"
+    );
     Ok(())
 }
 
@@ -1450,7 +1458,7 @@ fn drawn_focus(list: &ronoctua_protocol::DisplayList) -> Option<(u16, u16)> {
 /// a test would be bringing a dependency to answer what a `split_once`
 /// answers.
 fn ftl(path: &str) -> Result<std::collections::HashMap<String, String>> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("nao consegui ler {path}"))?;
+    let raw = std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))?;
     Ok(raw
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))

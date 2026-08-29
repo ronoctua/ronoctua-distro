@@ -43,10 +43,10 @@ let
     home = pathlib.Path("/var/lib/ronoctua-browser")
     crx = (home / "ronoctua.crx").read_bytes()
     if crx[:4] != b"Cr24":
-        sys.exit("ERRO: o .crx nao comeca com Cr24")
+        sys.exit("ERROR: the .crx does not start with Cr24")
     version, header_len = struct.unpack("<II", crx[4:12])
     if version != 3:
-        sys.exit(f"ERRO: CRX versao {version}, e o Chrome atual so le a 3")
+        sys.exit(f"ERROR: CRX version {version}, and the current Chrome only reads 3")
     header, payload = crx[12 : 12 + header_len], crx[12 + header_len :]
 
     def fields(buf):
@@ -58,7 +58,7 @@ let
                 key |= (b & 0x7F) << shift; shift += 7
                 if not b & 0x80: break
             if key & 7 != 2:
-                sys.exit("ERRO: campo protobuf que nao e delimitado por tamanho")
+                sys.exit("ERROR: a protobuf field that is not length-delimited")
             size = shift = 0
             while True:
                 b = buf[i]; i += 1
@@ -78,16 +78,16 @@ let
 
     written = (home / "id").read_text().strip()
     if written != derived:
-        sys.exit(f"ERRO: o id gravado ({written}) nao e o da chave ({derived})")
+        sys.exit(f"ERROR: the id written ({written}) is not the key's ({derived})")
 
     policy = json.loads(
         pathlib.Path("/etc/opt/chrome/policies/managed/ronoctua.json").read_text()
     )
     settings = policy["ExtensionSettings"]
     if list(settings) != [derived]:
-        sys.exit(f"ERRO: a politica nomeia {list(settings)} e nao {derived}")
+        sys.exit(f"ERROR: the policy names {list(settings)} and not {derived}")
     if settings[derived]["installation_mode"] != "force_installed":
-        sys.exit("ERRO: a politica nao forca a instalacao")
+        sys.exit("ERROR: the policy does not force the installation")
 
     host = json.loads(
         pathlib.Path(
@@ -96,9 +96,9 @@ let
     )
     origins = host["allowed_origins"]
     if origins != [f"chrome-extension://{derived}/"]:
-        sys.exit(f"ERRO: o host aceita {origins}, e nao so a nossa extensao")
+        sys.exit(f"ERROR: the host accepts {origins}, and not our extension alone")
     if not pathlib.Path(host["path"]).is_file():
-        sys.exit(f"ERRO: o host aponta para {host['path']}, que nao existe")
+        sys.exit(f"ERROR: the host points at {host['path']}, which does not exist")
 
     # AND THE SIGNATURE, over exactly the bytes Chrome covers.
     blob = (
@@ -121,9 +121,9 @@ let
         capture_output=True,
     )
     if done.returncode != 0:
-        sys.exit("ERRO: a assinatura do .crx NAO confere do jeito que o Chrome confere")
+        sys.exit("ERROR: the .crx's signature does NOT check out the way Chrome checks it")
 
-    print(f"OK: {derived}, assinatura confere, e os tres lugares concordam")
+    print(f"OK: {derived}, the signature checks out, and all three places agree")
   '';
 in
 pkgs.testers.runNixOSTest {
@@ -143,7 +143,7 @@ pkgs.testers.runNixOSTest {
           options.ronoctua.browser.enable = lib.mkOption {
             type = lib.types.bool;
             default = true;
-            description = "O navegador — aqui so a chave que o modulo le.";
+            description = "The browser — here only the key the module reads.";
           };
         }
       )
@@ -176,9 +176,9 @@ pkgs.testers.runNixOSTest {
     # 1. THE KEY, and its permissions.
     machine.succeed("test -f /var/lib/ronoctua-browser/key.pem")
     perms = machine.succeed("stat -c '%a %U' /var/lib/ronoctua-browser/key.pem").strip()
-    assert perms == "600 root", f"a chave esta {perms}, e devia ser 600 root"
+    assert perms == "600 root", f"the key is {perms}, and should be 600 root"
     home = machine.succeed("stat -c '%a' /var/lib/ronoctua-browser").strip()
-    assert home == "700", f"o diretorio esta {home}, e devia ser 700"
+    assert home == "700", f"the directory is {home}, and should be 700"
 
     # 2. EVERYTHING AGREES, and the signature is the one Chrome checks.
     print(machine.succeed("python3 ${verify}"))
@@ -190,7 +190,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl restart ronoctua-browser-extension.service")
     machine.wait_for_unit("ronoctua-browser-extension.service")
     after = machine.succeed("cat /var/lib/ronoctua-browser/id").strip()
-    assert before == after, f"o id mudou entre execucoes: {before} -> {after}"
+    assert before == after, f"the id changed between runs: {before} -> {after}"
     print(machine.succeed("python3 ${verify}"))
 
     # 4. AND THE HOST BINARY ANSWERS Chrome's framing.
@@ -210,7 +210,7 @@ pkgs.testers.runNixOSTest {
         "size = struct.unpack('<I', out[:4])[0]\n"
         "answer = json.loads(out[4:4 + size])\n"
         "assert answer.get('ok') is True, answer\n"
-        "print('OK: o host responde ao enquadramento do Chrome')\n"
+        "print('OK: the host answers the Chrome framing')\n"
         "PY"
     )
   '';

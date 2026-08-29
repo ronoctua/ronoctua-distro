@@ -8,11 +8,11 @@ use std::path::PathBuf;
 
 fn main() {
     let dir = std::env::var("RONOCTUA_I18N_DIR").expect(
-        "RONOCTUA_I18N_DIR nao esta definida.\n\
+        "RONOCTUA_I18N_DIR is not set.\n\
          \n\
-         Ela sai de `nix/i18n.nix`. Compilar este crate fora do devshell ou\n\
-         do crane nao funciona, e nao deve: o registro de chaves e gerado\n\
-         pelo Nix a partir de `assets/i18n/*.ftl`.",
+         It comes out of `nix/i18n.nix`. Compiling this crate outside the devshell or\n\
+         crane does not work, and should not: the key registry is generated\n\
+         by Nix out of `assets/i18n/*.ftl`.",
     );
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let origin = PathBuf::from(&dir).join("keys.rs");
@@ -26,11 +26,11 @@ fn main() {
     // permission. `write` on its own does not solve it either: it does not change the mode of
     // a file that already exists.
     let content = std::fs::read(&origin)
-        .unwrap_or_else(|e| panic!("nao consegui ler {}: {e}", origin.display()));
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", origin.display()));
     let destination = out.join("keys.rs");
     let _ = std::fs::remove_file(&destination);
     std::fs::write(&destination, content)
-        .unwrap_or_else(|e| panic!("nao consegui escrever {}: {e}", destination.display()));
+        .unwrap_or_else(|e| panic!("could not write {}: {e}", destination.display()));
     println!("cargo::rerun-if-env-changed=RONOCTUA_I18N_DIR");
     println!("cargo::rerun-if-changed={dir}");
 }

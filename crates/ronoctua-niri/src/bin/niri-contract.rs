@@ -26,72 +26,75 @@ const EVENT_CEILING: usize = 40;
 fn main() -> Result<()> {
     let path: PathBuf = std::env::args_os()
         .nth(1)
-        .context("uso: niri-contract <caminho-do-socket>")?
+        .context("usage: niri-contract <socket-path>")?
         .into();
 
     let mut niri = Niri::connect_at(&path)?;
 
     // 1. Version. It serves as proof of life and goes into the log, so diagnostics
     //    can say WHICH niri the contract failed against.
-    let version = niri.version().context("`Version` nao respondeu")?;
+    let version = niri.version().context("`Version` did not answer")?;
     println!("niri: {version}");
 
     // 2. `Windows` has to deserialise into `Window`. This is where a removed
     //    or renamed field shows up.
     let windows = niri
         .windows()
-        .context("`Windows` nao casa mais com `Janela` — o contrato quebrou")?;
-    println!("janelas: {}", windows.len());
+        .context("`Windows` no longer matches `Window` — the contract broke")?;
+    println!("windows: {}", windows.len());
 
     // 3. `FocusedWindow` answers, including with zero windows open. With no
     //    window at all the correct answer is `None`, not an error — and that is exactly the
     //    state the compositor starts in.
     let focused = niri
         .focused_window()
-        .context("`FocusedWindow` nao casa mais com `Option<Janela>`")?;
-    println!("focada: {:?}", focused.as_ref().map(|j| j.id));
+        .context("`FocusedWindow` no longer matches `Option<Window>`")?;
+    println!("focused: {:?}", focused.as_ref().map(|j| j.id));
 
     // 4. The layer-shell surfaces. With the footer running, ours shows up
     //    here — and it is what separates "the compositor does not see it" from "it sees it and does not paint it".
     let layers = niri
         .layers()
-        .context("`Layers` nao casa mais com o esperado")?;
-    println!("camadas: {layers:?}");
+        .context("`Layers` no longer matches what is expected")?;
+    println!("layers: {layers:?}");
 
     // 5. The event stream. It is what the modeline lives on.
     let mut events = niri
         .event_stream()
-        .context("`EventStream` nao foi aceito")?;
+        .context("`EventStream` was not accepted")?;
 
     let mut state = State::default();
-    let mut viu_janelas = false;
-    let mut lidos = 0usize;
+    let mut saw_windows = false;
+    let mut read_lines = 0usize;
 
-    while lidos < EVENT_CEILING {
+    while read_lines < EVENT_CEILING {
         let Some(event) = events.next_one()? else {
-            bail!("o niri fechou o fluxo depois de {lidos} eventos");
+            bail!("niri closed the stream after {read_lines} events");
         };
-        lidos += 1;
+        read_lines += 1;
         if matches!(event, Event::WindowsChanged(_)) {
-            viu_janelas = true;
+            saw_windows = true;
         }
         state.apply_to(&event);
         // The complete state comes out first; stopping at the first one that matters
         // avoids blocking on an event that would only come with interaction.
-        if viu_janelas {
+        if saw_windows {
             break;
         }
     }
 
-    if !viu_janelas {
+    if !saw_windows {
         bail!(
-            "nao veio `WindowsChanged` nos primeiros {lidos} eventos.\n\
+            "no `WindowsChanged` came in the first {read_lines} events.\n\
              \n\
-             A documentacao do niri promete o estado completo de saida. Se\n\
-             isso mudou, o daemon precisa pedir `Windows` explicitamente."
+             niri's documentation promises the complete state on output. If\n\
+             that changed, the daemon has to ask for `Windows` explicitly."
         );
     }
 
-    println!("contrato OK: {lidos} eventos, {} janelas", state.amount());
+    println!(
+        "contract OK: {read_lines} events, {} windows",
+        state.amount()
+    );
     Ok(())
 }

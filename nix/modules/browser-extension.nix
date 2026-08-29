@@ -113,7 +113,7 @@ let
       cat > /etc/opt/chrome/native-messaging-hosts/${host}.json <<JSON
       {
         "name": "${host}",
-        "description": "A fila de transferencias da ronoctua",
+        "description": "ronoctua's transfer queue",
         "path": "${ronoctua.transfers}/bin/ronoctua-transfers",
         "type": "stdio",
         "allowed_origins": ["chrome-extension://$id/"]
@@ -126,7 +126,7 @@ in
 {
   config = lib.mkIf cfg.enable {
     systemd.services.ronoctua-browser-extension = {
-      description = "ronoctua — empacota e declara a extensão do navegador";
+      description = "ronoctua — packages and declares the browser extension";
       wantedBy = [ "multi-user.target" ];
       # BEFORE ANYBODY LOGS IN: Chrome reads the policy at start-up, so a policy
       # written after the browser is already running takes effect on the next

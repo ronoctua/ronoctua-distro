@@ -51,55 +51,122 @@ in
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_SWAPPY =
     lib.mkIf config.ronoctua.media.enable "${pkgs.swappy}/bin/swappy";
 
+  # ===================================================================
+  # THE DECODERS ARE NOT UNDER THE SWITCH — the owner's decision
+  # ===================================================================
+  #
+  # `ffmpeg-full`, `exiftool` and `poppler-utils` are installed on EVERY
+  # profile. They were under `ronoctua.media.enable`, which
+  # `nix/modules/profile.nix` makes `full`-only, and the consequence was that a
+  # reduced install could not preview a video, a phone photo or a RAW file, and
+  # could not say what a file's metadata was. The owner asked for `ffmpeg-full`
+  # and complete format support, and removed the ISO ceiling that was the one
+  # argument on the other side.
+  #
+  # WHY THESE THREE AND NOT THE WHOLE LIST. This is format support, not
+  # applications. `ffmpeg` decodes HEIC, AVIF, WebP, every RAW the file
+  # manager will meet and every video container, and it does it in one
+  # program — measured on this machine: a phone HEIC in 0,09 s, a 17 MB DNG in
+  # 0,21 s, a frame out of a 355 MB mp4 in 0,17 s. `imagemagick` is NOT here
+  # and that is a measurement too: `magick` DUMPED CORE on the same DNG. A
+  # second converter would be a second failure mode for formats the first one
+  # already reads.
+  #
+  # The players — mpv, VLC, the GStreamer plugins — stay behind the switch.
+  # They are what one installs to USE, and that is the line `profile.nix`
+  # already draws.
+
+  # WHERE THOSE PROGRAMS ARE, for the file manager's preview and info panels.
+  #
+  # From the ENVIRONMENT and not baked in with `option_env!`, for the reason
+  # written over `RONOCTUA_SWAPPY` above and measured twice in this repository:
+  # a store path compiled in is a reference the closure carries whether it is
+  # used or not. It matters here even though these are now unconditional,
+  # because `ronoctua-files` also builds the binary that runs as ROOT, and that
+  # closure must not learn about video.
+  #
+  # NOT under `mkIf`: they are installed on every profile now, and a variable
+  # that pointed at a program only sometimes would put the honest-refusal path
+  # on the everyday route instead of where it belongs — a broken environment.
+  #
+  # BOTH PLACES, for the reason written above: `sessionVariables` reaches a
+  # login shell, and the footer is a systemd USER UNIT, which inherits the
+  # manager's environment rather than the shell's.
+  config.environment.sessionVariables.RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
+  config.environment.sessionVariables.RONOCTUA_FFPROBE = "${pkgs.ffmpeg-full}/bin/ffprobe";
+  config.environment.sessionVariables.RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
+  config.environment.sessionVariables.RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
+  config.environment.sessionVariables.RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_FFMPEG =
+    "${pkgs.ffmpeg-full}/bin/ffmpeg";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_FFPROBE =
+    "${pkgs.ffmpeg-full}/bin/ffprobe";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_EXIFTOOL =
+    "${pkgs.exiftool}/bin/exiftool";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_PDFTOPPM =
+    "${pkgs.poppler-utils}/bin/pdftoppm";
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_PDFINFO =
+    "${pkgs.poppler-utils}/bin/pdfinfo";
+
   # THE VA-API DRIVERS ARE NOT UNDER THE SWITCH, at the bottom of the file: they
   # are hardware enablement and not an application. A reduced machine has the
   # same GPU, and the compositor decodes with them.
-  config.environment.systemPackages = lib.mkIf config.ronoctua.media.enable (
+  # ONE definition, two halves — `mkMerge` and not two bindings, because an
+  # attribute may only be written once in an attrset.
+  #
+  # The first half is unconditional (the decoders, argued above). The second is
+  # the players and the rest, under the switch: `ffmpeg-full`, `exiftool` and
+  # `poppler-utils` are NOT in it any more.
+  config.environment.systemPackages = lib.mkMerge [
     (with pkgs; [
-      # ---- conversion ----
       ffmpeg-full
-      imagemagick
-      sox
-      yt-dlp
-
-      # ---- players ----
-      mpv # the everyday one: one binary, keyboard-driven
-      vlc # the one that opens what mpv refuses
-
-      # ---- images ----
-      # THE SCREENSHOT'S EDITOR, and the reason it is HERE and not in
-      # `base.nix`: the notification the compositor raises after a capture
-      # offers to edit it, and `swappy` is what that action starts. It is
-      # Wayland-native, a few MiB, and it is the whole of the "edit" the owner
-      # asked for.
-      #
-      # Under the `media` switch, so a minimal install simply does not offer
-      # the action — see `usable_actions` in the shell: an action whose program
-      # is missing DISAPPEARS from the notification rather than failing when
-      # clicked.
-      swappy
-      libwebp
-      libavif
-      libheif # what a phone photo actually is
       exiftool
-      oxipng
-
-      # ---- documents ----
-      poppler-utils # pdftotext, pdfimages
-      ghostscript
-
-      # ---- audio, the session's own ----
-      pavucontrol
-      crosspipe # the PipeWire patchbay (helvum was removed upstream)
-      playerctl # MPRIS: what a media key talks to
-      alsa-utils
-
-      # `vainfo` is how one finds out whether hardware decoding actually took.
-      libva-utils
+      poppler-utils # pdftoppm and pdfinfo — a page as a picture, and a page count
     ])
-    ++ [ pkgs.gst_all_1.gstreamer ]
-    ++ gstPlugins
-  );
+    (lib.mkIf config.ronoctua.media.enable (
+      (with pkgs; [
+        # ---- conversion ----
+        imagemagick
+        sox
+        yt-dlp
+
+        # ---- players ----
+        mpv # the everyday one: one binary, keyboard-driven
+        vlc # the one that opens what mpv refuses
+
+        # ---- images ----
+        # THE SCREENSHOT'S EDITOR, and the reason it is HERE and not in
+        # `base.nix`: the notification the compositor raises after a capture
+        # offers to edit it, and `swappy` is what that action starts. It is
+        # Wayland-native, a few MiB, and it is the whole of the "edit" the owner
+        # asked for.
+        #
+        # Under the `media` switch, so a minimal install simply does not offer
+        # the action — see `usable_actions` in the shell: an action whose program
+        # is missing DISAPPEARS from the notification rather than failing when
+        # clicked.
+        swappy
+        libwebp
+        libavif
+        libheif # what a phone photo actually is
+        oxipng
+
+        # ---- documents ----
+        ghostscript
+
+        # ---- audio, the session's own ----
+        pavucontrol
+        crosspipe # the PipeWire patchbay (helvum was removed upstream)
+        playerctl # MPRIS: what a media key talks to
+        alsa-utils
+
+        # `vainfo` is how one finds out whether hardware decoding actually took.
+        libva-utils
+      ])
+      ++ [ pkgs.gst_all_1.gstreamer ]
+      ++ gstPlugins
+    ))
+  ];
 
   # THE PLUGIN PATH, EXPLICITLY.
   #

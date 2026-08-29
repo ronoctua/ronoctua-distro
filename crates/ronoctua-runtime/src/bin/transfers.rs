@@ -48,7 +48,7 @@ fn job(id: u64, engine: Engine, errand: Errand, stage: Stage, done: u64, total: 
         amount: Amount::Bytes,
         done,
         total,
-        subject: format!("arquivo-{id}.bin"),
+        subject: format!("file-{id}.bin"),
         trouble: String::new(),
         answer: 0,
         // The one row that went out as the person, so the detail screen has
@@ -142,10 +142,10 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
             inst.render(columns, ROWS, heights())?
         };
         if let Err(e) = at.nothing_overlaps(heights(), columns) {
-            bail!("em {columns} colunas, {e}");
+            bail!("at {columns} columns, {e}");
         }
         if let Err(e) = at.nothing_is_covered(heights(), columns) {
-            bail!("em {columns} colunas, {e}");
+            bail!("at {columns} columns, {e}");
         }
     }
     Ok(Screen::of(&list))
@@ -159,11 +159,11 @@ fn run(inst: &mut ronoctua_runtime::Instance, id: &str) -> Result<Vec<Effect>> {
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-test-transfers <componente.wasm> <dir-i18n>")?;
+        .context("usage: ronoctua-test-transfers <component.wasm> <i18n-dir>")?;
     let i18n = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-test-transfers <componente.wasm> <dir-i18n>")?;
-    let wasm = std::fs::read(&path).with_context(|| format!("nao consegui ler {path}"))?;
+        .context("usage: ronoctua-test-transfers <component.wasm> <i18n-dir>")?;
+    let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
 
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
@@ -173,13 +173,15 @@ fn main() -> Result<()> {
     // ---- THE DESCRIPTOR ----
     let d = inst.init()?;
     if d.mode != "transfers" {
-        bail!("o modo do buffer e `{}`; a modeline mostra isso", d.mode);
+        bail!("the buffer's mode is `{}`; the modeline shows that", d.mode);
     }
     if !d
         .capabilities
         .contains(&ronoctua_protocol::Capability::Transfers)
     {
-        bail!("a janela nao declara `transfers`: o host nunca assinaria a fila");
+        bail!(
+            "the window does not declare `transfers`: the host would never subscribe it to the queue"
+        );
     }
     // AND IT DOES NOT DECLARE `system`. Two capabilities in one buffer would
     // give a queue viewer the right to close processes and sweep the store —
@@ -187,27 +189,27 @@ fn main() -> Result<()> {
     if d.capabilities
         .contains(&ronoctua_protocol::Capability::System)
     {
-        bail!("a janela pede `system`, que ela nao usa: seriam poderes de graca");
+        bail!("the window asks for `system`, which it does not use: that would be powers for free");
     }
     for id in &d.commands {
         if !d.keymap.iter().any(|l| l.command == *id) {
-            bail!("`{id}` nao tem tecla: ninguem o alcanca pelo which-key");
+            bail!("`{id}` has no key: nobody reaches it through which-key");
         }
     }
     if let Err(e) = d.validate() {
-        bail!("o descritor nao passa na guarda da secao 7.9: {e}");
+        bail!("the descriptor does not pass the section 7.9 guard: {e}");
     }
     for language in ["pt-BR", "en-GB"] {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for id in &d.commands {
             let key = format!("cmd-{id}");
             if !table.contains(&key) {
-                bail!("falta `{key}` em {language}.ftl — o SPC m mostraria [{key}]");
+                bail!("`{key}` is missing from {language}.ftl — SPC m would show [{key}]");
             }
         }
     }
     println!(
-        "descritor: modo `{}`, {} comandos com tecla, e so a capacidade que usa",
+        "descriptor: mode `{}`, {} commands with a key, and only the capability it uses",
         d.mode,
         d.commands.len()
     );
@@ -215,10 +217,10 @@ fn main() -> Result<()> {
     // ---- BEFORE THE QUEUE: no numbers ----
     let empty = look(&mut inst)?;
     if empty.shows("GiB") {
-        bail!("a janela desenhou tamanho antes de receber fila alguma");
+        bail!("the window drew a size before taking any queue at all");
     }
     if !empty.names("transfers-window-empty") {
-        bail!("a janela vazia nao diz que esta vazia");
+        bail!("the empty window does not say it is empty");
     }
 
     // ---- THE QUEUE CROSSES, RECORD BY RECORD ----
@@ -233,22 +235,19 @@ fn main() -> Result<()> {
         "transfers-work-media",
     ] {
         if !full.names(k) {
-            bail!("a fila nao mostrou `{k}`: um campo do record cruzou trocado");
+            bail!("the queue did not show `{k}`: a field of the record crossed over swapped");
         }
     }
     if !full.shows("1.0 GiB") || !full.shows("4.0 GiB") {
-        bail!(
-            "os numeros da primeira linha nao apareceram: {:?}",
-            full.data
-        );
+        bail!("the first row's numbers did not show up: {:?}", full.data);
     }
     // The bar is drawn with glyphs from tokens, one command per cell, plus the
     // stage and engine drawings on every row.
     if full.icons < 12 {
-        bail!("a barra nao foi desenhada: {} icones", full.icons);
+        bail!("the bar was not drawn: {} icons", full.icons);
     }
     println!(
-        "fila: tres linhas, cinco enums pelo nome, {} icones de token",
+        "queue: three rows, five enums by name, {} token icons",
         full.icons
     );
 
@@ -265,11 +264,11 @@ fn main() -> Result<()> {
     // Giving up asks first: the first press must NOT send anything.
     let armed = run(&mut inst, "transfers-give-up")?;
     if armed.iter().any(|e| matches!(e, Effect::Ask(_))) {
-        bail!("desistir disparou sem perguntar: {armed:?}");
+        bail!("giving up fired without asking: {armed:?}");
     }
     let asking = look(&mut inst)?;
     if !asking.names("transfers-window-confirm-cancel") {
-        bail!("a pergunta nao apareceu na tela");
+        bail!("the question did not appear on screen");
     }
 
     // And the second press names the ID it was on — 2 — and not the row it now
@@ -279,9 +278,9 @@ fn main() -> Result<()> {
         what: Request::CancelJob,
         target: 2,
     })) {
-        bail!("desistir apontou a linha, e nao o id, depois do reordenamento: {fired:?}");
+        bail!("giving up pointed at the row, not the id, after the reordering: {fired:?}");
     }
-    println!("cursor: sobrevive ao reordenamento, e o pedido nomeia o id 2");
+    println!("cursor: survives the reordering, and the request names id 2");
 
     // ---- HOLD READS THE STAGE ----
     //
@@ -292,9 +291,9 @@ fn main() -> Result<()> {
         what: Request::ResumeJob,
         target: 2,
     })) {
-        bail!("segurar/soltar mandou o verbo errado para uma linha segurada: {held:?}");
+        bail!("hold/release sent the wrong verb for a held row: {held:?}");
     }
-    println!("segurar: le a situacao da linha e nunca manda o verbo errado");
+    println!("hold: reads the row's situation and never sends the wrong verb");
 
     // ---- A FINISHED JOB IS NOT HELD ----
     inst.event(&Input::Queue(Queue {
@@ -302,7 +301,7 @@ fn main() -> Result<()> {
     }))?;
     let nothing = run(&mut inst, "transfers-hold")?;
     if !nothing.is_empty() {
-        bail!("segurar mandou pedido para uma linha que ja acabou: {nothing:?}");
+        bail!("holding sent a request for a row that had already ended: {nothing:?}");
     }
 
     // ---- A TOTAL OF ZERO NEVER DRAWS A FRACTION ----
@@ -321,17 +320,17 @@ fn main() -> Result<()> {
     }))?;
     let unknown = look(&mut inst)?;
     if unknown.shows("%") {
-        bail!("desenhou porcentagem sem total: {:?}", unknown.data);
+        bail!("it drew a percentage with no total: {:?}", unknown.data);
     }
     if !unknown.names("transfers-stage-running") {
-        bail!("sem total, a linha devia dizer a situacao em vez de fingir uma fracao");
+        bail!("with no total, the row should say the situation instead of faking a fraction");
     }
-    println!("sem total: mostra a situacao, e nunca uma fracao inventada");
+    println!("no total: it shows the situation, and never an invented fraction");
 
     // ---- THE DETAIL SCREEN ----
     let detailed = run(&mut inst, "transfers-detail")?;
     if !detailed.contains(&Effect::Redraw) {
-        bail!("o detalhe nao pediu redesenho");
+        bail!("the detail asked for no redraw");
     }
     let detail = look(&mut inst)?;
     for k in [
@@ -341,16 +340,16 @@ fn main() -> Result<()> {
         "transfers-window-field-identity",
     ] {
         if !detail.names(k) {
-            bail!("o detalhe nao mostrou `{k}`");
+            bail!("the detail did not show `{k}`");
         }
     }
     if !detail.names("transfers-window-unknown") {
-        bail!("o detalhe devia dizer que o total nao se sabe, em vez de imprimir 0");
+        bail!("the detail should say the total is not known, instead of printing 0");
     }
     if !detail.names("transfers-identity-anonymous") {
-        bail!("o detalhe nao disse quem pediu; um download identificado nao se desfaz");
+        bail!("the detail did not say who asked; an identified download cannot be undone");
     }
-    println!("detalhe: campo a campo, quem pediu, e `nao se sabe` em vez de zero");
+    println!("detail: field by field, who asked, and `not known` instead of zero");
 
     // ---- AND THE IDENTIFIED ONE SAYS SO ----
     inst.event(&Input::Queue(Queue {
@@ -363,28 +362,28 @@ fn main() -> Result<()> {
     // just arrived has one job in it — so the cursor is on it.
     let mine = look(&mut inst)?;
     if !mine.names("transfers-identity-mine") {
-        bail!("o detalhe de um trabalho identificado nao disse que foi voce");
+        bail!("the detail of an identified job did not say it was you");
     }
     if mine.names("transfers-identity-anonymous") {
-        bail!("o detalhe disse as duas coisas ao mesmo tempo");
+        bail!("the detail said both things at once");
     }
-    println!("identidade: a linha que nao foi anonima diz que nao foi");
+    println!("identity: the row that was not anonymous says it was not");
 
     // ---- THE CURSOR HIGHLIGHTS EXACTLY ONE ROW ----
     run(&mut inst, "transfers-detail")?;
     let back = look(&mut inst)?;
     if back.selections != 1 {
         bail!(
-            "a lista destacou {} linhas; devia destacar exatamente a do cursor",
+            "the list highlighted {} rows; it should highlight exactly the cursor's",
             back.selections
         );
     }
 
-    println!("OK: a janela da fila recebe do host, e o que e irreversivel pede duas vezes");
+    println!("OK: the queue window takes from the host, and what is irreversible asks twice");
     Ok(())
 }
 
 /// The keys of an `.ftl`, as one string.
 fn ftl(path: &str) -> Result<String> {
-    std::fs::read_to_string(path).with_context(|| format!("nao consegui ler {path}"))
+    std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))
 }

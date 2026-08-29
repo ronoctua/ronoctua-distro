@@ -53,6 +53,34 @@
   # circle and `countdown-one` is the last sliver before it goes. Words and not
   # digits because every stretch of a WIT identifier begins with a letter —
   # `countdown-8` is refused three derivations away, inside a buffer.
+  # THE TWELVE FRAMES OF "SOMETHING IS RUNNING", for the modeline's update mark.
+  #
+  # AN UPDATE, BREATHING. The arrow in a circle is what an update is drawn as
+  # everywhere somebody has drawn one; the two frames are the SAME circle,
+  # filled and hollow, alternating once a second on the clock the footer already
+  # beats.
+  #
+  # WHY IT STILL MOVES: a still glyph and a hung update look identical, and an
+  # update is the one thing here that legitimately takes twenty minutes.
+  #
+  # WHY TWO FRAMES OF ONE SHAPE and not a rotation: `chrome-icons-match-the-text`
+  # measures every one of these against the digit beside it, because "an
+  # animation whose frames are 20% shorter than the text next to it does not
+  # read as one drawing moving, it reads as the line twitching". Filled against
+  # hollow is the same circle at the same size — the only thing that changes is
+  # the ink, so it breathes instead of twitching. The font's rotating families
+  # are the clock, which is out, and the pie, which is spoken for.
+  #
+  # NOT the `countdown-*` pie, and the two must not be confused: the pie is how
+  # much time is LEFT and empties towards a deadline. This is something running
+  # whose end nobody knows. Same subject, opposite question, so they are
+  # different drawings.
+  #
+  # WORDS AND NOT DIGITS in the token's name, and it is not taste: a token
+  # becomes a WIT identifier, and a segment that begins with a digit is not one.
+  working-one = "md-arrow_up_bold_circle";
+  working-two = "md-arrow_up_bold_circle_outline";
+
   countdown-eight = "md-circle_slice_8";
   countdown-seven = "md-circle_slice_7";
   countdown-six = "md-circle_slice_6";
@@ -241,7 +269,7 @@
   # ===================================================================
   # NAMES BY WORD, and not `wifi-0`..`wifi-4`.
   #
-  # The WIT `icone` enum is GENERATED from here, and in WIT every segment of an
+  # The WIT `icon` enum is GENERATED from here, and in WIT every segment of an
   # identifier has to begin with a LETTER: `wifi-0` is rejected with
   # "invalid character in identifier '0'" — three derivations later, inside
   # a buffer that has nothing to do with icons. The generator now rejects that
@@ -268,6 +296,13 @@
   monitor = "md-monitor";
   keyboard = "md-keyboard";
   cpu = "md-chip";
+  # THE BRAIN'S OWN MARK, the one glyph on its line, in the left margin.
+  #
+  # A line that begins with a sentence and a line that begins with a mark are
+  # two shapes — `band::generic_glyph` argues it for notifications, and the
+  # same holds here: this line appears without being asked for, and the mark is
+  # what says WHOSE it is before a word is read.
+  brain = "md-brain";
   memory = "md-memory";
   disk = "md-harddisk";
   # A DRIVE ONE CAN PULL OUT, in the file manager's sidebar. It is a different

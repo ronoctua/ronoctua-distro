@@ -3,7 +3,7 @@
 
 [package]
 name = "ronoctua-buffer-glyphs"
-description = "Navegador de glifos (secao 6.5)."
+description = "Glyph browser (section 6.5)."
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
@@ -14,7 +14,16 @@ publish = false
 crate-type = [ "cdylib" ]
 
 [dependencies]
-wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ] }
+# THE LAYOUT VOCABULARY, and the bindings with it.
+#
+# `wit-bindgen` is NOT a dependency here any more: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` macro, so the three browsers share
+# ONE generated binding set — and, with it, one grid, one sheet and one
+# heading. Three copies of the same geometry with three different constants is
+# what this dependency replaces.
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
+] }
 
 [lints.rust]
 unsafe_code = "warn"

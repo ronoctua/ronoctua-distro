@@ -44,7 +44,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 /// A LITERAL, and not a key: by the time it reaches the buffer it is already
 /// text, because a component has no bundle to look one up in (invariant 11).
 /// Checking that it is drawn AS DATA is checking that the split held.
-const NEEDED: &str = "o sistema esta montado em /";
+const NEEDED: &str = "the system is mounted at /";
 
 fn device(id: &str, name: &str, node: &str, kind: &str, whole: bool, needed: &str) -> Device {
     Device {
@@ -165,11 +165,11 @@ fn plan(effects: &[Effect]) -> Option<&ronoctua_protocol::Plan> {
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-test-format <componente.wasm> <dir-i18n>")?;
+        .context("usage: ronoctua-test-format <component.wasm> <i18n-dir>")?;
     let i18n = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-test-format <componente.wasm> <dir-i18n>")?;
-    let wasm = std::fs::read(&path).with_context(|| format!("nao consegui ler {path}"))?;
+        .context("usage: ronoctua-test-format <component.wasm> <i18n-dir>")?;
+    let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
 
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
@@ -179,13 +179,13 @@ fn main() -> Result<()> {
     // ---- THE DESCRIPTOR ----
     let d = inst.init()?;
     if d.mode != "format" {
-        bail!("o modo do buffer e `{}`; a modeline mostra isso", d.mode);
+        bail!("the buffer's mode is `{}`; the modeline shows that", d.mode);
     }
     if !d
         .capabilities
         .contains(&ronoctua_protocol::Capability::Disks)
     {
-        bail!("o buffer nao declara `disks`: o host nunca assinaria o udisks");
+        bail!("the buffer does not declare `disks`: the host would never subscribe it to udisks");
     }
     // AND IT DECLARES NOTHING ELSE. `disks` is the heaviest of the five, and a
     // buffer that also held `system` could end processes and sweep the store on
@@ -195,11 +195,13 @@ fn main() -> Result<()> {
         ronoctua_protocol::Capability::Transfers,
     ] {
         if d.capabilities.contains(&extra) {
-            bail!("o buffer pede `{extra:?}`, que nao usa: seriam poderes de graca");
+            bail!(
+                "the buffer asks for `{extra:?}`, which it does not use: that would be powers for free"
+            );
         }
     }
     if let Err(e) = d.validate() {
-        bail!("o descritor nao passa na guarda da secao 7.9: {e}");
+        bail!("the descriptor does not pass the section 7.9 guard: {e}");
     }
     // THREE STATES, AND THERE IS DELIBERATELY NO `working`. Every state a
     // buffer declares is offered under `SPC b s`, so a fourth one would put
@@ -207,19 +209,19 @@ fn main() -> Result<()> {
     // wait happens on the list, where the row is about to change.
     let states: Vec<&str> = d.states.iter().map(|s| s.id.as_str()).collect();
     if states != ["normal", "choose", "confirm"] {
-        bail!("os estados do buffer sao {states:?}, fora do combinado");
+        bail!("the buffer's states are {states:?}, outside what was agreed");
     }
     for language in ["pt-BR", "en-GB"] {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for s in &d.states {
             let key = format!("state-{}", s.id);
             if !table.contains(&key) {
-                bail!("falta `{key}` em {language}.ftl — a modeline mostraria [{key}]");
+                bail!("`{key}` is missing from {language}.ftl — the modeline would show [{key}]");
             }
         }
     }
     println!(
-        "descritor: modo `{}`, {} estados, e so a capacidade que usa",
+        "descriptor: mode `{}`, {} states, and only the capability it uses",
         d.mode,
         d.states.len()
     );
@@ -227,10 +229,10 @@ fn main() -> Result<()> {
     // ---- BEFORE THE RACK: nothing, and it says so ----
     let empty = look(&mut inst)?;
     if !empty.names("format-empty") {
-        bail!("a tela vazia nao diz que nao ha disco nenhum");
+        bail!("the empty screen does not say there is no disk at all");
     }
     if empty.shows("/dev/") {
-        bail!("o buffer desenhou um dispositivo antes de receber leitura alguma");
+        bail!("the buffer drew a device before taking any reading at all");
     }
 
     // ---- THE RACK CROSSES, FIELD BY FIELD ----
@@ -238,30 +240,30 @@ fn main() -> Result<()> {
     let full = look(&mut inst)?;
     for what in ["SanDisk Cruzer", "/dev/sdb1", "vfat", "32.0 GiB"] {
         if !full.shows(what) {
-            bail!("`{what}` nao apareceu na lista: {:?}", full.data);
+            bail!("`{what}` did not show up in the list: {:?}", full.data);
         }
     }
     // AN EMPTY `kind` IS A SENTENCE. The whole stick has nothing written on it,
     // and a gap where the other rows have a word would read as a row that
     // failed to load rather than as a disk that is empty.
     if !full.names("format-blank") {
-        bail!("a linha sem sistema de arquivos nao disse que esta vazia");
+        bail!("the row with no filesystem did not say it is empty");
     }
     // AND `whole` IS ON THE ROW. It decides which question comes next — a whole
     // disk gets a fresh partition table and a partition cannot — so discovering
     // it one screen later would be discovering it too late.
     if !full.names("format-whole") || !full.names("format-part") {
-        bail!("as linhas nao dizem qual e o disco inteiro e qual e uma parte");
+        bail!("the rows do not say which is the whole disk and which is a part");
     }
     // THE REFUSAL ARRIVED AS TEXT AND IS DRAWN AS TEXT. Had the buffer been
     // given a key instead, this is where the split would have failed.
     if !full.shows(NEEDED) {
         bail!(
-            "a linha do sistema nao trouxe o motivo escrito: {:?}",
+            "the system's row did not carry the written reason: {:?}",
             full.data
         );
     }
-    println!("a leitura cruzou: nome, no, tipo, tamanho, o que e cada linha, e o motivo");
+    println!("the reading crossed over: name, node, kind, size, what each row is, and the reason");
 
     // THE LIST HAS THE SECOND REGISTER TOO. The row rounds to `32.0 GiB`, which
     // is what somebody READS; the line under the cursor gives the exact count,
@@ -269,7 +271,7 @@ fn main() -> Result<()> {
     // `lsblk`, against the disk they meant to grab.
     if !full.shows(&format!("{} B", 32 * GIB)) {
         bail!(
-            "a lista nao da o tamanho exato sob o cursor: {:?}",
+            "the list does not give the exact size under the cursor: {:?}",
             full.data
         );
     }
@@ -285,11 +287,11 @@ fn main() -> Result<()> {
     let narrow = Screen::of(&inst.render(46, ROWS, heights())?);
     if !narrow.shows(NEEDED) {
         bail!(
-            "numa janela de 46 colunas o motivo caiu para fora: {:?}",
+            "in a 46-column window the reason fell outside: {:?}",
             narrow.data
         );
     }
-    println!("e o motivo continua na tela numa janela de 46 colunas");
+    println!("and the reason stays on screen in a 46-column window");
 
     // ---- AND NOTHING TOUCHES ANYTHING, AT ANY WIDTH ----
     //
@@ -299,7 +301,7 @@ fn main() -> Result<()> {
     for columns in [46, 60, 80, 110, 160] {
         nothing_touches(&inst.render(columns, ROWS, heights())?, columns)?;
     }
-    println!("e nada encosta em nada, de 46 a 160 colunas");
+    println!("and nothing touches anything, from 46 to 160 columns");
 
     // ---- THE CURSOR STARTS SOMEWHERE USABLE ----
     //
@@ -309,13 +311,13 @@ fn main() -> Result<()> {
     // presses do nothing.
     if full.selections != 1 {
         bail!(
-            "a lista destacou {} linhas ao receber a leitura",
+            "the list highlighted {} rows on taking the reading",
             full.selections
         );
     }
     let opened = inst.event(&Input::Confirm)?;
     if moved_to(&opened) != Some("choose") {
-        bail!("o cursor nasceu num disco que nao avanca: {opened:?}");
+        bail!("the cursor was born on a disk that does not advance: {opened:?}");
     }
     inst.event(&Input::Cancel)?;
 
@@ -326,16 +328,16 @@ fn main() -> Result<()> {
     inst.event(&Input::Up)?;
     let refused = inst.event(&Input::Confirm)?;
     if moved_to(&refused).is_some() {
-        bail!("o buffer avancou a partir do disco que o sistema precisa");
+        bail!("the buffer advanced from the disk the system needs");
     }
     if plan(&refused).is_some() {
-        bail!("o buffer PEDIU para formatar o disco que o sistema precisa");
+        bail!("the buffer ASKED to format the disk the system needs");
     }
     let still = look(&mut inst)?;
     if !still.names("format-title") {
-        bail!("a tela mudou depois de um Enter que devia nao fazer nada");
+        bail!("the screen changed after an Enter that should do nothing");
     }
-    println!("recusa 1: Enter no disco do sistema nao avanca, e nao pede nada");
+    println!("refusal 1: Enter on the system's disk does not advance, and asks nothing");
 
     // ---- THE ORDINARY PATH ----
     //
@@ -345,24 +347,24 @@ fn main() -> Result<()> {
     inst.event(&Input::Up)?;
     let chose = inst.event(&Input::Confirm)?;
     if moved_to(&chose) != Some("choose") {
-        bail!("Enter num disco livre nao levou a escolher: {chose:?}");
+        bail!("Enter on a free disk did not lead to the choice: {chose:?}");
     }
     let choosing = look(&mut inst)?;
     // The chosen disk is NAMED on the screen that asks about it: somebody who
     // got here by pressing `Enter` twice can still see what they chose.
     if !choosing.shows("/dev/sdb1") {
         bail!(
-            "a tela de escolha nao diz de qual disco se trata: {:?}",
+            "the choice screen does not say which disk it is about: {:?}",
             choosing.data
         );
     }
     if !choosing.names("format-recipe-universal") || !choosing.names("format-recipe-modern") {
-        bail!("a lista de sistemas de arquivos nao apareceu inteira");
+        bail!("the filesystem list did not come out whole");
     }
     // XFS IS ON THE LIST, saying why it is not on offer. Leaving it out would
     // be somebody searching a screen for something that is not there.
     if !choosing.names("format-recipe-missing") {
-        bail!("o XFS sumiu da lista em vez de dizer por que nao esta");
+        bail!("XFS went away from the list instead of saying why it is not there");
     }
 
     // ---- THE SAME SCREEN, ANSWERING A SECOND PERSON ----
@@ -373,20 +375,25 @@ fn main() -> Result<()> {
     // to follow the cursor, or it is a caption that happens to be near a list.
     if !choosing.names("format-tech-universal") {
         bail!(
-            "a linha tecnica nao acompanhou o cursor na primeira receita: {:?}",
+            "the technical line did not follow the cursor on the first recipe: {:?}",
             choosing.keys
         );
     }
     for other in ["format-tech-windows", "format-tech-modern"] {
         if choosing.names(other) {
-            bail!("a tela mostrou `{other}` com o cursor noutra linha: sao legendas, nao detalhe");
+            bail!(
+                "the screen showed `{other}` with the cursor on another row: these are captions, not detail"
+            );
         }
     }
     // AND IT MOVES. One row down is exFAT, and the line has to say so.
     inst.event(&Input::Down)?;
     let moved = look(&mut inst)?;
     if !moved.names("format-tech-large") || moved.names("format-tech-universal") {
-        bail!("a linha tecnica nao mudou com a seta: {:?}", moved.keys);
+        bail!(
+            "the technical line did not change with the arrow: {:?}",
+            moved.keys
+        );
     }
     inst.event(&Input::Up)?;
 
@@ -399,14 +406,14 @@ fn main() -> Result<()> {
     inst.event(&Input::Up)?;
     let on_xfs = look(&mut inst)?;
     if !on_xfs.names("format-tech-missing") {
-        bail!("o cursor nao alcanca a linha do XFS: {:?}", on_xfs.keys);
+        bail!("the cursor does not reach the XFS row: {:?}", on_xfs.keys);
     }
     let refused_xfs = inst.event(&Input::Confirm)?;
     if moved_to(&refused_xfs).is_some() || plan(&refused_xfs).is_some() {
-        bail!("Enter no XFS avancou, e esta distro nao tem o mkfs dele: {refused_xfs:?}");
+        bail!("Enter on XFS advanced, and this distro does not have its mkfs: {refused_xfs:?}");
     }
     inst.event(&Input::Down)?;
-    println!("recusa 3: o XFS esta na lista, o cursor o alcanca, e o Enter nele nao anda");
+    println!("refusal 3: XFS is in the list, the cursor reaches it, and Enter on it does not move");
 
     // The name, typed. It is the one place on any of the three screens where a
     // key means a letter rather than a choice.
@@ -415,7 +422,7 @@ fn main() -> Result<()> {
     }
     let named = look(&mut inst)?;
     if !named.shows("FOTOS") {
-        bail!("o nome digitado nao apareceu: {:?}", named.data);
+        bail!("the typed name did not show up: {:?}", named.data);
     }
 
     // A second filesystem, so the plan below cannot pass by accident on the
@@ -425,16 +432,16 @@ fn main() -> Result<()> {
     // ---- THE SECOND REFUSAL: THE FIRST `Enter` ON `confirm` GOES BACK ----
     let asked = inst.event(&Input::Confirm)?;
     if moved_to(&asked) != Some("confirm") {
-        bail!("Enter na escolha nao levou a confirmar: {asked:?}");
+        bail!("Enter on the choice did not lead to the confirmation: {asked:?}");
     }
     let back = inst.event(&Input::Confirm)?;
     if plan(&back).is_some() {
-        bail!("o quarto Enter seguido formatou o disco: `nao` nao era a primeira linha");
+        bail!("the fourth Enter in a row formatted the disk: `no` was not the first row");
     }
     if moved_to(&back) != Some("choose") {
-        bail!("o Enter em `nao` nao voltou uma tela: {back:?}");
+        bail!("Enter on `no` did not go back a screen: {back:?}");
     }
-    println!("recusa 2: o Enter no ritmo volta, em vez de apagar o disco");
+    println!("refusal 2: an Enter in the rhythm goes back, instead of erasing the disk");
 
     // ---- AND THE DELIBERATE ONE GOES THROUGH ----
     inst.event(&Input::Confirm)?;
@@ -447,63 +454,69 @@ fn main() -> Result<()> {
     let sure = look(&mut inst)?;
     if !sure.names("format-tech-large") {
         bail!(
-            "a confirmacao nao diz qual sistema de arquivos vai ser escrito: {:?}",
+            "the confirmation does not say which filesystem will be written: {:?}",
             sure.keys
         );
     }
     if !sure.shows("/dev/sdb1") || !sure.shows("FOTOS") {
         bail!(
-            "a confirmacao nao diz onde nem com que nome: {:?}",
+            "the confirmation says neither where nor under what name: {:?}",
             sure.data
         );
     }
 
     let did = inst.event(&Input::Confirm)?;
     let Some(p) = plan(&did) else {
-        bail!("`sim` escolhido de proposito nao pediu nada: {did:?}");
+        bail!("`yes` chosen on purpose asked for nothing: {did:?}");
     };
     // THE ID IS THE ONE THAT WAS SENT, byte for byte. A buffer that built one
     // would be a buffer with an opinion about what a udisks object path is.
     if p.device != "/block/sdb1" {
-        bail!("o plano nomeia `{}`, que nao e o disco escolhido", p.device);
+        bail!(
+            "the plan names `{}`, which is not the chosen disk",
+            p.device
+        );
     }
     if p.recipe != Recipe::LargeFiles {
         bail!(
-            "o plano leva `{:?}`, e nao a linha que estava sob o cursor",
+            "the plan carries `{:?}`, and not the row that was under the cursor",
             p.recipe
         );
     }
     if p.label != "FOTOS" {
-        bail!("o plano leva o nome `{}`", p.label);
+        bail!("the plan carries the name `{}`", p.label);
     }
     // AND `whole_disk` COMES OFF THE ROW. `/dev/sdb1` is one partition, so a
     // `true` here would wipe the partition table of the whole stick when
     // somebody asked to reformat one part of it.
     if p.whole_disk {
-        bail!("o plano pediu apagar o disco inteiro a partir de uma particao");
+        bail!("the plan asked to erase the whole disk starting from a partition");
     }
     // AND IT WENT BACK TO THE LIST, which is where the row being written is.
     if moved_to(&did) != Some("normal") {
-        bail!("o buffer nao voltou a lista depois de pedir: {did:?}");
+        bail!("the buffer did not go back to the list after asking: {did:?}");
     }
     let waiting = look(&mut inst)?;
     if !waiting.names("format-working") {
-        bail!("nada na tela diz que um disco esta sendo escrito");
+        bail!("nothing on screen says a disk is being written");
     }
-    println!("o plano saiu: id recebido, sistema escolhido, nome digitado, alcance certo");
+    println!("the plan came out: id taken, filesystem chosen, name typed, right reach");
 
     // ---- WHAT CAME BACK ----
-    let trouble = "nao consegui formatar FOTOS: em uso".to_owned();
+    let trouble = "could not format PHOTOS: in use".to_owned();
     inst.event(&Input::Formatted(Outcome {
         done: false,
         trouble: trouble.clone(),
     }))?;
     let told = look(&mut inst)?;
     if !told.shows(&trouble) {
-        bail!("a recusa do host nao chegou a tela: {:?}", told.data);
+        bail!(
+            "the host's refusal did not reach the screen: {:?}",
+            told.data
+        );
     }
     if !told.names("format-title") {
-        bail!("o buffer nao voltou a lista depois da recusa");
+        bail!("the buffer did not go back to the list after the refusal");
     }
 
     // ---- AND THE CURSOR IS AN ID, not a row ----
@@ -518,27 +531,29 @@ fn main() -> Result<()> {
     let after = look(&mut inst)?;
     if after.selections != 1 {
         bail!(
-            "a lista destacou {} linhas; devia destacar exatamente a do cursor",
+            "the list highlighted {} rows; it should highlight exactly the cursor's",
             after.selections
         );
     }
     let followed = inst.event(&Input::Confirm)?;
     if moved_to(&followed) != Some("choose") {
-        bail!("depois do reordenamento o cursor caiu num disco que nao avanca");
+        bail!("after the reordering the cursor landed on a disk that does not advance");
     }
     let where_now = look(&mut inst)?;
     if !where_now.shows("/dev/sdb1") {
         bail!(
-            "o cursor nao seguiu o id pelo reordenamento: {:?}",
+            "the cursor did not follow the id through the reordering: {:?}",
             where_now.data
         );
     }
 
-    println!("OK: o buffer recusa o que o sistema precisa, e o Enter no ritmo nao apaga nada");
+    println!(
+        "OK: the buffer refuses what the system needs, and an Enter in the rhythm erases nothing"
+    );
     Ok(())
 }
 
 /// The keys of an `.ftl`, as one string.
 fn ftl(path: &str) -> Result<String> {
-    std::fs::read_to_string(path).with_context(|| format!("nao consegui ler {path}"))
+    std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))
 }

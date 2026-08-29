@@ -6,7 +6,7 @@
 //! The clipboard history has to show what was copied, and what one
 //! copies is not always text. Until now the renderer knew glyphs and flat-colour
 //! rectangles: a pasted screenshot showed up as
-//! `copy_of kdl_of kind nao suportado ignorada` in the log and nothing on screen.
+//! `copy_of kdl_of kind unsupported ignored` in the log and nothing on screen.
 //!
 //! # This does not violate invariant 15
 //!
@@ -153,12 +153,12 @@ impl Images {
     /// It never fails today; the signature follows [`crate::quad::Quads::new`].
     pub fn new(device: &wgpu::Device, format_of: wgpu::TextureFormat) -> anyhow::Result<Self> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             source: wgpu::ShaderSource::Wgsl(include_str!("image.wgsl").into()),
         });
 
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -180,7 +180,7 @@ impl Images {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             // An `Option` in wgpu 30, like the pipeline's `layout`. See the
             // graphics-API trap in CLAUDE.md.
             bind_group_layouts: &[Some(&layout)],
@@ -188,7 +188,7 @@ impl Images {
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -223,7 +223,7 @@ impl Images {
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             // LINEAR in both directions: the preview almost always SHRINKS a
             // screenshot, and shrinking with `Nearest` aliases text to the point
             // of making the copied window unrecognisable.
@@ -237,7 +237,7 @@ impl Images {
             layout,
             sampler,
             buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("imagem-instancia"),
+                label: Some("image-instance"),
                 size: (std::mem::size_of::<Instance>() * CEILING) as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -280,7 +280,7 @@ impl Images {
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             size,
             mip_level_count: 1,
             sample_count: 1,
@@ -309,7 +309,7 @@ impl Images {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("imagem"),
+            label: Some("image"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -391,9 +391,9 @@ impl Images {
         if self.uploads.len() <= TEXTURE_CEILING {
             return;
         }
-        let vivas: std::collections::HashSet<&str> =
+        let alive: std::collections::HashSet<&str> =
             self.batch.iter().map(String::as_str).collect();
-        self.uploads.retain(|k, _| vivas.contains(k.as_str()));
+        self.uploads.retain(|k, _| alive.contains(k.as_str()));
     }
 
     /// Draws what was prepared.
@@ -459,8 +459,8 @@ mod tests {
         // STRETCHING WOULD BE WORSE THAN SHRINKING. A deformed screenshot
         // makes whoever looks doubt what they copied.
         let a = area().fit_into(200, 200);
-        assert!((a.width - 50.0).abs() < 0.01, "largura: {}", a.width);
-        assert!((a.height - 50.0).abs() < 0.01, "altura: {}", a.height);
+        assert!((a.width - 50.0).abs() < 0.01, "width: {}", a.width);
+        assert!((a.height - 50.0).abs() < 0.01, "height: {}", a.height);
         // Centred horizontally, which is where the space was left over.
         assert!((a.x - 35.0).abs() < 0.01, "x: {}", a.x);
         assert!((a.y - 20.0).abs() < 0.01, "y: {}", a.y);
@@ -471,7 +471,7 @@ mod tests {
         let a = area().fit_into(400, 100);
         assert!((a.width - 100.0).abs() < 0.01);
         assert!((a.height - 25.0).abs() < 0.01);
-        assert!((a.y - 32.5).abs() < 0.01, "nao centralizou na vertical");
+        assert!((a.y - 32.5).abs() < 0.01, "it did not centre vertically");
     }
 
     #[test]

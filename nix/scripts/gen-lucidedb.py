@@ -48,7 +48,7 @@ from fontTools.ttLib import TTFont, newTable
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
 # THE LEXICON'S CONTRACT IS SHARED with the other two generators.
-from lexicon import STOPWORDS, search_forms, palavras, translate
+from lexicon import STOPWORDS, search_forms, words_of, translate
 
 # The elements Lucide's SVGs use, and each one's attributes.
 #
@@ -81,14 +81,14 @@ DO_SVG = {
     "stroke-linejoin",
 }
 
-# The separators of the `nos` encoding.
+# The separators of the `nodes` encoding.
 #
 # The buffer has no JSON parser (invariant 11), and the symbol database has already
 # shown the cost of forgetting that. Measured: Lucide's attribute values
 # use only ` ,-.0123456789` and path command letters. None of these three
-# appears there, and the `checar_separadores` guard rejects the version in which one does.
-ENTRE_NOS = ";"
-ENTRE_ATRIBUTOS = "|"
+# appears there, and the `check_separators` guard rejects the version in which one does.
+BETWEEN_NODES = ";"
+BETWEEN_ATTRIBUTES = "|"
 BETWEEN_KEY_AND_VALUE = "="
 
 # What would break the component's parser, which finds the end of a string value
@@ -97,7 +97,7 @@ FORBIDDEN = '"[]{},'
 
 
 def die(msg: str) -> None:
-    print(f"ERRO: {msg}", file=sys.stderr)
+    print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -122,64 +122,64 @@ def ler_svg(path: pathlib.Path) -> list[tuple[str, list[tuple[str, str]]]]:
     would hide precisely the change this generator needs to flag.
     """
     raw_text = path.read_text(encoding="utf-8")
-    nos: list[tuple[str, list[tuple[str, str]]]] = []
+    nodes: list[tuple[str, list[tuple[str, str]]]] = []
     for m in re.finditer(r"<([a-z]+)\b([^>]*?)/?>", raw_text):
         element = m.group(1)
         if element == "svg":
             continue
         if element not in ELEMENTS:
             die(
-                f"{path.name}: elemento SVG desconhecido <{element}>.\n"
-                f"       Os aceitos sao {sorted(ELEMENTS)}.\n"
-                "       Uma versao nova da Lucide passou a usar outra coisa, e\n"
-                "       aceita-la em silencio faria a copia emitir um SVG que\n"
-                "       nao desenha o que a tela mostra."
+                f"{path.name}: unknown SVG element <{element}>.\n"
+                f"       The accepted ones are {sorted(ELEMENTS)}.\n"
+                "       A new version of Lucide started using something else, and\n"
+                "       accepting it in silence would make the copy emit an SVG that\n"
+                "       does not draw what the screen shows."
             )
-        atributos = []
+        attributes = []
         for key, value in re.findall(r'([\w:-]+)="([^"]*)"', m.group(2)):
             if key in DO_SVG and key not in ELEMENTS[element]:
                 continue
             if key not in ELEMENTS[element]:
                 die(
-                    f"{path.name}: atributo `{key}` inesperado em "
+                    f"{path.name}: attribute `{key}` inesperado em "
                     f"<{element}>.\n"
-                    f"       Os aceitos sao {list(ELEMENTS[element])}."
+                    f"       The accepted ones are {list(ELEMENTS[element])}."
                 )
             # THE COMMA BECOMES A SPACE. In the SVG grammar the two are the SAME
             # separator (`wsp | comma-wsp`), so the drawing does not change; and the
             # comma is the only character in the inventory that would break the
             # component parser's list. Measured: one file in 1,668 uses it.
-            atributos.append((key, value.replace(",", " ")))
-        nos.append((element, atributos))
-    if not nos:
-        die(f"{path.name}: nenhum no de desenho.")
-    return nos
+            attributes.append((key, value.replace(",", " ")))
+        nodes.append((element, attributes))
+    if not nodes:
+        die(f"{path.name}: no drawing node at all.")
+    return nodes
 
 
-def codificar(nos) -> str:
+def codificar(nodes) -> str:
     """The nodes become ONE string, which is how the component receives them."""
     parts = []
-    for element, atributos in nos:
+    for element, attributes in nodes:
         chunk = [element]
-        chunk += [f"{k}{BETWEEN_KEY_AND_VALUE}{v}" for k, v in atributos]
-        parts.append(ENTRE_ATRIBUTOS.join(chunk))
-    return ENTRE_NOS.join(parts)
+        chunk += [f"{k}{BETWEEN_KEY_AND_VALUE}{v}" for k, v in attributes]
+        parts.append(BETWEEN_ATTRIBUTES.join(chunk))
+    return BETWEEN_NODES.join(parts)
 
 
-def checar_separadores(nos, name: str) -> None:
+def check_separators(nodes, name: str) -> None:
     """No value may contain what separates the values.
 
     Without this the failure is mute: the component cuts the `d` in half and draws —
     or copies — half an icon, and nothing in the build flags it.
     """
-    for element, atributos in nos:
-        for key, value in atributos:
-            for c in (ENTRE_NOS, ENTRE_ATRIBUTOS, BETWEEN_KEY_AND_VALUE, *FORBIDDEN):
+    for element, attributes in nodes:
+        for key, value in attributes:
+            for c in (BETWEEN_NODES, BETWEEN_ATTRIBUTES, BETWEEN_KEY_AND_VALUE, *FORBIDDEN):
                 if c in value:
                     die(
-                        f"{name}: o atributo `{key}` de <{element}> contem "
-                        f"`{c}`, que e separador da codificacao.\n"
-                        "       O componente cortaria o valor ai, e a copia "
+                        f"{name}: o attribute `{key}` de <{element}> contem "
+                        f"`{c}`, which is a separator of the encoding.\n"
+                        "       The component would cut the value there, and the copy "
                         "sairia truncada em silencio."
                     )
 
@@ -221,21 +221,21 @@ def match_glyphs(name_list, nodes_by_name, by_name) -> dict[str, str]:
         if name in by_name:
             not_in[name] = name
             continue
-        gemeos = [
-            outro
-            for outro in by_drawing[json.dumps(nodes_by_name[name])]
-            if outro != name and outro in by_name
+        twins = [
+            other
+            for other in by_drawing[json.dumps(nodes_by_name[name])]
+            if other != name and other in by_name
         ]
-        if gemeos:
-            not_in[name] = gemeos[0]
+        if twins:
+            not_in[name] = twins[0]
         else:
             missing.append(name)
     if missing:
         die(
-            f"{len(missing)} icones do conjunto nao tem glifo na fonte: "
+            f"{len(missing)} icons of the set have no glyph in the font: "
             f"{missing[:10]}\n"
-            "       A fonte e o conjunto de icones vem de versoes diferentes.\n"
-            "       Confira a versao declarada em nix/lucidegen.nix."
+            "       The font and the icon set come from different versions.\n"
+            "       Check the version declared in nix/lucidegen.nix."
         )
     return not_in
 
@@ -254,12 +254,12 @@ def free_range(base: int, how_many: int, others: list[pathlib.Path]) -> None:
         taken = [cp for cp in range(base, base + how_many) if cp in cmap]
         if taken:
             die(
-                f"a faixa U+{base:04X}..U+{base + how_many - 1:04X} colide com "
-                f"{len(taken)} codepoints de {face.name} "
-                f"(o primeiro e U+{taken[0]:04X}).\n"
-                "       A face primaria vence a cadeia de fallback: estes\n"
-                "       icones sairiam desenhados como OUTRO simbolo, o que\n"
-                "       nao da para ver olhando."
+                f"the range U+{base:04X}..U+{base + how_many - 1:04X} collides with "
+                f"{len(taken)} codepoints of {face.name} "
+                f"(the first is U+{taken[0]:04X}).\n"
+                "       The primary face beats the fallback chain: these\n"
+                "       icons would come out drawn as ANOTHER symbol, which\n"
+                "       there is no seeing it by looking."
             )
 
 
@@ -290,14 +290,14 @@ def remapear(entry: pathlib.Path, out_path: pathlib.Path, assignment: dict[str, 
     # the embedded faces, so the name has to be unmistakable.
     name_list = font_file["name"]
     name_list.names = []
-    for identificador, value in (
+    for identifier, value in (
         (1, "Noctua Lucide"),
         (2, "Regular"),
         (3, "Noctua Lucide"),
         (4, "Noctua Lucide"),
         (6, "NoctuaLucide-Regular"),
     ):
-        name_list.setName(value, identificador, 3, 1, 0x409)
+        name_list.setName(value, identifier, 3, 1, 0x409)
     font_file.save(out_path)
 
 
@@ -312,7 +312,7 @@ def main() -> int:
         type=pathlib.Path,
         action="append",
         default=[],
-        help="face embutida que a faixa de destino nao pode invadir",
+        help="the embedded face the target range must not invade",
     )
     p.add_argument("--base", required=True, help="inicio da faixa, em hexadecimal")
     p.add_argument("--min-coverage", type=float, default=0.0)
@@ -329,16 +329,16 @@ def main() -> int:
     # alphabetical order. The grid is a list one walks with the eye.
     name_list = sorted(m.stem for m in args.icons.glob("*.json"))
     if not name_list:
-        die(f"nenhum icone em {args.icons}")
+        die(f"no icon in {args.icons}")
 
     nodes_by_name = {}
     for name in name_list:
         svg = args.icons / f"{name}.svg"
         if not svg.exists():
-            die(f"{name}: tem metadado e nao tem desenho.")
-        nos = ler_svg(svg)
-        checar_separadores(nos, name)
-        nodes_by_name[name] = nos
+            die(f"{name}: it has metadata and no drawing.")
+        nodes = ler_svg(svg)
+        check_separators(nodes, name)
+        nodes_by_name[name] = nodes
 
     # --- the font -----------------------------------------------------------
     font_file = TTFont(args.font, lazy=True)
@@ -348,9 +348,9 @@ def main() -> int:
     extra = set(by_name) - {glyph_of[n] for n in name_list}
     if extra:
         die(
-            f"{len(extra)} glifos da fonte nao tem icone no conjunto: "
+            f"{len(extra)} glyphs of the font have no icon in the set: "
             f"{sorted(extra)[:10]}\n"
-            "       A fonte e o conjunto vem de versoes diferentes."
+            "       The font and the set come from different versions."
         )
 
     free_range(base, len(name_list), args.other)
@@ -365,21 +365,21 @@ def main() -> int:
     # because the font assigns the PUA in name order; measured on 0.563.0, where
     # `clock` sits between `clipboard-list` and `cloud`, and `clock-4` between
     # `clock-3` and `clock-5`.
-    origem: dict[str, int] = {}
+    source: dict[str, int] = {}
     for glyph, cps in by_name.items():
         donos = sorted(n for n in name_list if glyph_of[n] == glyph)
-        for dono, cp in zip(donos, cps):
-            origem[dono] = cp
-        for dono in donos[len(cps) :]:
-            origem[dono] = cps[-1]
+        for owner, cp in zip(donos, cps):
+            source[owner] = cp
+        for owner in donos[len(cps) :]:
+            source[owner] = cps[-1]
 
     # --- the tags -----------------------------------------------------------
     lexicon = tomllib.loads(args.lexicon.read_text(encoding="utf-8"))
     no_translation: Counter[str] = Counter()
     without_pt = []
     categories: Counter[str] = Counter()
-    registros = []
-    total_apelidos = 0
+    records = []
+    total_aliases = 0
     # THE COVERAGE DENOMINATOR, counted where the tokens are counted. Deriving it
     # from the output tags would give a different number: `translate` deduplicates into sets
     # and adds synonyms, so the sum would be over a population that is not
@@ -396,17 +396,17 @@ def main() -> int:
         apelidos = []
         for alias in meta.get("aliases", []):
             apelidos.append(seguro(alias["name"] if isinstance(alias, dict) else alias))
-        total_apelidos += len(apelidos)
+        total_aliases += len(apelidos)
 
         # An icon's VOCABULARY: the words of the name, of the aliases, of
         # the categories and the tags Lucide wrote.
-        tokens = list(palavras(name))
+        tokens = list(words_of(name))
         for a in apelidos:
-            tokens += palavras(a)
+            tokens += words_of(a)
         for c in cats:
-            tokens += palavras(c)
+            tokens += words_of(c)
         for t in meta.get("tags", []):
-            tokens += palavras(t)
+            tokens += words_of(t)
 
         ocorrencias_totais += sum(1 for t in tokens if t not in STOPWORDS)
         tags_en, tags_pt, has_pt = translate(tokens, lexicon, no_translation)
@@ -420,7 +420,7 @@ def main() -> int:
             "cp": base + i,
             # WHAT LUCIDE PUBLISHES — it serves whoever pastes into a page with
             # their font. Two facts, from two sources; not two copies of one.
-            "lcp": origem[name],
+            "lcp": source[name],
             "cats": cats,
             "nodes": codificar(nodes_by_name[name]),
         }
@@ -430,92 +430,92 @@ def main() -> int:
         registro["tags_pt"] = sorted(tags_pt)
         if search_terms:
             registro["search"] = sorted(search_terms)
-        registros.append(registro)
+        records.append(registro)
 
     (args.out / "lucide.json").write_text(
-        json.dumps(registros, ensure_ascii=False, separators=(",", ":")),
+        json.dumps(records, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
 
     ocorrencias = sum(no_translation.values())
-    tipos = len(no_translation)
+    kinds = len(no_translation)
     coverage = (
         100.0 * (1 - ocorrencias / ocorrencias_totais) if ocorrencias_totais else 100.0
     )
 
     raw_text = [
-        "# Cobertura da base de icones Lucide",
+        "# Lucide icon database coverage",
         "",
-        "Gerado por `nix/scripts/gen-lucidedb.py`. Nao editar a mao.",
+        "Generated by `nix/scripts/gen-lucidedb.py`. Do not edit by hand.",
         "",
-        f"- Icones na base: **{len(registros)}**",
-        f"- Categorias: **{len(categories)}**",
-        f"- Apelidos: **{total_apelidos}**",
-        f"- Faixa de desenho: **U+{base:04X}..U+{base + len(registros) - 1:04X}**",
-        f"- Sem NENHUMA palavra em portugues: **{len(without_pt)}**",
+        f"- Icons in the database: **{len(records)}**",
+        f"- Categories: **{len(categories)}**",
+        f"- Apelidos: **{total_aliases}**",
+        f"- Faixa de desenho: **U+{base:04X}..U+{base + len(records) - 1:04X}**",
+        f"- With NO Portuguese word at all: **{len(without_pt)}**",
         "",
-        "## Por categoria",
+        "## By category",
         "",
-        "| categoria | icones |",
+        "| category | icons |",
         "|---|---:|",
     ]
     for category, n in categories.most_common():
         raw_text.append(f"| `{category}` | {n} |")
     raw_text += [
         "",
-        f"## Traducao de tags: {coverage:.1f}%",
+        f"## Tag translation: {coverage:.1f}%",
         "",
-        f"Piso exigido: **>= {args.min_coverage}%**.",
+        f"Required floor: **>= {args.min_coverage}%**.",
         "",
-        "## Palavras sem traducao, por frequencia",
+        "## Untranslated words, by frequency",
         "",
-        "Esta e a fila para crescer `assets/lexicon/tags.en-pt.toml`.",
-        "Traduzir nesta ordem, nao na ordem que vier — o mesmo lexico serve",
-        "os tres navegadores.",
+        "This is the queue for growing `assets/lexicon/tags.en-pt.toml`.",
+        "Translate in this order, not in whatever order comes along — the same lexicon serves",
+        "all three browsers.",
         "",
-        "| palavra | ocorrencias |",
+        "| word | occurrences |",
         "|---|---:|",
     ]
-    for palavra, n in no_translation.most_common(120):
-        raw_text.append(f"| `{palavra}` | {n} |")
+    for word, n in no_translation.most_common(120):
+        raw_text.append(f"| `{word}` | {n} |")
     if len(no_translation) > 120:
-        raw_text.append(f"| … | mais {len(no_translation) - 120} palavras |")
+        raw_text.append(f"| … | {len(no_translation) - 120} more words |")
     (args.out / "coverage.md").write_text("\n".join(raw_text) + "\n", encoding="utf-8")
 
     print(
-        f"OK: {len(registros)} icones indexados "
-        f"({len(categories)} categorias, {total_apelidos} apelidos, "
-        f"faixa U+{base:04X}..U+{base + len(registros) - 1:04X})"
+        f"OK: {len(records)} icons indexed "
+        f"({len(categories)} categories, {total_aliases} aliases, "
+        f"range U+{base:04X}..U+{base + len(records) - 1:04X})"
     )
 
     if len(without_pt) > args.cap_no_pt:
         print("", file=sys.stderr)
         print(
-            f"ERRO: {len(without_pt)} icones sem NENHUMA tag em portugues, "
-            f"e o teto e {args.cap_no_pt}.",
+            f"ERROR: {len(without_pt)} icons with NO Portuguese tag at all, "
+            f"and the ceiling is {args.cap_no_pt}.",
             file=sys.stderr,
         )
         for name in without_pt[:12]:
             print(f"       {name}", file=sys.stderr)
         if len(without_pt) > 12:
             print(f"       … e mais {len(without_pt) - 12}", file=sys.stderr)
-        print("       Quem procura em portugues NAO acha estes icones.", file=sys.stderr)
-        print("       A fila, por frequencia, esta no coverage.md.", file=sys.stderr)
+        print("       Anyone searching in Portuguese does NOT find these icons.", file=sys.stderr)
+        print("       The queue, by frequency, is in coverage.md.", file=sys.stderr)
         sys.exit(1)
 
     if coverage < args.min_coverage:
         print("", file=sys.stderr)
         print(
-            f"ERRO: cobertura de traducao em {coverage:.1f}%, "
-            f"abaixo do piso de {args.min_coverage}%.",
+            f"ERROR: translation coverage at {coverage:.1f}%, "
+            f"below the floor of {args.min_coverage}%.",
             file=sys.stderr,
         )
-        print("       A fila de trabalho esta no coverage.md.", file=sys.stderr)
+        print("       The work queue is in coverage.md.", file=sys.stderr)
         sys.exit(1)
 
     print(
-        f"OK: traducao de tags em {coverage:.1f}% "
-        f"({tipos} palavras distintas sem traducao)"
+        f"OK: tag translation at {coverage:.1f}% "
+        f"({kinds} distinct words with no translation)"
     )
     return 0
 

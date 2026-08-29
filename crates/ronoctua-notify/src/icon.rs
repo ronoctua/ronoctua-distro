@@ -94,7 +94,7 @@ impl Chain<'_> {
         &self,
         app_id: &str,
         icon_name: Option<&str>,
-        embutido: Option<Vec<u8>>,
+        embedded: Option<Vec<u8>>,
     ) -> Icon {
         // Step 1.
         if let Some(g) = self.glyph(app_id) {
@@ -109,14 +109,14 @@ impl Chain<'_> {
                 return Icon::Pixmap(p);
             }
             if let Some(root) = self.superpack
-                && let Some(achado) = look_up(root, name)
+                && let Some(found_at) = look_up(root, name)
             {
-                return Icon::Pixmap(achado);
+                return Icon::Pixmap(found_at);
             }
         }
 
         // Step 3.
-        if let Some(bytes) = embutido.filter(|b| !b.is_empty()) {
+        if let Some(bytes) = embedded.filter(|b| !b.is_empty()) {
             return Icon::Builtin(bytes);
         }
 
@@ -207,7 +207,7 @@ pub enum Fit {
 /// `side × side`; in [`Fit::Natural`] it is the document's size, and it only
 /// reaches `side` when the document is bigger than that.
 #[must_use]
-pub fn from_svg(bytes: &[u8], side: u32, encaixe: Fit) -> Option<Rgba> {
+pub fn from_svg(bytes: &[u8], side: u32, fit: Fit) -> Option<Rgba> {
     let options = resvg::usvg::Options::default();
     let tree = resvg::usvg::Tree::from_data(bytes, &options).ok()?;
     let sz = tree.size();
@@ -218,19 +218,16 @@ pub fn from_svg(bytes: &[u8], side: u32, encaixe: Fit) -> Option<Rgba> {
     // is looking doubt what they are seeing. The scale is the smaller of the two, and what
     // is left over becomes transparency — which the pipeline's alpha lets through.
     let fits = (side as f32 / sz.width()).min(side as f32 / sz.height());
-    let scale = match encaixe {
+    let scale = match fit {
         Fit::Fill => fits,
         // NEVER ENLARGE. A 24 px document enlarged to fill the box is
         // the same image as a 512 px one — and that was exactly the defect.
         Fit::Natural => fits.min(1.0),
     };
-    let arredondar = |v: f32| (v.round() as u32).max(1);
-    let (width, height) = match encaixe {
+    let round_it = |v: f32| (v.round() as u32).max(1);
+    let (width, height) = match fit {
         Fit::Fill => (side, side),
-        Fit::Natural => (
-            arredondar(sz.width() * scale),
-            arredondar(sz.height() * scale),
-        ),
+        Fit::Natural => (round_it(sz.width() * scale), round_it(sz.height() * scale)),
     };
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
     let dx = (width as f32 - sz.width() * scale) / 2.0;
@@ -265,8 +262,8 @@ pub fn from_raster(bytes: &[u8], side: u32) -> Option<Rgba> {
     // `Lanczos3` and not `Nearest`: the reduction is large — 512 px to 18 — and a
     // nearest-neighbour resampler loses the icon's thin lines
     // entirely, leaving a blur of blocks.
-    let escalada = img.resize(side, side, image::imageops::FilterType::Lanczos3);
-    let rgba = escalada.to_rgba8();
+    let scaled = img.resize(side, side, image::imageops::FilterType::Lanczos3);
+    let rgba = scaled.to_rgba8();
     Some(Rgba {
         width: rgba.width(),
         height: rgba.height(),
@@ -283,7 +280,7 @@ pub fn from_raster(bytes: &[u8], side: u32) -> Option<Rgba> {
 /// calls it from a thread, far from the event loop. See [`Chain::glyph`].
 #[must_use]
 pub fn look_up(root: &std::path::Path, name: &str) -> Option<PathBuf> {
-    let mut tamanhos: Vec<_> = std::fs::read_dir(root)
+    let mut sizes: Vec<_> = std::fs::read_dir(root)
         .ok()?
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -291,10 +288,10 @@ pub fn look_up(root: &std::path::Path, name: &str) -> Option<PathBuf> {
         .collect();
     // A stable, decreasing order. Without this, the choice would depend on the filesystem's
     // order and would change between machines.
-    tamanhos.sort();
-    tamanhos.reverse();
+    sizes.sort();
+    sizes.reverse();
 
-    for dir in tamanhos {
+    for dir in sizes {
         for ext in ["svg", "png"] {
             let target = dir.join(format!("{name}.{ext}"));
             if target.exists() {
@@ -302,10 +299,10 @@ pub fn look_up(root: &std::path::Path, name: &str) -> Option<PathBuf> {
             }
             // freedesktop themes put the files in a context
             // subdirectory (`apps/`, `places/`, …).
-            let Ok(contextos) = std::fs::read_dir(&dir) else {
+            let Ok(contexts) = std::fs::read_dir(&dir) else {
                 continue;
             };
-            let mut ctxs: Vec<_> = contextos
+            let mut ctxs: Vec<_> = contexts
                 .filter_map(Result::ok)
                 .map(|e| e.path())
                 .filter(|p| p.is_dir())
@@ -360,10 +357,10 @@ mod tests {
 
     #[test]
     fn stage_2_the_superpack() {
-        let dir = std::env::temp_dir().join("ronoctua-teste-icone-2");
+        let dir = std::env::temp_dir().join("ronoctua-test-icon-2");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("48x48/apps")).unwrap();
-        std::fs::write(dir.join("48x48/apps/estranho.png"), b"x").unwrap();
+        std::fs::write(dir.join("48x48/apps/strange.png"), b"x").unwrap();
 
         let t = table();
         let c = Chain {
@@ -371,8 +368,8 @@ mod tests {
             superpack: Some(&dir),
             generic: None,
         };
-        let i = c.resolve("com.exemplo.estranho", Some("estranho"), None);
-        assert_eq!(i.stage(), 2, "resolveu {i:?}");
+        let i = c.resolve("com.example.strange", Some("strange"), None);
+        assert_eq!(i.stage(), 2, "it resolved {i:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -380,7 +377,7 @@ mod tests {
     fn the_largest_size_wins() {
         // Shrinking a large icon comes out better than enlarging a small one, and the
         // order must not depend on the filesystem's order.
-        let dir = std::env::temp_dir().join("ronoctua-teste-icone-tam");
+        let dir = std::env::temp_dir().join("ronoctua-test-icon-size");
         let _ = std::fs::remove_dir_all(&dir);
         for sz in ["16x16", "512x512", "48x48"] {
             std::fs::create_dir_all(dir.join(format!("{sz}/apps"))).unwrap();
@@ -393,9 +390,9 @@ mod tests {
             generic: None,
         };
         let Icon::Pixmap(p) = c.resolve("x", Some("x"), None) else {
-            panic!("nao achou")
+            panic!("it did not find it")
         };
-        assert!(p.to_string_lossy().contains("512x512"), "achou {p:?}");
+        assert!(p.to_string_lossy().contains("512x512"), "found {p:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -407,7 +404,7 @@ mod tests {
             superpack: None,
             generic: None,
         };
-        let i = c.resolve("desconhecido", Some("tambem-nao-existe"), Some(vec![9]));
+        let i = c.resolve("desconhecido", Some("also-does-not-exist"), Some(vec![9]));
         assert_eq!(i.stage(), 3);
     }
 

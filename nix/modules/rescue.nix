@@ -63,7 +63,7 @@ let
     case "$1" in
       switch) "$profile"/bin/switch-to-configuration switch ;;
       boot)   "$profile"/bin/switch-to-configuration boot ;;
-      *) echo "modo desconhecido: $1" >&2; exit 2 ;;
+      *) echo "unknown mode: $1" >&2; exit 2 ;;
     esac
   '';
 
@@ -74,11 +74,11 @@ let
   # the cheapest check that catches the whole class, and it costs no evaluation.
   installHost = pkgs.writeShellScript "ronoctua-rescue-host" ''
     set -eu
-    test -s ${staged} || { echo "nada foi editado" >&2; exit 1; }
+    test -s ${staged} || { echo "nothing was edited" >&2; exit 1; }
     ${pkgs.nix}/bin/nix-instantiate --parse ${staged} > /dev/null \
-      || { echo "o arquivo editado nao e Nix valido; nada foi instalado" >&2; exit 1; }
+      || { echo "the edited file is not valid Nix; nothing was installed" >&2; exit 1; }
     ${pkgs.coreutils}/bin/install -m 0644 ${staged} /etc/nixos/host.nix
-    echo "gravado; falta um nixos-rebuild switch"
+    echo "written; a nixos-rebuild switch is still needed"
   '';
 
   # The units the console may start or restart, and NOTHING else.
@@ -100,14 +100,14 @@ in
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "O console de resgate no Ctrl+Alt+Del.";
+      description = "The rescue console on Ctrl+Alt+Del.";
     };
     vt = lib.mkOption {
       type = lib.types.int;
       default = 8;
       description = ''
-        Qual console virtual o resgate toma. O padrao e 8 porque 1..6 sao dos
-        getty e o 7 e onde a sessao grafica costuma estar.
+        Which virtual console the rescue takes. The default is 8 because 1..6 belong to the
+        gettys and 7 is where the graphical session usually is.
       '';
     };
   };
@@ -151,7 +151,7 @@ in
     systemd.ctrlAltDelUnit = "ronoctua-rescue.target";
 
     systemd.targets.ronoctua-rescue = {
-      description = "Ctrl+Alt+Del — abre o console de resgate";
+      description = "Ctrl+Alt+Del — opens the rescue console";
       # A target and not the service directly: `ctrl-alt-del.target` is a
       # symlink to whatever this names, and systemd expects a target's name to
       # end in `.target`.
@@ -160,7 +160,7 @@ in
     };
 
     systemd.services.ronoctua-rescue = {
-      description = "Console de resgate no console virtual ${toString cfg.vt}";
+      description = "Rescue console on virtual console ${toString cfg.vt}";
       # `Type = "idle"` and not `simple`: with jobs still running, a TTY service
       # that starts at once writes over whatever else is printing on the console.
       serviceConfig = {
@@ -197,7 +197,7 @@ in
     # WHAT IT MAY ASK FOR
     # ---------------------------------------------------------------
     systemd.services."ronoctua-rescue-rollback@" = {
-      description = "Volta para a geracao anterior (%i)";
+      description = "Goes back to the previous generation (%i)";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${rollback} %i";
@@ -205,7 +205,7 @@ in
     };
 
     systemd.services.ronoctua-rescue-rebuild = {
-      description = "Aplica /etc/nixos nesta maquina";
+      description = "Applies /etc/nixos on this machine";
       serviceConfig = {
         Type = "oneshot";
         # The attribute is named after the person, and `rescue-flake-target-exists`
@@ -215,7 +215,7 @@ in
     };
 
     systemd.services.ronoctua-rescue-host = {
-      description = "Instala o host.nix editado no console de resgate";
+      description = "Installs the host.nix edited in the rescue console";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${installHost}";

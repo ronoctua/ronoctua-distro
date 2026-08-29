@@ -69,7 +69,7 @@ pub fn restore_it() -> Result<(), String> {
     // gives back success, and the keyboard would still be without a leader — with
     // a message saying it worked, which is worse than having no message.
     if !active() {
-        return Err(format!("{UNIT} reiniciou e nao ficou ativo"));
+        return Err(format!("{UNIT} restarted and did not stay active"));
     }
     Ok(())
 }

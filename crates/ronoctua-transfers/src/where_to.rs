@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn a_magnet_never_reaches_the_link_engine() {
-        let into = PathBuf::from("/onde/vai");
+        let into = PathBuf::from("/where/it/goes");
         assert!(matches!(
             work_for("magnet:?xt=urn:btih:abc", into.clone(), Wish::plain()),
             Work::Torrent { .. }
@@ -193,8 +193,8 @@ mod tests {
             Some("$HOME/main/temp")
         );
         assert_eq!(
-            expand(std::path::Path::new("/casa/alguem"), "$HOME/main/temp"),
-            PathBuf::from("/casa/alguem/main/temp")
+            expand(std::path::Path::new("/home/someone"), "$HOME/main/temp"),
+            PathBuf::from("/home/someone/main/temp")
         );
         // A commented-out line is not a value, and a key that is a prefix of
         // another one must not match it.

@@ -40,16 +40,16 @@ fn measure(rt: &Runtime, wasm: &[u8], repeats: usize) -> Result<(f64, f64)> {
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-bench-instance <componente.wasm> [repeticoes]")?;
+        .context("usage: ronoctua-bench-instance <component.wasm> [repeats]")?;
     let repeats: usize = std::env::args()
         .nth(2)
         .and_then(|s| s.parse().ok())
         .unwrap_or(200);
 
-    let wasm = std::fs::read(&path).with_context(|| format!("nao consegui ler {path}"))?;
+    let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
     let rt = Runtime::fresh()?;
 
-    println!("componente: {} KiB", wasm.len() / 1024);
+    println!("component: {} KiB", wasm.len() / 1024);
 
     let (p50, p99) = measure(&rt, &wasm, repeats)?;
     println!("com  memory_init_cow: p50={p50:.3} ms  p99={p99:.3} ms  (n={repeats})");
@@ -64,19 +64,19 @@ fn main() -> Result<()> {
                 println!("diferenca no p99: {:.1}x", s99 / p99);
             }
         }
-        Err(e) => println!("(nao consegui medir sem cow: {e})"),
+        Err(e) => println!("(could not measure without cow: {e})"),
     }
 
     // The P99, not the average. The average hides exactly the case the user
     // notices — the buffer that took long.
     if p99 > CEILING_MS {
         bail!(
-            "p99 de {p99:.3} ms passa do teto de {CEILING_MS} ms da secao 5.2.\n\
+            "a p99 of {p99:.3} ms goes past section 5.2's ceiling of {CEILING_MS} ms.\n\
              \n\
-             O primeiro suspeito e `memory_init_cow`: sem ele a imagem de\n\
-             memoria e copiada por instancia. Ver `Runtime::novo`."
+             The first suspect is `memory_init_cow`: without it the memory image\n\
+             is copied per instance. See `Runtime::fresh`."
         );
     }
-    println!("OK: dentro do teto de {CEILING_MS} ms");
+    println!("OK: within the ceiling of {CEILING_MS} ms");
     Ok(())
 }

@@ -62,7 +62,7 @@ pkgs.testers.runNixOSTest {
       machine.start()
       machine.wait_for_unit("multi-user.target")
 
-      with subtest("o ctrl-alt-del.target e NOSSO, e nao um apelido do reboot"):
+      with subtest("ctrl-alt-del.target is OURS, and not an alias for reboot"):
           # THE DEFECT THIS CATCHES: a unit that does not override the alias.
           # Nothing would say so — the file would sit in /etc/systemd/system being
           # ignored, and the first press would reboot the machine.
@@ -72,10 +72,10 @@ pkgs.testers.runNixOSTest {
           following = machine.succeed("systemctl show ctrl-alt-del.target -p Id --value").strip()
           print(f"{following}: {wants}")
           assert "ronoctua-rescue.service" in wants, (
-              f"o ctrl-alt-del.target leva a `{following}`, e nao ao resgate:\n" + wants
+              f"ctrl-alt-del.target leads to `{following}`, and not to the rescue:\n" + wants
           )
 
-      with subtest("a saida dura continua sendo do systemd"):
+      with subtest("the hard exit is still systemd's"):
           # Taking the key over means taking what it did. If the burst stopped
           # rebooting too, a machine whose everything is frozen would have no way
           # out at all — and nothing would say so until that day.
@@ -84,7 +84,7 @@ pkgs.testers.runNixOSTest {
           ).strip()
           assert burst == "reboot-force", f"os sete toques viraram `{burst}`"
 
-      with subtest("um toque ABRE o console, e a maquina NAO reinicia"):
+      with subtest("one press OPENS the console, and the machine does NOT restart"):
           before = machine.succeed("cat /proc/sys/kernel/random/boot_id").strip()
 
           # What the kernel does when the key is pressed on a console the
@@ -97,10 +97,10 @@ pkgs.testers.runNixOSTest {
 
           after = machine.succeed("cat /proc/sys/kernel/random/boot_id").strip()
           assert before == after, (
-              "a maquina REINICIOU: o alvo continua levando ao reboot.target"
+              "the machine RESTARTED: the target still leads to reboot.target"
           )
 
-      with subtest("ele roda como a pessoa, e nao como root"):
+      with subtest("it runs as the person, and not as root"):
           # A root console one keypress away from any locked machine is a bigger
           # hole than the one this console closes.
           who = machine.succeed(
@@ -108,12 +108,12 @@ pkgs.testers.runNixOSTest {
           ).strip()
           assert who == user_name, f"o resgate roda como `{who}`"
 
-      with subtest("a tela do console virtual tem a barra lateral"):
+      with subtest("the virtual console's screen has the sidebar"):
           # `/dev/vcs8` IS the console's text. No screenshot, no OCR, no font: if
           # the sidebar is in there, then the unit came up, the VT switched, the
           # terminal took raw mode, ratatui drew and the text came out translated.
           #
-          # `Terminal` and not `Estado`: it is the one entry that reads the same
+          # `Terminal` and not `State`: it is the one entry that reads the same
           # in both languages, so the assertion does not depend on which locale
           # the VM happened to boot with.
           machine.wait_until_succeeds(
@@ -125,9 +125,9 @@ pkgs.testers.runNixOSTest {
       with subtest("e o console virtual em foco e o 8"):
           # Opening on a VT nobody is looking at is opening nothing.
           at = machine.succeed("fgconsole").strip()
-          assert at == "8", f"o resgate abriu no vt8 e a tela ficou no {at}"
+          assert at == "8", f"the rescue opened on vt8 and the screen stayed on {at}"
 
-      with subtest("as unidades que ele pode pedir existem"):
+      with subtest("the units it can ask for exist"):
           # A row whose unit does not exist fails in front of the person, and the
           # message systemd gives ("Unit not found") points nowhere useful.
           for unit in [
@@ -138,22 +138,22 @@ pkgs.testers.runNixOSTest {
           ]:
               machine.succeed(f"systemctl cat {unit} > /dev/null")
 
-      with subtest("o diretorio onde o editor grava e da pessoa"):
+      with subtest("the directory the editor writes into belongs to the person"):
           # AND THE BOOT DID NOT COMPLAIN. `systemd-tmpfiles` writes one line
           # and carries on: the rule named a group that does not exist, the
           # directory was never created, and the failure would have shown up
           # much later as an edit that saved and installed nothing.
           boot = machine.succeed("journalctl -b -u systemd-tmpfiles-setup --no-pager")
           assert "ronoctua-rescue" not in boot, (
-              "o tmpfiles reclamou da nossa regra:\n" + boot
+              "tmpfiles complained about our rule:\n" + boot
           )
           owner = machine.succeed("stat -c %U /run/ronoctua-rescue").strip()
           assert owner == user_name, (
               f"/run/ronoctua-rescue e de `{owner}`; o editor roda como a pessoa "
-              "e nao conseguiria gravar"
+              "and would not manage to write"
           )
 
-      with subtest("sair devolve a tela de onde ela veio"):
+      with subtest("leaving gives the screen back to where it came from"):
           machine.succeed("systemctl stop ronoctua-rescue.service")
           machine.wait_until_succeeds("test $(fgconsole) != 8", timeout=30)
     '';

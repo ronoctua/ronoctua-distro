@@ -7,8 +7,8 @@ key, wifi PSK, token, e-mail or real name.
 
 # Why by shape, and not by word
 
-Searching for the word "senha" would flag the tests themselves: `installer-dryrun`
-sets `RONOCTUA_INST_SENHA=senha-de-teste`, and that is a fixture, not a secret.
+Searching for the word "password" would flag the tests themselves: `installer-dryrun`
+sets `RONOCTUA_INST_PASSWORD=test-password`, and that is a fixture, not a secret.
 What is looked for here is the SHAPE of a real secret — a private key
 block, a crypt hash prefix, an age key, a known token prefix.
 A real secret has a recognisable shape; a fixture does not.
@@ -34,21 +34,21 @@ _BEGIN = "-----" + "BEGIN"
 _PRIV = "PRIVATE" + " KEY"
 
 PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("bloco de chave privada", re.compile(rf"{_BEGIN}[ A-Z]*{_PRIV}")),
+    ("private key", re.compile(rf"{_BEGIN}[ A-Z]*{_PRIV}")),
     # `$y$` yescrypt, `$6$` sha512, `$2b$` bcrypt, `$argon2…`. The suffix requires
     # a long body so it does not match a bare `$6$` in some text.
-    ("hash de senha", re.compile(r"\$(y|6|2[aby]|argon2[a-z]*)\$[./A-Za-z0-9$,=+-]{16,}")),
-    ("chave age", re.compile("AGE-SECRET-" + "KEY-1[0-9A-Z]{50,}")),
-    ("token de servico", re.compile(r"\b(ghp_|github_pat_|xoxb-|sk-ant-|AKIA)[A-Za-z0-9_-]{16,}")),
-    ("PSK de wifi", re.compile(r"\bpsk\s*=\s*[\"']?[^\s\"']{8,}")),
+    ("password hash", re.compile(r"\$(y|6|2[aby]|argon2[a-z]*)\$[./A-Za-z0-9$,=+-]{16,}")),
+    ("age key", re.compile("AGE-SECRET-" + "KEY-1[0-9A-Z]{50,}")),
+    ("service token", re.compile(r"\b(ghp_|github_pat_|xoxb-|sk-ant-|AKIA)[A-Za-z0-9_-]{16,}")),
+    ("wifi PSK", re.compile(r"\bpsk\s*=\s*[\"']?[^\s\"']{8,}")),
     # E-mail: section 9 admits none. Obvious placeholders pass.
-    ("endereco de e-mail", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+    ("e-mail address", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
 ]
 
 # Placeholders that are NOT personal data.
-ISENTOS = re.compile(
+EXEMPT = re.compile(
     r"(example\.(com|org)|example\.com|<[^>]*>|foo@bar|localhost|@\{|"
-    r"seu-usuario|usuario@|noreply@|"
+    r"your-user|user@|noreply@|"
     # `user@1000.service` is a systemd UNIT name, and it appears in every
     # cgroup path. Without this exemption, any test that mentions a
     # session cgroup becomes "e-mail in the repository".
@@ -72,7 +72,7 @@ ISENTOS = re.compile(
 # The exemption is (file, RULE), and not the file on its own: a private key or a
 # service token planted in `LICENSE-OFL.txt` still has to be caught. Only the
 # e-mail rule is lifted, and only there.
-ISENTOS_POR_ARQUIVO = {"LICENSE-OFL.txt": {"endereco de e-mail"}}
+EXEMPT_PER_FILE = {"LICENSE-OFL.txt": {"e-mail address"}}
 
 # There is no reason to read these: they are binaries or a build tree.
 IGNORAR_DIR = {".git", "target", "result", ".direnv", "__pycache__"}
@@ -103,17 +103,17 @@ def scan(root_dir: Path) -> list[str]:
 
         rel = f.relative_to(root_dir)
         for n, line in enumerate(raw_text.splitlines(), 1):
-            if ISENTOS.search(line):
+            if EXEMPT.search(line):
                 continue
-            isentas = ISENTOS_POR_ARQUIVO.get(f.name, frozenset())
+            exempt = EXEMPT_PER_FILE.get(f.name, frozenset())
             for name, pattern in PATTERNS:
-                if name in isentas:
+                if name in exempt:
                     continue
                 m = pattern.search(line)
                 if m:
                     # The SNIPPET is not printed: if it is a real secret, the
                     # CI log would publish it again. Only the shape and the place.
-                    hits.append(f"{rel}:{n}: {name} ({len(m.group(0))} caracteres)")
+                    hits.append(f"{rel}:{n}: {name} ({len(m.group(0))} characters)")
                     break
     return hits
 
@@ -124,24 +124,24 @@ def main() -> int:
         return 2
     root_dir = Path(sys.argv[1])
     if not root_dir.is_dir():
-        print(f"ERRO: {root_dir} nao e diretorio", file=sys.stderr)
+        print(f"ERROR: {root_dir} is not a directory", file=sys.stderr)
         return 2
 
     hits = scan(root_dir)
     if hits:
-        print("ERRO: padrao de segredo na arvore (secao 9).", file=sys.stderr)
+        print("ERROR: a secret pattern in the tree (section 9).", file=sys.stderr)
         print("", file=sys.stderr)
         for a in hits:
             print(f"  {a}", file=sys.stderr)
         print("", file=sys.stderr)
         print(
-            "O repositorio precisa ser publicavel como esta. Dado pessoal e\n"
-            "segredo vivem em /persist ou no host.nix local, nunca aqui.",
+            "The repository has to be publishable as it stands. Personal data and\n"
+            "a secret live in /persist or in the local host.nix, never here.",
             file=sys.stderr,
         )
         return 1
 
-    print("OK: nenhum padrao de segredo na arvore")
+    print("OK: no secret pattern in the tree")
     return 0
 
 

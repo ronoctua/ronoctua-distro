@@ -81,7 +81,7 @@ fn main() -> std::process::ExitCode {
 
     // A LONG name on purpose: a browser title goes past 200 characters,
     // and it is what makes the elision work.
-    let name = "projeto/subpasta/mais/fundo/ainda/um/arquivo-de-nome-bem-longo.rs";
+    let name = "project/subfolder/deeper/still/one/a-rather-long-file-name.rs";
     let segs = segments(name);
 
     // Widths that exercise the three regimes: slack, tight and phase B.
@@ -89,7 +89,7 @@ fn main() -> std::process::ExitCode {
     let mut worst = 0.0_f64;
 
     for width in widths {
-        // Aquecimento: a primeira passada paga cache frio.
+        // Warm-up: the first pass pays for a cold cache.
         for _ in 0..100 {
             std::hint::black_box(resolve(width, &segs));
         }
@@ -103,21 +103,23 @@ fn main() -> std::process::ExitCode {
         samples.sort_by(f64::total_cmp);
         let p99 = samples[(samples.len() as f64 * 0.99) as usize];
         let p50 = samples[samples.len() / 2];
-        println!("layout {width:>4} colunas: p50={p50:.4} ms  p99={p99:.4} ms");
+        println!("layout {width:>4} columns: p50={p50:.4} ms  p99={p99:.4} ms");
         worst = worst.max(p99);
     }
 
     let ceiling = FRAME_MS * SLICE;
     let pct = (SLICE * 100.0) as u32;
     println!();
-    println!("pior p99: {worst:.4} ms   teto: {ceiling:.1} ms ({pct}% do frame de {FRAME_MS} ms)");
+    println!(
+        "worst p99: {worst:.4} ms   ceiling: {ceiling:.1} ms ({pct}% of the {FRAME_MS} ms frame)"
+    );
 
     if worst > ceiling {
         eprintln!(
-            "\nERRO: o layout sozinho passa de {pct}% do frame.\n\
+            "\nERROR: layout on its own goes past {pct}% of the frame.\n\
              \n\
-             Ele e a PRIMEIRA etapa; o que sobra e para moldar texto, subir\n\
-             atlas e desenhar. Ver a secao 5.2."
+             It is the FIRST stage; what is left is for shaping text, bringing up\n\
+             the atlas and drawing. See section 5.2."
         );
         return std::process::ExitCode::FAILURE;
     }

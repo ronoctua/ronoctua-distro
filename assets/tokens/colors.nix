@@ -52,7 +52,7 @@
     # elision (section 7 of the plan).
     dim = "0x6E6656FF";
     inverse = "0x000000FF";
-    # The label of a SUBMENU in the shortcut list — which-key's `+janela`.
+    # The label of a SUBMENU in the shortcut list — which-key's `+window`.
     #
     # It needs a tone of its own: a submenu does not DO anything, it leads to another
     # level, and with no distinction the list mixes "this happens" with "this opens
@@ -146,6 +146,49 @@
     # tells them apart is which column they are in, and the column has a
     # heading.
     suppressed = "0x6E6656FF";
+  };
+
+  # -------------------------------------------------------------------
+  # THE BRAIN'S LINE — below the minibuffer, above the expansion
+  # -------------------------------------------------------------------
+  #
+  # It is the footer's own surface growing DOWNWARDS, the mirror of the
+  # notification band growing upwards. One surface, no popup, no card
+  # (invariants 14 and 15).
+  #
+  # NOT another rung of the band's ramp. `surface.base` (0x000000) →
+  # `surface.chrome` (0x121212) → `modeline.background` (0x1E1E1E) →
+  # `notification.background` (0x242424) is a ladder the eye climbs upwards,
+  # and every rung means "one more layer of chrome". This one is a step
+  # SIDEWAYS: the same luminance neighbourhood as the modeline, with a blue
+  # cast, because it is not one more thing above — it is a different KIND of
+  # line. It is the only background in this file that carries a hue, and that
+  # is the whole point: the machine is about to do something to itself, and
+  # the line saying so must not read as a modeline that changed its mind.
+  #
+  # The owner asked for it in those words: a dark, slightly blue-ish grey,
+  # with white letters.
+  brain = {
+    background = "0x161C28FF";
+
+    # THE ONE NEAR-WHITE IN THIS FILE, and it is confined to this line.
+    #
+    # The body text is warm on purpose — see the `text` block, where the whole
+    # family was warmed together so a greyscale ramp would not change
+    # temperature halfway. Over a blue-cast background a warm white reads as
+    # dirty, so this family is neutral instead. Two temperatures on one screen
+    # is exactly what that block argues against, which is why this one may not
+    # leave this line.
+    text = "0xF4F6FAFF";
+
+    # The bracketed keys, and the quieter half of a button's label. The same
+    # hue at a lower luminance — the `text.dim` relation, inside this family.
+    dim = "0x93A0B8FF";
+
+    # THE PIE, and it is brighter than `dim` on purpose: it is the only thing
+    # on the line that MOVES, and it is what a person looks at to decide
+    # whether to reach for the keyboard.
+    countdown = "0xC3CEE2FF";
   };
 
   # -------------------------------------------------------------------

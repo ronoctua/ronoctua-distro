@@ -284,12 +284,12 @@ impl Manager {
     /// Node bus, or no NetworkManager on it.
     pub fn fresh() -> Result<Self> {
         let connection = zbus::blocking::Connection::system()
-            .context("sem barramento de sistema para falar com o NetworkManager")?;
+            .context("no system bus to talk to NetworkManager")?;
         Ok(Self { connection })
     }
 
     fn manager(&self) -> Result<nm::ManagerProxyBlocking<'_>> {
-        nm::ManagerProxyBlocking::new(&self.connection).context("NetworkManager fora do barramento")
+        nm::ManagerProxyBlocking::new(&self.connection).context("NetworkManager is off the bus")
     }
 
     /// Is the Wi-Fi radio on?
@@ -530,11 +530,11 @@ impl Manager {
             .devices_of_kind(nm::WIFI_KIND)?
             .into_iter()
             .next()
-            .context("esta máquina não tem rádio Wi-Fi")?;
+            .context("this machine has no Wi-Fi radio")?;
 
         let access_point = self
             .access_point_at(&device, ssid)?
-            .context("essa rede não está mais ao alcance")?;
+            .context("that network is no longer in range")?;
 
         if password.is_none()
             && let Some(profile) = self.profile_of(ssid)?
@@ -649,14 +649,13 @@ impl Manager {
             .devices_of_kind(kind)?
             .into_iter()
             .next()
-            .context("nenhum dispositivo desse tipo")?;
+            .context("no device of that kind")?;
         self.device(&path)?.disconnect()?;
         Ok(())
     }
 
     fn vault(&self) -> Result<nm::VaultProxyBlocking<'_>> {
-        nm::VaultProxyBlocking::new(&self.connection)
-            .context("o agente de rede não está no barramento")
+        nm::VaultProxyBlocking::new(&self.connection).context("the network agent is not on the bus")
     }
 
     /// Is there a password sealed in the TPM for this network?
@@ -676,7 +675,7 @@ impl Manager {
     pub fn forget(&self, ssid: &str) -> Result<()> {
         let path = self
             .profile_of(ssid)?
-            .context("não há perfil salvo com esse nome")?;
+            .context("there is no saved profile by that name")?;
         self.profile(&path)?.delete()?;
         // THE BLOB GOES WITH IT. The agent deletes it too on `DeleteSecrets`, and having
         // both paths is on purpose: the agent's covers whoever deleted the
@@ -713,13 +712,13 @@ where
         .devices_of_kind(nm::WIFI_KIND)?
         .into_iter()
         .next()
-        .context("esta máquina não tem rádio Wi-Fi")?;
+        .context("this machine has no Wi-Fi radio")?;
 
     std::thread::Builder::new()
         .name("ronoctua-scan".to_owned())
         .spawn(move || {
             let Ok(radio) = manager.radio(&device) else {
-                tracing::warn!("sem proxy do rádio; a lista não vai reler sozinha");
+                tracing::warn!("no radio proxy; the list will not reread on its own");
                 return;
             };
             // A BLOCKING stream: the thread exists precisely to wait here.
@@ -730,9 +729,9 @@ where
             }
             // The stream ending means NetworkManager went away. Saying so beats
             // a thread that quietly stops working.
-            tracing::info!("o fluxo de varredura terminou; sem releitura automática");
+            tracing::info!("the scan stream ended; no automatic reread");
         })
-        .context("nao consegui subir a thread de varredura")?;
+        .context("could not start the scan thread")?;
     Ok(())
 }
 
@@ -784,7 +783,7 @@ mod tests {
         assert!(secured(0, 0, 0x1)); // RSN only
         assert!(secured(0, 0x1, 0)); // WPA only
         assert!(secured(nm::AP_PRIVACY, 0, 0));
-        assert!(!secured(0, 0, 0), "rede aberta de verdade");
+        assert!(!secured(0, 0, 0), "a genuinely open network");
     }
 
     #[test]
@@ -827,7 +826,7 @@ mod tests {
         ];
         let output = group_by_ssid(networks);
         assert_eq!(output.len(), 1);
-        assert_eq!(output[0].signal, 85, "ficou com o ponto mais fraco");
+        assert_eq!(output[0].signal, 85, "it kept the weaker point");
         assert_eq!(output[0].band, Band::Ghz5);
     }
 
@@ -855,7 +854,7 @@ mod tests {
                 max_rate_kbps: 0,
             },
             Network {
-                ssid: "atual".into(),
+                ssid: "current".into(),
                 signal: 10,
                 band: Band::Ghz5,
                 secured: true,
@@ -869,7 +868,7 @@ mod tests {
             .into_iter()
             .map(|r| r.ssid)
             .collect();
-        assert_eq!(names, ["atual", "salva", "vizinho"]);
+        assert_eq!(names, ["current", "salva", "vizinho"]);
     }
 
     #[test]
@@ -878,9 +877,13 @@ mod tests {
         // profile file — exactly what this work exists to
         // eliminate. Neither of the two paths may fall into it.
         assert_eq!(flags(true), 1, "lembrar tem de ser AGENT_OWNED");
-        assert_eq!(flags(false), 2, "nao lembrar tem de ser NOT_SAVED");
+        assert_eq!(flags(false), 2, "not remembering has to be NOT_SAVED");
         for remember in [true, false] {
-            assert_ne!(flags(remember), 0, "caiu no padrao que grava em disco");
+            assert_ne!(
+                flags(remember),
+                0,
+                "it fell back to the default that writes to disk"
+            );
         }
     }
 

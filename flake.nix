@@ -1,5 +1,5 @@
 {
-  description = "ronoctua-distro — distribuicao NixOS sem barra, dock ou menu iniciar: so o conteudo e um rodape de duas linhas";
+  description = "ronoctua-distro — a NixOS distribution with no bar, dock or start menu: only the content and a two-line footer";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -292,6 +292,7 @@
           i18nRs
           mimeDb
           notificationsRs
+          updatesRs
           niriActions
           ;
         inherit (pkgs) xkeyboard_config;
@@ -301,6 +302,7 @@
         bufferMemory = buffers.memory;
         bufferTransfers = buffers.transfers;
         bufferFormat = buffers.format;
+        bufferBrain = buffers.brain;
         inherit iconSuperpack ghosttyVt torrentShim;
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
@@ -334,6 +336,18 @@
       diagnostics = pkgs.callPackage ./nix/diagnostics.nix {
         niri = inputs.niri.packages.${system}.niri;
       };
+
+      # THE UPDATE TABLE, generated from `assets/updates.nix` — the same shape
+      # `assets/notifications.nix` has: one declaration, and from it the Rust
+      # table, the text keys both languages owe, and the refusal of a field
+      # that does not exist.
+      updatesTable = pkgs.callPackage ./nix/updates.nix {
+        updatesFile = ./assets/updates.nix;
+      };
+      # The Rust half of it, named on its own because that is what goes into the
+      # compilation's environment — the whole attrset also carries the negative
+      # fixture and the runner factory, neither of which belongs in a build.
+      updatesRs = updatesTable.table;
 
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
@@ -409,7 +423,7 @@
           from =
             src:
             assert lib.assertMsg (builtins.length src.urls == 1)
-              "${src.name}: passou a ter ${toString (builtins.length src.urls)} espelhos — nix/prefetch.nix nao e mais necessario para ela";
+              "${src.name}: now has ${toString (builtins.length src.urls)} mirrors — nix/prefetch.nix is no longer needed for it";
             {
               inherit (src) name outputHash;
               url = builtins.head src.urls;
@@ -470,6 +484,16 @@
         # protects — the compositor and the footer — is declared later.
         ./nix/modules/memory.nix
         ./nix/modules/rescue.nix
+        # AFTER the rescue console, and the order is load-bearing: the update
+        # sequence's `system-rebuild` step BORROWS `ronoctua-rescue-rebuild`
+        # rather than declaring a second `nixos-rebuild switch --flake
+        # /etc/nixos#<person>`. One of those in the repository, not two, and an
+        # `assertions` entry says so if the rescue console is ever turned off.
+        ./nix/modules/update.nix
+        # AFTER the update module, because the brain's one task asks systemd to
+        # start the units that module declares. Nix does not care about the
+        # order; a person reading the list does.
+        ./nix/modules/brain.nix
         # The file manager's privileged half: one unit, one polkit rule, and
         # where it opens. Everything else about it needs no configuration.
         ./nix/modules/files.nix
@@ -521,6 +545,12 @@
               # that outlives the session, and its closure should be the copy
               # and not the desktop.
               transfers = rust.transfers;
+              # The brain's daemon, EXTRACTED for the same reason as the queue's
+              # — and one more: it decides WHEN the machine rebuilds itself, and
+              # a unit with no screen must not carry the renderer that would
+              # come with the whole workspace. `brain-unit-is-narrow` measures
+              # that rather than asserting it.
+              brain = rust.brain;
               # The browser extension, already generated: `nix/modules/browser-extension.nix`
               # packs and signs it on the machine, because the id comes from a
               # key that may not live in this repository.
@@ -599,7 +629,19 @@
         buffer-memory = buffers.memory;
         buffer-transfers = buffers.transfers;
         buffer-format = buffers.format;
+        buffer-brain = buffers.brain;
         i18n-rs = i18nRs;
+
+        # THE UPDATE SEQUENCE, in three pieces, exposed so a check can reach
+        # them without evaluating a whole NixOS system.
+        #
+        # `updates-negative` is the fixture that must FAIL to build: it is a
+        # table with a step that installs, and a guard nobody proves is a guard
+        # that stopped working quietly. The same shape `nix/glyphgen.nix` and
+        # the icon table already use.
+        updates-rs = updatesTable.table;
+        updates-negative = updatesTable.negativeFixture;
+        update-runners = self.nixosConfigurations.noctua.config.ronoctua.update.package;
 
         # The shell: the two-line footer.
         ronoctua-shell = rust.shell;
@@ -611,6 +653,10 @@
           inherit fonts;
           niri = inputs.niri.packages.${system}.niri;
           ronoctua-shell = rust.shell;
+          # The daemon, so the brain's line can be photographed. It is the only
+          # region of the footer that no buffer draws, so `nix run .#png`
+          # cannot reach it and a real compositor is the only vehicle.
+          ronoctua-brain = rust.brain;
         };
 
         iso = self.nixosConfigurations.installer.config.system.build.isoImage;
@@ -776,6 +822,7 @@
           glyphdb
           unicodedb
           lucidedb
+          updatesTable
           iconSuperpack
           rust
           buffers
@@ -807,7 +854,7 @@
           type = "app";
           program = "${devApp}/bin/ronoctua-dev";
           meta = {
-            description = "niri aninhado + rodape, para o loop de trabalho de UI";
+            description = "nested niri + footer, for the UI working loop";
             platforms = [ system ];
           };
         };
@@ -819,7 +866,7 @@
           type = "app";
           program = "${diagnostics}/bin/ronoctua-diagnostics";
           meta = {
-            description = "instantaneo do estado quando os atalhos travam";
+            description = "a snapshot of the state when the shortcuts lock up";
             platforms = [ system ];
           };
         };
@@ -835,7 +882,7 @@
           type = "app";
           program = "${gateApp}/bin/ronoctua-gate";
           meta = {
-            description = "nix flake check dimensionado pela RAM da maquina";
+            description = "nix flake check, sized by the machine's RAM";
             platforms = [ system ];
           };
         };
@@ -854,7 +901,7 @@
           type = "app";
           program = "${mostApp}/bin/ronoctua-most";
           meta = {
-            description = "os checks que nao constroem instalacao, pela RAM da maquina";
+            description = "the checks that do not build an installation, by the machine's RAM";
             platforms = [ system ];
           };
         };
@@ -872,7 +919,7 @@
           type = "app";
           program = "${prefetchApp}/bin/ronoctua-prefetch";
           meta = {
-            description = "baixa com retomada as fontes que nenhum cache tem";
+            description = "downloads, with resume, the fonts no cache has";
             platforms = [ system ];
           };
         };
@@ -896,7 +943,7 @@
         #
         # It says out loud that it is not the gate. A short lane that lets one
         # believe the work is finished is worse than no short lane.
-        quick = mkScriptApp "ronoctua-quick" "os checks que nao sobem VM — o laco curto" ''
+        quick = mkScriptApp "ronoctua-quick" "the checks that bring up no VM — the short loop" ''
           echo "== o laco curto: um subconjunto escolhido =="
           # THE LIST COMES FROM `tests/quick.nix`, not from here.
           #
@@ -911,17 +958,17 @@
             } \
             "$@"
           echo
-          echo "OK — e isto e um SUBCONJUNTO, nao uma categoria."
-          echo "     Sao dez escolhidos para o laco de edicao. Nao e completo e"
-          echo "     nao pretende ser: ha mais de cem checks, e a maioria deles"
-          echo "     tambem nao sobe VM."
+          echo "OK — and this is a SUBSET, not a category."
+          echo "     They are ten chosen for the editing loop. It is not complete and"
+          echo "     does not aim to be: there are more than a hundred checks, and most of them"
+          echo "     also bring up no VM."
           echo
-          echo "     nix run .#most   todos menos os que constroem instalacao"
-          echo "     nix run .#gate   tudo (invariante 7)"
+          echo "     nix run .#most   everything but the ones that build an installation"
+          echo "     nix run .#gate   everything (invariant 7)"
         '';
 
         # A complete system in a VM.
-        vm = mkScriptApp "ronoctua-vm" "sobe o sistema completo em VM" ''
+        vm = mkScriptApp "ronoctua-vm" "brings the whole system up in a VM" ''
           exec ${self.nixosConfigurations.vm.config.system.build.vm}/bin/run-nixos-vm "$@"
         '';
 
@@ -941,11 +988,11 @@
         # zstd -19 measured on this set: 24% of the original. 2,1 GB of patched
         # TTF becomes ~510 MB, comfortably inside one asset.
         fonts-release =
-          mkScriptApp "ronoctua-fonts-release" "empacota as fontes para um GitHub Release e imprime os hashes"
+          mkScriptApp "ronoctua-fonts-release" "packages the fonts for a GitHub Release and prints the hashes"
             ''
               root="''${1:-}"
               if [ -z "$root" ] || [ ! -d "$root/noctua-iosevka" ]; then
-                echo "uso: nix run .#fonts-release -- /caminho/com/noctua-iosevka" >&2
+                echo "usage: nix run .#fonts-release -- /path/with/noctua-iosevka" >&2
                 exit 1
               fi
               out=$(mktemp -d -t ronoctua-fonts-release-XXXXXX)
@@ -1010,17 +1057,17 @@
               } >> "$notes"
 
               echo
-              echo "notas do release (em ingles, prontas): $notes"
+              echo "release notes (in English, ready): $notes"
               echo
-              echo "Suba os quatro como assets de um Release em"
+              echo "Upload the four as assets of a Release at"
               echo "  https://github.com/ronoctua/ronoctua-distro/releases/new"
-              echo "com uma tag PROPRIA das fontes (fonts-v1), que nao se confunda"
-              echo "com a do ISO, e o corpo vindo do arquivo acima. Depois rode"
+              echo "with a tag OF THE FONTS' OWN (fonts-v1), not to be confused"
+              echo "with the ISO's, and the body coming from the file above. Then run"
               echo "  nix flake update fonts-ttf fonts-ttf-nerdfonts fonts-woff2 fonts-woff2-nerdfonts"
             '';
 
         # Builds the ISO and says where it is.
-        iso = mkScriptApp "ronoctua-iso" "gera o ISO do instalador" ''
+        iso = mkScriptApp "ronoctua-iso" "builds the installer's ISO" ''
           out=$(nix build --no-link --print-out-paths .#iso)
           echo "ISO gerado em:"
           find "$out/iso" -name '*.iso' -printf '  %p  (%s bytes)\n'
@@ -1029,34 +1076,34 @@
         # The real installer. Without `--execute` it does a DRY RUN: it shows the
         # `host.nix` it would generate and the steps it would run, and exits. That is the default
         # on purpose — the first step erases an entire disk.
-        install = mkScriptApp "ronoctua-install" "instala a versao de producao" ''
+        install = mkScriptApp "ronoctua-install" "installs the production version" ''
           exec ${rust.workspace}/bin/ronoctua-install "$@"
         '';
 
         # Measures performance on real hardware (section 9.3 of the plan: section 5.2's
         # targets are NEVER measured under lavapipe).
-        bench = mkScriptApp "ronoctua-bench" "mede os alvos da secao 5.2 em hardware real" ''
-          echo "ronoctua-bench — secao 5.2"
+        bench = mkScriptApp "ronoctua-bench" "measures section 5.2's targets on real hardware" ''
+          echo "ronoctua-bench — section 5.2"
           echo
-          echo "== trabalho de CPU do frame =="
+          echo "== the frame's CPU work =="
           ${rust.workspace}/bin/ronoctua-bench-layout "''${1:-20000}"
           echo
-          echo "== moldagem de texto =="
+          echo "== text shaping =="
           ${rust.workspace}/bin/ronoctua-bench-shaping
           echo
-          echo "== instanciacao de componente =="
+          echo "== component instantiation =="
           ${rust.workspace}/bin/ronoctua-bench-instance \
             ${buffers.glyphs}/lib/ronoctua_buffer_glyphs.wasm 200
           echo
-          echo "== alvos de frame, em hardware real =="
+          echo "== frame targets, on real hardware =="
           # Section 9.3 demands they be measured here and never under lavapipe. It needs a
           # graphics session; without one, the command says what is missing instead of
           # inventing a number.
           if [ -n "''${WAYLAND_DISPLAY:-}''${DISPLAY:-}" ]; then
             ${benchFrames}/bin/ronoctua-bench-frames "''${2:-6}" "''${3:-15}"
           else
-            echo "Sem sessao grafica: os alvos de frame nao foram medidos."
-            echo "Rode este comando de dentro de uma sessao Wayland ou X."
+            echo "No graphical session: the frame targets were not measured."
+            echo "Run this command from inside a Wayland or X session."
           fi
         '';
 
@@ -1081,7 +1128,7 @@
         # the command answer the same on this machine, on one with no GPU and
         # inside a check. Section 9.3 still holds: frame time is NEVER measured
         # here.
-        png = mkScriptApp "ronoctua-png" "desenha um buffer num PNG, sem VM" ''
+        png = mkScriptApp "ronoctua-png" "draws a buffer into a PNG, with no VM" ''
           # NO `LD_LIBRARY_PATH` HERE, and that is deliberate: it beats
           # `DT_RUNPATH`, and the binary already carries the loader it was built
           # against. Putting a second `libvulkan` in front of it is the same
@@ -1170,7 +1217,7 @@
             elif [ -e "$a" ]; then
               files+=("$a")
             else
-              echo "nix fmt: nao existe: $a" >&2
+              echo "nix fmt: does not exist: $a" >&2
               failed=1
             fi
           done

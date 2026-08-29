@@ -59,28 +59,28 @@ fn main() -> Result<()> {
         }
     }
     let adapter = adapter.context(
-        "nenhum adaptador grafico, nem Vulkan nem GL.\n\
+        "no graphics adapter, neither Vulkan nor GL.\n\
          \n\
-         Nos checks o adaptador e o lavapipe, posto por VK_DRIVER_FILES.\n\
-         Sem ele este teste nao consegue afirmar nada, e passar em silencio\n\
-         seria pior do que falhar: o teto de 2048 voltaria sem ninguem ver.",
+         In the checks the adapter is lavapipe, put there by VK_DRIVER_FILES.\n\
+         Without it this test can claim nothing, and passing in silence\n\
+         would be worse than failing: the 2048 ceiling would come back with nobody seeing it.",
     )?;
 
     let limits = ronoctua_render::gpu::limits_of(&adapter);
     let ceiling = limits.max_texture_dimension_2d;
     println!(
-        "adaptador: {:?} ({:?}); teto de textura 2D: {ceiling}",
+        "adapter: {:?} ({:?}); 2D texture ceiling: {ceiling}",
         adapter.get_info().name,
         adapter.get_info().backend,
     );
 
     if ceiling < WIDTH || ceiling < HEIGHT {
         bail!(
-            "o teto de textura 2D e {ceiling}, e um monitor de {WIDTH}x{HEIGHT} nao cabe.\n\
+            "the 2D texture ceiling is {ceiling}, and a monitor of {WIDTH}x{HEIGHT} does not fit.\n\
              \n\
-             O adaptador informa {}. Se ele informa mais do que isto, quem\n\
-             baixou o teto foi `limites_do` — provavelmente um\n\
-             `downlevel_defaults()` sem `using_resolution`.",
+             The adapter reports {}. If it reports more than this, what\n\
+             lowered the ceiling was `limits_of` — probably a\n\
+             `downlevel_defaults()` with no `using_resolution`.",
             adapter.limits().max_texture_dimension_2d,
         );
     }
@@ -91,16 +91,16 @@ fn main() -> Result<()> {
         required_limits: limits,
         ..Default::default()
     }))
-    .context("o adaptador nao entregou dispositivo com os limites de producao")?;
+    .context("the adapter handed over no device with production's limits")?;
 
     // AN ERROR SCOPE, and not a `catch_unwind`: a wgpu validation error goes to
     // the innermost scope instead of bringing the process down. Without it, the
     // regression would show up as "the test died", without saying in which
     // dimension. In wgpu 30 the `push_error_scope` gives back a GUARD, and it is
     // the guard that has the `pop()`; the `Device` no longer has `pop_error_scope`.
-    let escopo = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("do tamanho de um monitor"),
+        label: Some("the size of a monitor"),
         size: wgpu::Extent3d {
             width: WIDTH,
             height: HEIGHT,
@@ -115,11 +115,11 @@ fn main() -> Result<()> {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    if let Some(e) = pollster::block_on(escopo.pop()) {
-        bail!("uma textura de {WIDTH}x{HEIGHT} foi recusada: {e}");
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        bail!("a texture of {WIDTH}x{HEIGHT} was refused: {e}");
     }
     drop(texture);
 
-    println!("uma superficie de {WIDTH}x{HEIGHT} cabe nos limites de producao.");
+    println!("a surface of {WIDTH}x{HEIGHT} fits within production's limits.");
     Ok(())
 }

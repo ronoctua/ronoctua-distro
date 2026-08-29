@@ -687,14 +687,14 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, area: Rect, base: Styl
             let mut lines: Vec<Line> = Vec::new();
             for (i, p) in e.build_plan().iter().enumerate() {
                 let mark = if p.destructive { "!" } else { " " };
-                let estilo = if p.destructive {
+                let style = if p.destructive {
                     Style::default().fg(color(color::STATE_CRITICAL))
                 } else {
                     Style::default().fg(color(color::TEXT_SECONDARY))
                 };
                 lines.push(Line::from(Span::styled(
                     format!("{mark} {}. {}", i + 1, texts.t(p.label)),
-                    estilo,
+                    style,
                 )));
             }
             lines.push(Line::from(""));
@@ -723,8 +723,8 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, area: Rect, base: Styl
             }
             // Only the end of the output: `nixos-install` prints thousands of lines,
             // and what matters is always the last one.
-            let cabem = usize::from(area.height).saturating_sub(lines.len()).max(1);
-            let start = e.output.len().saturating_sub(cabem);
+            let fit_in = usize::from(area.height).saturating_sub(lines.len()).max(1);
+            let start = e.output.len().saturating_sub(fit_in);
             for l in &e.output[start..] {
                 lines.push(Line::from(Span::styled(
                     l.clone(),
@@ -762,7 +762,7 @@ impl Drop for Guard {
 pub fn collect(initial: &Texts) -> Result<Option<Answers>> {
     enable_raw_mode().context("raw mode")?;
     let mut output = std::io::stdout();
-    crossterm::execute!(output, EnterAlternateScreen).context("tela alternativa")?;
+    crossterm::execute!(output, EnterAlternateScreen).context("alternate screen")?;
     let mut g = Guard(Terminal::new(CrosstermBackend::new(output)).context("terminal")?);
 
     let mut e = State::fresh(disks(), networks());
@@ -796,7 +796,7 @@ pub fn collect(initial: &Texts) -> Result<Option<Answers>> {
             modifiers,
             kind,
             ..
-        }) = event::read().context("ler tecla")?
+        }) = event::read().context("read a key")?
         else {
             continue;
         };
@@ -837,7 +837,7 @@ mod tests {
                     model: String::new(),
                 },
             ],
-            vec!["casa-5g".into(), "casa-2g".into()],
+            vec!["home-5g".into(), "home-2g".into()],
         )
     }
 
@@ -875,7 +875,10 @@ mod tests {
         // for over an hour, when an empty list made every answer invalid.
         let limit = Question::ALL_KEYS.len() * 4;
         while let Some(q) = e.question_of() {
-            assert!(views.len() < limit, "a tela {q:?} nao avanca: {views:?}");
+            assert!(
+                views.len() < limit,
+                "the screen {q:?} does not advance: {views:?}"
+            );
             views.push(q);
             match q {
                 // Every list question: `Enter` takes the option under the
@@ -906,7 +909,7 @@ mod tests {
                     e.key(KeyCode::Enter, &t);
                 }
                 Question::Password | Question::Passphrase => {
-                    for c in "Zq7-frase-de-teste".chars() {
+                    for c in "Zq7-test-phrase".chars() {
                         e.key(KeyCode::Char(c), &t);
                     }
                     e.key(KeyCode::Enter, &t);
@@ -916,9 +919,9 @@ mod tests {
                     e.key(KeyCode::Enter, &t);
                 }
                 Question::WifiPassword => {
-                    panic!("a senha apareceu sem rede escolhida")
+                    panic!("the password showed up with no network chosen")
                 }
-                Question::ResumeOffset => panic!("a TUI nao pergunta o offset"),
+                Question::ResumeOffset => panic!("the TUI does not ask for the offset"),
             }
         }
         assert_eq!(e.screen, Screen::Reviewing);
@@ -929,7 +932,7 @@ mod tests {
         assert!(!views.contains(&Question::ResumeOffset));
         assert!(
             !views.contains(&Question::WifiPassword),
-            "quem vai de cabo nao devia ver a tela de senha"
+            "somebody going by cable should not see the password screen"
         );
         assert_eq!(e.answers.disk, "/dev/nvme0n1");
         assert_eq!(e.answers.hostname, "noctua-teste");
@@ -944,10 +947,13 @@ mod tests {
         assert_ne!(e.answers.keyboard, crate::model::DEFAULT_LAYOUT);
         assert!(
             crate::model::layout_names().contains(&e.answers.keyboard),
-            "a lista entregou `{}`, que nao e um layout",
+            "the list handed over `{}`, which is not a layout",
             e.answers.keyboard
         );
-        assert!(e.answers.wifi_ssid.is_empty(), "escolheu rede sem querer");
+        assert!(
+            e.answers.wifi_ssid.is_empty(),
+            "a network was chosen by accident"
+        );
     }
 
     #[test]
@@ -964,7 +970,10 @@ mod tests {
         // for over an hour, when an empty list made every answer invalid.
         let limit = Question::ALL_KEYS.len() * 4;
         while let Some(q) = e.question_of() {
-            assert!(views.len() < limit, "a tela {q:?} nao avanca: {views:?}");
+            assert!(
+                views.len() < limit,
+                "the screen {q:?} does not advance: {views:?}"
+            );
             views.push(q);
             match q {
                 // Every list question: `Enter` takes the option under the
@@ -999,18 +1008,21 @@ mod tests {
                     e.key(KeyCode::Enter, &t);
                 }
                 Question::Password | Question::Passphrase | Question::WifiPassword => {
-                    for c in "Zq7-frase-de-teste".chars() {
+                    for c in "Zq7-test-phrase".chars() {
                         e.key(KeyCode::Char(c), &t);
                     }
                     e.key(KeyCode::Enter, &t);
                 }
-                Question::ResumeOffset => panic!("a TUI nao pergunta o offset"),
+                Question::ResumeOffset => panic!("the TUI does not ask for the offset"),
             }
         }
         assert_eq!(e.screen, Screen::Reviewing);
-        assert!(views.contains(&Question::WifiPassword), "nao pediu a senha");
-        assert_eq!(e.answers.wifi_ssid, "casa-5g");
-        assert_eq!(e.answers.wifi_password, "Zq7-frase-de-teste");
+        assert!(
+            views.contains(&Question::WifiPassword),
+            "it did not ask for the password"
+        );
+        assert_eq!(e.answers.wifi_ssid, "home-5g");
+        assert_eq!(e.answers.wifi_password, "Zq7-test-phrase");
     }
 
     /// Walks to `wanted`, taking the pre-selected answer on every list before it.
@@ -1029,7 +1041,7 @@ mod tests {
                 None => break,
             }
         }
-        panic!("nao cheguei em {wanted:?}");
+        panic!("I did not reach {wanted:?}");
     }
 
     #[test]
@@ -1043,7 +1055,7 @@ mod tests {
         }
         e.key(KeyCode::Enter, &t);
         assert_eq!(e.screen, stayed, "avancou com hostname invalido");
-        assert!(e.error.is_some(), "e nem disse por que");
+        assert!(e.error.is_some(), "and did not even say why");
     }
 
     #[test]
@@ -1058,7 +1070,10 @@ mod tests {
             e.key(KeyCode::Char(c), &t);
         }
         e.key(KeyCode::Enter, &t);
-        assert_ne!(e.screen, hostname, "nao avancou com hostname valido");
+        assert_ne!(
+            e.screen, hostname,
+            "it did not advance with a valid hostname"
+        );
         e.key(KeyCode::Esc, &t);
         assert_eq!(e.screen, hostname);
         assert_eq!(e.typing, "noctua-teste");
@@ -1091,7 +1106,7 @@ mod tests {
         for c in "/dev/nvme0n1".chars() {
             e.key(KeyCode::Char(c), &t);
         }
-        assert!(e.key(KeyCode::Enter, &t), "o caminho certo nao armou");
+        assert!(e.key(KeyCode::Enter, &t), "the right path did not arm");
         assert_eq!(e.screen, Screen::Running);
     }
 
@@ -1104,7 +1119,7 @@ mod tests {
         for c in "/dev/nvme0n1".chars() {
             e.key(KeyCode::Char(c), &t);
         }
-        assert!(!e.key(KeyCode::Enter, &t), "confirmou o disco errado");
+        assert!(!e.key(KeyCode::Enter, &t), "it confirmed the wrong disk");
     }
 
     #[test]
@@ -1142,7 +1157,7 @@ mod tests {
                 let s = t.t(c);
                 assert!(
                     !s.starts_with('['),
-                    "{language}: `{c}` saiu como chave crua"
+                    "{language}: `{c}` came out as a raw key"
                 );
             }
         }
@@ -1153,11 +1168,11 @@ mod tests {
         let mut e = with_disks();
         let t = texts();
         e.key(KeyCode::Up, &t);
-        assert_eq!(e.choice, 0, "subiu acima do primeiro");
+        assert_eq!(e.choice, 0, "it went above the first one");
         for _ in 0..10 {
             e.key(KeyCode::Down, &t);
         }
-        assert_eq!(e.choice, 1, "desceu abaixo do ultimo");
+        assert_eq!(e.choice, 1, "it went below the last one");
     }
 
     #[test]
@@ -1170,7 +1185,7 @@ mod tests {
         walk_to(&mut e, &t, Question::Disk);
         let disk = e.screen.clone();
         e.key(KeyCode::Enter, &t);
-        assert_eq!(e.screen, disk, "avancou sem disco escolhido");
+        assert_eq!(e.screen, disk, "it moved on with no disk chosen");
         assert!(e.error.is_some());
     }
 }

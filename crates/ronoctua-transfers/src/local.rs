@@ -97,7 +97,7 @@ fn end_it(shared: &Arc<Shared>, id: u64, e: &anyhow::Error) {
     // `{e:#}` and not `{e}`: anyhow's chain is where the useful half lives —
     // `copiar /x/y` alone does not say `No space left on device`.
     let said = format!("{e:#}");
-    tracing::warn!(job = id, trouble = %said, "trabalho terminou mal");
+    tracing::warn!(job = id, trouble = %said, "the job ended badly");
     shared.touch(id, |j| {
         j.stage = Stage::Failed;
         j.trouble = Some(said.clone());
@@ -145,7 +145,7 @@ fn weigh(work: &Work, switch: &Arc<Control>) -> Result<u64> {
         // and the model disagree. An error puts that on the row where somebody
         // sees it; a panic would take the unit down and every copy with it.
         Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } => {
-            anyhow::bail!("trabalho de rede entregue ao motor local")
+            anyhow::bail!("a network job handed to the local engine")
         }
     })
 }
@@ -215,7 +215,7 @@ fn carry_out(work: &Work, w: &mut Watch<'_>) -> Result<Option<u64>> {
         // and the model disagree. An error puts that on the row where somebody
         // sees it; a panic would take the unit down and every copy with it.
         Work::Fetch { .. } | Work::Media { .. } | Work::Torrent { .. } => {
-            anyhow::bail!("trabalho de rede entregue ao motor local")
+            anyhow::bail!("a network job handed to the local engine")
         }
     }
 }
@@ -227,11 +227,11 @@ fn carry_out(work: &Work, w: &mut Watch<'_>) -> Result<Option<u64>> {
 /// When the child cannot start, ends badly, or somebody pressed cancel — and
 /// in that last case the child is killed rather than waited for.
 fn waited(mut cmd: std::process::Command, w: &mut Watch<'_>) -> Result<()> {
-    let mut child = cmd.spawn().context("subir o processo do arquivo")?;
+    let mut child = cmd.spawn().context("start the file's process")?;
     loop {
-        match child.try_wait().context("esperar o processo do arquivo")? {
+        match child.try_wait().context("wait for the file's process")? {
             Some(status) if status.success() => return Ok(()),
-            Some(status) => anyhow::bail!("o programa saiu com {status}"),
+            Some(status) => anyhow::bail!("the program exited with {status}"),
             None => {}
         }
         // The switch, and then a nap. Killing on cancel is the only way to stop

@@ -88,8 +88,8 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
             // counter, flush right. What decides is the COLUMN.
             match &counter {
                 Some((col, _)) if *col >= *column => field = Some(s.clone()),
-                Some((col, texto_ant)) => {
-                    field = Some(texto_ant.clone());
+                Some((col, text_before)) => {
+                    field = Some(text_before.clone());
                     let _ = col;
                     counter = Some((*column, s.clone()));
                 }
@@ -126,10 +126,10 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
         budgets.push(*w);
     }
 
-    let (_, cab) = counter.context("o `render` nao emitiu contador na linha 0")?;
+    let (_, cab) = counter.context("`render` emitted no counter on line 0")?;
     let (n, m) = cab
         .split_once('/')
-        .with_context(|| format!("contador fora do formato `N / M`: {cab}"))?;
+        .with_context(|| format!("the counter is not in the `N / M` shape: {cab}"))?;
 
     Ok(Vision {
         filtered: n.trim().parse().context("contagem de resultados")?,
@@ -191,7 +191,7 @@ fn panel_of(list: &ronoctua_protocol::DisplayList) -> Vec<(String, u16, u16, u16
 
 /// A `.ftl` as a `key -> text` table.
 fn ftl(path: &str) -> Result<std::collections::HashMap<String, String>> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("nao consegui ler {path}"))?;
+    let raw = std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))?;
     Ok(raw
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))
@@ -229,11 +229,11 @@ fn sheet(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::Dis
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-test-symbols <componente.wasm> <dir-i18n>")?;
+        .context("usage: ronoctua-test-symbols <component.wasm> <i18n-dir>")?;
     let i18n = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-test-symbols <componente.wasm> <dir-i18n>")?;
-    let wasm = std::fs::read(&path).with_context(|| format!("nao consegui ler {path}"))?;
+        .context("usage: ronoctua-test-symbols <component.wasm> <i18n-dir>")?;
+    let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
 
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
@@ -243,15 +243,15 @@ fn main() -> Result<()> {
     // ---- THE DESCRIPTOR: a command outside the keymap is not reachable ----
     let d = inst.init()?;
     if d.mode != "unicode" {
-        bail!("o modo do buffer e `{}`; a modeline mostra isso", d.mode);
+        bail!("the buffer's mode is `{}`; the modeline shows that", d.mode);
     }
     for id in &d.commands {
         if !d.keymap.iter().any(|l| l.command == *id) {
-            bail!("`{id}` nao tem tecla: ninguem o alcanca pelo which-key");
+            bail!("`{id}` has no key: nobody reaches it through which-key");
         }
     }
     if let Err(e) = d.validate() {
-        bail!("o descritor nao passa na guarda da secao 7.9: {e}");
+        bail!("the descriptor does not pass the section 7.9 guard: {e}");
     }
     // EVERY COMMAND HAS A KEY IN BOTH LANGUAGES. Without this which-key shows
     // `[cmd-unicode-copy-utf8]`, which is the usual silent fallback.
@@ -260,12 +260,12 @@ fn main() -> Result<()> {
         for id in &d.commands {
             let key = format!("cmd-{id}");
             if !table.contains_key(&key) {
-                bail!("`{key}` nao existe em {language}.ftl");
+                bail!("`{key}` does not exist in {language}.ftl");
             }
         }
     }
     println!(
-        "descritor {} comandos, todos com tecla e chave",
+        "descriptor {} commands, all with a key and a text key",
         d.commands.len()
     );
 
@@ -276,12 +276,12 @@ fn main() -> Result<()> {
     // because its database starts at `U+E000`; **here `}` is in the database**. What
     // saves it is the generator not emitting a string field with an arbitrary character —
     // and if that changes, the number changes.
-    let inicial = screen(&mut inst)?;
-    if inicial.total != TOTAL {
+    let initial = screen(&mut inst)?;
+    if initial.total != TOTAL {
         bail!(
-            "a base tem {} caracteres e deveria ter {TOTAL}. Se caiu, algum campo do\n\
-             gerador voltou a carregar `}}`, `\"` ou `,` e o parser partiu no meio.",
-            inicial.total
+            "the database has {} characters and should have {TOTAL}. If it dropped, some field of the\n\
+             generator went back to carrying `}}`, `\"` or `,` and the parser split it down the middle.",
+            initial.total
         );
     }
 
@@ -290,22 +290,22 @@ fn main() -> Result<()> {
     // THE DEFECT THIS CATCHES: "opening filtered" done with a hidden
     // flag. The user would see 3.8xx of 7,529 with an empty field and with
     // no clue as to why.
-    let field = inicial
+    let field = initial
         .field
         .clone()
-        .context("o campo de busca nao emitiu nada na abertura")?;
+        .context("the search field emitted nothing on opening")?;
     if field != INITIAL_FILTER {
-        bail!("o buffer abriu com o campo `{field}`, e nao com `{INITIAL_FILTER}`");
+        bail!("the buffer opened with the field `{field}`, and not with `{INITIAL_FILTER}`");
     }
-    if inicial.filtered == 0 || inicial.filtered >= TOTAL {
+    if initial.filtered == 0 || initial.filtered >= TOTAL {
         bail!(
-            "a abertura mostrou {} de {TOTAL}: o filtro de simbolos nao restringiu",
-            inicial.filtered
+            "the opening showed {} of {TOTAL}: the symbol filter did not narrow",
+            initial.filtered
         );
     }
     println!(
-        "abertura  {} de {TOTAL}, com `{field}` no campo",
-        inicial.filtered
+        "opening   {} of {TOTAL}, with `{field}` in the field",
+        initial.filtered
     );
 
     // ---- `Esc` IN TWO LAYERS ----
@@ -316,35 +316,35 @@ fn main() -> Result<()> {
     // free term — which is how one types with a filter active.
     inst.event(&Input::Paste(" rosto".to_owned()))?;
     let with_term = screen(&mut inst)?;
-    if with_term.filtered >= inicial.filtered {
-        bail!("o termo livre nao restringiu dentro do filtro de simbolos");
+    if with_term.filtered >= initial.filtered {
+        bail!("the free term did not narrow within the symbol filter");
     }
     inst.event(&Input::Cancel)?;
-    let volta1 = screen(&mut inst)?;
-    if volta1.field.as_deref() != Some(INITIAL_FILTER) {
+    let back1 = screen(&mut inst)?;
+    if back1.field.as_deref() != Some(INITIAL_FILTER) {
         bail!(
-            "o primeiro `Esc` devia limpar o TERMO e manter o filtro; ficou {:?}",
-            volta1.field
+            "the first `Esc` should clear the TERM and keep the filter; it left {:?}",
+            back1.field
         );
     }
     inst.event(&Input::Cancel)?;
-    let volta2 = screen(&mut inst)?;
-    if volta2.filtered != TOTAL {
+    let back2 = screen(&mut inst)?;
+    if back2.filtered != TOTAL {
         bail!(
-            "o segundo `Esc` devia mostrar os {TOTAL}; mostrou {}. Sem isto nao ha\n\
-             caminho para as letras, e o filtro de abertura vira uma armadilha.",
-            volta2.filtered
+            "the second `Esc` should show all {TOTAL}; it showed {}. Without this there is no\n\
+             way through to the letters, and the opening filter becomes a trap.",
+            back2.filtered
         );
     }
     if !inst.event(&Input::Cancel)?.is_empty() {
-        bail!("o terceiro `Esc`, com a busca ja vazia, pediu redesenho a toa");
+        bail!("the third `Esc`, with the search already empty, asked for a redraw for nothing");
     }
-    println!("esc       termo -> filtro -> tudo ({TOTAL})");
+    println!("esc       term -> filter -> everything ({TOTAL})");
 
     // ---- AND THE LETTERS ARE THERE ----
-    let grego = query(&mut inst, "GREEK SMALL LETTER ALPHA")?;
-    if grego.filtered == 0 {
-        bail!("depois do `Esc` duplo, buscar uma letra grega nao acha nada");
+    let greek = query(&mut inst, "GREEK SMALL LETTER ALPHA")?;
+    if greek.filtered == 0 {
+        bail!("after the double `Esc`, searching for a Greek letter finds nothing");
     }
 
     // ---- THE SEARCH MATCHES BY WORD, AND IN A PHRASE ----
@@ -357,21 +357,21 @@ fn main() -> Result<()> {
     //   - searching `seta` put `PESETA SIGN` FIRST, because "the name
     //     contains" scores better than "has the tag" and `pe·seta·` matches as
     //     a substring.
-    let frase = query(&mut inst, "seta para cima")?;
-    if frase.filtered == 0 {
+    let phrase = query(&mut inst, "seta para cima")?;
+    if phrase.filtered == 0 {
         bail!(
-            "`seta para cima` nao achou nada. Uma frase tem de casar quando TODAS as\n\
-             palavras casam — casar a frase inteira contra cada tag nunca acha nada,\n\
-             porque as tags sao palavras soltas."
+            "`seta para cima` found nothing. A phrase has to match when ALL the\n\
+             words match — matching the whole phrase against each tag never finds anything,\n\
+             because the tags are single words."
         );
     }
     // AND IT RESTRICTS MORE than a single word: more words, fewer results.
     let so_seta = query(&mut inst, "seta")?;
-    if frase.filtered >= so_seta.filtered {
+    if phrase.filtered >= so_seta.filtered {
         bail!(
-            "`seta para cima` achou {} e `seta` achou {}: a segunda palavra nao\n\
-             restringiu — ela esta sendo ignorada.",
-            frase.filtered,
+            "`seta para cima` found {} and `seta` found {}: the second word did not\n\
+             narrow — it is being ignored.",
+            phrase.filtered,
             so_seta.filtered
         );
     }
@@ -386,13 +386,13 @@ fn main() -> Result<()> {
     inst.event(&Input::Cancel)?;
     if name == "U+20A7" {
         bail!(
-            "buscar `seta` pos {first:?} (U+20A7 PESETA SIGN) em primeiro. Substring\n\
-             solta no nome esta vencendo a tag: `pe·seta·` nao devia casar `seta`."
+            "searching `seta` put {first:?} (U+20A7 PESETA SIGN) first. A loose substring\n\
+             in the name is beating the tag: `pe·seta·` should not match `seta`."
         );
     }
     println!(
-        "busca     frase {} · `seta` {} · primeiro {first:?}",
-        frase.filtered, so_seta.filtered
+        "search    phrase {} · `seta` {} · first {first:?}",
+        phrase.filtered, so_seta.filtered
     );
 
     // ---- THE EMOJI ----
@@ -402,22 +402,22 @@ fn main() -> Result<()> {
     let emoji = query(&mut inst, "familia:emoji")?;
     if emoji.filtered != 3944 {
         bail!(
-            "a familia `emoji` tem {} registros; esperava 3.944",
+            "the `emoji` family has {} records; expected 3,944",
             emoji.filtered
         );
     }
-    let carinhas = query(&mut inst, "grupo:carinhas")?;
-    if carinhas.filtered == 0 || carinhas.filtered >= emoji.filtered {
+    let emoji_faces = query(&mut inst, "grupo:carinhas")?;
+    if emoji_faces.filtered == 0 || emoji_faces.filtered >= emoji.filtered {
         bail!(
-            "`grupo:carinhas` nao restringiu: {} de {}",
-            carinhas.filtered,
+            "`grupo:carinhas` did not narrow: {} of {}",
+            emoji_faces.filtered,
             emoji.filtered
         );
     }
     // SEARCHING IN PORTUGUESE, coming from the CLDR and not from the lexicon.
     let pt = query(&mut inst, "bandeira brasil")?;
     if pt.filtered == 0 {
-        bail!("`bandeira brasil` nao achou nada — as palavras-chave do CLDR nao chegaram");
+        bail!("`bandeira brasil` found nothing — the CLDR keywords did not arrive");
     }
     // COPYING A SEQUENCE carries the WHOLE sequence.
     //
@@ -428,7 +428,7 @@ fn main() -> Result<()> {
     let f = sheet(&mut inst)?;
     let hex = sheet_value(&f, "unicode-sheet-codepoint").unwrap_or_default();
     if !hex.contains("U+200D") {
-        bail!("a ficha de 👩‍💻 mostra {hex:?}: a sequencia foi truncada no primeiro codepoint");
+        bail!("the sheet of 👩‍💻 shows {hex:?}: the sequence was truncated at the first codepoint");
     }
     let copied = inst
         .event(&Input::Confirm)?
@@ -437,17 +437,17 @@ fn main() -> Result<()> {
             ronoctua_protocol::Effect::Copy(s) => Some(s.clone()),
             _ => None,
         })
-        .context("copiar o emoji nao pediu Copiar")?;
+        .context("copying the emoji did not ask for Copy")?;
     if copied.chars().count() != 3 {
         bail!(
-            "copiar 👩‍💻 devolveu {copied:?} com {} caracteres; a sequencia tem 3",
+            "copying 👩‍💻 gave back {copied:?} with {} characters; the sequence has 3",
             copied.chars().count()
         );
     }
     inst.event(&Input::Cancel)?;
     println!(
-        "emoji     {} · carinhas {} · `bandeira brasil` {}",
-        emoji.filtered, carinhas.filtered, pt.filtered
+        "emoji     {} · faces {} · `bandeira brasil` {}",
+        emoji.filtered, emoji_faces.filtered, pt.filtered
     );
 
     // ---- THE FILTERS RESTRICT ----
@@ -461,7 +461,7 @@ fn main() -> Result<()> {
         ("bloco:arrows", &block),
     ] {
         if v.filtered == 0 || v.filtered >= TOTAL {
-            bail!("`{name}` nao restringiu: {} de {TOTAL}", v.filtered);
+            bail!("`{name}` did not narrow: {} of {TOTAL}", v.filtered);
         }
     }
     // THE CATEGORY MATCHES BY PREFIX: `cat:s` catches the four symbol types, and
@@ -469,7 +469,7 @@ fn main() -> Result<()> {
     if cat_larga.filtered <= category.filtered {
         bail!(
             "`cat:s` devolveu {} e `cat:sm` devolveu {}: o codigo esta casando exato\n\
-             em vez de por prefixo",
+             instead of by prefix",
             cat_larga.filtered,
             category.filtered
         );
@@ -478,13 +478,13 @@ fn main() -> Result<()> {
     // boundaries do not fall on round multiples, and the other browser's shortcut
     // would answer wrong on every one of them.
     let f = sheet(&mut inst)?;
-    let bloco_do_foco = sheet_value(&f, "unicode-sheet-block").unwrap_or_default();
-    if !bloco_do_foco.to_lowercase().contains("arrows") {
-        bail!("`bloco:arrows` deixou passar um caractere do bloco `{bloco_do_foco}`");
+    let focus_block = sheet_value(&f, "unicode-sheet-block").unwrap_or_default();
+    if !focus_block.to_lowercase().contains("arrows") {
+        bail!("`bloco:arrows` let a character of block `{focus_block}` through");
     }
     inst.event(&Input::Cancel)?;
     println!(
-        "filtros   familia {} · cat:sm {} · cat:s {} · bloco {}",
+        "filters   family {} · cat:sm {} · cat:s {} · block {}",
         family.filtered, category.filtered, cat_larga.filtered, block.filtered
     );
 
@@ -496,16 +496,16 @@ fn main() -> Result<()> {
     // write a codepoint, invariants 9 and 11).
     let marks = query(&mut inst, "familia:marca")?;
     if marks.filtered == 0 {
-        bail!("nao ha marcas combinantes na base — o campo `familia` sumiu?");
+        bail!("there are no combining marks in the database — did the `familia` field go away?");
     }
     let first = marks
         .drawings
         .first()
-        .context("a familia das marcas nao desenhou nada")?;
+        .context("the marks' family drew nothing")?;
     if first.chars().count() < 2 || !first.starts_with(CIRCLE) {
         bail!(
-            "a marca combinante foi desenhada como {first:?}: sem o circulo pontilhado\n\
-             ela some da celula ou pinta sobre a vizinha."
+            "the combining mark was drawn as {first:?}: without the dotted circle\n\
+             it goes away from the cell or paints over its neighbour."
         );
     }
     // AND THE COPY DOES NOT CARRY THE CIRCLE ALONG.
@@ -514,8 +514,8 @@ fn main() -> Result<()> {
     // survives any visual inspection: the screen looks right and what goes into
     // the user's document is wrong.
     let f = sheet(&mut inst)?;
-    let cp_da_marca = sheet_value(&f, "unicode-sheet-codepoint")
-        .context("a ficha da marca nao mostrou o codepoint")?;
+    let mark_codepoint = sheet_value(&f, "unicode-sheet-codepoint")
+        .context("the mark's sheet did not show the codepoint")?;
     let copied = inst
         .event(&Input::Confirm)?
         .iter()
@@ -523,31 +523,33 @@ fn main() -> Result<()> {
             ronoctua_protocol::Effect::Copy(s) => Some(s.clone()),
             _ => None,
         })
-        .context("copiar a marca nao pediu Copiar")?;
+        .context("copying the mark did not ask for Copy")?;
     if copied.chars().count() != 1 {
         bail!(
-            "copiar a marca devolveu {copied:?}, com {} caracteres; devia ser UM",
+            "copying the mark gave back {copied:?}, with {} characters; it should be ONE",
             copied.chars().count()
         );
     }
     if copied.starts_with(CIRCLE) {
-        bail!("copiar a marca devolveu o CIRCULO PONTILHADO — o apoio foi junto para o texto");
+        bail!(
+            "copying the mark gave back the DOTTED CIRCLE — the support went along into the text"
+        );
     }
     let expected = format!("U+{:04X}", copied.chars().next().unwrap_or('?') as u32);
-    if expected != cp_da_marca {
-        bail!("a ficha diz {cp_da_marca} e a copia devolveu {expected}");
+    if expected != mark_codepoint {
+        bail!("the sheet says {mark_codepoint} and the copy gave back {expected}");
     }
     inst.event(&Input::Cancel)?;
     inst.event(&Input::Cancel)?;
     println!(
-        "marcas    {} desenhadas sobre `{CIRCLE}`, e a copia sai limpa",
+        "marks     {} drawn over `{CIRCLE}`, and the copy comes out clean",
         marks.filtered
     );
 
     // ---- THE 23 DOUBLE-WIDTH ONES ----
-    let largos = query(&mut inst, "LONG LEFTWARDS ARROW")?;
-    if largos.filtered == 0 {
-        bail!("nao achei `LONG LEFTWARDS ARROW` — a base mudou?");
+    let wide = query(&mut inst, "LONG LEFTWARDS ARROW")?;
+    if wide.filtered == 0 {
+        bail!("could not find `LONG LEFTWARDS ARROW` — did the database change?");
     }
     // THE BUDGET FOLLOWS THE INK, and the proof is a PAIR:
     //
@@ -557,16 +559,16 @@ fn main() -> Result<()> {
     // One side alone does not prove it: "LEFTWARDS ARROW" also matches "LONG LEFTWARDS
     // ARROW", so both maxima would give four and the test would pass with the
     // budget fixed at four for everyone — which would elide the rest.
-    let largest = largos
+    let largest = wide
         .budgets
         .iter()
         .copied()
         .max()
-        .context("a grade nao desenhou o caractere largo")?;
+        .context("the grid did not draw the wide character")?;
     if largest <= ICON_COLUMNS {
         bail!(
-            "nenhum dos caracteres longos declarou mais que {ICON_COLUMNS} colunas.\n\
-             O host vai elidir um caractere so em `…`, pelo proprio orcamento."
+            "none of the long characters declared more than {ICON_COLUMNS} columns.\n\
+             The host will elide a single character into `…`, out of its own budget."
         );
     }
     // `box drawing`, and not `arrows`: the block filter matches on the name's
@@ -575,8 +577,8 @@ fn main() -> Result<()> {
     let simple = query(&mut inst, "bloco:box drawing")?;
     if simple.budgets.iter().any(|o| *o != ICON_COLUMNS) {
         bail!(
-            "algum caractere de largura simples declarou orcamento diferente de \
-             {ICON_COLUMNS}: a largura deixou de vir da fonte"
+            "some single-width character declared a budget other than \
+             {ICON_COLUMNS}: the width stopped coming from the font"
         );
     }
     // AND THE GRID'S GAP STILL ABSORBS THE LARGEST. Without this, tightening the
@@ -587,11 +589,11 @@ fn main() -> Result<()> {
         .windows(2)
         .find(|p| p[0].0 == p[1].0)
         .map(|p| p[1].1 - p[0].1)
-        .context("a grade nao tem duas colunas para medir o passo")?;
+        .context("the grid does not have two columns to measure the step")?;
     if largest >= step {
         bail!(
-            "a tinta mais larga declara {largest} colunas e o passo da grade e {step}:\n\
-             os caracteres de largura dupla vao pintar sobre o vizinho."
+            "the widest ink declares {largest} columns and the grid's step is {step}:\n\
+             the double-width characters will paint over their neighbour."
         );
     }
     let budget = largest;
@@ -604,18 +606,18 @@ fn main() -> Result<()> {
     let f = sheet(&mut inst)?;
     if !keys(&f).iter().any(|(k, _)| k == "unicode-sheet-width") {
         bail!(
-            "a ficha de {:?} nao diz que ele e largo (chaves: {:?})",
+            "the sheet of {:?} does not say it is wide (keys: {:?})",
             sheet_value(&f, "unicode-sheet-codepoint"),
             keys(&f).iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()
         );
     }
     inst.event(&Input::Cancel)?;
-    println!("largos    orcamento {budget} contra {normal} do normal");
+    println!("wide      budget {budget} against {normal} for the normal one");
 
     // ---- THE FAMILY PANEL ----
     query(&mut inst, "")?;
     let header = inst.render(COLUMNS, ROWS, heights())?;
-    let (l_icone, c_icone) = header
+    let (icon_line, icon_column) = header
         .commands
         .iter()
         .find_map(|c| match c {
@@ -627,25 +629,25 @@ fn main() -> Result<()> {
             } if n == "filter" => Some((*line, *column)),
             _ => None,
         })
-        .context("o cabecalho nao emitiu o icone de filtro")?;
+        .context("the header did not emit the filter icon")?;
     if inst
         .event(&Input::Click {
-            column: c_icone,
-            line: l_icone,
+            column: icon_column,
+            line: icon_line,
         })?
         .is_empty()
     {
-        bail!("clicar no icone de filtro nao abriu o painel");
+        bail!("clicking the filter icon did not open the panel");
     }
     let open = inst.render(COLUMNS, ROWS, heights())?;
     let options = panel_of(&open);
     if options.is_empty() {
-        bail!("o painel abriu sem nenhuma opcao");
+        bail!("the panel opened with no option at all");
     }
     for example in ["all", "symbol", "letter", "mark"] {
         let key = format!("unicode-family-{example}");
         if !options.iter().any(|(k, ..)| *k == key) {
-            bail!("o painel nao ofereceu `{key}` — a familia sumiu da base?");
+            bail!("the panel did not offer `{key}` — did the family go away from the database?");
         }
     }
     // EVERY OPTION HAS A KEY IN BOTH LANGUAGES AND FITS THE BUDGET, and the LABEL
@@ -658,15 +660,17 @@ fn main() -> Result<()> {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, _, _, budget) in &options {
             let Some(text) = table.get(key) else {
-                bail!("a opcao `{key}` nao existe em {language}.ftl — sairia como `[{key}]`");
+                bail!(
+                    "the option `{key}` does not exist in {language}.ftl — it would come out as `[{key}]`"
+                );
             };
             if text.chars().count() > usize::from(*budget) {
                 bail!(
-                    "em {language}, `{key}` = {text:?} tem {} celulas e o painel reservou {budget}",
+                    "in {language}, `{key}` = {text:?} is {} cells and the panel reserved {budget}",
                     text.chars().count()
                 );
             }
-            let (prefix, valor) = if let Some(f) = key.strip_prefix("unicode-family-") {
+            let (prefix, value) = if let Some(f) = key.strip_prefix("unicode-family-") {
                 ("familia", f)
             } else if let Some(g) = key.strip_prefix("unicode-group-") {
                 ("grupo", g)
@@ -675,21 +679,21 @@ fn main() -> Result<()> {
             } else {
                 continue;
             };
-            if valor == "all" {
+            if value == "all" {
                 continue;
             }
-            let so_a_familia = query(&mut inst, &format!("{prefix}:{valor}"))?.filtered;
+            let family_only = query(&mut inst, &format!("{prefix}:{value}"))?.filtered;
             let by_name = query(&mut inst, &text.to_lowercase())?.filtered;
-            if by_name < so_a_familia {
+            if by_name < family_only {
                 bail!(
-                    "em {language}, o painel mostra {text:?} e buscar por isso acha {by_name}\n\
-                     caracteres — `{prefix}:{valor}` tem {so_a_familia}. O `.ftl` e o gerador\n\
-                     divergiram, e a tela esta ensinando uma palavra que a busca nao conhece."
+                    "in {language}, the panel shows {text:?} and searching for that finds {by_name}\n\
+                     characters — `{prefix}:{value}` has {family_only}. The `.ftl` and the generator\n\
+                     diverged, and the screen is teaching a word the search does not know."
                 );
             }
         }
         println!(
-            "painel    {language:8} -> as {} opcoes cabem e acham",
+            "panel     {language:8} -> the {} options fit and find",
             options.len()
         );
     }
@@ -705,9 +709,9 @@ fn main() -> Result<()> {
     // The answer is not to hide, but to SEPARATE: a rule, a small label, and
     // they stay. This criterion asserts both halves — that they are always there, and
     // that the separation is there with them.
-    let subfiltros =
-        |inst: &mut ronoctua_runtime::Instance, busca: &str| -> Result<(usize, usize)> {
-            query(inst, busca)?;
+    let subfilters =
+        |inst: &mut ronoctua_runtime::Instance, search: &str| -> Result<(usize, usize)> {
+            query(inst, search)?;
             if panel_of(&inst.render(COLUMNS, ROWS, heights())?).is_empty() {
                 inst.event(&Input::Toggle)?;
             }
@@ -721,18 +725,18 @@ fn main() -> Result<()> {
                     .count(),
             ))
         };
-    for postura in [
+    for stance in [
         "familia:emoji",
         "grupo:comida",
         "familia:letra",
         "familia:marca",
         "",
     ] {
-        let (groups, tons) = subfiltros(&mut inst, postura)?;
+        let (groups, tons) = subfilters(&mut inst, stance)?;
         if groups != 9 || tons != 5 {
             bail!(
-                "com `{postura}` o painel mostrou {groups} grupos e {tons} tons; \
-                 sao sempre 9 e 5"
+                "with `{stance}` the panel showed {groups} groups and {tons} tones; \
+                 are always 9 and 5"
             );
         }
     }
@@ -756,25 +760,27 @@ fn main() -> Result<()> {
         _ => None,
     });
     let Some(label_row) = label else {
-        bail!("o painel nao trouxe o rotulo da secao de emoji — os subfiltros ficam sem legenda");
+        bail!(
+            "the panel did not bring the emoji section's label — the subfilters are left with no caption"
+        );
     };
     if !with_panel
         .commands
         .iter()
         .any(|c| matches!(c, Command::Rule { line, .. } if *line + 1 == label_row))
     {
-        bail!("nao ha regua acima do rotulo da secao — a secao nao se ve separada");
+        bail!("there is no rule above the section's label — the section does not read as separate");
     }
     // AND THE SUB-FILTERS COME AFTER IT. A label below what it names
     // names something else.
-    let primeiro_subfiltro = panel_of(&with_panel)
+    let first_subfilter = panel_of(&with_panel)
         .into_iter()
         .filter(|(k, ..)| k.starts_with("unicode-group-") || k.starts_with("unicode-tone-"))
         .map(|(_, l, ..)| l)
         .min()
-        .context("os subfiltros sumiram da tela")?;
-    if primeiro_subfiltro <= label_row {
-        bail!("os subfiltros aparecem ANTES do rotulo que os nomeia");
+        .context("the subfilters went off the screen")?;
+    if first_subfilter <= label_row {
+        bail!("the subfilters appear BEFORE the label that names them");
     }
 
     // THE TONES REALLY DO NARROW, and each narrows a different slice.
@@ -782,25 +788,25 @@ fn main() -> Result<()> {
     for tom in ["light", "medium-light", "medium", "medium-dark", "dark"] {
         let n = query(&mut inst, &format!("tom:{tom}"))?.filtered;
         if n == 0 {
-            bail!("`tom:{tom}` nao acha nada — o tom nao chegou a base");
+            bail!("`tom:{tom}` finds nothing — the tone did not reach the database");
         }
         seen.push(n);
     }
     let soma: usize = seen.iter().sum();
     let so_emoji = query(&mut inst, "familia:emoji")?.filtered;
     if soma >= so_emoji {
-        bail!("os cinco tons somam {soma} de {so_emoji} emoji — eles nao estao recortando");
+        bail!("the five tones add up to {soma} of {so_emoji} emoji — they are not cutting");
     }
     // AND A FREE TERM COEXISTS with the tone, as with the other enumeration
     // filters: `tom:dark mao` is the actual gesture of whoever is looking for a hand.
     let so_tom = query(&mut inst, "tom:escuro")?.filtered;
     let with_term = query(&mut inst, "tom:escuro mao")?.filtered;
     if with_term == 0 || with_term >= so_tom {
-        bail!("`tom:escuro mao` devolveu {with_term} de {so_tom} — o termo livre nao recortou");
+        bail!("`tom:escuro mao` gave back {with_term} of {so_tom} — the free term did not cut");
     }
     inst.event(&Input::Cancel)?;
     println!(
-        "subfiltros 9 grupos e 5 tons em toda postura, separados por regua e rotulo\n\
+        "subfilters 9 groups and 5 tones in every stance, separated by a rule and a label\n\
          tons      {seen:?} de {so_emoji} emoji · `tom:escuro mao` -> {with_term}"
     );
 
@@ -810,7 +816,7 @@ fn main() -> Result<()> {
     // bitmap), and `state-accent` does not change a pixel of them. In 3,944 of the 11,614
     // cells the selection was invisible — and precisely in the ones the buffer OPENS
     // showing. The marker is an icon, on the row below the focused cell.
-    let marcador = |list: &ronoctua_protocol::DisplayList| -> Option<(u16, u16)> {
+    let marker = |list: &ronoctua_protocol::DisplayList| -> Option<(u16, u16)> {
         list.commands.iter().find_map(|c| match c {
             Command::Text {
                 line,
@@ -822,19 +828,19 @@ fn main() -> Result<()> {
         })
     };
     query(&mut inst, "familia:emoji")?;
-    let before = marcador(&inst.render(COLUMNS, ROWS, heights())?)
-        .context("a grade nao marcou a selecao — em emoji ela ficaria invisivel")?;
+    let before = marker(&inst.render(COLUMNS, ROWS, heights())?)
+        .context("the grid did not mark the selection — on emoji it would be invisible")?;
     inst.event(&Input::Right)?;
-    let after = marcador(&inst.render(COLUMNS, ROWS, heights())?)
-        .context("o marcador sumiu ao mover o cursor")?;
+    let after = marker(&inst.render(COLUMNS, ROWS, heights())?)
+        .context("the marker went away when the cursor moved")?;
     if before == after {
-        bail!("o marcador nao andou com o cursor: ficou em {before:?}");
+        bail!("the marker did not move with the cursor: it stayed at {before:?}");
     }
     if before.0 != after.0 {
-        bail!("andar para o lado mudou a LINHA do marcador: {before:?} -> {after:?}");
+        bail!("moving sideways changed the marker's LINE: {before:?} -> {after:?}");
     }
     inst.event(&Input::Left)?;
-    println!("marcador  {before:?} -> {after:?} ao andar uma celula");
+    println!("marker    {before:?} -> {after:?} on moving one cell");
 
     // ---- `Tab` TOGGLES, AND DOES NOT GO INTO THE SEARCH ----
     //
@@ -851,21 +857,21 @@ fn main() -> Result<()> {
     let before = screen(&mut inst)?.field.unwrap_or_default();
     inst.event(&Input::Toggle)?;
     if panel_of(&inst.render(COLUMNS, ROWS, heights())?).is_empty() {
-        bail!("`Tab` nao abriu o painel");
+        bail!("`Tab` did not open the panel");
     }
     inst.event(&Input::Toggle)?;
-    let depois_tela = inst.render(COLUMNS, ROWS, heights())?;
-    if !panel_of(&depois_tela).is_empty() {
-        bail!("o segundo `Tab` nao fechou o painel");
+    let screen_after = inst.render(COLUMNS, ROWS, heights())?;
+    if !panel_of(&screen_after).is_empty() {
+        bail!("the second `Tab` did not close the panel");
     }
-    let after = read(&depois_tela)?.field.unwrap_or_default();
+    let after = read(&screen_after)?.field.unwrap_or_default();
     if before != after {
         bail!(
-            "o campo era {before:?} e depois de dois `Tab` e {after:?}: a tecla entrou\n\
-             na busca como caractere, e uma tabulacao no campo e invisivel."
+            "the field was {before:?} and after two `Tab`s it is {after:?}: the key went\n\
+             into the search as a character, and a tab in the field is invisible."
         );
     }
-    println!("tab       abre, fecha, e nao toca no campo");
+    println!("tab       opens, closes, and does not touch the field");
 
     // ---- THE CLICK LANDS ON WHAT WAS DRAWN THERE ----
     query(&mut inst, "familia:letra")?;
@@ -874,30 +880,30 @@ fn main() -> Result<()> {
     let (line, column) = *grid
         .positions
         .get(TARGET)
-        .context("a grade nao desenhou celulas suficientes")?;
-    let desenhado = grid.drawings[TARGET].clone();
+        .context("the grid did not draw enough cells")?;
+    let drawn = grid.drawings[TARGET].clone();
     if inst.event(&Input::Click { column, line })?.is_empty() {
-        bail!("o clique em ({column},{line}) nao pediu redesenho");
+        bail!("the click at ({column},{line}) asked for no redraw");
     }
     // THE FOCUS IS READ FROM THE SHEET, and not from the drawing: for a mark the drawing starts
     // at the circle, and comparing drawings would give false.
     let f = sheet(&mut inst)?;
-    let cp = sheet_value(&f, "unicode-sheet-codepoint").context("ficha sem codepoint")?;
-    let expected = desenhado
+    let cp = sheet_value(&f, "unicode-sheet-codepoint").context("a sheet with no codepoint")?;
+    let expected = drawn
         .chars()
         .next_back()
         .map(|c| format!("U+{:04X}", c as u32))
         .unwrap_or_default();
     if cp != expected {
-        bail!("o clique em ({column},{line}) focou {cp}, e ali estava desenhado {expected}");
+        bail!("the click at ({column},{line}) focused {cp}, and {expected} was drawn there");
     }
     inst.event(&Input::Cancel)?;
-    println!("clique    ({column},{line}) -> {cp}");
+    println!("click    ({column},{line}) -> {cp}");
 
     // ---- THE SHEET CARRIES THE VALUES, AND THE COPY REPORTS BACK ----
     query(&mut inst, "FOR ALL")?;
     let f = sheet(&mut inst)?;
-    let valores: Vec<String> = f
+    let values: Vec<String> = f
         .commands
         .iter()
         .filter_map(|c| match c {
@@ -909,10 +915,10 @@ fn main() -> Result<()> {
         })
         .collect();
     for expected in ["U+2200", "8704", "E2 88 80", "\\u{2200}", "&#x2200;"] {
-        if !valores.iter().any(|v| v == expected) {
+        if !values.iter().any(|v| v == expected) {
             bail!(
-                "a ficha de `FOR ALL` nao mostra {expected:?}. Uma lista de rotulos sem valor\n\
-                 e uma lista de promessas: {valores:?}"
+                "the sheet of `FOR ALL` does not show {expected:?}. A list of labels with no value\n\
+                 is a list of promises: {values:?}"
             );
         }
     }
@@ -925,9 +931,9 @@ fn main() -> Result<()> {
             ronoctua_protocol::Effect::Copy(s) => Some(s.clone()),
             _ => None,
         })
-        .context("copiar nao pediu Copiar")?;
+        .context("copying did not ask for Copy")?;
     if copied != "FOR ALL" {
-        bail!("baixo+Enter copiou {copied:?}; a segunda opcao e o NOME");
+        bail!("down+Enter copied {copied:?}; the second option is the NAME");
     }
     // THE VERDICT APPEARS, and goes away on the next key.
     inst.event(&Input::Copied(true))?;
@@ -935,14 +941,14 @@ fn main() -> Result<()> {
         .iter()
         .any(|(k, _)| k == "unicode-sheet-copied")
     {
-        bail!("depois de copiar, a ficha nao mostra a confirmacao");
+        bail!("after copying, the sheet does not show the confirmation");
     }
     inst.event(&Input::Down)?;
     if keys(&inst.render(COLUMNS, ROWS, heights())?)
         .iter()
         .any(|(k, _)| k == "unicode-sheet-copied")
     {
-        bail!("o aviso de copia ficou na tela depois da tecla seguinte");
+        bail!("the copy notice stayed on screen after the next key");
     }
     // EVERY SHEET LABEL FITS THE BUDGET, in both languages.
     let keys = keys(&inst.render(COLUMNS, ROWS, heights())?);
@@ -950,18 +956,18 @@ fn main() -> Result<()> {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in &keys {
             let Some(text) = table.get(key) else {
-                bail!("a chave `{key}` da ficha nao existe em {language}.ftl");
+                bail!("the sheet's key `{key}` does not exist in {language}.ftl");
             };
             if text.chars().count() > usize::from(*budget) {
                 bail!(
-                    "em {language}, `{key}` = {text:?} tem {} celulas e o buffer reservou {budget}",
+                    "in {language}, `{key}` = {text:?} is {} cells and the buffer reserved {budget}",
                     text.chars().count()
                 );
             }
         }
     }
     inst.event(&Input::Cancel)?;
-    println!("ficha     valores, copia com veredito, e os rotulos cabem");
+    println!("sheet     values, copy with a verdict, and the labels fit");
 
     // ---- PASTING A CHARACTER FINDS THE CHARACTER, EVEN WITH THE FILTER ACTIVE ----
     //
@@ -973,18 +979,20 @@ fn main() -> Result<()> {
     inst.event(&Input::Paste("α".to_owned()))?;
     let pasted = screen(&mut inst)?;
     if pasted.filtered == 0 {
-        bail!("colar uma LETRA com o filtro de simbolos ativo nao achou nada");
+        bail!("pasting a LETTER with the symbol filter active found nothing");
     }
     let f = sheet(&mut inst)?;
-    let cp = sheet_value(&f, "unicode-sheet-codepoint").context("ficha sem codepoint")?;
+    let cp = sheet_value(&f, "unicode-sheet-codepoint").context("a sheet with no codepoint")?;
     if cp != "U+03B1" {
-        bail!("colar `α` achou {cp}");
+        bail!("pasting `α` found {cp}");
     }
     inst.event(&Input::Cancel)?;
-    println!("colar     `α` com `simbolos:` ativo -> {cp}");
+    println!("paste     `α` with `simbolos:` active -> {cp}");
 
-    println!("OK: a base tem {TOTAL}, abre filtrada e sai do filtro, os filtros restringem,");
-    println!("    as marcas aparecem sobre o circulo e copiam limpas, os largos nao");
-    println!("    sao elididos, o painel amarra rotulo e busca, e a ficha copia com aviso");
+    println!(
+        "OK: the database has {TOTAL}, opens filtered and leaves the filter, the filters narrow,"
+    );
+    println!("    the marks show over the circle and copy clean, the wide ones are not");
+    println!("    elided, the panel ties label to search, and the sheet copies with a notice");
     Ok(())
 }

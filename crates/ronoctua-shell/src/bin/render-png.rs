@@ -26,7 +26,7 @@
 //!     rack, a transfer queue, a memory survey. Those buffers draw their empty
 //!     screen here, which is the honest picture of what they have.
 //!
-//! Usage: `ronoctua-render-png <componente.wasm> [opcoes]`, `--help` for the list.
+//! Usage: `ronoctua-render-png <component.wasm> [options]`, `--help` for the list.
 
 #[path = "../paint.rs"]
 mod paint;
@@ -47,20 +47,20 @@ struct Ask {
 }
 
 const USAGE: &str = "\
-uso: ronoctua-render-png <componente.wasm> [opcoes]
+usage: ronoctua-render-png <component.wasm> [options]
 
-  --out <arquivo>     onde escrever            (padrao: buffer.png)
-  --columns <n>       largura em celulas       (padrao: 90)
-  --lines <n>         altura em celulas        (padrao: 24)
-  --language <id>     pt-BR ou en-GB           (padrao: pt-BR)
+  --out <file>        where to write            (default: buffer.png)
+  --columns <n>       width in cells           (default: 90)
+  --lines <n>         height in cells          (default: 24)
+  --language <id>     pt-BR or en-GB           (default: pt-BR)
 
-  --state <id>        entra num estado antes de desenhar
-  --command <id>      dispara um comando do buffer
-  --key <nome>        up, down, left, right, enter, esc, tab, backspace
-  --type <texto>      digita, caractere por caractere
+  --state <id>        enters a state before drawing
+  --command <id>      fires a command of the buffer
+  --key <name>        up, down, left, right, enter, esc, tab, backspace
+  --type <text>       types, character by character
 
-As quatro ultimas sao repetiveis e valem NA ORDEM em que aparecem: e assim que
-se chega numa tela que so existe depois de andar ate ela.";
+The last four are repeatable and apply IN THE ORDER they appear: that is how
+one reaches a screen that only exists after walking to it.";
 
 fn parse() -> Result<Ask> {
     let mut args = std::env::args().skip(1);
@@ -82,11 +82,14 @@ fn parse() -> Result<Ask> {
         // worth naming: the alternative is a picture of a screen the caller did
         // not ask for. Taken here and not in a closure so the loop keeps the
         // iterator to itself.
-        let mut value = || args.next().with_context(|| format!("`{flag}` sem valor"));
+        let mut value = || {
+            args.next()
+                .with_context(|| format!("`{flag}` with no value"))
+        };
         match flag.as_str() {
             "--out" => me.out = std::path::PathBuf::from(value()?),
-            "--columns" => me.columns = value()?.parse().context("`--columns` nao e numero")?,
-            "--lines" => me.lines = value()?.parse().context("`--lines` nao e numero")?,
+            "--columns" => me.columns = value()?.parse().context("`--columns` is not a number")?,
+            "--lines" => me.lines = value()?.parse().context("`--lines` is not a number")?,
             "--language" => me.language = value()?,
             "--state" => me.inputs.push(Input::EnterState(value()?)),
             "--command" => me.inputs.push(Input::Command(value()?)),
@@ -102,10 +105,10 @@ fn parse() -> Result<Ask> {
                     "esc" => Input::Cancel,
                     "tab" => Input::Toggle,
                     "backspace" => Input::Delete,
-                    other => bail!("tecla `{other}` desconhecida.\n\n{USAGE}"),
+                    other => bail!("unknown key `{other}`.\n\n{USAGE}"),
                 });
             }
-            other => bail!("opcao `{other}` desconhecida.\n\n{USAGE}"),
+            other => bail!("unknown option `{other}`.\n\n{USAGE}"),
         }
     }
     Ok(me)
@@ -130,10 +133,9 @@ fn heights() -> ronoctua_protocol::Heights {
 fn main() -> Result<()> {
     let ask = parse()?;
     let texts = ronoctua_i18n::Texts::fresh(&ask.language)
-        .with_context(|| format!("nao existe o idioma `{}`", ask.language))?;
+        .with_context(|| format!("the language `{}` does not exist", ask.language))?;
 
-    let wasm =
-        std::fs::read(&ask.wasm).with_context(|| format!("nao consegui ler {}", ask.wasm))?;
+    let wasm = std::fs::read(&ask.wasm).with_context(|| format!("could not read {}", ask.wasm))?;
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
     let component = rt.load(&cwasm)?;
@@ -144,7 +146,7 @@ fn main() -> Result<()> {
     // refused on the screen must be refused here too, or this would produce a
     // picture of a buffer nobody can open.
     if let Err(e) = d.validate() {
-        bail!("{}: o descritor nao passa na guarda: {e}", d.name);
+        bail!("{}: the descriptor does not pass the guard: {e}", d.name);
     }
     // A FIRST FRAME BEFORE ANYTHING, because the host draws one too — and a
     // component that only computes its screen lazily would otherwise be
@@ -156,7 +158,7 @@ fn main() -> Result<()> {
     }
     let list = inst.render(ask.columns, ask.lines, heights())?;
     if let Err(e) = list.validate(&d.capabilities) {
-        bail!("o quadro foi recusado pela mesma trava do host: {e}");
+        bail!("the frame was refused by the host's own gate: {e}");
     }
 
     // THE WINDOW'S SIZE IS THE INVERSE OF `Host::context_of`: it takes a window
@@ -165,9 +167,9 @@ fn main() -> Result<()> {
     // the picture have the same air around it as the screen does.
     let (cell_w, cell_h) = paint::cell();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let width = (f32::from(ask.columns + tokens::space::BUFFER_MARGINX * 2) * cell_w) as u32;
+    let width = (f32::from(ask.columns + tokens::space::CONTENT_INSET * 2) * cell_w) as u32;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = (f32::from(ask.lines + tokens::space::BUFFER_MARGINY * 2) * cell_h) as u32;
+    let height = (f32::from(ask.lines + tokens::space::CONTENT_INSETY * 2) * cell_h) as u32;
 
     let mut gpu = ronoctua_render::offscreen::Offscreen::new(width, height)?;
     let mut text = ronoctua_render::Text::new(
@@ -181,7 +183,7 @@ fn main() -> Result<()> {
 
     let spans = paint::spans_of(&list, &texts, ask.columns);
     #[allow(clippy::cast_precision_loss)]
-    let bands = paint::selections_of(&list, gpu.width as f32);
+    let bands = paint::quads_of(&list, gpu.width as f32);
     text.prepare(
         &gpu.device,
         &gpu.queue,
@@ -214,10 +216,12 @@ fn main() -> Result<()> {
         // SAID OUT LOUD, because a missing drawing looks exactly like a drawing
         // that failed, and somebody comparing this picture with the screen has
         // to know which of the two they are looking at.
-        println!("aviso: {svgs} desenho(s) svg nao entraram — esta ferramenta nao rasteriza vetor");
+        println!(
+            "notice: {svgs} svg drawing(s) did not get in — this tool does not rasterise vectors"
+        );
     }
     println!(
-        "{}: {}x{} px, {} celulas por {}, {} trechos, idioma {}",
+        "{}: {}x{} px, {} cells by {}, {} runs, language {}",
         ask.out.display(),
         gpu.width,
         gpu.height,

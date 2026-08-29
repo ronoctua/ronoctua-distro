@@ -131,7 +131,7 @@ fn expand(token: &str, ctx: Context<'_>) -> Vec<String> {
         match cs.next() {
             Some('%') => out.push('%'),
             Some(otherwise) => {
-                tracing::debug!(code = %otherwise, token, "codigo de campo desconhecido; token fora");
+                tracing::debug!(code = %otherwise, token, "an unknown field code; the token stays out");
                 return Vec::new();
             }
             None => out.push('%'),
@@ -171,7 +171,7 @@ mod tests {
         // With NOTHING to open — the app launcher's case, which is 66 of 108
         // measured entries.
         for line in ["code %F", "vlc %U", "gedit %f", "eog %u"] {
-            let (_, args) = assemble(line, CTX).expect("tem programa");
+            let (_, args) = assemble(line, CTX).expect("there is a program");
             assert!(args.is_empty(), "`{line}` deixou {args:?}");
         }
     }
@@ -191,18 +191,18 @@ mod tests {
         let ctx = Context { open: &two, ..WITH };
         // The singular codes take ONE, the plural ones take all — which is what
         // decides whether opening four files starts one process or four.
-        let (_, args) = assemble("eog %f", ctx).expect("tem programa");
+        let (_, args) = assemble("eog %f", ctx).expect("there is a program");
         assert_eq!(args, ["/tmp/a.png"]);
-        let (_, args) = assemble("eog %F", ctx).expect("tem programa");
+        let (_, args) = assemble("eog %F", ctx).expect("there is a program");
         assert_eq!(args, ["/tmp/a.png", "/tmp/b.png"]);
-        let (_, args) = assemble("vlc %U", ctx).expect("tem programa");
+        let (_, args) = assemble("vlc %U", ctx).expect("there is a program");
         assert_eq!(args, ["/tmp/a.png", "/tmp/b.png"]);
     }
 
     /// THE DEFECT: `%i` becoming a single token passes `--icon` with no value.
     #[test]
     fn the_icon_becomes_two_tokens() {
-        let (p, args) = assemble("prog %i --foo", CTX).expect("tem programa");
+        let (p, args) = assemble("prog %i --foo", CTX).expect("there is a program");
         assert_eq!(p, "prog");
         assert_eq!(args, ["--icon", "firefox", "--foo"]);
     }
@@ -211,9 +211,9 @@ mod tests {
     #[test]
     fn the_quotes_hold_the_space() {
         let (p, args) =
-            assemble(r#""/nix/store/a b/bin/x" --f "dois termos""#, CTX).expect("tem programa");
+            assemble(r#""/nix/store/a b/bin/x" --f "two terms""#, CTX).expect("there is a program");
         assert_eq!(p, "/nix/store/a b/bin/x");
-        assert_eq!(args, ["--f", "dois termos"]);
+        assert_eq!(args, ["--f", "two terms"]);
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn name_and_path_go_in_where_asked_for() {
-        let (_, args) = assemble("prog %c %k %%", CTX).expect("tem programa");
+        let (_, args) = assemble("prog %c %k %%", CTX).expect("there is a program");
         assert_eq!(
             args,
             [
@@ -237,9 +237,9 @@ mod tests {
 
     #[test]
     fn an_unknown_code_carries_only_its_own_token() {
-        let (p, args) = assemble("prog %z --fica", CTX).expect("tem programa");
+        let (p, args) = assemble("prog %z --fica", CTX).expect("there is a program");
         assert_eq!(p, "prog");
-        assert_eq!(args, ["--fica"], "o resto da linha sobrevive");
+        assert_eq!(args, ["--fica"], "the rest of the line survives");
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
         assert!(assemble("   ", CTX).is_none());
         assert!(
             assemble("%F", CTX).is_none(),
-            "so codigo de campo nao e programa"
+            "a field code alone is not a program"
         );
     }
 }

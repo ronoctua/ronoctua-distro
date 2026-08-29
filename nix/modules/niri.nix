@@ -234,13 +234,13 @@ let
     # The chords go INSIDE the `binds` block, in place of the marker.
     ${pkgs.gnused}/bin/sed -i -e "/@CHORDS@/r ${binds.forPrefix "Mod"}" -e "/@CHORDS@/d" $out
     grep -q "focus-column-left" $out || {
-      echo "ERRO: os acordes nao entraram no config do niri." >&2; exit 1; }
+      echo "ERROR: the chords did not get into niri's config." >&2; exit 1; }
 
     # The window rules go at the END, and not in a marker: `window-rule` is a
     # top-level node, so appending is the whole of it.
     cat ${windowRules} >> $out
     grep -q "open-floating" $out || {
-      echo "ERRO: as regras de janela nao entraram no config do niri." >&2; exit 1; }
+      echo "ERROR: the window rules did not get into niri's config." >&2; exit 1; }
   '';
 in
 {
@@ -300,7 +300,7 @@ in
       # 10 s, and giving up here means a machine with no compositor — there is
       # no outcome worse than that, so there is no ceiling.
       startLimitIntervalSec = 0;
-      description = "niri — compositor Wayland (upstream, sem patch)";
+      description = "niri — Wayland compositor (upstream, unpatched)";
       bindsTo = [ "graphical-session.target" ];
       before = [ "graphical-session.target" ];
       wants = [ "graphical-session-pre.target" ];
@@ -337,7 +337,7 @@ in
       # seconds and the person is left with a bare screen and no way to be told
       # why.
       startLimitIntervalSec = 0;
-      description = "ronoctua — o rodapé de duas linhas";
+      description = "ronoctua — the two-line footer";
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];

@@ -56,7 +56,7 @@ fn verified(
         let rows = session.poll();
         if let Some(row) = rows.iter().find(|r| r.hash == hash) {
             if row.state == State::Errored {
-                bail!("o torrent falhou: {}", row.trouble);
+                bail!("the torrent failed: {}", row.trouble);
             }
             // Seeding means it has everything AND checked it: libtorrent only
             // gets there by hashing what is on disk against the torrent.
@@ -68,7 +68,7 @@ fn verified(
             }
         }
         if start.elapsed() > PATIENCE {
-            bail!("o torrent nao verificou em {PATIENCE:?}");
+            bail!("the torrent did not verify in {PATIENCE:?}");
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -77,12 +77,12 @@ fn verified(
 fn main() -> Result<()> {
     let root = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-test-torrent <diretorio-de-trabalho>")?;
+        .context("usage: ronoctua-test-torrent <working-directory>")?;
     let root = PathBuf::from(root);
     std::fs::create_dir_all(&root)?;
 
     if !ronoctua_torrent::available() {
-        bail!("esta build nao tem o shim; nao ha o que provar");
+        bail!("this build has no shim; there is nothing to prove");
     }
     println!("libtorrent: {}", ronoctua_torrent::version());
 
@@ -104,33 +104,33 @@ fn main() -> Result<()> {
     ] {
         if !raw.windows(needle.len()).any(|w| w == needle) {
             bail!(
-                "o .torrent v2 nao tem `{}` — nao e BEP 52",
+                "the v2 .torrent does not have `{}` — it is not BEP 52",
                 String::from_utf8_lossy(needle)
             );
         }
     }
     if raw.windows(8).any(|w| w == b"6:pieces") {
-        bail!("o .torrent `so-v2` ainda carrega o `pieces` do v1");
+        bail!("the `so-v2` .torrent still carries v1's `pieces`");
     }
-    println!("arquivo: `meta version`, `file tree` e `piece layers`, e nenhum `pieces` v1");
+    println!("file: `meta version`, `file tree` and `piece layers`, and no v1 `pieces`");
 
     // A high, fixed range: the check runs in a sandbox with a loopback and
     // nothing else, and a port already taken would fail for the wrong reason.
-    let mut session = Session::open(&root.join("estado"), (46881, 46891))?;
+    let mut session = Session::open(&root.join("state"), (46881, 46891))?;
 
     let v2 = verified(&mut session, &v2_file, content.parent().unwrap_or(&root))?;
     if !v2.v2 {
-        bail!("a sessao nao reconheceu o hash v2");
+        bail!("the session did not recognise the v2 hash");
     }
     if v2.v1 {
-        bail!("o torrent `so-v2` chegou com hash v1 — nao era so-v2");
+        bail!("the `so-v2` torrent arrived with a v1 hash — it was not v2-only");
     }
     // 64 hex characters: a SHA-256, whole. `get_best()` would have truncated it
     // to a 40-character SHA-1 so v1 code paths could carry it, and truncated
     // hashes collide.
     if v2.hash.len() != 64 {
         bail!(
-            "o hash v2 tem {} caracteres, nao 64: {}",
+            "the v2 hash is {} characters, not 64: {}",
             v2.hash.len(),
             v2.hash
         );
@@ -145,19 +145,19 @@ fn main() -> Result<()> {
     let v1 = verified(&mut session, &v1_file, content.parent().unwrap_or(&root))?;
     if !v1.v1 || v1.v2 {
         bail!(
-            "o torrent `so-v1` nao veio como v1 puro: v1={} v2={}",
+            "the `so-v1` torrent did not come as pure v1: v1={} v2={}",
             v1.v1,
             v1.v2
         );
     }
     if v1.hash.len() != 40 {
-        bail!("o hash v1 tem {} caracteres, nao 40", v1.hash.len());
+        bail!("the v1 hash is {} characters, not 40", v1.hash.len());
     }
     println!("v1: verificado, e a bandeira distingue os dois");
 
     // ---- HOLD, LET GO, AND GIVE UP ----
     if !session.pause(&v2.hash) {
-        bail!("pausar o v2 falhou");
+        bail!("pausing the v2 failed");
     }
     let held = {
         let start = std::time::Instant::now();
@@ -174,25 +174,25 @@ fn main() -> Result<()> {
         }
     };
     if !held {
-        bail!("pediu para segurar e a sessao nunca disse que segurou");
+        bail!("it asked to hold and the session never said it held");
     }
     if !session.resume(&v2.hash) {
-        bail!("soltar o v2 falhou");
+        bail!("releasing the v2 failed");
     }
-    println!("segurar e soltar: a sessao confirma, e nao so aceita o pedido");
+    println!("hold and release: the session confirms, and does not merely take the request");
 
     // GIVING UP TAKES THE DATA, which is the promise a cancelled copy makes.
     if !session.remove(&v1.hash, true) {
-        bail!("remover o v1 falhou");
+        bail!("removing the v1 failed");
     }
     let start = std::time::Instant::now();
     while session.poll().iter().any(|r| r.hash == v1.hash) {
         if start.elapsed() > PATIENCE {
-            bail!("o torrent removido continua na lista");
+            bail!("the removed torrent is still in the list");
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    println!("desistir: some da lista");
+    println!("give up: it disappears from the list");
 
     session.save();
     println!("OK: BitTorrent v2 verificado offline, e o v1 continua distinguivel");

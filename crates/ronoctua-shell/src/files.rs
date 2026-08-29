@@ -102,9 +102,21 @@ impl Column {
     /// that elides is a date column that lies about the year.
     const fn width(self) -> u16 {
         match self {
-            // The glyph plus one cell of air. Without the air the icon touches
-            // the first letter and reads as part of the name.
-            Self::Icon => 2,
+            // THE GLYPH, AND NOTHING ELSE. The air is the columns' own `gap`,
+            // which `layout_beside` already adds after every column.
+            //
+            // It used to be two — "the glyph plus one cell of air" — and the
+            // gap was added on top, so the icon had TWO cells between its ink
+            // and the first letter of the name while the whole table had one
+            // between any other pair of columns. Measured off the owner's
+            // screen: 25 px on the icon's right against 21 on its left, in a
+            // grid whose cell is 10,8. *"The icon spacing is far too wide
+            // in the listing."*
+            //
+            // One cell of air is what every other column gets, and it is what
+            // this one gets now. The air itself did not go anywhere; it stopped
+            // being paid twice.
+            Self::Icon => 1,
             Self::Name => 0,
             Self::Perms => 10,
             Self::Owner | Self::Group => 8,
@@ -223,6 +235,65 @@ const SIDE_GUTTER: u16 = ronoctua_tokens::space::FILES_SIDEBARGUTTER;
 /// smudge rather than as a target and a boundary.
 const SIDE_EJECT: u16 = ronoctua_tokens::space::FILES_SIDEBAREJECT;
 
+/// The narrowest a PANEL may be squeezed to.
+///
+/// `Dimensions  3024 × 4032` is twenty-three cells and it is the widest
+/// ordinary fact there is; twenty-four is that plus the air on its right. Below
+/// it the value elides on the row that exists to carry the value, which is the
+/// same argument [`NAME_FLOOR`] makes about a name and [`SIDE_FLOOR`] about a
+/// place.
+const PANEL_FLOOR: u16 = 24;
+
+/// The widest a panel is ever given.
+///
+/// Forty cells is some 340 px at the window's font — past the headroom
+/// `space.files.panelPixels` already reserves — and every cell beyond it is a
+/// cell the LISTING gives up. The sidebar's ceiling makes the same argument
+/// with `width / 3`; here the number is flat because a panel's content does not
+/// grow with the screen: a fact is as long as it is.
+const PANEL_CEILING: u16 = 40;
+
+/// How many lines a PREVIEW wants before it is a picture rather than a smudge.
+///
+/// The same number the bottom strip takes, and deliberately the same: it is one
+/// answer to one question — "how short may a preview get and still be worth
+/// drawing" — and two numbers for it would be two answers.
+fn preview_lines() -> u16 {
+    ronoctua_tokens::space::FILES_STRIPLINES
+}
+
+/// What the toggle says when it turns a panel on at a width that cannot hold
+/// it.
+///
+/// The state flips ANYWAY and the screen says why — the shape
+/// `files-sidebar-only` already has, and for the same reason: from the outside,
+/// a key that refuses and a key that is dead look the same.
+const PANEL_NO_ROOM: &str = ronoctua_i18n::key::FILES_PANEL_NO_ROOM;
+
+/// What the preview panel says when there is no picture in it.
+///
+/// Not "the file could not be read" — that is what `ronoctua_inspect`'s own
+/// refusals say, and they win when there is one. This is the answer for a
+/// directory, a broken link and a file the tools have not been asked about
+/// yet: there is no picture, and the panel says so instead of drawing a large
+/// icon that says what the listing's own icon column already said.
+const NO_PREVIEW: &str = ronoctua_i18n::key::FILES_NO_PREVIEW;
+
+/// What the facts key says when there is nothing to scroll.
+///
+/// A key that does nothing and says nothing is the one outcome this project
+/// treats as a defect: from the outside, a refusal and a dead key look the
+/// same. It is `files-sidebar-only`'s shape, once more.
+const FACTS_ALL_SHOWN: &str = ronoctua_i18n::key::FILES_FACTS_ALL_SHOWN;
+
+/// One fact, in full, on the message line.
+///
+/// A panel is [`PANEL_FLOOR`] cells and a path is two hundred characters, so
+/// the row that had to be cut is exactly the row somebody wants to read whole.
+/// It goes where which-key already puts a description; nothing floats
+/// (invariant 14).
+const FACT_SAYS: &str = ronoctua_i18n::key::FILES_FACT_SAYS;
+
 /// How many cells a sidebar row wants: the glyph, its air, the name, and the
 /// eject glyph when there is one.
 ///
@@ -274,6 +345,616 @@ pub fn sidebar_columns(width: u16, showing: bool, content: u16) -> u16 {
     wanted
 }
 
+/// One of the two panels the manager can put beside — or under — the listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    /// What the file LOOKS like: a picture, or the type's glyph and the reason
+    /// there is none.
+    Preview,
+    /// What the file IS, in as much detail as the tools on the machine can say.
+    Info,
+}
+
+/// One row of the info panel: what it says, and what it offers.
+///
+/// The label and the value are already WORDS by the time they are here —
+/// `sheet_of` resolves them through the view's own bundle — because a `Choice`
+/// and a filename follow the same rule: text on screen is text, and a key that
+/// reached the screen is the defect invariant 8 exists to refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fact {
+    /// What it is called.
+    pub label: String,
+    /// What it says.
+    pub value: String,
+    /// What acting on it reaches — and [`Doable::Nothing`] for the facts one
+    /// only reads.
+    pub does: Doable,
+}
+
+/// What a row of the info panel offers, if anything.
+///
+/// **Every variant is something the LISTING already reaches**, and that is the
+/// whole point of the enum: the panel is a second place to press the same
+/// targets, never a second implementation of them. A variant here with no
+/// counterpart in `row_of` would be a gesture that only exists in one of the
+/// two places one can see the same file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Doable {
+    /// Nothing. A date is not something one edits, a path is not somewhere one
+    /// types, and a file's size is what the kernel says it is. A row that lit
+    /// up and then refused would be worse than one that never promised —
+    /// `menu::Applies` states that rule and this is it, one register down.
+    Nothing,
+    /// The permission triplet: one target per character, as `Column::Perms`.
+    Mode,
+    /// `owner:group`: two targets, as `Column::Owner` and `Column::Group`.
+    Ownership,
+    /// A directory's size, which is a walk — as `TAB` on a directory.
+    Measure,
+}
+
+/// How many cells the two panels take on the RIGHT — and ZERO when they withdraw.
+///
+/// Two phases, the same shape as [`sidebar_columns`], [`layout_beside`] and
+/// `layout::resolve` on the modeline — and mirrored deliberately, because it is
+/// the same question asked at the other edge.
+///
+/// **Phase one is a PREFERENCE.** Below `space.files.panelsFrom` the panels are
+/// not offered on the right at all. They are not refused: they move to a short
+/// strip along the bottom, which is [`View::panes`]' business and not this
+/// function's.
+///
+/// **Phase two is what does not give way** — nothing leaks off the screen. Each
+/// panel is a quarter of what is left, floored at [`PANEL_FLOOR`] and capped at
+/// [`PANEL_CEILING`]; and if what remains cannot hold a listing at its own floor
+/// the pair withdraws ENTIRELY rather than shrinking. Half a panel beside half a
+/// listing is two things neither of which can be read — the sentence the sidebar
+/// already carries, applied to the other edge.
+///
+/// `width` is what is left AFTER the sidebar, and that is not a detail: the
+/// sidebar is decided first, so turning a panel on never moves the places one
+/// navigates by. `wanted` is how many panels are on — one or two.
+#[must_use]
+pub fn right_columns(width: u16, showing: bool, wanted: u16) -> u16 {
+    if !showing || wanted == 0 || width < ronoctua_tokens::space::FILES_PANELSFROM {
+        return 0;
+    }
+    let each = (width / 4).clamp(PANEL_FLOOR, PANEL_CEILING);
+    // ONE RULE BEFORE EACH PANEL — the one that separates the first from the
+    // listing, and the one between the two — plus the right edge's air, which
+    // is not a column and never gives way. See `EDGE_RIGHT`.
+    let take = each
+        .saturating_mul(wanted)
+        .saturating_add(RULE.saturating_mul(wanted))
+        .saturating_add(EDGE_RIGHT);
+    // What a listing needs before it says anything: the gutter, the icon and
+    // its gap, the name's floor, and the right edge. The same expression
+    // `sidebar_columns` uses, and it has to be the same or the two edges
+    // disagree about what a listing is.
+    let listing_floor = GUTTER + Column::Icon.width() + 1 + NAME_FLOOR + EDGE_RIGHT;
+    if width.saturating_sub(take) < listing_floor {
+        return 0;
+    }
+    take
+}
+
+/// Whether the two panels fit side by side in a strip along the bottom.
+///
+/// The strip spans the whole width, so the only question is whether each panel
+/// still reaches its floor. Below that they do not shrink — they do not appear,
+/// and the key that turned one on SAYS so.
+#[must_use]
+pub fn strip_fits(width: u16, wanted: u16) -> bool {
+    if wanted == 0 {
+        return false;
+    }
+    let rules = wanted.saturating_sub(1).saturating_mul(RULE);
+    width
+        >= PANEL_FLOOR
+            .saturating_mul(wanted)
+            .saturating_add(rules)
+            .saturating_add(EDGE_RIGHT)
+}
+
+/// Where every region of the manager begins, at one width.
+///
+/// # Why one struct and not four functions
+///
+/// Because `View::split` already records what happens when the division is
+/// computed in more than one place: both painters and both hit-testers asked
+/// `sidebar_columns` for themselves, and on a second monitor the rule and the
+/// fields landed at different cells. With FOUR regions — the sidebar, the
+/// listing and two panels — that argument only gets stronger, so the whole
+/// division is decided once and handed over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Panes {
+    /// Where the sidebar ends; zero when there is none.
+    pub sidebar: u16,
+    /// How many cells the panels take on the right, rules and edge included;
+    /// zero when they are not there.
+    pub right: u16,
+    /// How many LINES the bottom strip takes; zero when there is none.
+    pub strip: u16,
+    /// Whether the preview panel is on.
+    pub preview: bool,
+    /// Whether the info panel is on.
+    pub info: bool,
+}
+
+impl Panes {
+    /// The listing's first cell — where the sidebar ends plus its rule, or zero.
+    #[must_use]
+    pub const fn listing_from(self) -> u16 {
+        if self.sidebar == 0 {
+            0
+        } else {
+            self.sidebar + RULE
+        }
+    }
+
+    /// The panels that are on, left to right.
+    ///
+    /// The preview first, always. It is what answers "is this the file I
+    /// meant" in one glance, and the facts are what one then reads.
+    #[must_use]
+    pub fn on(self) -> Vec<Panel> {
+        let mut out = Vec::new();
+        if self.preview {
+            out.push(Panel::Preview);
+        }
+        if self.info {
+            out.push(Panel::Info);
+        }
+        out
+    }
+
+    /// Where each panel sits: `(which, first cell, cells)`.
+    ///
+    /// **ONE function for both places.** The right-hand columns and the bottom
+    /// strip differ in how wide they are and how many lines they have, and in
+    /// nothing else — the panels themselves are the same two panels. Two
+    /// builders would be two answers to "what does the info panel say", which
+    /// is the divergence the two doors already exist to prevent.
+    #[must_use]
+    pub fn boxes(self, width: u16) -> Vec<(Panel, u16, u16)> {
+        let on = self.on();
+        let Ok(n) = u16::try_from(on.len()) else {
+            return Vec::new();
+        };
+        if n == 0 {
+            return Vec::new();
+        }
+        // A RULE BEFORE THE FIRST ONE ONLY ON THE RIGHT. Down in the strip
+        // there is nothing to its left to be separated from: what separates the
+        // strip from the listing is the rule ABOVE it, which is a line and not a
+        // column.
+        let (from, room, leading) = if self.right > 0 {
+            (width.saturating_sub(self.right), self.right, 1u16)
+        } else if self.strip > 0 {
+            (0, width, 0u16)
+        } else {
+            return Vec::new();
+        };
+        let rules = leading.saturating_add(n - 1);
+        let each = room
+            .saturating_sub(rules)
+            .saturating_sub(EDGE_RIGHT)
+            .checked_div(n)
+            .unwrap_or(0);
+        let mut at = from.saturating_add(leading * RULE);
+        let mut out = Vec::with_capacity(on.len());
+        let last = on.len().saturating_sub(1);
+        for (i, which) in on.into_iter().enumerate() {
+            // THE REMAINDER GOES TO THE LAST ONE, and it is not tidiness.
+            //
+            // An integer division leaves up to `n - 1` cells over, and they
+            // were left at the right-hand end where nothing drew them: the
+            // owner measured the consequence as *"the big blank space that
+            // should not exist between the scrollbar and the window's corner"*,
+            // because the facts' bar sits in the LAST cell of its own box and
+            // the box stopped short of the edge.
+            let mine = if i == last {
+                room.saturating_sub(at.saturating_sub(from))
+                    .saturating_sub(EDGE_RIGHT)
+            } else {
+                each
+            };
+            out.push((which, at, mine));
+            at = at.saturating_add(mine).saturating_add(RULE);
+        }
+        out
+    }
+
+    /// The cells the VERTICAL rules sit in, for whoever paints them.
+    ///
+    /// One before the first panel when they are on the right, and one between
+    /// them wherever they are. It is a one-pixel rule and a cell of grid:
+    /// separation by whitespace and a rule, never by a container (invariant 15).
+    #[must_use]
+    pub fn rules(self, width: u16) -> Vec<u16> {
+        let boxes = self.boxes(width);
+        let mut out = Vec::new();
+        for (n, (_, at, _)) in boxes.iter().enumerate() {
+            if n == 0 && self.right == 0 {
+                continue;
+            }
+            out.push(at.saturating_sub(RULE));
+        }
+        out
+    }
+
+    /// The cell the LISTING's own scrollbar sits in.
+    ///
+    /// # Why the bar moved out of the surface's last cell
+    ///
+    /// Because with the panels on the right that cell is inside the INFO
+    /// panel, and a thumb there says "the listing is cut" from a column that is
+    /// not the listing — and drags a list it is not sitting on. The owner
+    /// photographed the consequence from the other side: two bars in one
+    /// column, one under the other, reading as one control.
+    ///
+    /// So it is the listing's own last cell: just before the panels' first
+    /// rule when they are on the right.
+    ///
+    /// `None` when nothing is beside the listing on the right, and that is not
+    /// the same as "the last cell of the region". The region's cells are the
+    /// SCREEN's and every row is drawn `chrome::FIELDS_LEAD` cells further in,
+    /// so the region's last cell is already past the edge — `files.edgeRight`
+    /// is what absorbs it. `None` means the SURFACE's own last cell, which is
+    /// exactly where every other view's bar goes and where this one has always
+    /// been; the door knows that in pixels and the view does not.
+    #[must_use]
+    pub const fn listing_bar(self, width: u16) -> Option<u16> {
+        if self.right == 0 {
+            return None;
+        }
+        Some(width.saturating_sub(self.right).saturating_sub(RULE))
+    }
+
+    /// Which SECTION a cell belongs to.
+    ///
+    /// # Why this exists at all
+    ///
+    /// Because until now nothing asked. The manager draws one `Row` per line
+    /// carrying every section's fields, and `Row::field_at` walks from the
+    /// right — which answers "what did I click" without ever naming a region,
+    /// and that was the whole trick. It is not enough for the three things the
+    /// owner asked for next, and he named the symptom exactly: *"putting the
+    /// cursor over an item of the info column, on the exact row the mouse is
+    /// on, ends up giving the hover effect in the listing; that is, right now
+    /// it is all one single row"* — and the same missing answer is why a scroll
+    /// gesture over the facts scrolled the listing, the sidebar and the facts
+    /// together.
+    ///
+    /// A field can say what it is. A REGION cannot, because the empty cells of
+    /// a short section have no field in them at all — and the pointer spends
+    /// most of its time over empty cells. So the region is arithmetic, here,
+    /// once, and the three callers (the band, the wheel and the focus) ask it
+    /// rather than each working it out from `sidebar` and `right`.
+    /// `in_strip` is whether the pointer is BELOW the listing, in the band the
+    /// panels take when they do not fit beside it. It has to be told, because
+    /// down there the panels' boxes span the whole width — the same cell is the
+    /// listing's above the rule and a panel's below it, and a cell alone cannot
+    /// say which side of a horizontal line it is on.
+    #[must_use]
+    pub fn section_at(self, cell: u16, width: u16, in_strip: bool) -> Pane {
+        if !in_strip && self.sidebar > 0 && cell < self.sidebar {
+            return Pane::Sidebar;
+        }
+        if self.right == 0 && !in_strip {
+            return Pane::Listing;
+        }
+        // THE PANELS FROM THE RIGHT, in the order `boxes` lays them out. A cell
+        // on a rule belongs to the section that starts after it, which is the
+        // same choice `band_of` makes about the pixel: the rule is drawn on top
+        // of whatever the band left there.
+        for (which, at, room) in self.boxes(width) {
+            if cell >= at && cell < at.saturating_add(room) {
+                return match which {
+                    Panel::Preview => Pane::Preview,
+                    Panel::Info => Pane::Info,
+                };
+            }
+        }
+        Pane::Listing
+    }
+
+    /// The preview's box, in cells: `(first column, columns)`.
+    #[must_use]
+    pub fn preview_box(self, width: u16) -> Option<(u16, u16)> {
+        self.boxes(width)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Preview))
+            .map(|(_, at, w)| (at, w))
+    }
+}
+
+/// Where the panels' own rows sit inside a region: `(first line, how many).`
+///
+/// # Why this is not simply "the region"
+///
+/// Because the panels' fields ride the LISTING's rows, and every door puts
+/// lines of its own above those — the footer two, the path and the header; the
+/// window three, with the message line between them. The picture was fitted
+/// into a box that started at the region's first line and ran its whole
+/// height, so it was two lines taller than the panel it was in, centred in the
+/// wrong box, and the difference came out as air underneath. Photographed and
+/// reported in one sentence: *"the preview's picture is touching the top
+/// line and has a lot of extra space underneath"*.
+///
+/// One function, four readers — each door's picture and each door's facts bar
+/// — because that defect was one door's arithmetic written out by hand, and
+/// the second door had written its own and got it right. Two answers to one
+/// question is how the doors come to disagree.
+///
+/// `first` is the region's first line, `lines` its height INCLUDING the
+/// chrome, `chrome` how many of those lines are the door's own, and `strip`
+/// how many lines the bottom strip has — because down there the panels are not
+/// in the listing's rows at all, they are underneath them.
+#[must_use]
+pub const fn panel_band(first: u16, lines: u16, strip: u16) -> (u16, u16) {
+    if strip > 0 {
+        return (first.saturating_add(lines), strip);
+    }
+    // THE REGION'S FIRST LINE, and never "minus the listing's chrome".
+    //
+    // It used to subtract it, and the doors computed the subtraction as
+    // `2 - offset` — what was on screen right then. So the picture's box moved
+    // two lines UP the moment somebody scrolled the listing, and the owner saw
+    // exactly that: *"the same extra-spacing defect at the top of the preview
+    // column is still happening, and it goes away only when the listing's
+    // scrollbar is scrolled"*. A column whose top is a function of another column's offset
+    // is not a column.
+    //
+    // The chrome does not scroll any more (see `View::region_rows`), and it is
+    // the LISTING's: the panels start where every other section starts.
+    (first, lines)
+}
+
+/// Where a RULE's line goes inside the cell reserved for it, in PIXELS.
+///
+/// # The same lopsidedness, one register down
+///
+/// [`RULE`] reserves a whole cell of grid for a line one logical pixel wide,
+/// and every site drew that line at the cell's LEFT edge. So the cell became
+/// air on the line's right and none at all on its left. Measured off the
+/// owner's screen, in the footer door at 1280 px: the sidebar's last column
+/// ended 10,8 px before the rule and the listing's icon began 21,6 px after
+/// it — one cell against two, for one boundary.
+///
+/// The line goes in the MIDDLE of its own cell, so both neighbours get half of
+/// it. Nothing else moves: every hit test, every column and every elision
+/// counts the same cells they counted before, because the cell was the rule's
+/// already and no field is laid out inside it.
+///
+/// `at` is the rule's cell, `lead` what the door owes before a row's first
+/// cell, and `cell` how wide a cell is in that door.
+#[must_use]
+pub fn rule_x(at: u16, lead: u16, cell: f32) -> f32 {
+    (f32::from(lead.saturating_add(at)) + 0.5) * cell
+}
+
+/// Where the pointer's band begins and how wide it is, in PIXELS.
+///
+/// # Why one function and not one per door
+///
+/// Because the two doors had written it out separately and had arrived at
+/// three different answers between them, and every one of the three was the
+/// same defect: the band began one CELL to the right of the rule it should
+/// have started at, so the row lit up with a strip of unlit background between
+/// it and the line beside it. The owner reported it in those words — *"the
+/// item's selection background does not touch the vertical separating line
+/// on the listing's left-hand side"* — about the footer, and the window door
+/// had it in both of its arms: the sidebar's band started at the margin
+/// instead of at the screen's edge, and the listing's ran to the window's
+/// right edge, straight under the preview.
+///
+/// # Why PIXELS, when everything else here is cells
+///
+/// Because the band's two edges are RULES, and a rule sits in the middle of
+/// its own cell (see [`rule_x`]). Half a cell is not a thing the integer grid
+/// can say, and a band that stopped at the cell's edge would be back to a gap
+/// on one side. The `cell` and the `edge` come from the door, so this is still
+/// one answer for both of them and not a pixel decided here.
+///
+/// The band stops exactly ON the rule, and that is deliberate: the rules are
+/// painted after it, so the line covers the last pixel of the band rather than
+/// leaving one of its own.
+///
+/// `at` is the cell the pointer is on, in the ROW's own cells — `None` when it
+/// is over the row but not over a field, which lights the listing, because the
+/// listing is what a row mostly is.
+#[must_use]
+pub fn band_of(
+    panes: Panes,
+    lead: u16,
+    width: u16,
+    at: Option<u16>,
+    cell: f32,
+    edge: f32,
+) -> (f32, f32) {
+    let split = panes.sidebar;
+    // WHERE THE LISTING ENDS ON THE RIGHT: the panels' first rule, or the
+    // surface's own edge. A band running under the preview would light the
+    // picture, and the pointer is not on the picture — it is on a row beside it.
+    let right = if panes.right > 0 {
+        rule_x(width.saturating_sub(panes.right), lead, cell)
+    } else {
+        edge
+    };
+    // A PANEL LIGHTS ITSELF, and never the listing beside it.
+    //
+    // The owner photographed this one: *"putting the cursor over an item
+    // of the info column, on the exact row the mouse is on, ends up giving
+    // the hover effect in the listing"*. The band was bounded on the right by the panels'
+    // first rule and then drawn for whatever cell the pointer was in, so a
+    // pointer inside a panel lit a row of a list it was not over.
+    if let Some(c) = at
+        && panes.right > 0
+    {
+        let which = panes.section_at(c, width, false);
+        if matches!(which, Pane::Preview | Pane::Info) {
+            let panel = match which {
+                Pane::Preview => Panel::Preview,
+                _ => Panel::Info,
+            };
+            return panel_px(panes, panel, lead, width, cell, edge).unwrap_or((0.0, 0.0));
+        }
+    }
+    if split == 0 {
+        return (0.0, right.max(0.0));
+    }
+    let line = rule_x(split, lead, cell);
+    match at {
+        // THE SIDEBAR'S BAND RUNS FROM THE SCREEN'S OWN EDGE. It is the one of
+        // the four the owner called right, and it is right for a reason worth
+        // keeping: the lead is not the sidebar's air, it is the door's, and a
+        // band that began after it would leave a lit row with a dark margin.
+        Some(c) if c < split => (0.0, line),
+        _ => (line, (right - line).max(0.0)),
+    }
+}
+
+/// One offset, moved by `by` and kept inside what there is to show.
+///
+/// Integer arithmetic and saturating at both ends, like every other offset in
+/// this project: a list shorter than its room does not scroll at all, and the
+/// last page is the floor rather than the end.
+#[must_use]
+pub fn slide(from: usize, by: i64, total: usize, room: usize) -> usize {
+    let last = total.saturating_sub(room);
+    let moved = i64::try_from(from)
+        .unwrap_or(i64::MAX)
+        .saturating_add(by)
+        .max(0);
+    usize::try_from(moved).unwrap_or(0).min(last)
+}
+
+/// Where a panel's REGION begins and ends, in pixels.
+///
+/// # Why this is not `at * cell` and `room * cell`
+///
+/// Because those are the TEXT's rails, and a picture is not text. It is the
+/// two-rails rule this design system already keeps for the rule and the
+/// selection band, applied to the third thing that fills a region: what fills
+/// one runs from the rule on its left to the rule on its right, and where there
+/// is no rule it runs to the surface's own edge.
+///
+/// The difference is not academic — it is half a cell at each end, and the
+/// owner measured it as a picture that was not centred. In the window's strip
+/// the preview's box began at the door's text margin (one cell in) while its
+/// region began at the window's edge, so the air came out 60 px on the left
+/// against 54 on the right for a box the code believed was centred.
+#[must_use]
+pub fn panel_px(
+    panes: Panes,
+    which: Panel,
+    lead: u16,
+    width: u16,
+    cell: f32,
+    edge: f32,
+) -> Option<(f32, f32)> {
+    let boxes = panes.boxes(width);
+    let i = boxes.iter().position(|(p, _, _)| *p == which)?;
+    let (_, at, _) = boxes[i];
+    // A RULE ON THE LEFT, or the surface. Down in the strip the first panel has
+    // nothing to its left — what separates it from the listing is the rule
+    // ABOVE it — and `Panes::boxes` says so by giving it no leading rule.
+    let left = if at >= RULE && (panes.right > 0 || i > 0) {
+        rule_x(at.saturating_sub(RULE), lead, cell) + 1.0
+    } else {
+        0.0
+    };
+    let right = boxes.get(i + 1).map_or(edge, |(_, next, _)| {
+        rule_x(next.saturating_sub(RULE), lead, cell)
+    });
+    Some((left, (right - left).max(0.0)))
+}
+
+/// ANY SECTION'S BAND, in pixels: where it begins and how wide it is.
+///
+/// # Why the pixels, and why one function
+///
+/// Because a column's edges are RULES and the surface's border, and neither is
+/// on a cell boundary: `columns` is `floor(width / cell)`, so the last cell ends
+/// before the border and a rule sits in the middle of its own cell. Anything
+/// placed by cell index inherits that difference — and the owner measured every
+/// one of its consequences: a scrollbar drawn a cell past the border and gone
+/// off screen, another that answered for a cell the pointer never reached, and
+/// air to the right of one column that changed with the window's width.
+///
+/// So the band is arithmetic in pixels, here, once. The hover's band asks it,
+/// the scrollbar asks it, and the picture's box asks it — three readers, one
+/// answer, which is the only arrangement in which they cannot disagree.
+#[must_use]
+pub fn section_px(
+    panes: Panes,
+    pane: Pane,
+    lead: u16,
+    width: u16,
+    cell: f32,
+    edge: f32,
+) -> Option<(f32, f32)> {
+    match pane {
+        Pane::Sidebar => (panes.sidebar > 0).then(|| (0.0, rule_x(panes.sidebar, lead, cell))),
+        Pane::Listing => {
+            let from = if panes.sidebar == 0 {
+                0.0
+            } else {
+                rule_x(panes.sidebar, lead, cell) + 1.0
+            };
+            // WHERE THE LISTING ENDS: the panels' first rule when they sit
+            // beside it, and the surface's own border when they do not.
+            let to = if panes.right > 0 {
+                rule_x(width.saturating_sub(panes.right), lead, cell)
+            } else {
+                edge
+            };
+            Some((from, (to - from).max(0.0)))
+        }
+        Pane::Preview => panel_px(panes, Panel::Preview, lead, width, cell, edge),
+        Pane::Info => panel_px(panes, Panel::Info, lead, width, cell, edge),
+    }
+}
+
+/// The preview's picture, centred in its box with air on all four sides.
+///
+/// # What `fit_into` alone does not do
+///
+/// It centres, and it is not enough. The scale is the tighter of the two
+/// ratios, so whichever dimension is the tight one comes out exactly as long
+/// as the box — the picture is centred and touching two borders at once. Both
+/// doors shipped that way and the owner photographed both: the top edge in the
+/// window, the right-hand rule in the footer. What he asked for is a rule and
+/// not a nudge — *"the blank space on the left has to be always equal to the
+/// one on the right, and the blank space below the picture has to be always
+/// equal to the space above"* — and centring already promises the halves are equal. The
+/// missing half of the promise is that neither of them is zero.
+///
+/// So the box gives up `space.files.pictureAir` on each of its four sides
+/// before anything is fitted into it. One function, two doors, because the
+/// arithmetic that was written out twice is the arithmetic that came out
+/// different twice.
+#[must_use]
+pub fn picture_in(
+    space: ronoctua_render::image::Area,
+    w: u32,
+    h: u32,
+) -> ronoctua_render::image::Area {
+    let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR);
+    ronoctua_render::image::Area {
+        x: space.x + air,
+        y: space.y + air,
+        // NEVER NEGATIVE. A panel at its floor in a two-line strip is smaller
+        // than the air twice over, and a negative width would come out of
+        // `fit_into` as a scale nobody can see.
+        width: (space.width - air - air).max(0.0),
+        height: (space.height - air - air).max(0.0),
+    }
+    .fit_into(w, h)
+}
+
 /// Which columns fit, and where.
 ///
 /// Integer arithmetic in two phases, the same shape as `layout::resolve`:
@@ -287,13 +968,31 @@ pub fn sidebar_columns(width: u16, showing: bool, content: u16) -> u16 {
 /// would let the last column fall off the right edge, and "nothing leaks" is
 /// the one rule that never gives way. The compositor does not clip.
 ///
-/// There is no `layout_beside(width, 0)` beside it any more. It was this function
+/// There is no `layout_beside(width, 0, 0)` beside it any more. It was this function
 /// with `from` at zero, and once the header and the rows both had to ask about
 /// the sidebar it had no caller left outside the tests — a second name for one
 /// arithmetic is a second place to read.
+///
+/// `to` is what the PANELS take on the right, and zero when they are not there.
+/// It is the same argument the first line already carries, applied to the other
+/// edge: resolving the columns against the whole width and then reserving the
+/// right-hand cells would let the last column land underneath a panel, and
+/// "nothing leaks" is the one rule that never gives way. Every caller passes
+/// the same `to`, which is what [`Panes`] exists to guarantee.
+///
+/// `details` is whether the three columns one LOOKS UP — the permission
+/// triplet and the two names — are asked for at all. They are off until
+/// somebody asks, and the argument is [`GIVE_WAY`]'s own, applied one step
+/// earlier: a listing is navigated by NAME, and those three are read
+/// deliberately, one file at a time. What the owner asked for is that the
+/// deliberate case be the one that costs a key.
+///
+/// It is a preference removed BEFORE the loop and never a column filtered out
+/// of a finished layout: removed here the cells go to the name, filtered
+/// afterwards they would be a hole where the column used to be.
 #[must_use]
-pub fn layout_beside(width: u16, from: u16) -> Layout {
-    let width = width.saturating_sub(from);
+pub fn layout_beside(width: u16, from: u16, to: u16, details: bool) -> Layout {
+    let width = width.saturating_sub(from).saturating_sub(to);
     let mut wanted = vec![
         Column::Icon,
         Column::Name,
@@ -303,6 +1002,9 @@ pub fn layout_beside(width: u16, from: u16) -> Layout {
         Column::Size,
         Column::Modified,
     ];
+    if !details {
+        wanted.retain(|c| !matches!(c, Column::Perms | Column::Owner | Column::Group));
+    }
     // One cell of separation between columns, which is the whole of the
     // separation: no rule, no box (invariant 15).
     let gap = 1u16;
@@ -420,17 +1122,43 @@ pub enum Hit {
     Nothing,
 }
 
-/// Which of the two lists has the keyboard.
+/// Which SECTION of the manager has the keyboard.
 ///
 /// The same word the notification manager uses for the same idea, and
 /// deliberately: two names for "which side am I on" is two things to learn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// # There are four now, and the order is the screen's
+///
+/// It was two, and the two were the two LISTS — the only regions that had a
+/// cursor to move. Then the panels arrived on the right, the facts stopped
+/// fitting in the lines they were given, and the owner asked for the obvious
+/// consequence: *"each section being independent and having its own scrollbar
+/// (sidebar/listing/preview/info). And it has to be possible to move the focus
+/// between them with Tab and Shift+Tab."*
+///
+/// The variants are declared LEFT TO RIGHT as they are drawn, because that is
+/// what [`View::cycle_pane`] walks. Down in the bottom strip the two panels are
+/// underneath rather than beside, and the order still reads correctly: they
+/// come after the listing either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Pane {
+    /// The sidebar.
+    Sidebar,
     /// The directory. Where the cursor starts, and where typing always goes.
     #[default]
     Listing,
-    /// The sidebar.
-    Sidebar,
+    /// The picture.
+    ///
+    /// **It has nothing to scroll, and it still takes focus.** A picture is one
+    /// thing and it is either in the panel or it is not, so this pane will
+    /// almost never show a bar — the arrows in it move the LISTING's cursor,
+    /// which is what changes the picture, and that is the honest answer to
+    /// "what does moving inside a preview mean". What it must not do is be
+    /// SKIPPED: a `Tab` that visits three of four sections is a key one has to
+    /// count presses for.
+    Preview,
+    /// The facts.
+    Info,
 }
 
 /// One drawn piece of a row.
@@ -476,6 +1204,178 @@ impl Field {
     }
 }
 
+/// ONE COLUMN OF THE MANAGER, and everything that is true about it.
+///
+/// # Why this type exists
+///
+/// Because the manager draws four lists and had no name for any of them. Each
+/// painter, each hit test and each gesture worked out where a column began and
+/// what it held, and they disagreed — every one of the owner's reports was two
+/// of those answers differing:
+///
+/// - the sidebar's first two rows were unreachable, because the LISTING's
+///   chrome was refused for the whole line;
+/// - clicking a folder went to the parent, because the listing's cell was
+///   resolved against the path's crumbs;
+/// - the preview's top moved when the listing scrolled, because the panels'
+///   band was computed as "the region, minus the listing's chrome, minus how
+///   much of it is still on screen";
+/// - and a gesture over the facts scrolled everything, because there was one
+///   offset.
+///
+/// A section says where it is (`from`..`to` in cells, `top` for `lines`), what
+/// it holds (`rows`, already at its own `offset`), and how much of it there is
+/// (`total`). Everything else asks. Nothing else decides.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Section {
+    /// Which column this is.
+    pub pane: Pane,
+    /// Its first cell.
+    pub from: u16,
+    /// One past its last cell.
+    pub to: u16,
+    /// Its first line of the region.
+    pub top: usize,
+    /// How many lines it occupies.
+    pub lines: usize,
+    /// Its own first visible row.
+    pub offset: usize,
+    /// How many rows it has in all.
+    pub total: usize,
+    /// How many of `content`'s first lines are CHROME — the listing's path and
+    /// header, which do not scroll. Zero for every other section.
+    pub above: usize,
+    /// Its own lines, from `offset`, at most `lines` of them. The listing's
+    /// chrome is the first of these and does not scroll.
+    ///
+    /// A section's lines are ITS OWN. Nothing composes a line out of several
+    /// sections' fields: that arrangement is what made a column's length, its
+    /// offset and its top reach into its neighbours, and every defect the
+    /// owner reported was one of those reaches.
+    pub content: Vec<Row>,
+}
+
+impl Section {
+    /// WHICH REGION LINE carries `row` of this section, if it is on screen.
+    ///
+    /// Each section counts from its own `top` and its own `offset`, and the
+    /// listing's chrome sits in front of its rows. Doing this arithmetic
+    /// anywhere else is how a pointer resting on the third fact lit the third
+    /// row of the listing: the row number was right and the line it was turned
+    /// into belonged to another column.
+    #[must_use]
+    pub fn line_of(&self, row: usize) -> Option<usize> {
+        let i = row.checked_sub(self.offset)?;
+        let at = self.above.saturating_add(i);
+        (at < self.content.len()).then_some(self.top + at)
+    }
+
+    /// THE SCROLLBAR'S RECTANGLE, in pixels — or none when nothing is cut.
+    ///
+    /// One rectangle, drawn by the painter and tested by the pointer. They used
+    /// to be two answers: a cell index for the drawing and another arithmetic
+    /// for the hit test, and the owner found every place they disagreed — the
+    /// facts' bar that could not be grabbed in one door, the listing's that
+    /// could not be grabbed in the other, and one drawn a cell past the border.
+    ///
+    /// `right` is the section's own right edge and `top` the region's, both in
+    /// pixels; `Section::line_of` and [`section_px`] are where those come from.
+    /// The thumb is at least one line: with twenty facts in four lines the
+    /// proportional answer is nought.
+    #[must_use]
+    pub fn bar_box(
+        &self,
+        right: f32,
+        top: f32,
+        bottom: f32,
+        cell: f32,
+        line_px: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        if self.total <= self.lines || self.lines == 0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let (total, lines, offset) = (self.total as f32, self.lines as f32, self.offset as f32);
+        // THE TRACK IS PIXELS, AND IT ENDS WHERE THE SURFACE DOES.
+        //
+        // It used to be `lines × line_px`, and a surface is not a whole number
+        // of lines: `lines` is `floor(height / line_px)`, so the track stopped
+        // short by the residue — up to one line of it — and at the last offset
+        // the thumb stopped there too. The owner photographed the gap under
+        // the facts' bar twice and said, correctly, that it was still there.
+        //
+        // The residue is not distributed and not rounded away: the band's
+        // bottom IS the number the door measured, and the thumb's travel is
+        // computed inside it.
+        //
+        // AND THE BAND IS THE SECTION'S OWN, never the whole surface's.
+        //
+        // Reaching for `bottom` unconditionally was the first shape of this
+        // fix, and it was too wide: down in the STRIP the panels have lines of
+        // their own BELOW the listing, so the listing's band ends where the
+        // strip begins. Handed the surface, the listing's thumb walked out of
+        // its column and into the facts' box, which the owner watched it do.
+        //
+        // The residue is at most one line by construction — `lines` is
+        // `floor(height / line_px)` — so a band ending within one line of the
+        // surface is the LAST band in its column and takes what is left over;
+        // one ending a whole line or more above it has something underneath.
+        let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
+        let natural = band_top + lines * line_px;
+        let band_bottom = if bottom - natural < line_px {
+            bottom
+        } else {
+            natural
+        };
+        let band = (band_bottom - band_top).max(line_px);
+        let tall = (lines / total * band).max(line_px);
+        // THE LAST PAGE PUTS THE THUMB AT THE BOTTOM, and never half way: the
+        // owner dragged one to its end and it stopped in the middle of its
+        // own column, because the travel was measured over the whole list
+        // instead of over what is left after the thumb.
+        let travel = (band - tall).max(0.0);
+        let last = (total - lines).max(1.0);
+        let from = (offset / last).min(1.0) * travel;
+        Some((right - cell, band_top + from, cell, tall))
+    }
+
+    /// Whether a point of the region is inside this section.
+    #[must_use]
+    pub const fn holds(&self, line: usize, cell: u16) -> bool {
+        cell >= self.from && cell < self.to && line >= self.top && line < self.top + self.lines
+    }
+}
+
+/// How many lines each kind of section is given.
+///
+/// Two numbers and not one, because the panels and the listing are not the same
+/// height whenever the panels are down in the strip — and a bar asked about the
+/// wrong one answers "nothing is cut" for a list that is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Room {
+    /// The listing's, which the sidebar shares.
+    pub list: usize,
+    /// The panels', which is the strip's height when they are down there.
+    pub panel: usize,
+}
+
+/// What a point resolves to: the section, the row inside THAT section, and the
+/// field's target.
+///
+/// See [`View::hit`] for why the section has to come first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    /// Which section owns the cell.
+    pub pane: Pane,
+    /// The row inside that section. `usize::MAX` is the listing's chrome, which
+    /// both doors already spell that way.
+    pub row: usize,
+    /// What the field under the point does.
+    pub hit: Hit,
+    /// What it says about itself, for the line above.
+    pub explain: Option<Explanation>,
+}
+
 impl Row {
     /// Which field a cell belongs to.
     ///
@@ -487,6 +1387,12 @@ impl Row {
         self.fields.iter().rev().find(|f| f.covers(cell))
     }
 }
+
+/// The listing's own chrome: the path, then the header.
+///
+/// Two lines, and they belong to the LISTING's column — not to the region. Every
+/// other section starts at the region's first line.
+pub const CHROME: usize = 2;
 
 /// How many cells the eject glyph needs on a sidebar row — two, or none.
 ///
@@ -509,6 +1415,15 @@ fn eject_room(row: &ronoctua_files::sidebar::Row) -> u16 {
 /// Text width in CELLS, by cluster.
 fn width_of(s: &str) -> u16 {
     ronoctua_render::layout::width(s)
+}
+
+/// The first cell that puts `what` cells in the middle of `room` cells at `at`.
+///
+/// Integer arithmetic, and it rounds DOWN: half a cell does not exist on this
+/// grid, and a glyph one cell left of centre reads as centred while a glyph
+/// half a cell anywhere reads as blurred.
+const fn centred(at: u16, room: u16, what: u16) -> u16 {
+    at.saturating_add(room.saturating_sub(what) / 2)
 }
 
 /// Something the host has to carry out — a process, a thread, or the disk.
@@ -779,6 +1694,11 @@ pub enum Report {
     /// `Box`ed because it is by far the largest variant and a `Report` is
     /// cloned per message.
     Racked(Box<ronoctua_disks::Rack>),
+    /// What is INSIDE the file the cursor was on — the picture and the facts.
+    ///
+    /// `Box`ed for the same reason `Racked` is: it carries up to a mebibyte of
+    /// RGBA, and a `Report` is moved by value through the channel.
+    Inspected(Box<Looked>),
 }
 
 /// What is on the clipboard, and whether it moves or copies.
@@ -803,7 +1723,7 @@ pub struct View {
     /// labels are text keys (`files-preset-file`, `files-yes`). Written into
     /// `Choice.label` and drawn verbatim, the raw key went to the screen — which
     /// is exactly the shape invariant 8 exists to refuse, reported as
-    /// *"as respostas são `files-no` e `files-yes`"*.
+    /// *"the answers are `files-no` and `files-yes`"*.
     ///
     /// It was not only the drawing: `Picker::shown` FILTERS on the label, so
     /// typing narrowed a list of keys and not of sentences.
@@ -879,8 +1799,143 @@ pub struct View {
     /// The cursor INSIDE the sidebar, so crossing over and back lands where it
     /// left rather than at the top.
     side_cursor: usize,
+    /// The sidebar's own first visible row.
+    ///
+    /// # Why the sidebar needed one of its own
+    ///
+    /// Because it did not have one, and the owner found the hole from the
+    /// outside: *"using the touchpad's scroll gestures over the info region,
+    /// EVERYTHING ends up scrolling (sidebar/listing/…)"*. The sidebar's
+    /// rows are `Field`s on the listing's `Row`, which is what made the whole
+    /// arrangement cheap — and it also meant line `n` was sidebar row `n`, so
+    /// the two could not be anywhere but level with each other.
+    ///
+    /// One number breaks that, and only that: the rows are still the same
+    /// `Row`, still one hit test, still one painter. What changed is which
+    /// sidebar row line `n` carries.
+    side_offset: usize,
+    /// The listing's own first visible row.
+    ///
+    /// # Why it moved here, and what it cost while it was elsewhere
+    ///
+    /// It used to be a `Cell<usize>` the DOOR wrote before every question:
+    /// each door kept the number and pushed it in through `set_first`. Three
+    /// of the four sections already had their offset here — the sidebar, the
+    /// facts, and the preview which does not scroll — so the listing being
+    /// somewhere else was the one asymmetry in the four, and it produced two
+    /// of the defects the owner reported by hand.
+    ///
+    /// `wheel` had no arm for the listing: it answered `false`, meaning "not
+    /// mine, ask the door". Each door then had to implement the case again,
+    /// and each got a different half right — the drag worked in the window's
+    /// facts and not its listing, and in the footer's listing and not its
+    /// facts. With the number here there is no arm to forget: the same
+    /// `slide` moves all three.
+    ///
+    /// The second half was the ORDER. A wheel event moved the door's copy, and
+    /// the next frame pushed that copy in before drawing — so a gesture with
+    /// no redraw between the two showed up one frame late, which is what a
+    /// touchpad sends dozens of times a second.
+    list_offset: usize,
     /// When the sidebar's file was last read, for "has somebody changed it".
     side_stamp: Option<std::time::SystemTime>,
+    /// Whether the PREVIEW panel is asked for.
+    ///
+    /// **ON at the start**, and the key is how one turns it OFF. It used to be
+    /// the other way round, and the argument was the cost — a preview is a
+    /// child process per file walked past. The owner overruled it from the
+    /// screen: the panels are what the manager is FOR, and a feature that has
+    /// to be switched on every time is a feature most of the time nobody has.
+    /// The cost is still real and it is still bounded, by the one thread
+    /// `inspector` runs and by its "only the newest" rule.
+    preview_on: bool,
+    /// Whether the INFO panel is asked for. On at the start, same argument.
+    info_on: bool,
+    /// The first fact the info panel shows.
+    ///
+    /// The panel is as tall as the region and a file can have twenty facts, so
+    /// the list does not always fit — and a list that is cut with nothing
+    /// saying so is the failure this whole file keeps naming. What says so is
+    /// [`View::facts_bar`], and this is what it points at.
+    ///
+    /// It goes back to zero whenever the CURSOR moves: the facts are about the
+    /// focused entry, and keeping a scroll position across two different files
+    /// would open the next one half way down a list it does not have.
+    info_offset: usize,
+    /// Whether the listing shows the permission triplet, the owner and the
+    /// group.
+    ///
+    /// Off at the start. See [`layout_beside`] for the argument; the key that
+    /// turns it on is `files-columns`, and the hint line names it.
+    details_on: bool,
+    /// What the tools said about the file the cursor was on.
+    ///
+    /// ONE, and not a map. The panels are about the focused entry and there is
+    /// one of those; a cache of every file walked past would be the footer's
+    /// memory, which is the argument `ronoctua_render::image` already makes
+    /// about its thirty-nine textures.
+    looked: Option<Looked>,
+    /// The stamp of what was last ASKED for.
+    ///
+    /// It is what stops the host asking again, and it has to be separate from
+    /// [`View::looked`] for the reason `surface`'s `icons` map already
+    /// records: a refusal is an ANSWER, and without somewhere to write "I have
+    /// asked and the answer was no" the same file is asked about on every
+    /// frame.
+    asked: Option<String>,
+    /// How many lines the panels were last DRAWN in.
+    ///
+    /// The same arrangement as [`View::drawn_at`] and for the same reason: a
+    /// key arrives without a height, and how far the facts can scroll depends
+    /// on one. The view cannot work it out — the footer's region has a ceiling
+    /// and a window has the height somebody dragged it to — so the door that
+    /// draws the bar is the one that knows, and [`View::facts_bar`] is where
+    /// every frame of both of them goes through.
+    drawn_lines: std::cell::Cell<u16>,
+    /// The width the view was last laid out at.
+    ///
+    /// # Why the view remembers a width
+    ///
+    /// Because a KEY arrives without one and the answer to "can this panel
+    /// appear" depends on one. The alternative was for each door to work it out
+    /// after the key — which is two doors answering the same question, the
+    /// exact divergence this module exists to prevent. The last width the view
+    /// was DRAWN at is the only one that is true of what is on screen, and both
+    /// doors draw before anybody types.
+    drawn_at: std::cell::Cell<u16>,
+}
+
+/// What the inspector was asked about one file.
+///
+/// The path travels back with the answer because the cursor moves while a
+/// child process runs: without it the panel would show the previous file's
+/// picture under the current file's name, which is the one failure a preview
+/// must not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    /// The file, absolute.
+    pub path: PathBuf,
+    /// The type to act on — already through `ronoctua_inspect::settled`.
+    pub mime: &'static str,
+    /// How many pixels across the longer side, before quantisation.
+    pub target: u32,
+    /// The cache key this answer will carry back.
+    pub key: String,
+}
+
+/// What the inspector came back with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Looked {
+    /// `Stamp::key()` — what identifies this answer in the texture map.
+    pub key: String,
+    /// The file it is about.
+    pub path: PathBuf,
+    /// The pixels, when there are any.
+    pub rgba: Option<ronoctua_render::image::Rgba>,
+    /// Why there are none, when there are none.
+    pub why: Option<ronoctua_inspect::Refusal>,
+    /// What the tools said the file is.
+    pub facts: Vec<ronoctua_inspect::facts::Fact>,
 }
 
 /// An action's technical answer, as an [`Explanation`] with nothing to fill in.
@@ -893,6 +1948,52 @@ fn does(key: &'static str) -> mode::Explanation {
     mode::Explanation {
         key,
         args: Vec::new(),
+    }
+}
+
+/// A fact's value, in words.
+///
+/// TWO SHAPES, and the split is not tidiness. A camera's model is `Pixel 8 Pro`
+/// in every language and translating it would be wrong — the same rule a
+/// `Choice`'s label already follows, because a filename is text and never a
+/// key. A frame rate is not: where the unit goes and what two channels are
+/// called are the LANGUAGE's business, and that belongs in the `.ftl`
+/// (invariant 8).
+///
+/// # Why an argument called `n` crosses as a NUMBER
+///
+/// Because `files-value-channels` and `files-value-pages` are Fluent
+/// SELECTORS, and `facts::Value::Phrase` carries its arguments as `String`.
+/// Given the string `"1"`, Fluent looks for a variant literally named `1` and
+/// falls through to `*[other]`: the screen says **"1 páginas"** with every
+/// check green. It is verbatim the defect `ronoctua_i18n::Arg::Number`'s own
+/// docstring exists for.
+///
+/// The rule is the argument's NAME and not a list of the two keys, so a third
+/// selector arriving later is right by construction — and it is `n` and not
+/// "anything that parses as an integer" on purpose: Fluent groups a number by
+/// locale, so `iso` would become `1,600` and a photograph's dimensions
+/// `3,024 × 4,032`.
+fn fact_said(value: &ronoctua_inspect::facts::Value, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::Arg;
+    use ronoctua_inspect::facts::Value;
+    match value {
+        Value::Data(text) => text.clone(),
+        Value::Phrase { key, args } => {
+            let crossing: Vec<(&str, Arg<'_>)> = args
+                .iter()
+                .map(|(k, v)| {
+                    if *k == "n"
+                        && let Ok(n) = v.parse::<i64>()
+                    {
+                        (*k, Arg::Number(n))
+                    } else {
+                        (*k, Arg::Text(v.as_str()))
+                    }
+                })
+                .collect();
+            texts.t_args(key, &crossing)
+        }
     }
 }
 
@@ -912,6 +2013,8 @@ impl View {
             texts,
             pane: Pane::Listing,
             side_cursor: 0,
+            side_offset: 0,
+            list_offset: 0,
             side_stamp: side.stamp(),
             side,
             where_: where_.to_path_buf(),
@@ -938,6 +2041,19 @@ impl View {
             zone,
             bin,
             stamp: None,
+            // THE PANELS COME UP ON. The owner's decision, reported from the
+            // screen: "prévia e info devem estar sempre habilitadas".
+            preview_on: true,
+            info_on: true,
+            info_offset: 0,
+            // AND THE THREE COLUMNS ONE LOOKS UP COME UP OFF, which is the
+            // same decision seen from the other side: what the manager shows
+            // without being asked is what one navigates by.
+            details_on: false,
+            looked: None,
+            asked: None,
+            drawn_at: std::cell::Cell::new(0),
+            drawn_lines: std::cell::Cell::new(0),
         };
         view.reread();
         view
@@ -1105,8 +2221,13 @@ impl View {
         // — and clicking one would have sorted by whichever column happened to
         // be under the word. It is the same `split` the rows are built with,
         // and it has to be, or the header names a different table.
-        let split = self.split(width);
-        let layout = layout_beside(width, if split == 0 { 0 } else { split + RULE });
+        // THE SAME `panes` THE ROWS ARE BUILT WITH, and it has to be, or the
+        // header names a different table. It is also why nothing of the header
+        // reaches past `panes.right`: a column name drawn over a panel would
+        // label a column that is somewhere else, and clicking it would sort by
+        // whichever one happened to be under the word.
+        let panes = self.panes(width);
+        let layout = layout_beside(width, panes.listing_from(), panes.right, self.details_on);
         let fields = layout
             .columns
             .iter()
@@ -1147,10 +2268,10 @@ impl View {
     /// It takes the bundle because a row carries TEXT, and some of that text is
     /// a key: a menu row's label, a permission preset's name. Resolving it here
     /// keeps `Field::text` a finished string, which is what both doors draw —
-    /// and it is why the menu once showed `files-open` instead of "abrir".
-    #[must_use]
-    pub fn rows(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
-        self.rows_from(0, usize::MAX, width, texts)
+    /// ONLY THE TESTS ASK — see [`View::drawn_at`], which says why.
+    #[cfg(test)]
+    fn drawn(&mut self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        self.drawn_at(&[], 0, usize::MAX, width, texts)
     }
 
     /// Moves the cursor to a row, and NOTHING else.
@@ -1215,86 +2336,58 @@ impl View {
     /// caller, and a branch that quietly returned more than was asked for would
     /// draw a menu over the rows below it.
     #[must_use]
-    pub fn rows_from(
-        &self,
+    /// ONLY THE TESTS ASK FOR THIS, and it is not a model of anything.
+    ///
+    /// # Why it is not how the manager works
+    ///
+    /// Because the manager has four columns, and for a long time it drew them
+    /// as ONE line carrying all four's fields. That arrangement made a
+    /// column's length, its offset and its top reach into its neighbours, and
+    /// every defect the owner reported came out of a reach: clicking a folder
+    /// resolving to the path above it, the sidebar's first rows unreachable,
+    /// the facts' hover lighting the listing, one wheel gesture moving
+    /// everything, the preview's top jumping when the listing scrolled.
+    ///
+    /// Both doors draw [`View::sections`] now — each section on its own rail,
+    /// at its own `top`, from its own content. Nothing in the shell composes a
+    /// line out of several sections.
+    ///
+    /// What remains here is an ASSERTION CONVENIENCE: a test that wants to say
+    /// "at this line, this is what would be on screen" reads the sections and
+    /// concatenates them. It is `cfg(test)` so it cannot become a habit.
+    #[cfg(test)]
+    fn drawn_at(
+        &mut self,
+        chrome: &[Row],
         skip: usize,
         take: usize,
         width: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        let cut = |v: Vec<Row>| v.into_iter().skip(skip).take(take).collect();
-        if let Some(picker) = &self.picking {
-            return cut(picker_rows(picker, width, texts));
+        if !self.plain() {
+            return self.modal_rows(skip, take, width, texts);
         }
-        if let Some(name) = &self.detail {
-            return cut(self.detail_rows(name, width, texts));
-        }
-        if let Some(chosen) = self.menu {
-            return cut(self.menu_rows(chosen, width, texts));
-        }
-        // THE SIDEBAR IS NOT A SECOND LIST OF LINES: it is extra `Field`s on
-        // the SAME `Row`. Line `n` carries sidebar row `n` in the cells before
-        // the split and listing row `n` after it, which is what leaves the
-        // scrolling, the paging, the hit testing and both doors' painters
-        // untouched — `Row::field_at` walks from the right, so a cell below the
-        // split finds a sidebar field and one above it finds a listing field,
-        // with no boundary arithmetic anywhere.
-        //
-        // Neither the picker, the detail sheet nor the menu gets one: each is
-        // modal, and covering a question half-way is worse than covering it.
-        let split = self.split(width);
-        let layout = layout_beside(width, if split == 0 { 0 } else { split + RULE });
-        let side = self.side.shown(self.hidden);
-        // AT LEAST ONE LINE, because "nothing here" is a sentence and a
-        // sentence needs somewhere to be. It is the same `.max(1)` as
-        // `row_count`, and the two have to agree or the region asks for a
-        // height it then does not fill.
-        let lines = self
-            .shown
-            .len()
-            .max(if split == 0 { 0 } else { side.len() })
-            .max(1);
-        (skip..lines.min(skip.saturating_add(take)))
-            .map(|n| {
-                // `n` STAYS ABSOLUTE. It is what says which row has the cursor
-                // and which is marked, and a window that renumbered from zero
-                // would put the focus on the first visible line whatever the
-                // offset.
-                let mut row = self.shown.get(n).map_or_else(
-                    || Row {
-                        fields: Vec::new(),
-                        marked: false,
-                        focused: false,
-                    },
-                    |i| self.row_of(n, *i, &layout),
-                );
-                // "NOTHING HERE" IS A FIELD OF THE LISTING, on its first line.
-                //
-                // It used to be a row the FOOTER built, which had two
-                // consequences: the window door drew nothing at all for an
-                // empty directory and said nothing either, and with a sidebar
-                // beside it the sentence would have disappeared altogether,
-                // because the region is no longer empty. Here it is beside the
-                // sidebar, where it belongs, and both doors get it.
-                if n == 0 && self.shown.is_empty() {
-                    row.fields.push(Field {
-                        at: layout.from + GUTTER,
-                        text: texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE),
-                        color: ronoctua_tokens::color::TEXT_DIM,
-                        hit: Hit::Nothing,
-                        explain: None,
-                    });
+        self.list_offset = skip;
+        let sections = self.sections(chrome, take, width, texts);
+        let region: Vec<&Section> = sections.iter().filter(|s| s.top == 0).collect();
+        let lines = region.iter().map(|s| s.content.len()).max().unwrap_or(0);
+        (0..take.min(lines))
+            .map(|k| {
+                let mut fields = Vec::new();
+                for sec in &region {
+                    if let Some(line) = sec.content.get(k) {
+                        fields.extend(line.fields.iter().cloned());
+                    }
                 }
-                // A GAP DRAWS NOTHING. It is what separates the blocks, and
-                // an empty line is exactly what it should look like.
-                if split > 0
-                    && let Some(Some(place)) = side.get(n)
-                {
-                    let mut fields = self.side_fields(n, place, split, texts);
-                    fields.append(&mut row.fields);
-                    row.fields = fields;
+                let of_listing = region
+                    .iter()
+                    .find(|s| matches!(s.pane, Pane::Listing))
+                    .and_then(|s| s.content.get(k));
+                Row {
+                    fields,
+                    marked: of_listing.is_some_and(|r| r.marked),
+                    focused: of_listing.is_some_and(|r| r.focused),
                 }
-                row
             })
             .collect()
     }
@@ -1323,12 +2416,54 @@ impl View {
             // was there would ask the region for lines nothing draws into —
             // blank space below a two-line directory, which reads as the
             // manager having lost the rest of it.
-            let side = if self.split(width) == 0 {
+            let panes = self.panes(width);
+            let side = if panes.sidebar == 0 {
                 0
             } else {
                 self.side.shown(self.hidden).len()
             };
-            self.shown.len().max(side).max(1)
+            // AND THE PANELS' OWN, when they are on the RIGHT. Down in the
+            // strip they take LINES OF THEIR OWN and none of the listing's, so
+            // they count for nothing here — see `Panes::strip`, and the split
+            // between "height" and "scroll" the footer keeps.
+            let panel = if panes.right == 0 {
+                0
+            } else {
+                self.panel_lines()
+            };
+            self.shown.len().max(side).max(panel).max(1)
+        })
+    }
+
+    /// How many lines the REGION needs, with the listing's chrome on top of the
+    /// listing and nothing else.
+    ///
+    /// # Why this is not `row_count + chrome`
+    ///
+    /// Because the chrome is one column's, and adding it to the tallest of the
+    /// three added it to whichever column happened to win. With a short listing
+    /// beside a ten-row sheet that is two blank lines at the bottom of the
+    /// region — the same defect as the blank at the top, upside down.
+    #[must_use]
+    pub fn region_len(&self, chrome: usize, width: u16) -> Option<usize> {
+        let panes = self.panes(width);
+        self.row_count(width).map(|_| {
+            let side = if panes.sidebar == 0 {
+                0
+            } else {
+                self.side.shown(self.hidden).len()
+            };
+            let panel = if panes.right == 0 {
+                0
+            } else {
+                self.panel_lines()
+            };
+            self.shown
+                .len()
+                .max(1)
+                .saturating_add(chrome)
+                .max(side)
+                .max(panel)
         })
     }
 
@@ -1373,10 +2508,124 @@ impl View {
     /// landed at different cells. One method, one width, one answer.
     #[must_use]
     pub fn split(&self, width: u16) -> u16 {
+        self.panes(width).sidebar
+    }
+
+    /// **THE ONE PLACE THE WHOLE DIVISION IS DECIDED.**
+    ///
+    /// [`View::split`] used to be it, and its own note says why it had to be:
+    /// both painters and both hit-testers asked `sidebar_columns` for
+    /// themselves, and on a second monitor the rule and the fields landed at
+    /// different cells. There are FOUR regions now — the sidebar, the listing
+    /// and two panels — so `split` became a thin call into this rather than
+    /// gaining siblings beside it, which would have been three more chances to
+    /// disagree.
+    ///
+    /// Everything is zero while a menu, a question or a sheet is up: each of
+    /// them is modal, and covering a question half-way is worse than covering
+    /// it.
+    ///
+    /// **The order is the sidebar first.** It is decided against the whole
+    /// width, exactly as before, and the panels get what is left — so turning a
+    /// preview on never moves the places one navigates by, and no existing
+    /// answer changes when both panels are off.
+    ///
+    /// **And the panels flip TOGETHER**: right-hand columns or bottom strip,
+    /// never one of each. The owner's sentence is binary, and a mixed mode
+    /// would make the listing shorter *and* narrower at once.
+    #[must_use]
+    pub fn panes(&self, width: u16) -> Panes {
+        // THE WIDTH IS REMEMBERED HERE, because this is the one function every
+        // painter and every hit test goes through. See `View::drawn_at`.
+        self.drawn_at.set(width);
         if !self.plain() {
+            return Panes::default();
+        }
+        let sidebar = sidebar_columns(width, self.sidebar_showing(), self.side_content());
+        let beside = width.saturating_sub(if sidebar == 0 { 0 } else { sidebar + RULE });
+        let wanted = u16::from(self.preview_on) + u16::from(self.info_on);
+        let right = right_columns(beside, wanted > 0, wanted);
+        Panes {
+            sidebar,
+            right,
+            strip: if wanted > 0 && right == 0 && strip_fits(width, wanted) {
+                ronoctua_tokens::space::FILES_STRIPLINES
+            } else {
+                0
+            },
+            preview: self.preview_on,
+            info: self.info_on,
+        }
+    }
+
+    /// Whether the preview panel is asked for.
+    ///
+    /// `#[cfg(test)]` because nothing on screen reads it: what the doors need
+    /// is [`View::panes`], which answers where the panels ARE and not only
+    /// whether they were asked for. It is here because the toggle has to be
+    /// provable — the same reason `View::pane` is.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn preview_showing(&self) -> bool {
+        self.preview_on
+    }
+
+    /// Whether the info panel is asked for.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn info_showing(&self) -> bool {
+        self.info_on
+    }
+
+    /// How many LINES the panels want, when they sit on the right.
+    ///
+    /// The taller of the two, and it is what makes `row_count` and `rows_from`
+    /// agree: a region that reserved lines nothing draws into is blank space
+    /// below the listing, which reads as the manager having lost the rest of
+    /// it. The preview asks for [`preview_lines`] whatever is in it — a picture
+    /// one line tall is not a picture — and the info panel asks for as many
+    /// lines as it has facts.
+    ///
+    /// **Asking is not getting.** The footer's region has a ceiling of twelve
+    /// lines (invariant 14) and a photograph has more facts than that, so what
+    /// the panel is GIVEN is the door's business and can be less than this.
+    /// What says so on screen is [`View::facts_bar`]; before it there was
+    /// nothing, and the facts past the ceiling were simply not there.
+    fn panel_lines(&self) -> usize {
+        // NOTHING UNDER THE CURSOR, NOTHING TO ASK FOR. A query that matches no
+        // file leaves both panels with no subject, and a region that stayed
+        // twelve lines tall to hold two empty boxes is a region that stopped
+        // answering the person typing. `leader-vm` is what caught it: typing
+        // `zzz` has to narrow the list, and with the panels on by default it
+        // did not — 288 px before and 288 px after.
+        //
+        // It is the panels' own rule, not an exception to it: they are always
+        // ON, and what they ask for is what they have to say.
+        if self.focused().is_none() {
             return 0;
         }
-        sidebar_columns(width, self.sidebar_showing(), self.side_content())
+        // AND THE PANELS ASK FOR WHAT THEY HAVE TO SAY, which is a picture's
+        // box or a sheet's rows.
+        //
+        // This is what makes the region grow to its ceiling whenever the
+        // manager is open, and that is deliberate rather than a side effect:
+        // the panels are on from the start now, and a panel given four lines
+        // out of a sheet of ten is a panel one has to scroll to read at all.
+        // The ceiling still holds (invariant 14), and `View::facts_bar` is
+        // what says the sheet was cut when even the ceiling is not enough —
+        // which for a photograph it never is.
+        //
+        // The cost is that the region's HEIGHT stops being an answer to what
+        // was typed; `leader-vm` used to read it that way and now reads the
+        // text instead, which is what it was actually asking about.
+        let mut lines = 0usize;
+        if self.preview_on {
+            lines = lines.max(usize::from(preview_lines()));
+        }
+        if self.info_on {
+            lines = lines.max(self.sheet().len());
+        }
+        lines
     }
 
     /// How many cells the widest sidebar row wants.
@@ -1406,12 +2655,54 @@ impl View {
         self.side.showing() && self.side.how_many(self.hidden) > 0
     }
 
+    /// Where the path row begins and how many cells it has.
+    ///
+    /// # The defect this exists for
+    ///
+    /// The path was built without a width and drawn from cell ZERO, so on a
+    /// screen with a sidebar it ran straight across the rule that separates
+    /// the two lists — photographed in `10-manager-with-preview.png`, where
+    /// `/root/shots/` reaches `x≈170` and the rule is at `x=151`. It was
+    /// the one thing on that row that did not respect the division: the
+    /// sidebar's fields stop at the split and the listing's start after it.
+    ///
+    /// # Why it MOVES rather than being cut short
+    ///
+    /// Because the path is the LISTING's — it says which directory these rows
+    /// are — and the sidebar's column is somebody else's. Cutting it at the
+    /// split would have squeezed it into the dozen cells the sidebar happens
+    /// to be wide, leaving sixty empty cells to the right of it on the same
+    /// row; starting it after the split lines it up with the HEADER, which is
+    /// laid out from exactly this cell and always has been.
+    ///
+    /// It stops before the panels for the same reason it starts after the
+    /// sidebar. What is left over is elided, by CLUSTER — a two-hundred
+    /// character path in a seventy-column footer is the case that made the
+    /// elision necessary at all.
+    fn crumb_box(&self, width: u16) -> (u16, u16) {
+        let panes = self.panes(width);
+        let from = panes.listing_from();
+        (from, width.saturating_sub(from).saturating_sub(panes.right))
+    }
+
     /// The path above, as clickable pieces.
+    ///
+    /// `width` is the region's, in cells: the row belongs to the listing and
+    /// has to stay inside it, and [`View::crumb_box`] is where that is decided.
     #[must_use]
-    pub fn crumbs(&self) -> Vec<Field> {
+    pub fn crumbs(&self, width: u16) -> Vec<Field> {
+        let (from, room) = self.crumb_box(width);
         let parts = listing::ancestry(&self.where_);
-        let mut fields = Vec::new();
-        let mut at = 0u16;
+        // WHAT WAS TYPED IS PAID FOR FIRST, and the path gives way to it.
+        //
+        // The query is at the END of the path (see below) and it is what the
+        // hand is doing RIGHT NOW; the path is where one already is. Eliding
+        // from the end without reserving for the query would make the letters
+        // one is typing the first thing to disappear, which is the opposite of
+        // what a query at the end of a path is for.
+        let typed = width_of(&self.filter).min(room);
+        let for_path = room.saturating_sub(typed);
+        let mut pieces: Vec<(String, Hit, Color)> = Vec::new();
         for (n, (label, _)) in parts.iter().enumerate() {
             let text = if n == 0 {
                 label.clone()
@@ -1429,6 +2720,56 @@ impl View {
             } else {
                 ronoctua_tokens::color::TEXT_SECONDARY
             };
+            pieces.push((text, hit, color));
+        }
+        // WHOLE PIECES FROM THE END, and an ellipsis for what was dropped.
+        //
+        // A path is elided at the FRONT because the tail is what tells you
+        // where you are — `…/shots/` answers the question and `/root/sh…`
+        // does not — and it is elided by whole crumbs because each of them is
+        // a click target: half a directory's name is not somewhere to go. The
+        // measuring is `layout::width`, which counts CLUSTERS, so an accented
+        // folder name is not cut through the middle of a letter.
+        let total: u16 = pieces.iter().map(|(t, _, _)| width_of(t)).sum();
+        let mut dropped = 0usize;
+        if for_path == 0 {
+            pieces.clear();
+        } else if total > for_path {
+            let mut kept = 0u16;
+            // One cell for the ellipsis, which is a piece of the row too.
+            let budget = for_path.saturating_sub(1);
+            dropped = pieces.len();
+            for (n, (text, _, _)) in pieces.iter().enumerate().rev() {
+                let w = width_of(text);
+                if kept + w > budget {
+                    break;
+                }
+                kept += w;
+                dropped = n;
+            }
+        }
+        let mut fields = Vec::new();
+        let mut at = from;
+        if dropped > 0 {
+            fields.push(Field {
+                at,
+                text: "…".to_owned(),
+                color: ronoctua_tokens::color::TEXT_DIM,
+                hit: Hit::Nothing,
+                explain: None,
+            });
+            at += 1;
+        }
+        // NOT ONE WHOLE PIECE FITS: the last one is cut instead of vanishing.
+        //
+        // A row that says nothing at all about where you are is worse than one
+        // that says part of it, and this is where the two-phase shape the rest
+        // of this file uses ends up: the preference is whole crumbs, and what
+        // holds is that something identifies the directory.
+        if dropped == pieces.len() && !pieces.is_empty() {
+            let (text, hit, color) = pieces.remove(pieces.len() - 1);
+            let text =
+                ronoctua_render::layout::elide_end(&text, (from + for_path).saturating_sub(at));
             let width = width_of(&text);
             fields.push(Field {
                 at,
@@ -1438,6 +2779,18 @@ impl View {
                 explain: None,
             });
             at += width;
+        } else {
+            for (text, hit, color) in pieces.drain(dropped..) {
+                let width = width_of(&text);
+                fields.push(Field {
+                    at,
+                    text,
+                    color,
+                    hit,
+                    explain: None,
+                });
+                at += width;
+            }
         }
         // WHAT WAS TYPED GOES AT THE END OF THE PATH, in the accent colour.
         //
@@ -1457,7 +2810,11 @@ impl View {
         if !self.filter.is_empty() {
             fields.push(Field {
                 at,
-                text: self.filter.clone(),
+                // ELIDED AT THE END, and only when even the whole row cannot
+                // hold what is being typed. `typed` is already the query's
+                // share of the room; this is what keeps the row inside it when
+                // somebody types more letters than the sidebar is wide.
+                text: ronoctua_render::layout::elide_end(&self.filter, typed),
                 color: ronoctua_tokens::color::STATE_ACCENT,
                 hit: Hit::Nothing,
                 explain: None,
@@ -1589,6 +2946,342 @@ impl View {
             });
         }
         fields
+    }
+
+    /// One line of the two panels, wherever they sit.
+    ///
+    /// `n` is the line INSIDE the panels' block: with them on the right it is
+    /// the listing's own line number, and down in the strip it is the strip's.
+    /// The panels do not know which, and that is the point — one builder, two
+    /// places, and no branch that could answer differently in each.
+    fn panel_fields(
+        &self,
+        n: usize,
+        boxes: &[(Panel, u16, u16)],
+        sheet: &[Fact],
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Field> {
+        boxes
+            .iter()
+            .flat_map(|(which, at, room)| match which {
+                Panel::Preview => self.preview_fields(n, *at, *room, texts),
+                Panel::Info => self.info_fields(n, *at, *room, sheet),
+            })
+            .collect()
+    }
+
+    /// The preview panel's line `n`.
+    ///
+    /// **THE PANEL ALWAYS DRAWS SOMETHING.** With a picture the fields are
+    /// BLANK — the texture is not text, and what these carry is the click
+    /// target, so that clicking a picture of a file opens it exactly as
+    /// clicking its name does.
+    ///
+    /// # With no picture it is a SENTENCE, and no longer a glyph
+    ///
+    /// It used to draw the type's icon, big and centred, with the reason under
+    /// it. The owner asked for the icon to go: *"when there is no preview,
+    /// instead of showing an icon it should say, in a very discreet
+    /// formatting, that there is no preview"* — and he is right about what the glyph was doing.
+    /// It said what the file IS, which the listing's own icon column already
+    /// says on the row the cursor is on, and it said it at the size of a
+    /// picture, so an empty panel looked like a panel with something in it.
+    ///
+    /// So: one dim line, and it says the REASON when the tools gave one and
+    /// the plain sentence when they did not. A blank panel and a refused panel
+    /// must not look the same — that is `ronoctua-inspect`'s rule, "refusal is
+    /// a VALUE, not an absence" — and now neither of them is blank.
+    fn preview_fields(
+        &self,
+        n: usize,
+        at: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Field> {
+        let Some(entry) = self.focused() else {
+            return Vec::new();
+        };
+        let path = self.where_.join(&entry.name);
+        let looked = self.looked.as_ref().filter(|l| l.path == path);
+        let target = Hit::Name(self.cursor);
+        if looked.is_some_and(|l| l.rgba.is_some()) {
+            // A FIELD OF BLANKS, and not "no field at all". A picture has no
+            // text to hit-test against, and a panel one cannot click would be
+            // the mouse reaching less than the keyboard — the one direction
+            // `files-everything-has-a-key` rules out.
+            return vec![Field {
+                at,
+                text: " ".repeat(usize::from(room)),
+                color: ronoctua_tokens::color::TEXT_PRIMARY,
+                hit: target,
+                explain: None,
+            }];
+        }
+        // ONE LINE, AND NOTHING ON THE REST: a line that does nothing must not
+        // look like a line that does something, which is the rule the blank
+        // rows of a short listing already follow.
+        if n != 0 {
+            return Vec::new();
+        }
+        // THE TOOLS' OWN REASON WHEN THERE IS ONE — "there is no picture
+        // inside this kind of file", "`ffmpeg` is not installed" — and the
+        // plain sentence when there is not. The reason is the better answer
+        // and it is the one that wins; the sentence is what a directory, a
+        // broken link and a file still being decoded get.
+        let text = match looked.and_then(|l| l.why.as_ref()) {
+            Some(why) => {
+                let args: Vec<(&str, String)> = why.args();
+                let borrowed: Vec<(&str, &str)> =
+                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                texts.t_with(why.key(), &borrowed)
+            }
+            None => texts.t(NO_PREVIEW),
+        };
+        let text = ronoctua_render::layout::elide_end(&text, room);
+        vec![Field {
+            at: centred(at, room, width_of(&text)),
+            text,
+            // THE DIMMEST TEXT THERE IS, which is the whole of the "very
+            // discreet formatting" that was asked for: no box, no rule, no
+            // second size. Hierarchy is colour and air (invariant 15).
+            color: ronoctua_tokens::color::TEXT_DIM,
+            hit: target,
+            explain: None,
+        }]
+    }
+
+    /// The info panel's line `n`: one fact, label and value.
+    ///
+    /// # Why a row here answers the pointer like a row of the listing
+    ///
+    /// Because it is the same fact about the same file. The panel used to be
+    /// `Hit::Nothing` throughout, on the grounds that "a fact is not something
+    /// one acts on" — and that was true of a date and false of everything the
+    /// listing's own row already lets one change. The owner reported it as
+    /// exactly that asymmetry: the permission letters are clickable in the
+    /// table and dead in the panel that exists to show them.
+    ///
+    /// So the targets come from [`Fact::does`], which is decided once in
+    /// [`View::sheet_of`], and every one of them is a target the LISTING
+    /// already produces — the same `Hit`, the same `confirm_mode`, the same
+    /// picker. There is no second machinery, which is what stops the two
+    /// disagreeing about what clicking a `w` does.
+    ///
+    /// **And what a row cannot offer is not drawn as if it could.** A size is
+    /// not a number one types and a date is not something one edits: those
+    /// stay `Hit::Nothing`, with the `explain` that carries the value
+    /// UN-ELIDED — the row that had to be cut to fit is exactly the row
+    /// somebody wants to read in full, and the message line is where it goes.
+    /// Nothing floats (invariant 14).
+    fn info_fields(&self, n: usize, at: u16, room: u16, sheet: &[Fact]) -> Vec<Field> {
+        // THE OFFSET IS THE PANEL'S OWN. The listing scrolls with the region
+        // and the facts do not: they are about ONE entry, and there are more
+        // of them than the region has lines. See `View::facts_bar`.
+        let Some(fact) = sheet.get(n.saturating_add(self.info_offset)) else {
+            return Vec::new();
+        };
+        // THE LABEL IS DIM AND THE VALUE IS NOT — hierarchy by colour, never by
+        // size, which is what the two `nothing_*` rules already ask of every
+        // buffer. The label gets a third of the panel and the value the rest:
+        // the label is looked past and the value is read.
+        let for_label = (room / 3).max(1);
+        let value_at = at.saturating_add(for_label).saturating_add(1);
+        // AND ONE CELL AT THE END IS THE BAR'S, always.
+        //
+        // Reserved whether or not there is one to draw, because a column that
+        // gave a cell back when the last fact was scrolled into view would
+        // re-elide every value on the row underneath it — layout that moves
+        // while one reads is worse than a cell of air. See `View::facts_bar`
+        // for why the bar cannot sit in the surface's own last cell.
+        let for_value = room.saturating_sub(for_label + 2);
+        let mut fields = vec![Field {
+            at,
+            text: ronoctua_render::layout::elide_end(&fact.label, for_label),
+            color: ronoctua_tokens::color::TEXT_DIM,
+            hit: Hit::Nothing,
+            explain: None,
+        }];
+        let acted = match fact.does {
+            Doable::Mode => self.mode_fields(value_at, for_value),
+            Doable::Ownership => self.ownership_fields(value_at, for_value, &fact.value),
+            Doable::Measure => self.measure_field(value_at, for_value, &fact.value),
+            Doable::Nothing => Vec::new(),
+        };
+        if acted.is_empty() {
+            fields.push(Field {
+                at: value_at,
+                text: ronoctua_render::layout::elide_end(&fact.value, for_value),
+                color: ronoctua_tokens::color::TEXT_PRIMARY,
+                hit: Hit::Nothing,
+                // THE WHOLE VALUE, for the line that explains. A path of two
+                // hundred characters is exactly the fact one opened the panel
+                // to read, and the panel is twenty-four cells wide.
+                explain: Some(mode::Explanation {
+                    key: FACT_SAYS,
+                    args: vec![("label", fact.label.clone()), ("value", fact.value.clone())],
+                }),
+            });
+        } else {
+            fields.extend(acted);
+        }
+        fields
+    }
+
+    /// The permission triplet inside the info panel, one target per character.
+    ///
+    /// The same ten cells the listing's `Perms` column draws, from the same
+    /// `mode::cells`, with the same `Hit`s and the same sentences — and then
+    /// the octal, which is not a target because there is nothing to flip in
+    /// it. Anything past `room` is DROPPED rather than drawn: nothing leaks
+    /// off the screen, which is the one rule that never gives way.
+    fn mode_fields(&self, at: u16, room: u16) -> Vec<Field> {
+        let Some(entry) = self.focused() else {
+            return Vec::new();
+        };
+        let owner = self
+            .roster
+            .person(entry.uid)
+            .map_or_else(|| entry.uid.to_string(), ToOwned::to_owned);
+        let group = self
+            .roster
+            .group(entry.gid)
+            .map_or_else(|| entry.gid.to_string(), ToOwned::to_owned);
+        let n = self.cursor;
+        let mut fields = Vec::new();
+        for (k, cell) in mode::cells(entry.mode).into_iter().enumerate() {
+            let Ok(k) = u16::try_from(k) else { break };
+            if k >= room {
+                break;
+            }
+            let hit = match (cell.special, cell.segment) {
+                (Some(s), _) => Hit::Special(n, s),
+                (None, mode::Segment::Bit(who, what)) => Hit::Bit(n, who, what),
+                (None, mode::Segment::Kind) => Hit::Nothing,
+            };
+            fields.push(Field {
+                at: at + k,
+                text: cell.letter.to_string(),
+                color: if cell.set {
+                    ronoctua_tokens::color::TEXT_PRIMARY
+                } else {
+                    ronoctua_tokens::color::TEXT_DIM
+                },
+                hit,
+                explain: Some(mode::explain(cell, entry.mode, &owner, &group)),
+            });
+        }
+        // THE OCTAL, when there is room for it whole. Half of `(0644)` is not
+        // a mode, and a mode read wrong is worse than one not shown.
+        let octal = format!("({})", mode::octal(entry.mode));
+        let used = u16::try_from(fields.len()).unwrap_or(room);
+        let left = room.saturating_sub(used + 1);
+        if left >= width_of(&octal) {
+            fields.push(Field {
+                at: at + used + 1,
+                text: octal,
+                color: ronoctua_tokens::color::TEXT_DIM,
+                hit: Hit::Nothing,
+                explain: None,
+            });
+        }
+        fields
+    }
+
+    /// `owner:group` inside the info panel, as two targets and a colon.
+    ///
+    /// The colon is `Hit::Nothing` on purpose: it is punctuation between two
+    /// answers, and a click on it could only guess which of the two was meant.
+    fn ownership_fields(&self, at: u16, room: u16, value: &str) -> Vec<Field> {
+        let Some((owner, group)) = value.split_once(':') else {
+            return Vec::new();
+        };
+        let n = self.cursor;
+        let mut fields = Vec::new();
+        let mut used = 0u16;
+        let mut put = |text: String, hit: Hit, explain: Option<Explanation>, dim: bool| {
+            let left = room.saturating_sub(used);
+            if left == 0 {
+                return;
+            }
+            let text = ronoctua_render::layout::elide_end(&text, left);
+            let width = width_of(&text);
+            fields.push(Field {
+                at: at + used,
+                text,
+                color: if dim {
+                    ronoctua_tokens::color::TEXT_DIM
+                } else {
+                    ronoctua_tokens::color::TEXT_PRIMARY
+                },
+                hit,
+                explain,
+            });
+            used += width;
+        };
+        put(
+            owner.to_owned(),
+            Hit::Owner(n),
+            Some(Explanation {
+                key: ronoctua_i18n::key::FILES_EXPLAIN_OWNER,
+                args: vec![("who", owner.to_owned())],
+            }),
+            false,
+        );
+        put(":".to_owned(), Hit::Nothing, None, true);
+        put(
+            group.to_owned(),
+            Hit::Group(n),
+            Some(Explanation {
+                key: ronoctua_i18n::key::FILES_EXPLAIN_GROUP,
+                args: vec![("who", group.to_owned())],
+            }),
+            false,
+        );
+        fields
+    }
+
+    /// A DIRECTORY's size inside the info panel: the same walk `TAB` asks for.
+    ///
+    /// Only a directory gets one, and that is decided in [`View::sheet_of`]. A
+    /// file's size is a fact the kernel already knows and nothing can change
+    /// from here — so it is drawn, and it is not a target.
+    fn measure_field(&self, at: u16, room: u16, value: &str) -> Vec<Field> {
+        let Some(entry) = self.focused() else {
+            return Vec::new();
+        };
+        vec![Field {
+            at,
+            text: ronoctua_render::layout::elide_end(value, room),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            hit: Hit::Measure(self.cursor),
+            explain: Some(Explanation {
+                key: ronoctua_i18n::key::FILES_EXPLAIN_MEASURE,
+                args: vec![("bytes", entry.bytes.to_string())],
+            }),
+        }]
+    }
+
+    /// The panels' own lines, when they sit in the STRIP along the bottom.
+    ///
+    /// A separate list and not more rows of the listing, because the strip does
+    /// not scroll: it is pinned under the last line of the region, and rows
+    /// that scrolled would put it on the last page only. It is the same two
+    /// panels through the same builder.
+    #[must_use]
+    pub fn strip_rows(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        let panes = self.panes(width);
+        if panes.strip == 0 {
+            return Vec::new();
+        }
+        let boxes = panes.boxes(width);
+        let sheet = if panes.info { self.sheet() } else { Vec::new() };
+        (0..usize::from(panes.strip))
+            .map(|n| Row {
+                fields: self.panel_fields(n, &boxes, &sheet, texts),
+                marked: false,
+                focused: false,
+            })
+            .collect()
     }
 
     /// What the pointer resting on a sidebar row says on the message line.
@@ -2114,7 +3807,7 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         // what the person meant by pressing the row.
         Doing::Mount(id) => {
             let sender = sender.clone();
-            raise("montar", move || {
+            raise("mount", move || {
                 let report = match ronoctua_disks::Manager::fresh().and_then(|m| m.mount(&id)) {
                     Ok(at) => Report::Mounted(std::path::PathBuf::from(at)),
                     // THE NAME OF THE ERROR, and not its prose. `NotSupported`
@@ -2209,9 +3902,9 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             // `nix/modules/files.nix` installs, so on a machine that is not
             // running this distro — the nested loop, above all, where most of
             // the work happens — it is simply not there. What came out of the
-            // thread then was `criar /run/ronoctua-files/staged: Permission
+            // thread then was `create /run/ronoctua-files/staged: Permission
             // denied`, three seconds on the message line, and a report of
-            // "trocar o dono não fez nada".
+            // "changing the owner did nothing".
             //
             // Answering before starting turns that into a sentence that says
             // WHY, and it says it synchronously, which is the difference
@@ -2298,7 +3991,7 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             let stem = first
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "arquivo".to_owned());
+                .unwrap_or_else(|| "file".to_owned());
             let archive = directory.join(format!("{stem}.{extension}"));
             queued(Work::Compress {
                 directory,
@@ -2334,7 +4027,7 @@ fn queued(work: Work) -> Errand {
     match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
         Ok(()) => Errand::Done,
         Err(e) => {
-            tracing::warn!(error = %e, "a fila de transferencias nao aceitou o trabalho");
+            tracing::warn!(error = %e, "the transfer queue did not take the job");
             Errand::Say(Explanation {
                 key: ronoctua_i18n::key::TRANSFERS_OFFLINE,
                 args: Vec::new(),
@@ -2381,12 +4074,87 @@ fn in_a_thread(
 /// A NAMED thread, always: an unnamed one in `top` says `ronoctua-shell` and
 /// nothing about what it is doing, on the one screen that exists to answer
 /// that.
+/// Starts the thread that looks INSIDE files.
+///
+/// # Why one long-lived NAMED thread, and not one per ask
+///
+/// Because holding an arrow key down over a folder of videos is sixty asks a
+/// second, and each one is `ffmpeg` seeking a frame. One thread per ask would
+/// spawn sixty processes to throw away fifty-nine of them; this one takes the
+/// NEWEST and drops the rest on the floor, which is the answer somebody
+/// scrolling actually wants. It is the arrangement `apps::painter` already has,
+/// for the same reason and with the same two channels: `mpsc` in, because only
+/// it has a blocking `recv` and the thread should sleep while nobody asks, and
+/// the loop's own `calloop` channel out.
+///
+/// **Nothing here touches the frame.** `ronoctua-inspect` is synchronous and
+/// spawns children; waiting for one inside the loop that draws is the trap this
+/// project paid for once with `systemd-run --scope`.
+#[must_use]
+pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mpsc::Sender<Ask>> {
+    let (queue, asks) = std::sync::mpsc::channel::<Ask>();
+    let born = std::thread::Builder::new()
+        .name("ronoctua-inspect".to_owned())
+        .spawn(move || {
+            while let Ok(first) = asks.recv() {
+                // ONLY THE NEWEST. Everything queued behind it is a file the
+                // cursor has already left, and decoding it would only make the
+                // one being looked at arrive later.
+                let mut ask = first;
+                while let Ok(newer) = asks.try_recv() {
+                    ask = newer;
+                }
+                let made = ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target);
+                let facts = ronoctua_inspect::facts::facts(
+                    &ask.path,
+                    ask.mime,
+                    // WITHHELD, and it is the default for a reason the crate
+                    // spells out: the panel is what somebody opens just before
+                    // sending a photograph to a stranger, and "where this was
+                    // taken" is most often the house it was taken in.
+                    ronoctua_inspect::facts::Place::Withheld,
+                );
+                let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
+                    width: r.width,
+                    height: r.height,
+                    pixels: r.pixels,
+                });
+                if let Some(r) = rgba.as_ref() {
+                    tracing::debug!(
+                        width = r.width,
+                        height = r.height,
+                        kind = ask.mime,
+                        "preview decoded"
+                    );
+                }
+                let looked = Looked {
+                    key: ask.key,
+                    path: ask.path,
+                    rgba,
+                    why: made.why,
+                    facts,
+                };
+                if out.send(Report::Inspected(Box::new(looked))).is_err() {
+                    // A closed channel = the door left.
+                    return;
+                }
+            }
+        });
+    match born {
+        Ok(_) => Some(queue),
+        Err(e) => {
+            tracing::error!(error = %e, "could not create the inspection thread");
+            None
+        }
+    }
+}
+
 fn raise(name: &str, work: impl FnOnce() + Send + 'static) {
     if let Err(e) = std::thread::Builder::new()
-        .name(format!("arquivos-{name}"))
+        .name(format!("files-{name}"))
         .spawn(work)
     {
-        tracing::error!(error = %e, thread = name, "nao consegui subir a thread");
+        tracing::error!(error = %e, thread = name, "could not start the thread");
     }
 }
 
@@ -2591,8 +4359,55 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("C-o", "files-sidebar-focus"),
     ("C-e", "files-eject"),
     ("C-u", "files-unpin"),
-    // TAB IS NOT A LETTER, so it stays where it was.
-    ("TAB", "files-measure"),
+    // THE TWO PANELS, and both are LETTERS for the reason the sidebar's four
+    // are: `Footer::press_key` sends an arrow held with the RIGHT `Ctrl` to
+    // `navigate` before the view sees it, and the window door does not track
+    // the right Ctrl at all — so `C-<arrow>` would cross in one door and page
+    // in the other.
+    //
+    // `C-i` IS NOT `TAB` HERE, and somebody will assume it is: in a terminal
+    // they are the same byte. They are not the same key on Wayland — `key_of`
+    // maps `Keysym::Tab` and `Keysym::i` separately — and the test beside this
+    // table pins it, because the day they collided `TAB` would silently stop
+    // measuring a directory.
+    ("C-v", "files-preview"),
+    ("C-i", "files-facts"),
+    // AND THE FACTS SCROLL, because the panel no longer stretches the region
+    // to hold them — see `View::panel_lines`. It PAGES and it WRAPS, in one
+    // key, and the shape is `files-sort`'s: a list of a dozen rows that comes
+    // back round is a key one can hold down without having to know where the
+    // end is. The bar says where one is.
+    //
+    // Punctuation and not a letter, and it is not an exception: `C-<` and
+    // `C->` are already here, and every bare key is a letter of the query.
+    ("C-.", "files-facts-scroll"),
+    // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
+    //
+    // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
+    // are: `Footer::press_key` sends an arrow held with the right `Ctrl` to
+    // `navigate` before the view sees it.
+    ("C-d", "files-columns"),
+    // AND THE FOUR SECTIONS, WALKED BY `TAB`.
+    //
+    // `TAB` ALREADY MEANT THIS ONE ROOM AWAY: the notification manager's own
+    // key line says `TAB pane`, and it has said so since it had
+    // two columns. Two managers in one shell disagreeing about what `TAB` does
+    // is the divergence the two doors exist to prevent, one level up.
+    //
+    // So `files-measure` moved off it, to `C-t` — "total", the thing it
+    // answers, and a letter for the reason the sidebar's four are letters:
+    // `Footer::press_key` sends an arrow held with the RIGHT `Ctrl` to
+    // `navigate` before the view sees it.
+    ("C-t", "files-measure"),
+    ("TAB", "files-pane-next"),
+    // AND BACKWARDS, which is the one key in this table that carries `S-`.
+    //
+    // Not an exception: `S-TAB` is not "Shift plus Tab" as far as anything here
+    // is concerned, it is the keysym `ISO_Left_Tab`, which is what xkb produces
+    // for it — the same "xkb has already applied it" both doors' `key_of` rely
+    // on when they refuse to count Shift. The two doors read the keysym and set
+    // the flag from THAT, so neither of them is guessing at a modifier.
+    ("S-TAB", "files-pane-previous"),
 ];
 
 /// The hint line: what typing does, and how to reach the menu without a mouse.
@@ -2623,14 +4438,67 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
 #[must_use]
 pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> String {
     let menu = key_that_runs("files-menu").map_or_else(String::new, |t| t.notation());
+    // AND THE TWO PANELS, read out of the same table.
+    //
+    // Neither is a command of the registry, so neither is in `M-x` or in the
+    // manual: this line is the only thing on screen that says they exist, and
+    // `C-o` already cost this file the lesson — implemented, working, and
+    // mentioned nowhere, "which is the same as not having it". Interpolated and
+    // never written into the sentence, because keys move.
+    let preview = key_that_runs("files-preview").map_or_else(String::new, |t| t.notation());
+    let facts = key_that_runs("files-facts").map_or_else(String::new, |t| t.notation());
+    // AND THE TWO NEWEST, in a sentence of their own APPENDED to the line.
+    //
+    // A second key and not a longer first one, because the first one is
+    // already written in two languages and the two halves are about different
+    // things: what is always there, and what one asks for. The join is a
+    // single space and the separator lives inside the value — a `·` written
+    // here would be a visual literal in Rust, which is what invariant 9 is
+    // about.
+    let columns = key_that_runs("files-columns").map_or_else(String::new, |t| t.notation());
+    let scroll = key_that_runs("files-facts-scroll").map_or_else(String::new, |t| t.notation());
+    let more = texts.t_with(
+        ronoctua_i18n::key::FILES_HINT_MORE,
+        &[("columns", columns.as_str()), ("facts", scroll.as_str())],
+    );
+    // AND THE FOUR SECTIONS, in a third sentence.
+    //
+    // A sentence of its own for the reason `files-hint-more` is one: the two
+    // halves are about different things, and this one is about a key that is in
+    // no registry and no manual — the lesson `C-o` cost this file, said a third
+    // time. BOTH keys are named, because a person who is told about `TAB` and
+    // not about `S-TAB` has to guess that the way back exists.
+    let next = key_that_runs("files-pane-next").map_or_else(String::new, |t| t.notation());
+    let back = key_that_runs("files-pane-previous").map_or_else(String::new, |t| t.notation());
+    let more = format!(
+        "{more}{}",
+        texts.t_with(
+            ronoctua_i18n::key::FILES_HINT_PANES,
+            &[("next", next.as_str()), ("back", back.as_str())],
+        )
+    );
     if !sidebar {
-        return texts.t_with(ronoctua_i18n::key::FILES_HINT, &[("key", menu.as_str())]);
+        let first = texts.t_with(
+            ronoctua_i18n::key::FILES_HINT,
+            &[
+                ("key", menu.as_str()),
+                ("preview", preview.as_str()),
+                ("info", facts.as_str()),
+            ],
+        );
+        return format!("{first} {more}");
     }
     let side = key_that_runs("files-sidebar-focus").map_or_else(String::new, |t| t.notation());
-    texts.t_with(
+    let first = texts.t_with(
         ronoctua_i18n::key::FILES_HINT_SIDEBAR,
-        &[("key", menu.as_str()), ("side", side.as_str())],
-    )
+        &[
+            ("key", menu.as_str()),
+            ("side", side.as_str()),
+            ("preview", preview.as_str()),
+            ("info", facts.as_str()),
+        ],
+    );
+    format!("{first} {more}")
 }
 
 /// The KEY that runs a given id, read out of the same table.
@@ -2833,6 +4701,15 @@ impl View {
                 self.open_menu()
             }
             Some("files-measure") => self.measure_focused(),
+            Some("files-preview") => self.toggle_panel(Panel::Preview),
+            Some("files-facts") => self.toggle_panel(Panel::Info),
+            Some("files-facts-scroll") => self.scroll_facts(),
+            Some("files-pane-next") => self.cycle_pane(true),
+            Some("files-pane-previous") => self.cycle_pane(false),
+            Some("files-columns") => {
+                self.details_on = !self.details_on;
+                Step::Changed
+            }
             _ => Step::Nothing,
         }
     }
@@ -3191,6 +5068,11 @@ impl View {
             // puts the cursor where it clicked and then presses the key. That
             // is what keeps `files-everything-has-a-key` honest — the mouse
             // never reaches anything the keyboard cannot.
+            // AND THE SIDEBAR OPENS ON THE FIRST CLICK, which is where I put
+            // the rule too widely and the owner corrected it: select-then-open
+            // is for the LISTING and nothing else. A place in the sidebar is a
+            // destination, not a selection — asking for two clicks to reach
+            // `trash` would be two clicks for every one of them.
             Hit::Sidebar(n) => {
                 self.pane = Pane::Sidebar;
                 self.side_cursor = *n;
@@ -3238,9 +5120,29 @@ impl View {
                     .find(|a| a.id == *id)
                     .map_or(Step::Nothing, |a| self.run(a))
             }
+            // FIRST CLICK SELECTS, SECOND OPENS.
+            //
+            // The owner asked for it in those words, and it is the gesture a
+            // listing wants: opening on the first click means a mis-aimed press
+            // plays a video, and there is no way to just LOOK at a row with the
+            // mouse — which with the preview and the facts on the right is most
+            // of what one is doing.
+            //
+            // The pane has to match as well as the row: with the focus in the
+            // sidebar the listing has a cursor too, and clicking the row it
+            // happens to be on would open it without ever having selected it.
+            //
+            // THE LISTING AND NOTHING ELSE. It was the sidebar too for one
+            // round, and the owner sent it back: *"everything else I want to
+            // work as it was (e.g. if I click a folder in the sidebar it has
+            // to open right away on the very first click)"*.
             Hit::Name(n) => {
+                if self.cursor == *n && matches!(self.pane, Pane::Listing) {
+                    return self.open_focused();
+                }
+                self.pane = Pane::Listing;
                 self.cursor = *n;
-                self.open_focused()
+                Step::Changed
             }
             Hit::Mark(n) => {
                 self.cursor = *n;
@@ -3307,19 +5209,425 @@ impl View {
         }
     }
 
-    /// What the pointer resting on a field says, if anything.
-    #[must_use]
-    pub fn explanation(
+    /// The picker, the detail sheet and the menu, which are not columns at all.
+    ///
+    /// Each is MODAL: it covers the listing, and covering a question half way
+    /// is worse than covering it. So none of them gets a sidebar or a panel,
+    /// and none of them is a [`Section`] — they are ONE list, and the doors
+    /// draw them as one. `View::plain` is what says which of the two a door is
+    /// looking at.
+    pub fn modal_rows(
         &self,
-        row: usize,
-        cell: u16,
+        skip: usize,
+        take: usize,
         width: u16,
         texts: &ronoctua_i18n::Texts,
-    ) -> Option<Explanation> {
-        self.rows(width, texts)
-            .get(row)
-            .and_then(|r| r.field_at(cell))
-            .and_then(|f| f.explain.clone())
+    ) -> Vec<Row> {
+        let cut = |v: Vec<Row>| v.into_iter().skip(skip).take(take).collect();
+        if let Some(picker) = &self.picking {
+            return cut(picker_rows(picker, width, texts));
+        }
+        if let Some(name) = &self.detail {
+            return cut(self.detail_rows(name, width));
+        }
+        if let Some(chosen) = self.menu {
+            return cut(self.menu_rows(chosen, width, texts));
+        }
+        Vec::new()
+    }
+
+    /// The LISTING's own chrome: the path, then the header.
+    ///
+    /// The doors used to own these two rows and chain them in front of the
+    /// region. They are one column's, they do not scroll, and both doors and
+    /// [`View::hit`] have to agree about them — so they are built here.
+    #[must_use]
+    pub fn chrome_rows(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        if !self.plain() {
+            return Vec::new();
+        }
+        let rows = vec![
+            Row {
+                fields: self.crumbs(width),
+                marked: false,
+                focused: false,
+            },
+            self.header(width, texts),
+        ];
+        debug_assert_eq!(rows.len(), CHROME, "the listing's chrome is two lines");
+        rows
+    }
+
+    /// THE FOUR COLUMNS, each with its own extent, its own offset and its own
+    /// rows.
+    ///
+    /// This is the one place any of that is decided; see [`Section`] for the
+    /// four defects that came of deciding it in several.
+    ///
+    /// `chrome` is the LISTING's — the path and the header — and it is the only
+    /// section that has any. It sits at that column's top and does not scroll:
+    /// chained in front of the region, as it was, it took the first lines of
+    /// every column and moved with the listing's offset.
+    #[must_use]
+    pub fn sections(
+        &self,
+        chrome: &[Row],
+        take: usize,
+        width: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Section> {
+        self.sections_of(chrome, take, width, texts, None)
+    }
+
+    /// The sections, or ONE of them.
+    ///
+    /// # Why one is worth asking for
+    ///
+    /// Because `View::hit` runs on every pointer motion, and building all four
+    /// means building the facts — `sheet_of` runs `examined` and walks them.
+    /// Paying that per pixel of mouse movement is what the owner felt as the
+    /// hover lagging behind the pointer across a listing. He is right that it
+    /// should not happen at all: what a panel shows is about the CURSOR, and
+    /// the pointer moving changes nothing it displays.
+    ///
+    /// So the point resolution asks for the column it is over, and the painter
+    /// asks for all four — one definition, two appetites.
+    #[must_use]
+    pub fn sections_of(
+        &self,
+        chrome: &[Row],
+        take: usize,
+        width: u16,
+        texts: &ronoctua_i18n::Texts,
+        only: Option<Pane>,
+    ) -> Vec<Section> {
+        let panes = self.panes(width);
+        let mut out = Vec::with_capacity(4);
+        let side = self.side.shown(self.hidden);
+
+        // `take` IS "AT MOST", AND NEVER "EXACTLY".
+        //
+        // `View::rows` asks for `usize::MAX` and means "all of them" — a
+        // sentinel that was safe while `take` only ever bounded an iterator
+        // over a finite range. This function MATERIALISES rows, and under that
+        // reading the sentinel became a request for 2^64 of them: past the end
+        // of the listing `shown.get(n)` answers `None` and an empty `Row` was
+        // pushed, for ever, until the allocator gave up at four gibibytes.
+        //
+        // It cost the owner six killed sessions in twenty minutes — the OOM
+        // killer takes the terminal's whole cgroup, so the agent died with it
+        // and left nothing behind to read. His own report is what found it.
+        //
+        // So the ceiling is what EXISTS: the longest column, chrome included.
+        // Anything past that is a line nobody would draw.
+        let chrome_lines = chrome.len();
+        let most = self
+            .shown
+            .len()
+            .saturating_add(chrome_lines)
+            .max(if panes.sidebar == 0 { 0 } else { side.len() })
+            // ONLY WHEN THEY SIT BESIDE THE LISTING. Down in the strip the
+            // panels take lines OF THEIR OWN and none of the region's — the
+            // same condition `View::row_count` uses, and it has to be the same
+            // or the count and the drawing disagree.
+            .max(if panes.right == 0 {
+                0
+            } else {
+                self.panel_lines()
+            })
+            .max(chrome_lines)
+            .max(1);
+        // THE REGION'S HEIGHT is what the door asked for, and the strip begins
+        // where it ends. `take` is about to be clamped to what the columns
+        // actually hold — a short listing gives back the lines it does not use
+        // — and clamping the STRIP's top with it would float the strip up
+        // under the header, drawn a second time over the listing.
+        let region = take;
+        let take = take.min(most);
+
+        let wanted = |p: Pane| only.is_none_or(|o| o == p);
+        if panes.sidebar > 0 && wanted(Pane::Sidebar) {
+            let first = self.side_offset.min(side.len().saturating_sub(1));
+            out.push(Section {
+                pane: Pane::Sidebar,
+                from: 0,
+                to: panes.sidebar,
+                top: 0,
+                lines: take,
+                offset: first,
+                total: side.len(),
+                above: 0,
+                content: (0..take)
+                    .map(|k| Row {
+                        fields: side
+                            .get(first + k)
+                            .and_then(|r| r.as_ref())
+                            .map_or_else(Vec::new, |place| {
+                                self.side_fields(first + k, place, panes.sidebar, texts)
+                            }),
+                        marked: false,
+                        focused: false,
+                    })
+                    .collect(),
+            });
+        }
+
+        // THE LISTING: its chrome first, then its rows from ITS offset.
+        let above = chrome_lines.min(take);
+        if wanted(Pane::Listing) {
+            let layout = layout_beside(width, panes.listing_from(), panes.right, self.details_on);
+            let first = self.list_offset;
+            let listing_to = if panes.right > 0 {
+                width.saturating_sub(panes.right)
+            } else {
+                width
+            };
+            let mut rows: Vec<Row> = chrome.to_vec();
+            for k in above..take {
+                let n = first + k - above;
+                rows.push(self.shown.get(n).map_or_else(
+                    || Row {
+                        fields: Vec::new(),
+                        marked: false,
+                        focused: false,
+                    },
+                    |i| self.row_of(n, *i, &layout),
+                ));
+            }
+            // "NOTHING HERE" IS A FIELD OF THE LISTING, on its own first row.
+            if self.shown.is_empty()
+                && let Some(row) = rows.get_mut(above)
+            {
+                row.fields.push(Field {
+                    at: layout.from + GUTTER,
+                    text: texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE),
+                    color: ronoctua_tokens::color::TEXT_DIM,
+                    hit: Hit::Nothing,
+                    explain: None,
+                });
+            }
+            out.push(Section {
+                pane: Pane::Listing,
+                from: panes.listing_from(),
+                to: listing_to,
+                top: 0,
+                lines: take,
+                offset: first,
+                total: self.shown.len(),
+                above,
+                content: rows,
+            });
+        }
+        // THE PANELS: beside the listing, or under it — and either way starting
+        // at the top of their OWN band.
+        if panes.right > 0 || panes.strip > 0 {
+            let boxes = panes.boxes(width);
+            let sheet = self.sheet();
+            let top = if panes.strip > 0 { region } else { 0 };
+            let lines = if panes.strip > 0 {
+                usize::from(panes.strip)
+            } else {
+                take
+            };
+            for (which, at, room) in boxes.iter().copied() {
+                let pane = match which {
+                    Panel::Preview => Pane::Preview,
+                    Panel::Info => Pane::Info,
+                };
+                if matches!(pane, Pane::Info) {
+                    // HOW MANY LINES THE FACTS WERE GIVEN, remembered for the
+                    // key that pages them (`C-.`). It used to be `facts_bar`
+                    // that recorded it, and that function is gone: the bar is
+                    // the SECTION's rectangle now.
+                    self.drawn_lines
+                        .set(u16::try_from(lines).unwrap_or(u16::MAX));
+                }
+                if !wanted(pane) {
+                    continue;
+                }
+                out.push(Section {
+                    pane,
+                    from: at,
+                    to: at.saturating_add(room),
+                    top,
+                    lines,
+                    offset: if matches!(pane, Pane::Info) {
+                        self.info_offset
+                    } else {
+                        0
+                    },
+                    total: if matches!(pane, Pane::Info) {
+                        sheet.len()
+                    } else {
+                        1
+                    },
+                    above: 0,
+                    content: (0..lines)
+                        .map(|k| Row {
+                            fields: match which {
+                                Panel::Preview => self.preview_fields(k, at, room, texts),
+                                Panel::Info => self.info_fields(k, at, room, &sheet),
+                            },
+                            marked: false,
+                            focused: false,
+                        })
+                        .collect(),
+                });
+            }
+        }
+        out
+    }
+
+    /// WHAT IS UNDER A POINT — the one question both doors ask, answered per
+    /// SECTION.
+    ///
+    /// # Why this had to exist
+    ///
+    /// Because the manager draws one `Row` per line carrying every section's
+    /// fields, and the doors asked "which ROW is this `y`, and which field of
+    /// it is this `x`". That question has no correct answer: a line is four
+    /// lists at once, and a point in one of them was resolved against all four.
+    /// Every symptom the owner reported came out of it —
+    ///
+    /// - clicking a folder went to the PARENT, because the listing's cell on a
+    ///   line the listing does not own resolved to the path's crumb;
+    /// - the sidebar's first two rows answered nothing, because those lines are
+    ///   the LISTING's chrome and the whole line was refused;
+    /// - the facts answered nothing, because the strip is a second list the
+    ///   doors never asked;
+    /// - and a pointer resting in an empty part of the facts described a file
+    ///   far down the listing.
+    ///
+    /// So the point is resolved in one place, in this order: which SECTION owns
+    /// the cell, which row of THAT section the line is, and then the field —
+    /// among that section's fields only. Nothing else may ask.
+    ///
+    /// `line` counts from the region's first line. `room` is how many lines the
+    /// region has, which is what says where the strip begins.
+    #[must_use]
+    pub fn hit(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Target> {
+        // THROUGH THE SECTIONS, which are the one definition of where each
+        // column is and what it holds. This function used to rebuild every
+        // column's content itself — a second opinion about the same four
+        // lists, and second opinions are what every one of the owner's reports
+        // turned out to be.
+        let chrome = self.chrome_rows(width, texts);
+        // ONE COLUMN, and not four: this runs on every pointer motion — see
+        // `View::sections_of`.
+        let panes = self.panes(width);
+        let in_strip = panes.strip > 0 && line >= room;
+        let which = panes.section_at(cell, width, in_strip);
+        let sections = self.sections_of(&chrome, room, width, texts, Some(which));
+        let sec = sections.iter().find(|s| s.holds(line, cell))?;
+        let inside = line - sec.top;
+        let f = sec.content.get(inside)?.field_at(cell)?;
+        // WHICH ROW OF ITS OWN LIST. The listing's chrome is not one of them —
+        // `usize::MAX` is what both doors already spell for the header — and
+        // every other section is indexed from its own offset.
+        let row = match sec.pane {
+            Pane::Listing if inside < chrome.len() => usize::MAX,
+            Pane::Listing => sec.offset + inside - chrome.len(),
+            _ => sec.offset + inside,
+        };
+        Some(Target {
+            pane: sec.pane,
+            row,
+            hit: f.hit.clone(),
+            explain: f.explain.clone(),
+        })
+    }
+
+    /// The listing's first visible row.
+    ///
+    /// A reader and not a setter: the doors used to push their own copy in
+    /// before every question, which is the arrangement that let the two of them
+    /// disagree. What moves this number is the wheel, the drag and
+    /// [`View::follow`] — all of them here.
+    #[must_use]
+    pub const fn list_offset(&self) -> usize {
+        self.list_offset
+    }
+
+    /// Puts the listing's first visible row at `to`, clamped to what exists.
+    ///
+    /// The doors' page keys and their scrollbar drag land here. Clamped ON THE
+    /// WAY IN, so there is no way to hold an offset past the end — the state
+    /// that used to produce a region drawn empty after a filter narrowed the
+    /// list under it.
+    pub fn scroll_listing_to(&mut self, to: usize) {
+        self.list_offset = to.min(self.amount().saturating_sub(1));
+    }
+
+    /// Keeps the cursor inside the listing's visible rows.
+    ///
+    /// # Why it is one function and was three
+    ///
+    /// The footer had `follow_cursor`, the window had `follow`, and each
+    /// carried its own margin — so holding `j` stopped at a different row in
+    /// each door. Worse, the window compared against the region's whole height
+    /// while its wheel used the height minus the chrome, and the last two
+    /// entries of a directory were unreachable there.
+    ///
+    /// `room` is what the LISTING has, chrome already taken off.
+    pub fn follow(&mut self, room: usize) {
+        /// How many rows of context stay visible past the cursor.
+        const MARGIN: usize = 1;
+        let total = self.amount();
+        let last = total.saturating_sub(room);
+        let cursor = self.cursor.min(total.saturating_sub(1));
+        if cursor < self.list_offset.saturating_add(MARGIN) {
+            self.list_offset = cursor.saturating_sub(MARGIN);
+        } else if cursor + MARGIN >= self.list_offset.saturating_add(room) {
+            self.list_offset = cursor + MARGIN + 1 - room;
+        }
+        self.list_offset = self.list_offset.min(last);
+    }
+
+    /// Puts a section's first visible row where the pointer is, dragging its
+    /// bar.
+    ///
+    /// `fraction` is how far down the region the pointer is, from nought to
+    /// one.
+    ///
+    /// Every section that scrolls is here, the listing included. It used to
+    /// answer `false` for the listing — "not mine, the door's" — and each door
+    /// then wrote the case again; the owner found the halves that were missing
+    /// by dragging them.
+    pub fn drag_to(&mut self, pane: Pane, fraction: f64, width: u16, room: Room) -> bool {
+        // EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT — see [`Room`].
+        let room = match pane {
+            Pane::Info => room.panel,
+            _ => room.list,
+        };
+        let total = match pane {
+            Pane::Sidebar => self.side.shown(self.hidden).len(),
+            Pane::Info => self.sheet().len(),
+            Pane::Listing => self.amount(),
+            // THE PREVIEW DOES NOT SCROLL: it is one picture, or one sentence
+            // saying there is none. There is nothing to put a bar on.
+            Pane::Preview => return false,
+        };
+        let last = total.saturating_sub(room);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let to = ((fraction.clamp(0.0, 1.0) * last as f64).round() as usize).min(last);
+        let _ = width;
+        match pane {
+            Pane::Sidebar => self.side_offset = to,
+            Pane::Listing => self.list_offset = to,
+            _ => self.info_offset = to,
+        }
+        true
     }
 
     /// The rows the menu would offer right now.
@@ -3482,6 +5790,13 @@ impl View {
         match self.pane {
             Pane::Listing => self.move_by(by),
             Pane::Sidebar => self.side_by(by),
+            // THE PREVIEW MOVES THE LISTING, because that is what moves the
+            // PICTURE. See `Pane::Preview`: the panel is about the focused
+            // entry, so the only thing an arrow can mean in it is "another
+            // entry", and a pane whose arrows did nothing would be a pane one
+            // learns to Tab straight past.
+            Pane::Preview => self.move_by(by),
+            Pane::Info => self.step_facts(by),
         }
     }
 
@@ -3490,6 +5805,151 @@ impl View {
         match self.pane {
             Pane::Listing => self.open_focused(),
             Pane::Sidebar => self.open_side(),
+            // BOTH PANELS ARE ABOUT THE FOCUSED ENTRY, so `Enter` in either of
+            // them opens it — the same thing clicking the picture already does,
+            // because `preview_fields` hands its blank field a `Hit::Name`.
+            Pane::Preview | Pane::Info => self.open_focused(),
+        }
+    }
+
+    /// The SECTIONS that are on screen, left to right.
+    ///
+    /// What `Tab` walks, and the only place that decides it. A pane that is not
+    /// drawn must not be reachable — a cursor in a region nobody can see is the
+    /// defect `files-sidebar` already fixed once, when hiding the sidebar left
+    /// the keyboard inside it.
+    #[must_use]
+    pub fn panes_on(&self, width: u16) -> Vec<Pane> {
+        let panes = self.panes(width);
+        let placed = panes.right > 0 || panes.strip > 0;
+        let mut out = Vec::with_capacity(4);
+        if panes.sidebar > 0 {
+            out.push(Pane::Sidebar);
+        }
+        // THE LISTING IS ALWAYS THERE, even empty: "nothing here" is a sentence
+        // and it is drawn in the listing's own first row.
+        out.push(Pane::Listing);
+        if placed && panes.preview {
+            out.push(Pane::Preview);
+        }
+        if placed && panes.info {
+            out.push(Pane::Info);
+        }
+        out
+    }
+
+    /// Moves the keyboard to the next section, or to the one before it.
+    ///
+    /// # Why it wraps, and why it cannot land nowhere
+    ///
+    /// It wraps for the reason `files-sort` cycles: a key one can press again
+    /// without having to know where the end is. And it walks [`View::panes_on`]
+    /// rather than the enum, so a section that is not on screen is not a stop —
+    /// with no sidebar and both panels off, `Tab` has exactly one place to be
+    /// and stays there, which is a key doing nothing VISIBLE rather than a key
+    /// putting the cursor somewhere nobody can see.
+    ///
+    /// The width is the last one DRAWN, for the reason every other key that
+    /// needs one uses it: a key arrives without a width. See [`View::panes`].
+    fn cycle_pane(&mut self, forward: bool) -> Step {
+        let on = self.panes_on(self.drawn_at.get());
+        let Some(here) = on.iter().position(|p| *p == self.pane) else {
+            // THE CURRENT PANE WENT OFF SCREEN — the sidebar hidden while the
+            // cursor was in it, a panel turned off. Land on the listing, which
+            // is the one section that is always there.
+            self.pane = Pane::Listing;
+            return Step::Changed;
+        };
+        let n = on.len();
+        let next = if forward {
+            (here + 1) % n
+        } else {
+            (here + n - 1) % n
+        };
+        self.pane = on[next];
+        if matches!(self.pane, Pane::Sidebar) {
+            self.clamp_side();
+        }
+        // The MENU is about the listing's focused entry and an armed action is
+        // about the row it was armed on — the same two things `cross_over`
+        // leaves behind, and for the same reason.
+        self.arming = None;
+        Step::Changed
+    }
+
+    /// Scrolls the facts ONE line, for the arrows inside [`Pane::Info`].
+    ///
+    /// `files-facts-scroll` pages and wraps; this steps and STOPS. They are the
+    /// two gestures a list gets everywhere else in this shell — the arrow walks
+    /// and does not wrap, the page key turns and does — and having both is what
+    /// makes the pane's focus worth having at all.
+    fn step_facts(&mut self, by: i32) -> Step {
+        let room = usize::from(self.drawn_lines.get());
+        let total = self.sheet().len();
+        if room == 0 || total <= room {
+            return Step::Say(does(FACTS_ALL_SHOWN));
+        }
+        let last = total - room;
+        let to = if by < 0 {
+            self.info_offset.saturating_sub(by.unsigned_abs() as usize)
+        } else {
+            self.info_offset
+                .saturating_add(by.unsigned_abs() as usize)
+                .min(last)
+        };
+        if to == self.info_offset {
+            return Step::Nothing;
+        }
+        self.info_offset = to;
+        Step::Changed
+    }
+
+    /// Scrolls the section under the pointer, and only it.
+    ///
+    /// # Why the door does not do this itself
+    ///
+    /// Because the door owns exactly one offset — the listing's — and until now
+    /// that was the only one there was. A wheel event over the facts moved it,
+    /// which moved the listing, the sidebar and the panels together: one list
+    /// with three names. The owner reported it as the facts' scrollbar not
+    /// working, and he was reading it right, because a bar that cannot be moved
+    /// alone is not that section's bar.
+    ///
+    /// Returns `true` when this took the gesture. `false` means the pointer was
+    /// over the LISTING, whose offset is the door's — the one thing here that
+    /// genuinely belongs to the door, because paging and the scrollbar's drag
+    /// are its.
+    ///
+    /// A picture does not scroll, and saying so is the point: the gesture is
+    /// swallowed rather than passed on, so a hand resting over the preview does
+    /// not move a list somewhere else on the screen.
+    pub fn wheel(&mut self, which: Pane, by: i64, width: u16, room: usize) -> bool {
+        match which {
+            // THE ARM THAT WAS NOT HERE. It answered `false`, which read as
+            // "nothing happened" to one door and as "it is yours to do" to the
+            // other — and the two doors implemented different halves of it.
+            // The owner reported the shape exactly: the gesture worked over
+            // the listing in the footer and over the facts in the window, and
+            // in neither of the other two.
+            Pane::Listing => {
+                let total = self.amount();
+                self.list_offset = slide(self.list_offset, by, total, room);
+                true
+            }
+            Pane::Preview => true,
+            Pane::Sidebar => {
+                let total = self.side.shown(self.hidden).len();
+                self.side_offset = slide(self.side_offset, by, total, room);
+                true
+            }
+            Pane::Info => {
+                if !self.panes(width).info {
+                    return false;
+                }
+                let total = self.sheet().len();
+                self.info_offset = slide(self.info_offset, by, total, room);
+                true
+            }
         }
     }
 
@@ -3503,7 +5963,13 @@ impl View {
     /// without looking.
     fn cross_over(&mut self) -> Step {
         match self.pane {
-            Pane::Listing => {
+            // FROM ANYWHERE THAT IS NOT THE SIDEBAR, this key goes TO the
+            // sidebar. It is not `Tab` with a different name: `Tab` walks the
+            // four sections in order and this one has a destination, which is
+            // what "go to the sidebar, and back" has always said. From a panel
+            // it therefore crosses the whole screen in one press, which is the
+            // point of having a key with a destination at all.
+            Pane::Listing | Pane::Preview | Pane::Info => {
                 // NOTHING TO CROSS INTO is not silence: a key that did nothing
                 // and said nothing is indistinguishable from a key that never
                 // arrived, which is the report this project has had three times
@@ -3596,6 +6062,10 @@ impl View {
         }
         self.cursor = new;
         self.arming = None;
+        // THE FACTS GO BACK TO THE TOP. They are about the entry the cursor is
+        // on, and a scroll position kept across two different files opens the
+        // next one half way down a list it does not have.
+        self.info_offset = 0;
         Step::Changed
     }
 
@@ -3702,11 +6172,17 @@ impl View {
     /// The primary button never had the defect because it goes through
     /// `Row::field_at` and acts on the `Hit` it finds. This does the same, and
     /// now both buttons answer one question: what is under the pointer?
-    pub fn menu_at(&mut self, row: usize, cell: u16, width: u16) -> Step {
+    pub fn menu_at(&mut self, line: usize, cell: u16, width: u16, room: usize) -> Step {
+        // THROUGH `View::hit`, the same resolution the primary button uses.
+        // It reads the SECTIONS, so a right-click lands in the column it is
+        // over rather than on whatever the flattened line happened to hold.
+        //
+        // `room` is the door's, because a section's extent depends on it — the
+        // strip begins where the region ends, and a menu opened without it
+        // would resolve against a region one line tall.
         let hit = self
-            .rows_from(row, 1, width, &self.texts.clone())
-            .first()
-            .and_then(|r| r.field_at(cell).map(|f| f.hit.clone()));
+            .hit(width, room, line, cell, &self.texts.clone())
+            .map(|t| t.hit);
         match hit {
             // A SIDEBAR CELL OPENS THE SIDEBAR'S MENU. The eject glyph counts:
             // right-clicking a target is asking what else that row can do.
@@ -3719,7 +6195,7 @@ impl View {
             // anywhere and still has a menu, about the directory itself.
             _ => {
                 self.pane = Pane::Listing;
-                if matches!(self.focus_row(row), Step::Nothing) && !self.is_empty() {
+                if matches!(self.focus_row(line), Step::Nothing) && !self.is_empty() {
                     return Step::Nothing;
                 }
                 self.open_menu()
@@ -3816,9 +6292,9 @@ impl View {
     ///
     /// # Why an unmounted device does NOT get mounted here
     ///
-    /// It used to, and it was reported from the screen: *"ao clicar em algum
-    /// item da sidebar que não está montado, não deve-se montá-lo
-    /// automaticamente"*. Mounting is asking the system for something — it can
+    /// It used to, and it was reported from the screen: *"pressing an item
+    /// of the sidebar that is not mounted should not mount it
+    /// automatically"*. Mounting is asking the system for something — it can
     /// take a moment, it can be refused, and it changes what is on the machine.
     /// A row one presses to LOOK at a disk should not do that.
     ///
@@ -3924,7 +6400,7 @@ impl View {
         // left a `/tmp` path pinned and the sidebar switched off. See
         // `sidebar::Sidebar::store`.
         if let Err(e) = self.side.save() {
-            tracing::warn!(error = %e, "nao consegui salvar a barra lateral");
+            tracing::warn!(error = %e, "could not save the sidebar");
         }
         // OUR OWN WRITE MOVES THE STAMP. Without this the next tick sees a file
         // newer than the reading, re-reads it, and throws away the sidebar's
@@ -4131,16 +6607,80 @@ impl View {
 
     /// The detail sheet's rows.
     ///
-    /// Everything a listing cannot fit, and one thing it deliberately does not
-    /// show: what the CONTENT says the file is, next to what the name claims.
-    /// A `.txt` holding a PNG is a real thing, and this is where it is caught.
-    fn detail_rows(&self, name: &str, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
-        let Some((i, entry)) = self
-            .entries
-            .iter()
-            .enumerate()
-            .find(|(_, e)| e.name == name)
-        else {
+    /// The layout only. What is IN it comes from [`View::sheet_of`], which is
+    /// the one builder the right-hand column, the bottom strip and this modal
+    /// sheet all read — three homes, one answer to "what is known about this
+    /// file".
+    ///
+    /// It takes no bundle any more: the labels are already words by the time
+    /// they leave `sheet_of`, which reads the view's OWN `texts` — the same
+    /// `Rc` both doors handed it.
+    fn detail_rows(&self, name: &str, width: u16) -> Vec<Row> {
+        let lines = self.sheet_of(name);
+        // The label column is as wide as the widest label, so the values line
+        // up — a sheet whose values start at seven different columns is a
+        // sheet one reads seven times.
+        let widest = lines.iter().map(|f| width_of(&f.label)).max().unwrap_or(0);
+        lines
+            .into_iter()
+            .map(|f| Row {
+                // THE SHEET IS READ AND NOT ACTED ON, and it stays that way:
+                // every key closes it, so a target here would be a promise the
+                // next keystroke breaks. What `Fact::does` reaches is the
+                // PANEL, which is beside a listing that is still live.
+                fields: vec![
+                    Field {
+                        at: 0,
+                        text: f.label,
+                        color: ronoctua_tokens::color::TEXT_DIM,
+                        hit: Hit::Nothing,
+                        explain: None,
+                    },
+                    Field {
+                        at: widest + 2,
+                        text: ronoctua_render::layout::elide_end(
+                            &f.value,
+                            width.saturating_sub(widest + 2),
+                        ),
+                        color: ronoctua_tokens::color::TEXT_PRIMARY,
+                        hit: Hit::Nothing,
+                        explain: None,
+                    },
+                ],
+                marked: false,
+                focused: false,
+            })
+            .collect()
+    }
+
+    /// Everything known about the entry the cursor is on.
+    fn sheet(&self) -> Vec<Fact> {
+        let Some(name) = self.focused().map(|e| e.name.clone()) else {
+            return Vec::new();
+        };
+        self.sheet_of(&name)
+    }
+
+    /// Everything known about one entry, as [`Fact`]s already in words.
+    ///
+    /// # Why ONE builder for THREE homes
+    ///
+    /// Because the right-hand column, the bottom strip and the modal sheet the
+    /// menu's *information* row opens are three places showing the same list,
+    /// and a second builder is a second answer to "what does this file say".
+    /// It is the same argument that keeps the two doors on one `View`.
+    ///
+    /// What the FILESYSTEM knows comes first — the path, the type, the mode,
+    /// the owner, the size, the date — and what the CONTENT says follows, from
+    /// `ronoctua_inspect::facts`. The order is the reading order: one answers
+    /// "which file is this", the other "what is inside it".
+    ///
+    /// **A fact with no answer is ABSENT.** Never a row saying "unknown": a
+    /// panel of unknowns is a panel nobody reads twice, and the crate that
+    /// produces them already refuses to emit one.
+    fn sheet_of(&self, name: &str) -> Vec<Fact> {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let Some(entry) = self.entries.iter().find(|e| e.name == name) else {
             return Vec::new();
         };
         let path = self.where_.join(&entry.name);
@@ -4160,17 +6700,23 @@ impl View {
             .filter(|(n, _)| n == name)
             .map(|(_, b)| size_text(*b));
 
-        let mut lines: Vec<(&'static str, String)> = vec![
+        // WHAT EACH ROW OFFERS IS DECIDED HERE, once, beside the value it is
+        // about — and not in the drawing, which would have to work out what
+        // kind of fact it was holding from the text of it.
+        let mut lines: Vec<(&'static str, String, Doable)> = vec![
             (
                 ronoctua_i18n::key::FILES_DETAIL_PATH,
                 path.to_string_lossy().into_owned(),
+                Doable::Nothing,
             ),
-            (ronoctua_i18n::key::FILES_DETAIL_TYPE, {
+            (
+                ronoctua_i18n::key::FILES_DETAIL_TYPE,
                 match sniffed {
                     Some(found) if found != named => format!("{named} / {found}"),
                     _ => named.to_owned(),
-                }
-            }),
+                },
+                Doable::Nothing,
+            ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_MODE,
                 format!(
@@ -4178,14 +6724,24 @@ impl View {
                     ronoctua_files::mode::shown(entry.mode),
                     ronoctua_files::mode::octal(entry.mode)
                 ),
+                Doable::Mode,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_OWNER,
                 format!("{owner}:{group}"),
+                Doable::Ownership,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_SIZE,
                 measured.unwrap_or_else(|| size_text(entry.bytes)),
+                // A DIRECTORY'S SIZE IS A WALK and a file's is already known:
+                // one of the two is a thing to ask for and the other is a
+                // thing to read. See `measure_field`.
+                if matches!(entry.kind, Kind::Directory) {
+                    Doable::Measure
+                } else {
+                    Doable::Nothing
+                },
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_MODIFIED,
@@ -4193,10 +6749,12 @@ impl View {
                     "{:04}-{:02}-{:02} {:02}:{:02}",
                     c.year, c.month, c.day, c.hour, c.minute
                 ),
+                Doable::Nothing,
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_LINKS,
                 entry.links.to_string(),
+                Doable::Nothing,
             ),
         ];
         // A LINK SAYS WHERE IT GOES, and whether it goes anywhere at all.
@@ -4208,43 +6766,208 @@ impl View {
                     ronoctua_i18n::key::FILES_DETAIL_TARGET
                 },
                 target.clone(),
+                Doable::Nothing,
             ));
         }
-        let _ = i;
-        // The label column is as wide as the widest label, so the values line
-        // up — a sheet whose values start at seven different columns is a
-        // sheet one reads seven times.
-        let widest = lines
-            .iter()
-            .map(|(k, _)| width_of(&texts.t(k)))
-            .max()
-            .unwrap_or(0);
-        lines
+        let mut out: Vec<Fact> = lines
             .into_iter()
-            .map(|(k, v)| Row {
-                fields: vec![
-                    Field {
-                        at: 0,
-                        text: texts.t(k),
-                        color: ronoctua_tokens::color::TEXT_DIM,
-                        hit: Hit::Nothing,
-                        explain: None,
-                    },
-                    Field {
-                        at: widest + 2,
-                        text: ronoctua_render::layout::elide_end(
-                            &v,
-                            width.saturating_sub(widest + 2),
-                        ),
-                        color: ronoctua_tokens::color::TEXT_PRIMARY,
-                        hit: Hit::Nothing,
-                        explain: None,
-                    },
-                ],
-                marked: false,
-                focused: false,
+            .map(|(k, value, does)| Fact {
+                label: texts.t(k),
+                value,
+                does,
             })
-            .collect()
+            .collect();
+        // AND WHAT THE TOOLS SAID, when they have been asked about THIS file.
+        //
+        // The path is compared and not only the name: the cursor moves while a
+        // child process runs, and facts about the previous file under the
+        // current file's name is the one failure this panel must not have.
+        //
+        // NONE OF THEM IS A TARGET, and that is not an oversight: a
+        // photograph's ISO and a video's frame rate are what the file IS, and
+        // nothing this manager does could change one.
+        if let Some(l) = self.looked.as_ref().filter(|l| l.path == path) {
+            out.extend(l.facts.iter().map(|f| Fact {
+                label: texts.t(f.label),
+                value: fact_said(&f.value, &texts),
+                does: Doable::Nothing,
+            }));
+        }
+        out
+    }
+
+    /// Turns a panel on, or off.
+    ///
+    /// **They TOGGLE; they do not take focus.** There is no third [`Pane`], and
+    /// that is a decision and not an omission: a panel with nothing to choose
+    /// in it is not a list, and a cursor that could walk into a place where
+    /// every key answers [`Step::Nothing`] is exactly what `cross_over`
+    /// refuses in writing. So the `Esc` ladder is untouched and `Esc` goes on
+    /// meaning what it means everywhere else.
+    ///
+    /// **A toggle that turns a panel on where it cannot appear flips the state
+    /// ANYWAY and says why** — the shape `files-sidebar-only` already has. The
+    /// alternative is a key that does nothing and says nothing, which is the
+    /// one outcome this project treats as a defect: from the outside, a refusal
+    /// and a dead key look the same.
+    fn toggle_panel(&mut self, which: Panel) -> Step {
+        match which {
+            Panel::Preview => self.preview_on = !self.preview_on,
+            Panel::Info => {
+                self.info_on = !self.info_on;
+                // TURNED OFF AND ON AGAIN IS A FRESH LOOK. Coming back to a
+                // panel scrolled to where it was three files ago is the same
+                // defect `move_by` clears, one gesture up.
+                self.info_offset = 0;
+            }
+        }
+        // ASKING AGAIN COSTS NOTHING AND ANSWERS EVERYTHING: the width is the
+        // one the view was last DRAWN at, which is the only width that is true
+        // of what is on screen. See `View::drawn_at`.
+        let width = self.drawn_at.get();
+        let panes = self.panes(width);
+        if (panes.preview || panes.info) && panes.right == 0 && panes.strip == 0 {
+            return Step::Say(mode::Explanation {
+                key: PANEL_NO_ROOM,
+                args: vec![("cells", PANEL_FLOOR.to_string())],
+            });
+        }
+        Step::Changed
+    }
+
+    /// Turns the info panel to its next page of facts, and round to the start.
+    ///
+    /// # Why it pages, and why it wraps
+    ///
+    /// A page because the panel is a block one reads, not a line one steps
+    /// through: a fact list of a dozen rows in four lines is three presses,
+    /// and three presses of one key is less to learn than two keys. It wraps
+    /// for the reason `files-sort` cycles — a key one can press again without
+    /// having to know where the end is — and [`View::facts_bar`] is what says
+    /// where one has got to, so the wrap is never a surprise.
+    ///
+    /// **With everything already on screen it SAYS so.** From the outside a
+    /// key that refuses and a key that is dead look the same, and that is the
+    /// one outcome this project treats as a defect.
+    fn scroll_facts(&mut self) -> Step {
+        // THE WIDTH AND THE HEIGHT ARE BOTH THE LAST ONES DRAWN, which are
+        // the only ones true of what is on screen. A key arrives with neither
+        // — see `View::drawn_at` and `View::drawn_lines`.
+        let width = self.drawn_at.get();
+        let room = usize::from(self.drawn_lines.get());
+        let total = self.sheet().len();
+        if !self.panes(width).info || room == 0 || total <= room {
+            return Step::Say(does(FACTS_ALL_SHOWN));
+        }
+        self.info_offset = self.info_offset.saturating_add(room);
+        if self.info_offset >= total {
+            self.info_offset = 0;
+        }
+        Step::Changed
+    }
+
+    /// What the inspector should be asked for, or `None` when nothing is due.
+    ///
+    /// # Why the ASK is remembered and not only the answer
+    ///
+    /// Because `None` is an ANSWER — "this file has no picture" — and without
+    /// somewhere to write "I have asked, and that was the reply" the host asks
+    /// again on every frame, which is a child process per frame. It is the rule
+    /// `surface`'s `icons` map already learned, and the reason
+    /// `ronoctua_inspect::Made` carries the refusal alongside the pixels.
+    ///
+    /// `target` is `space.files.panelPixels`; the crate quantises it, so
+    /// dragging a window's edge re-decodes at most twice.
+    pub fn wants_look(&mut self, target: u32) -> Option<Ask> {
+        if !self.preview_on && !self.info_on {
+            return None;
+        }
+        // COPIED OUT BEFORE ANYTHING IS WRITTEN. `focused()` borrows the whole
+        // view and the line that records the ask writes to it; taking the five
+        // facts first is what lets the two coexist without cloning the entry.
+        let (kind, name, bytes, modified, broken) = {
+            let entry = self.focused()?;
+            (
+                // WHAT IT OPENS AS, and never `kind`. A symlink to a
+                // photograph is a photograph when you look at it — following
+                // the link is the one operation that should — and `kind` would
+                // have refused every one of them with nothing on screen saying
+                // why. Found by pointing the panels at a directory of symlinks.
+                entry.opens_as(),
+                entry.name.clone(),
+                entry.bytes,
+                entry.modified,
+                entry.broken(),
+            )
+        };
+        // A DIRECTORY HAS NO CONTENT TO LOOK INTO. Neither has a broken link,
+        // and asking about one would spawn a child to be told what `lstat`
+        // already said.
+        if !matches!(kind, Kind::File) || broken {
+            return None;
+        }
+        let path = self.where_.join(&name);
+        // THE SECONDS AS THE ENTRY CARRIES THEM. `Entry::modified` is already an
+        // `i64` of seconds since the epoch — the listing formats it with
+        // `when::civil` — so there is no `SystemTime` in the middle to convert
+        // and get wrong.
+        let stamp = ronoctua_inspect::Stamp::new(path.clone(), modified, bytes, target);
+        let key = stamp.key();
+        if self.asked.as_deref() == Some(key.as_str()) {
+            return None;
+        }
+        self.asked = Some(key.clone());
+        // THE NAME MAY BE FINER THAN THE SNIFF, and `settled` is where that is
+        // decided: a `.dng` sniffs as `image/tiff` because it IS one, and the
+        // TIFF decoder reads the RAW planes and refuses.
+        let (named, sniffed) = mime::examined(&path, kind);
+        let mime = ronoctua_inspect::settled(named, sniffed);
+        Some(Ask {
+            path,
+            mime,
+            target,
+            key,
+        })
+    }
+
+    /// What the inspector came back with.
+    ///
+    /// A stale answer is DROPPED, not drawn: the cursor moves while a child
+    /// process runs, and one file's picture under another file's name is the
+    /// one failure a preview must not have.
+    pub fn looked(&mut self, l: Looked) {
+        if self.asked.as_deref() != Some(l.key.as_str()) {
+            return;
+        }
+        self.looked = Some(l);
+    }
+
+    /// The texture key of the picture the preview is showing, if there is one.
+    ///
+    /// The door asks `Images::missing` with it BEFORE uploading — a preview is
+    /// up to a mebibyte of RGBA, and putting that on the bus every frame is the
+    /// transfer the key exists to avoid.
+    #[must_use]
+    pub fn preview_key(&self) -> Option<&str> {
+        self.showing_now()?;
+        let l = self.looked.as_ref()?;
+        l.rgba.as_ref().map(|_| l.key.as_str())
+    }
+
+    /// The pixels behind that key, for the door that has to upload them.
+    #[must_use]
+    pub fn preview_pixels(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.showing_now()?;
+        self.looked.as_ref()?.rgba.as_ref()
+    }
+
+    /// `Some` when what was looked at is still what the cursor is on.
+    fn showing_now(&self) -> Option<()> {
+        if !self.preview_on {
+            return None;
+        }
+        let path = self.focused_path()?;
+        (self.looked.as_ref()?.path == path).then_some(())
     }
 
     /// What a measurement came back with.
@@ -4289,7 +7012,7 @@ mod tests {
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ronoctua-view-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("criar diretorio de teste");
+        std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
     }
 
@@ -4297,7 +7020,7 @@ mod tests {
     /// about the listing, and a sidebar would move every column two dozen cells
     /// to the right for no reason.
     fn view_at(dir: &Path) -> View {
-        View::at(
+        plainly(View::at(
             dir,
             Roster::default(),
             Zone::utc(),
@@ -4305,7 +7028,30 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             no_sidebar(),
-        )
+        ))
+    }
+
+    /// A view as the tests below assume one: the panels OFF and the three
+    /// columns one looks up ON.
+    ///
+    /// # Why the fixture disagrees with the default
+    ///
+    /// Because the default changed and what these tests are about did not.
+    /// They are about the LISTING's own arithmetic at a given width — where
+    /// the name ends, which column gives way first, which cell a permission
+    /// bit is in — and a panel takes a third of that width away while the
+    /// three columns are the ones half of them measure. Left as they come, a
+    /// test written about the table would be a test about the panels.
+    ///
+    /// The defaults themselves are pinned, and by their own tests:
+    /// `the_panels_are_on_the_moment_the_manager_opens` and
+    /// `the_three_columns_one_looks_up_start_hidden`. Those two build a view
+    /// through `View::at` and never come through here.
+    fn plainly(mut view: View) -> View {
+        view.preview_on = false;
+        view.info_on = false;
+        view.details_on = true;
+        view
     }
 
     /// An empty sidebar, hidden.
@@ -4333,7 +7079,7 @@ mod tests {
 
     /// A view with a sidebar of `rows` places.
     fn view_beside(dir: &Path, rows: usize) -> View {
-        View::at(
+        plainly(View::at(
             dir,
             Roster::default(),
             Zone::utc(),
@@ -4341,7 +7087,7 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             a_sidebar(rows),
-        )
+        ))
     }
 
     /// The same, with a trash whose root is under the test's own tree.
@@ -4351,8 +7097,8 @@ mod tests {
     /// other's trash.
     fn view_in_trash(root: &Path) -> View {
         let bin = ronoctua_files::trash::Bin::at(root.join("Trash"));
-        bin.ensure().expect("criar a lixeira de teste");
-        View::at(
+        bin.ensure().expect("create the test trash");
+        plainly(View::at(
             &bin.files(),
             Roster::default(),
             Zone::utc(),
@@ -4360,7 +7106,7 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             no_sidebar(),
-        )
+        ))
     }
 
     /// The bundle the tests draw with. Loading it is what makes a row's text a
@@ -4379,7 +7125,7 @@ mod tests {
     /// A key of the VIEW, which since the query took the bare letters all
     /// carry a modifier.
     fn of_view(notation: &str) -> Key {
-        Key::parse(notation).unwrap_or_else(|_| panic!("`{notation}` nao e uma tecla"))
+        Key::parse(notation).unwrap_or_else(|_| panic!("`{notation}` is not a key"))
     }
 
     #[test]
@@ -4387,7 +7133,7 @@ mod tests {
         // THE DEFECT THIS CATCHES: an order that drifts with the last edit, so
         // the narrow case shows whatever happened to survive. Wide first, then
         // each width just below the point where one more column stops fitting.
-        let wide = layout_beside(120, 0);
+        let wide = layout_beside(120, 0, 0, true);
         for c in [
             Column::Icon,
             Column::Name,
@@ -4397,35 +7143,35 @@ mod tests {
             Column::Size,
             Column::Modified,
         ] {
-            assert!(wide.find(c).is_some(), "{c:?} nao coube em 120 colunas");
+            assert!(wide.find(c).is_some(), "{c:?} did not fit in 120 columns");
         }
         // Narrowing drops them in the declared order and never out of it.
         let mut gone = Vec::new();
         for width in (1..=120).rev() {
-            let l = layout_beside(width, 0);
+            let l = layout_beside(width, 0, 0, true);
             for c in GIVE_WAY {
                 if l.find(c).is_none() && !gone.contains(&c) {
                     gone.push(c);
                 }
             }
         }
-        assert_eq!(gone, GIVE_WAY.to_vec(), "a ordem de ceder mudou");
+        assert_eq!(gone, GIVE_WAY.to_vec(), "the order of giving way changed");
     }
 
     #[test]
     fn the_name_never_gives_way_however_narrow_it_gets() {
         for width in 1..=200u16 {
-            let l = layout_beside(width, 0);
+            let l = layout_beside(width, 0, 0, true);
             assert!(
                 l.find(Column::Name).is_some(),
-                "sem coluna de nome em {width} colunas"
+                "no name column at {width} columns"
             );
             // And nothing leaks off the edge, which is the one rule the
             // compositor will not enforce for us.
             for (c, at, w) in &l.columns {
                 assert!(
                     at + w <= width.max(1) + 1,
-                    "{c:?} vaza: comeca em {at}, tem {w}, a tela tem {width}"
+                    "{c:?} leaks: starts at {at}, is {w} wide, the screen is {width}"
                 );
             }
         }
@@ -4438,19 +7184,23 @@ mod tests {
         // column, which is the same as explaining nothing.
         let root = scratch("perms");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
-        let v = view_at(&root);
-        let rows = v.rows(120, &bundle());
+        let mut v = view_at(&root);
+        let rows = v.drawn(120, &bundle());
         assert_eq!(rows.len(), 1);
-        let (at, _) = layout_beside(120, 0).find(Column::Perms).unwrap();
+        let (at, _) = layout_beside(120, 0, 0, true).find(Column::Perms).unwrap();
         let mut sentences = Vec::new();
         for k in 0..10u16 {
-            let f = rows[0].field_at(at + k).expect("celula sem campo");
-            assert_eq!(width_of(&f.text), 1, "a celula {k} nao tem um caractere so");
-            sentences.push(f.explain.clone().expect("celula sem explicacao").key);
+            let f = rows[0].field_at(at + k).expect("a cell with no field");
+            assert_eq!(
+                width_of(&f.text),
+                1,
+                "cell {k} does not hold a single character"
+            );
+            sentences.push(f.explain.clone().expect("a cell with no explanation").key);
         }
         sentences.sort_unstable();
         sentences.dedup();
-        assert_eq!(sentences.len(), 10, "duas celulas explicam a mesma coisa");
+        assert_eq!(sentences.len(), 10, "two cells explain the same thing");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4472,7 +7222,7 @@ mod tests {
         assert_eq!(
             v.chosen(),
             vec![root.join("a.txt")],
-            "a marca acompanhou o indice em vez do nome"
+            "the mark followed the index instead of the name"
         );
 
         // And a mark on a file that is gone goes with it.
@@ -4488,7 +7238,7 @@ mod tests {
         std::fs::write(root.join(".oculto"), b"x").unwrap();
         std::fs::write(root.join("visivel"), b"x").unwrap();
         let mut v = view_at(&root);
-        assert_eq!(v.amount(), 2, "os ocultos nao apareceram");
+        assert_eq!(v.amount(), 2, "the hidden ones did not appear");
         v.key(of_view("C-h"));
         assert_eq!(v.amount(), 1);
         v.key(of_view("C-h"));
@@ -4515,46 +7265,50 @@ mod tests {
         // fast" but "it does not grow". So the assertion is a ratio against a
         // small directory and not a millisecond count — a slow machine makes
         // both sides slow, and the shape is what has to hold.
-        let small = scratch("frame-small");
+        let small_dir = scratch("frame-small");
         for n in 0..20 {
-            std::fs::write(small.join(format!("f-{n:05}.txt")), b"x").unwrap();
+            std::fs::write(small_dir.join(format!("f-{n:05}.txt")), b"x").unwrap();
         }
         let big = scratch("frame-big");
         for n in 0..3000 {
             std::fs::write(big.join(format!("f-{n:05}.txt")), b"x").unwrap();
         }
         let b = bundle();
-        let v_small = view_at(&small);
-        let v_big = view_at(&big);
+        let mut v_small = view_at(&small_dir);
+        let mut v_big = view_at(&big);
 
         // WARM FIRST: the first call through this path pays for the layout
         // table and the text bundle, and that cost belongs to neither side.
         for _ in 0..20 {
-            let _ = v_small.rows_from(0, 12, 174, &b);
-            let _ = v_big.rows_from(0, 12, 174, &b);
+            let _ = v_small.drawn_at(&[], 0, 12, 174, &b);
+            let _ = v_big.drawn_at(&[], 0, 12, 174, &b);
         }
 
         let rounds = 200;
         let t = std::time::Instant::now();
         for _ in 0..rounds {
-            let _ = v_small.rows_from(0, 12, 174, &b);
+            let _ = v_small.drawn_at(&[], 0, 12, 174, &b);
         }
-        let pequeno = t.elapsed();
+        let small = t.elapsed();
         let t = std::time::Instant::now();
         for _ in 0..rounds {
-            let _ = v_big.rows_from(0, 12, 174, &b);
+            let _ = v_big.drawn_at(&[], 0, 12, 174, &b);
         }
-        let grande = t.elapsed();
+        let large = t.elapsed();
 
-        assert_eq!(v_big.rows_from(0, 12, 174, &b).len(), 12, "a janela vazou");
+        assert_eq!(
+            v_big.drawn_at(&[], 0, 12, 174, &b).len(),
+            12,
+            "the window leaked"
+        );
         // 150x the entries. A ceiling of 8x is loose enough for a debug build
         // and a loaded machine, and still an order of magnitude below the 40x
         // the whole-list version would show.
         assert!(
-            grande < pequeno * 8,
-            "o quadro cresce com o diretorio: 20 entradas {pequeno:?}, 3000 entradas {grande:?}"
+            large < small * 8,
+            "the frame grows with the directory: 20 entries {small:?}, 3000 entries {large:?}"
         );
-        let _ = std::fs::remove_dir_all(&small);
+        let _ = std::fs::remove_dir_all(&small_dir);
         let _ = std::fs::remove_dir_all(&big);
     }
 
@@ -4566,30 +7320,30 @@ mod tests {
         // folder it had just entered. One cause: the right button "focused"
         // with the ACTIVATING click.
         let root = scratch("rightdir");
-        std::fs::create_dir(root.join("vazia")).unwrap();
+        std::fs::create_dir(root.join("empty")).unwrap();
         std::fs::create_dir(root.join("cheia")).unwrap();
         std::fs::write(root.join("cheia/um.txt"), b"x").unwrap();
         let mut v = view_at(&root);
-        let onde = v.where_().to_path_buf();
+        let where_at = v.where_().to_path_buf();
 
         // Directories come first, so rows 0 and 1 are the two folders.
         for row in [0usize, 1] {
             let step = v.focus_row(row);
             assert!(matches!(step, Step::Changed), "{step:?}");
-            assert_eq!(v.cursor(), row, "o foco nao foi para a linha clicada");
+            assert_eq!(v.cursor(), row, "the focus did not go to the clicked line");
             assert_eq!(
                 v.where_(),
-                onde,
-                "o botao direito entrou na pasta em vez de so focar"
+                where_at,
+                "the right button went into the folder instead of only focusing"
             );
-            assert!(!v.menu_open(), "focar nao abre o menu sozinho");
+            assert!(!v.menu_open(), "focusing does not open the menu on its own");
         }
 
         // And then the menu opens, on the row that was clicked.
-        let t = key_that_runs("files-menu").expect("files-menu tem tecla");
+        let t = key_that_runs("files-menu").expect("files-menu has a key");
         v.key(t);
-        assert!(v.menu_open(), "o menu nao abriu");
-        assert_eq!(v.where_(), onde, "o menu abriu noutra pasta");
+        assert!(v.menu_open(), "the menu did not open");
+        assert_eq!(v.where_(), where_at, "the menu opened in another folder");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4603,13 +7357,13 @@ mod tests {
         let root = scratch("rightclick");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
         let mut v = view_at(&root);
-        let t = key_that_runs("files-menu").expect("files-menu tem de ter tecla na tabela");
+        let t = key_that_runs("files-menu").expect("files-menu has to have a key in the table");
         let step = v.key(t);
         assert!(matches!(step, Step::Changed), "{step:?}");
-        assert!(v.menu_open(), "a tecla do menu nao abriu o menu");
+        assert!(v.menu_open(), "the menu key did not open the menu");
         assert!(
             v.filter().is_empty(),
-            "a tecla do menu foi parar no filtro: {:?}",
+            "the menu key ended up in the filter: {:?}",
             v.filter()
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -4626,17 +7380,17 @@ mod tests {
         std::fs::write(root.join("relatorio.txt"), b"x").unwrap();
         let mut v = view_at(&root);
 
-        let plain = v.crumbs();
+        let plain = v.crumbs(120);
         for c in "rel".chars() {
             v.key(press(c));
         }
-        let typed = v.crumbs();
+        let typed = v.crumbs(120);
         assert_eq!(
             typed.len(),
             plain.len() + 1,
-            "a query nao virou um campo do caminho"
+            "the query did not become a field of the path"
         );
-        let last = typed.last().expect("o caminho tem campos");
+        let last = typed.last().expect("the path has fields");
         assert_eq!(last.text, "rel");
         // A DIFFERENT COLOUR IS THE WHOLE FORMATTING: no box, no separator
         // (invariants 14 and 15). It has to differ from the piece before it,
@@ -4644,7 +7398,7 @@ mod tests {
         let before = &typed[typed.len() - 2];
         assert_ne!(
             last.color, before.color,
-            "a query saiu com a mesma cor do caminho"
+            "the query came out in the same colour as the path"
         );
         // And it leads nowhere: it is not a directory yet.
         assert!(matches!(last.hit, Hit::Nothing), "{:?}", last.hit);
@@ -4658,9 +7412,9 @@ mod tests {
         // are in. And it must NOT close the view — backspace held down would
         // take it away, which is the thing one is least likely to have meant.
         let root = scratch("backup");
-        std::fs::create_dir(root.join("dentro")).unwrap();
-        std::fs::write(root.join("dentro/um.txt"), b"x").unwrap();
-        let mut v = view_at(&root.join("dentro"));
+        std::fs::create_dir(root.join("inside")).unwrap();
+        std::fs::write(root.join("inside/one.txt"), b"x").unwrap();
+        let mut v = view_at(&root.join("inside"));
         let del = Key {
             mods: ronoctua_keymap::Mods::default(),
             sym: Sym::Backspace,
@@ -4670,11 +7424,19 @@ mod tests {
         assert_eq!(v.filter(), "u");
         let step = v.key(del);
         assert!(matches!(step, Step::Changed), "{step:?}");
-        assert_eq!(v.where_(), root.join("dentro"), "apagou uma letra e SUBIU");
+        assert_eq!(
+            v.where_(),
+            root.join("inside"),
+            "it deleted a letter and WENT UP"
+        );
 
         let step = v.key(del);
         assert!(matches!(step, Step::Changed), "{step:?}");
-        assert_eq!(v.where_(), root, "backspace com nada digitado nao subiu");
+        assert_eq!(
+            v.where_(),
+            root,
+            "backspace with nothing typed did not go up"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4694,16 +7456,16 @@ mod tests {
         // empty in a test and the question would refuse to open at all.
         v.key(of_view("C-m"));
         v.key(press('m'));
-        let rows = v.rows(120, &b);
+        let rows = v.drawn(120, &b);
         let title = rows[0].fields[0].text.clone();
-        assert!(!title.is_empty(), "a pergunta subiu sem titulo");
+        assert!(!title.is_empty(), "the question came up with no title");
         assert!(
             !title.starts_with("files-"),
-            "a chave crua foi para a tela: {title}"
+            "the raw key went to the screen: {title}"
         );
         assert!(
             rows[1].fields[0].text.starts_with('>'),
-            "a caixa de digitacao devia ser a SEGUNDA linha: {:?}",
+            "the typing box should be the SECOND line: {:?}",
             rows[1].fields[0].text
         );
 
@@ -4712,9 +7474,12 @@ mod tests {
             mods: ronoctua_keymap::Mods::default(),
             sym: Sym::Enter,
         });
-        let asking = v.rows(120, &b)[0].fields[0].text.clone();
+        let asking = v.drawn(120, &b)[0].fields[0].text.clone();
         assert!(!asking.is_empty(), "a confirmacao subiu sem titulo");
-        assert_ne!(asking, title, "a confirmacao repetiu o titulo da pergunta");
+        assert_ne!(
+            asking, title,
+            "the confirmation repeated the question's title"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4734,11 +7499,11 @@ mod tests {
         // `C-M-` either.
         for (notation, id) in OF_THE_VIEW {
             let t = ronoctua_keymap::Key::parse(notation)
-                .unwrap_or_else(|_| panic!("`{notation}` nao e uma tecla"));
+                .unwrap_or_else(|_| panic!("`{notation}` is not a key"));
             assert!(
                 !t.mods.alt,
-                "`{notation}` (`{id}`) usa Alt, que no laco aninhado e a familia \
-                 dos acordes do compositor — a tecla nao chega na vista"
+                "`{notation}` (`{id}`) uses Alt, which in the nested loop is the family \
+                 of the compositor's chords — the key does not reach the view"
             );
         }
     }
@@ -4750,21 +7515,24 @@ mod tests {
         // was copied, open a terminal in it. The right button answered with
         // nothing at all, and it was reported as the button not working.
         let root = scratch("emptymenu");
-        std::fs::create_dir_all(root.join("vazia")).unwrap();
-        let mut v = view_at(&root.join("vazia"));
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        let mut v = view_at(&root.join("empty"));
         assert_eq!(v.amount(), 0);
         assert!(v.is_empty());
 
-        let t = key_that_runs("files-menu").expect("files-menu tem tecla");
+        let t = key_that_runs("files-menu").expect("files-menu has a key");
         let step = v.key(t);
         assert!(matches!(step, Step::Changed), "{step:?}");
-        assert!(v.menu_open(), "pasta vazia ficou sem menu");
+        assert!(v.menu_open(), "an empty folder was left with no menu");
 
-        let rows = v.rows(120, &bundle());
-        assert!(rows.len() > 1, "o menu subiu sem linhas: {rows:?}");
+        let rows = v.drawn(120, &bundle());
+        assert!(rows.len() > 1, "the menu came up with no rows: {rows:?}");
         // AND THE FIRST LINE SAYS WHO IT IS ABOUT — here, the folder itself.
         let title = &rows[0].fields[0].text;
-        assert!(title.contains("vazia"), "o menu nao diz o alvo: {title}");
+        assert!(
+            title.contains("empty"),
+            "the menu does not say the target: {title}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4775,14 +7543,14 @@ mod tests {
         // marks it is worse, because the answer is not the row under the
         // pointer — it is all of them.
         let root = scratch("menutitle");
-        std::fs::write(root.join("alvo.txt"), b"x").unwrap();
-        std::fs::write(root.join("outro.txt"), b"x").unwrap();
+        std::fs::write(root.join("chosen.txt"), b"x").unwrap();
+        std::fs::write(root.join("other.txt"), b"x").unwrap();
         let mut v = view_at(&root);
-        let t = key_that_runs("files-menu").expect("files-menu tem tecla");
+        let t = key_that_runs("files-menu").expect("files-menu has a key");
 
         v.key(t);
-        let title = v.rows(120, &bundle())[0].fields[0].text.clone();
-        assert!(title.contains("alvo.txt"), "{title}");
+        let title = v.drawn(120, &bundle())[0].fields[0].text.clone();
+        assert!(title.contains("chosen.txt"), "{title}");
 
         v.key(Key {
             mods: ronoctua_keymap::Mods::default(),
@@ -4790,12 +7558,12 @@ mod tests {
         });
         v.key(of_view("C-a")); // mark everything
         v.key(t);
-        let title = v.rows(120, &bundle())[0].fields[0].text.clone();
+        let title = v.drawn(120, &bundle())[0].fields[0].text.clone();
         assert!(
-            !title.contains("alvo.txt"),
-            "com marcas o alvo nao e uma entrada so: {title}"
+            !title.contains("chosen.txt"),
+            "with marks the target is not a single entry: {title}"
         );
-        assert!(title.contains('2'), "nao disse quantos: {title}");
+        assert!(title.contains('2'), "it did not say how many: {title}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4816,26 +7584,26 @@ mod tests {
         let b = bundle();
 
         v.click(0, &Hit::Bit(0, mode::Who::Group, mode::What::Write));
-        let rows = v.rows(120, &b);
+        let rows = v.drawn(120, &b);
         let question = rows[0].fields[0].text.clone();
         assert!(
             question.contains("um.txt"),
-            "a pergunta nao diz sobre o que e: {question}"
+            "the question does not say what it is about: {question}"
         );
         assert!(
             question.contains("0664") || question.contains("0644"),
-            "a pergunta nao diz o que vai virar: {question}"
+            "the question does not say what it will become: {question}"
         );
 
         let answers: Vec<String> = rows[2..]
             .iter()
             .filter_map(|r| r.fields.first().map(|f| f.text.clone()))
             .collect();
-        assert!(!answers.is_empty(), "a pergunta subiu sem respostas");
+        assert!(!answers.is_empty(), "the question came up with no answers");
         for a in &answers {
             assert!(
                 !a.starts_with("files-"),
-                "resposta com a chave crua na tela: {a}"
+                "an answer with the raw key on screen: {a}"
             );
         }
         let _ = std::fs::remove_dir_all(&root);
@@ -4848,13 +7616,13 @@ mod tests {
         let root = scratch("presets");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
         let mut v = view_at(&root);
-        v.key(key_that_runs("files-menu").expect("tecla do menu"));
+        v.key(key_that_runs("files-menu").expect("the menu key"));
         v.key(press('m'));
-        for r in v.rows(120, &bundle()).iter().skip(2) {
+        for r in v.drawn(120, &bundle()).iter().skip(2) {
             let Some(f) = r.fields.first() else { continue };
             assert!(
                 !f.text.starts_with("files-"),
-                "preset com a chave crua na tela: {}",
+                "a preset with the raw key on screen: {}",
                 f.text
             );
         }
@@ -4873,7 +7641,7 @@ mod tests {
             "root:x:0:0::/root:/bin/sh\nnoctua:x:1000:100::/home/noctua:/bin/sh\nnobody:x:65534:65534::/:/bin/sh\n",
             "root:x:0:\nusers:x:100:\n",
         );
-        let mut v = View::at(
+        let mut v = plainly(View::at(
             &root,
             roster,
             Zone::utc(),
@@ -4881,11 +7649,11 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             no_sidebar(),
-        );
+        ));
 
-        v.key(key_that_runs("files-menu").expect("tecla do menu"));
+        v.key(key_that_runs("files-menu").expect("the menu key"));
         v.key(press('O')); // the menu's key for "owner"
-        assert!(v.showing_detail(), "a pergunta de dono nao abriu");
+        assert!(v.showing_detail(), "the owner question did not open");
 
         // Narrow to `nobody` by typing, exactly as a person would, and confirm.
         for c in "nobody".chars() {
@@ -4907,7 +7675,7 @@ mod tests {
 
     #[test]
     fn changing_the_owner_without_the_unit_says_so() {
-        // "Trocar o dono não fez nada" — and it had: the request could not even
+        // "Changing the owner did nothing" — and it had: the request could not even
         // be WRITTEN, because `/run/ronoctua-files/` belongs to a unit this
         // distro installs and the nested loop has no NixOS. What came out was
         // `Permission denied` from a thread, three seconds on the message line.
@@ -4921,7 +7689,7 @@ mod tests {
             .parent()
             .is_some_and(std::path::Path::is_dir)
         {
-            eprintln!("pulando: esta maquina TEM /run/ronoctua-files");
+            eprintln!("skipping: this machine HAS /run/ronoctua-files");
             return;
         }
         let (tx, _rx) = channel::channel::<Report>();
@@ -4932,7 +7700,7 @@ mod tests {
         );
         match errand {
             Errand::Say(e) => assert_eq!(e.key, ronoctua_i18n::key::FILES_NO_ROOT_HELPER),
-            other => panic!("sem a unidade, trocar dono devolveu {other:?}"),
+            other => panic!("without the unit, changing owner gave back {other:?}"),
         }
     }
 
@@ -4951,7 +7719,7 @@ mod tests {
         for c in "rela".chars() {
             v.key(press(c));
         }
-        assert_eq!(v.filter(), "rela", "a digitacao nao chegou ao filtro");
+        assert_eq!(v.filter(), "rela", "the typing did not reach the filter");
         assert!(v.filtering());
         assert_eq!(v.amount(), 1);
 
@@ -4970,7 +7738,7 @@ mod tests {
         });
         assert!(
             matches!(step, Step::Changed),
-            "Esc com filtro na tela nao pode fechar a vista: {step:?}"
+            "Esc with a filter on screen must not close the view: {step:?}"
         );
         assert!(!v.filtering());
         assert_eq!(v.amount(), 2);
@@ -4980,7 +7748,7 @@ mod tests {
             mods: ronoctua_keymap::Mods::default(),
             sym: Sym::Esc,
         });
-        assert!(matches!(step, Step::Closed), "Esc vazio tem de fechar");
+        assert!(matches!(step, Step::Closed), "an empty Esc has to close");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -5009,7 +7777,7 @@ mod tests {
             },
             sym: Sym::Char('s'),
         });
-        assert_eq!(v.filter(), "setup", "`C-s` virou letra do filtro");
+        assert_eq!(v.filter(), "setup", "`C-s` became a filter letter");
         assert_eq!(v.amount(), before);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5025,7 +7793,7 @@ mod tests {
         let step = v.click(0, &Hit::Bit(0, mode::Who::Group, mode::What::Write));
         assert!(
             matches!(step, Step::Changed),
-            "clicar num bit nao pode aplicar direto: {step:?}"
+            "clicking a bit must not apply straight away: {step:?}"
         );
         let enter = Key {
             mods: ronoctua_keymap::Mods::default(),
@@ -5079,7 +7847,7 @@ mod tests {
         // First press arms and changes nothing on disk.
         let first = v.key(press('D'));
         assert!(matches!(first, Step::Changed));
-        assert!(v.menu_open(), "o menu fechou antes de agir");
+        assert!(v.menu_open(), "the menu closed before acting");
         // Second press acts.
         let second = v.key(press('D'));
         assert!(matches!(second, Step::Do(Doing::Delete(_))), "{second:?}");
@@ -5124,19 +7892,26 @@ mod tests {
             std::fs::write(root.join(n), b"x").unwrap();
         }
         let mut v = view_at(&root);
-        let drawn = |v: &View| -> Vec<(String, ronoctua_tokens::Color)> {
-            v.rows(120, &bundle())
+        let drawn = |v: &mut View| -> Vec<(String, ronoctua_tokens::Color)> {
+            v.drawn(120, &bundle())
                 .iter()
                 .flat_map(|r| r.fields.iter().map(|f| (f.text.clone(), f.color)))
                 .collect()
         };
-        let before = drawn(&v);
+        let before = drawn(&mut v);
         let step = v.key(Key {
             mods: ronoctua_keymap::Mods::default(),
             sym: Sym::Down,
         });
-        assert!(matches!(step, Step::Changed), "a seta nao mexeu o cursor");
-        assert_ne!(before, drawn(&v), "o cursor mexeu e o desenho ficou igual");
+        assert!(
+            matches!(step, Step::Changed),
+            "the arrow did not move the cursor"
+        );
+        assert_ne!(
+            before,
+            drawn(&mut v),
+            "the cursor moved and the drawing stayed the same"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -5151,23 +7926,29 @@ mod tests {
             std::fs::write(root.join(n), b"x").unwrap();
         }
         let mut v = view_at(&root);
-        let name_at = layout_beside(120, 0).find(Column::Name).unwrap().0;
+        let name_at = layout_beside(120, 0, 0, true).find(Column::Name).unwrap().0;
 
-        let rows = v.rows(120, &bundle());
+        let rows = v.drawn(120, &bundle());
         let focused = rows[0].field_at(name_at).unwrap().color;
         let other = rows[1].field_at(name_at).unwrap().color;
-        assert_ne!(focused, other, "a linha em foco tem a cor das outras");
+        assert_ne!(
+            focused, other,
+            "the focused line has the colour of the others"
+        );
 
         // MARKING DOES NOT TOUCH THE NAME'S COLOUR; it puts a glyph in the
         // gutter, which is cell zero.
         v.key(of_view("C-SPC"));
-        let rows = v.rows(120, &bundle());
+        let rows = v.drawn(120, &bundle());
         let mark = &rows[0].fields[0];
         assert_eq!(mark.at, 0);
-        assert!(!mark.text.is_empty(), "a marca nao aparece na calha");
+        assert!(
+            !mark.text.is_empty(),
+            "the mark does not show in the gutter"
+        );
         assert!(
             rows[1].fields[0].text.is_empty(),
-            "linha sem marca tem marca"
+            "a line with no mark has a mark"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5178,11 +7959,11 @@ mod tests {
         // is the same `modeline.edgeLeft` the rest of the footer leaves, and it
         // is also where the mark goes — one cell doing two jobs.
         for width in 20..=200u16 {
-            let l = layout_beside(width, 0);
+            let l = layout_beside(width, 0, 0, true);
             for (c, at, _) in &l.columns {
                 assert!(
                     *at >= GUTTER,
-                    "{c:?} comeca na celula {at}, colada na borda (tela de {width})"
+                    "{c:?} starts at cell {at}, flush against the edge (screen of {width})"
                 );
             }
         }
@@ -5216,12 +7997,12 @@ mod tests {
         let step = v.key(enter);
         assert!(
             matches!(step, Step::Changed),
-            "escolher um preset nao pode aplicar direto: {step:?}"
+            "choosing a preset must not apply straight away: {step:?}"
         );
         let step = v.key(enter);
         assert!(
             matches!(step, Step::Changed),
-            "a resposta padrao da confirmacao tem de ser NAO: {step:?}"
+            "the confirmation's default answer has to be NO: {step:?}"
         );
 
         // And now, on purpose: the preset again, then `yes`.
@@ -5234,7 +8015,7 @@ mod tests {
         });
         match v.key(enter) {
             Step::Do(Doing::Mode(paths, _)) => assert_eq!(paths.len(), 3, "{paths:?}"),
-            other => panic!("mudar permissao de tres marcados deu {other:?}"),
+            other => panic!("changing the permission of three marked ones gave {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5246,14 +8027,14 @@ mod tests {
         // the thing being pointed at, which is a gesture that looks like it
         // worked and lands somewhere else.
         let root = scratch("terminal");
-        std::fs::create_dir(root.join("dentro")).unwrap();
+        std::fs::create_dir(root.join("inside")).unwrap();
         std::fs::write(root.join("um.txt"), b"x").unwrap();
         let mut v = view_at(&root);
 
         v.menu = Some(0);
         match v.run(menu::by_id("terminal").unwrap()) {
-            Step::Do(Doing::Terminal(dir)) => assert_eq!(dir, root.join("dentro")),
-            other => panic!("terminal numa pasta deu {other:?}"),
+            Step::Do(Doing::Terminal(dir)) => assert_eq!(dir, root.join("inside")),
+            other => panic!("a terminal in a folder gave {other:?}"),
         }
 
         // On a FILE there is no inside, so it is the directory one is looking
@@ -5262,7 +8043,7 @@ mod tests {
         v.menu = Some(0);
         match v.run(menu::by_id("terminal").unwrap()) {
             Step::Do(Doing::Terminal(dir)) => assert_eq!(dir, root),
-            other => panic!("terminal num arquivo deu {other:?}"),
+            other => panic!("a terminal on a file gave {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5304,7 +8085,7 @@ mod tests {
         // and a `.zip` is not one — the two rows exist precisely because the
         // database says the formats are unrelated.
         std::fs::write(root.join("dois.tar"), b"").unwrap();
-        std::fs::create_dir(root.join("pasta")).unwrap();
+        std::fs::create_dir(root.join("folder")).unwrap();
         // A FRESH VIEW PER ROW, and the reason is a defect this test found:
         // running `open` on a directory ENTERS it, so every row after that one
         // was being asked of an empty directory — and `open-with` came back
@@ -5323,7 +8104,7 @@ mod tests {
                 v.menu = Some(0);
                 v.arming = if a.confirms { Some(a.id) } else { None };
                 let step = v.run(a);
-                assert!(!matches!(step, Step::Nothing), "`{}` nao faz nada", a.id);
+                assert!(!matches!(step, Step::Nothing), "`{}` does nothing", a.id);
                 reached.insert(a.id);
             }
             let _ = std::fs::remove_dir_all(&trash);
@@ -5351,7 +8132,7 @@ mod tests {
                 let step = v.run(a);
                 assert!(
                     !matches!(step, Step::Nothing),
-                    "a linha `{}` do menu nao faz nada",
+                    "the menu's `{}` row does nothing",
                     a.id
                 );
                 reached.insert(a.id);
@@ -5361,7 +8142,7 @@ mod tests {
         for a in menu::all_of() {
             assert!(
                 reached.contains(a.id),
-                "a linha `{}` nao foi alcancada por nenhuma entrada",
+                "no entry reached the `{}` row",
                 a.id
             );
         }
@@ -5371,7 +8152,7 @@ mod tests {
     #[test]
     fn the_breadcrumb_leads_where_it_says() {
         let v = view_at(Path::new("/usr/share"));
-        let crumbs = v.crumbs();
+        let crumbs = v.crumbs(120);
         assert!(crumbs.len() >= 3);
         // The last piece is where one IS, and is not a place to go.
         assert_eq!(crumbs.last().unwrap().hit, Hit::Nothing);
@@ -5382,12 +8163,12 @@ mod tests {
     #[test]
     fn a_broken_link_does_not_look_like_a_working_one() {
         let root = scratch("broken");
-        std::os::unix::fs::symlink("nao-existe", root.join("quebrado")).unwrap();
-        std::fs::write(root.join("alvo"), b"x").unwrap();
-        std::os::unix::fs::symlink("alvo", root.join("inteiro")).unwrap();
-        let v = view_at(&root);
-        let rows = v.rows(120, &bundle());
-        let (at, _) = layout_beside(120, 0).find(Column::Name).unwrap();
+        std::os::unix::fs::symlink("does-not-exist", root.join("broken-link")).unwrap();
+        std::fs::write(root.join("target"), b"x").unwrap();
+        std::os::unix::fs::symlink("target", root.join("inteiro")).unwrap();
+        let mut v = view_at(&root);
+        let rows = v.drawn(120, &bundle());
+        let (at, _) = layout_beside(120, 0, 0, true).find(Column::Name).unwrap();
         let names: Vec<_> = rows
             .iter()
             .map(|r| r.field_at(at).unwrap())
@@ -5395,7 +8176,7 @@ mod tests {
             .collect();
         let broken = names
             .iter()
-            .find(|(t, _)| t.starts_with("quebrado"))
+            .find(|(t, _)| t.starts_with("broken-link"))
             .unwrap();
         let whole = names
             .iter()
@@ -5403,12 +8184,12 @@ mod tests {
             .unwrap();
         assert_ne!(
             broken.1, whole.1,
-            "o link quebrado tem a mesma cor do inteiro"
+            "the broken link has the same colour as the whole one"
         );
         // And both say where they point, which is the one thing a listing
         // cannot leave out about a link.
-        assert!(broken.0.contains("nao-existe"));
-        assert!(whole.0.contains("alvo"));
+        assert!(broken.0.contains("does-not-exist"));
+        assert!(whole.0.contains("target"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -5418,13 +8199,13 @@ mod tests {
         // question nobody asked. A number that answers a different question is
         // worse than no number.
         let root = scratch("size");
-        std::fs::create_dir(root.join("pasta")).unwrap();
+        std::fs::create_dir(root.join("folder")).unwrap();
         let mut v = view_at(&root);
-        let (at, _) = layout_beside(120, 0).find(Column::Size).unwrap();
-        assert_eq!(v.rows(120, &bundle())[0].field_at(at).unwrap().text, "");
-        v.measured("pasta", 5 * 1024 * 1024);
+        let (at, _) = layout_beside(120, 0, 0, true).find(Column::Size).unwrap();
+        assert_eq!(v.drawn(120, &bundle())[0].field_at(at).unwrap().text, "");
+        v.measured("folder", 5 * 1024 * 1024);
         assert_eq!(
-            v.rows(120, &bundle())[0].field_at(at).unwrap().text,
+            v.drawn(120, &bundle())[0].field_at(at).unwrap().text,
             "5,0 MiB"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -5435,8 +8216,8 @@ mod tests {
         // The gesture every table in the world has. The `s` key goes round the
         // same cycle; neither reaches anything the other does not.
         let root = scratch("header");
-        std::fs::write(root.join("grande.txt"), vec![b'x'; 5000]).unwrap();
-        std::fs::write(root.join("pequeno.txt"), b"x").unwrap();
+        std::fs::write(root.join("large.txt"), vec![b'x'; 5000]).unwrap();
+        std::fs::write(root.join("small.txt"), b"x").unwrap();
         let mut v = view_at(&root);
 
         // THE ORDER is what changes, and the CURSOR stays on the same file —
@@ -5451,18 +8232,18 @@ mod tests {
 
         let step = v.click(usize::MAX, &Hit::Sort(Column::Size));
         assert!(matches!(step, Step::Changed));
-        assert_eq!(names(&v), ["pequeno.txt", "grande.txt"]);
+        assert_eq!(names(&v), ["small.txt", "large.txt"]);
         assert_eq!(v.focused().map(|e| e.name.clone()), watching);
 
         // Again on the same column: it reverses, and does not go back to name.
         v.click(usize::MAX, &Hit::Sort(Column::Size));
-        assert_eq!(names(&v), ["grande.txt", "pequeno.txt"]);
+        assert_eq!(names(&v), ["large.txt", "small.txt"]);
 
         // A DIFFERENT column starts ascending, rather than inheriting the
         // reversal — otherwise clicking `name` after reversing `size` would
         // give Z to A, which nobody asked for.
         v.click(usize::MAX, &Hit::Sort(Column::Name));
-        assert_eq!(names(&v), ["grande.txt", "pequeno.txt"]);
+        assert_eq!(names(&v), ["large.txt", "small.txt"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -5479,7 +8260,7 @@ mod tests {
             .iter()
             .filter(|f| f.text.contains('↑') || f.text.contains('↓'))
             .collect();
-        assert_eq!(marked.len(), 1, "{} colunas marcadas", marked.len());
+        assert_eq!(marked.len(), 1, "{} columns marked", marked.len());
         assert_eq!(marked[0].hit, Hit::Sort(Column::Modified));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5495,7 +8276,7 @@ mod tests {
         let step = v.run(menu::by_id("info").unwrap());
         assert!(matches!(step, Step::Changed));
 
-        let rows = v.rows(120, &bundle());
+        let rows = v.drawn(120, &bundle());
         let sheet: Vec<String> = rows
             .iter()
             .filter_map(|r| r.fields.last())
@@ -5505,7 +8286,7 @@ mod tests {
         assert!(joined.contains("text/plain"), "{joined}");
         assert!(
             joined.contains("image/png"),
-            "o conteudo nao foi examinado: {joined}"
+            "the content was not examined: {joined}"
         );
         // AND EVERY KEY CLOSES IT: it is opened to be looked at, so no gesture
         // is lost waiting for the right one.
@@ -5521,16 +8302,16 @@ mod tests {
         // message line would go on showing whatever was there before.
         let root = scratch("explains");
         std::fs::write(root.join("um.txt"), b"x").unwrap();
-        std::fs::create_dir(root.join("pasta")).unwrap();
-        let v = view_at(&root);
-        for row in v.rows(120, &bundle()) {
+        std::fs::create_dir(root.join("folder")).unwrap();
+        let mut v = view_at(&root);
+        for row in v.drawn(120, &bundle()) {
             for f in &row.fields {
                 if matches!(f.hit, Hit::Nothing | Hit::Name(_) | Hit::Mark(_)) {
                     continue;
                 }
                 assert!(
                     f.explain.is_some(),
-                    "o campo `{}` ({:?}) acende e nao explica nada",
+                    "the field `{}` ({:?}) lights up and explains nothing",
                     f.text,
                     f.hit
                 );
@@ -5581,9 +8362,9 @@ mod tests {
         // before there was a sidebar. Pinned here so the next person does not
         // read the sidebar's own test as an accusation against the sidebar.
         let leaks: Vec<u16> = (1..=120u16)
-            .filter(|w| rightmost(&v.rows(*w, &b)) > *w)
+            .filter(|w| rightmost(&v.drawn(*w, &b)) > *w)
             .collect();
-        assert_eq!(leaks, vec![1], "a listagem sozinha vaza em {leaks:?}");
+        assert_eq!(leaks, vec![1], "the listing alone leaks at {leaks:?}");
     }
 
     #[test]
@@ -5593,9 +8374,9 @@ mod tests {
         // sidebar has nothing to draw. Left "showing", it would take a quarter
         // of the screen and a vertical rule for nothing, and the listing would
         // give up columns to hold it.
-        let dir = scratch("side-vazia");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
-        let mut v = View::at(
+        let dir = scratch("side-no-places");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -5610,14 +8391,14 @@ mod tests {
                 ronoctua_files::sidebar::Preferences::fresh(),
                 None,
             ),
-        );
+        ));
         v.reread();
         let b = bundle();
         assert!(!v.sidebar_showing());
         assert_eq!(v.split(120), 0);
         // Compared through the DRAWING: the mark is back at cell zero, which is
         // the same thing as "the listing got the whole width".
-        assert_eq!(cell_of(&v.rows(120, &b), &Hit::Mark(0)), Some(0));
+        assert_eq!(cell_of(&v.drawn(120, &b), &Hit::Mark(0)), Some(0));
     }
 
     #[test]
@@ -5632,7 +8413,7 @@ mod tests {
         alone.reread();
 
         for width in 1..=120u16 {
-            let rows = v.rows(width, &b);
+            let rows = v.drawn(width, &b);
             // THE SIDEBAR NEVER MAKES IT WORSE. That is the claim this test
             // owns, and it is the stronger one: the listing on its own already
             // leaks at a width of one cell, because the name's floor is
@@ -5640,8 +8421,8 @@ mod tests {
             // worse than one cell over the edge. `the_listing_alone_leaks_…`
             // pins that, so this cannot be misread as the sidebar's doing.
             assert!(
-                rightmost(&rows) <= rightmost(&alone.rows(width, &b)).max(width),
-                "em {width} colunas a barra empurrou algo para {}",
+                rightmost(&rows) <= rightmost(&alone.drawn(width, &b)).max(width),
+                "at {width} columns the bar pushed something to {}",
                 rightmost(&rows)
             );
             // AND THE NAME SURVIVES. A sidebar that took its quarter and left
@@ -5649,13 +8430,13 @@ mod tests {
             assert!(
                 rows.iter()
                     .any(|r| r.fields.iter().any(|f| matches!(f.hit, Hit::Name(_)))),
-                "em {width} colunas a listagem ficou sem nome"
+                "at {width} columns the listing lost its name"
             );
             let side = cell_of(&rows, &Hit::Sidebar(0)).is_some();
             if width < ronoctua_tokens::space::FILES_SIDEBARFROM {
                 assert!(
                     !side,
-                    "a barra apareceu em {width} colunas, abaixo do token"
+                    "the bar showed up at {width} columns, below the token"
                 );
             }
         }
@@ -5670,7 +8451,7 @@ mod tests {
         // which is the sentence `space.nix` already carries twice about other
         // glyphs. No test looked, because no test looks at white space.
         let dir = scratch("side-ar");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_with_devices(&dir);
         v.reread();
         let b = bundle();
@@ -5680,26 +8461,38 @@ mod tests {
             if split == 0 {
                 continue;
             }
-            let rows = v.rows(width, &b);
+            let rows = v.drawn(width, &b);
             for f in rows.iter().flat_map(|r| r.fields.iter()) {
                 match f.hit {
-                    Hit::Sidebar(_) => assert!(
-                        f.at >= SIDE_GUTTER,
-                        "em {width} colunas um campo da barra ficou em {} — colado na borda",
-                        f.at
+                    // THE AIR MOVED AND DID NOT GO AWAY. `space.files
+                    // .sidebarGutter` is zero now, because `chrome::FIELDS_LEAD`
+                    // already pays that cell for every row of the manager — the
+                    // sidebar's included — and a row that bought one of its own
+                    // was paying twice: the owner measured 21 px of it against
+                    // 14 on the glyph's other side. What has to hold is the
+                    // distance from the SURFACE's border, and that is the sum of
+                    // the two; the `const` block below is what keeps the sum
+                    // from becoming nought whatever either half becomes.
+                    Hit::Sidebar(_) => assert_ne!(
+                        f.at + crate::chrome::FIELDS_LEAD,
+                        0,
+                        "at {width} columns a field of the bar sat flush against the edge"
                     ),
                     // AND THE RIGHT EDGE: the glyph must not touch the rule at
                     // `split`, or the two read as one smudge instead of as a
                     // target and a boundary.
                     Hit::Eject(_) => assert!(
                         f.at + width_of(&f.text) < split,
-                        "em {width} colunas o ejetar terminou em {} e a regua esta em {split}",
+                        "at {width} columns eject ended at {} and the rule is at {split}",
                         f.at + width_of(&f.text)
                     ),
                     _ => {}
                 }
             }
         }
+        // AND IT IS THE COMPILER THAT REFUSES A ZERO, not a runtime assertion
+        // over two constants — the shape `chrome`'s own test already uses.
+        const { assert!(crate::chrome::FIELDS_LEAD + SIDE_GUTTER >= 1) };
     }
 
     #[test]
@@ -5712,7 +8505,7 @@ mod tests {
         let mut short = view_beside(&dir, 2);
         short.reread();
 
-        let mut long = View::at(
+        let mut long = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -5725,23 +8518,23 @@ mod tests {
                 s.add(Item {
                     id: "place:/x".to_owned(),
                     target: Target::Place(PathBuf::from("/x")),
-                    label: Some("um nome consideravelmente mais longo".to_owned()),
+                    label: Some("a considerably longer name".to_owned()),
                 });
                 s
             },
-        );
+        ));
         long.reread();
 
         let narrow = short.split(200);
         let wide = long.split(200);
         assert!(
             wide > narrow,
-            "a barra nao acompanhou o rotulo: {narrow} vs {wide}"
+            "the bar did not follow the label: {narrow} vs {wide}"
         );
         // And the short one is nowhere near a quarter of the screen.
         assert!(
             narrow < 200 / 4,
-            "a barra tomou {narrow} colunas de 200 para nomes de seis letras"
+            "the bar took {narrow} columns of 200 for six-letter names"
         );
     }
 
@@ -5749,8 +8542,8 @@ mod tests {
     fn the_hint_names_the_key_that_reaches_the_sidebar() {
         // `C-o` is not a command of the registry, so it is in neither `M-x` nor
         // the manual. This line is the ONLY thing that teaches it — and it did
-        // not, which is the same as the key not existing. Reported as "não está
-        // claro como eu pulo da listagem para a sidebar".
+        // not, which is the same as the key not existing. Reported as "it is not
+        // clear how I jump from the listing to the sidebar".
         let b = bundle();
         let alone = hint_of(&b, false);
         let beside = hint_of(&b, true);
@@ -5758,7 +8551,7 @@ mod tests {
         let side = key_that_runs("files-sidebar-focus").unwrap().notation();
         assert!(
             beside.contains(&side),
-            "a dica com barra nao nomeia `{side}`: {beside:?}"
+            "the hint with a sidebar does not name `{side}`: {beside:?}"
         );
         // And the key is read from the table, so a rebinding moves the sentence
         // with it — the reason `key_that_runs` exists at all.
@@ -5773,7 +8566,7 @@ mod tests {
         // are painted OUTSIDE `expansion()` and never consulted the flag that
         // removes the path and the header.
         let dir = scratch("side-menu");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 4);
         v.reread();
         let b = bundle();
@@ -5783,13 +8576,17 @@ mod tests {
         assert!(v.menu_open());
         // ONE ANSWER, and everything that draws beside the rows asks it.
         assert!(!v.plain());
-        assert_eq!(v.split(120), 0, "a regua teria sido desenhada sobre o menu");
+        assert_eq!(
+            v.split(120),
+            0,
+            "the rule would have been drawn over the menu"
+        );
         assert!(
-            !v.rows(120, &b)
+            !v.drawn(120, &b)
                 .iter()
                 .flat_map(|r| r.fields.iter())
                 .any(|f| matches!(f.hit, Hit::Sidebar(_) | Hit::Eject(_))),
-            "sobrou campo da barra por baixo do menu"
+            "a field of the bar was left under the menu"
         );
     }
 
@@ -5798,8 +8595,8 @@ mod tests {
         // TWO TABLES, TWO SUBJECTS. The listing's menu asks questions only an
         // entry can answer; a place or a disk answers none of them. Sharing one
         // table would have meant twenty rows saying "not for this kind".
-        let dir = scratch("side-menu-tabela");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        let dir = scratch("side-menu-table");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_with_devices(&dir);
         v.reread();
         let b = bundle();
@@ -5807,7 +8604,7 @@ mod tests {
         v.key(of_view("C-o"));
         v.key(of_view("C-m"));
         let hits: Vec<Hit> = v
-            .rows(120, &b)
+            .drawn(120, &b)
             .iter()
             .flat_map(|r| r.fields.iter())
             .map(|f| f.hit.clone())
@@ -5815,7 +8612,7 @@ mod tests {
         assert!(hits.iter().any(|h| matches!(h, Hit::SideMenu(_))));
         assert!(
             !hits.iter().any(|h| matches!(h, Hit::Menu(_))),
-            "o menu da listagem apareceu sobre uma linha da barra"
+            "the listing's menu appeared over a line of the sidebar"
         );
 
         // And back in the listing it is the other one. `Esc` closes the menu:
@@ -5831,7 +8628,7 @@ mod tests {
         v.key(of_view("C-o"));
         v.key(of_view("C-m"));
         let hits: Vec<Hit> = v
-            .rows(120, &b)
+            .drawn(120, &b)
             .iter()
             .flat_map(|r| r.fields.iter())
             .map(|f| f.hit.clone())
@@ -5848,10 +8645,10 @@ mod tests {
         //
         // WHAT IS ASSERTED IS THAT IT FOLLOWS THE CURSOR. A second sentence
         // that sat still would be a caption near a list, and the request said
-        // "ao navegar pelas opções com as setas" — the answer has to be about
+        // "navigating the options with the arrows" — the answer has to be about
         // the row about to be chosen, or it is about nothing.
-        let dir = scratch("menu-segundo-registro");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        let dir = scratch("menu-second-record");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_at(&dir);
         v.reread();
         let b = bundle();
@@ -5862,59 +8659,57 @@ mod tests {
         // pointer's per-field path is for, and it still is.
         assert!(
             v.cursor_explains().is_none(),
-            "a listagem explicou uma coluna que ninguem apontou"
+            "the listing explained a column nobody pointed at"
         );
 
         v.key(of_view("C-m"));
-        let first = v
-            .cursor_explains()
-            .expect("a primeira linha do menu explica");
+        let first = v.cursor_explains().expect("the menu's first line explains");
         assert!(
             first.key.starts_with("files-does-"),
-            "a explicacao nao e a tecnica: {}",
+            "the explanation is not the technical one: {}",
             first.key
         );
         // AND IT IS A SENTENCE, not a key drawn raw. The bundle has to answer
         // it, or invariant 8 would put `files-does-open` on screen in front of
         // somebody.
         let said = b.t_with(first.key, &first.borrowed());
-        assert_ne!(said, first.key, "a chave `{}` nao tem texto", first.key);
+        assert_ne!(said, first.key, "key `{}` has no text", first.key);
 
         // AND THE ARROW MOVES IT.
         v.key(Key {
             mods: ronoctua_keymap::Mods::default(),
             sym: Sym::Down,
         });
-        let second = v.cursor_explains().expect("a segunda linha tambem explica");
+        let second = v.cursor_explains().expect("the second line explains too");
         assert_ne!(
             first.key, second.key,
-            "a linha tecnica nao mudou com a seta: e legenda, nao detalhe"
+            "the technical line did not change with the arrow: it is a caption, not a detail"
         );
     }
 
     #[test]
     fn the_sidebars_menu_explains_itself_too_and_with_its_own_words() {
-        // THE SAME SECOND REGISTER, and it has to be the SIDEBAR's: `montar`
+        // THE SAME SECOND REGISTER, and it has to be the SIDEBAR's: `mount`
         // talks to udisks and `abrir` opens a folder, and an explanation taken
         // from the listing's table would describe the wrong machine entirely.
-        let dir = scratch("side-menu-segundo-registro");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        let dir = scratch("side-menu-second-record");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_with_devices(&dir);
         v.reread();
         let b = bundle();
 
         v.key(of_view("C-o"));
         v.key(of_view("C-m"));
-        let e = v.cursor_explains().expect("a linha da barra explica");
+        let e = v.cursor_explains().expect("the bar's line explains");
         assert!(
             e.key.starts_with("sidebar-does-"),
-            "a barra pegou a explicacao da tabela errada: {}",
+            "the bar took its explanation from the wrong table: {}",
             e.key
         );
         assert_ne!(
             b.t_with(e.key, &e.borrowed()),
             e.key,
-            "a chave `{}` nao tem texto",
+            "key `{}` has no text",
             e.key
         );
     }
@@ -5927,7 +8722,7 @@ mod tests {
         side.devices_are(vec![Side {
             id: "device:/dev/dm-0".to_owned(),
             target: Target::Device("/block/dm-0".to_owned()),
-            label: Some("o sistema".to_owned()),
+            label: Some("the system".to_owned()),
             section: Section::Devices,
             mounted: Some(true),
             at: Some(PathBuf::from("/")),
@@ -5937,7 +8732,7 @@ mod tests {
             removable: false,
             built_in: true,
         }]);
-        let mut v = View::at(
+        let mut v = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -5945,7 +8740,7 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             side,
-        );
+        ));
         v.reread();
         v.key(of_view("C-o"));
         v.key(of_view("C-m"));
@@ -5955,20 +8750,20 @@ mod tests {
         // somebody's system — and a row offered that then refuses teaches that
         // the refusal is arbitrary.
         assert!(
-            !v.rows(120, &b)
+            !v.drawn(120, &b)
                 .iter()
                 .flat_map(|r| r.fields.iter())
                 .any(|f| f.hit == Hit::SideMenu("format") || f.hit == Hit::SideMenu("unmount")),
-            "o menu ofereceu formatar ou desmontar a raiz"
+            "the menu offered to format or unmount the root"
         );
         // And the facts SAY why the list is short, instead of leaving it to be
         // guessed from rows that are missing.
         let said = v
-            .rows(120, &b)
+            .drawn(120, &b)
             .iter()
             .flat_map(|r| r.fields.iter())
             .any(|f| f.text.contains('/'));
-        assert!(said, "a ficha nao disse onde o sistema mora");
+        assert!(said, "the sheet did not say where the system lives");
     }
 
     #[test]
@@ -5987,16 +8782,16 @@ mod tests {
         assert!(split > 0);
 
         // A cell inside the sidebar.
-        v.menu_at(1, SIDE_GUTTER, 120);
+        v.menu_at(1, SIDE_GUTTER, 120, 12);
         assert!(v.menu_open());
         assert!(
             matches!(v.pane(), Pane::Sidebar),
-            "o menu foi para o painel errado"
+            "the menu went to the wrong panel"
         );
         v.key(of_view("C-m"));
 
         // And a cell inside the listing.
-        v.menu_at(1, split + RULE + GUTTER + 1, 120);
+        v.menu_at(1, split + RULE + GUTTER + 1, 120, 12);
         assert!(v.menu_open());
         assert!(matches!(v.pane(), Pane::Listing));
     }
@@ -6009,7 +8804,7 @@ mod tests {
         side.devices_are(vec![Side {
             id: "device:/dev/dm-0".to_owned(),
             target: Target::Device("/block/dm-0".to_owned()),
-            label: Some("o sistema".to_owned()),
+            label: Some("the system".to_owned()),
             section: Section::Devices,
             mounted: Some(true),
             at: Some(PathBuf::from("/")),
@@ -6019,7 +8814,7 @@ mod tests {
             removable: false,
             built_in: true,
         }]);
-        let mut v = View::at(
+        let mut v = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -6027,18 +8822,18 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             side,
-        );
+        ));
         v.reread();
         let b = bundle();
         // NO TARGET AT ALL. A row offered that then refuses is worse than one
         // not offered: the gesture was spent to be told no, and nothing says
         // which part of the state decided.
         assert!(
-            !v.rows(120, &b)
+            !v.drawn(120, &b)
                 .iter()
                 .flat_map(|r| r.fields.iter())
                 .any(|f| matches!(f.hit, Hit::Eject(_))),
-            "ofereceu ejetar a raiz do sistema"
+            "it offered to eject the system root"
         );
         // And the key refuses NAMING what decided.
         v.key(of_view("C-o"));
@@ -6047,14 +8842,14 @@ mod tests {
                 assert_eq!(e.key, ronoctua_i18n::key::FILES_UNMOUNT_NEEDED);
                 assert!(e.args.iter().any(|(k, val)| *k == "why" && val == "/"));
             }
-            other => panic!("desmontar a raiz devia ser recusado com motivo: {other:?}"),
+            other => panic!("unmounting the root should be refused with a reason: {other:?}"),
         }
     }
 
     #[test]
     fn the_mark_travels_with_the_listing() {
         let dir = scratch("side-mark");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
 
         let mut beside = view_beside(&dir, 3);
         beside.reread();
@@ -6063,24 +8858,27 @@ mod tests {
         let b = bundle();
 
         let split = beside.split(120);
-        assert!(split > 0, "a barra deveria caber em 120 colunas");
+        assert!(split > 0, "the bar should fit in 120 columns");
         // THE MARK IS THE LISTING'S, so it moves with it. Left at cell zero it
         // sits under the sidebar's last letter, and clicking it marks the wrong
         // thing — which nothing else in this file would have caught.
         assert_eq!(
-            cell_of(&beside.rows(120, &b), &Hit::Mark(0)),
+            cell_of(&beside.drawn(120, &b), &Hit::Mark(0)),
             Some(split + RULE)
         );
-        assert_eq!(cell_of(&alone.rows(120, &b), &Hit::Mark(0)), Some(0));
+        assert_eq!(cell_of(&alone.drawn(120, &b), &Hit::Mark(0)), Some(0));
         // And the columns themselves are resolved identically — the sidebar is
         // not a column and does not degrade with them.
-        assert_eq!(layout_beside(120, 0), layout_beside(120, 0));
+        assert_eq!(
+            layout_beside(120, 0, 0, true),
+            layout_beside(120, 0, 0, true)
+        );
     }
 
     #[test]
     fn hiding_the_sidebar_gives_the_width_back_to_the_listing() {
         let dir = scratch("side-toggle");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 3);
         v.reread();
         let b = bundle();
@@ -6103,11 +8901,11 @@ mod tests {
         // the screen showing nothing.
         assert!(
             with.iter().zip(&without).all(|(a, b)| b >= a),
-            "esconder a barra tirou colunas da listagem"
+            "hiding the sidebar took columns from the listing"
         );
         assert!(
             with.iter().zip(&without).any(|(a, b)| b > a),
-            "esconder a barra nao devolveu largura em nenhuma das {} larguras",
+            "hiding the sidebar gave no width back at any of the {} widths",
             widths.len()
         );
     }
@@ -6115,29 +8913,29 @@ mod tests {
     #[test]
     fn a_sidebar_longer_than_the_listing_still_draws_every_row() {
         let dir = scratch("side-longer");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         std::fs::write(dir.join("dois.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 6);
         v.reread();
         let b = bundle();
 
         assert_eq!(v.row_count(120), Some(6));
-        let rows = v.rows_from(0, 12, 120, &b);
+        let rows = v.drawn_at(&[], 0, 12, 120, &b);
         assert_eq!(rows.len(), 6);
         // The rows past the listing's end carry the sidebar and NOTHING else —
         // no empty listing fields pretending to be entries.
         for (n, row) in rows.iter().enumerate().skip(2) {
             assert!(
                 row.fields.iter().any(|f| f.hit == Hit::Sidebar(n)),
-                "a linha {n} perdeu a barra"
+                "line {n} lost the bar"
             );
             assert!(
                 !row.fields.iter().any(|f| matches!(f.hit, Hit::Name(_))),
-                "a linha {n} inventou uma entrada"
+                "line {n} invented an entry"
             );
         }
         // And a click inside the sidebar's cells of row five finds row five.
-        let inside = rows[5].field_at(1).expect("celula da barra");
+        let inside = rows[5].field_at(1).expect("a cell of the bar");
         assert_eq!(inside.hit, Hit::Sidebar(5));
     }
 
@@ -6151,7 +8949,7 @@ mod tests {
         // `1` from `expansion_len` and the window door drew nothing at all and
         // said nothing either.
         assert_eq!(v.row_count(120), Some(3));
-        let rows = v.rows_from(0, 12, 120, &b);
+        let rows = v.drawn_at(&[], 0, 12, 120, &b);
         assert_eq!(rows.len(), 3);
         assert!(rows[0].fields.iter().any(|f| f.hit == Hit::Sidebar(0)));
     }
@@ -6179,7 +8977,7 @@ mod tests {
             removable: true,
             built_in: true,
         }]);
-        let mut v = View::at(
+        let mut v = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -6187,10 +8985,10 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             side,
-        );
+        ));
         v.reread();
         let b = bundle();
-        let rows = v.rows(120, &b);
+        let rows = v.drawn(120, &b);
 
         // THREE LINES FOR TWO ROWS: the place, a blank, the device. That blank
         // is the ONLY separation there is — no heading, no rule (invariants 14
@@ -6202,7 +9000,7 @@ mod tests {
                 .fields
                 .iter()
                 .any(|f| matches!(f.hit, Hit::Sidebar(_))),
-            "a linha do meio devia estar em branco: {:?}",
+            "the middle line should be blank: {:?}",
             rows[1].fields
         );
         assert!(rows[2].fields.iter().any(|f| f.hit == Hit::Sidebar(2)));
@@ -6217,7 +9015,7 @@ mod tests {
         });
         assert!(
             matches!(step, Step::Changed) && v.where_().ends_with("stick"),
-            "uma seta devia ter chegado ao dispositivo, nao ao vao"
+            "an arrow should have reached the device, not the gap"
         );
     }
 
@@ -6232,8 +9030,8 @@ mod tests {
         let b = bundle();
 
         // Where the accent is, read off the DRAWING.
-        let accent = |v: &View| -> Vec<Hit> {
-            v.rows(120, &b)
+        let accent = |v: &mut View| -> Vec<Hit> {
+            v.drawn(120, &b)
                 .iter()
                 .flat_map(|r| r.fields.iter())
                 .filter(|f| f.color == ronoctua_tokens::color::STATE_ACCENT && !f.text.is_empty())
@@ -6242,21 +9040,25 @@ mod tests {
         };
 
         v.key(of_view("C-n"));
-        let in_listing = accent(&v);
+        let in_listing = accent(&mut v);
         v.key(of_view("C-o"));
         v.key(of_view("C-n"));
         v.key(of_view("C-n"));
         assert!(
-            accent(&v).contains(&Hit::Sidebar(2)),
-            "o acento nao foi para a barra: {:?}",
-            accent(&v)
+            accent(&mut v).contains(&Hit::Sidebar(2)),
+            "the accent did not go to the bar: {:?}",
+            accent(&mut v)
         );
         v.key(of_view("C-o"));
-        assert_eq!(accent(&v), in_listing, "voltar nao caiu onde estava");
+        assert_eq!(
+            accent(&mut v),
+            in_listing,
+            "going back did not land where it was"
+        );
         v.key(of_view("C-o"));
         assert!(
-            accent(&v).contains(&Hit::Sidebar(2)),
-            "atravessar de novo nao caiu onde estava"
+            accent(&mut v).contains(&Hit::Sidebar(2)),
+            "crossing again did not land where it was"
         );
     }
 
@@ -6272,7 +9074,7 @@ mod tests {
         // THE RULE THE WHOLE KEYBOARD WAS REBUILT AROUND: in a list of names
         // the letter is text. A pane that swallowed letters would break it in
         // the one place nobody would think to test.
-        let query = v.crumbs().last().expect("o caminho tem campos").clone();
+        let query = v.crumbs(120).last().expect("the path has fields").clone();
         assert_eq!(query.text, "a");
         assert_eq!(query.color, ronoctua_tokens::color::STATE_ACCENT);
         assert!(v.filtering());
@@ -6281,7 +9083,7 @@ mod tests {
     #[test]
     fn esc_leaves_the_sidebar_before_it_leaves_the_view() {
         let dir = scratch("side-esc");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 3);
         v.reread();
         let esc = Key {
@@ -6294,13 +9096,16 @@ mod tests {
         // Three levels, one press each, and never two at a time.
         assert!(
             matches!(v.key(esc), Step::Changed),
-            "a query devia sair primeiro"
+            "the query should come out first"
         );
         assert!(
             matches!(v.key(esc), Step::Changed),
-            "a barra devia sair depois"
+            "the bar should have gone away afterwards"
         );
-        assert!(matches!(v.key(esc), Step::Closed), "so entao a vista fecha");
+        assert!(
+            matches!(v.key(esc), Step::Closed),
+            "only then does the view close"
+        );
     }
 
     /// A sidebar holding one mounted device and one that is not.
@@ -6335,7 +9140,7 @@ mod tests {
                 built_in: true,
             },
         ]);
-        View::at(
+        plainly(View::at(
             dir,
             Roster::default(),
             Zone::utc(),
@@ -6343,7 +9148,7 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             side,
-        )
+        ))
     }
 
     #[test]
@@ -6369,7 +9174,7 @@ mod tests {
             a_row("interna-montada", true, false),
             a_row("interna-desmontada", false, false),
         ]);
-        let mut v = View::at(
+        let mut v = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -6377,15 +9182,15 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             side,
-        );
+        ));
         v.reread();
         let b = bundle();
-        let rows = v.rows(120, &b);
+        let rows = v.drawn(120, &b);
         let glyph = |n: usize| -> String {
             rows.iter()
                 .flat_map(|r| r.fields.iter())
                 .find(|f| f.hit == Hit::Sidebar(n) && f.text.chars().count() == 1)
-                .expect("o glifo")
+                .expect("the glyph")
                 .text
                 .clone()
         };
@@ -6395,7 +9200,11 @@ mod tests {
         // redraw the internal one as a stick the moment somebody unmounted it,
         // and the two rows below would come out identical.
         assert_ne!(glyph(0), glyph(1));
-        assert_eq!(glyph(1), glyph(2), "montar nao muda que tipo de disco e");
+        assert_eq!(
+            glyph(1),
+            glyph(2),
+            "mounting does not change what kind of disk it is"
+        );
     }
 
     #[test]
@@ -6404,13 +9213,13 @@ mod tests {
         let mut v = view_with_devices(&dir);
         v.reread();
         let b = bundle();
-        let rows = v.rows(120, &b);
+        let rows = v.drawn(120, &b);
 
         let field = |n: usize| -> Field {
             rows.iter()
                 .flat_map(|r| r.fields.iter())
                 .find(|f| f.hit == Hit::Sidebar(n) && !f.text.is_empty() && f.text.len() > 4)
-                .expect("o nome do dispositivo")
+                .expect("the device's name")
                 .clone()
         };
         let mounted = field(0);
@@ -6437,9 +9246,9 @@ mod tests {
     #[test]
     fn pressing_an_unmounted_device_shows_it_instead_of_mounting_it() {
         // THE BEHAVIOUR THAT WAS ASKED FOR, and this test used to assert the
-        // opposite: *"ao clicar em algum item da sidebar que não está montado,
-        // não deve-se montá-lo automaticamente; em vez disso, mostrar
-        // informações sobre o item, e mostrar a opção de montá-lo"*.
+        // opposite: *"pressing an item of the sidebar that is not mounted
+        // should not mount it automatically; instead, show information
+        // about the item, and offer the option of mounting it"*.
         //
         // Mounting asks the system for something — it takes a moment, it can be
         // refused, and it changes what is on the machine. A row one presses to
@@ -6456,18 +9265,18 @@ mod tests {
         });
         assert!(
             matches!(step, Step::Changed) && v.menu_open(),
-            "esperava a ficha do dispositivo, veio {step:?}"
+            "expected the device's sheet, got {step:?}"
         );
 
         // AND MOUNTING IS THERE, with its key beside it — which is the other
         // half of what was asked for.
         let b = bundle();
-        let rows = v.rows(120, &b);
+        let rows = v.drawn(120, &b);
         assert!(
             rows.iter()
                 .flat_map(|r| r.fields.iter())
                 .any(|f| f.hit == Hit::SideMenu("mount")),
-            "a ficha nao ofereceu montar"
+            "the sheet did not offer to mount"
         );
         // The facts are on the same surface: the top line names the device.
         assert!(rows[0].fields[0].text.contains("MISO_EFI"));
@@ -6475,14 +9284,14 @@ mod tests {
         // And pressing that row is what mounts.
         match v.key(press('m')) {
             Step::Do(Doing::Mount(ref id)) => assert_eq!(id, "/block/sda2"),
-            other => panic!("a linha `montar` devia montar, veio {other:?}"),
+            other => panic!("the `mount` row should mount, got {other:?}"),
         }
     }
 
     #[test]
     fn a_system_volume_offers_mounting_and_then_names_what_it_needs() {
         use ronoctua_files::sidebar::{Preferences, Row as Side, Section, Sidebar, Target};
-        let dir = scratch("side-sistema");
+        let dir = scratch("side-system");
         let mut side = Sidebar::of(&[], None, None, Preferences::fresh(), None);
         side.devices_are(vec![Side {
             id: "device:/dev/nvme0n1p3".to_owned(),
@@ -6499,7 +9308,7 @@ mod tests {
             removable: false,
             built_in: true,
         }]);
-        let mut v = View::at(
+        let mut v = plainly(View::at(
             &dir,
             Roster::default(),
             Zone::utc(),
@@ -6507,7 +9316,7 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             std::rc::Rc::new(bundle()),
             side,
-        );
+        ));
         v.reread();
         v.key(of_view("C-o"));
         v.key(Key {
@@ -6523,11 +9332,9 @@ mod tests {
         match v.key(press('m')) {
             Step::Say(e) => assert_eq!(e.key, ronoctua_i18n::key::FILES_MOUNT_NEEDS_ADMIN),
             Step::Do(Doing::Mount(_)) => {
-                panic!(
-                    "tentou montar um volume de sistema, que o polkit recusa sem ter a quem perguntar"
-                )
+                panic!("it tried to mount a system volume, which polkit refuses with nobody to ask")
             }
-            other => panic!("esperava a frase que oferece o terminal root, veio {other:?}"),
+            other => panic!("expected the sentence offering the root terminal, got {other:?}"),
         }
     }
 
@@ -6559,7 +9366,7 @@ mod tests {
     #[test]
     fn every_sidebar_key_says_something_when_it_does_not_apply() {
         let dir = scratch("side-says");
-        std::fs::write(dir.join("um.txt"), b"x").unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 2);
         v.reread();
         // Pressed from the LISTING, where neither has a row to act on. A key
@@ -6569,7 +9376,7 @@ mod tests {
         for notation in ["C-e", "C-u"] {
             assert!(
                 matches!(v.key(of_view(notation)), Step::Say(_)),
-                "`{notation}` ficou calada na listagem"
+                "`{notation}` stayed silent in the listing"
             );
         }
     }
@@ -6583,11 +9390,11 @@ mod tests {
         // Invariant 14's other half: there is no floating tooltip and there
         // will not be one, so what the pointer is over goes on the message
         // line — and a field that explains nothing has nothing to put there.
-        for f in v.rows(120, &b).iter().flat_map(|r| r.fields.iter()) {
+        for f in v.drawn(120, &b).iter().flat_map(|r| r.fields.iter()) {
             if matches!(f.hit, Hit::Eject(_))
                 || (matches!(f.hit, Hit::Sidebar(_)) && f.text.len() > 4)
             {
-                assert!(f.explain.is_some(), "{f:?} nao se explica");
+                assert!(f.explain.is_some(), "{f:?} does not explain itself");
             }
         }
     }
@@ -6605,7 +9412,1653 @@ mod tests {
         // with the cursor clamped in between rather than left past the end.
         assert!(matches!(first, Step::Say(_)));
         assert!(matches!(second, Step::Say(_)));
-        assert_eq!(v.row_count(120), Some(1), "a barra devia ter esvaziado");
+        assert_eq!(v.row_count(120), Some(1), "the bar should have emptied");
+    }
+
+    /// A view with BOTH panels on, laid out once at a generous width so the
+    /// toggle's own answer is not the one a narrow screen gives.
+    fn with_panels(v: &mut View) {
+        let _ = v.panes(200);
+        v.key(of_view("C-v"));
+        v.key(of_view("C-i"));
+        assert!(v.preview_showing() && v.info_showing());
+    }
+
+    #[test]
+    fn the_chrome_is_the_listings_and_the_other_columns_start_at_the_top() {
+        // THE OWNER PHOTOGRAPHED THE BLANK: *"there is a blank space above the
+        // sidebar, preview and info columns, and that is caused precisely by
+        // something that ought to be 100% isolated in the listing
+        // column"* — the path and the header, chained in front of the whole
+        // region instead of sitting on the listing's own rail.
+        let dir = scratch("chrome-rail");
+        for n in 0..10 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 8);
+        v.reread();
+        let width = 200u16;
+        let chrome = vec![
+            Row {
+                fields: v.crumbs(width),
+                marked: false,
+                focused: false,
+            },
+            v.header(width, &bundle()),
+        ];
+        let panes = v.panes(width);
+        let rows = v.drawn_at(&chrome, 0, 6, width, &bundle());
+
+        // LINE 0 CARRIES BOTH: the listing's path AND the sidebar's first row.
+        let first = &rows[0];
+        assert!(
+            first.fields.iter().any(|f| f.at < panes.sidebar),
+            "the sidebar left its first line blank: {:?}",
+            first.fields
+        );
+        assert!(
+            first
+                .fields
+                .iter()
+                .any(|f| f.at >= panes.listing_from() && f.text.contains('/')),
+            "the path is not on the listing's first line"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scrolling_the_listing_leaves_the_other_columns_where_they_were() {
+        // THE OTHER HALF OF THE SAME REPORT: *"scrolling the listing column's
+        // scrollbar downwards ends up interfering with every one of the other
+        // columns"*. Chained in front, the chrome was `skip`ped with the rows,
+        // so the top of three columns went up with the fourth.
+        let dir = scratch("scroll-isolated");
+        for n in 0..20 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 8);
+        v.reread();
+        let width = 200u16;
+        let chrome = vec![
+            Row {
+                fields: v.crumbs(width),
+                marked: false,
+                focused: false,
+            },
+            v.header(width, &bundle()),
+        ];
+        let panes = v.panes(width);
+        let side_of = |rows: &[Row]| -> Vec<String> {
+            rows.iter()
+                .map(|r| {
+                    r.fields
+                        .iter()
+                        .filter(|f| f.at < panes.sidebar)
+                        .map(|f| f.text.as_str())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        let top = v.drawn_at(&chrome, 0, 6, width, &bundle());
+        let down = v.drawn_at(&chrome, 5, 6, width, &bundle());
+        assert_eq!(
+            side_of(&top),
+            side_of(&down),
+            "the sidebar moved along with the listing"
+        );
+        // AND THE LISTING DID MOVE, or the assertion above would pass on a
+        // region that scrolls nothing at all.
+        let name_of = |rows: &[Row]| -> Option<String> {
+            rows.get(2).and_then(|r| {
+                r.fields
+                    .iter()
+                    .find(|f| matches!(f.hit, Hit::Name(_)))
+                    .map(|f| f.text.clone())
+            })
+        };
+        assert_ne!(name_of(&top), name_of(&down), "the listing did not scroll");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_strip_carries_the_same_targets_the_side_panels_do() {
+        // *"This column simply is not working (the mouse clicks and the
+        // scrollbar do not work)"* — the strip was DRAWN and never
+        // hit-tested. The rows themselves always had the targets; nothing in
+        // the window door asked them, so a press went through to the listing's
+        // arithmetic and came out as a row that happened to exist.
+        //
+        // This asserts the half that lives here: the strip's rows carry the
+        // same `Hit`s the right-hand panels do. The door asking them is
+        // `files_window::click`, through `strip_rows`.
+        let dir = scratch("strip-targets");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        v.preview_on = true;
+        v.info_on = true;
+        // NARROW ENOUGH that the panels cannot sit beside the listing.
+        let narrow = 70u16;
+        let panes = v.panes(narrow);
+        assert!(
+            panes.strip > 0 && panes.right == 0,
+            "this width does not put the panels below: {panes:?}"
+        );
+        let rows = v.strip_rows(narrow, &bundle());
+        let hits: Vec<&Hit> = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .map(|f| &f.hit)
+            .filter(|h| !matches!(h, Hit::Nothing))
+            .collect();
+        assert!(
+            hits.iter().any(|h| matches!(h, Hit::Bit(..))),
+            "the band has no clickable permissions: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|h| matches!(h, Hit::Owner(_) | Hit::Group(_))),
+            "the band has no clickable owner or group: {hits:?}"
+        );
+        // AND `field_at` FINDS THEM, which is what the door calls.
+        // ON ITS OWN ROW, which is what the door asks: `strip_rows[k]`, where
+        // `k` is the line the pointer is on.
+        let (line, bit) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(k, r)| {
+                r.fields
+                    .iter()
+                    .find(|f| matches!(f.hit, Hit::Bit(..)))
+                    .map(|f| (k, f))
+            })
+            .expect("one cell of permission");
+        let found = rows[line]
+            .field_at(bit.at)
+            .expect("field_at finds the cell");
+        assert!(matches!(found.hit, Hit::Bit(..)), "{:?}", found.hit);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_listings_offset_reaches_no_other_column() {
+        // *"YOU DID NOT ISOLATE THE COLUMNS FROM EVERYTHING ELSE, because if
+        // the column were isolated, its scrollbar would not affect the result
+        // of other columns"*. He is right, and this is the assertion that says
+        // it: with the listing at the top and the listing scrolled, everything
+        // that decides where ANOTHER column begins has to come out identical.
+        let dir = scratch("offset-reaches-nothing");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 6);
+        v.reread();
+        v.preview_on = true;
+        v.info_on = true;
+        let w = 200u16;
+        let b = bundle();
+        let panes = v.panes(w);
+        let chrome = vec![
+            Row {
+                fields: v.crumbs(w),
+                marked: false,
+                focused: false,
+            },
+            v.header(w, &b),
+        ];
+
+        // THE PICTURE'S BAND, which is what the owner photographed: its top
+        // must not be a function of the listing's offset. `panel_band` no
+        // longer takes one, and that is the point — there is no parameter to
+        // pass an offset through any more.
+        assert_eq!(
+            panel_band(0, 12, panes.strip),
+            panel_band(0, 12, panes.strip),
+            "the panel's band changed with nothing changing"
+        );
+
+        // AND THE COLUMNS' OWN FIRST ROWS, at the top and scrolled.
+        let of = |rows: &[Row], from: u16, to: u16| -> Vec<String> {
+            rows.iter()
+                .map(|r| {
+                    r.fields
+                        .iter()
+                        .filter(|f| f.at >= from && f.at < to)
+                        .map(|f| f.text.as_str())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        let top = v.drawn_at(&chrome, 0, 8, w, &b);
+        let down = v.drawn_at(&chrome, 12, 8, w, &b);
+        assert_eq!(
+            of(&top, 0, panes.sidebar),
+            of(&down, 0, panes.sidebar),
+            "the sidebar followed the listing"
+        );
+        let panels_from = w.saturating_sub(panes.right);
+        assert_eq!(
+            of(&top, panels_from, w),
+            of(&down, panels_from, w),
+            "the panels followed the listing"
+        );
+        // AND THE LISTING ITSELF DID MOVE, or none of the above means anything.
+        assert_ne!(
+            of(&top, panes.listing_from(), panels_from),
+            of(&down, panes.listing_from(), panels_from),
+            "the listing did not scroll"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_facts_bar_is_where_the_pointer_can_reach_it_and_it_moves() {
+        // THE OWNER TRIED IT WITH THE MOUSE IN BOTH DOORS, and each moved in
+        // one and refused in the other. The cause was the same both times: the
+        // bar was DRAWN by one arithmetic and LOOKED FOR by another. Now there
+        // is one rectangle — `Section::bar_box` — and the painter and the
+        // pointer both read it.
+        let dir = scratch("facts-drag");
+        std::fs::write(dir.join("um.png"), b"x").unwrap();
+        let mut v = view_beside(&dir, 1);
+        v.reread();
+        v.preview_on = true;
+        v.info_on = true;
+        let w = 53u16;
+        let b = bundle();
+        let panes = v.panes(w);
+        assert!(panes.strip > 0, "this width does not put the panels below");
+        let (cell, line_px) = (12.0f32, 26.0f32);
+        let edge = f32::from(w) * cell;
+        let sections = v.sections(&v.chrome_rows(w, &b), 21, w, &b);
+        let info = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are a section");
+        let (x, wide) =
+            section_px(panes, Pane::Info, 1, w, cell, edge).expect("the facts have a box");
+
+        // THE THUMB IS INSIDE ITS OWN COLUMN, and against its right edge —
+        // never a cell past the border, which is where it went off screen.
+        // A SURFACE THAT IS NOT A WHOLE NUMBER OF LINES, which is every real
+        // one: the band's last line plus four tenths of another. That residue
+        // is what the old arithmetic left under the thumb.
+        let surface_bottom = line_px + (info.top + info.lines) as f32 * line_px + line_px * 0.4;
+        let (bx, by, bw, bh) = info
+            .bar_box(x + wide, line_px, surface_bottom, cell, line_px)
+            .expect("the sheet does not fit in four lines: there is a bar");
+        assert!(
+            bx >= x && bx + bw <= x + wide + 0.5,
+            "the bar ({bx}..{}) left its column ({x}..{})",
+            bx + bw,
+            x + wide
+        );
+        assert!(bx + bw <= edge, "the bar went past the surface's edge");
+
+        // AND IT LIVES INSIDE ITS OWN BAND, never over the listing above it.
+        // THE TRACK ENDS AT THE SURFACE, and not at the last whole line.
+        //
+        // THESE ASSERTIONS USED TO MEASURE `lines × line_px`, and that was the
+        // defect written down: a surface is not a whole number of lines, so the
+        // track stopped short by the residue and so did the thumb. The owner
+        // photographed the gap under this very bar, twice.
+        let band_top = line_px + info.top as f32 * line_px;
+        assert!(by >= band_top - 0.5, "the bar rose out of the track");
+        assert!(
+            by + bh <= surface_bottom + 0.5,
+            "the bar went past the end of the track"
+        );
+
+        // AND DRAGGING MOVES IT: the last page puts the thumb at the BOTTOM,
+        // which is where the owner's stopped half way.
+        let room = Room {
+            list: 21,
+            panel: usize::from(panes.strip),
+        };
+        assert!(v.drag_to(Pane::Info, 1.0, w, room), "the drag was refused");
+        let down = v.sections(&v.chrome_rows(w, &b), 21, w, &b);
+        let info = down
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are still there");
+        let (_, by2, _, bh2) = info
+            .bar_box(x + wide, line_px, surface_bottom, cell, line_px)
+            .expect("the bar is still there");
+        // AND IT LANDS ON THE SURFACE'S BOTTOM. Dragged to the end, the thumb
+        // ends where the window does — there is no strip of background left
+        // under it, which is what the owner's photograph showed.
+        assert!(
+            (by2 + bh2 - surface_bottom).abs() < 1.0,
+            "dragging to the end stopped at {} and the surface ends at {surface_bottom}",
+            by2 + bh2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_listings_bar_stops_where_the_strip_begins() {
+        // THE OWNER DRAGGED IT TO THE END AND IT KEPT GOING: the listing's
+        // thumb ran down to the bottom of the WINDOW, across the boundary and
+        // into the box the facts own.
+        //
+        // It is the other half of the bar above. Giving every band the
+        // surface's bottom fixed the residue under the facts — the facts are
+        // the last band in their column — and broke the listing, which is not:
+        // below it sits the strip. A band ends where ITS lines end, and only
+        // the last one in a column takes the residue.
+        let dir = scratch("listing-bar-strip");
+        for n in 0..60 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 1);
+        v.reread();
+        v.preview_on = true;
+        v.info_on = true;
+        let w = 53u16;
+        let b = bundle();
+        let panes = v.panes(w);
+        assert!(panes.strip > 0, "this width does not put the panels below");
+        let (cell, line_px) = (12.0f32, 26.0f32);
+        let edge = f32::from(w) * cell;
+        let region = 21usize;
+        let chrome = v.chrome_rows(w, &b);
+        // THE SAME SURFACE THE FACTS' TEST USES: the region, the strip below
+        // it, and a residue that is not a whole line.
+        let top = line_px;
+        let strip_top = top + region as f32 * line_px;
+        let surface_bottom = strip_top + f32::from(panes.strip) * line_px + line_px * 0.4;
+
+        let (x, wide) = section_px(panes, Pane::Listing, 1, w, cell, edge).expect("a listing box");
+        for to in [0.0f64, 0.5, 1.0] {
+            let room = Room {
+                list: region,
+                panel: usize::from(panes.strip),
+            };
+            assert!(
+                v.drag_to(Pane::Listing, to, w, room),
+                "the drag was refused"
+            );
+            let sections = v.sections(&chrome, region, w, &b);
+            let listing = sections
+                .iter()
+                .find(|s| matches!(s.pane, Pane::Listing))
+                .expect("the listing is a section");
+            let (_, by, _, bh) = listing
+                .bar_box(x + wide, top, surface_bottom, cell, line_px)
+                .expect("sixty files do not fit: there is a bar");
+            assert!(by >= top - 0.5, "at {to}: the bar rose out of the track");
+            assert!(
+                by + bh <= strip_top + 0.5,
+                "at {to}: the bar ends at {} and the strip begins at {strip_top}",
+                by + bh
+            );
+        }
+
+        // AND THE LAST PAGE STILL REACHES THE BOTTOM OF ITS OWN BAND, or the
+        // fix would have traded one gap for another.
+        let sections = v.sections(&chrome, region, w, &b);
+        let listing = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Listing))
+            .expect("the listing is a section");
+        let (_, by, _, bh) = listing
+            .bar_box(x + wide, top, surface_bottom, cell, line_px)
+            .expect("there is a bar");
+        assert!(
+            (by + bh - strip_top).abs() < 1.0,
+            "dragged to the end the bar stops at {} and its band ends at {strip_top}",
+            by + bh
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_row_of_the_strip_is_a_line_of_the_strip() {
+        // THE OWNER PHOTOGRAPHED IT: the pointer on the THIRD fact, and the
+        // band on the THIRD row of the listing. The row number was right; the
+        // line it was turned into belonged to another column, because the
+        // arithmetic added the region's top and knew nothing of the strip's.
+        let dir = scratch("strip-line");
+        std::fs::write(dir.join("um.png"), b"x").unwrap();
+        let mut v = view_beside(&dir, 1);
+        v.reread();
+        v.preview_on = true;
+        v.info_on = true;
+        let narrow = 53u16;
+        let panes = v.panes(narrow);
+        assert!(panes.strip > 0, "this width does not put the panels below");
+        let b = bundle();
+        let room = 21usize;
+        let sections = v.sections(&v.chrome_rows(narrow, &b), room, narrow, &b);
+
+        let info = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are a section");
+        // ITS THIRD ROW IS ITS THIRD LINE, counted from its OWN top.
+        let line = info.line_of(2).expect("the facts' third line");
+        assert_eq!(line, info.top + 2, "the facts answered for another line");
+        assert!(
+            line >= room,
+            "the facts line ({line}) landed inside the listing's region"
+        );
+
+        // AND THE LISTING'S THIRD ROW IS SOMEWHERE ELSE ENTIRELY.
+        let listing = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Listing))
+            .expect("the listing is a section");
+        assert_ne!(
+            listing.line_of(2),
+            Some(line),
+            "the listing and the facts matched on the same line"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_section_answers_for_itself_and_for_nothing_else() {
+        // THE FOUR DEFECTS THE OWNER REPORTED, in one place — because they were
+        // one defect. The doors asked "which ROW is this `y`" and then read a
+        // field off the flattened line, so a point in one section was resolved
+        // against all four:
+        //
+        //   - clicking a folder went to the PARENT (the listing's cell resolved
+        //     to the path's crumb);
+        //   - the sidebar's items answered nothing;
+        //   - the facts' answered nothing;
+        //   - and hovering the sidebar's first two rows did nothing at all,
+        //     because those lines are the LISTING's chrome and the whole line
+        //     was refused.
+        let dir = scratch("sections-answer");
+        std::fs::create_dir(dir.join("a-folder")).unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = view_beside(&dir, 6);
+        v.reread();
+        v.preview_on = true;
+        v.info_on = true;
+        let w = 200u16;
+        let panes = v.panes(w);
+        assert!(
+            panes.sidebar > 0 && panes.right > 0,
+            "this width does not have the four sections: {panes:?}"
+        );
+        let b = bundle();
+        let room = 12usize;
+        v.scroll_listing_to(0);
+
+        // 1. THE SIDEBAR, ON THE LISTING'S CHROME LINES. Line 0 is the path's
+        //    line for the listing and the sidebar's FIRST row for the sidebar.
+        for line in 0..2usize {
+            let t = v
+                .hit(w, room, line, 1, &b)
+                .unwrap_or_else(|| panic!("the sidebar did not answer on line {line}"));
+            assert_eq!(t.pane, Pane::Sidebar, "line {line}: {t:?}");
+            assert_eq!(t.row, line, "the sidebar answered for the wrong line");
+        }
+
+        // 2. THE LISTING'S OWN CHROME, at a listing cell on the same lines.
+        let listing_cell = panes.listing_from() + 2;
+        let path = v.hit(w, room, 0, listing_cell, &b).expect("the path");
+        assert!(
+            matches!(path.hit, Hit::Crumb(_)),
+            "the path line did not answer with a piece of it: {path:?}"
+        );
+
+        // 3. A FOLDER IN THE LISTING SELECTS — it does not go to the parent.
+        let first = CHROME;
+        let name = v
+            .hit(w, room, first, listing_cell, &b)
+            .expect("the listing's first line");
+        assert_eq!(name.pane, Pane::Listing);
+        assert!(
+            matches!(name.hit, Hit::Name(_) | Hit::Mark(_)),
+            "clicking in the listing landed on {:?}",
+            name.hit
+        );
+        assert!(
+            !matches!(name.hit, Hit::Crumb(_)),
+            "clicking a folder resolved to the path — which is why it went up a level"
+        );
+
+        // 4. THE FACTS ANSWER, and they answer with their own targets.
+        let (_, info_at, info_room) = panes
+            .boxes(w)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .expect("the facts panel");
+        let mut reached = false;
+        for line in 0..6usize {
+            for cell in info_at..info_at + info_room {
+                if let Some(t) = v.hit(w, room, line, cell, &b)
+                    && !matches!(t.hit, Hit::Nothing)
+                {
+                    assert_eq!(
+                        t.pane,
+                        Pane::Info,
+                        "a target of the facts came from another section"
+                    );
+                    reached = true;
+                }
+            }
+        }
+        assert!(reached, "no target in the facts column");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pointer_in_a_panel_lights_the_panel_and_not_the_listing() {
+        // THE OWNER'S WORDS: *"putting the cursor over an item of the info
+        // column, on the exact row the mouse is on, ends up giving the hover
+        // effect in the listing; that is, right now it is all one single row"*.
+        let dir = scratch("hover-panel");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let width = 200u16;
+        let panes = v.panes(width);
+        let cell = 10.0;
+        let edge = f32::from(width) * cell;
+        let (info_at, _) = panes
+            .boxes(width)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .map(|(_, a, r)| (a, r))
+            .expect("the information panel has a box");
+        // A cell INSIDE the facts.
+        let (x, wide) = band_of(panes, 1, width, Some(info_at + 1), cell, edge);
+        let (px, pwide) =
+            panel_px(panes, Panel::Info, 1, width, cell, edge).expect("the panel's region");
+        assert!(
+            (x - px).abs() < 1.0 && (wide - pwide).abs() < 1.0,
+            "the panel's band came out at {x}..{} and its region is {px}..{}",
+            x + wide,
+            px + pwide
+        );
+        // AND THE LISTING'S BAND IS SOMEWHERE ELSE ENTIRELY: if the two were
+        // the same rectangle the assertion above would pass on a band that
+        // still lit the listing, because the listing would BE the panel.
+        let (lx, lwide) = band_of(panes, 1, width, Some(panes.listing_from() + 1), cell, edge);
+        assert!(
+            lx + lwide <= x + 1.0,
+            "the listing's band ({lx}..{}) invades the panel ({x}..)",
+            lx + lwide
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_wheel_alone_moves_what_the_next_frame_draws() {
+        // DEFECT (c), AS AN EXECUTABLE SENTENCE.
+        //
+        // A wheel event, and then the very next question the door asks before
+        // drawing — with nothing in between. It used to fail because the
+        // listing's offset lived in the DOOR: the wheel moved the door's copy
+        // and the door pushed that copy in on the following frame, so a
+        // gesture with no redraw between the two showed up one frame late.
+        // A touchpad sends dozens of those a second, which is why the owner
+        // described it as the gesture not working rather than as lag.
+        let dir = scratch("wheel-one-frame");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f-{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.reread();
+        let b = bundle();
+        let width = 120u16;
+        let panes = v.panes(width);
+
+        let before = v.sections(&[], 8, width, &b);
+        assert!(v.wheel(Pane::Listing, 4, width, 8), "the wheel was refused");
+        let after = v.sections(&[], 8, width, &b);
+
+        let listing = |secs: &[Section]| -> String {
+            secs.iter()
+                .find(|s| matches!(s.pane, Pane::Listing))
+                .and_then(|s| s.content.first())
+                .map(|r| first_name_text(std::slice::from_ref(r), panes))
+                .unwrap_or_default()
+        };
+        assert_ne!(
+            listing(&before),
+            listing(&after),
+            "the wheel moved nothing the NEXT frame would draw"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn holding_the_key_reaches_the_last_entry() {
+        // THE FIFTH DEFECT, which the owner had not reported yet.
+        //
+        // The window's `follow` compared the cursor against the region's whole
+        // height while its wheel used the height minus the chrome, so the last
+        // two entries of a directory could not be reached by holding `j`. One
+        // function now, and it takes the LISTING's room.
+        let dir = scratch("follow-last");
+        for n in 0..30 {
+            std::fs::write(dir.join(format!("f-{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.reread();
+        let room = 8usize;
+        let total = v.amount();
+        for _ in 0..total + 4 {
+            v.key(Key {
+                mods: ronoctua_keymap::Mods::default(),
+                sym: Sym::Down,
+            });
+            v.follow(room);
+        }
+        assert_eq!(v.cursor(), total - 1, "the cursor did not reach the end");
+        assert!(
+            v.cursor() >= v.list_offset() && v.cursor() < v.list_offset() + room,
+            "the last entry is outside the visible rows: cursor {} in {}..{}",
+            v.cursor(),
+            v.list_offset(),
+            v.list_offset() + room
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_wheel_moves_the_section_it_is_over_and_nothing_else() {
+        // *"Using the touchpad's scroll gestures over the info region,
+        // EVERYTHING ends up scrolling (sidebar/listing/…)"* — one list with
+        // three names. Each section keeps its own place now, and the LISTING's
+        // stays with the door, which is what `wheel` returning `false` says.
+        let dir = scratch("wheel-sections");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 30);
+        v.reread();
+        with_panels(&mut v);
+        let width = 200u16;
+        let panes = v.panes(width);
+
+        // OVER THE SIDEBAR: it moves, and it is the only thing that does.
+        let before = v.drawn_at(&[], 0, 6, width, &bundle());
+        assert!(v.wheel(Pane::Sidebar, 3, width, 6), "the sidebar scrolled");
+        let after = v.drawn_at(&[], 0, 6, width, &bundle());
+        assert_ne!(
+            first_side_text(&before, panes),
+            first_side_text(&after, panes),
+            "the sidebar did not move"
+        );
+        assert_eq!(
+            first_name_text(&before, panes),
+            first_name_text(&after, panes),
+            "the listing moved along with the sidebar"
+        );
+
+        // AND THE LISTING'S GESTURE IS TAKEN HERE TOO.
+        //
+        // THIS ASSERTION USED TO SAY THE OPPOSITE, and it was the defect
+        // written down: `!v.wheel(Pane::Listing, …)`, commented "the view
+        // swallowed the listing's gesture, which belongs to the door". The
+        // `false` meant "not mine" — so each door implemented the case again,
+        // and each got a different half right. The owner found the halves by
+        // dragging them: it worked in the window's facts and not its listing,
+        // and the other way round in the footer.
+        //
+        // Read through the DRAWING and not through the number, because what
+        // was wrong was never the number — it was which list moved.
+        let before = v.drawn_at(&[], v.list_offset(), 6, width, &bundle());
+        assert!(
+            v.wheel(Pane::Listing, 3, width, 6),
+            "the listing's own gesture is still refused"
+        );
+        let after = v.drawn_at(&[], v.list_offset(), 6, width, &bundle());
+        assert_ne!(
+            first_name_text(&before, panes),
+            first_name_text(&after, panes),
+            "the wheel over the listing did not move it"
+        );
+        v.scroll_listing_to(0);
+        // A PICTURE DOES NOT SCROLL, and swallowing the gesture is the point.
+        assert!(
+            v.wheel(Pane::Preview, 3, width, 6),
+            "the gesture over the preview leaked into another list"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The text of the first row's leftmost field — the sidebar's, when there
+    /// is one.
+    fn first_side_text(rows: &[Row], panes: Panes) -> String {
+        rows.first().map_or_else(String::new, |r| {
+            r.fields
+                .iter()
+                .filter(|f| f.at < panes.sidebar)
+                .map(|f| f.text.as_str())
+                .collect()
+        })
+    }
+
+    /// The text of the first row's first field inside the LISTING.
+    fn first_name_text(rows: &[Row], panes: Panes) -> String {
+        rows.first()
+            .and_then(|r| {
+                r.fields
+                    .iter()
+                    .find(|f| f.at >= panes.listing_from() && matches!(f.hit, Hit::Name(_)))
+            })
+            .map(|f| f.text.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_click_selects_and_only_the_second_one_opens() {
+        // THE OWNER ASKED FOR THIS ONE: *"if I click an item that is not
+        // selected, it should only become selected; and if I click an item
+        // that is already selected, then it is opened"*.
+        let dir = scratch("click-twice");
+        // TWO directories, because the cursor opens on the first one and
+        // clicking THAT is the second click by the very rule being asserted.
+        std::fs::create_dir(dir.join("first-folder")).unwrap();
+        std::fs::create_dir(dir.join("second-folder")).unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        // A ROW THE CURSOR IS NOT ALREADY ON. It opens at zero, and clicking
+        // the row it opened on is by this very rule the SECOND click.
+        assert_eq!(
+            v.cursor(),
+            0,
+            "the view opens with the cursor on the first line"
+        );
+        let target = v
+            .drawn_at(&[], 0, 10, 200, &bundle())
+            .iter()
+            .flat_map(|r| r.fields.clone())
+            .find_map(|f| match f.hit {
+                Hit::Name(n) if f.text.contains("second-folder") => Some(n),
+                _ => None,
+            })
+            .expect("the folder is in the listing");
+        let was = v.where_().to_path_buf();
+
+        // FIRST CLICK: the cursor moves and NOTHING opens.
+        let step = v.click(target, &Hit::Name(target));
+        assert!(
+            matches!(step, Step::Changed),
+            "the first click did more than select: {step:?}"
+        );
+        assert_eq!(v.cursor(), target, "the first click did not select");
+        assert_eq!(
+            v.where_(),
+            was,
+            "the first click already went into the folder"
+        );
+
+        // SECOND CLICK on the same row: now it opens.
+        let _ = v.click(target, &Hit::Name(target));
+        assert_ne!(
+            v.where_(),
+            was,
+            "the second click on the already selected line did not open"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_panels_leak_nowhere_the_listing_did_not_already() {
+        // The listing alone leaks at ONE cell and has since before there was a
+        // sidebar — `the_listing_alone_leaks_only_where_a_name_cannot_fit`
+        // pins that. What this asserts is that the two panels add nothing to
+        // the list, at any width, beside any sidebar.
+        let dir = scratch("panels-leak");
+        for n in 0..4 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let b = bundle();
+        for sidebar in [0usize, 3, 8] {
+            let mut v = if sidebar == 0 {
+                view_at(&dir)
+            } else {
+                view_beside(&dir, sidebar)
+            };
+            v.reread();
+            with_panels(&mut v);
+            let leaks: Vec<u16> = (1..=240u16)
+                .filter(|w| rightmost(&v.drawn(*w, &b)) > *w)
+                .collect();
+            assert_eq!(leaks, vec![1], "com {sidebar} lugares, vazou em {leaks:?}");
+            // AND THE STRIP TOO, which is drawn from the same boxes and would
+            // be the half nobody looked at.
+            let strip_leaks: Vec<u16> = (1..=240u16)
+                .filter(|w| rightmost(&v.strip_rows(*w, &b)) > *w)
+                .collect();
+            assert!(
+                strip_leaks.is_empty(),
+                "a faixa vazou em {strip_leaks:?} com {sidebar} lugares"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asking_for_every_line_asks_for_what_exists() {
+        // THE SIX KILLED SESSIONS.
+        //
+        // `View::rows` asks for `usize::MAX` and means "all of them". While
+        // `take` only bounded an iterator over a finite range that was free;
+        // once `sections` began MATERIALISING rows it became a request for
+        // 2^64 of them, and past the end of the listing an empty `Row` was
+        // pushed for ever. Twenty-seven tests grew that `Vec` at once, the
+        // machine's fourteen gibibytes went in seconds, and `systemd-oomd`
+        // took the terminal's whole cgroup — the agent with it, six times,
+        // leaving nothing in the session to read. The owner found it from the
+        // journal and wrote it up; this is the assertion that keeps it found.
+        //
+        // The rule in one line: `take` is AT MOST, never EXACTLY.
+        let dir = scratch("sentinel");
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 4);
+        v.reread();
+        let b = bundle();
+        let all = v.drawn(200, &b);
+        assert!(
+            all.len() <= 64,
+            "asking for every line materialised {} — the sentinel became a count",
+            all.len()
+        );
+        // AND IT IS THE SAME ANSWER the region's height gives, which is the
+        // other half: a count that disagrees with the drawing is blank space
+        // nobody can explain.
+        assert_eq!(
+            all.len(),
+            v.row_count(200).expect("a listing counts"),
+            "the lines drawn are not the ones counted"
+        );
+        // AND ASKING FOR MORE THAN EXISTS ANSWERS WITH WHAT EXISTS.
+        assert_eq!(v.drawn_at(&[], 0, 10_000, 200, &b).len(), all.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_count_is_exactly_what_the_rows_produce() {
+        // A DISAGREEMENT HERE IS THE REGION RESERVING LINES NOTHING DRAWS INTO
+        // — blank space below the listing, which reads as the manager having
+        // lost the rest of it. It is the same rule the sidebar's `.max(1)`
+        // already had to obey, with a third term in the maximum.
+        let b = bundle();
+        for how_many in [0usize, 1, 3, 20] {
+            let dir = scratch(&format!("count-{how_many}"));
+            for n in 0..how_many {
+                std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+            }
+            for sidebar in [0usize, 6] {
+                let mut v = if sidebar == 0 {
+                    view_at(&dir)
+                } else {
+                    view_beside(&dir, sidebar)
+                };
+                v.reread();
+                with_panels(&mut v);
+                for w in [40u16, 80, 96, 140, 200] {
+                    let count = v.row_count(w).expect("a listing counts");
+                    let rows = v.drawn_at(&[], 0, usize::MAX, w, &b).len();
+                    assert_eq!(
+                        count, rows,
+                        "{how_many} files, {sidebar} places, {w} columns"
+                    );
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn the_panels_are_never_one_on_the_right_and_one_at_the_bottom() {
+        // The owner's sentence is binary — beside, or underneath — and a mixed
+        // mode would make the listing shorter AND narrower at once.
+        let dir = scratch("panels-flip");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = view_beside(&dir, 4);
+        v.reread();
+        with_panels(&mut v);
+        let mut saw_right = false;
+        let mut saw_strip = false;
+        for w in 1..=240u16 {
+            let p = v.panes(w);
+            assert!(
+                p.right == 0 || p.strip == 0,
+                "at {w} columns both places at once: {p:?}"
+            );
+            saw_right |= p.right > 0;
+            saw_strip |= p.strip > 0;
+        }
+        assert!(saw_right, "it never fitted on the right");
+        assert!(saw_strip, "nunca desceu para a faixa");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_header_never_names_a_column_under_a_panel() {
+        // The header used to be laid out without the sidebar and named columns
+        // that were somewhere else; this is the same defect at the other edge,
+        // and clicking one of those names would sort by whatever happened to be
+        // under the word.
+        let dir = scratch("panels-header");
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let b = bundle();
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        with_panels(&mut v);
+        for w in 20..=240u16 {
+            let panes = v.panes(w);
+            if panes.right == 0 {
+                continue;
+            }
+            let from = w.saturating_sub(panes.right);
+            for f in &v.header(w, &b).fields {
+                assert!(
+                    f.at + width_of(&f.text) <= from,
+                    "at {w} columns the header invades the panel: {f:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cell_in_the_info_panel_is_a_fact_and_one_left_of_the_rule_is_the_listing() {
+        // `Row::field_at` walks from the RIGHT, which is why the sidebar needed
+        // no boundary arithmetic when it was prepended. The panels are appended
+        // for the same reason, and this is the assertion that says so: one cell
+        // either side of the same rule answers with two different regions.
+        let dir = scratch("panels-hit");
+        std::fs::write(dir.join("relatorio.pdf"), b"x").unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let w = 200u16;
+        let panes = v.panes(w);
+        assert!(
+            panes.right > 0,
+            "at 200 columns the panels sit on the right"
+        );
+        let info = panes
+            .boxes(w)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .expect("the information panel has a box");
+        let rows = v.drawn(w, &b);
+        let row = rows.first().expect("a row");
+        // INSIDE THE INFO PANEL: a field of the panel, and never of the table.
+        let there = row.field_at(info.1).expect("something in the box");
+        assert!(
+            there.at >= info.1,
+            "cell {} found a field at {}",
+            info.1,
+            there.at
+        );
+        assert_eq!(there.hit, Hit::Nothing, "a fact is not an action");
+        // AND ONE CELL LEFT OF THE FIRST RULE: the listing, still.
+        let from = w.saturating_sub(panes.right);
+        let last = row
+            .fields
+            .iter()
+            .filter(|f| f.at < from)
+            .map(|f| f.at)
+            .max()
+            .expect("the listing drew something");
+        let here = row.field_at(last).expect("the listing's field");
+        assert!(here.at < from, "cell {last} landed in the panel");
+    }
+
+    #[test]
+    fn the_information_key_is_not_the_tab_key() {
+        // In a terminal `C-i` and `TAB` are the same byte and somebody will
+        // assume they are the same key here. They are not: `key_of` maps
+        // `Keysym::Tab` and `Keysym::i` separately, and the day they collided
+        // one of the two would silently stop working.
+        let tab = of_view("TAB");
+        let ci = of_view("C-i");
+        assert_ne!(tab, ci, "TAB and C-i became the same key");
+        assert_eq!(of_the_view(tab), Some("files-pane-next"));
+        assert_eq!(of_the_view(ci), Some("files-facts"));
+        assert_eq!(of_the_view(of_view("C-v")), Some("files-preview"));
+        // AND `S-TAB` IS A THIRD KEY, which is the half that is new: it reaches
+        // the view only because both doors read `ISO_Left_Tab` off the keysym
+        // and set the flag from THERE. Sharing `TAB`'s notation would have made
+        // Shift+Tab walk forwards, in silence.
+        let back = of_view("S-TAB");
+        assert_ne!(back, tab, "S-TAB and TAB became the same key");
+        assert_eq!(of_the_view(back), Some("files-pane-previous"));
+        // AND MEASURING KEPT A KEY. It moved off `TAB` — the notification
+        // manager's own key line has said `TAB pane` since it had two columns —
+        // and a gesture the mouse reaches (`Hit::Measure`) with no key at all
+        // is the one direction `files-everything-has-a-key` rules out.
+        assert_eq!(of_the_view(of_view("C-t")), Some("files-measure"));
+    }
+
+    #[test]
+    fn a_panel_that_cannot_appear_flips_anyway_and_says_why() {
+        // A key that does nothing and says nothing is the one outcome this
+        // project treats as a defect: from the outside, a refusal and a dead
+        // key look the same. The shape is `files-sidebar-only`'s.
+        let dir = scratch("panels-narrow");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        // A SCREEN TOO NARROW FOR EVEN ONE PANEL.
+        let _ = v.panes(20);
+        let step = v.key(of_view("C-v"));
+        assert!(v.preview_showing(), "the state has to turn anyway");
+        assert!(
+            matches!(step, Step::Say(_)),
+            "a recusa tem de dizer alguma coisa: {step:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_hint_names_the_two_panel_keys() {
+        // `C-o` was implemented, worked, and nothing on screen said it existed
+        // — "which is the same as not having it". These two are in no registry
+        // and no manual either, so this line is all there is.
+        let b = bundle();
+        for sidebar in [false, true] {
+            let hint = hint_of(&b, sidebar);
+            for id in ["files-preview", "files-facts"] {
+                let t = key_that_runs(id).expect("the key is in the table");
+                assert!(
+                    hint.contains(&t.notation()),
+                    "the hint does not name `{}` ({id}): {hint}",
+                    t.notation()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_panels_are_on_the_moment_the_manager_opens() {
+        // THE OWNER'S DECISION, and it is a default and not a preference: the
+        // panels are what the manager is for, and a feature that has to be
+        // switched on every time is a feature most of the time nobody has.
+        //
+        // Through `View::at` and NOT through `view_at`, which is the fixture
+        // the listing's own tests use and which turns them off. A test that
+        // came through the fixture would be asserting the fixture.
+        let dir = scratch("panels-default");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let v = View::at(
+            &dir,
+            Roster::default(),
+            Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            std::rc::Rc::new(bundle()),
+            no_sidebar(),
+        );
+        // ON THE SCREEN and not only in the state: at a width that holds them,
+        // both boxes have to be there. `panes` is what every painter and every
+        // hit test goes through.
+        let panes = v.panes(200);
+        assert!(panes.right > 0, "the panels did not appear: {panes:?}");
+        assert_eq!(
+            panes.boxes(200).len(),
+            2,
+            "both boxes have to be there: {panes:?}"
+        );
+        // AND THE KEYS STILL HIDE THEM — the owner asked for them to be on,
+        // not for the keys to go.
+        let mut v = v;
+        v.key(of_view("C-v"));
+        v.key(of_view("C-i"));
+        assert_eq!(v.panes(200).boxes(200).len(), 0, "the keys do not hide");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_query_that_matches_nothing_gives_the_lines_back() {
+        // WHAT `leader-vm` CAUGHT, and it is the reason this test exists at
+        // this level: typing narrows the list, and the region has to narrow
+        // with it. With the panels on by default it stopped doing that — the
+        // preview asked for its twelve lines whether or not there was a file
+        // to draw in them, so `zzz` left the footer 288 px tall before and
+        // 288 px after, and the person typing got no answer.
+        let dir = scratch("query-nothing");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = View::at(
+            &dir,
+            Roster::default(),
+            Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            std::rc::Rc::new(bundle()),
+            no_sidebar(),
+        );
+        // THROUGH `row_count`, which is what the region's height is made of:
+        // `Surface::expansion_len` asks it and nothing else. Asserting on
+        // `rows_from` would count the rows drawn and miss the lines ASKED FOR,
+        // which is the half that was wrong.
+        let with_a_file = v.row_count(200).expect("a listing counts");
+        for letter in "zzz".chars() {
+            v.key(of_view(&letter.to_string()));
+        }
+        let with_none = v.row_count(200).expect("a listing counts");
+        assert!(
+            with_none < with_a_file,
+            "the region did not shrink: {with_a_file} lines before, {with_none} after"
+        );
+        // AND THE PANELS ASK FOR NOTHING, which is the half a comparison would
+        // miss: with no sidebar and no match there is one line left — the
+        // listing's own "nothing here" — and not the picture's box holding
+        // four open around an empty frame.
+        assert_eq!(
+            with_none, 1,
+            "the panels held lines with nothing to say: {with_none}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_three_columns_one_looks_up_start_hidden_and_a_key_shows_them() {
+        // The other half of the same decision: what the listing shows without
+        // being asked is what one navigates BY, and the permission triplet and
+        // the two names are what one looks UP.
+        let dir = scratch("columns-default");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let b = bundle();
+        let mut v = View::at(
+            &dir,
+            Roster::default(),
+            Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            std::rc::Rc::new(bundle()),
+            no_sidebar(),
+        );
+        v.key(of_view("C-v"));
+        v.key(of_view("C-i"));
+        let named = |v: &View| -> Vec<Column> {
+            v.header(120, &b)
+                .fields
+                .iter()
+                .filter_map(|f| match f.hit {
+                    Hit::Sort(c) => Some(c),
+                    _ => None,
+                })
+                .collect()
+        };
+        let hidden = named(&v);
+        for c in [Column::Perms, Column::Owner, Column::Group] {
+            assert!(
+                !hidden.contains(&c),
+                "{c:?} apareceu sem ninguem pedir: {hidden:?}"
+            );
+        }
+        // AND THE KEY BRINGS THEM BACK — with their targets, which is what
+        // makes them worth showing.
+        assert!(matches!(v.key(of_view("C-d")), Step::Changed));
+        let shown = named(&v);
+        for c in [Column::Perms, Column::Owner, Column::Group] {
+            assert!(shown.contains(&c), "{c:?} did not come back: {shown:?}");
+        }
+        let row = v.drawn(120, &b).remove(0);
+        assert!(
+            row.fields
+                .iter()
+                .any(|f| matches!(f.hit, Hit::Bit(_, _, _))),
+            "the letters came back with no target"
+        );
+        // AND THE HINT LINE NAMES THE KEY. It is in no registry and no manual:
+        // `C-o` already cost this file the lesson.
+        for sidebar in [false, true] {
+            let hint = hint_of(&b, sidebar);
+            let t = key_that_runs("files-columns").expect("the key is in the table");
+            assert!(
+                hint.contains(&t.notation()),
+                "the hint does not name the key: {hint}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn there_is_no_glyph_where_there_is_no_picture_and_a_sentence_instead() {
+        // THE OWNER'S WORDS: "when there is no preview, instead of showing an
+        // icon it should say, in a very discreet formatting, that there is no
+        // preview". The glyph said what the listing's own icon column already
+        // said, at the size of a picture, so an empty panel looked full.
+        let dir = scratch("no-preview");
+        std::fs::create_dir(dir.join("folder")).unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let w = 200u16;
+        let (at, room) = v.panes(w).preview_box(w).expect("the preview has a box");
+        let rows = v.drawn(w, &b);
+        let inside: Vec<&Field> = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.at >= at && f.at < at + room)
+            .collect();
+        assert_eq!(
+            inside.len(),
+            1,
+            "the panel should have ONE line: {inside:?}"
+        );
+        let said = &inside[0];
+        assert_eq!(
+            said.text,
+            b.t(NO_PREVIEW),
+            "the panel does not say there is no preview"
+        );
+        assert_eq!(
+            said.color,
+            ronoctua_tokens::color::TEXT_DIM,
+            "the formatting has to be the most discreet there is"
+        );
+        // AND NOTHING IS A GLYPH OF THE PRIVATE USE AREA any more — which is
+        // where every icon of this system lives, and the range is what
+        // `layout::is_chrome_glyph` already answers with.
+        assert!(
+            !said
+                .text
+                .chars()
+                .any(ronoctua_render::layout::is_chrome_glyph),
+            "there is still an icon in the panel: {}",
+            said.text
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_picture_sits_between_the_rules_and_not_inside_the_margin() {
+        // THE OWNER MEASURED THIS ONE OFF THE SCREEN: 60 px of air on the
+        // picture's left against 54 on its right, in a box the code believed
+        // was centred. The box was the TEXT's — one cell in from the window's
+        // edge — while the region it looked like was the window's edge to the
+        // rule. Half a cell at each end, which is exactly the difference.
+        //
+        // In the strip the preview is the first panel and has no rule to its
+        // left, so its region starts at ZERO. That is the whole assertion.
+        let panes = Panes {
+            sidebar: 0,
+            right: 0,
+            strip: ronoctua_tokens::space::FILES_STRIPLINES,
+            preview: true,
+            info: true,
+        };
+        let cell = 12.0;
+        let (x, wide) = panel_px(panes, Panel::Preview, 1, 60, cell, 60.0 * cell)
+            .expect("the preview has a region");
+        assert!(
+            x.abs() < f32::EPSILON,
+            "the preview started inside the text margin, at {x} px"
+        );
+        // AND IT ENDS AT THE RULE, never half a cell short of it.
+        let (info_at, _) = panes
+            .boxes(60)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .map(|(_, a, r)| (a, r))
+            .expect("the information panel has a box");
+        let rule = rule_x(info_at.saturating_sub(RULE), 1, cell);
+        assert!(
+            (x + wide - rule).abs() < 1.0,
+            "the preview ends at {} and the rule is at {rule}",
+            x + wide
+        );
+    }
+
+    #[test]
+    fn the_picture_gets_the_same_air_above_it_as_below() {
+        // THE PANELS START WHERE EVERY SECTION STARTS: the region's first
+        // line. The band used to subtract the LISTING's chrome, and the doors
+        // computed that subtraction as `2 - offset` — so the picture's box
+        // jumped two lines up the moment the listing was scrolled. The owner
+        // saw it as extra air at the top of the preview that "disappears only
+        // when you scroll the file list".
+        let (top, lines) = panel_band(3, 12, 0);
+        assert_eq!(
+            (top, lines),
+            (3, 12),
+            "the band does not start at the top of the region"
+        );
+        // AND WITH THE STRIP the panels are UNDER the listing, not in it.
+        assert_eq!(panel_band(3, 12, 4), (15, 4));
+        // WHAT WOULD BE DRAWN: a landscape picture in that band has the same
+        // air above it as below. `Area::fit_into` centres, and the box is what
+        // it centres in — which is the half that was wrong.
+        let area = ronoctua_render::image::Area {
+            x: 0.0,
+            y: f32::from(top),
+            width: 40.0,
+            height: f32::from(lines),
+        }
+        .fit_into(480, 320);
+        let above = area.y - f32::from(top);
+        let below = (f32::from(top) + f32::from(lines)) - (area.y + area.height);
+        assert!(
+            (above - below).abs() < 0.001,
+            "{above} above and {below} below"
+        );
+    }
+
+    #[test]
+    fn the_info_column_says_when_it_has_been_cut() {
+        // The panel no longer stretches the region to fit its facts — a
+        // photograph has a dozen and the footer's whole ceiling is twelve
+        // lines — so it has to say when it has been cut. A list cut with
+        // nothing saying so is this file's oldest complaint.
+        let dir = scratch("facts-bar");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let w = 200u16;
+        let facts = v.sheet().len();
+        assert!(facts > 4, "the test needs more facts than lines");
+        let (cell, line_px) = (10.0f32, 26.0f32);
+        let edge = f32::from(w) * cell;
+        let panes = v.panes(w);
+        let (x, wide_px) =
+            section_px(panes, Pane::Info, 1, w, cell, edge).expect("the facts have a box");
+        let (_, at, wide) = panes
+            .boxes(w)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .expect("the information panel has a box");
+
+        // WITH ROOM FOR EVERY FACT there is no bar: chrome about nothing is
+        // what the listing's own bar refuses to be.
+        let roomy = v.sections(&[], facts, w, &b);
+        let roomy = roomy
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are a section");
+        assert_eq!(
+            roomy.bar_box(x + wide_px, 0.0, line_px * 12.0, cell, line_px),
+            None,
+            "a bar where everything fits"
+        );
+
+        // WITH FOUR LINES there is one, against the column's own right edge.
+        let cut = v.sections(&[], 4, w, &b);
+        let cut = cut
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are a section");
+        let (bx, _, bw, _) = cut
+            .bar_box(x + wide_px, 0.0, line_px * 12.0, cell, line_px)
+            .expect("the bar is missing");
+        assert!(bx >= x, "the bar left the panel on the left");
+        assert!(
+            (bx + bw - (x + wide_px)).abs() < 0.5,
+            "the bar does not reach the column's edge"
+        );
+        assert!(bx + bw <= edge, "the bar went past the surface's edge");
+        // AND NO VALUE REACHES IT: the bar's cell is the column's last, and
+        // `info_fields` keeps it clear.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bar_cell = ((bx / cell) as u16).saturating_sub(1);
+        let rows = v.drawn(w, &b);
+        for f in rows.iter().flat_map(|r| r.fields.iter()) {
+            if f.at < at || f.at >= at + wide {
+                continue;
+            }
+            assert!(
+                f.at + width_of(&f.text) <= bar_cell + 1,
+                "the `{}` field invades the bar's cell",
+                f.text
+            );
+        }
+
+        // AND THE KEY MOVES IT, and comes round to the start.
+        // ASKED AGAIN, because `drawn()` above wanted every line and that is
+        // what the view now remembers as the panel's height. `C-.` pages what
+        // was last drawn.
+        let cut = v.sections(&[], 4, w, &b);
+        let cut = cut
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("the facts are a section");
+        let top_y = cut
+            .bar_box(x + wide_px, 0.0, line_px * 12.0, cell, line_px)
+            .expect("the bar")
+            .1;
+        assert!(matches!(v.key(of_view("C-.")), Step::Changed));
+        let after = v.sections(&[], 4, w, &b);
+        let after = after
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Info))
+            .expect("os fatos continuam la");
+        let moved_y = after
+            .bar_box(x + wide_px, 0.0, line_px * 12.0, cell, line_px)
+            .expect("the bar is still there")
+            .1;
+        assert!(moved_y > top_y, "the key did not move the thumb");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_panels_stay_put_while_the_listing_scrolls() {
+        // THE DEFECT: the panels' fields ride the listing's rows, and they
+        // were indexed by the ABSOLUTE row. So the preview's sentence and the
+        // first fact belonged to line zero of the DIRECTORY — scroll to row
+        // twenty and both panels went blank, because sheet index twenty does
+        // not exist. Nothing said so, because a blank panel says nothing.
+        //
+        // It only mattered a little while the panels were off by default. Now
+        // that they are on, it is what a long directory looks like.
+        let dir = scratch("panels-scroll");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let w = 200u16;
+        let (at, room) = v.panes(w).preview_box(w).expect("the preview has a box");
+        let said = |rows: &[Row]| -> Option<String> {
+            rows.iter()
+                .flat_map(|r| r.fields.iter())
+                .find(|f| f.at >= at && f.at < at + room)
+                .map(|f| f.text.clone())
+        };
+        let top = said(&v.drawn_at(&[], 0, 8, w, &b));
+        assert!(top.is_some(), "the panel drew nothing at the top");
+        assert_eq!(
+            said(&v.drawn_at(&[], 20, 8, w, &b)),
+            top,
+            "the panel emptied when the listing scrolled"
+        );
+        // AND WHAT THE POINTER FINDS IS WHAT WAS DRAWN. The hit test used to
+        // rebuild the row from the top of the directory, so with the region
+        // scrolled it answered with a fact that was somewhere else — or with
+        // none at all.
+        let (at, room) = v
+            .panes(w)
+            .boxes(w)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .map(|(_, a, r)| (a, r))
+            .expect("the information panel has a box");
+        let cell = at + room / 2;
+        // THROUGH `hit`, which is what both doors ask now. The panel's line is
+        // the line ON SCREEN whatever the listing's offset is, so the region's
+        // first line answers with the same fact either way.
+        v.scroll_listing_to(20);
+        let scrolled = v.hit(w, 12, CHROME, cell, &b).map(|t| t.explain);
+        v.scroll_listing_to(0);
+        let top = v.hit(w, 12, CHROME, cell, &b).map(|t| t.explain);
+        assert_eq!(
+            scrolled, top,
+            "the panel's first line really changed on scroll"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fact_in_the_info_panel_reaches_the_same_target_the_listing_does() {
+        // THE OWNER'S REPORT: the permission letters are clickable in the
+        // table and dead in the panel that exists to show them. Every target
+        // here is one the listing already produces — the same `Hit`, the same
+        // question — because a second machinery is how the two come to
+        // disagree about what clicking a `w` does.
+        let dir = scratch("facts-hit");
+        let file = dir.join("one.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let w = 200u16;
+        let (at, room) = v
+            .panes(w)
+            .boxes(w)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .map(|(_, a, r)| (a, r))
+            .expect("the information panel has a box");
+        let rows = v.drawn(w, &b);
+        let inside: Vec<&Field> = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.at >= at && f.at < at + room)
+            .collect();
+        // THE PERMISSION TRIPLET IS TEN TARGETS, exactly as in the table.
+        let bits = inside
+            .iter()
+            .filter(|f| matches!(f.hit, Hit::Bit(_, _, _) | Hit::Special(_, _)))
+            .count();
+        assert_eq!(bits, 9, "the nine letters have to be targets: {inside:?}");
+        // AND THE OWNER AND THE GROUP ARE ONE EACH.
+        assert!(
+            inside.iter().any(|f| matches!(f.hit, Hit::Owner(_))),
+            "the owner is not a target"
+        );
+        assert!(
+            inside.iter().any(|f| matches!(f.hit, Hit::Group(_))),
+            "the group is not a target"
+        );
+        // WHAT CANNOT BE OFFERED IS NOT DRAWN AS IF IT COULD: a file's size
+        // and a date are read, never edited.
+        assert!(
+            !inside.iter().any(|f| matches!(f.hit, Hit::Measure(_))),
+            "the size of a FILE is not a walk"
+        );
+        // AND EVERY ONE OF THEM SAYS SOMETHING, which is what the listing's
+        // own `every_field_that_lights_up_says_something` asks of a target.
+        for f in &inside {
+            if matches!(f.hit, Hit::Nothing) {
+                continue;
+            }
+            assert!(f.explain.is_some(), "o campo `{}` acende e cala", f.text);
+        }
+        // AND PRESSING ONE REACHES THE SAME QUESTION THE TABLE REACHES.
+        let bit = inside
+            .iter()
+            .find(|f| matches!(f.hit, Hit::Bit(_, _, _)))
+            .expect("a letter");
+        let hit = bit.hit.clone();
+        assert!(
+            matches!(v.click(0, &hit), Step::Changed),
+            "clicking the panel's bit did not open the question"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directorys_size_in_the_panel_is_the_walk_and_a_files_is_not() {
+        // `Doable` is the whole of this: what a row offers is decided beside
+        // the value it is about, and a row that lit up and then refused would
+        // be worse than one that never promised.
+        let dir = scratch("facts-measure");
+        std::fs::create_dir(dir.join("folder")).unwrap();
+        let b = bundle();
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let w = 200u16;
+        let (at, room) = v
+            .panes(w)
+            .boxes(w)
+            .into_iter()
+            .find(|(p, _, _)| matches!(p, Panel::Info))
+            .map(|(_, a, r)| (a, r))
+            .expect("the information panel has a box");
+        let rows = v.drawn(w, &b);
+        let measure = rows
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .filter(|f| f.at >= at && f.at < at + room)
+            .find(|f| matches!(f.hit, Hit::Measure(_)));
+        assert!(measure.is_some(), "the size of a FOLDER is a walk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_path_never_crosses_the_sidebars_rule() {
+        // THE DEFECT THE OWNER PHOTOGRAPHED, in
+        // `10-manager-with-preview.png`: `/root/shots/` runs to `x≈170`
+        // and the rule between the two lists is at `x=151`. Everything else on
+        // that row already respects the division; the path was drawn from cell
+        // zero and measured against nothing.
+        let dir = scratch("path-rule");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let b = bundle();
+        let mut v = view_beside(&dir, 6);
+        v.reread();
+        with_panels(&mut v);
+        for w in 1..=240u16 {
+            let panes = v.panes(w);
+            let from = panes.listing_from();
+            let ends = w.saturating_sub(panes.right);
+            for f in v.crumbs(w) {
+                assert!(
+                    f.at >= from,
+                    "at {w} columns the path starts at {} and the bar runs to {from}",
+                    f.at
+                );
+                assert!(
+                    f.at + width_of(&f.text) <= ends,
+                    "at {w} columns the path goes past {ends}: {f:?}"
+                );
+            }
+        }
+        // AND IT STARTS WHERE THE HEADER DOES, which is the whole of "respects
+        // the split": both are the LISTING's, and the sidebar's column is
+        // somebody else's.
+        let w = 120u16;
+        let panes = v.panes(w);
+        assert!(panes.sidebar > 0, "the test needs the sidebar");
+        let head = v.header(w, &b).fields.first().map(|f| f.at);
+        let path = v.crumbs(w).first().map(|f| f.at);
+        assert_eq!(
+            path,
+            Some(panes.listing_from()),
+            "the path does not respect the split"
+        );
+        assert!(head.is_some_and(|h| h >= panes.listing_from()));
+        // AND WHAT IS BEING TYPED SURVIVES THE CUT: the query is at the end of
+        // the path and it is what the hand is doing now.
+        for c in "picture".chars() {
+            v.key(press(c));
+        }
+        let crumbs = v.crumbs(w);
+        let last = crumbs.last().expect("the path has fields");
+        assert_eq!(
+            last.color,
+            ronoctua_tokens::color::STATE_ACCENT,
+            "the last field should be the query: {crumbs:?}"
+        );
+        assert!(!last.text.is_empty(), "a consulta desapareceu");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -6617,7 +11070,7 @@ mod tests {
         for n in ["a.txt", "b.txt", "c.txt"] {
             std::fs::write(root.join(n), b"x").unwrap();
         }
-        std::fs::create_dir(root.join("pasta")).unwrap();
+        std::fs::create_dir(root.join("folder")).unwrap();
         for (notation, label) in OF_THE_VIEW {
             let mut v = view_at(&root);
             // THE CURSOR IN THE MIDDLE. At the top, `k` moves nowhere and
@@ -6626,13 +11079,414 @@ mod tests {
             // and the `match` agree, not whether a clamp clamps.
             v.cursor = 1;
             let t = ronoctua_keymap::Key::parse(notation)
-                .unwrap_or_else(|_| panic!("`{notation}` nao e uma tecla valida"));
+                .unwrap_or_else(|_| panic!("`{notation}` is not a valid key"));
             let step = v.key(t);
             assert!(
                 !matches!(step, Step::Nothing),
-                "a tecla `{notation}` (`{label}`) nao faz nada"
+                "the key `{notation}` (`{label}`) does nothing"
             );
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ------------------------------------------------------------------
+    // THE FIVE THINGS THE OWNER MEASURED OFF ONE SCREENSHOT
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn a_rule_gives_half_its_own_cell_to_each_side() {
+        // `RULE` reserves a whole cell of grid for a line one pixel wide, and
+        // every site drew that line at the cell's LEFT edge — so the cell was
+        // air on the listing's side and nothing at all on the sidebar's.
+        // Measured off the owner's screen at 1280 px: 10,8 px before the line
+        // and 21,6 px after it, for one boundary.
+        let cell = 10.8_f32;
+        let (at, lead) = (13u16, 1u16);
+        let x = rule_x(at, lead, cell);
+        let left = f32::from(lead + at) * cell;
+        let right = f32::from(lead + at + 1) * cell;
+        assert!(
+            ((x - left) - (right - x)).abs() < 0.001,
+            "the line is not in the middle of its own cell: {x} in [{left}, {right}]"
+        );
+    }
+
+    #[test]
+    fn the_band_reaches_the_rule_beside_it() {
+        // THE DEFECT THE OWNER PHOTOGRAPHED, in his own words: *"the item's
+        // selection background does not touch the vertical separating line on
+        // the listing's left-hand side"*. The footer began the listing's band at
+        // `lead + split + 1` — one whole CELL past the rule — so a lit row had
+        // a strip of unlit background between it and the line beside it.
+        let cell = 10.8_f32;
+        let (lead, width, edge) = (1u16, 118u16, 1280.0_f32);
+        let panes = Panes {
+            sidebar: 13,
+            right: 50,
+            strip: 0,
+            preview: true,
+            info: true,
+        };
+        let line = rule_x(panes.sidebar, lead, cell);
+
+        // OVER THE SIDEBAR: the screen's own edge to the rule. The one arm of
+        // the four the owner called right, and it stays as it is.
+        let (at, wide) = band_of(panes, lead, width, Some(3), cell, edge);
+        assert!(
+            (at - 0.0).abs() < f32::EPSILON,
+            "the bar's track does not start at the edge"
+        );
+        assert!(
+            (at + wide - line).abs() < 0.001,
+            "the bar's track stops at {} and the rule is at {line}",
+            at + wide
+        );
+
+        // OVER THE LISTING: the same rule to the panels' first one. The two
+        // bands meet ON the line, which is what a rule painted afterwards
+        // covers.
+        let (at, wide) = band_of(panes, lead, width, Some(40), cell, edge);
+        assert!(
+            (at - line).abs() < 0.001,
+            "the listing's band starts at {at}, not at the rule {line}"
+        );
+        let panels = rule_x(width - panes.right, lead, cell);
+        assert!(
+            (at + wide - panels).abs() < 0.001,
+            "the listing's band runs under the panels: it stops at {}, their rule is at {panels}",
+            at + wide
+        );
+
+        // AND WITH NOTHING BESIDE IT, edge to edge — never `lead + width`,
+        // which is past the border by the door's own lead.
+        let (at, wide) = band_of(Panes::default(), lead, width, None, cell, edge);
+        assert!((at - 0.0).abs() < f32::EPSILON && (wide - edge).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_picture_never_touches_the_box_it_is_in() {
+        use ronoctua_render::image::Area;
+        // `fit_into` centres, and centring was never the whole promise:
+        // whichever dimension is the tight one comes out exactly as long as
+        // the box. Photographed in both doors — against the top edge in the
+        // window, against the right-hand rule in the footer.
+        let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR);
+        let space = Area {
+            x: 100.0,
+            y: 50.0,
+            width: 260.0,
+            height: 106.0,
+        };
+        let sides = |got: &Area| {
+            (
+                got.x - space.x,
+                (space.x + space.width) - (got.x + got.width),
+                got.y - space.y,
+                (space.y + space.height) - (got.y + got.height),
+            )
+        };
+
+        // A PHOTOGRAPH WIDER THAN ITS BOX: the width is the tight dimension,
+        // which is the footer's case.
+        let got = picture_in(space, 4000, 1000);
+        let (l, r, t, b) = sides(&got);
+        assert!(l >= air && r >= air, "no air on the sides: {l} and {r}");
+        assert!((l - r).abs() < 0.001, "the left {l} is not the right {r}");
+        assert!((t - b).abs() < 0.001, "the top {t} is not the bottom {b}");
+
+        // AND A TALL ONE, which is the window's case.
+        let got = picture_in(space, 1000, 4000);
+        let (l, r, t, b) = sides(&got);
+        assert!(t >= air && b >= air, "no air above and below: {t} and {b}");
+        assert!((l - r).abs() < 0.001 && (t - b).abs() < 0.001);
+
+        // AND A BOX SMALLER THAN THE AIR TWICE OVER gives back nothing, and
+        // never a negative picture.
+        let got = picture_in(
+            Area {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 4.0,
+            },
+            100,
+            100,
+        );
+        assert!(
+            got.width >= 0.0 && got.height >= 0.0,
+            "an image of negative width"
+        );
+    }
+
+    #[test]
+    fn the_icon_gets_the_one_cell_of_air_every_other_column_gets() {
+        // *"The icon spacing is far too wide in the listing."* Measured
+        // off the owner's screen: the icon's ink ended at x=183 and the name
+        // began at x=208 — 25 px, in a grid whose cell is 10,8. The column
+        // asked for two cells and `layout_beside` added the gap on top.
+        let l = layout_beside(120, 0, 0, true);
+        let (icon_at, icon_wide) = l.find(Column::Icon).expect("the icon");
+        let (name_at, _) = l.find(Column::Name).expect("the name");
+        assert_eq!(
+            icon_wide, 1,
+            "the icon asked for more than one cell of drawing"
+        );
+        assert_eq!(
+            name_at - icon_at,
+            2,
+            "the icon and the name are not one cell of air apart"
+        );
+        // AND IT IS THE SAME DISTANCE AS BETWEEN ANY OTHER PAIR, which is what
+        // "proportional" means here: one gap, one number, every column.
+        let (size_at, size_wide) = l.find(Column::Size).expect("the size");
+        let (when_at, _) = l.find(Column::Modified).expect("a data");
+        assert_eq!(when_at - (size_at + size_wide), 1);
+    }
+
+    #[test]
+    fn the_sidebar_pays_the_doors_lead_once() {
+        // The sidebar's glyph was at `chrome::FIELDS_LEAD + files.sidebarGutter`
+        // — two cells, 21 px — while its own name was one cell away on the
+        // other side. The gutter and the lead are the same job, and the row was
+        // paying for it twice.
+        let dir = scratch("sidebar-air");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let mut v = view_beside(&dir, 4);
+        v.reread();
+        let texts = bundle();
+        let split = v.split(120);
+        assert!(split > 0, "the sidebar did not appear");
+        let rows = v.drawn(120, &texts);
+        let side: Vec<u16> = rows
+            .first()
+            .expect("a row")
+            .fields
+            .iter()
+            .filter(|f| f.at < split)
+            .map(|f| f.at)
+            .collect();
+        assert_eq!(
+            side.first(),
+            Some(&0),
+            "the sidebar's glyph does not start in the line's first cell"
+        );
+        // AND ITS NAME IS TWO CELLS ON — the glyph and ONE cell of air, which
+        // is exactly what the listing's icon gets.
+        assert_eq!(
+            side.get(1),
+            Some(&2),
+            "the sidebar's name has no cell of air"
+        );
+    }
+
+    #[test]
+    fn tab_walks_the_sections_that_are_on_screen() {
+        // *"It has to be possible to move the focus between them with Tab and Shift+Tab."*
+        let dir = scratch("panes-tab");
+        for n in ["a.txt", "b.txt"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        // THE PANELS ON, which is how the manager opens: `view_beside` goes
+        // through `plainly` and turns them off.
+        let mut v = view_beside(&dir, 4);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let wide = 160u16;
+        assert_eq!(
+            v.panes_on(wide),
+            vec![Pane::Sidebar, Pane::Listing, Pane::Preview, Pane::Info],
+            "the four sections are not on screen"
+        );
+
+        // AND THE DRAWN EVIDENCE OF WHERE THE KEYBOARD IS: the sidebar's row
+        // carries `state.accent` only while the sidebar has it.
+        let texts = bundle();
+        let lit = |v: &mut View| {
+            let split = v.split(wide);
+            v.drawn(wide, &texts)
+                .first()
+                .expect("a row")
+                .fields
+                .iter()
+                .any(|f| f.at < split && f.color == ronoctua_tokens::color::STATE_ACCENT)
+        };
+        assert!(!lit(&mut v), "the sidebar was already lit");
+
+        // FORWARDS, and round. `panes(wide)` is what remembers the width a key
+        // arrives without.
+        let tab = of_view("TAB");
+        let _ = v.panes(wide);
+        assert!(matches!(v.key(tab), Step::Changed));
+        assert!(!lit(&mut v), "Tab in the listing should go to the preview");
+        assert!(matches!(v.key(tab), Step::Changed));
+        assert!(!lit(&mut v), "Tab in the preview should go to the facts");
+        assert!(matches!(v.key(tab), Step::Changed));
+        assert!(
+            lit(&mut v),
+            "Tab in the facts should go back to the sidebar"
+        );
+        assert!(matches!(v.key(tab), Step::Changed));
+        assert!(
+            !lit(&mut v),
+            "Tab in the sidebar should go back to the listing"
+        );
+
+        // AND BACKWARDS, which is the whole of `S-TAB`: one press from the
+        // listing lands in the sidebar.
+        let back = of_view("S-TAB");
+        assert!(matches!(v.key(back), Step::Changed));
+        assert!(
+            lit(&mut v),
+            "Shift+Tab in the listing should go to the sidebar"
+        );
+
+        // AND A SECTION THAT IS NOT DRAWN IS NOT A STOP. With no sidebar and
+        // both panels off there is one place to be, and `Tab` stays there
+        // rather than putting the cursor where nobody can see it.
+        let mut alone = view_at(&dir);
+        alone.reread();
+        assert_eq!(alone.panes_on(wide), vec![Pane::Listing]);
+        assert!(matches!(alone.key(tab), Step::Changed));
+        assert_eq!(alone.pane(), Pane::Listing);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_sections_bar_sits_in_its_own_column() {
+        // The owner photographed the facts' bar reading as if it sat BELOW the
+        // listing's rather than inside its own section, and the cause was that
+        // the listing's was in the SURFACE's last cell — which, with the panels
+        // on the right, is inside the info panel.
+        let dir = scratch("panes-bars");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 30);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let wide = 160u16;
+        let panes = v.panes(wide);
+        assert!(
+            panes.sidebar > 0 && panes.right > 0,
+            "the test screen does not have the four sections"
+        );
+
+        // EVERY SECTION'S BAR IS INSIDE ITS OWN COLUMN, and no two share one.
+        //
+        // The owner photographed the consequence of them not being: the facts'
+        // thumb off the side of the screen, and two of them that could not be
+        // grabbed at all because the drawing and the pointer test disagreed.
+        let (cell, line_px) = (10.0f32, 26.0f32);
+        let edge = f32::from(wide) * cell;
+        let b = bundle();
+        let sections = v.sections(&[], 8, wide, &b);
+        let mut boxes: Vec<(Pane, f32, f32)> = Vec::new();
+        for sec in &sections {
+            let Some((x, w)) = section_px(panes, sec.pane, 1, wide, cell, edge) else {
+                continue;
+            };
+            let Some((bx, _, bw, bh)) = sec.bar_box(x + w, 0.0, line_px * 12.0, cell, line_px)
+            else {
+                continue;
+            };
+            assert!(
+                bx >= x && bx + bw <= x + w + 0.5,
+                "{:?}: the bar ({bx}..{}) left its column ({x}..{})",
+                sec.pane,
+                bx + bw,
+                x + w
+            );
+            assert!(
+                bx + bw <= edge,
+                "{:?}: the bar went past the edge",
+                sec.pane
+            );
+            assert!(bh >= line_px - 0.5, "{:?}: the thumb vanished", sec.pane);
+            boxes.push((sec.pane, bx, bx + bw));
+        }
+        assert!(boxes.len() >= 2, "expected bars in more than one section");
+        for (i, (pane, from, to)) in boxes.iter().enumerate() {
+            for (other, ofrom, oto) in boxes.iter().skip(i + 1) {
+                assert!(
+                    to <= ofrom || from >= oto,
+                    "{pane:?} and {other:?} draw the bar in the same column"
+                );
+            }
+        }
+
+        // AND A SECTION WITH NOTHING TO SCROLL SHOWS NO BAR, which is what a
+        // bar means everywhere else in this shell.
+        let roomy = v.sections(&[], 200, wide, &b);
+        for sec in &roomy {
+            let Some((x, w)) = section_px(panes, sec.pane, 1, wide, cell, edge) else {
+                continue;
+            };
+            assert_eq!(
+                sec.bar_box(x + w, 0.0, line_px * 12.0, cell, line_px),
+                None,
+                "{:?}: a bar over a whole list",
+                sec.pane
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bar_over_a_big_directory_stays_inside_the_region() {
+        // The facts are a dozen rows and this arithmetic fitted in sixteen
+        // bits by accident. A LISTING is however many files are in the folder,
+        // and `offset * room` passes 65 535 at six thousand entries — a panic
+        // in the frame, in a debug build, on a directory nobody would think to
+        // test with.
+        let line_px = 26.0f32;
+        for (total, offset) in [(200_000usize, 199_000usize), (6_000, 5_500), (13, 1)] {
+            let sec = Section {
+                pane: Pane::Listing,
+                from: 0,
+                to: 40,
+                top: 0,
+                lines: 12,
+                offset,
+                total,
+                above: 0,
+                content: Vec::new(),
+            };
+            let (_, y, _, tall) = sec
+                .bar_box(400.0, 0.0, line_px * 12.0, 10.0, line_px)
+                .expect("the list was cut");
+            assert!(tall >= line_px - 0.5, "the thumb vanished");
+            assert!(
+                y + tall <= 12.0 * line_px + 0.5,
+                "the thumb went past the end of the region: {y} + {tall}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_hint_line_names_both_keys_that_walk_the_sections() {
+        // `TAB` and `S-TAB` are in no registry and in no manual, so this line
+        // is the only thing on screen that says they exist — the lesson `C-o`
+        // already cost this file. And BOTH of them: somebody told only about
+        // the way forward has to guess that there is a way back.
+        let t = bundle();
+        let next = key_that_runs("files-pane-next").expect("the key that goes forward");
+        let back = key_that_runs("files-pane-previous").expect("the key that goes back");
+        for sidebar in [false, true] {
+            let line = hint_of(&t, sidebar);
+            assert!(
+                line.contains(&back.notation()),
+                "the hint does not say {}: {line}",
+                back.notation()
+            );
+            // `TAB` is a substring of `S-TAB`, so counting is what proves the
+            // forward key is named as well as the backward one.
+            assert!(
+                line.matches(&next.notation()).count() >= 2,
+                "the hint does not say {}: {line}",
+                next.notation()
+            );
+        }
     }
 }

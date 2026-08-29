@@ -40,15 +40,15 @@ writeShellApplication {
     # is a whole shell line ("compile and restart"), and passing it as `argv` would
     # force every caller to get the quoting right. The mistake would show up as a
     # command cut in half, months later.
-    : "''${RONOCTUA_RELOAD_CMD:?defina o command a rodar a cada mudanca}"
+    : "''${RONOCTUA_RELOAD_CMD:?set the command to run on every change}"
 
     if [ $# -eq 0 ]; then
-      echo "ERRO: nenhum diretorio para observar." >&2
+      echo "ERROR: no directory to watch." >&2
       exit 2
     fi
 
     for d in "$@"; do
-      [ -d "$d" ] || { echo "ERRO: '$d' nao e diretorio." >&2; exit 2; }
+      [ -d "$d" ] || { echo "ERROR: '$d' is not a directory." >&2; exit 2; }
     done
 
     # `close_write` and not `modify`: editors write in pieces, and `modify`
@@ -100,7 +100,7 @@ writeShellApplication {
       done &
     watcher_proc=$!
 
-    # `pkill -P $$` and not just `kill "$observador"`: the `$!` of a pipeline is its
+    # `pkill -P $$` and not just `kill "$watcher"`: the `$!` of a pipeline is its
     # LAST command — the reading loop. `inotifywait` is its sibling, not its
     # child, and would survive waiting for an event nobody reads any more.
     shutdown() {
@@ -113,7 +113,7 @@ writeShellApplication {
   '';
 
   meta = {
-    description = "Observa .rs/.wit e roda um comando a cada mudanca";
+    description = "Watches .rs/.wit and runs a command on every change";
     platforms = lib.platforms.linux;
   };
 }

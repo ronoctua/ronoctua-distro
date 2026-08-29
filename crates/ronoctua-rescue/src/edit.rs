@@ -192,7 +192,7 @@ pub fn edit_it(path: &Path, texts: &Texts) {
                 ]),
                 split[1],
             );
-            #[expect(clippy::cast_possible_truncation, reason = "cabe numa tela")]
+            #[expect(clippy::cast_possible_truncation, reason = "it fits on one screen")]
             f.set_cursor_position((
                 split[0].x + sheet.column as u16,
                 split[0].y + (sheet.line - top) as u16,

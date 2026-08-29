@@ -109,7 +109,7 @@ pub fn run() -> Result<()> {
             .draw(|f| draw(f, &view, &texts, &state_lines))
             .context("desenhar")?;
 
-        if !event::poll(Duration::from_millis(200)).context("esperar tecla")? {
+        if !event::poll(Duration::from_millis(200)).context("wait for a key")? {
             continue;
         }
         let Some(k) = read_key()? else { continue };
@@ -480,7 +480,7 @@ fn active(unit: &str, user: bool) -> String {
 fn human(bytes: u64) -> String {
     #[expect(
         clippy::cast_precision_loss,
-        reason = "uma casa decimal numa tela de resgate"
+        reason = "one decimal place on a rescue screen"
     )]
     let n = bytes as f64;
     if n >= 1_073_741_824.0 {
@@ -520,13 +520,13 @@ fn hand_over(guard: &mut Guard, h: &Hand, texts: &Texts) -> Result<()> {
         Hand::Edit(path) => crate::edit::edit_it(path, texts),
     }
 
-    enable_raw_mode().context("raw mode de volta")?;
+    enable_raw_mode().context("raw mode back")?;
     let _ = crossterm::execute!(
         guard.0.backend_mut(),
         EnterAlternateScreen,
         EnableMouseCapture
     );
-    guard.0.clear().context("limpar")?;
+    guard.0.clear().context("clear")?;
     Ok(())
 }
 
@@ -570,7 +570,7 @@ fn show_file(path: &Path, texts: &Texts) {
             if let Some(origin) = origin {
                 println!(
                     "{}",
-                    texts.t_with(key::RESCUE_GENERATED_BY, &[("origem", origin)])
+                    texts.t_with(key::RESCUE_GENERATED_BY, &[("source", origin)])
                 );
             }
             print!("{text}");

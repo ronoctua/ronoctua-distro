@@ -41,6 +41,69 @@ pub fn pressure(p: &Places) -> ronoctua_protocol::Pressure {
         .unwrap_or_default()
 }
 
+/// Stall waiting for a PROCESSOR, from `/proc/pressure/cpu`.
+///
+/// # Why it is here and not in whoever wants it
+///
+/// Because this crate is the only border with `/proc` — the same rule that
+/// makes `ronoctua-niri` the only one that speaks to the compositor. The first
+/// caller is `ronoctua-brain`, which refuses to start an update while the
+/// machine is busy, and a scheduler that opened `/proc` for one file would be
+/// the second border this crate exists to prevent.
+///
+/// The file has the same grammar as the memory one — [`crate::parse_pressure`]
+/// reads both — and only its `some` line means anything: `full` on a processor
+/// is a line the kernel prints as zeros because everybody stalled at once is
+/// not a state a runnable machine reaches.
+///
+/// `None`, and not zeros, when the file is not there. Zero stall is a real
+/// reading on an idle machine, so it cannot also mean "this kernel has no PSI"
+/// — the distinction the whole `readings` list is built around.
+#[must_use]
+pub fn cpu_pressure(p: &Places) -> Option<ronoctua_protocol::Pressure> {
+    read(&p.procfs.join("pressure/cpu"))
+        .as_deref()
+        .map(crate::parse_pressure)
+}
+
+/// Whether the machine is running off its battery right now.
+///
+/// `None` when there is no battery at all — a desktop, a virtual machine —,
+/// which is not the same answer as "plugged in": a caller that refuses to
+/// compile a system on battery has nothing to refuse on a machine that has
+/// none, and a `false` there would be a claim about hardware that was never
+/// read. [`vram`] is the precedent for an optional `/sys` reading, and the
+/// numbering is unstable in the same way — `BAT0` on one machine is `BAT1` on
+/// the next, so the supplies are walked instead of named.
+///
+/// What decides is the SUPPLY's own `status`, not `AC/online`: a laptop docked
+/// to a charger that is not charging still reports `Discharging`, and that is
+/// the state a long build must not start in.
+#[must_use]
+pub fn on_battery(p: &Places) -> Option<bool> {
+    let supplies = std::fs::read_dir(p.sysfs.join("class/power_supply")).ok()?;
+    let mut found = None;
+    for entry in supplies.flatten() {
+        let path = entry.path();
+        // Only a battery answers this question. A `Mains` supply has a
+        // `status` too — `Unknown` — and reading it as "not discharging" would
+        // say "plugged in" on a laptop whose battery is going flat.
+        if read(&path.join("type")).as_deref().map(str::trim) != Some("Battery") {
+            continue;
+        }
+        let Some(status) = read(&path.join("status")) else {
+            continue;
+        };
+        // ANY battery discharging is enough: a machine with two of them is on
+        // battery as soon as one is being drawn from.
+        if status.trim() == "Discharging" {
+            return Some(true);
+        }
+        found = Some(false);
+    }
+    found
+}
+
 /// Every number a tick can afford.
 ///
 /// A gauge the machine does not have simply does not enter the list — no zram,
@@ -297,6 +360,59 @@ mod tests {
     }
 
     #[test]
+    fn a_kernel_without_processor_pressure_says_nothing_instead_of_zero() {
+        // THE DEFECT THIS CATCHES: a scheduler reading "no stall" on a kernel
+        // that does not measure it, and starting a compile on a machine that
+        // is already on its knees. Zero is a real reading on an idle machine,
+        // so the absence has to be a different answer.
+        let (dir, places) = fake();
+        assert_eq!(cpu_pressure(&places), None, "it invented a reading");
+
+        std::fs::write(
+            dir.path().join("proc/pressure/cpu"),
+            "some avg10=12.34 avg60=2.00 avg300=0.00 total=999\n\
+             full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+        )
+        .expect("pressure/cpu");
+        let cpu = cpu_pressure(&places).expect("the file exists");
+        // Per mille, rounded from the two decimals the kernel prints.
+        assert_eq!(cpu.some10, 123);
+        assert_eq!(cpu.some60, 20);
+    }
+
+    #[test]
+    fn the_battery_answers_three_ways_and_a_charger_is_not_one_of_them() {
+        let (dir, places) = fake();
+        // No `power_supply` at all: a desktop or a VM. "There is no battery"
+        // and "it is plugged in" are different answers, and only one of them
+        // is true here.
+        assert_eq!(on_battery(&places), None);
+
+        let supplies = dir.path().join("sys/class/power_supply");
+        // A charger, and nothing else. It has a `status` — `Unknown` — and
+        // reading it would answer a question about a battery from a device
+        // that is not one.
+        let mains = supplies.join("ADP1");
+        std::fs::create_dir_all(&mains).expect("mkdir");
+        std::fs::write(mains.join("type"), "Mains\n").expect("type");
+        std::fs::write(mains.join("status"), "Unknown\n").expect("status");
+        assert_eq!(
+            on_battery(&places),
+            None,
+            "the charger answered for the battery"
+        );
+
+        let bat = supplies.join("BAT0");
+        std::fs::create_dir_all(&bat).expect("mkdir");
+        std::fs::write(bat.join("type"), "Battery\n").expect("type");
+        std::fs::write(bat.join("status"), "Charging\n").expect("status");
+        assert_eq!(on_battery(&places), Some(false));
+
+        std::fs::write(bat.join("status"), "Discharging\n").expect("status");
+        assert_eq!(on_battery(&places), Some(true));
+    }
+
+    #[test]
     fn the_cgroup_values_are_read_at_the_leaf() {
         let (_dir, places) = fake();
         let app = places.app_slice();
@@ -329,7 +445,7 @@ mod tempdir {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
             let p =
                 std::env::temp_dir().join(format!("ronoctua-memory-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).expect("criar o diretorio do teste");
+            std::fs::create_dir_all(&p).expect("create the test's directory");
             Self(p)
         }
 

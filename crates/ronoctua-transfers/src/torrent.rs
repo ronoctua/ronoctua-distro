@@ -88,7 +88,7 @@ fn swarm(shared: &Arc<Shared>) -> Option<&'static Sender<Order>> {
     SWARM
         .get_or_init(|| {
             if !ronoctua_torrent::available() {
-                tracing::error!("esta build nao tem o motor de torrent");
+                tracing::error!("this build does not have the torrent engine");
                 return None;
             }
             let dir = state_dir()?;
@@ -100,7 +100,7 @@ fn swarm(shared: &Arc<Shared>) -> Option<&'static Sender<Order>> {
             match built {
                 Ok(_) => Some(orders),
                 Err(e) => {
-                    tracing::error!(error = %e, "nao consegui subir a thread da sessao de torrent");
+                    tracing::error!(error = %e, "could not start the torrent session's thread");
                     None
                 }
             }
@@ -117,7 +117,7 @@ fn session(shared: &Arc<Shared>, dir: PathBuf, orders: &std::sync::mpsc::Receive
     let mut session = match ronoctua_torrent::Session::open(&dir, PORTS) {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "a sessao de torrent nao subiu");
+            tracing::error!(error = %e, "the torrent session did not come up");
             return;
         }
     };
@@ -238,14 +238,14 @@ fn keep(
 /// would be one thread per row for the life of the seed.
 pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     let Work::Torrent { source, into } = work else {
-        tracing::error!("o motor de torrent recebeu trabalho que nao e torrent");
+        tracing::error!("the torrent engine got a job that is not a torrent");
         shared.touch(id, |j| j.stage = Stage::Failed);
         return;
     };
     let Some(orders) = swarm(shared) else {
         shared.touch(id, |j| {
             j.stage = Stage::Failed;
-            j.trouble = Some("o motor de torrent nao esta disponivel".to_owned());
+            j.trouble = Some("the torrent engine is not available".to_owned());
         });
         return;
     };
@@ -258,7 +258,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     if sent.is_err() {
         shared.touch(id, |j| {
             j.stage = Stage::Failed;
-            j.trouble = Some("a sessao de torrent nao esta mais no ar".to_owned());
+            j.trouble = Some("the torrent session is no longer up".to_owned());
         });
     }
 }
@@ -285,8 +285,8 @@ mod tests {
         assert!(takes(
             "magnet:?xt=urn:btmh:1220caf1e1f4a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6"
         ));
-        assert!(takes("/casa/alguem/debian.torrent"));
-        assert!(!takes("https://exemplo/arquivo.iso"));
+        assert!(takes("/home/someone/debian.torrent"));
+        assert!(!takes("https://example/file.iso"));
         assert!(!takes("https://exemplo/video"));
     }
 }

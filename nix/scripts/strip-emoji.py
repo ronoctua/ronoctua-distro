@@ -65,7 +65,7 @@ def presenca_de_emoji(emoji_data: pathlib.Path) -> set[int]:
         else:
             not_in.add(int(range_of, 16))
     if not not_in:
-        die(f"{emoji_data.name} nao declarou nenhum Emoji_Presentation")
+        die(f"{emoji_data.name} declared no Emoji_Presentation at all")
     return not_in
 
 
@@ -78,16 +78,16 @@ def main() -> int:
     args = p.parse_args()
 
     font_file = TTFont(args.primary)
-    da_emoji = set(TTFont(args.emoji, lazy=True).getBestCmap())
+    of_emoji = set(TTFont(args.emoji, lazy=True).getBestCmap())
     apresenta = presenca_de_emoji(args.emoji_data)
 
     prior = set(font_file.getBestCmap())
-    ceder = (prior & da_emoji) & apresenta
-    if not ceder:
+    give_way = (prior & of_emoji) & apresenta
+    if not give_way:
         die(
-            "nenhum codepoint a ceder — ou a Iosevka deixou de trazer emoji, ou\n"
-            "       a leitura do emoji-data.txt quebrou. Nos dois casos, seguir\n"
-            "       daqui gravaria uma face identica a entrada sem dizer nada."
+            "nenhum codepoint a give_way — ou a Iosevka deixou de trazer emoji, ou\n"
+            "       reading emoji-data.txt broke. In either case, carrying on\n"
+            "       from here would write a face identical to the input without saying so."
         )
 
     # IT LEAVES EVERY subtable, and not just `getBestCmap`: a font has
@@ -95,7 +95,7 @@ def main() -> int:
     # one of them would return the wrong glyph in any reader that preferred it.
     for table in font_file["cmap"].tables:
         for cp in list(table.cmap):
-            if cp in ceder:
+            if cp in give_way:
                 del table.cmap[cp]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -104,22 +104,22 @@ def main() -> int:
     # --- THE GUARDS, over what was WRITTEN -----------------------------------
     written = set(TTFont(args.out, lazy=True).getBestCmap())
 
-    leftover = (written & da_emoji) & apresenta
+    leftover = (written & of_emoji) & apresenta
     if leftover:
         die(
-            f"{len(leftover)} codepoints de presenca de emoji continuam na face "
-            f"primaria (o primeiro e U+{min(leftover):04X}).\n"
-            "       Eles seriam desenhados em monocromatico, e a tela nao teria "
+            f"{len(leftover)} emoji-presentation codepoints are still in the face "
+            f"primary (the first is U+{min(leftover):04X}).\n"
+            "       They would be drawn monochrome, and the screen would not have "
             "como denunciar."
         )
 
     # WHAT MUST NOT HAVE LEFT: TEXT presentation. Losing `#` or the digits
     # from the primary face would break ordinary text, and the symptom would show up far away.
-    perdidos = (prior - written) - apresenta
-    if perdidos:
+    lost = (prior - written) - apresenta
+    if lost:
         die(
-            f"{len(perdidos)} codepoints de presenca de TEXTO sairam da face "
-            f"primaria: {sorted(f'U+{c:04X}' for c in perdidos)[:8]}"
+            f"{len(lost)} codepoints with TEXT presentation left the face "
+            f"primaria: {sorted(f'U+{c:04X}' for c in lost)[:8]}"
         )
 
     # And the canonical ones, by name, because an empty set also passes the test
@@ -129,8 +129,8 @@ def main() -> int:
             die(f"a face primaria perdeu `{name}` (U+{cp:04X})")
 
     print(
-        f"OK: {len(ceder)} codepoints cedidos a face de emoji; "
-        f"{len(prior & da_emoji) - len(ceder)} de presenca de texto ficaram"
+        f"OK: {len(give_way)} codepoints cedidos a face de emoji; "
+        f"{len(prior & of_emoji) - len(give_way)} with text presentation stayed"
     )
     return 0
 

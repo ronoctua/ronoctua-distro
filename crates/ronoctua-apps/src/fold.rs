@@ -71,13 +71,13 @@ mod tests {
             "Cálculo",
             "Configurações",
             "Ámbar Ñandú Çedilha",
-            "sem acento nenhum",
+            "no accent at all",
             "ÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝ",
         ] {
             assert_eq!(
                 fold(s).chars().count(),
                 s.chars().count(),
-                "a dobra mudou o comprimento de {s:?}"
+                "the fold changed the length of {s:?}"
             );
         }
     }

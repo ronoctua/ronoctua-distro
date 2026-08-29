@@ -103,7 +103,7 @@ stdenv.mkDerivation {
   '';
 
   meta = {
-    description = "A fronteira C em frente ao libtorrent-rasterbar";
+    description = "The C boundary in front of libtorrent-rasterbar";
     platforms = lib.platforms.linux;
   };
 }

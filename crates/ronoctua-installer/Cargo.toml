@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-installer"
-description = "As seis perguntas e o plano de instalacao (secao 7.1)."
+description = "The six questions and the installation plan (section 7.1)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

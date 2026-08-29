@@ -91,7 +91,7 @@ let
           ''
             runHook preBuild
             mkdir -p $out
-            echo "### fixture negativo: o gerador DEVE falhar ###"
+            echo "### negative fixture: the generator MUST fail ###"
 
             # NO pipe: in `cmd | tee` the exit code is `tee`'s, which
             # is always 0 — the test would report success with the generator failing
@@ -104,10 +104,10 @@ let
             cat $out/out_text.txt
 
             if [ "$rc" -eq 0 ]; then
-              echo "ERRO: o gerador ACEITOU um UCD de outra versao." >&2
+              echo "ERROR: the generator ACCEPTED a UCD of another version." >&2
               exit 1
             fi
-            echo "OK: o gerador recusou, como devia (codigo $rc)"
+            echo "OK: the generator refused, as it should (code $rc)"
             runHook postBuild
           ''
         else
@@ -121,7 +121,7 @@ let
       dontInstall = true;
 
       meta = {
-        description = "Base do navegador de simbolos Unicode";
+        description = "Unicode symbol browser database";
         platforms = lib.platforms.all;
       };
     };
@@ -129,11 +129,11 @@ in
 # THE MESSAGE BEFORE THE BUILD. Without it, a version bump in nixpkgs would fail
 # deep inside the generator, in a log nobody reads until they go looking.
 assert lib.assertMsg (fromPackage == upstreamVersion) ''
-  o unicode-character-database do nixpkgs esta em ${fromPackage}, e o
+  nixpkgs' unicode-character-database is at ${fromPackage}, and the
   nix/unicodegen.nix declara ${upstreamVersion}.
 
-  Subir a versao muda quais caracteres existem e como eles se chamam. Atualize
-  a constante de proposito e confira a cobertura de traducao depois.
+  Raising the version changes which characters exist and what they are called. Update
+  the constant deliberately and check the translation coverage afterwards.
 '';
 {
   inherit upstreamVersion;
@@ -146,7 +146,7 @@ assert lib.assertMsg (fromPackage == upstreamVersion) ''
   # promise — and the glyph one has already shown that an unverified promise is the same
   # thing as an absent guard.
   versionMismatchFails = mkGen {
-    name = "ronoctua-unicodedb-fixture-negativo";
+    name = "ronoctua-unicodedb-negative-fixture";
     declaredVersion = "1.0.0";
     expectFailure = true;
   };

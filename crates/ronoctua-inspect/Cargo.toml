@@ -1,0 +1,52 @@
+[package]
+name = "ronoctua-inspect"
+description = "The boundary with a file's CONTENT: pixels for the preview, facts for the panel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHY A CRATE OF ITS OWN, AND NOT A MODULE OF `ronoctua-files`
+#
+# `ronoctua-files` builds `[[bin]] ronoctua-files-root`, and `nix/rust.nix`
+# extracts that binary on purpose so what runs AS ROOT does not carry the
+# desktop — `files-vm` asserts the closure. Putting image decoders and an SVG
+# rasteriser in that crate would put them inside a root binary, which is the
+# trap `CLAUDE.md` records as "a derivation references what its BYTES cite".
+#
+# So the split is the same one `ronoctua-clipboard` and `ronoctua-notify`
+# already have: one border, one crate. `ronoctua-files` is the border with the
+# filesystem — names, sizes, modes, acts. This is the border with what is
+# INSIDE a file.
+[dependencies]
+# THE MIME TABLE, and only that. It is 125 KB of generated data with an alias
+# map and a subclass DAG, and there is exactly one of it: a second alias table
+# here would be the "two implementations" this whole arrangement exists to
+# prevent, and the day they disagreed nothing on screen would say which is
+# right.
+#
+# The edge is ONE WAY — `ronoctua-files` does not depend on this crate — so
+# `ronoctua-files-root` gains nothing from this line, which is the whole reason
+# the two crates are separate.
+ronoctua-files = { path = "../ronoctua-files" }
+tracing.workspace = true
+# ffprobe, exiftool and pdfinfo all answer in JSON. The parsers here take a
+# `&str` and give back facts, so a fixture in a test is worth more than an
+# installed program — which is what lets these tests run with none of the
+# tools present.
+serde_json.workspace = true
+# `poll` on the child's stdout, so ONE loop watches both the pipe and the
+# clock. The alternative is a second thread pumping the pipe, and this crate
+# promises to spawn none: the shell owns concurrency. `rustix` and not `libc`
+# for the reason the workspace already gives — the API is safe.
+rustix = { workspace = true, features = [ "event" ] }
+# THE DECODERS, in process. `resvg` for SVG (`default-features = false` at the
+# workspace, so no text engine and no second font machinery) and `image` for
+# every raster — see the workspace's `image` line for what the feature list
+# buys and what it costs.
+image.workspace = true
+resvg.workspace = true
+
+[lints]
+workspace = true

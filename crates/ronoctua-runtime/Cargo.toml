@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-runtime"
-description = "wasmtime, ciclo de vida de buffer e o orcamento de 5 ms (secoes 5.2 e 7.9)."
+description = "wasmtime, a buffer's life cycle and the 5 ms budget (sections 5.2 and 7.9)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -108,11 +108,11 @@ pub fn read_message<T: serde::de::DeserializeOwned>(from: &mut impl Read) -> Res
     }
     let len = u32::from_le_bytes(header);
     if len > CEILING {
-        bail!("mensagem de {len} bytes; o teto e {CEILING}");
+        bail!("a message of {len} bytes; the ceiling is {CEILING}");
     }
     let mut body = vec![0_u8; len as usize];
     from.read_exact(&mut body)
-        .context("a mensagem terminou antes do tamanho anunciado")?;
+        .context("the message ended before the announced size")?;
     Ok(Some(serde_json::from_slice(&body)?))
 }
 
@@ -123,7 +123,7 @@ pub fn read_message<T: serde::de::DeserializeOwned>(from: &mut impl Read) -> Res
 /// When the pipe is gone, or the value does not serialise.
 pub fn write_message<T: Serialize>(to: &mut impl Write, value: &T) -> Result<()> {
     let body = serde_json::to_vec(value)?;
-    let len = u32::try_from(body.len()).context("mensagem grande demais para o enquadramento")?;
+    let len = u32::try_from(body.len()).context("a message too large for the framing")?;
     to.write_all(&len.to_le_bytes())?;
     to.write_all(&body)?;
     to.flush()?;
@@ -192,8 +192,8 @@ pub fn serve_stdio() -> Result<()> {
                 // never what is on the disk: a browser that learned a path from
                 // an error message learned something the person did not send.
                 Err(e) => {
-                    tracing::error!(error = %e, "a fila recusou o pedido do navegador");
-                    Answer::no("a fila de transferencias nao esta no ar")
+                    tracing::error!(error = %e, "the queue refused the browser's request");
+                    Answer::no("the transfer queue is not up")
                 }
             },
         };
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn the_framing_round_trips_and_stops_at_the_end() {
         let mut pipe = Vec::new();
-        write_message(&mut pipe, &Request::Ping).expect("escrever");
+        write_message(&mut pipe, &Request::Ping).expect("write");
         write_message(
             &mut pipe,
             &Request::Media {
@@ -218,7 +218,7 @@ mod tests {
                 identity: Identity::Anonymous,
             },
         )
-        .expect("escrever");
+        .expect("write");
 
         let mut reading = pipe.as_slice();
         assert_eq!(
@@ -268,7 +268,7 @@ mod tests {
             let attempt = format!("{{\"kind\":\"{forbidden}\",\"id\":1}}");
             assert!(
                 serde_json::from_str::<Request>(&attempt).is_err(),
-                "`{forbidden}` nao pode existir na porta do navegador"
+                "`{forbidden}` cannot exist at the browser's door"
             );
         }
     }

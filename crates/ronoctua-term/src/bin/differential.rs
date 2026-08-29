@@ -48,7 +48,9 @@ fn engines() -> Vec<Box<dyn Engine>> {
     #[cfg(ghostty_vt)]
     match ronoctua_term::ghostty::Ghostty::fresh(COLUMNS, ROWS) {
         Ok(engine) => out.push(Box::new(engine)),
-        Err(e) => eprintln!("AVISO: motor ghostty indisponivel ({e}); comparando com o golden"),
+        Err(e) => eprintln!(
+            "WARNING: the ghostty engine is unavailable ({e}); comparing against the golden"
+        ),
     }
     out
 }
@@ -59,7 +61,7 @@ fn main() -> Result<()> {
         .context("uso: diferencial <corpus> <golden> [--gravar]")?;
     let golden = std::env::args()
         .nth(2)
-        .context("falta o diretorio do golden")?;
+        .context("the golden's directory is missing")?;
     let write_out = std::env::args().any(|a| a == "--gravar");
 
     let corpus = Path::new(&corpus);
@@ -69,7 +71,7 @@ fn main() -> Result<()> {
     }
 
     let mut cases: Vec<_> = std::fs::read_dir(corpus)
-        .with_context(|| format!("nao consegui ler {}", corpus.display()))?
+        .with_context(|| format!("could not read {}", corpus.display()))?
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "vt"))
@@ -77,28 +79,28 @@ fn main() -> Result<()> {
     // A stable order: the failure report has to be the same between runs.
     cases.sort();
     if cases.is_empty() {
-        bail!("nenhum caso `.vt` em {}", corpus.display());
+        bail!("no `.vt` case in {}", corpus.display());
     }
 
     let n_motores = engines().len();
-    println!("{} casos, {n_motores} motor(es)", cases.len());
+    println!("{} cases, {n_motores} engine(s)", cases.len());
     if n_motores < 2 {
         println!(
-            "MODO GOLDEN-FILE: so ha um motor, entao isto pega regressao, nao\n\
+            "GOLDEN-FILE MODE: there is only one engine, so this catches a regression, not\n\
              divergencia de interpretacao. Ver o risco R1 no ARCHITECTURE.md."
         );
     }
 
     let mut failures = Vec::new();
-    for caso in &cases {
-        let name = caso
+    for case in &cases {
+        let name = case
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let bytes = std::fs::read(caso)?;
+        let bytes = std::fs::read(case)?;
 
-        let grades: Vec<(String, _)> = engines()
+        let grids: Vec<(String, _)> = engines()
             .into_iter()
             .map(|mut m| {
                 let name = m.name().to_owned();
@@ -108,12 +110,12 @@ fn main() -> Result<()> {
             .collect();
 
         // Strong mode: everyone against the first.
-        let (nome_ref, grade_ref) = &grades[0];
-        for (otherwise, g) in &grades[1..] {
-            let d = grade_ref.diff(g);
+        let (name_ref, grid_ref) = &grids[0];
+        for (otherwise, g) in &grids[1..] {
+            let d = grid_ref.diff(g);
             if !d.is_empty() {
                 failures.push(format!(
-                    "{name}: {nome_ref} x {otherwise} divergem:\n  {}",
+                    "{name}: {name_ref} x {otherwise} divergem:\n  {}",
                     d.join("\n  ")
                 ));
             }
@@ -121,24 +123,24 @@ fn main() -> Result<()> {
 
         // Golden mode.
         let file = golden.join(format!("{name}.txt"));
-        let current = grade_ref.canonical_f();
+        let current = grid_ref.canonical_f();
         if write_out {
             std::fs::write(&file, &current)?;
             continue;
         }
         let expected = std::fs::read_to_string(&file).with_context(|| {
             format!(
-                "falta o golden {}.\n\
+                "the golden {} is missing.\n\
                  \n\
                  Gere com: diferencial <corpus> <golden> --gravar\n\
-                 e CONFIRA o resultado antes de versionar — um golden errado\n\
+             and CHECK the result before versioning it — a wrong golden\n\
                  congela o bug em vez de pegar.",
                 file.display()
             )
         })?;
         if current != expected {
             failures.push(format!(
-                "{name}: a grade mudou.\n--- gravado ---\n{expected}\n--- agora ---\n{current}"
+                "{name}: the grid changed.\n--- recorded ---\n{expected}\n--- now ---\n{current}"
             ));
         }
     }
@@ -153,11 +155,11 @@ fn main() -> Result<()> {
     }
     if !failures.is_empty() {
         bail!(
-            "{} caso(s) com diferenca:\n\n{}",
+            "{} case(s) with a difference:\n\n{}",
             failures.len(),
             failures.join("\n\n")
         );
     }
-    println!("OK: diff de grade ZERO em {} casos", cases.len());
+    println!("OK: ZERO grid diff in {} cases", cases.len());
     Ok(())
 }

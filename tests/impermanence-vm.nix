@@ -11,7 +11,7 @@
 #
 #   1. what was written in `/` IS GONE;
 #   2. what was written in `/persist` STAYED;
-#   3. the old `@root` is still mountable at `/@antigos`.
+#   3. the old `@root` is still mountable at `/@old`.
 #
 # The third is the one that separates "it wiped" from "it kept". Without it, a
 # wipe that destroys with no recovery window would pass — and the difference
@@ -41,7 +41,7 @@ pkgs.testers.runNixOSTest {
       ronoctua.persist = {
         enable = true;
         wipeRoot = true;
-        # No LUKS in this VM: that is why `dispositivo` is an option.
+        # No LUKS in this VM: that is why `device` is an option.
         blockDevice = "/dev/vdb";
         keepDays = 30;
         directories = [ "/var/lib/teste" ];
@@ -53,7 +53,7 @@ pkgs.testers.runNixOSTest {
       # of exercising the real script without rebuilding the whole boot — and what
       # we want to test is the script, not NixOS's initrd.
       systemd.services.ronoctua-wipe-simulated = {
-        description = "Roda o wipe fora do initrd, contra /dev/vdb";
+        description = "Runs the wipe outside the initrd, against /dev/vdb";
         serviceConfig.Type = "oneshot";
         serviceConfig.RemainAfterExit = true;
         # Before anything that writes to the test disk.
@@ -102,32 +102,32 @@ pkgs.testers.runNixOSTest {
         machine.fail("test -e /mnt/some-no-wipe")
         machine.succeed("umount /mnt")
 
-    with subtest("o que estava em /persist FICOU"):
+    with subtest("what was in /persist STAYED"):
         machine.succeed("mount -o subvol=@persist /dev/vdb /mnt")
         assert machine.succeed("cat /mnt/sobrevive").strip() == "guardado"
         machine.succeed("umount /mnt")
 
-    with subtest("o @root velho continua recuperavel"):
+    with subtest("the old @root is still recoverable"):
         # The difference between "it wiped" and "it kept". Without this window, a
         # path forgotten in `directories` loses state with no recourse.
         machine.succeed("mount /dev/vdb /mnt")
-        old_roots = machine.succeed("ls /mnt/@antigos").strip()
-        print(f"antigos: {old_roots!r}")
-        assert old_roots, "o wipe apagou o @root sem guardar copia"
+        old_roots = machine.succeed("ls /mnt/@old").strip()
+        print(f"old ones: {old_roots!r}")
+        assert old_roots, "the wipe deleted the @root without keeping a copy"
 
         target_path = machine.succeed(
-            "find /mnt/@antigos -maxdepth 2 -name some-no-wipe | head -1"
+            "find /mnt/@old -maxdepth 2 -name some-no-wipe | head -1"
         ).strip()
-        assert target_path, f"o arquivo perdido nao esta no @root guardado; antigos={old_roots!r}"
+        assert target_path, f"the lost file is not in the kept @root; old={old_roots!r}"
         assert machine.succeed(f"cat {target_path}").strip() == "efemero"
         machine.succeed("umount /mnt")
 
-    with subtest("rodar o wipe de novo nao perde o guardado anterior"):
+    with subtest("running the wipe again does not lose the previously kept one"):
         # Two boots in a row with a wipe: the name carries the epoch precisely so
         # that two on the same day do not collide.
         machine.succeed("systemctl restart ronoctua-wipe-simulated")
         machine.succeed("mount /dev/vdb /mnt")
-        n = int(machine.succeed("ls /mnt/@antigos | wc -l").strip())
+        n = int(machine.succeed("ls /mnt/@old | wc -l").strip())
         assert n == 2, f"esperava 2 @root guardados, ha {n}"
         machine.succeed("umount /mnt")
   '';

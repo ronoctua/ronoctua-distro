@@ -162,9 +162,9 @@ pub fn guess(text: &str) -> Option<Language> {
 /// It returns **only** what is not ordinary: the rest of the text is ordinary by omission,
 /// and emitting a range per common word would double the list without saying anything.
 #[must_use]
-pub fn ranges(text: &str, linguagem: Language) -> Vec<Range> {
+pub fn ranges(text: &str, language: Language) -> Vec<Range> {
     let bytes = text.as_bytes();
-    let comment = linguagem.comment().as_bytes();
+    let comment = language.comment().as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
 
@@ -232,7 +232,7 @@ pub fn ranges(text: &str, linguagem: Language) -> Vec<Range> {
             while j < bytes.len() && is_word_char(bytes[j]) {
                 j += 1;
             }
-            if linguagem.words().contains(&&text[i..j]) {
+            if language.words().contains(&&text[i..j]) {
                 out.push(Range {
                     start: i,
                     end: j,
@@ -276,11 +276,11 @@ mod tests {
     fn the_comment_beats_the_quotes() {
         // `# "this"` is a comment IN ITS ENTIRETY. Without this order, the highlighting would open
         // a string that never closes and would paint the rest of the block a single colour.
-        let t = "echo ok  # \"nao sou texto\"";
+        let t = "echo ok  # \"I am not text\"";
         let p = roles(t, Language::Shell);
         assert!(
             p.iter()
-                .any(|(s, pa)| *pa == Role::Comment && s.contains("nao sou texto")),
+                .any(|(s, pa)| *pa == Role::Comment && s.contains("I am not text")),
             "{p:?}"
         );
         assert!(!p.iter().any(|(_, pa)| *pa == Role::Text), "{p:?}");
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn a_number_inside_a_word_is_not_a_number() {
-        let p = roles("utf8 e um nome", Language::Rust);
+        let p = roles("utf8 is a name", Language::Rust);
         assert!(!p.iter().any(|(_, pa)| *pa == Role::Number), "{p:?}");
     }
 
@@ -332,14 +332,14 @@ mod tests {
         assert_eq!(guess("#!/bin/sh\nls"), Some(Language::Shell));
         assert_eq!(guess("pub fn x() {}"), Some(Language::Rust));
         assert_eq!(guess("with pkgs; [ hello ]"), Some(Language::Nix));
-        assert_eq!(guess("[secao]\nchave = 1"), Some(Language::Toml));
+        assert_eq!(guess("[section]\nkey = 1"), Some(Language::Toml));
     }
 
     #[test]
     fn prose_gets_no_highlight() {
         // COLOURING PROSE IS WORSE THAN NOT COLOURING: the reader starts looking for
         // meaning in a colour that means nothing.
-        assert_eq!(guess("Bom dia, tudo bem com voce?"), None);
+        assert_eq!(guess("Good morning, how are you doing?"), None);
         assert_eq!(guess("https://example.org/pagina"), None);
         assert_eq!(guess(""), None);
     }

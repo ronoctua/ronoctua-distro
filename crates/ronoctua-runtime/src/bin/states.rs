@@ -70,10 +70,10 @@ fn look(inst: &mut ronoctua_runtime::Instance, name: &str) -> Result<()> {
     for columns in [46, 80, COLUMNS] {
         let list = inst.render(columns, ROWS, heights())?;
         if let Err(e) = list.nothing_overlaps(heights(), columns) {
-            bail!("{name}: em {columns} colunas, {e}");
+            bail!("{name}: at {columns} columns, {e}");
         }
         if let Err(e) = list.nothing_is_covered(heights(), columns) {
-            bail!("{name}: em {columns} colunas, {e}");
+            bail!("{name}: at {columns} columns, {e}");
         }
         no_sentence_at_a_glyph_scale(&list, name)?;
     }
@@ -110,10 +110,10 @@ fn no_sentence_at_a_glyph_scale(list: &ronoctua_protocol::DisplayList, name: &st
         } = c
         {
             bail!(
-                "{name}: a chave `{k}` esta na linha {line} em escala \
-                 `{scale:?}`, que e o tamanho de um GLIFO.\n\
-                 Uma frase traduzida se le no tamanho do corpo; o que marca um \
-                 titulo e a cor, a regua e o espaco em branco, nunca o tamanho."
+                "{name}: the key `{k}` is on line {line} at scale \
+                 `{scale:?}`, which is a GLYPH's size.\n\
+                 A translated sentence is read at the body's size; what marks a \
+                 title is colour, the rule and white space, never size."
             );
         }
     }
@@ -121,7 +121,7 @@ fn no_sentence_at_a_glyph_scale(list: &ronoctua_protocol::DisplayList, name: &st
 }
 
 fn drive(path: &str) -> Result<()> {
-    let wasm = std::fs::read(path).with_context(|| format!("nao consegui ler {path}"))?;
+    let wasm = std::fs::read(path).with_context(|| format!("could not read {path}"))?;
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
     let component = rt.load(&cwasm)?;
@@ -132,10 +132,10 @@ fn drive(path: &str) -> Result<()> {
     // descriptor that would be refused on screen must be refused here too, or
     // this driver would go on to prove things about a buffer nobody can open.
     if let Err(e) = d.validate() {
-        bail!("{}: o descritor nao passa na guarda: {e}", d.name);
+        bail!("{}: the descriptor does not pass the guard: {e}", d.name);
     }
     let ids: Vec<String> = d.states.iter().map(|s| s.id.clone()).collect();
-    println!("{}: estados {ids:?}", d.name);
+    println!("{}: states {ids:?}", d.name);
 
     // The first `render` before anything else, because the host does it too —
     // and because a component that only computes its state lazily would other-
@@ -173,7 +173,10 @@ fn drive(path: &str) -> Result<()> {
         look(&mut inst, &d.name)?;
         match reported(&effects) {
             Some(said) if said == going => {}
-            Some(said) => bail!("{}: pedi `{going}` e o componente relatou `{said}`", d.name),
+            Some(said) => bail!(
+                "{}: I asked for `{going}` and the component reported `{said}`",
+                d.name
+            ),
             // SILENCE IS THE FAILURE, and this arm was written the other way
             // round first: it PRINTED that the state had refused and carried on,
             // reasoning that `sheet` with nothing under the cursor is a screen
@@ -189,8 +192,8 @@ fn drive(path: &str) -> Result<()> {
             // the answer is to give this driver the setup — not to let silence
             // count as success.
             None => bail!(
-                "{}: pedi `{going}` e o componente nao relatou nada.\n\
-                 Um estado declarado que nao se alcanca do base e um estado que \
+                "{}: I asked for `{going}` and the component reported nothing.\n\
+                 A declared state that is not reachable from the base is a state that \
                  o `SPC b s` oferece e ninguem entra.",
                 d.name
             ),
@@ -211,8 +214,8 @@ fn drive(path: &str) -> Result<()> {
         look(&mut inst, &d.name)?;
         if reported(&back).is_none() {
             bail!(
-                "{}: `Esc` em `{going}` nao voltou, ou voltou sem relatar.\n\
-                 O rodape le o relato: sem ele a modeline segue nomeando a tela \
+                "{}: `Esc` in `{going}` did not go back, or went back without reporting.\n\
+                 The footer reads the report: without it the modeline goes on naming the screen \
                  que ja saiu.",
                 d.name
             );
@@ -229,7 +232,7 @@ fn drive(path: &str) -> Result<()> {
     inst.event(&Input::EnterState(BASE_STATE.to_owned()))?;
     let effects = inst.event(&Input::EnterState("a-state-from-the-future".to_owned()))?;
     if let Some(said) = reported(&effects) {
-        bail!("{}: um id inexistente virou `{said}`", d.name);
+        bail!("{}: a nonexistent id became `{said}`", d.name);
     }
     Ok(())
 }
@@ -237,13 +240,13 @@ fn drive(path: &str) -> Result<()> {
 fn main() -> Result<()> {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
-        bail!("uso: ronoctua-test-states <componente.wasm> [<componente.wasm> …]");
+        bail!("usage: ronoctua-test-states <component.wasm> [<component.wasm> …]");
     }
     for p in &paths {
         drive(p)?;
     }
     println!(
-        "OK: {} buffers, o contrato de estado fecha nos dois sentidos",
+        "OK: {} buffers, the state contract closes in both directions",
         paths.len()
     );
     Ok(())

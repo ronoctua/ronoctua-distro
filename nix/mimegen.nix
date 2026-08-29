@@ -60,7 +60,7 @@ let
 
     installPhase = "true";
 
-    meta.description = "Tabela MIME gerada do shared-mime-info";
+    meta.description = "MIME table generated from shared-mime-info";
   };
 
   # THE NEGATIVE FIXTURE. A guard that has never refused anything has not been
@@ -95,22 +95,22 @@ let
           --glyphs ${broken} \
           --icons ${glyphdb.db}/icons.json \
           --out /dev/null \
-          --version ${version} > saida.txt 2>&1
+          --version ${version} > output.txt 2>&1
         rc=$?
         set -e
-        cat saida.txt
+        cat output.txt
         if [ "$rc" = 0 ]; then
-          echo "ERRO: o gerador ACEITOU uma tabela sem resposta para um icone" >&2
-          echo "      generico que o freedesktop usa. A guarda nao guarda nada." >&2
+          echo "ERROR: the generator ACCEPTED a table with no answer for a generic" >&2
+          echo "      icon that freedesktop uses. The guard guards nothing." >&2
           exit 1
         fi
         # And it failed for the RIGHT reason, not for a typo in this fixture.
-        grep -q "x-office-spreadsheet" saida.txt || {
-          echo "ERRO: falhou por outro motivo; a mensagem nao nomeia o icone" >&2
+        grep -q "x-office-spreadsheet" output.txt || {
+          echo "ERROR: it failed for another reason; the message does not name the icon" >&2
           exit 1
         }
         mkdir -p $out
-        echo "OK: recusou, e disse qual icone faltava" > $out/veredito
+        echo "OK: it refused, and said which icon was missing" > $out/verdict
         runHook postBuild
       '';
       installPhase = "true";

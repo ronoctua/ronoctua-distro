@@ -43,7 +43,7 @@ stdenvNoCC.mkDerivation {
   dontInstall = true;
 
   meta = {
-    description = "Catalogo de notificacoes e filtros, gerado de assets/notifications.nix";
+    description = "Notification catalogue and filters, generated from assets/notifications.nix";
     platforms = lib.platforms.all;
   };
 }

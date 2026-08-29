@@ -31,26 +31,26 @@ fn main() -> Result<()> {
     // the session bus the registration would return "name has no owner", which is the
     // same error as an absent service and would lead to the wrong diagnosis.
     let connection = zbus::blocking::connection::Builder::system()
-        .context("sem barramento de sistema")?
+        .context("no system bus")?
         // THE WELL-KNOWN NAME IS MANDATORY, and not decoration.
         //
         // NetworkManager would find the agent by the connection's unique name, but the
         // footer calls `org.ronoctua.Network1` by fixed address — without claiming
-        // the name, `Guardar` would fail with "name has no owner", which is the same
+        // the name, `Store` would fail with "name has no owner", which is the same
         // error as an absent daemon and would lead to the wrong diagnosis.
         .name(IDENTIFIER)
-        .context("reivindicar o nome no barramento")?
+        .context("claim the name on the bus")?
         .serve_at(AGENT_PATH, Agent)?
         .serve_at(RONOCTUA_PATH, Ronoctua)?
         .build()
-        .context("expor o agente no barramento")?;
+        .context("put the agent on the bus")?;
 
-    let manager = nm::AgentManagerProxyBlocking::new(&connection)
-        .context("NetworkManager fora do barramento")?;
+    let manager =
+        nm::AgentManagerProxyBlocking::new(&connection).context("NetworkManager is off the bus")?;
     manager
         .register(IDENTIFIER)
-        .context("registrar como agente de segredo")?;
-    tracing::info!(identificador = IDENTIFIER, "agente de rede registrado");
+        .context("register as the secret agent")?;
+    tracing::info!(identifier = IDENTIFIER, "network agent registered");
 
     // The connection has to LIVE: dropping it undoes the registration and NetworkManager
     // starts asking the password of nobody, with nothing here noticing. Same

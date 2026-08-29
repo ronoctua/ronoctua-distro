@@ -146,7 +146,7 @@
     git
     jq
 
-    # The executor's `hash_da_senha` calls it by name. Without this package the
+    # The executor's `password_hash` calls it by name. Without this package the
     # installer reaches the second-to-last step and stops — after the disk has
     # already been erased, which is the worst place to be missing a dependency.
     mkpasswd
@@ -175,8 +175,8 @@
 
     ronoctua-distro
 
-    Para instalar:      ronoctua-install --execute
-    Para so ver o que aconteceria:  ronoctua-install
+    To install:         ronoctua-install --execute
+    To preview only:    ronoctua-install
 
     To install:         ronoctua-install --execute
     To preview only:    ronoctua-install

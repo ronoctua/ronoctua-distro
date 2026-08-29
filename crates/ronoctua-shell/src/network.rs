@@ -232,7 +232,7 @@ impl ViewState {
         let g = self
             .manager
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("sem NetworkManager"))?;
+            .ok_or_else(|| anyhow::anyhow!("no NetworkManager"))?;
         g.connect(ssid, password, remember)?;
         self.reread();
         Ok(())
@@ -247,7 +247,7 @@ impl ViewState {
         let g = self
             .manager
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("sem NetworkManager"))?;
+            .ok_or_else(|| anyhow::anyhow!("no NetworkManager"))?;
         g.forget(ssid)?;
         self.reread();
         Ok(())
@@ -262,7 +262,7 @@ impl ViewState {
         let g = self
             .manager
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("sem NetworkManager"))?;
+            .ok_or_else(|| anyhow::anyhow!("no NetworkManager"))?;
         g.disconnect(medium)?;
         self.reread();
         Ok(())
@@ -383,9 +383,9 @@ mod tests {
     fn the_cursor_does_not_leave_the_list() {
         let mut v = view(vec![network("a", 50), network("b", 40)], vec![]);
         v.move_by(-1);
-        assert_eq!(v.cursor(), 0, "subiu acima da primeira");
+        assert_eq!(v.cursor(), 0, "it went above the first one");
         v.move_by(50);
-        assert_eq!(v.cursor(), 1, "passou da ultima");
+        assert_eq!(v.cursor(), 1, "it went past the last one");
     }
 
     #[test]
@@ -427,10 +427,17 @@ mod tests {
         // enters. Inverting the rule there makes it flag.
         let mut v = view(vec![], vec![]);
         v.apply_to(false, vec![], vec![network("casa", 90)]);
-        assert!(v.lines().is_empty(), "listou rede com o radio desligado");
+        assert!(
+            v.lines().is_empty(),
+            "it listed a network with the radio off"
+        );
 
         v.apply_to(true, vec![], vec![network("casa", 90)]);
-        assert_eq!(v.lines().len(), 1, "com o radio ligado a rede some");
+        assert_eq!(
+            v.lines().len(),
+            1,
+            "with the radio on the network goes away"
+        );
     }
 
     #[test]
@@ -447,6 +454,6 @@ mod tests {
         v.focus_on(2);
         assert_eq!(v.cursor(), 2);
         v.apply_to(true, vec![], vec![network("a", 90)]);
-        assert_eq!(v.cursor(), 0, "o cursor ficou fora da lista");
+        assert_eq!(v.cursor(), 0, "the cursor ended up outside the list");
     }
 }

@@ -71,8 +71,8 @@ pub fn token_color(name: &str) -> Option<tokens::Color> {
 ///
 /// Without it the first character touches the window's edge and looks like clipping.
 fn with_margin(mut t: ronoctua_render::Span) -> ronoctua_render::Span {
-    t.column = t.column.saturating_add(tokens::space::BUFFER_MARGINX);
-    t.line = t.line.saturating_add(tokens::space::BUFFER_MARGINY);
+    t.column = t.column.saturating_add(tokens::space::CONTENT_INSET);
+    t.line = t.line.saturating_add(tokens::space::CONTENT_INSETY);
     t
 }
 
@@ -132,7 +132,7 @@ fn spans_from(
             max_width,
         } => {
             let Some(color) = token_color(color.as_str()) else {
-                tracing::error!(token = color.as_str(), "cor invalida num buffer");
+                tracing::error!(token = color.as_str(), "an invalid colour in a buffer");
                 return Vec::new();
             };
             vec![ronoctua_render::Span {
@@ -161,21 +161,21 @@ fn spans_from(
                 column: *column,
                 line: *line,
                 color,
+                edge: false,
             }]
         }
-        // A rule and a selection are QUADS, not text. Until the renderer has the
-        // quad pipeline (the footer only needs glyphs), the rule comes out as
-        // a line of `─` — a glyph from the font, coherent with invariant 10.
-        Command::Rule { line, color } => token_color(color.as_str())
-            .map(|color| ronoctua_render::Span {
-                size: ronoctua_render::Size::Grid,
-                text: "─".repeat(80),
-                column: 0,
-                line: *line,
-                color,
-            })
-            .into_iter()
-            .collect(),
+        // THE RULE IS NOT TEXT, and it took a photograph of the screen to
+        // finish saying so. It went out through here as `"─".repeat(80)` at
+        // column 0 — a glyph, which `with_margin` then pushed two cells in.
+        // Three defects in one line, and the owner reported all three: a gap on
+        // the left, a spill past the right edge below eighty-two columns, and
+        // eighty cells of width that had nothing to do with the window.
+        //
+        // It goes out through the quad pipeline now — see [`quads_of`], which
+        // draws it EDGE TO EDGE. The comment that used to be here said the
+        // renderer had no quad pipeline; it has had one since the selection
+        // band needed it.
+        Command::Rule { .. } => Vec::new(),
         // THE GRID: one line of text per grid row, drawn with the
         // SAME font and the SAME tokens as everything else. That is why
         // it is a first-class node and not a `raw-surface` (section 7.10).
@@ -186,7 +186,7 @@ fn spans_from(
             color,
         } => {
             let Some(color) = token_color(color.as_str()) else {
-                tracing::error!(token = color.as_str(), "cor invalida numa grade");
+                tracing::error!(token = color.as_str(), "an invalid colour in a grid");
                 return Vec::new();
             };
             lines
@@ -200,6 +200,7 @@ fn spans_from(
                     // should truncate, never wrap around the u16.
                     line: line.saturating_add(u16::try_from(n).unwrap_or(u16::MAX)),
                     color,
+                    edge: false,
                 })
                 .collect()
         }
@@ -233,44 +234,88 @@ pub fn cell() -> (f32, f32) {
     )
 }
 
-/// The focused rows' bands, as quads, for a window `width_px` wide.
+/// Everything that is drawn EDGE TO EDGE, as quads, for a window `width_px` wide.
 ///
-/// A change of COLOUR, not a box and not an outline (invariant 15): that is why
-/// there is no width to fit and no radius — it paints the whole row, and that
-/// is all. The margin goes in here for the same reason it goes into
-/// [`with_margin`]: the component counts from zero and does not know where its
-/// window is.
+/// # Two rails, and only two
+///
+/// A display list leaves this module by one of two routes, and which one a
+/// command takes is the whole of the layout standard:
+///
+/// | rail | origin | what rides it |
+/// |---|---|---|
+/// | inset | [`spans_of`] → [`with_margin`] | every `Text`, every `Grid` |
+/// | full-bleed | here | `Rule`, `Selection` |
+///
+/// Text is inset because a glyph against the window's edge reads as clipping.
+/// A boundary is the opposite: one that stopped at the text's margin would have
+/// a beginning and an end, and a thing with a beginning and an end is a box —
+/// which invariant 15 forbids. So these two start at `x = 0` and run the whole
+/// width, and they never pass through [`with_margin`].
+///
+/// It used to be called `selections_of`, and the rule was not here: it went out
+/// as a line of `─` glyphs, eighty of them, starting at the margin. That is
+/// what the owner photographed — a gap on the left, and a spill past the right
+/// edge on any window narrower than eighty-two columns.
 #[must_use]
-pub fn selections_of(
+pub fn quads_of(
     list: &ronoctua_protocol::DisplayList,
     width_px: f32,
 ) -> Vec<ronoctua_render::quad::Quad> {
     use ronoctua_protocol::Command;
     let (_, line_height) = cell();
+    let top_of =
+        |line: u16| f32::from(line.saturating_add(tokens::space::CONTENT_INSETY)) * line_height;
     list.commands
         .iter()
-        .filter_map(|c| {
-            let Command::Selection { line, color } = c else {
-                return None;
-            };
-            let token = token_color(color.as_str()).or_else(|| {
-                tracing::error!(token = color.as_str(), "cor invalida numa selecao");
-                None
-            })?;
-            Some(ronoctua_render::quad::Quad {
-                x: 0.0,
-                y: f32::from(line.saturating_add(tokens::space::BUFFER_MARGINY)) * line_height,
-                width: width_px,
-                height: line_height,
-                color: token,
-            })
+        .filter_map(|c| match c {
+            // A CHANGE OF COLOUR, not a box and not an outline (invariant 15):
+            // that is why there is no width to fit and no radius — it paints
+            // the whole row, and that is all.
+            Command::Selection { line, color } => {
+                let token = token_color(color.as_str()).or_else(|| {
+                    tracing::error!(token = color.as_str(), "an invalid colour in a selection");
+                    None
+                })?;
+                Some(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: top_of(*line),
+                    width: width_px,
+                    height: line_height,
+                    color: token,
+                })
+            }
+            // THE RULE SITS AT THE BOTTOM EDGE OF THE ROW IT NAMES, which is
+            // what changes `Command::Rule { line }` from "a glyph in row N"
+            // into "the boundary at the END of row N" — which is what a rule
+            // has always meant on screen and never meant in the type.
+            //
+            // Drawn in the middle of its row it would be a line with text
+            // above and below it inside one cell; drawn at the edge it is the
+            // seam between two rows, and the air on either side of it is the
+            // rows' own line boxes rather than something anybody has to add.
+            Command::Rule { line, color } => {
+                let token = token_color(color.as_str()).or_else(|| {
+                    tracing::error!(token = color.as_str(), "an invalid colour in a rule");
+                    None
+                })?;
+                #[allow(clippy::cast_precision_loss)]
+                let thickness = f32::from(tokens::space::RULE_THICKNESS);
+                Some(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: top_of(*line) + line_height - thickness,
+                    width: width_px,
+                    height: thickness,
+                    color: token,
+                })
+            }
+            _ => None,
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{elide_to_budget, spans_of, token_color};
+    use super::{cell, elide_to_budget, quads_of, spans_of, token_color};
     use ronoctua_protocol::{Color, Command, DisplayList, Text};
 
     #[test]
@@ -323,12 +368,12 @@ mod tests {
             let width = u16::try_from(clipped.chars().count()).unwrap_or(u16::MAX);
             assert!(
                 width <= budget,
-                "com {columns} colunas o texto passou do orcamento: \
+                "at {columns} columns the text went past its budget: \
                  {width} > {budget}"
             );
             assert!(
                 2 + width <= columns,
-                "com {columns} colunas o texto vazou da borda"
+                "at {columns} columns the text leaked past the edge"
             );
         }
     }
@@ -361,7 +406,7 @@ mod tests {
         //
         // Today the guest cannot even produce an invalid name (over there it is an enum), and
         // if one arrives anyway, it does NOT become any colour.
-        assert_eq!(token_color("nao-existe"), None);
+        assert_eq!(token_color("does-not-exist"), None);
         assert_eq!(token_color(""), None);
     }
 
@@ -378,10 +423,92 @@ mod tests {
         ] {
             assert!(
                 token_color(name).is_some(),
-                "`{name}` nao resolve, mas e caso do enum WIT"
+                "`{name}` does not resolve, but it is a case of the WIT enum"
             );
         }
         // And the OLD form, with a dot, no longer resolves.
         assert_eq!(token_color("text.primary"), None);
+    }
+
+    #[test]
+    fn the_rule_reaches_both_edges_and_is_never_a_glyph() {
+        // THE DEFECT, and the owner photographed it: the rule went out as
+        // `"─".repeat(80)` at column 0, and `with_margin` then pushed it two
+        // cells in. So it began two cells from the left edge whatever the
+        // window measured, and it was eighty cells long — short of the right
+        // edge on a wide window, and spilling past it on anything narrower
+        // than eighty-two columns. The compositor does not clip.
+        //
+        // Two assertions, and the second is the one that would have caught it:
+        // a rule produces NO span at all, and the quad it produces starts at
+        // zero and is exactly as wide as the window.
+        let t = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
+        let (cell_w, line_h) = cell();
+        for columns in [10_u16, 46, 80, 110, 200] {
+            let mut d = DisplayList::fresh_one();
+            d.push(Command::Rule {
+                line: 3,
+                color: Color::name("rule-default"),
+            });
+            assert!(
+                spans_of(&d, &t, columns).is_empty(),
+                "at {columns} columns the rule became text — it is a quad"
+            );
+
+            let width_px = f32::from(columns) * cell_w;
+            let quads = quads_of(&d, width_px);
+            assert_eq!(quads.len(), 1, "one rule, one quad");
+            let q = &quads[0];
+            assert!(
+                (q.x - 0.0).abs() < f32::EPSILON,
+                "at {columns} columns the rule started at {}, and not at the edge",
+                q.x
+            );
+            assert!(
+                (q.width - width_px).abs() < f32::EPSILON,
+                "at {columns} columns the rule measures {} px in a window of {width_px}",
+                q.width
+            );
+            // AND IT SITS AT THE BOTTOM EDGE OF ITS ROW — which is what makes
+            // `Command::Rule { line }` mean "the boundary at the end of row N".
+            let bottom = f32::from(3_u16 + ronoctua_tokens::space::CONTENT_INSETY + 1) * line_h;
+            assert!(
+                (q.y + q.height - bottom).abs() < 0.01,
+                "the rule did not reach the end of line 3: {} against {bottom}",
+                q.y + q.height
+            );
+        }
+    }
+
+    #[test]
+    fn the_selection_and_the_rule_take_the_same_rail() {
+        // Three notions of "the whole width" used to live in this file: the
+        // selection painted the window, the rule painted eighty cells from the
+        // margin, and the text started at the margin. Two rails now, and the
+        // two full-bleed ones have to agree with each other or the argument is
+        // just a comment.
+        let (cell_w, _) = cell();
+        let mut d = DisplayList::fresh_one();
+        d.push(Command::Selection {
+            line: 0,
+            color: Color::name("surface-selection"),
+        });
+        d.push(Command::Rule {
+            line: 1,
+            color: Color::name("rule-default"),
+        });
+        let width_px = 80.0 * cell_w;
+        let quads = quads_of(&d, width_px);
+        assert_eq!(quads.len(), 2);
+        for q in &quads {
+            assert!(
+                (q.x - 0.0).abs() < f32::EPSILON,
+                "one of the two does not bleed"
+            );
+            assert!(
+                (q.width - width_px).abs() < f32::EPSILON,
+                "different widths"
+            );
+        }
     }
 }

@@ -64,8 +64,12 @@ mod tests {
         // structure already proves. What is asserted here is what an invalid QR
         // would not have: an odd side >= 21, module count = side^2, and the
         // three position patterns in the corners.
-        let m = super::generate("https://example.org").expect("texto curto tem de caber");
-        assert!(m.side >= 21 && m.side % 2 == 1, "lado invalido: {}", m.side);
+        let m = super::generate("https://example.org").expect("short text has to fit");
+        assert!(
+            m.side >= 21 && m.side % 2 == 1,
+            "an invalid side: {}",
+            m.side
+        );
         assert_eq!(m.modules.len(), m.side * m.side);
 
         // THE THREE EYES. Every QR has a 7x7 pattern in the top
@@ -78,9 +82,9 @@ mod tests {
                 && !m.dark(ox + 1, oy + 1)
                 && m.dark(ox + 3, oy + 3)
         };
-        assert!(eye(0, 0), "sem olho no canto superior esquerdo");
-        assert!(eye(m.side - 7, 0), "sem olho no canto superior direito");
-        assert!(eye(0, m.side - 7), "sem olho no canto inferior esquerdo");
+        assert!(eye(0, 0), "no eye in the top-left corner");
+        assert!(eye(m.side - 7, 0), "no eye in the top-right corner");
+        assert!(eye(0, m.side - 7), "no eye in the bottom-left corner");
     }
 
     #[test]

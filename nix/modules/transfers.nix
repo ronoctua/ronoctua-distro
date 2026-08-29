@@ -59,7 +59,7 @@ let
       [Desktop Entry]
       Type=Application
       Name=ronoctua
-      Comment=Adiciona a transferencia a fila da ronoctua
+      Comment=Adds the transfer to ronoctua's queue
       Exec=${ronoctua.transfers}/bin/ronoctua-transfers open %u
       Terminal=false
       NoDisplay=true
@@ -72,7 +72,7 @@ in
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "A fila de transferencias do LEADER t.";
+      description = "LEADER t's transfer queue.";
     };
 
     # WHERE THE PERSON'S SESSION COMES FROM, when a download asks to be them.
@@ -95,16 +95,16 @@ in
       default = if config.ronoctua.browser.enable then "browser" else "none";
       defaultText = lib.literalExpression ''if config.ronoctua.browser.enable then "browser" else "none"'';
       description = ''
-        De onde saem os cookies de um download identificado.
+        Where an identified download's cookies come from.
 
-        `browser` le a base do proprio navegador, o que so funciona porque
-        `nix/modules/browser.nix` forca `--password-store=basic` — e e
-        exatamente esse o chaveiro que o yt-dlp chama de `basictext`.
+        `browser` reads the browser's own database, which only works because
+        `nix/modules/browser.nix` forces `--password-store=basic` — and that is
+        exactly the keyring yt-dlp calls `basictext`.
 
-        `file` le um arquivo no formato Netscape, exportado uma vez. E a opcao
-        mais segura das duas: o YouTube gira os cookies que entrega, e um
-        download que usa os do navegador em uso pode invalida-los — o que
-        aparece como o navegador se deslogando sozinho.
+        `file` reads a file in Netscape format, exported once. It is the option
+        safer of the two: YouTube rotates the cookies it hands out, and a
+        a download using the ones from the browser in use can invalidate them — which
+        shows up as the browser logging itself out.
       '';
     };
 
@@ -112,9 +112,9 @@ in
       type = lib.types.str;
       default = "chrome+basictext";
       description = ''
-        A grafia `BROWSER[+KEYRING]` do yt-dlp. O `+basictext` nao e detalhe:
-        sem ele, decifrar a base do Chrome no Linux pede um chaveiro que esta
-        distro deliberadamente nao tem.
+        yt-dlp's `BROWSER[+KEYRING]` spelling. The `+basictext` is not a detail:
+        without it, decrypting Chrome's database on Linux asks for a keyring this
+        distro deliberately does not have.
       '';
     };
 
@@ -146,13 +146,13 @@ in
       ];
       default = "none";
       description = ''
-        Se esta instalacao gera PO token para o yt-dlp.
+        Whether this installation generates a PO token for yt-dlp.
 
-        `on-demand` roda o gerador por pedido e ele sai; nada fica de pe. Os
-        tokens ficam num cache sob `XDG_CACHE_HOME`, entao o custo de alguns
-        segundos e pago uma vez por alguams horas, e nao por download.
+        `on-demand` runs the generator on request and it exits; nothing stays standing. The
+        tokens live in a cache under `XDG_CACHE_HOME`, so the cost of a few
+        seconds is paid once every few hours, and not per download.
 
-        Custa Deno e o gerador no fecho — por isso o padrao e `none`.
+        It costs Deno and the generator in the closure — hence the default of `none`.
       '';
     };
 
@@ -160,9 +160,9 @@ in
       type = lib.types.str;
       default = "%h/.config/ronoctua/cookies.txt";
       description = ''
-        O arquivo Netscape, quando `cookies = "file"`. Os especificadores do
-        systemd valem aqui — `%h` e a casa da pessoa. O arquivo NASCE na
-        maquina; nada dele entra no repositorio (invariante 13).
+        The Netscape file, when `cookies = "file"`. systemd's specifiers
+        apply here — `%h` is the person's home. The file IS BORN on the
+        machine; none of it goes into the repository (invariant 13).
       '';
     };
   };
@@ -204,7 +204,7 @@ in
     };
 
     systemd.user.services.ronoctua-transfers = {
-      description = "ronoctua — a fila de transferências";
+      description = "ronoctua — the transfer queue";
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
@@ -213,8 +213,12 @@ in
       # `option_env!` with a store path is a REFERENCE, and this one would point
       # at a package that is deliberately absent from the reduced profile:
       # yt-dlp lives under `ronoctua.media.enable`, which is `mkDefault full`.
-      # Baked in, it would drag yt-dlp and ffmpeg into `minimal` through this
-      # binary — the trap `RONOCTUA_EMACSCLIENT` fell into, with the same fix.
+      # Baked in, it would drag yt-dlp into `minimal` through this binary — the
+      # trap `RONOCTUA_EMACSCLIENT` fell into, with the same fix.
+      #
+      # It used to say "yt-dlp and ffmpeg". `ffmpeg-full` is unconditional now
+      # (see `nix/modules/media.nix`), so it is no longer part of what this
+      # would drag in — but yt-dlp still is, and the argument stands on it.
       environment =
         lib.optionalAttrs config.ronoctua.media.enable {
           RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";

@@ -126,10 +126,18 @@ pkgs.mkShell {
     # lives in `.git/hooks`, which git never clones. Whoever clones this
     # repository gets the hook the first time they run `nix develop`, and not
     # from a README instruction nobody reads.
-    if [ -d .git ] && [ ! -L .git/hooks/pre-commit ]; then
+    #
+    # THE TEST IS WHETHER IT RESOLVES, and not whether the link exists. It used
+    # to be `! -L`, and a symlink whose store path the garbage collector took
+    # is still a symlink: the condition stayed false for ever and the hook
+    # stayed dead. Git does not say so either — it reports that it cannot run
+    # the hook, which reads like a permission problem and is not one. `-e`
+    # follows the link, so a dangling one is relinked at the next `nix
+    # develop`, which is also what happens when this derivation changes.
+    if [ -d .git ] && [ ! -e .git/hooks/pre-commit ]; then
       mkdir -p .git/hooks
       ln -sf ${gitHooks}/hooks/pre-commit .git/hooks/pre-commit
-      echo "  hook de pre-commit instalado (fmt + clippy)"
+      echo "  pre-commit hook installed (fmt + clippy)"
       echo
     fi
 
@@ -143,14 +151,14 @@ pkgs.mkShell {
         crates/ronoctua-protocol/wit/deps/tokens/tokens.wit
     fi
 
-    echo "  nix run .#quick    dez escolhidos (~1 min) — subconjunto, nao categoria"
-    echo "  nix run .#most     os que nao constroem instalacao — antes de commitar"
-    echo "  nix run .#gate     tudo, pela RAM da maquina — so ele fecha o invariante 7"
-    echo "  nix run .#dev      niri aninhado + rodape (leader = Ctrl+Alt+Space)"
-    echo "  nix run .#vm       sistema completo em VM"
-    echo "  nix run .#bench    mede o trabalho de CPU do frame"
-    echo "  nix run .#install  instala (ensaia sem --execute)"
-    echo "  nix build .#iso    gera o ISO"
+    echo "  nix run .#quick    ten chosen ones (~1 min) — a subset, not a category"
+    echo "  nix run .#most     the ones that do not build an installation — before committing"
+    echo "  nix run .#gate     everything, by the machine's RAM — only it closes invariant 7"
+    echo "  nix run .#dev      nested niri + footer (leader = Ctrl+Alt+Space)"
+    echo "  nix run .#vm       the whole system in a VM"
+    echo "  nix run .#bench    measures the frame's CPU work"
+    echo "  nix run .#install  installs (rehearses without --execute)"
+    echo "  nix build .#iso    builds the ISO"
     echo
   '';
 }

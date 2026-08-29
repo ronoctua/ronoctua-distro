@@ -23,18 +23,18 @@ in
     type = lib.types.bool;
     default = true;
     description = ''
-      Instala o superpacote de icones fundido.
+      Installs the merged icon superpack.
 
-      CUSTO MEDIDO: ~989 MB. Sao 335.002 entradas e 26.799 name_list distintos,
-      fundidos de Zafiro, Adwaita, MoreWaita, Papirus e breeze. O Papirus
-      sozinho responde por 87% das entradas — e e justamente a width dele
-      que serve ao fallback por `IconName`.
+      MEASURED COST: ~989 MB. It is 335,002 entries and 26,799 distinct name_lists,
+      merged from Zafiro, Adwaita, MoreWaita, Papirus and breeze. Papirus
+      alone accounts for 87% of the entries — and it is precisely its width
+      that serves the `IconName` fallback.
 
-      Nao ha gordura obvia a cortar: a distribuicao por tamanho e plana
-      (limitar a <= 64 px economizaria 23 MB de 918). Ver docs/ARCHITECTURE.md.
+      There is no obvious fat to cut: the distribution by size is flat
+      (capping at <= 64 px would save 23 MB out of 918). See docs/ARCHITECTURE.md.
 
-      Desligar isto faz o passo 2 da cadeia da 4.2 cair direto no glyph
-      generico (passo 3) para todo app que nao esteja na tabela.
+      Switching this off makes step 2 of section 4.2's chain fall straight through to the
+      generic glyph (step 3) for every app not in the table.
     '';
   };
 

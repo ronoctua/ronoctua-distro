@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-memory"
-description = "A unica fronteira com /proc, os cgroups e a politica de memoria do systemd."
+description = "The one boundary with /proc, the cgroups and systemd's memory policy."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

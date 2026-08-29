@@ -84,18 +84,18 @@ def takes_argument(niri: str, name: str) -> bool:
 
 def main() -> None:
     if len(sys.argv) != 3:
-        sys.exit("uso: gen-niri-actions.py <caminho-do-niri> <saida.rs>")
+        sys.exit("usage: gen-niri-actions.py <path-to-niri> <out.rs>")
     niri, out_path = sys.argv[1], sys.argv[2]
 
     table = actions(niri)
     if len(table) < FLOOR:
         sys.exit(
-            f"ERRO: so {len(table)} acoes extraidas do niri, esperava ao menos "
+            f"ERROR: only {len(table)} actions extracted from niri, expected at least "
             f"{FLOOR}.\n"
-            "      O formato do `--help` provavelmente mudou. Uma tabela curta "
+            "      The shape of `--help` has probably changed. A short table "
             "aqui\n"
-            "      nao quebra nada visivelmente: as acoes so somem da lista de "
-            "comandos."
+            "      breaks nothing visibly: the actions simply go away from the "
+            "      command list."
         )
 
     lines = [
@@ -141,7 +141,7 @@ def main() -> None:
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    print(f"{len(table)} acoes do niri -> {out_path}")
+    print(f"{len(table)} niri actions -> {out_path}")
 
 
 if __name__ == "__main__":

@@ -310,19 +310,17 @@ pub enum Invalid {
 impl std::fmt::Display for Invalid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::Blank => "nao pode ficar vazio",
+            Self::Blank => "it cannot be left empty",
             Self::HostnameMalformed => {
-                "so letras minusculas, digitos e hifen; nao pode comecar nem terminar com hifen"
+                "lowercase letters, digits and hyphens only; it may not start or end with a hyphen"
             }
-            Self::HostnameWithoutPrefix => "o nome da maquina comeca com `noctua-`",
-            Self::PassphraseTooShort => {
-                "a frase-secreta do disco precisa de ao menos 12 caracteres"
-            }
-            Self::InvalidDisk => "esse caminho nao e um disco",
-            Self::UnknownProfile => "a instalacao e `full` ou `minimal`",
-            Self::UnknownLanguage => "idioma nao disponivel",
-            Self::UnknownLayout => "layout de teclado nao existe no xkeyboard-config",
-            Self::WifiPasswordTooShort => "a senha de uma rede WPA tem ao menos 8 caracteres",
+            Self::HostnameWithoutPrefix => "the machine's name starts with `noctua-`",
+            Self::PassphraseTooShort => "the disk's passphrase needs at least 12 characters",
+            Self::InvalidDisk => "that path is not a disk",
+            Self::UnknownProfile => "the installation is `full` or `minimal`",
+            Self::UnknownLanguage => "the language is not available",
+            Self::UnknownLayout => "the keyboard layout does not exist in xkeyboard-config",
+            Self::WifiPasswordTooShort => "a WPA network password is at least 8 characters",
         };
         f.write_str(s)
     }
@@ -339,7 +337,7 @@ pub const MINIMUM_PASSPHRASE: usize = 12;
 ///
 /// Eight is the standard's minimum, not a choice of ours: a shorter password is not
 /// even attempted by the radio.
-pub const MINIMO_SENHA_WIFI: usize = 8;
+pub const WIFI_PASSWORD_MIN: usize = 8;
 
 /// The hostname's mandatory prefix (section 7.1).
 pub const HOSTNAME_PREFIX: &str = "noctua-";
@@ -697,7 +695,7 @@ pub fn validate_it(
             // Eight is the WPA standard's MINIMUM — a shorter password is not even
             // attempted by the radio, and the failure would show up as "wrong
             // password" instead of "short password".
-            if answer.chars().count() < MINIMO_SENHA_WIFI {
+            if answer.chars().count() < WIFI_PASSWORD_MIN {
                 return Err(Invalid::WifiPasswordTooShort);
             }
         }
@@ -815,7 +813,7 @@ mod tests {
         let mut views: Vec<_> = Question::ALL_KEYS.to_vec();
         views.sort();
         views.dedup();
-        assert_eq!(views.len(), 14, "ha pergunta repetida na lista");
+        assert_eq!(views.len(), 14, "there is a repeated question in the list");
     }
 
     #[test]
@@ -825,7 +823,7 @@ mod tests {
         // something, because empty would be an error.
         let mut r = Answers::default();
         assert!(Question::WifiPassword.skipped_one(&r));
-        r.wifi_ssid = "alguma-rede".into();
+        r.wifi_ssid = "some-network".into();
         assert!(!Question::WifiPassword.skipped_one(&r));
         // The others are never skipped for any answer.
         for q in Question::ALL_KEYS {
@@ -890,7 +888,7 @@ mod tests {
             assert_eq!(
                 q.default_answer().is_some(),
                 guessable,
-                "{q:?} discorda sobre ter resposta padrao"
+                "{q:?} disagrees about having a default answer"
             );
         }
         assert_eq!(Question::ComposeKey.default_answer(), Some(DEFAULT_COMPOSE));
@@ -907,7 +905,7 @@ mod tests {
     #[test]
     fn the_hostname_requires_the_prefix() {
         assert_eq!(
-            validate_it(Question::Hostname, "maquina", LANGUAGES, LAYOUTS),
+            validate_it(Question::Hostname, "machine", LANGUAGES, LAYOUTS),
             Err(Invalid::HostnameWithoutPrefix)
         );
         assert!(validate_it(Question::Hostname, "noctua-portatil", LANGUAGES, LAYOUTS).is_ok());
@@ -936,10 +934,13 @@ mod tests {
         assert_eq!(doze_acentuados.chars().count(), 11);
         assert!(validate_it(Question::Passphrase, doze_acentuados, LANGUAGES, LAYOUTS).is_err());
 
-        let treze = "ãçãoçãoçãoçã";
-        assert_eq!(treze.chars().count(), 12);
-        assert!(treze.len() > 12, "o teste so vale se houver acento");
-        assert!(validate_it(Question::Passphrase, treze, LANGUAGES, LAYOUTS).is_ok());
+        let thirteen = "ãçãoçãoçãoçã";
+        assert_eq!(thirteen.chars().count(), 12);
+        assert!(
+            thirteen.len() > 12,
+            "the test only counts if there is an accent"
+        );
+        assert!(validate_it(Question::Passphrase, thirteen, LANGUAGES, LAYOUTS).is_ok());
     }
 
     #[test]

@@ -190,7 +190,7 @@ pub fn make_torrent(
     #[cfg(torrent)]
     {
         let (Some(content), Some(out)) = (ffi::c_path(content), ffi::c_path(out_file)) else {
-            bail!("o caminho tem um NUL");
+            bail!("the path has a NUL in it");
         };
         let flavour = match flavour {
             Flavour::Hybrid => 0,
@@ -200,12 +200,12 @@ pub fn make_torrent(
         if ffi::make_torrent(&content, &out, flavour) {
             return Ok(());
         }
-        bail!("o libtorrent recusou criar o torrent")
+        bail!("libtorrent refused to create the torrent")
     }
     #[cfg(not(torrent))]
     {
         let _ = (content, out_file, flavour);
-        bail!("esta build nao tem o shim do libtorrent")
+        bail!("this build does not have libtorrent's shim")
     }
 }
 
@@ -219,11 +219,11 @@ impl Session {
         #[cfg(torrent)]
         {
             let Some(dir) = ffi::c_path(state_dir) else {
-                bail!("o caminho do estado tem um NUL");
+                bail!("the state's path has a NUL in it");
             };
             let Some(raw) = ffi::Raw::open(&dir, ports.0, ports.1) else {
                 bail!(
-                    "o libtorrent recusou subir a sessao nas portas {}-{}",
+                    "libtorrent refused to bring the session up on ports {}-{}",
                     ports.0,
                     ports.1
                 );
@@ -239,7 +239,7 @@ impl Session {
         #[cfg(not(torrent))]
         {
             let _ = (state_dir, ports);
-            bail!("esta build nao tem o shim do libtorrent")
+            bail!("this build does not have libtorrent's shim")
         }
     }
 
@@ -252,7 +252,7 @@ impl Session {
         #[cfg(torrent)]
         {
             let (Ok(uri), Some(into)) = (std::ffi::CString::new(uri), ffi::c_path(into)) else {
-                bail!("o endereco ou o destino tem um NUL");
+                bail!("the address or the destination has a NUL in it");
             };
             self.raw
                 .add_magnet(&uri, &into)
@@ -261,7 +261,7 @@ impl Session {
         #[cfg(not(torrent))]
         {
             let _ = (uri, into);
-            bail!("esta build nao tem o shim do libtorrent")
+            bail!("this build does not have libtorrent's shim")
         }
     }
 
@@ -274,16 +274,16 @@ impl Session {
         #[cfg(torrent)]
         {
             let (Some(path), Some(into)) = (ffi::c_path(path), ffi::c_path(into)) else {
-                bail!("o caminho ou o destino tem um NUL");
+                bail!("the path or the destination has a NUL in it");
             };
             self.raw
                 .add_file(&path, &into)
-                .ok_or_else(|| anyhow::anyhow!("o libtorrent recusou o arquivo"))
+                .ok_or_else(|| anyhow::anyhow!("libtorrent refused the file"))
         }
         #[cfg(not(torrent))]
         {
             let _ = (path, into);
-            bail!("esta build nao tem o shim do libtorrent")
+            bail!("this build does not have libtorrent's shim")
         }
     }
 
@@ -384,7 +384,7 @@ mod tests {
         // A queue that ACCEPTED a torrent job with no engine behind it would
         // show a row that never moves, which is the one failure a queue must
         // never produce. Without the shim, `open` says so at the door.
-        let out = Session::open(std::path::Path::new("/nao/existe"), (6881, 6889));
+        let out = Session::open(std::path::Path::new("/does/not/exist"), (6881, 6889));
         assert_eq!(out.is_err(), !available());
     }
 }

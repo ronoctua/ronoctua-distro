@@ -59,7 +59,7 @@ let
     else if dirs ? ${key} then
       dirs.${key}
     else
-      throw "ronoctua: nix/files-sidebar.nix cita \"${key}\", que nao existe em nix/user-dirs.nix";
+      throw "ronoctua: nix/files-sidebar.nix cites \"${key}\", which does not exist in nix/user-dirs.nix";
   # COLON-SEPARATED, the habit `XDG_DATA_DIRS` already set. None of these is a
   # path, so none of them can contain a colon: they are names relative to home.
   sidebar = lib.concatStringsSep ":" (map nameOf chosen);
@@ -69,7 +69,7 @@ in
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "O gerenciador de arquivos do LEADER . e da janela.";
+      description = "The file manager of LEADER . and of the window.";
     };
 
     start = lib.mkOption {
@@ -77,12 +77,12 @@ in
       # ONE PLACE, and the nested loop reads the same file — see it for why.
       default = import ../files-start.nix;
       description = ''
-        Em que pasta o gerenciador abre, RELATIVA a home — um nome, nunca um
-        caminho. Se ela nao existir na maquina, ele abre na home; nao e erro.
+        Which folder the manager opens in, RELATIVE to home — a name, never a
+        path. If it does not exist on the machine, it opens in home; that is not an error.
 
-        Uma opcao e nao um literal no Rust porque a pasta em que alguem guarda o
-        que faz e preferencia DA MAQUINA (invariante 13), e porque escrever um
-        caminho absoluto aqui seria pessoal.
+        An option and not a literal in the Rust because the folder somebody keeps their
+        things in is a preference OF THE MACHINE (invariant 13), and because writing
+        an absolute path here would be personal.
       '';
     };
 
@@ -92,13 +92,13 @@ in
       # `nix/user-dirs.nix`. The nested loop reads the same two files.
       default = lib.splitString ":" sidebar;
       description = ''
-        Com que pastas a barra lateral do gerenciador nasce, RELATIVAS a home —
-        nomes, nunca caminhos, pelo mesmo motivo de `start`.
+        Which folders the manager's sidebar is born with, RELATIVE to home —
+        names, never paths, for the same reason as `start`.
 
-        Quem ajusta a barra depois nao mexe aqui: o que a pessoa acrescenta,
+        Whoever adjusts the sidebar afterwards does not touch this: what the person adds,
         oculta ou remove vive em `$XDG_CONFIG_HOME/ronoctua/files-sidebar.json`
-        e vence esta lista. Uma pasta daqui que nao exista na maquina nao vira
-        linha, e isso nao e erro.
+        and beats this list. A folder from here that does not exist on the machine does not become
+        line, and that is not an error.
       '';
     };
   };
@@ -123,7 +123,7 @@ in
     # shipping the shell here would put wgpu, the wasm runtime and the renderer
     # in a unit that runs as root.
     systemd.services.ronoctua-files-root = {
-      description = "Aplica uma mudanca de dono, grupo ou permissao pedida pelo gerenciador";
+      description = "Applies a change of owner, group or permission asked for by the manager";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${ronoctua.filesRoot}/bin/ronoctua-files-root ${staging}";

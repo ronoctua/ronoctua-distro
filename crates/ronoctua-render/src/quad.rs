@@ -181,12 +181,12 @@ impl Quads {
             })
             .collect();
 
-        let preciso = instances.len() as u64;
-        if preciso > self.capability_of {
+        let precise = instances.len() as u64;
+        if precise > self.capability_of {
             // It grows and never shrinks: the footer alternates between few and many
             // rectangles on every expansion, and reallocating both ways would trade
             // memory for one allocation per key.
-            self.capability_of = preciso.next_power_of_two();
+            self.capability_of = precise.next_power_of_two();
             self.buffer = Self::make_buffer(device, self.capability_of);
         }
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&instances));
@@ -233,7 +233,7 @@ mod tests {
         let pos = [q.x / w * 2.0 - 1.0, 1.0 - q.y / h * 2.0];
         let sz = [q.width / w * 2.0, -(q.height / h * 2.0)];
         assert_eq!(pos, [-1.0, 1.0], "o canto superior esquerdo e (-1, 1)");
-        assert_eq!(sz, [2.0, -2.0], "a tela inteira mede 2 x -2 em NDC");
+        assert_eq!(sz, [2.0, -2.0], "the whole screen measures 2 x -2 in NDC");
     }
 
     #[test]

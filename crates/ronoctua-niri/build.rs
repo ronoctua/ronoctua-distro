@@ -12,14 +12,14 @@ fn main() {
 
     let generated = env::var("RONOCTUA_NIRI_ACTIONS").unwrap_or_else(|_| {
         panic!(
-            "RONOCTUA_NIRI_ACTIONS nao esta definida.\n\
+            "RONOCTUA_NIRI_ACTIONS is not set.\n\
              \n\
-             A tabela de acoes e extraida do niri PINADO pelo Nix. Entre no\n\
-             ambiente com `nix develop` (ou `direnv allow`), que define a\n\
-             variavel, ou construa pelo flake com `nix build`.\n\
+             The action table is extracted from the PINNED niri by Nix. Enter\n\
+             the environment with `nix develop` (or `direnv allow`), which sets the\n\
+             variable, or build through the flake with `nix build`.\n\
              \n\
-             Extrai-la aqui exigiria rodar o compositor no `cargo build`, e\n\
-             o cargo nao sabe qual niri e o pinado."
+             Extracting it here would need the compositor to run in `cargo build`, and\n\
+             cargo does not know which niri is the pinned one."
         )
     });
 
@@ -39,6 +39,6 @@ fn main() {
         let _ = fs::remove_file(&destination);
         let kdl_of = origin.join(file);
         fs::copy(&kdl_of, &destination)
-            .unwrap_or_else(|e| panic!("nao consegui copiar {kdl_of:?} -> {destination:?}: {e}"));
+            .unwrap_or_else(|e| panic!("could not copy {kdl_of:?} -> {destination:?}: {e}"));
     }
 }

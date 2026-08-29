@@ -373,7 +373,7 @@ mod tests {
             .map(|i| ronoctua_notify::Action {
                 id: format!("a{i}"),
                 key: Some(char::from(b'a' + i as u8)),
-                label: ronoctua_notify::Label::Text(format!("acao {i}")),
+                label: ronoctua_notify::Label::Text(format!("action {i}")),
                 doing: ronoctua_notify::Doing::Invoke,
             })
             .collect();
@@ -411,7 +411,7 @@ mod tests {
                 for p in &line.pieces {
                     assert!(
                         p.at + layout::width(&p.text) <= columns,
-                        "'{}' vaza com {columns} colunas",
+                        "'{}' leaks at {columns} columns",
                         p.text
                     );
                 }
@@ -441,7 +441,7 @@ mod tests {
         // At the edge: the first thing on the right, and nothing to its right
         // but the margin.
         let edge = 80 - tokens::space::MODELINE_EDGERIGHT;
-        assert_eq!(control.at, edge - 1, "o controle nao esta na borda");
+        assert_eq!(control.at, edge - 1, "the control is not at the edge");
         // And the left margin is the notification's own mark, not a control.
         let first = out[0].pieces.first().unwrap();
         assert_eq!(first.at, tokens::space::MODELINE_EDGELEFT);
@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(last.pieces.len(), 3);
         for (i, p) in last.pieces.iter().enumerate() {
             assert_eq!(p.hit, Some(Hit::Action(i)));
-            assert!(p.text.starts_with('['), "{:?} sem a letra", p.text);
+            assert!(p.text.starts_with('['), "{:?} has no letter", p.text);
         }
     }
 

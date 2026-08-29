@@ -45,7 +45,7 @@ disko.lib.testLib.makeDiskoTest {
   # disko). Here the "installer" is the test VM, so it writes the file.
   extraInstallerConfig = {
     systemd.tmpfiles.rules = [
-      "f /tmp/disko-luks.key 0600 root root - senha-de-teste"
+      "f /tmp/disko-luks.key 0600 root root - test-password"
     ];
   };
 
@@ -76,11 +76,11 @@ disko.lib.testLib.makeDiskoTest {
   # the log. Using the display name fails at type check, not at runtime.
   bootCommands = ''
     machine.wait_for_console_text("Please enter passphrase")
-    machine.send_console("senha-de-teste\n")
+    machine.send_console("test-password\n")
   '';
 
   extraTestScript = ''
-    with subtest("ESP de 1 GiB, nao 512 MiB (secao 7.2)"):
+    with subtest("an ESP of 1 GiB, not 512 MiB (section 7.2)"):
         # NixOS keeps kernel+initrd of SEVERAL generations on the ESP. With 512 MiB
         # it fills up after a few updates, and the symptom is a nixos-rebuild that
         # fails without explaining.
@@ -90,19 +90,19 @@ disko.lib.testLib.makeDiskoTest {
         assert 1_000_000_000 <= size_kib <= 1_200_000_000, \
             f"ESP tem {size_kib} bytes, esperava ~1 GiB"
 
-    with subtest("os 7 subvolumes btrfs da secao 7.2"):
+    with subtest("section 7.2's 7 btrfs subvolumes"):
         subs = machine.succeed("btrfs subvolume list /")
         print(subs)
         for sv in ["@root", "@home", "@nix", "@persist", "@log", "@snapshots", "@swap"]:
             assert sv in subs, f"subvolume {sv} ausente"
 
-    with subtest("zstd e noatime onde a 7.2 manda"):
+    with subtest("zstd and noatime where 7.2 says"):
         for mp in ["/", "/nix"]:
             opts = machine.succeed(f"findmnt -n -o OPTIONS {mp}")
             assert "compress=zstd" in opts, f"{mp} sem compress=zstd: {opts}"
             assert "noatime" in opts, f"{mp} sem noatime: {opts}"
 
-    with subtest("/persist existe desde o dia um (impermanencia projetada)"):
+    with subtest("/persist exists from day one (impermanence by design)"):
         # Section 7.2 says to create it right away and route state there, even with
         # the wipe switched off until milestone 7.
         machine.succeed("test -d /persist")
@@ -125,7 +125,7 @@ disko.lib.testLib.makeDiskoTest {
         print(f"atributos do swapfile: {attrs}")
         assert "C" in attrs, (
             f"swapfile sem NOCOW (atributos: {attrs}). "
-            "Sem isso a hibernacao da secao 7.2 nao funciona."
+            "Without it section 7.2's hibernation does not work."
         )
 
         # And the requested size — proof that the `mkswapfile` really allocated it.
@@ -134,14 +134,14 @@ disko.lib.testLib.makeDiskoTest {
         # formatting and activating belong to the system's `swapDevices` activation,
         # and this test's config declares no swap. This test covers the LAYOUT.
         size_kib = int(machine.succeed("stat -c %s /swap/swapfile").strip())
-        print(f"tamanho do swapfile: {size_kib} bytes")
+        print(f"swapfile size: {size_kib} bytes")
         assert size_kib >= 200_000_000, (
-            f"swapfile de {size_kib} bytes — o mkswapfile nao alocou. "
-            "Na primeira vez isso aconteceu porque o teste pedia 16 GiB "
-            "(o default de producao) num disco de 4 GiB."
+            f"a swapfile of {size_kib} bytes — mkswapfile did not allocate. "
+            "The first time this happened because the test asked for 16 GiB "
+            "(production's default) on a 4 GiB disk."
         )
 
-    with subtest("o volume esta mesmo dentro de LUKS2"):
+    with subtest("the volume really is inside LUKS2"):
         out = machine.succeed("cryptsetup luksDump /dev/vda2 | head -5")
         print(out)
         assert "LUKS header information" in out

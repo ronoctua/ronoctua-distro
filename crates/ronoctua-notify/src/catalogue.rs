@@ -182,7 +182,7 @@ mod tests {
         Notification::fresh_one(
             7,
             "niri".into(),
-            Some("file:///home/x/Imagens/a.png".into()),
+            Some("file:///home/x/Pictures/a.png".into()),
             "Screenshot captured".into(),
             "You can paste the image from the clipboard.".into(),
             Urgency::Normal,
@@ -195,7 +195,7 @@ mod tests {
         // nothing would fail — the screen would simply stop knowing what
         // anything is.
         let b = Book::distro();
-        assert!(!b.entries.is_empty(), "catalogo vazio");
+        assert!(!b.entries.is_empty(), "an empty catalogue");
         for e in &b.entries {
             assert!(!e.when.is_empty(), "`{}` reconheceria tudo", e.id);
             assert!(!e.id.is_empty());
@@ -211,14 +211,14 @@ mod tests {
         let p = Book::distro().decide(&shot());
         assert_eq!(p.catalogue.as_deref(), Some("screenshot"));
         assert_eq!(p.show, Show::Full);
-        assert!(!p.loud, "a captura nao grita");
+        assert!(!p.loud, "the screenshot does not shout");
         // AND NO DISTRO RULE TAKES THE ROOM BACK. At level 20 the distro's own
         // `small-things-are-quick` caught it and forced one line: the entry
         // said `full` and the screen showed `brief`, with only the manager able
         // to say why.
         assert!(
             p.by.is_none(),
-            "uma regra da distro pegou a captura: {:?}",
+            "a distro rule caught the screenshot: {:?}",
             p.by
         );
         // And its glyph came from the font by NAME — nothing in the design
@@ -247,7 +247,7 @@ mod tests {
         // suggestion, not a filter.
         let mut b = Book::distro();
         b.mine.push(Rule {
-            id: "sem-captura".into(),
+            id: "no-screenshot".into(),
             when: vec![Term {
                 field: Field::Catalogue,
                 test: Test::Is("screenshot".into()),
@@ -259,7 +259,7 @@ mod tests {
         });
         let p = b.decide(&shot());
         assert_eq!(p.show, Show::Hidden);
-        assert_eq!(p.by.as_deref(), Some("sem-captura"));
+        assert_eq!(p.by.as_deref(), Some("no-screenshot"));
     }
 
     #[test]

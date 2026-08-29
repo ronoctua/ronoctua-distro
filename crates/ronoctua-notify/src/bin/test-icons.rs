@@ -44,22 +44,22 @@ const NAMES: &[&str] = &[
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(root) = args.next() else {
-        eprintln!("uso: ronoctua-test-icons <raiz-do-superpacote>");
+        eprintln!("usage: ronoctua-test-icons <superpack-root>");
         return std::process::ExitCode::FAILURE;
     };
     let root = std::path::PathBuf::from(root);
     if !root.is_dir() {
-        eprintln!("ERRO: {} nao e um diretorio", root.display());
+        eprintln!("ERROR: {} is not a directory", root.display());
         return std::process::ExitCode::FAILURE;
     }
 
     let mut failed = false;
     for name in NAMES {
         let Some(rgba) = icon::rasterize(Some(&root), name, SIDE) else {
-            eprintln!("ERRO: `{name}` nao resolveu no superpacote.");
-            eprintln!("       O passo de pixmap devolveria `None` para tudo, e a");
-            eprintln!("       lista de aplicativos ficaria so com os glifos de");
-            eprintln!("       categoria — que parecem propositais.");
+            eprintln!("ERROR: `{name}` did not resolve in the superpack.");
+            eprintln!("       The pixmap stage would give back `None` for everything, and the");
+            eprintln!("       application list would be left with only the glyphs of the");
+            eprintln!("       category — which look deliberate.");
             failed = true;
             continue;
         };
@@ -86,13 +86,13 @@ fn main() -> std::process::ExitCode {
 
     // THE OTHER SIDE: without this, "everything resolved" could only mean that the
     // function always returns something.
-    let inexistente = "zzz-nao-existe-nenhum-icone-com-este-nome";
-    if icon::rasterize(Some(&root), inexistente, SIDE).is_some() {
-        eprintln!("ERRO: um nome inventado resolveu; a cadeia responde a qualquer coisa");
+    let missing = "zzz-there-is-no-icon-with-this-name";
+    if icon::rasterize(Some(&root), missing, SIDE).is_some() {
+        eprintln!("ERROR: a made-up name resolved; the chain answers anything");
         failed = true;
     }
     if icon::rasterize(Some(&root), "firefox", 0).is_some() {
-        eprintln!("ERRO: lado zero devolveu imagem");
+        eprintln!("ERROR: a side of zero gave back an image");
         failed = true;
     }
 
@@ -100,7 +100,7 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     println!(
-        "OK: {} nomes reais resolvem e desenham em {SIDE}px",
+        "OK: {} real names resolve and draw at {SIDE}px",
         NAMES.len()
     );
     std::process::ExitCode::SUCCESS

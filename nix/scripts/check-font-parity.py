@@ -38,11 +38,11 @@ PROBES = [
     ("A", 0x0041, "ASCII"),
     ("ç", 0x00E7, "pt-BR: cedilha"),
     ("ã", 0x00E3, "pt-BR: til"),
-    ("É", 0x00C9, "pt-BR: agudo maiusculo"),
+    ("É", 0x00C9, "pt-BR: acute on a capital"),
     ("─", 0x2500, "box-drawing"),
-    ("█", 0x2588, "bloco"),
-    ("→", 0x2192, "seta"),
-    ("λ", 0x03BB, "grego"),
+    ("█", 0x2588, "block"),
+    ("→", 0x2192, "arrow"),
+    ("λ", 0x03BB, "greek"),
     ("Ж", 0x0416, "cirilico"),
     ("", 0xE0A0, "PUA: Powerline"),
     ("", 0xF07B, "PUA: Font Awesome"),
@@ -83,7 +83,7 @@ def main() -> int:
     ap.add_argument("--chain-json", type=pathlib.Path, required=True)
     ap.add_argument("--font-dir", type=pathlib.Path, action="append", required=True)
     ap.add_argument("--strict", action="store_true",
-                    help="falha se fontconfig e renderer divergirem")
+                    help="fails if fontconfig and the renderer disagree")
     args = ap.parse_args()
 
     chain = json.loads(args.chain_json.read_text())
@@ -94,22 +94,22 @@ def main() -> int:
     for d in args.font_dir:
         files += sorted(d.rglob("*.ttf")) + sorted(d.rglob("*.otf"))
     if not files:
-        print("ERRO: nenhuma face encontrada nos diretorios dados", file=sys.stderr)
+        print("ERROR: no face found in the directories given", file=sys.stderr)
         return 1
 
     # The first of the chain is our Regular; it is the one that has to win on
     # everything it covers.
-    nossa = [f for f in files if "NerdFontMono-Regular" in f.name]
-    resto = [f for f in files if f not in nossa]
-    ordered = nossa + resto
+    ours = [f for f in files if "NerdFontMono-Regular" in f.name]
+    rest = [f for f in files if f not in ours]
+    ordered = ours + rest
 
-    print(f"cadeia declarada: primaria = {primary!r}")
-    print(f"faces disponiveis: {len(ordered)}")
+    print(f"declared chain: primary = {primary!r}")
+    print(f"faces available: {len(ordered)}")
     print()
     print(f"{'sonda':<28} {'renderer':<38} {'fontconfig':<38} ")
     print("-" * 106)
 
-    divergencias = 0
+    divergences = 0
     no_coverage = 0
 
     for ch, cp, desc in PROBES:
@@ -121,29 +121,29 @@ def main() -> int:
 
         if r is None:
             no_coverage += 1
-            mark = "  (sem cobertura na cadeia local)"
+            mark = "  (no coverage in the local chain)"
         elif f and pathlib.Path(f).name == r_name:
             mark = "  OK"
         elif f is None:
             mark = "  (fc-match indisponivel)"
         else:
             mark = "  DIVERGE"
-            divergencias += 1
+            divergences += 1
 
         print(f"U+{cp:05X} {desc:<21} {r_name:<38} {f_name:<38}{mark}")
 
     print()
-    print(f"divergencias: {divergencias}   sondas sem cobertura local: {no_coverage}")
+    print(f"divergences: {divergences}   probes with no local coverage: {no_coverage}")
 
     # Our font has 18,053 codepoints; CJK and emoji are left out of it on
     # purpose (they come from Noto). Having no local coverage for those probes is
     # what is expected when only the noctua family is installed.
-    if args.strict and divergencias:
+    if args.strict and divergences:
         print("", file=sys.stderr)
-        print("ERRO: fontconfig e o renderer escolheriam faces diferentes.", file=sys.stderr)
-        print("      As duas cadeias saem de nix/fontconfig.nix e NAO podem", file=sys.stderr)
-        print("      divergir — senao o mesmo texto renderiza diferente dentro", file=sys.stderr)
-        print("      e fora dos nossos buffers (secao 6.4).", file=sys.stderr)
+        print("ERROR: fontconfig and the renderer would choose different faces.", file=sys.stderr)
+        print("      Both chains come out of nix/fontconfig.nix and must NOT", file=sys.stderr)
+        print("      diverge — otherwise the same text renders differently inside", file=sys.stderr)
+        print("      and outside our buffers (section 6.4).", file=sys.stderr)
         return 1
 
     return 0

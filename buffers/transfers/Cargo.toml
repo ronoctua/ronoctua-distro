@@ -5,7 +5,7 @@
 
 [package]
 name = "ronoctua-buffer-transfers"
-description = "A fila de transferencias em janela propria: disco, link, midia e torrent."
+description = "The transfer queue in a window of its own: disk, link, media and torrent."
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -15,7 +15,22 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.46", features = ["macros"] }
+# THE LAYOUT VOCABULARY, and the bindings with it.
+#
+# `wit-bindgen` is NOT a dependency here any more: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` macro, so there is ONE generated
+# binding set for the seven buffers instead of seven. That is what makes "one
+# heading" enforceable rather than agreed.
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
+] }
+
+[lints.rust]
+# The same two as the host's workspace, repeated because this is another
+# workspace. There is no crate-wide `allow` in `lib.rs` any more: the exemption
+# for generated code belongs to the one crate that generates bindings.
+unsafe_code = "warn"
+missing_docs = "warn"
 
 [profile.release]
 opt-level = "s"

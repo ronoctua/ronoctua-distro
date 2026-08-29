@@ -65,16 +65,16 @@ pkgs.testers.runNixOSTest {
 
     # The passphrase is a TEST one and lives only in this VM. No real secret
     # goes into a file of the repository (section 9).
-    PHRASE = "frase-secreta-de-teste-12345"
+    PHRASE = "test-passphrase-12345"
 
     def enroll(blockDevice, pcrs):
-        """Sela a chave do volume no TPM, nos PCRs dados."""
+        """Seals the volume's key into the TPM, against the given PCRs."""
         return machine.succeed(
             f"echo -n '{PHRASE}' | systemd-cryptenroll --unlock-key-file=/dev/stdin "
             f"--tpm2-device=auto --tpm2-pcrs={pcrs} {blockDevice} 2>&1"
         )
 
-    with subtest("o TPM2 existe e responde"):
+    with subtest("the TPM2 exists and answers"):
         machine.succeed("test -c /dev/tpmrm0")
         pcrs = machine.succeed("tpm2_pcrread sha256:7,11,12,15")
         print(pcrs)
@@ -89,13 +89,13 @@ pkgs.testers.runNixOSTest {
         uuid = machine.succeed("cryptsetup luksUUID /dev/vdb").strip()
         print(f"uuid legitimo: {uuid}")
 
-    with subtest("sela a chave no TPM com os quatro PCRs"):
+    with subtest("seals the key into the TPM against all four PCRs"):
         out_text = enroll("/dev/vdb", "7+11+12+15")
         print(out_text)
         # `systemd-cryptenroll` prints the created slot.
         assert "tpm2" in out_text.lower(), out_text
 
-    with subtest("o volume LEGITIMO destrava pelo TPM, SEM frase"):
+    with subtest("the LEGITIMATE volume unlocks through the TPM, with NO phrase"):
         # With no `--unlock-key-file` and no passphrase on stdin: if it asked for
         # the passphrase, the test would pass with the TPM having done nothing. The
         # proof is in systemd's message, checked below.
@@ -108,25 +108,25 @@ pkgs.testers.runNixOSTest {
         machine.succeed("test -b /dev/mapper/legitimo")
         machine.succeed("systemd-cryptsetup detach legitimo")
 
-    with subtest("o PCR 15 NAO e estendido sem UKI medida"):
+    with subtest("PCR 15 is NOT extended with no measured UKI"):
         # This documents a LIMIT of the test, and not a success. If one day it
         # starts changing here, the comment at the top of this file is out of date
         # — and the forged-volume proof can move over here.
         pcr15 = machine.succeed("tpm2_pcrread sha256:15")
         print(pcr15)
         assert "0x00000000" in pcr15, (
-            "o PCR 15 mudou nesta VM — a condicao `measured-uki` passou a "
-            "valer, e a prova do volume forjado pode sair do secureboot-vm"
+            "PCR 15 changed in this VM — the `measured-uki` condition started to "
+            "hold, and the forged-volume proof can leave secureboot-vm"
         )
         cond = machine.succeed("journalctl -b --no-pager | grep -c 'measured-uki' || true")
-        print(f"linhas mencionando measured-uki no boot: {cond.strip()}")
+        print(f"lines mentioning measured-uki at boot: {cond.strip()}")
 
-    with subtest("um volume SEM O TOKEN nao destrava"):
+    with subtest("a volume WITHOUT THE TOKEN does not unlock"):
         # Weaker than the real property — see the top of the file. What is proved
         # here is that unlocking depends on the sealed token, not that it resists a
         # copied header.
         machine.succeed(
-            "echo -n 'outra-frase-do-atacante' | cryptsetup luksFormat --type luks2 "
+            "echo -n 'attackers-other-phrase' | cryptsetup luksFormat --type luks2 "
             "--pbkdf argon2id --pbkdf-force-iterations 4 --pbkdf-memory 32768 "
             f"--uuid {uuid} /dev/vdb -"
         )

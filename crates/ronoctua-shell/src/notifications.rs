@@ -76,7 +76,7 @@ impl Pane {
     #[must_use]
     pub const fn heading(self) -> &'static str {
         match self {
-            Self::Happened => ronoctua_i18n::key::NOTIF_COLUMN_UNREAD,
+            Self::Happened => ronoctua_i18n::key::NOTIF_COLUMN_HAPPENED,
             Self::Suppressed => ronoctua_i18n::key::NOTIF_COLUMN_SUPPRESSED,
             Self::Catalogue => ronoctua_i18n::key::NOTIF_COLUMN_CATALOGUE,
         }
@@ -290,7 +290,7 @@ impl<'a> Lists<'a> {
 /// stops one cell short of the screen for the same reason its band does.
 #[must_use]
 pub fn extent_of(pane: Pane, columns: u16) -> (u16, u16) {
-    let left = tokens::space::MODELINE_EDGELEFT;
+    let left = crate::chrome::INSET;
     if pane == Pane::Catalogue || !two_columns(columns) {
         return (left, columns.saturating_sub(left * 2));
     }
@@ -711,7 +711,7 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        let left = tokens::space::MODELINE_EDGELEFT;
+        let left = crate::chrome::INSET;
         let room = columns.saturating_sub(left * 2);
 
         // THE SHEET takes the whole region: it is one thing being adjusted, and
@@ -1110,7 +1110,7 @@ mod tests {
         assert_eq!(v.level, Some(60));
         p.level = 95;
         turn(&p, Knob::Level, 1, &mut v);
-        assert_eq!(v.level, Some(TOP_LEVEL), "passou do teto");
+        assert_eq!(v.level, Some(TOP_LEVEL), "it went past the ceiling");
         p.level = 5;
         turn(&p, Knob::Level, -1, &mut v);
         assert_eq!(v.level, Some(0), "passou do chao");
@@ -1134,7 +1134,7 @@ mod tests {
         // that only shows the result cannot say which of the two you are on.
         let mut b = Book::distro();
         let (_, adjusted) = in_force(&b, "screenshot");
-        assert!(!adjusted, "sem ajuste, e o padrao da distro");
+        assert!(!adjusted, "no preference, so the distro's default");
         b.adjustments.insert(
             "screenshot".into(),
             Verdict {
@@ -1152,7 +1152,10 @@ mod tests {
         let mut b = Book::distro();
         b.adjustments
             .insert("screenshot".into(), Verdict::default());
-        assert!(!in_force(&b, "screenshot").1, "ajuste vazio nao e ajuste");
+        assert!(
+            !in_force(&b, "screenshot").1,
+            "an empty preference is not a preference"
+        );
     }
 
     #[test]
@@ -1237,9 +1240,9 @@ mod tests {
         let mut v = View::fresh();
         v.pane = Pane::Catalogue;
         assert_eq!(v.key(Press::Enter, &lists, &b), Errand::Nothing);
-        assert!(v.knob.is_some(), "o Enter nao abriu a folha");
+        assert!(v.knob.is_some(), "Enter did not open the sheet");
         assert_eq!(v.key(Press::Escape, &lists, &b), Errand::Nothing);
-        assert!(v.knob.is_none(), "o Esc nao fechou a folha");
+        assert!(v.knob.is_none(), "Esc did not close the sheet");
         assert_eq!(v.key(Press::Escape, &lists, &b), Errand::Close);
     }
 
@@ -1251,7 +1254,7 @@ mod tests {
         v.pane = Pane::Catalogue;
         let _ = v.key(Press::Enter, &lists, &b);
         let Errand::Adjusted(id, verdict) = v.key(Press::Right, &lists, &b) else {
-            panic!("a seta nao ajustou nada");
+            panic!("the arrow adjusted nothing");
         };
         assert_eq!(id, lists.catalogue[0].0);
         assert!(verdict.is_some_and(|x| !x.says_nothing()));
@@ -1317,7 +1320,7 @@ mod tests {
             };
             let mut v = View::fresh();
             let did = v.key(press, &lists, &b);
-            assert_ne!(did, Errand::Nothing, "`{key}` ({id}) nao faz nada");
+            assert_ne!(did, Errand::Nothing, "`{key}` ({id}) does nothing");
         }
     }
 
@@ -1356,7 +1359,7 @@ mod tests {
             // The row carrying THIS pane's item has a bin at the pane's end.
             assert!(
                 rows[1].fields.iter().any(|f| f.at == at + room - 1),
-                "{pane:?}: lixeira desenhada fora de {:?}",
+                "{pane:?}: a trash can drawn outside {:?}",
                 (at, room)
             );
             assert_eq!(target_at(at + room - 1, at, room), Some(Hit::Delete));
@@ -1410,7 +1413,7 @@ mod tests {
         let (at, room) = v.row_extent(200);
         // Newest first: row 0 is id 2.
         assert_eq!(v.clicked(0, Some(at + 5), &lists, 200), Errand::Nothing);
-        assert_eq!(v.cursor(), 0, "o clique na linha ao menos mira");
+        assert_eq!(v.cursor(), 0, "the click on the row at least aims");
         assert_eq!(
             v.clicked(1, Some(at + room - 3), &lists, 200),
             Errand::Read(1)
@@ -1454,12 +1457,12 @@ mod tests {
         for _ in 0..dead {
             let _ = v.key(Press::Down, &lists, &b);
         }
-        assert!(v.hint(&t).is_some(), "o interruptor morto ficou mudo");
+        assert!(v.hint(&t).is_some(), "the dead switch stayed silent");
         // And the row itself carries no third column any more.
         let rows = v.rows(&lists, &b, 200, &t);
         for (i, r) in rows.iter().enumerate().skip(1) {
             let texts: Vec<&str> = r.fields.iter().map(|f| f.text.as_str()).collect();
-            assert!(r.fields.len() <= 2, "linha {i} com {texts:?}");
+            assert!(r.fields.len() <= 2, "line {i} with {texts:?}");
         }
     }
 
@@ -1496,6 +1499,6 @@ mod tests {
             seen.push(p);
         }
         assert_eq!(seen.len(), 4);
-        assert_eq!(seen[0], seen[3], "TAB tem de voltar ao comeco");
+        assert_eq!(seen[0], seen[3], "TAB has to go back to the start");
     }
 }

@@ -16,12 +16,12 @@ in
     type = lib.types.bool;
     default = true;
     description = ''
-      Instala a familia inteira: 540 faces, ~4,1 GB.
+      Installs the whole family: 540 faces, ~4.1 GB.
 
-      A secao 6.2 manda que nada seja descartado, e esse e o padrao. Um host
-      apertado de disco pode desligar isto e ficar so com a TTF patcheada,
-      que e a unica usada nas interfaces. O ISO nunca usa este caminho: ele
-      leva noctua-iosevka-core (~62 MB). Ver docs/ARCHITECTURE.md.
+      Section 6.2 says nothing is to be discarded, and that is the default. A host
+      tight on disk can switch this off and keep only the patched TTF,
+      which is the only one used in the interfaces. The ISO never uses this path: it
+      takes noctua-iosevka-core (~62 MB). See docs/ARCHITECTURE.md.
     '';
   };
 
@@ -29,12 +29,12 @@ in
     type = lib.types.bool;
     default = true;
     description = ''
-      Instala a coverage Noto ampla. E o maior item isolado do closure de
-      fontes (passa de 1 GB sozinho). Removivel sem tocar no desenho.
+      Installs the wide Noto coverage. It is the single largest item in the font
+      closure (over 1 GB on its own). Removable without touching the design.
 
-      O package e `noto-fonts`: no nixpkgs 26.05 o `noto-fonts-extra` foi
-      absorvido por ele, e o alias RENOMEADO derruba a avaliacao em vez de
-      avisar — a mesma classe das others renomeacoes ja anotadas no
+      The package is `noto-fonts`: in nixpkgs 26.05 `noto-fonts-extra` was
+      absorbed into it, and the RENAMED alias brings the evaluation down instead of
+      warning — the same class as the other renames already noted in
       CLAUDE.md.
     '';
   };

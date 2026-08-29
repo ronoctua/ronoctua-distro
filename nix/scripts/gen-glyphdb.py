@@ -39,7 +39,7 @@ from fontTools.ttLib import TTFont
 
 # THE LEXICON'S CONTRACT IS SHARED with the Unicode database generator: the
 # format of `tags.en-pt.toml` is a single fact, and two readers of it would diverge.
-from lexicon import search_forms, palavras, translate
+from lexicon import search_forms, words_of, translate
 
 # Nerd Fonts source sets: prefix -> (readable name en, pt).
 # It feeds the set tag and section 6.5's "by source set" filter.
@@ -74,7 +74,7 @@ SETS = {
 }
 
 def die(msg: str) -> None:
-    print(f"ERRO: {msg}", file=sys.stderr)
+    print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -85,22 +85,22 @@ def check_versions(font: TTFont, names_meta: dict, expected: str) -> None:
     raw = font["name"].getDebugName(5) or ""
     m = re.search(r"Nerd Fonts (\d+\.\d+\.\d+)", raw)
     if not m:
-        die(f"o nameID 5 da fonte nao declara versao do Nerd Fonts: {raw!r}")
+        die(f"the font's nameID 5 does not declare a Nerd Fonts version: {raw!r}")
     font_v = m.group(1)
     json_v = names_meta.get("version", "")
 
     if font_v != expected or json_v != expected:
-        print("ERRO: versoes do Nerd Fonts divergem.", file=sys.stderr)
-        print(f"       esperada (flake):     {expected}", file=sys.stderr)
-        print(f"       fonte (nameID 5):     {font_v}", file=sys.stderr)
+        print("ERROR: the Nerd Fonts versions diverge.", file=sys.stderr)
+        print(f"       expected (flake):     {expected}", file=sys.stderr)
+        print(f"       font (nameID 5):      {font_v}", file=sys.stderr)
         print(f"       glyphnames.json:      {json_v}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Os codepoints da PUA mudam entre versoes maiores. Atualize", file=sys.stderr)
-        print("       a fonte e o glyphnames.json JUNTOS, ou a tabela de icones", file=sys.stderr)
-        print("       aponta para os glifos errados sem ninguem notar.", file=sys.stderr)
+        print("       The PUA codepoints change between major versions. Update", file=sys.stderr)
+        print("       the font and glyphnames.json TOGETHER, or the icon table", file=sys.stderr)
+        print("       points at the wrong glyphs with nobody noticing.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"OK: Nerd Fonts {expected} — fonte, glyphnames.json e flake concordam")
+    print(f"OK: Nerd Fonts {expected} — the font, glyphnames.json and the flake agree")
 
 
 # ---------------------------------------------------------------------------
@@ -113,30 +113,30 @@ def build_icon_table(tokens: dict, names: dict, cmap: set, tray: dict) -> dict:
     for token, glyph in sorted(tokens.items()):
         entry = names.get(glyph)
         if entry is None:
-            missing.append((token, glyph, "nao existe no glyphnames.json"))
+            missing.append((token, glyph, "does not exist in glyphnames.json"))
             continue
         cp = int(entry["code"], 16)
         if cp not in cmap:
-            missing.append((token, glyph, f"U+{cp:04X} ausente no cmap da fonte"))
+            missing.append((token, glyph, f"U+{cp:04X} is missing from the font's cmap"))
             continue
         out[token] = {"glyph": glyph, "codepoint": cp, "char": chr(cp)}
 
     # The tray table may only point at tokens that exist.
     for app_id, token in sorted(tray.items()):
         if token not in tokens:
-            missing.append((f"tray[{app_id}]", token, "token de icone inexistente"))
+            missing.append((f"tray[{app_id}]", token, "an icon token that does not exist"))
 
     if missing:
-        print("ERRO: tokens de icone que nao resolvem:", file=sys.stderr)
-        for token, glyph, motivo in missing:
+        print("ERROR: icon tokens that do not resolve:", file=sys.stderr)
+        for token, glyph, reason in missing:
             print(f"       icon.{token}  ->  {glyph}", file=sys.stderr)
-            print(f"           {motivo}", file=sys.stderr)
+            print(f"           {reason}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Corrija em assets/tokens/icons.nix. O navegador de glifos", file=sys.stderr)
-        print("       (marco 7) existe para achar o nome certo sem adivinhar.", file=sys.stderr)
+        print("       Fix it in assets/tokens/icons.nix. The glyph browser", file=sys.stderr)
+        print("       (milestone 7) exists to find the right name without guessing.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"OK: {len(out)} tokens de icone resolvidos contra o cmap real")
+    print(f"OK: {len(out)} icon tokens resolved against the real cmap")
     return out
 
 
@@ -150,7 +150,7 @@ def tokenize(glyph: str) -> tuple[str, list[str]]:
     shared module, so the two generators split a name the same way.
     """
     prefix, _, rest = glyph.partition("-")
-    return prefix, palavras(rest)
+    return prefix, words_of(rest)
 
 
 def build_glyph_index(
@@ -287,11 +287,11 @@ def main() -> int:
     overlay = tomllib.loads(args.overlay.read_text())
 
     # The overlay may only speak of glyphs that exist.
-    orfaos = [g for g in overlay if g not in raw_names]
-    if orfaos:
+    orphans = [g for g in overlay if g not in raw_names]
+    if orphans:
         die(
-            f"overlay.toml cita {len(orfaos)} glifos inexistentes: {orfaos[:5]}\n"
-            "       Use o nome sem o prefixo `nf-` (ex.: `fa-folder`, nao `nf-fa-folder`)."
+            f"overlay.toml cites {len(orphans)} glyphs that do not exist: {orphans[:5]}\n"
+            "       Use the name without the `nf-` prefix (e.g. `fa-folder`, not `nf-fa-folder`)."
         )
 
     icons = build_icon_table(tokens, raw_names, cmap, tray)
@@ -323,27 +323,27 @@ def main() -> int:
     )
 
     lines = [
-        "# Cobertura da camada de glifos",
+        "# Glyph layer coverage",
         "",
-        "Gerado por `nix/scripts/gen-glyphdb.py`. Nao editar a mao.",
+        "Generated by `nix/scripts/gen-glyphdb.py`. Do not edit by hand.",
         "",
         f"- Nerd Fonts: **{args.nf_version}**",
-        f"- Codepoints Nerd Fonts na fonte: **{stats['nerd_codepoints']}**",
-        f"- Com nome no glyphnames.json: **{stats['named']}**",
-        f"- Sem nome (so codepoint): **{stats['unnamed']}**",
-        f"- Tokens de icone: **{len(icons)}**",
-        f"- Entradas no lexico pt-BR: **{len(lexicon)}**",
-        f"- Entradas no overlay curado: **{len(overlay)}**",
-        f"- Glifos nomeados SEM nenhuma tag em portugues: **{len(stats['no_pt'])}**",
+        f"- Nerd Fonts codepoints in the font: **{stats['nerd_codepoints']}**",
+        f"- Named in glyphnames.json: **{stats['named']}**",
+        f"- Unnamed (codepoint only): **{stats['unnamed']}**",
+        f"- Icon tokens: **{len(icons)}**",
+        f"- Entries in the pt-BR lexicon: **{len(lexicon)}**",
+        f"- Entries in the curated overlay: **{len(overlay)}**",
+        f"- Named glyphs with NO Portuguese tag at all: **{len(stats['no_pt'])}**",
         "",
-        f"## Traducao de tags: {coverage:.1f}%",
+        f"## Tag translation: {coverage:.1f}%",
         "",
-        f"Piso exigido: **>= {args.min_coverage}%** das ocorrencias de token traduzidas.",
+        f"Required floor: **>= {args.min_coverage}%** of the token occurrences translated.",
         "",
-        "## Tokens sem traducao, por frequencia",
+        "## Untranslated tokens, by frequency",
         "",
-        "Esta e a fila de trabalho para crescer `assets/lexicon/tags.en-pt.toml`.",
-        "Traduzir nesta ordem, nao na ordem que vier.",
+        "This is the work queue for growing `assets/lexicon/tags.en-pt.toml`.",
+        "Translate in this order, not in whatever order comes along.",
         "",
         "| token | ocorrencias |",
         "|---|---:|",
@@ -355,8 +355,8 @@ def main() -> int:
 
     (args.out / "coverage.md").write_text("\n".join(lines) + "\n")
 
-    print(f"OK: {stats['nerd_codepoints']} glifos indexados "
-          f"({stats['named']} nomeados, {stats['unnamed']} so por codepoint)")
+    print(f"OK: {stats['nerd_codepoints']} glyphs indexed "
+          f"({stats['named']} named, {stats['unnamed']} by codepoint alone)")
     # --- THE TWO COVERAGE GUARDS -------------------------------------------
     #
     # They live in the GENERATOR, and not in a check that reads the JSON afterwards, for
@@ -369,32 +369,32 @@ def main() -> int:
     # the new glyphs are translated. It is the same design as the check that demands
     # translation of niri's actions.
     if stats["no_pt"]:
-        amostra = stats["no_pt"][:12]
+        sample = stats["no_pt"][:12]
         print("", file=sys.stderr)
-        print(f"ERRO: {len(stats['no_pt'])} glifos sem NENHUMA tag em portugues.", file=sys.stderr)
+        print(f"ERROR: {len(stats['no_pt'])} glyphs with NO Portuguese tag at all.", file=sys.stderr)
         print("", file=sys.stderr)
-        for g in amostra:
+        for g in sample:
             print(f"       {g}", file=sys.stderr)
-        if len(stats["no_pt"]) > len(amostra):
-            print(f"       … e mais {len(stats['no_pt']) - len(amostra)}", file=sys.stderr)
+        if len(stats["no_pt"]) > len(sample):
+            print(f"       … and {len(stats['no_pt']) - len(sample)} more", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Quem procura em portugues NAO acha estes glifos. Traduza os", file=sys.stderr)
-        print("       tokens deles em assets/lexicon/tags.en-pt.toml — a fila, por", file=sys.stderr)
-        print("       frequencia, esta no coverage.md que este mesmo build gera.", file=sys.stderr)
+        print("       Anyone searching in Portuguese does NOT find these glyphs. Translate", file=sys.stderr)
+        print("       their tokens in assets/lexicon/tags.en-pt.toml — the queue, by", file=sys.stderr)
+        print("       frequency, is in the coverage.md this very build generates.", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Nome de marca NAO se traduz: ele ganha tags de CATEGORIA", file=sys.stderr)
+        print("       A brand name is NOT translated: it gets CATEGORY tags", file=sys.stderr)
         print("       (`mysql` -> en: database / pt: banco de dados).", file=sys.stderr)
         sys.exit(1)
 
     if coverage < args.min_coverage:
         print("", file=sys.stderr)
-        print(f"ERRO: cobertura de traducao em {coverage:.1f}%, "
-              f"abaixo do piso de {args.min_coverage}%.", file=sys.stderr)
-        print("       A fila de trabalho, por frequencia, esta no coverage.md.", file=sys.stderr)
+        print(f"ERROR: translation coverage at {coverage:.1f}%, "
+              f"below the floor of {args.min_coverage}%.", file=sys.stderr)
+        print("       The work queue, by frequency, is in coverage.md.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"OK: traducao de tags em {coverage:.1f}% "
-          f"({len(stats['untranslated'])} tokens distintos sem traducao)")
+    print(f"OK: tag translation at {coverage:.1f}% "
+          f"({len(stats['untranslated'])} distinct tokens with no translation)")
     return 0
 
 

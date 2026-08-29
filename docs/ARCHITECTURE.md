@@ -77,8 +77,14 @@ fecha com 2,1 GB de fonte.
 | `noctua-iosevka-woff2{,-nerdfonts}` | 270 WOFF2 | 626 MB | sistema instalado |
 | `noctua-iosevka` | meta, junta os quatro | 4,1 GB | `fonts.packages` |
 
-"Nada é descartado" vale para o **sistema instalado**. A mídia leva o subconjunto porque tem de
-caber — o check `iso-fits-usb-stick` põe teto de 4 GiB.
+"Nada é descartado" vale para o **sistema instalado**. A mídia leva o subconjunto porque é o que a
+instalação precisa ter à mão — e **não porque exista um teto**. Havia um, de 4 GiB, e o número nunca
+foi arbitrário: é o tamanho máximo de ARQUIVO do FAT32, e ele só mordia quando o `.iso` era
+**copiado** para o pendrive (Ventoy, ou uma ESP de onde a UEFI dá boot no arquivo). Gravado com
+`dd`, que escreve setores crus e é o que o `INSTALL.md` manda fazer, não há limite nenhum. O dono
+tirou o teto e escolheu o `dd`; o `iso-is-measured` continua medindo, e o que ele recusa agora é
+uma imagem **pequena demais** — `storeContents` que avalia para nada produz um ISO perfeitamente
+válido e perfeitamente inútil, e essa falha se parece com sucesso.
 
 #### O TTY não consome TTF
 
@@ -856,6 +862,153 @@ dependências do crane, minutos em toda máquina, para poupar essas quarenta.
 
 ---
 
+### O design system existe, e é um crate — `ronoctua-design`
+
+A seção acima termina dizendo que olhar passou a custar 0,2 s. O dono olhou, e voltou com quatro
+coisas na mesma frase: *o título não tem ar proporcional em cima e em baixo; a régua encosta na
+direita e sobra na esquerda; cada buffer tem uma margem, quase sempre excessiva; e a mesma vista sai
+colada na borda no rodapé e com outro espaçamento em janela própria.* E a conclusão dele, que é a
+única parte que importa: **"não existe padrão nenhum; não há um design system"** — e conserte de um
+jeito que esses erros **não tenham como ocorrer de novo**.
+
+Ele estava certo, e a causa é sempre a mesma: **não havia um lugar sobre o qual estar certo.**
+
+**Quatro cabeçalhos, quatro respostas.** `example` punha título na linha 0, régua na 1, conteúdo na 2
+na coluna 0. `format` punha o ícone na coluna 2, o texto na 5, régua na 1, uma linha em branco na 2 e
+o conteúdo na 3. `memory` não tinha régua nenhuma e devolvia `line + 2`. `transfers` tinha régua e
+não tinha branco. Ar acima do título: zero, nos quatro. **Três navegadores, três cópias** de
+`grid_columns`, `rule_row`, `footer_row` e `row_step`, com números DIFERENTES — `ICON_COLUMNS` 2/4/2,
+`HORIZONTAL_GAP` 3/3/4, `LABEL_WIDTH` 24/20/24 — e um literal `2` de ar à direita em cada uma.
+
+**O invariante 12 já nomeava o crate, e o `PENDING` dizia que ele não existia.** Existe agora, e é o
+que fecha aquele item: `crates/ronoctua-design` é **um crate compilado duas vezes**, não um crate do
+hospedeiro com um gêmeo no convidado. Isso só é possível porque o `ronoctua-protocol` foi escrito
+para atravessar — zero dependências, `no_std` mais `alloc` — e diz isso por escrito no próprio
+manifesto desde sempre; o que faltava era alguém do lado do convidado consumi-lo.
+
+**Ele é o dono das bindings do WIT, e é isso que torna "um cabeçalho" obrigatório em vez de
+combinado.** Os sete buffers não chamam mais `wit_bindgen::generate!`: o crate chama uma vez, com
+`pub_export_macro`, e cada componente exporta com
+`export!(Component with_types_in ronoctua_design::bindings)`. Medido antes de qualquer migração: a
+saída começa com `00 61 73 6d 0d 00 01 00`, a assinatura do component model, igual à de um buffer
+construído pelo Nix. Junto foi embora o `#![allow(unsafe_code, missing_docs)]` que cada buffer
+carregava — a isenção é de quem gera binding, e agora só um gera.
+
+**A única coisa que difere entre os dois lados é a cor e o ícone**, e isso é um `trait Palette` com
+duas implementações de vinte linhas. A aritmética é a mesma função, não duas.
+
+#### O cabeçalho são três células, e não há régua nenhuma
+
+O dono mudou de ideia no meio deste trabalho, e a mudança melhorou o argumento em vez de furá-lo:
+**"não quero que exista linha alguma; zero linha."** O `colors.nix` sempre abriu dizendo que
+separação é por espaço em branco *e* uma régua de uma linha; o painel de memória sempre desenhou o
+cabeçalho **sem régua**, e esta seção já registrava que lá o que separa é a célula vazia. Dos quatro
+formatos, o certo era o que não tinha régua. Agora é o de todos.
+
+```
+linha + 0   AR
+linha + 1   glifo (coluna 0, largura ICON) + título (coluna ICON+GAP, até a borda)
+linha + 2   AR
+linha + 3   primeira linha de conteúdo   <- o que heading() devolve
+```
+
+A célula é 20 × 1,45 = **29,0 px**, e a caixa da fonte é 1,25 em = 25 px — então toda run já carrega
+**2,0 px** de folga acima e abaixo da tinta. Ar acima do título: 29,0 + 2,0 = **31,0 px**. Abaixo:
+2,0 + 29,0 = **31,0 px**. Dois vãos iguais, cada um exatamente *uma altura de linha mais a folga da
+própria caixa* — que é, ao pé da letra, o "ar proporcional em cima e em baixo até a altura da linha"
+que foi pedido. E três células em vez das quatro que a versão com régua custaria: uma janela que
+precisa caber uma lista de discos agradece.
+
+`Screen::rule` continua existindo, para separar BLOCOS — é o que o painel de memória usa entre as
+suas quatro partes e os navegadores acima da grade. O que mudou é que `heading()` nunca emite uma.
+
+#### E os separadores saem de um lugar só — `chrome::rule` e `chrome::divider`
+
+Meses depois o dono voltou com a mesma frase, sobre outra tela: *"há algumas linhas horizontais que
+tocam o lado direito da tela e não tocam o esquerdo"*, e as verticais *"não estão tocando a parte
+baixa da tela"*. A régua dos BUFFERS já estava sangrada — o `paint.rs` foi consertado quando o crate
+nasceu. O que não estava era tudo que o **hospedeiro** desenha por conta: a janela do update, o
+gerenciador nas duas portas, a área de transferência.
+
+Medido antes de mexer, e é o que prova que não era o caso e sim a causa: na janela do update a régua
+começava em **x=12** e ia até a borda; no gerenciador os três divisores paravam em **y=798** de 800.
+Eram **oito** retângulos escritos à mão em três arquivos, e cada um errava de um dos dois jeitos:
+
+- `x: margin * cell` com `width: self.width` — recuo à esquerda e a largura INTEIRA, o que passa da
+  borda direita e é cortado lá. Na tela: buraco de um lado, colado do outro.
+- `height: linhas * line_height` — e a altura de linha é fracionária (26,5 px aqui), então o produto
+  cai antes do fim. Uma contagem de linhas é um PALPITE de onde a superfície termina.
+
+Agora há duas funções e mais nenhuma. `chrome::rule(largura, y)` recebe a largura da superfície e
+**não tem parâmetro de recuo** — não dá para escrever o erro. `chrome::divider(x, de, fundo)` recebe
+o **fundo** e não uma altura: "onde termina" passa a ser respondido com a borda, e quem sabe a borda
+é quem desenha. O check `separators-come-from-chrome` recusa qualquer `Quad` de separador fora do
+`chrome.rs`, e recusa também o `chrome.rs` perder as duas funções — um check que só proibisse
+passaria no dia em que alguém as apagasse e voltasse à mão.
+
+#### Dois trilhos, e só dois
+
+Uma display list sai do `paint` por um de dois caminhos, e qual deles um comando toma **é** o padrão
+de layout:
+
+| trilho | por onde | quem anda nele |
+|---|---|---|
+| recuado | `spans_of` → `with_margin` | todo `Text`, toda `Grid` |
+| **sangrado** | `quads_of` | `Rule`, `Selection` |
+
+Texto é recuado porque glifo encostado na borda se lê como corte. Fronteira é o contrário: uma que
+parasse na margem do texto teria começo e fim, e coisa com começo e fim é caixa — que o invariante 15
+proíbe. Então essas duas começam em `x = 0`, medem a janela inteira, e **não passam pelo
+`with_margin`**.
+
+Foi isso que o dono fotografou. A régua saía como `"─".repeat(80)` na coluna 0 — um **glifo** —, e o
+`with_margin` a empurrava duas células adentro. Três defeitos numa linha: folga na esquerda,
+vazamento na direita em qualquer janela com menos de oitenta e duas colunas, e oitenta células de
+largura que não tinham relação nenhuma com o tamanho da janela. Nenhuma das duas perguntas de
+geometria enxergava: o `nothing_overlaps` filtra para `Text`, e o `columns_of` já modelava a régua
+como largura inteira — **o modelo estava certo e quem mentia era o renderizador**.
+
+Ela é um quad agora, com a espessura vindo de `space.rule.thickness` (o segundo bloco daquele arquivo
+medido em PIXELS, e o comentário diz por quê), desenhado no **fim** da linha que ela nomeia. Isso
+muda o que `Command::Rule { line }` significa: de *"um glifo na linha N"* para **"a fronteira no FIM
+da linha N"** — que é o que uma régua sempre quis dizer na tela e nunca disse no tipo. Nada mudou no
+WIT: nem campo, nem ordem.
+
+#### Um recuo, e as duas portas param de discordar
+
+`space.buffer.marginX` virou **`space.content.inset`**, e o nome era o defeito. Chamado de "margem do
+buffer", ele chegava aos buffers e a mais nada: a região do rodapé pegava `modeline.edgeLeft` e a
+listagem do gerenciador pegava `files.gutter` — que é a célula da MARCA e não margem nenhuma. Medido:
+a mesma linha de arquivo começava a **10,8 px** no rodapé e a **24,0 px** na janela. Fator de 2,2, e
+é exatamente o que foi relatado.
+
+O `crates/ronoctua-shell/src/chrome.rs` é a casa do número, e a regra cabe numa frase: **conteúdo é
+recuado por `chrome::INSET` em toda superfície; a modeline e o minibuffer não são conteúdo e ficam com
+`modeline.edgeLeft`.** A exceção não é um furo, é a outra metade da regra — aquelas duas linhas são
+uma barra de status, e o comentário do token já argumentava que duas células ali "começariam a parecer
+margem".
+
+Uma linha que já traz a própria calha paga a DIFERENÇA, e isso é `chrome::FIELDS_LEAD`. As duas
+janelas tinham descoberto essa subtração cada uma por si e escrito um comentário explicando; o
+rodapé era o terceiro lugar e simplesmente não tinha nenhum. Sobra: duas células de `size.base` são
+21,6 px contra 24,0 px de `size.large` — um quinto de célula, que é da GRADE e não do layout, e o
+teste cobra que fique dentro de uma célula em vez de voltar a ser um fator de dois.
+
+**E o hit-test desceu junto.** `cell_at` devolvia a célula da tela; com o desenho recuado, ela
+descreveria o campo à esquerda do que está sob o dedo, a tela inteira. É a forma de defeito que este
+arquivo já pagou duas vezes — o desenho e o ponteiro calculando o mesmo número cada um do seu jeito.
+
+#### O que o `recount` do terminal fazia, e ninguém via
+
+`paint::spans_of` soma o recuo a toda run, e o `recount()` do terminal contava colunas na janela
+inteira. **As duas últimas colunas de todo terminal eram escritas fora dela**, e o compositor não
+recorta. O `context_of` do `buffer.rs` já subtraía; o `render-png` já somava de volta para achar o
+tamanho da janela. Três lugares, uma aritmética, e este era o que discordava. Virou função livre com
+teste — um método num struct que precisa de conexão Wayland não tem como ser testado, e era esse o
+motivo de ninguém ter olhado.
+
+---
+
 ### Um rodapé por sessão — garantido, e não afirmado
 
 O socket de controle tem o display no nome, e por muito tempo um comentário afirmava que outro rodapé
@@ -1144,6 +1297,32 @@ o software dos outros é pior que mostrar o que eles escolheram.
 
 **O `app_id` NÃO é traduzido**, e isso é deliberado: as *window rules* do niri casam por ele, e uma
 regra que só dispara num idioma é uma regra que falha na máquina de quem mudou o `LANG`.
+
+#### Onde cabe um idioma só, ele é o inglês
+
+O invariante 18 tem duas metades, e a segunda foi escrita depois — porque a primeira sozinha deixava
+uma pergunta sem resposta, e a resposta errada estava espalhada por 2 071 literais.
+
+A primeira metade é a que já estava: **nome, comentário e commit são inglês**. A segunda responde
+*onde o português pode aparecer*, e a regra é uma só: **pt-BR é um VALOR que tem par en-GB**. Vale
+para os `.ftl`, para a tag de busca, para o léxico (chave inglesa, valor português) e para os seis
+docs, que existem em português por decisão do dono. Fora disso não há par, e **sem par o idioma é o
+inglês**.
+
+Cinco lugares só têm um idioma, e por isso são ingleses: descrição de unidade do systemd, entrada
+`.desktop`, `description` do manifesto da extensão, alias do shell e `Job::trouble` — o texto livre
+que a fila põe na linha quando uma transferência quebra. O `trouble` é o caso que mostra por quê: ele
+atravessa para a tela sem passar por chave, então uma frase em português ali é lida por quem escolheu
+en-GB, sem tradução e sem volta. É o mesmo defeito do `[chave]` do invariante 8 com o sinal trocado:
+não é o nome da chave aparecendo, é a chave que nunca existiu.
+
+O mesmo raciocínio cobre o que **ninguém traduz**: mensagem de `assert`, de `bail!`, de `.context`,
+saída de check e ajuda de linha de comando. Não há um `.ftl` para elas e nunca vai haver — logo, um
+idioma, logo, inglês.
+
+**O que cobra é parcial, e é honesto dizer.** O `english-names` lê nome e comentário — declaração,
+campo, variante, `let` (padrão inteiro, tupla incluída), `fn` e parâmetro. Ele **não** lê literal de
+string: um `bail!("a fila nao subiu")` passa. Quem segura essa metade hoje é a revisão, não o build.
 
 ---
 
@@ -3100,8 +3279,9 @@ despacho é o único `match` do arquivo.
   no site de novo. O contêiner é **MKV**, e não é preferência: as faixas boas do YouTube são VP9 ou
   AV1 com Opus, que não cabem em MP4 — forçar MP4 faz o yt-dlp *descer* para um par que caiba. O
   caminho do binário vem do **ambiente**, posto pela unidade: baked por `option_env!` ele seria uma
-  referência, e arrastaria yt-dlp e ffmpeg para o perfil reduzido, onde `ronoctua.media.enable` é
-  `false` — a mesma armadilha em que o `RONOCTUA_EMACSCLIENT` caiu.
+  referência, e arrastaria o yt-dlp para o perfil reduzido, onde `ronoctua.media.enable` é `false` —
+  a mesma armadilha em que o `RONOCTUA_EMACSCLIENT` caiu. (O `ffmpeg-full` já não entra nessa conta:
+  ele é incondicional desde que o dono pediu suporte completo a formatos.)
 - **`Torrent`** — uma sessão do libtorrent para TODAS as linhas, e por isso o único motor que não é
   uma thread por trabalho: uma sessão é um objeto com porta, cache de disco e threads próprias, e
   duas seriam duas portas e duas cópias da DHT. A thread por trabalho que o `serve` sobe apenas
@@ -3402,20 +3582,30 @@ O gerenciador tinha uma vista só. Para chegar a `~/main/temp` digitava-se o cam
 montado não aparecia em lugar nenhum, e um desmontado não existia para o sistema inteiro — não
 havia `udisks2`, nem regra udev, nem `boot.supportedFilesystems` em parte alguma do repositório.
 
-#### A barra não é uma segunda lista, e essa decisão pagou por si mesma
+#### O gerenciador são QUATRO seções, e cada uma responde por si
 
-Uma barra lateral parece pedir uma segunda coluna de `ExpansionRow`, e teria custado deslocamento em
-duas dimensões, um segundo `last_offset` e um `Grid` que deixa de ser de uma coluna. O que ela é, em
-vez disso: **`Field`s a mais na MESMA `Row`**. A linha *n* leva o item *n* da barra nas células antes
-do corte e a linha *n* da listagem depois dele.
+A barra lateral, a listagem, a prévia e os fatos são **seções** (`files::Section`), e cada uma diz
+três coisas sobre si: **onde está** (`from`..`to` em células, `top` por `lines`), **o que tem**
+(`content`, já no deslocamento dela) e **quanto tem** (`total`). Quem desenha percorre as seções e
+põe cada uma no seu trilho; quem resolve um ponto (`View::hit`) acha a seção que o contém, depois a
+linha DAQUELA seção, e só então o campo — entre os campos daquela seção. As barras de rolagem, a
+roda e o arrasto perguntam à seção. Nada mais decide.
 
-Com isso não mudou NADA em `grid()`, `row_at`, `cell_at`, no despacho de `Click::Files`, no `at()` da
-janela, no `offset`, nas páginas nem na barra de rolagem. `Row::field_at` já andava **da direita para
-a esquerda** — uma decisão tomada por outro motivo, para que um clique no vão depois de um campo
-pertencesse a ele — e é ela que faz uma célula abaixo do corte achar um campo da barra e uma acima
-achar um da listagem, sem aritmética de fronteira em lugar nenhum.
+**O chrome é da LISTAGEM.** O caminho e o cabeçalho são duas linhas de uma coluna só: ficam no topo
+dela, não rolam, e as outras três seções começam na primeira linha da região. `View::chrome_rows` é
+o único lugar que os constrói, e as duas portas o pedem de lá.
 
-**O que muda é `Layout`, e num campo só.** `layout_beside(width, from)` resolve as colunas contra
+**A faixa de baixo não é da região.** Quando os painéis não cabem ao lado da listagem eles descem, e
+lá têm linhas PRÓPRIAS: `View::row_count` não as conta e as duas portas as desenham por
+`View::strip_rows`. Somá-las à altura da região fazia a contagem e o desenho discordarem — que é a
+divergência que este arranjo existe para impedir.
+
+**E `take` é TETO, nunca contagem.** `usize::MAX` quer dizer "todas"; uma função que MATERIALIZA
+linhas tem de limitar ao que existe, senão a sentinela vira pedido de 2⁶⁴ linhas vazias. Custou seis
+sessões mortas pelo `systemd-oomd` num só dia — ele mata o cgroup inteiro da janela, e o agente vai
+junto sem deixar rastro.
+
+**O que muda em `Layout` é um campo só.** `layout_beside(width, from)` resolve as colunas contra
 `width - from` — a largura da LISTAGEM — e só então desloca; resolver contra a largura inteira e
 deslocar depois deixaria a última coluna cair fora da borda, que é a única coisa que nunca cede.
 E `Layout.from` é onde a marca vai. **Deixá-la na célula zero foi o defeito que o teste pegou**: ela
@@ -3424,8 +3614,8 @@ fica embaixo da última letra de um lugar da barra, e clicar nela marca outra co
 **Um segundo, do mesmo tipo, e pior**: o `header` continuava chamando o layout sem a barra. Os nomes
 das colunas apareceriam sobre a barra, nomeando colunas que estavam em outro lugar, e clicar num
 ordenaria pela coluna que por acaso estivesse embaixo da palavra. Nenhum dos dois seria visto por um
-teste que olhasse o ESTADO — os dois foram pegos comparando **o que seria desenhado**, que é a lição
-que este arquivo já registrava sobre o cursor invisível.
+teste que só contasse linhas: os dois são sobre QUAL célula, e é por isso que as perguntas de
+geometria olham a célula e não a linha.
 
 #### Uma fonte para as dez pastas, e a que faltava
 
@@ -3566,6 +3756,142 @@ descoberto, não configurado. Modelá-lo ali faria o `ronoctua-files` depender d
 esse crate constrói o `ronoctua-files-root`: seria um cliente D-Bus dentro de um binário que roda
 como root, e uma segunda fronteira num crate cujo motivo de existir é ter UMA. O hospedeiro tem os
 dois e emenda as linhas por `devices_are`.
+
+### A prévia e os fatos — dois painéis, e por que eles custaram tão pouco
+
+Nome, tamanho, modo e data: nenhuma das quatro colunas responde *é esta a foto?*, que é a pergunta
+que se leva a um gerenciador de arquivos quando se abre um. `C-v` acende a prévia e `C-i` acende os
+fatos — um desenha o arquivo, o outro lista o que ele carrega dentro.
+
+#### Isto não custou uma primitiva nova, e a razão foi escrita antes
+
+O `files_window.rs` abre dizendo por que a janela **não é um componente wasm**: o `world` do WIT não
+importa sistema de arquivos (invariante 11, e é estrutural), o `input` não tem hover, nem botão
+direito, nem roda, e um diretório inteiro atravessaria por valor a cada mudança. O argumento foi
+escrito para recusar um gerenciador wasm, e é ele que faz esta seção ser barata: prévia e fatos são
+pixels e linhas de texto dentro de código nativo. **Zero mudança no WIT, zero primitiva nova na
+display list, zero buffer recompilado.** Do outro lado da fronteira, uma miniatura teria custado uma
+capacidade, um comando novo e todos os seis buffers recompilados por causa do `match` exaustivo.
+
+#### O crate é `ronoctua-inspect`, e ele NÃO é um módulo do `ronoctua-files`
+
+Parece um módulo — lê arquivo, e o `ronoctua-files` é a fronteira com o disco. Mas esse crate
+constrói o `ronoctua-files-root`, o binário que roda como **root**, e o `nix/rust.nix` o EXTRAI
+(`rust.filesRoot`) exatamente para que o que roda como root não carregue o desktop junto: o
+`files-vm` recusa `wgpu`, `wasmtime`, `mesa` e a fonte na closure dele. Pôr `image` e `resvg` ali
+seria pôr decodificador de formato estrangeiro dentro de um binário privilegiado, e a armadilha do
+`CLAUDE.md` diz por quê — **uma derivação referencia o que os BYTES dela citam**. O crate separado
+não é organização: é o que mantém aquela extração possível.
+
+Por isso a seta aponta ao contrário do que se imaginaria: o `ronoctua-inspect` depende do
+`ronoctua-files` — é de lá que vem a base de MIME —, e o `ronoctua-files` não sabe que ele existe.
+Quem tem os dois é o hospedeiro, exatamente como já tinha o `ronoctua-disks`.
+
+#### A geometria é a da barra lateral de novo, e a aritmética está escrita no token
+
+`space.files.panelsFrom` é **96**, e o comentário ao lado do número mostra a conta. O piso de um
+painel é `Dimensions  3024 x 4032` — o fato comum mais largo, vinte e três células — mais o ar à
+direita, vinte e quatro; dois painéis, com a régua que separa cada um do que está à sua esquerda,
+são `24 + 1 + 24 + 1 = 50`. Em 96 sobram 46, que é exatamente o que a listagem quer para manter
+ícone, nome, tamanho e data: `1 + (2+1) + (12+1) + (10+1) + (16+1) + 1`. Uma célula mais estreita, e
+a data sai.
+
+E as duas fases são as de sempre: 96 é **preferência**; o que não cede é "nada vaza da tela"; e
+quando não cabe, `right_columns` retira o par **inteiro**, nunca metade de um painel. Meio painel é
+a coluna cortada que a régua da direita já tinha ensinado a não desenhar.
+
+**Um lugar decide as quatro regiões.** O `View::split` já era "o único lugar onde o corte é
+calculado", e o motivo estava escrito nele: os dois pintores e os dois hit-testers perguntavam a
+`sidebar_columns` cada um por sua conta, e num segundo monitor as linhas eram dispostas com a largura
+da PRIMEIRA tela e a régua com a da tela que estava sendo pintada — numa mais estreita, a linha e os
+campos caíam em células diferentes. Com quatro regiões, `split` virou uma chamada fina para
+`View::panes(width)` em vez de ganhar irmãs ao lado, que seriam três chances a mais de discordar.
+
+**E os painéis são seções, como a barra lateral e a listagem.** Cada um diz onde começa e onde
+termina em células, quantas linhas ocupa e a partir de qual deslocamento; quem desenha percorre as
+seções e quem resolve um ponto acha a seção primeiro. A fronteira não é aritmética espalhada: é o
+`from`..`to` da seção, num lugar só.
+
+**Os dois viram juntos: colunas à direita, ou faixa embaixo, nunca um de cada.** A frase do dono é
+binária, e há um segundo motivo que decide sozinho — um modo misto deixaria a listagem mais CURTA e
+mais ESTREITA ao mesmo tempo, que é pagar as duas contas para ver metade do que se pediu.
+
+#### Cinco programas externos, e só um faz pixel — a escolha foi medida
+
+`Tool::ALL` tem cinco, e cada um faz o que nenhum outro faz: o `ffprobe` responde o que o arquivo É,
+o `exiftool` lê o Exif, o `pdftoppm` e o `pdfinfo` são do PDF, e o `ffmpeg` é o único que faz PIXEL
+sair de um arquivo que o crate `image` não decodifica — quadro de vídeo, imagem de dentro de
+contêiner, capa de faixa de áudio.
+
+A alternativa óbvia foi tentada nesta máquina, e o resultado é o argumento inteiro: o `magick`
+**DESPEJOU O CORE** num DNG de 17 MB, enquanto o `ffmpeg` deu um PNG de 400 px do MESMO arquivo em
+**0,21 s**; um HEIC em **0,09 s**; e um quadro de um mp4 de 355 MB em **0,17 s**. Um segundo
+conversor não seria redundância: seria um segundo modo de falhar para formatos que o primeiro já lê,
+e a pergunta "por que esta prévia não saiu?" passaria a ter duas respostas possíveis.
+
+**Toda porta externa devolve a figura no stdout**, e quem a decodifica é o crate `image` — o `ffmpeg`
+recebe `-f image2 -c:v png -`, o `pdftoppm` recebe `-png` e `-`, e o caminho do JPEG embutido
+devolve o JPEG que a câmera gravou. Nenhuma ferramenta externa decide arranjo de pixel, e o `Rgba`
+nasce num lugar só — é isso que mantém os tetos num lugar só também: a paciência de 5 s e o
+`STDOUT_CEILING` de 32 MiB valem para as cinco portas, e não para cada chamada por sua conta.
+
+#### Três defeitos que apareceram OLHANDO as fotografias do dono
+
+Nenhum teste teria pego os três, e não por descuido: os três são sobre o que a tela mostra, e todos
+os três passam por código que devolve os pixels sem reclamar de nada.
+
+1. **O `.dng` era recusado na porta.** O `mime::examined` fareja um DNG como `image/tiff` — e está
+   certo, um DNG É um TIFF, é assim que o formato é feito. Só que o nome diz `image/x-adobe-dng`, e
+   mandar o arquivo ao decodificador de TIFF o faz ler os planos RAW e falhar. Quem resolve é o
+   `settled()`: quando o nome DESCENDE do farejado, os dois concordam e o nome é apenas a resposta
+   mais fina. O farejado só vence quando os dois discordam de verdade — um PNG chamado `.txt`.
+2. **A prévia do DNG saía quase preta.** O `ffmpeg` decodifica os planos lineares do RAW sem curva de
+   tom nenhuma. O que a tela mostra hoje é o JPEG que a própria câmera gravou dentro do arquivo: é
+   por isso que `How::Embedded` existe, e é por isso que ele é do `exiftool` e não do `ffmpeg`.
+3. **Retrato saía deitado.** O crate `image` **não** aplica a orientação Exif. O `upright` lê
+   `decoder.orientation()` ANTES de o decodificador ser consumido e gira a imagem; e o caminho do
+   JPEG embutido precisa de uma segunda leitura, porque o JPEG que a câmera guardou não leva a
+   etiqueta que o DNG em volta dele leva.
+
+E um quarto, nos fatos: **o `ffprobe` responde a um JPEG com `25 fps` e `0,04 s`**, mais uma taxa de
+bits calculada em cima desses dois. É o demuxer `image2` inventando um filme de um quadro — todos
+aqueles números são fatos sobre COMO o ffmpeg abriu o arquivo, e nenhum é fato sobre o arquivo. Uma
+ficha dizendo "25 fps" embaixo de uma fotografia estaria mentindo com cara de quem sabe. O
+`pretend_film()` conhece o `image2` e tudo que termina em `_pipe`; um GIF animado é aberto pelo
+demuxer `gif` de verdade e mantém os seus 3,96 s e os seus 11 fps, que são dele.
+
+#### Uma recusa é um VALOR, e não uma ausência
+
+`Made` carrega `Option<Rgba>` **e** `Option<Refusal>`. Um painel em branco e um painel que recusou são
+idênticos na tela, e só um dos dois tem frase para dizer — sem o segundo campo, "este arquivo não
+tem figura", "falta o programa", "é grande demais" e "demorou" sairiam todos como o mesmo retângulo
+vazio. São cinco (`NoPicture`, `Missing`, `TooBig`, `Failed`, `TimedOut`), cada uma com a sua chave,
+e a `Missing` carrega o NOME do programa que falta — que é a diferença entre uma tela inerte e uma
+linha que diz o que fazer.
+
+#### O GPS fica guardado, e a linha diz que ele está lá
+
+`Place::Withheld` é o padrão, e a linha do lugar continua aparecendo: ela diz que a coordenada está
+ESCRITA dentro do arquivo e vai junto com ele para onde ele for. É esse o fato que alguém quer antes
+de mandar uma fotografia para um estranho, e é ele que uma ficha que simplesmente omitisse o GPS
+esconderia. Mostrar os números por padrão seria o inverso: pôr a casa de alguém na tela porque o
+cursor passou por cima de um arquivo.
+
+#### A chave do cache é uma versão, e não um tamanho
+
+O `Stamp` é `(caminho, mtime, bytes, alvo)`, com o alvo arredondado para cima até 128, 256 ou 512.
+Sem a quantização, arrastar a borda de uma janela redecodificaria a foto de celular a cada
+`configure` — uma vez por largura intermediária, enquanto a mão estivesse mexendo. E as dimensões da
+imagem não entram na chave de propósito: quem responde "mudou?" é `mtime` mais `bytes`, e uma imagem
+reescrita com o mesmo tamanho em pixels teria a mesma chave se elas entrassem.
+
+#### A porta de janela não tinha pipeline de imagem nenhum
+
+Ela desenhava glifo e retângulo, e mais nada; era o rodapé que já desenhava as capturas do clipboard
+e os pixmaps do localizador. Uma prévia que funcionasse numa das duas portas e não na outra é
+exatamente a divergência que o arranjo de duas portas existe para impedir, então a janela ganhou o
+`Images` do `ronoctua-render` e o mesmo quadro texturizado, na mesma superfície. Não conseguir
+criá-lo custa a figura, e não a janela.
 
 ### Formatar — `LEADER s f`, e a mesma porta pelo menu da barra
 
@@ -4611,6 +4937,240 @@ Nenhum elo pode ser pulado, e cada um custou uma descoberta:
 **O que o PCR 15 protege, de fato.** Copiar o header LUKS é *clonar*, não forjar: o clone tem a mesma
 chave de volume, o PCR 15 mede idêntico e destrava corretamente. O PCR 15 não impede clonagem — ele
 amarra o estado **pós-destrave** ao volume que foi realmente aberto.
+
+---
+
+### O cérebro — `LEADER s b`, e a linha que avisa antes
+
+A máquina faz coisas sozinha, e até esta tela nada dizia o quê, quando, nem no que deu. `nix flake
+update` era um ALIAS de shell; o rebuild morava no `rescue.nix`, a coleta de lixo no `memory.nix`, o
+cache do tldr no `cli.nix`, e o `fc-cache` dentro de um crate Rust. Cinco arquivos, cinco
+convenções, e nada que rodasse os cinco em ordem.
+
+#### O que ele é: a mesma classe do `ronoctua-transfers`, um andar acima
+
+`ronoctua-brain` é um daemon de usuário com relógio, pulso, fila e um registro de tarefas atrás de um
+`Mutex` com `Condvar` e um contador de `version`, publicado INTEIRO num socket de JSON por linha
+(`$XDG_RUNTIME_DIR/ronoctua-brain.sock`, um por USUÁRIO). O argumento é o da fila, um nível acima:
+uma cópia de 40 GiB não pode morrer com o rodapé, e uma decisão sobre quando a máquina se reconstrói
+também não — o rodapé reinicia a cada edição de arquivo no laço aninhado e a cada falha na máquina
+instalada. E são três processos querendo a mesma resposta: a modeline, a tela do cérebro na região
+expandida, e a janela em que essa tela abre.
+
+**Ele não desenha, não segura teclado, não abre `/proc` e não reimplementa Nix.** O que está na tela
+é um componente `wasm32-wasip2` em `buffers/brain/`, desenhado pelo rodapé como qualquer outro. Ele
+não sabe o que uma atualização É: nomeia uma unidade e lê o que a unidade relatou (invariante 5).
+
+#### A porta é o trait `Task`, e ela promete cinco lugares
+
+Este é o ponto do crate. O dono pediu um lugar onde *"qualquer coisa nesse espaço"* vire
+funcionalidade em vez de um daemon novo, e um lugar só é um lugar se os passos para usá-lo estiverem
+escritos. Acrescentar uma tarefa toca **cinco**: um tipo em `src/tasks/`, uma linha no `vec![]` que
+os lista, as duas chaves de texto nos dois idiomas, uma linha na página inicial do buffer (se ela
+quiser uma) e um padrão em `prefs` (se ela tiver preferências). O que ela NÃO escreve, porque o
+runner já é dono: a fila — no máximo uma tarefa por vez —, o portão de métrica, o aviso e a contagem
+dele, o diário, o socket e toda tela que olha.
+
+O trait tem seis métodos e **só o `run` toca a máquina**. Os outros — como se chama, quando vence,
+do que precisa, por quanto tempo avisa, quais são os passos — não recebem relógio, não abrem arquivo
+e não sobem processo. É isso que permite provar um ANO de agendamento em milissegundos, com um
+`Clock` de teste, sem esperar um segundo sequer.
+
+#### Não há uma segunda fronteira com o `/proc`
+
+O `ronoctua-memory` continua sendo a única — o mesmo critério do `ronoctua-niri` e do
+`ronoctua-network`. Quem cresceu foi ele: ganhou `cpu_pressure()` e `on_battery()`, e o cérebro recebe
+o pulso já lido, por um trait (`pulse::Meter`). A alternativa seria o cérebro abrindo `pressure/cpu`
+e
+`class/power_supply` por conta própria — a segunda fronteira que este repositório recusa em todo
+canto, e que aqui seria uma fronteira nova dentro do processo que decide quando reconstruir o
+sistema.
+
+#### Uma capacidade nova, `brain`, e por que não a `system`
+
+Já havia a `system`, e ela é a do painel de memória. Mas `system` quer dizer "quanta memória há e
+quem a está comendo"; esta termina com a máquina **reconstruindo o próprio sistema operacional**.
+Dobrar uma na outra daria esse alcance ao painel de memória, que não pediu por ele. O WIT já faz
+esse mesmo argumento duas vezes, para `transfers` e para `disks`, e a `brain` diz no próprio
+comentário que é o mesmo argumento um passo adiante — são sete capacidades, e nenhuma delas é "e
+mais o que couber".
+
+#### `tune` é efeito, e não demanda
+
+Uma `demand` é verbo mais ÍNDICE e não carrega valor nenhum: *aja na terceira linha*. "A cada sete
+dias" é um valor. Por isso a preferência atravessa como `effect::tune(setting)` — um `{ task, knob
+}`, com o `knob` sendo intervalo, parte do dia, ligado, passo ou "volte aos padrões" — e não como
+mais um verbo na lista das demandas. É a mesma fronteira que separa "escolha esta" de "passe a valer
+isto".
+
+#### Dois defeitos do protocolo, achados na entrada
+
+Nenhum dos dois é do cérebro. Os dois apareceram porque ele foi o primeiro a acrescentar uma
+capacidade depois que a família delas já existia.
+
+- **O `Request::requires()` prometia, no próprio comentário, que um pedido sem braço não
+  compilaria** — e logo abaixo tinha um `_ => Capability::System`. As duas frases moravam no MESMO
+  comentário, contradizendo-se. Um pedido novo não quebrava nada: ganhava calado a capacidade mais
+  larga que existe.
+- **O `Effect::requires()` tinha a mesma forma, um tom mais baixo, e pior**: o curinga era
+  `_ => None`, isto é, um efeito não listado exigia capacidade NENHUMA. Falha silenciosa que falha
+  ABERTA, no portão que guarda o que um buffer FAZ e não o que ele desenha.
+
+Os dois são exaustivos hoje — vinte e um braços num, nove no outro.
+
+#### O cérebro declarava a atualização DUAS VEZES
+
+Este é o defeito mais caro da entrada, e ele já estava desenhado. A tarefa do cérebro carregava três
+passos escritos à mão — `update-inputs`, `build`, `collect-garbage` — enquanto o
+`assets/updates.nix` declara doze, nomeados `flake-update`, `system-rebuild`,
+`store-collect-garbage` e mais nove. Não era um subconjunto: os dois conjuntos são **disjuntos**.
+Todo nome de passo na tela era um nome que a sequência não usa — e a linha do "parou em" tira o id
+do relatório que a UNIDADE escreve, então uma falha em `flake-update` procuraria uma chave que não
+existe e desenharia a chave crua na frente de quem foi olhar por que a atualização não terminou.
+
+Hoje a tarefa lê a tabela gerada: o `build.rs` traz para o `OUT_DIR` o `updates.rs` que o Nix
+produziu (por `RONOCTUA_UPDATES_RS`), e um `include!` o traz para dentro do crate. Uma fonte, e a
+lista na tela é a lista que roda.
+
+#### A sequência: uma fonte, quatro produtos, e o invariante 6 resolvido por construção
+
+De `assets/updates.nix` saem a tabela Rust, as chaves de texto que os dois idiomas têm de carregar,
+os dois roteiros de shell — o do root e o da pessoa — e uma recusa em tempo de build com o id do
+passo na mensagem. Escrita como script, "quais passos existem?" seria um grep por cinco arquivos, e
+a resposta sairia errada.
+
+O dono pediu os gerenciadores de linguagem junto — rust, go, js, npm —, e o `nix/modules/dev.nix`
+abre nomeando esses mesmos gerenciadores como a coisa que esta distro recusa. As duas metades ficam,
+e a costura é estrutural em vez de ser convenção:
+
+1. **Todo passo declara uma PRECONDIÇÃO**, e um passo cuja precondição é falsa é pulado E DITO —
+   nunca pulado em silêncio, que é a única forma de um passo declarado ser honesto sobre uma máquina
+   em que ele não cabe.
+2. **Nenhum passo pode INSTALAR.** Atualizar o que já está lá não é gerência imperativa de pacote; pôr
+   o que não está, é. O gerador recusa o substrato `install`, cada verbo de instalação que ele conhece,
+   todo metacaractere de shell e toda forma de escrever "passe isto por um shell" — não sobra
+   argumento por onde um se esgueire.
+3. **Passo que nomeia um BINÁRIO NU** — um que a flake não põe na máquina — **não pode nascer
+   ligado**, não pode rodar como root, e tem de declarar o próprio pré-requisito em `needs`, para que
+   a máquina que não tem a ferramenta ganhe um passo pulado e não uma falha. Ligá-lo é uma linha no
+   `configuration.nix` da máquina onde o dono pôs a ferramenta à mão — a mesma forma da saída que o
+   `dev.nix` já sanciona para o `~/.shellrc.local`.
+
+E há uma quarta lei, que é de ordem: exatamente um `move-inputs` e exatamente um
+`apply-configuration`, o primeiro antes do segundo, todo `reclaim-space` depois — e root primeiro,
+pessoa depois, nunca intercalados. Intercalar custaria uma ida ao polkit a cada troca, e uma
+sequência cuja ordem muda quando alguém vira um `root =` é uma sequência que ninguém prevê.
+
+São **quarenta e uma** recusas no gerador ao todo, e **duas delas são provadas** por uma fixture
+negativa: um passo que nasce ligado citando binário de fora, e um passo que instala. O check não se
+contenta com "o build caiu" — ele cobra as duas frases, *invariante 6* e *instala*. Sem isso, "o
+gerador recusa" seria uma afirmação não testada sobre o único código deste repositório que decide o
+que roda na máquina de alguém.
+
+#### Nada que ele faça pode PERGUNTAR
+
+Não há agente polkit na sessão gráfica. A regra de que ele depende nomeia duas unidades, um verbo
+(`start`) e um usuário, e devolve `polkit.Result.YES` — nunca um `AUTH_*`. Nenhum dos dois roteiros
+invoca `sudo`, `pkexec`, `pkttyagent` ou `systemd-run`, e o `systemctl` é achado por CAMINHO DO
+STORE, porque o `PATH` de uma unidade é mínimo e um nome falha longe da causa.
+
+**E a razão é do DONO, não do desenho.** Às vezes o leitor de digital pede que ele aprove alguma
+coisa, e ele não vê o pedido, ou está longe do laptop. Não é que ele recuse — é que não teve como
+aprovar. Isso decide a funcionalidade inteira: o cérebro existe para rodar a atualização num BOM
+MOMENTO, e um bom momento é quase sempre um em que ninguém está olhando para a tela. Ali um pedido
+não é uma pergunta, é uma falha silenciosa com o formato exato de uma recusa — e o relatório diria
+"você não quis" sobre uma coisa que ninguém viu. Sem agente, um `AUTH_*` já falharia; mas falharia
+por ACIDENTE, e o `updates-never-ask` transforma a ausência em requisito.
+
+#### O laço esperava passado a versão de ANTES da própria passada
+
+O dono relatou a tela: o buffer do cérebro com **muito** lag, a janela deixando o minibuffer por
+cima em vez de encolher, `Enter` levando segundos para trocar de página, e `LEADER b k` levando
+segundos para a janela sumir. E a frase que fecha o diagnóstico antes de ele começar: *"a janela
+deveria responder imediatamente, independente de o buffer estar com lag ou não."*
+
+**O buffer não estava lento.** Medido, com o `nix run .#png` aquecido: 203 ms, o mesmo que a
+memória, o formatador e a fila. A primeira medição disse 10 s e estava errada — ela pagava uma
+avaliação de flake que as outras já tinham pago.
+
+O que estava errado era o `Runner::serve`. Ele fazia a passada e então esperava a versão passar de
+`seen` — só que `seen` era lido **antes** da passada, e uma passada ESCREVE. O `wait_past` recebia
+um número que a própria passada já tinha ultrapassado, voltava na hora, e pumpava de novo: um giro,
+na velocidade que o processador desse. Medido com o defeito replantado: **248 088 passadas em
+300 ms**.
+
+Nada quebrou e nada foi para o log. O que apareceu foi a JANELA, porque cada volta do giro acordava
+todo assinante de `Ask::Watch` com uma `Mind` inteira — e do outro lado daquele socket está o laço
+que desenha. A janela não estava lenta para redimensionar: ela não tinha tempo sobrando para o
+Wayland.
+
+**Dois consertos, porque um não bastava.** O laço passou a esperar passado as próprias escritas; e o
+`Shared::change` parou de tocar o sino quando nada mudou — o `put_off` roda em toda passada e tira
+um `postponed` que quase sempre é `None`, e só isso já era um `+1` de versão, duas vezes por
+passada, para um não-evento.
+
+**E o hospedeiro passou a se defender**, que é a metade que responde ao dono. Uma `mind` igual à
+anterior agora morre numa comparação e não chega à conversão do WIT, nem ao componente, nem a um
+quadro. É a regra que o `buffers/memory` já enuncia sobre a amostra dele — chega no relógio, e a
+tela só se mexe quando MUDOU. O que isso não faz, e não vale prometer: o hospedeiro do buffer é um
+laço `calloop` só, de propósito, então um `render` genuinamente lento ainda segura a janela. O que
+ficou verdadeiro é que nada naquele laço tem permissão de ser lento.
+
+#### E a unidade que o cérebro pedia era de USUÁRIO, sem `--user`
+
+Achado puxando o mesmo fio. `nix/modules/update.nix` declara `ronoctua-update.service` em
+`systemd.user.services`, e o `systemd::argv` do cérebro montava `systemctl --no-block start …` sem
+`--user` — no barramento de SISTEMA, onde ela não existe.
+
+E não falharia só: no barramento de sistema o `systemctl start` é autorizado pelo polkit **antes** de
+o systemd procurar a unidade, e não há agente polkit na sessão. A chamada ficaria pendurada até
+estourar, levantando um pedido de autenticação que ninguém pediu — a mesma forma de defeito que um
+teste de unidade deste repositório já tinha levantado, e que o dono relatou por ter sido perguntado
+cinco vezes. Este dispararia a cada atualização vencida, numa máquina em que ele pode não estar
+sentado.
+
+#### A faixa é a superfície do rodapé crescendo PARA BAIXO
+
+Espelho da faixa de notificação, que cresce para cima. Uma superfície só, sem popup e sem card
+(invariantes 14 e 15), com o glifo do cérebro na margem dizendo quem está falando — ela chega sem
+ninguém ter pedido.
+
+Ela é **colada embaixo do minibuffer**, e não a última linha da superfície. O terceiro motivo é o
+que decide: uma linha verdadeiramente última moraria em `first_of_expansion() + expansion_rows()`, e
+teria de ser recalculada no pintor, no hit-test e no quadrilátero de fundo, para sempre — que é
+exatamente o defeito que o `first_of_expansion()` foi escrito para remover. Colada, ela custa **um
+termo** (`band_rows() + FOOTER_LINES + brain_line()`), e todo leitor rio abaixo acompanha de graça.
+Os outros dois motivos são que foi assim que se pediu, e que ela mantém o rodapé simétrico — faixa ·
+modeline · minibuffer · cérebro · expansão —, de modo que esta linha se mexe na tela exatamente
+quando a modeline se mexe.
+
+#### A contagem pega carona no relógio de um segundo que o rodapé já bate
+
+O cérebro manda o aviso UMA VEZ, e o que atravessa é o PRAZO; quem desenha calcula `deadline - now`.
+Um segundo cronômetro para o mesmo segundo acordaria o laço duas vezes por um efeito só. E a pizza é
+a
+`band::countdown_glyph`, a MESMA da faixa de notificação: são duas contagens na mesma tela, e quem
+aprendeu uma aprendeu a outra.
+
+#### `Ask::Abort` não para uma contagem, e por isso são dois pedidos sob um comando
+
+Enquanto o aviso corre, a tarefa está apenas na FILA, e o runner matricula tudo que está vencido a
+cada batida. Tirar da fila não é o que a para: meio minuto depois ela volta, *"e a pessoa
+responderia a mesma pergunta a cada meio minuto"*. O que move o próximo momento é o ADIAMENTO, que o
+runner anota como evento. Então `brain-abort` é um comando só e dois pedidos — `Postpone` enquanto
+nada está rodando, `Abort { task }` depois que alguma coisa está. Quem escolhe é uma função de três
+linhas, e não quem aperta a tecla.
+
+#### A cor é a única de fundo com matiz, e é um passo PARA O LADO
+
+`surface.base` (`0x000000`) → `surface.chrome` (`0x121212`) → `modeline.background` (`0x1E1E1E`) →
+`notification.background` (`0x242424`) é uma escada que o olho sobe, e cada degrau quer dizer "mais
+uma camada de chrome". O `brain.background` é `0x161C28` — 22, 28 e 40 —, na mesma vizinhança de
+luminância da modeline, com um viés de azul: não é mais uma coisa por cima, é um TIPO de linha
+diferente. É o único fundo do arquivo que carrega matiz, e é esse o ponto — a máquina está prestes a
+fazer alguma coisa consigo mesma, e a linha que diz isso não pode se ler como uma modeline que mudou
+de ideia. O branco dela também é o único quase-branco neutro do arquivo, e não sai desta linha: o
+corpo do texto é quente de propósito, e sobre um fundo azulado um branco quente se lê como sujo.
 
 ---
 

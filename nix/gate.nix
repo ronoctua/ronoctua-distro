@@ -33,7 +33,7 @@
 #
 # What is left over, divided by the peak, is how many compilers may run at once.
 #
-# # Duas baterias, uma aritmética
+# # Two batteries, one piece of arithmetic
 #
 # # Why `most` and `gate` are one function
 #
@@ -84,7 +84,7 @@ let
       ''
     else
       ''
-        echo "== ${toString (builtins.length targets)} checks, sem construir instalacao =="
+        echo "== ${toString (builtins.length targets)} checks, without building an installation =="
         targets=(
           ${targetLines}
         )
@@ -94,15 +94,15 @@ let
           exit 1
         fi
         echo ""
-        echo "OK — e isto NAO fecha o invariante 7."
+        echo "OK — and this does NOT close invariant 7."
         echo ""
-        echo "     Ficaram de fora ${toString (builtins.length left)}: os que constroem uma"
-        echo "     INSTALACAO — um sistema NixOS, uma imagem de disco ou o ISO —, e os"
-        echo "     marcos (mN), que sao pergunta de hora de publicar:"
+        echo "     ${toString (builtins.length left)} were left out: the ones that build an"
+        echo "     INSTALLATION — a NixOS system, a disk image or the ISO —, and the"
+        echo "     milestones (mN), which are a question for publishing time:"
         echo ""
         ${leftLines}
         echo ""
-        echo "     Quem os roda e  nix run .#gate  (invariante 7)."
+        echo "     What runs them is  nix run .#gate  (invariant 7)."
       '';
 in
 writeShellApplication {
@@ -172,11 +172,11 @@ writeShellApplication {
 
     # MiB and not GiB: the division truncates, and a floor of 1466 MiB shown as
     # "1 GiB" is a number that argues with the arithmetic beside it.
-    printf 'memoria: %s MiB no total, %s MiB disponivel\n' \
+    printf 'memory: %s MiB in total, %s MiB available\n' \
       "$(( total_kb / 1024 ))" "$(( available_kb / 1024 ))"
-    printf 'piso do earlyoom: %s MiB;  reserva: %s MiB;  pico por rustc: %s MiB\n' \
+    printf 'earlyoom floor: %s MiB;  reserve: %s MiB;  peak per rustc: %s MiB\n' \
       "$(( floor_kb / 1024 ))" "$(( reserve_kb / 1024 ))" "$(( peak_kb / 1024 ))"
-    printf 'cabem %s compilacoes ao mesmo tempo -> pesadas: --cores %s;  gate: --max-jobs %s --cores %s\n\n' \
+    printf '%s compilations fit at once -> heavy: --cores %s;  gate: --max-jobs %s --cores %s\n\n' \
       "$slots" "$slots" "$jobs" "$cores"
 
     started=$(date '+%Y-%m-%d %H:%M:%S')
@@ -190,17 +190,17 @@ writeShellApplication {
         | grep -c 'sending SIG.* "rustc"' || true)
       if [ "''${killed:-0}" -gt 0 ]; then
         echo ""
-        echo "O earlyoom matou o rustc $killed vez(es) durante esta rodada."
-        echo "NAO e defeito de compilacao: e a memoria do HOST, e o rustc esta"
-        echo "no --prefer dele. Feche o que puder e rode de novo — este comando"
-        echo "ja se ajusta ao que estiver livre no momento em que comeca."
+        echo "earlyoom killed rustc $killed time(s) during this round."
+        echo "It is NOT a compilation defect: it is the HOST's memory, and rustc is"
+        echo "in its --prefer. Close what you can and run again — this command"
+        echo "already fits itself to whatever is free at the moment it starts."
       fi
     }
 
-    echo "== as tres pesadas, uma de cada vez =="
-    for alvo in "''${heavy[@]}"; do
-      echo "-- $alvo"
-      if ! nix build --no-link --max-jobs 1 --cores "$slots" "$alvo"; then
+    echo "== the three heavy ones, one at a time =="
+    for target in "''${heavy[@]}"; do
+      echo "-- $target"
+      if ! nix build --no-link --max-jobs 1 --cores "$slots" "$target"; then
         blame_earlyoom
         exit 1
       fi
@@ -213,9 +213,9 @@ writeShellApplication {
   meta = {
     description =
       if what == "gate" then
-        "nix flake check dimensionado pela RAM da maquina"
+        "nix flake check, sized by the machine's RAM"
       else
-        "os checks que nao constroem instalacao, dimensionados pela RAM";
+        "the checks that do not build an installation, sized by the RAM";
     platforms = [ system ];
   };
 }

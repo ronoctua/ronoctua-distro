@@ -145,7 +145,7 @@ stdenv.mkDerivation {
   '';
 
   meta = {
-    description = "Motor de terminal do Ghostty, so a biblioteca VT";
+    description = "Ghostty's terminal engine, the VT library alone";
     homepage = "https://github.com/ghostty-org/ghostty";
     license = lib.licenses.mit;
     platforms = lib.platforms.linux;

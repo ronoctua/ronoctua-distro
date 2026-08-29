@@ -294,7 +294,7 @@ pub fn stop(p: &Places, target: &Consumer) -> anyhow::Result<()> {
         ConsumerKind::Scope => {
             anyhow::ensure!(
                 p.app_slice().join(&target.name).exists(),
-                "`{}` nao esta na app.slice",
+                "`{}` is not in app.slice",
                 target.name
             );
             let out = Command::new(SYSTEMCTL)
@@ -310,11 +310,11 @@ pub fn stop(p: &Places, target: &Consumer) -> anyhow::Result<()> {
         }
         ConsumerKind::Process => {
             let pid = i32::try_from(target.hint).map_err(|_| anyhow::anyhow!("pid invalido"))?;
-            anyhow::ensure!(pid > 1, "pid {pid} nao e encerravel");
+            anyhow::ensure!(pid > 1, "pid {pid} cannot be ended");
             let cgroup = read(&p.procfs.join(pid.to_string()).join("cgroup")).unwrap_or_default();
             anyhow::ensure!(
                 cgroup.contains("/app.slice/"),
-                "`{}` esta fora da app.slice, onde este painel nao mexe",
+                "`{}` is outside app.slice, where this panel does not reach",
                 target.name
             );
             // TERM and not KILL: the point is to give back memory, and a
@@ -324,7 +324,7 @@ pub fn stop(p: &Places, target: &Consumer) -> anyhow::Result<()> {
             rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
             Ok(())
         }
-        other => anyhow::bail!("nao sei encerrar {other:?}"),
+        other => anyhow::bail!("I do not know how to shut {other:?} down"),
     }
 }
 
@@ -345,14 +345,14 @@ pub fn sweep(what: ronoctua_protocol::Request) -> anyhow::Result<()> {
         R::SweepStore => "store",
         R::SweepGenerations => "generations",
         R::SweepJournal => "journal",
-        other => anyhow::bail!("{other:?} nao e uma faxina"),
+        other => anyhow::bail!("{other:?} is not a sweep"),
     };
     let out = Command::new(SYSTEMCTL)
         .args(["start", &format!("ronoctua-memory-sweep@{name}.service")])
         .output()?;
     anyhow::ensure!(
         out.status.success(),
-        "a faxina falhou: {}",
+        "the sweep failed: {}",
         String::from_utf8_lossy(&out.stderr).trim()
     );
     Ok(())
@@ -391,8 +391,8 @@ mod tests {
     #[test]
     fn a_cancelled_scan_stops_where_it_was() {
         let dir = std::env::temp_dir().join(format!("ronoctua-scan-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("um")).expect("mkdir");
-        std::fs::write(dir.join("um/arquivo"), vec![0u8; 4096]).expect("write");
+        std::fs::create_dir_all(dir.join("one")).expect("mkdir");
+        std::fs::write(dir.join("one/file"), vec![0u8; 4096]).expect("write");
         let cancel = Arc::new(AtomicBool::new(true));
         // Already cancelled: it reports nothing, and above all it does not walk.
         let out = disk(&dir, &cancel, |_| {});
@@ -403,19 +403,19 @@ mod tests {
     #[test]
     fn a_scan_reports_the_whole_subtree_and_its_progress() {
         let dir = std::env::temp_dir().join(format!("ronoctua-scan2-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("grande/dentro")).expect("mkdir");
-        std::fs::write(dir.join("grande/dentro/arquivo"), vec![0u8; 8192]).expect("write");
-        std::fs::create_dir_all(dir.join("pequeno")).expect("mkdir");
-        std::fs::write(dir.join("pequeno/arquivo"), vec![0u8; 1024]).expect("write");
+        std::fs::create_dir_all(dir.join("large/inside")).expect("mkdir");
+        std::fs::write(dir.join("large/inside/file"), vec![0u8; 8192]).expect("write");
+        std::fs::create_dir_all(dir.join("small")).expect("mkdir");
+        std::fs::write(dir.join("small/file"), vec![0u8; 1024]).expect("write");
 
         let cancel = Arc::new(AtomicBool::new(false));
         let mut seen = Vec::new();
         let out = disk(&dir, &cancel, |p| seen.push(p));
 
-        assert_eq!(out.len(), 2, "duas pastas de primeiro nivel");
+        assert_eq!(out.len(), 2, "two first-level folders");
         // The biggest first, and the number is the WHOLE subtree — the file is
         // two levels down.
-        assert!(out[0].name.ends_with("grande"));
+        assert!(out[0].name.ends_with("large"));
         assert_eq!(out[0].bytes, 8192);
         assert_eq!(seen.last(), Some(&1000), "o progresso termina em 100%");
         let _ = std::fs::remove_dir_all(&dir);

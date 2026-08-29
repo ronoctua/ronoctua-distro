@@ -114,22 +114,18 @@ mod tests {
 
     #[test]
     fn decodes_png_into_rgba() {
-        let r = super::decode(&png_2x1()).expect("um PNG valido tem de decodificar");
+        let r = super::decode(&png_2x1()).expect("a valid PNG has to decode");
         assert_eq!((r.width, r.height), (2, 1));
         let expected = usize::try_from(r.width * r.height * 4).unwrap();
-        assert_eq!(r.pixels.len(), expected, "RGBA sao quatro bytes por pixel");
-        assert_eq!(
-            &r.pixels[..4],
-            &[255, 0, 0, 255],
-            "o primeiro pixel e vermelho"
-        );
+        assert_eq!(r.pixels.len(), expected, "RGBA is four bytes per pixel");
+        assert_eq!(&r.pixels[..4], &[255, 0, 0, 255], "the first pixel is red");
     }
 
     #[test]
     fn junk_does_not_become_an_image() {
         // REFUSE, and do not draw noise. The history keeps the entry
         // either way; what is lost is the preview.
-        assert!(super::decode(b"nao sou um png").is_none());
+        assert!(super::decode(b"I am not a png").is_none());
         assert!(super::decode(&[]).is_none());
     }
 

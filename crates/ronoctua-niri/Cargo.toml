@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-niri"
-description = "Unica fronteira com o IPC do niri. Folha do grafo: so o shell a toca."
+description = "The one boundary with niri's IPC. A leaf of the graph: only the shell touches it."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -156,6 +156,24 @@ pub struct Span {
     pub color: tokens::Color,
     /// The size, and how it sits on the grid. See [`Size`].
     pub size: Size,
+    /// Whether this run is anchored to the surface's RIGHT EDGE.
+    ///
+    /// # Why a run ever needs to leave the grid
+    ///
+    /// Because the grid does not reach the edge. `columns` is
+    /// `floor(width / cell)`, so between the last cell and the surface's border
+    /// there is a remainder of nought to one cell — and it changes with the
+    /// window's width. Anything counted from the left is unaffected; anything
+    /// that should sit AGAINST the border inherits that remainder as a gap that
+    /// grows and shrinks as the window is resized.
+    ///
+    /// The owner found it by making a window fullscreen: *"the position of the
+    /// icons and numbers on the modeline's right shifts a little... it can never
+    /// be variable"*. With this set, the run is placed counting cells from the
+    /// border instead of from the origin, and the remainder falls where nobody
+    /// is looking — on the inside, between the segments and the text to their
+    /// left.
+    pub edge: bool,
 }
 
 /// The line box a run occupies, which is what decides whether it moves the
@@ -213,20 +231,20 @@ pub fn aligned_tops(spans: &[(u16, f32)], entrelinha: f32) -> Vec<f32> {
     // The largest box on each line. There are few lines per frame, so the linear
     // search costs less than the table that would avoid it.
     let mut largest: Vec<(u16, f32)> = Vec::new();
-    for (line, caixa) in spans {
+    for (line, bounds) in spans {
         match largest.iter_mut().find(|(l, _)| l == line) {
-            Some((_, c)) => *c = c.max(*caixa),
-            None => largest.push((*line, *caixa)),
+            Some((_, c)) => *c = c.max(*bounds),
+            None => largest.push((*line, *bounds)),
         }
     }
     spans
         .iter()
-        .map(|(line, caixa)| {
-            let da_linha = largest
+        .map(|(line, bounds)| {
+            let of_the_line = largest
                 .iter()
                 .find(|(l, _)| l == line)
-                .map_or(*caixa, |(_, c)| *c);
-            f32::from(*line).mul_add(entrelinha, (da_linha - caixa) / 2.0)
+                .map_or(*bounds, |(_, c)| *c);
+            f32::from(*line).mul_add(entrelinha, (of_the_line - bounds) / 2.0)
         })
         .collect()
 }
@@ -236,7 +254,7 @@ pub struct Text {
     face: glyphon::FontSystem,
     swash: glyphon::SwashCache,
     /// How many `prepare` calls have run. Only for timing the first few.
-    preparos: u8,
+    shapings: u8,
     /// glyphon's `Cache` holds pipelines and bind group layouts. Creating one
     /// per frame — as an earlier version did — would recreate the pipeline on
     /// every draw, which on its own would blow section 5.2's budget.
@@ -308,8 +326,8 @@ impl Text {
         anyhow::ensure!(
             n == FACES,
             "o banco tem {n} faces e devia ter {FACES} (Iosevka, emoji e Lucide). \
-             Uma face a menos volta a desenhar tofu no lugar dos emoji ou dos \
-             icones, e seguir daqui so produziria isso na tela."
+             One face fewer draws tofu again in place of the emoji or the \
+             icons, and carrying on from here would only produce that on screen."
         );
         tracing::debug!(faces = n, "faces embutidas carregadas");
 
@@ -333,7 +351,7 @@ impl Text {
         Ok(Self {
             face,
             swash: glyphon::SwashCache::new(),
-            preparos: 0,
+            shapings: 0,
             viewport,
             atlas_pinned,
             atlas_scratch,
@@ -378,13 +396,13 @@ impl Text {
 
         let cw = self.cell_width();
         let lh = self.line_height();
-        let metrica = glyphon::Metrics::new(self.size, lh);
+        let metric = glyphon::Metrics::new(self.size, lh);
         // THE METRIC OF A RUN THAT ASKS FOR ANOTHER SIZE.
         //
         // The line height follows the size: with the renderer's, a large
         // run would be clipped top and bottom by the line box.
-        let metrica_de = |t: &Span| match t.size {
-            Size::Grid => metrica,
+        let metric_of = |t: &Span| match t.size {
+            Size::Grid => metric,
             // A WHOLE LINE AT ANOTHER SIZE takes that size's line height too:
             // with the renderer's, a large run would be clipped top and bottom
             // by the line box.
@@ -405,7 +423,7 @@ impl Text {
         let t_moldar = std::time::Instant::now();
         let mut buffers = Vec::with_capacity(spans.len());
         for t in spans {
-            let mut b = glyphon::Buffer::new(&mut self.face, metrica_de(t));
+            let mut b = glyphon::Buffer::new(&mut self.face, metric_of(t));
             b.set_size(Some(width as f32), Some(lh));
             b.set_text(
                 &t.text,
@@ -420,29 +438,40 @@ impl Text {
             buffers.push(b);
         }
 
-        let moldagem = t_moldar.elapsed();
+        let shaping = t_moldar.elapsed();
 
         // EACH RUN'S BOX: it is the line height of its own metric, the same one
-        // `metrica_de` built. See `aligned_tops`.
-        let caixas: Vec<(u16, f32)> = spans
+        // `metric_of` built. See `aligned_tops`.
+        let boxes: Vec<(u16, f32)> = spans
             .iter()
             .map(|t| (t.line, line_box(t.size, lh)))
             .collect();
-        let tops = aligned_tops(&caixas, lh);
+        let tops = aligned_tops(&boxes, lh);
 
         let areas = spans
             .iter()
             .zip(&buffers)
             .zip(&tops)
-            .map(|((t, buf), topo)| {
+            .map(|((t, buf), top)| {
                 let [r, g, b, a] = t.color.to_rgba8();
                 glyphon::TextArea {
                     buffer: buf,
                     // THE NUDGE IS THE ONLY PLACE A RUN LEAVES THE GRID, and
                     // it is zero for everything but `Size::OnTheCell` — see
                     // `Size::nudge`.
-                    left: f32::from(t.column).mul_add(cw, t.size.nudge(self.size)),
-                    top: *topo,
+                    // COUNTED FROM THE BORDER when the run is anchored there —
+                    // see `Span::edge`. `columns` is what the layout was
+                    // resolved against, so `columns - column` is how many cells
+                    // the run sits from the right, and that distance is exact
+                    // in pixels however the remainder falls.
+                    left: if t.edge {
+                        let columns = (width as f32 / cw).floor();
+                        (columns - f32::from(t.column)).mul_add(-cw, width as f32)
+                            + t.size.nudge(self.size)
+                    } else {
+                        f32::from(t.column).mul_add(cw, t.size.nudge(self.size))
+                    },
+                    top: *top,
                     scale: 1.0,
                     bounds: glyphon::TextBounds {
                         left: 0,
@@ -471,15 +500,15 @@ impl Text {
                 areas,
                 &mut self.swash,
             )
-            .context("glyphon nao conseguiu preparar o texto")?;
+            .context("glyphon could not prepare the text")?;
 
         // Only the first few: after that they would be one line per 1 s tick.
-        if self.preparos < 3 {
-            self.preparos += 1;
+        if self.shapings < 3 {
+            self.shapings += 1;
             tracing::info!(
-                n = self.preparos,
+                n = self.shapings,
                 spans = spans.len(),
-                moldagem_ms = moldagem.as_secs_f64() * 1000.0,
+                shaping_ms = shaping.as_secs_f64() * 1000.0,
                 atlas_ms = t_atlas.elapsed().as_secs_f64() * 1000.0,
                 "partida: preparar"
             );
@@ -496,7 +525,7 @@ impl Text {
         };
         renderer
             .render(atlas_ref, &self.viewport, pass)
-            .context("glyphon nao conseguiu desenhar")
+            .context("glyphon could not draw")
     }
 }
 
@@ -510,7 +539,7 @@ mod tests {
         // truncated file — which would only show up as "nothing draws".
         assert!(
             EMBEDDED_FONT.len() > 1_000_000,
-            "a face embutida tem {} bytes, o que e pequeno demais para a Iosevka",
+            "the embedded face is {} bytes, which is far too small for Iosevka",
             EMBEDDED_FONT.len()
         );
         // The TrueType signature.
@@ -557,7 +586,7 @@ mod tests {
         // the bell carrying a box of its own, every letter beside it moved down
         // 2,9 px — silently, inside its own background.
         let icon = Size::OnTheCell(22.0);
-        assert_eq!(line_box(icon, LH), LH, "o icone trouxe caixa propria");
+        assert_eq!(line_box(icon, LH), LH, "the icon brought a box of its own");
 
         let boxes: Vec<(u16, f32)> = vec![
             (0, line_box(Size::Grid, LH)),
@@ -568,7 +597,7 @@ mod tests {
         assert_eq!(
             tops,
             vec![0.0, 0.0, 0.0],
-            "a linha desceu por causa do icone"
+            "the line moved down because of the icon"
         );
 
         // And the guard on the other side: a run that DOES carry its own box
@@ -576,7 +605,7 @@ mod tests {
         let browser = aligned_tops(&[(0, line_box(Size::Px(40.0), LH)), (0, TEXT)], LH);
         assert!(
             browser[1] > 0.0,
-            "o navegador perdeu o alinhamento pelo meio"
+            "the browser lost its alignment down the middle"
         );
     }
 
@@ -595,11 +624,11 @@ mod tests {
         // field on the SAME line. What the owner asked for, literally: "the middle
         // of the line of icons and of texts aligned".
         let tops = aligned_tops(&[(0, ICON), (0, TEXT)], LH);
-        assert_eq!(tops[0], 0.0, "o maior manda, e ele nao se move");
+        assert_eq!(tops[0], 0.0, "the largest decides, and it does not move");
         // The proof is the MIDDLE, and not the top: the centre of each box has to fall
         // in the same place, which is what "being on the same line" means
         // when the sizes differ.
-        let medium = |topo: f32, caixa: f32| topo + caixa / 2.0;
+        let medium = |top: f32, bounds: f32| top + bounds / 2.0;
         assert!((medium(tops[0], ICON) - medium(tops[1], TEXT)).abs() < 0.001);
     }
 

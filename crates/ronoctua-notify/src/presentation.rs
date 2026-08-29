@@ -236,7 +236,7 @@ pub struct Presentation {
 ///
 /// # Why a list, and why the manager reads it
 ///
-/// The `CLAUDE.md` records the trap by name: "interruptor que não interrompe" —
+/// The `CLAUDE.md` records the trap by name: a switch that switches nothing off —
 /// a switch that switches nothing off, and the day one finds out is the day
 /// something did not happen. Two of these fields are in that state on purpose
 /// (see [`Presentation::vibrate`] and [`Presentation::audio`]).
@@ -397,8 +397,12 @@ mod tests {
             assert!(life.how_long().as_secs() > 0);
         }
         let p = Presentation::from_urgency(Urgency::Critical);
-        assert_eq!(p.life, Life::Long, "a critica fica, mas nao para sempre");
-        assert!(p.loud, "a critica e chamativa por padrao");
+        assert_eq!(
+            p.life,
+            Life::Long,
+            "the critical one stays, but not forever"
+        );
+        assert!(p.loud, "the critical one is loud by default");
     }
 
     #[test]

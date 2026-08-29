@@ -64,6 +64,28 @@ verdade — e ela depende do item acima.
 - acabou quando: um estado sai numa cor que não é o verde de todos os outros, e há check disso
 
 
+### 0.015. Os passos que o brain desenha e os que a unidade roda não têm quem os compare · pequeno
+
+A tabela é uma só (`assets/updates.nix` gera, e o brain a LÊ por `build.rs`), então os ids não têm
+mais como divergir — foi assim que o defeito anterior morreu. O que continua sem prova é a outra
+ponta: a **unidade** escreve o relatório com esses ids, e nada confere que ela escreve os mesmos.
+Hoje é o mesmo gerador que produz os dois, o que torna a divergência improvável e não impossível.
+
+- acabou quando: um check lê os ids da tabela e os ids que o roteiro gerado escreve no relatório, e
+  falha se um lado tiver um que o outro não tem
+
+### 0.016. A faixa de notificação não é descontada do teto da expansão · pequeno
+
+`expansion_ceiling` recebe quanto é fixo, e o rodapé passa `FOOTER_LINES + brain_line()`. A faixa de
+notificação — até três linhas — continua de fora, então com ela na tela a região passa do percentual
+que o token promete. É anterior à linha do cérebro e não foi criado por ela; o que a linha fez foi
+tornar o número um parâmetro, que é o que permite consertar isto numa linha.
+
+O que falta decidir é se ela DEVE entrar: a faixa é transitória de um jeito que as outras linhas não
+são, e descontá-la faria a lista encolher e crescer sozinha enquanto uma notificação passa.
+
+- decidir: se a faixa entra no termo fixo; se entrar, é um argumento a mais na chamada
+
 ### 0.02. Notificação não toca som · pequeno
 
 O campo `audio` existe ponta a ponta — protocolo, catálogo, filtro, gerenciador, disco — e **não
@@ -157,70 +179,6 @@ não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo
 
 - acabou quando: parar a unidade com uma cópia em andamento não deixa arquivo pela metade no destino
 
-
-### 1. `ronoctua-design` não existe · decidir antes
-
-O invariante 12 nomeia `ronoctua-design` e `ronoctua-glyphdb` como componentes `wasm32-wasip2`. O
-`glyphdb` virou dados gerados por `nix/glyphgen.nix` e consumidos por `buffers/glyphs` — efeito
-equivalente. Já o `ronoctua-design` — a camada de componentes que produziria a display list, sem
-threads, filesystem nem wgpu — não existe em forma nenhuma: cada buffer a monta direto do
-`ronoctua-protocol`.
-
-**Decidir primeiro:** o invariante descreve algo que ainda queremos, ou a realidade o superou? Se
-superou, **o invariante muda** — e isso é decisão do dono, não do agente.
-
-- acabou quando: ou existe `ronoctua-design` compilando para wasip2, ou o invariante 12 foi reescrito
-
-### 2. O teto de 4 GiB do ISO · decidir antes
-
-`iso-fits-usb-stick` recusa um ISO maior que 4 GiB, e **ele está em 3720 MiB** — medido no gate de
-2026-08-21, com a fila de quatro motores e o libtorrent dentro. Sobram **376 MiB**, ou 9,2%. Os
-quatro motores custaram **8 MiB**, e não os 62,7 do fecho do libtorrent: quase tudo que ele traz
-(openssl, a `libstdc++`) já estava lá — o que é uma medição, não uma expectativa. O dono levantou que o
-teto vai apertar conforme mais aplicativos e funcionalidades entrarem, e o número diz que ele tem
-razão e que a margem é de uma feature grande, não de várias — mas
-**o número não é arbitrário e a decisão precisa do fato**: 4 GiB é o limite de
-tamanho de arquivo do **FAT32**, e ele só morde quando o `.iso` é **copiado**
-para o pendrive (Ventoy, ou uma ESP de onde a UEFI dá boot no arquivo). Gravado
-com `dd`, que escreve setores crus, não existe limite nenhum.
-
-Então a escolha é entre duas coisas, e nenhuma delas é "aumentar o número":
-
-- **Levantar o teto e assumir `dd`.** O ISO cresce à vontade e deixa de caber em
-  Ventoy. Quem instala grava com `dd`, que já é o que o `INSTALL.md` manda.
-- **Manter o teto e tirar a semente do ISO.** O `storeContents` é o que pesa —
-  ele carrega o que nenhum cache público tem. Sem ele o ISO fica pequeno e a
-  máquina alvo volta a **compilar** o shell, o niri pinado, o `libghostty-vt` e
-  os buffers, que é exatamente o que a semente resolveu.
-
-Uma terceira, mais trabalhosa: a semente numa **segunda partição** do mesmo
-pendrive, fora do arquivo `.iso`. Cabe em FAT32 porque são vários arquivos, e
-custa um passo a mais na gravação.
-
-E uma **quarta, que é a que resolve em vez de adiar** — porque o dono já
-levantou que muitos aplicativos ainda vão entrar, e as três acima escolhem entre
-perder Ventoy, perder a semente ou ganhar um passo de particionamento:
-
-- **Dois arquivos, e nenhum deles cresce sem limite.** O `.iso` sai pequeno e
-  **sem `storeContents`** — volta a caber em qualquer lugar, Ventoy inclusive —,
-  e a semente vira um **segundo arquivo ao lado**, um dump de store
-  (`nix-store --export`, comprimido), que o instalador procura no volume de onde
-  bootou ou num caminho dado por `--seed`. Gravar continua sendo copiar: dois
-  arquivos em vez de um. Se a semente um dia passar de 4 GiB, ela se parte em
-  pedaços numerados, que é coisa que um arquivo de dados aceita e uma imagem de
-  boot não.
-- **O teto deixa de ser sobre o sistema e passa a ser sobre o MEIO.** Hoje
-  `iso-fits-usb-stick` mede o `.iso` inteiro e por isso cresce junto com a
-  distro. Medindo só a imagem de boot, o número para de subir a cada aplicativo
-  novo — e o check passa a dizer o porquê de 4 GiB (o tamanho máximo de arquivo
-  do FAT32), que hoje ele não diz.
-- **Custo:** mexe em `nix/installer/`, na derivação do ISO e no crate do
-  instalador (achar, verificar e importar a semente antes do `nixos-install`),
-  mais um check de que o ISO sozinho ainda instala — só que compilando. Não é
-  pequeno: é do tamanho de uma funcionalidade, não de um ajuste.
-
-- decidir: qual das quatro; e o `iso-fits-usb-stick` passa a dizer o porquê do
-  número que ficar
 
 ### 3. Desempenho medido só em host não-NixOS · pequeno
 

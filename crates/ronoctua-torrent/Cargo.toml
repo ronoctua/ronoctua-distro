@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-torrent"
-description = "A fronteira com o libtorrent: BitTorrent v1 e v2, e todo o unsafe do torrent."
+description = "The boundary with libtorrent: BitTorrent v1 and v2, and all of the torrent's unsafe."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

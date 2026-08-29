@@ -55,11 +55,11 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
 
-    with subtest("o niri sobe no backend winit sobre Xvfb"):
+    with subtest("niri comes up on the winit backend over Xvfb"):
         start_xvfb()
         start_niri("niri", "${niri}")
 
-    with subtest("o rodape cria contexto grafico e desenha"):
+    with subtest("the footer creates a graphics context and draws"):
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -77,15 +77,15 @@ pkgs.testers.runNixOSTest {
         # log, not in the footer's.
         try:
             for marker in [
-                "superficie layer-shell criada",
-                "contexto grafico e desenhador prontos",
-                "layout do rodape resolvido",
+                "layer-shell surface created",
+                "graphics context and renderer ready",
+                "footer layout resolved",
             ]:
                 machine.wait_until_succeeds(
                     f"journalctl -u footer --no-pager | grep -q '{marker}'", timeout=60
                 )
         except Exception:
-            print("--- journal do rodape ---")
+            print("--- the footer's journal ---")
             print(machine.execute("journalctl -u footer --no-pager")[1])
             print("--- journal do niri ---")
             print(machine.execute("journalctl -u niri --no-pager")[1])
@@ -101,20 +101,20 @@ pkgs.testers.runNixOSTest {
         # something else, the test has stopped being hermetic (section 9.3 of the
         # plan) and performance numbers taken from it would not be worth anything.
         assert "llvmpipe" in out_text or "lavapipe" in out_text, (
-            f"o rodape nao usou rasterizador por software; log:\n{out_text}"
+            f"the footer did not use a software rasteriser; log:\n{out_text}"
         )
 
         # And NO drawing error. Without this, the footer could be failing every
         # frame and the test would pass on the messages above.
         for bad in [
-            "desenhar o frame falhou",
-            "preparar texto falhou",
-            "sem contexto grafico",
+            "drawing the frame failed",
+            "preparing the text failed",
+            "no graphics context",
             "panicked",
         ]:
-            assert bad not in out_text, f"o rodape reportou: {bad}"
+            assert bad not in out_text, f"the footer reported: {bad}"
 
-    with subtest("o rodape continua vivo depois de desenhar"):
+    with subtest("the footer is still alive after drawing"):
         # A crash right after the first frame would go unnoticed by the asserts
         # above, which only look at the log.
         machine.succeed("systemctl is-active footer")

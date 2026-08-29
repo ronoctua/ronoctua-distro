@@ -52,7 +52,7 @@ ID = re.compile(r"^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$")
 #
 # The way to find that out would be pressing it and watching something else
 # happen, which is why it is refused here instead.
-RESERVED_KEYS = {"r": "marca todas como lidas", "d": "esquece a notificacao em foco"}
+RESERVED_KEYS = {"r": "marks them all as read", "d": "forgets the focused notification"}
 
 problems: list[str] = []
 
@@ -91,9 +91,9 @@ def resolve_glyph(where: str, name: str) -> int | None:
         return glyphs[name]
     complain(
         where,
-        f"`icon = {name!r}` nao e token de icone nem glifo Nerd Fonts. "
-        "Um token vem de assets/tokens/icons.nix (`camera`); um glifo vem "
-        "do navegador de icones (`md-bell`), sem o `nf-`.",
+        f"`icon = {name!r}` is neither an icon token nor a Nerd Fonts glyph. "
+        "A token comes from assets/tokens/icons.nix (`camera`); a glyph comes "
+        "from the icon browser (`md-bell`), without the `nf-`.",
     )
     return None
 
@@ -104,11 +104,11 @@ def read_terms(where: str, raw: list) -> list[dict]:
         at = f"{where}.when[{i}]"
         field = t.get("field")
         if field not in FIELDS:
-            complain(at, f"campo `{field}` nao existe (ha: {', '.join(sorted(FIELDS))})")
+            complain(at, f"the field `{field}` does not exist (there are: {', '.join(sorted(FIELDS))})")
             continue
         tests = [k for k in t if k != "field"]
         if len(tests) != 1:
-            complain(at, f"precisa de UM teste, veio {len(tests)}: {tests}")
+            complain(at, f"needs ONE test, got {len(tests)}: {tests}")
             continue
         kind = tests[0]
         value = t[kind]
@@ -116,18 +116,18 @@ def read_terms(where: str, raw: list) -> list[dict]:
             # A numeric test on a text field never holds, and it would hold
             # silently: the notification simply never matches.
             if field != "level":
-                complain(at, f"`{kind}` so vale para `level`, nao para `{field}`")
+                complain(at, f"`{kind}` only holds for `level`, not for `{field}`")
                 continue
             if not isinstance(value, int) or not 0 <= value <= TOP_LEVEL:
-                complain(at, f"`{kind}` precisa de 0..{TOP_LEVEL}, veio {value!r}")
+                complain(at, f"`{kind}` needs 0..{TOP_LEVEL}, got {value!r}")
                 continue
         elif kind in TEXT_TESTS:
             if not isinstance(value, str) or not value:
-                complain(at, f"`{kind}` precisa de texto, veio {value!r}")
+                complain(at, f"`{kind}` needs text, got {value!r}")
                 continue
         else:
             known = ", ".join(sorted(TEXT_TESTS | NUMERIC_TESTS))
-            complain(at, f"teste `{kind}` nao existe (ha: {known})")
+            complain(at, f"the test `{kind}` does not exist (there are: {known})")
             continue
         out.append({"field": field, "kind": kind, "value": value})
     return out
@@ -160,13 +160,13 @@ def read_verdict(where: str, raw: dict) -> str:
     show = raw.get("show")
     if show is not None:
         if show not in SHOW:
-            complain(where, f"`show = {show!r}` nao existe (ha: {', '.join(sorted(SHOW))})")
+            complain(where, f"`show = {show!r}` does not exist (there are: {', '.join(sorted(SHOW))})")
         else:
             out.append(f"show: Some(Show::{show.capitalize()})")
     life = raw.get("life")
     if life is not None:
         if life not in LIFE:
-            complain(where, f"`life = {life!r}` nao existe (ha: {', '.join(sorted(LIFE))})")
+            complain(where, f"`life = {life!r}` does not exist (there are: {', '.join(sorted(LIFE))})")
         else:
             out.append(f"life: Some(Life::{life.capitalize()})")
     for name in ("loud", "blink", "vibrate", "audio"):
@@ -179,7 +179,7 @@ def read_verdict(where: str, raw: dict) -> str:
     level = raw.get("level")
     if level is not None:
         if not isinstance(level, int) or not 0 <= level <= TOP_LEVEL:
-            complain(where, f"`level` precisa de 0..{TOP_LEVEL}, veio {level!r}")
+            complain(where, f"`level` needs 0..{TOP_LEVEL}, got {level!r}")
         else:
             out.append(f"level: Some({level})")
     icon = raw.get("icon")
@@ -197,23 +197,23 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
         at = f"{where}.actions[{i}]"
         ident = a.get("id")
         if not isinstance(ident, str) or not ID.match(ident):
-            complain(at, f"id `{ident}` nao e kebab ingles")
+            complain(at, f"the id `{ident}` is not English kebab")
             continue
         key = a.get("key")
         if key is not None:
             if not isinstance(key, str) or len(key) != 1:
-                complain(at, f"`key` e UMA letra, veio {key!r}")
+                complain(at, f"`key` is ONE letter, got {key!r}")
                 key = None
             elif key in RESERVED_KEYS:
                 complain(
                     at,
-                    f"a letra `{key}` e do gerenciador ({RESERVED_KEYS[key]}); "
-                    "uma acao com ela nunca seria alcancada",
+                    f"the letter `{key}` belongs to the manager ({RESERVED_KEYS[key]}); "
+                    "an action with it would never be reached",
                 )
             elif key in seen_keys:
                 # Two actions on one letter means one of them cannot be
                 # reached by keyboard, and the mouse would be the only way in.
-                complain(at, f"a letra `{key}` ja e de outra acao desta notificacao")
+                complain(at, f"the letter `{key}` already belongs to another action of this notification")
             else:
                 seen_keys.add(key)
         doing = None
@@ -224,7 +224,7 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
         elif "run" in a:
             program = a["run"]
             if program not in PROGRAMS:
-                complain(at, f"`run = {program!r}` nao existe (ha: {', '.join(sorted(PROGRAMS))})")
+                complain(at, f"`run = {program!r}` does not exist (there are: {', '.join(sorted(PROGRAMS))})")
                 continue
             args = []
             for arg in a.get("args", []):
@@ -237,7 +237,7 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
                 f"args: vec![{', '.join(args)}] }}"
             )
         else:
-            complain(at, "precisa de `command`, `run` ou `copy-path`")
+            complain(at, "needs `command`, `run` or `copy-path`")
             continue
         keys.add(f"notif-action-{ident}")
         key_rust = f"Some('{key}')" if key else "None"
@@ -257,14 +257,14 @@ def main() -> int:
         "--glyphs",
         type=pathlib.Path,
         required=True,
-        help="glyphs.json do glyphdb: os 10.473 nomes Nerd Fonts",
+        help="the glyphdb's glyphs.json: the 10,473 Nerd Fonts names",
     )
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument(
         "--out-keys",
         type=pathlib.Path,
         required=True,
-        help="uma chave de texto por linha, para o check do i18n cobrar",
+        help="one text key per line, for the i18n check to demand",
     )
     args = ap.parse_args()
 
@@ -283,18 +283,18 @@ def main() -> int:
         where = f"entries.{ident}"
         e = source["entries"][ident]
         if not ID.match(ident):
-            complain(where, "id nao e kebab ingles (invariante 18)")
+            complain(where, "the id is not English kebab (invariant 18)")
         terms = read_terms(where, e.get("when", []))
         if not terms:
             # An entry with no terms would recognise EVERYTHING, and the first
             # one in the table would swallow every notification on the machine.
-            complain(where, "`when` vazio reconheceria tudo; uma entrada e uma notificacao")
+            complain(where, "an empty `when` would recognise everything; one entry is one notification")
         keys.add(f"notif-{ident}-summary")
         keys.add(f"notif-{ident}-body")
         tags = e.get("tags", [])
         for t in tags:
             if not isinstance(t, str) or not ID.match(t):
-                complain(where, f"tag `{t}` nao e kebab ingles")
+                complain(where, f"the tag `{t}` is not English kebab")
         rewrite = e.get("rewrite", False)
         if not isinstance(rewrite, bool):
             complain(where, f"`rewrite` e booleano, veio {rewrite!r}")
@@ -317,12 +317,12 @@ def main() -> int:
         ident = r.get("id")
         where = f"rules[{i}]"
         if not isinstance(ident, str) or not ID.match(ident):
-            complain(where, f"id `{ident}` nao e kebab ingles")
+            complain(where, f"the id `{ident}` is not English kebab")
             continue
         # The person's adjustments are keyed by id, and an entry and a rule
         # sharing one would make an adjustment reach both.
         if ident in seen:
-            complain(where, f"o id `{ident}` ja e de outra entrada ou regra")
+            complain(where, f"the id `{ident}` already belongs to another entry or rule")
         seen.add(ident)
         keys.add(f"notif-rule-{ident}")
         terms = read_terms(f"rules.{ident}", r.get("when", []))
@@ -335,13 +335,13 @@ def main() -> int:
         )
 
     if problems:
-        print("ERRO: assets/notifications.nix nao passa:", file=sys.stderr)
+        print("ERROR: assets/notifications.nix does not pass:", file=sys.stderr)
         for p in problems:
             print(f"       {p}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       A tabela e a fonte unica das notificacoes da distro", file=sys.stderr)
-        print("       (secao 4.2). Um campo errado aqui viraria uma", file=sys.stderr)
-        print("       notificacao no lugar errado, sem nada dizendo por que.", file=sys.stderr)
+        print("       The table is the single source of the distro's notifications", file=sys.stderr)
+        print("       (section 4.2). A wrong field here would become a", file=sys.stderr)
+        print("       notification in the wrong place, with nothing saying why.", file=sys.stderr)
         return 1
 
     out = [
@@ -368,8 +368,8 @@ def main() -> int:
     args.out.write_text("\n".join(out), encoding="utf-8")
     args.out_keys.write_text("\n".join(sorted(keys)) + "\n", encoding="utf-8")
     print(
-        f"notificacoes: {len(entries)} entradas, {len(rules)} filtros, "
-        f"{len(keys)} chaves de texto exigidas"
+        f"notifications: {len(entries)} entries, {len(rules)} filters, "
+        f"{len(keys)} text keys required"
     )
     return 0
 

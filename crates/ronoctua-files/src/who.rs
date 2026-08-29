@@ -183,15 +183,15 @@ mod tests {
     const PASSWD: &str = "\
 root:x:0:0:System administrator:/root:/bin/sh
 noctua:x:1000:100:Pessoa:/home/noctua:/run/current-system/sw/bin/zsh
-linha-quebrada
+broken-line
 nobody:x:65534:65534:Nobody:/var/empty:/bin/sh
 ";
 
     const GROUP: &str = "\
 root:x:0:
 users:x:100:noctua
-wheel:x:1:noctua,outra
-vazio:x:42:
+wheel:x:1:noctua,other
+empty:x:42:
 ";
 
     #[test]
@@ -212,7 +212,7 @@ vazio:x:42:
         assert_eq!(
             r.person(65534),
             Some("nobody"),
-            "a linha depois da quebrada sumiu"
+            "the line after the broken one went away"
         );
     }
 
@@ -226,9 +226,9 @@ vazio:x:42:
     #[test]
     fn the_member_list_is_read_and_an_empty_one_is_empty() {
         let r = Roster::parse(PASSWD, GROUP);
-        assert_eq!(r.listed_in("wheel"), ["noctua", "outra"]);
-        assert!(r.listed_in("vazio").is_empty());
-        assert!(r.listed_in("nao-existe").is_empty());
+        assert_eq!(r.listed_in("wheel"), ["noctua", "other"]);
+        assert!(r.listed_in("empty").is_empty());
+        assert!(r.listed_in("does-not-exist").is_empty());
     }
 
     #[test]

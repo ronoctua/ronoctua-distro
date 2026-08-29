@@ -1,7 +1,7 @@
 # `Categories= -> glyph` table — the SECOND step of the app launcher's icon
 # chain.
 #
-# The whole chain, in the order `apps::icone` walks it:
+# The whole chain, in the order `apps::icon` walks it:
 #
 #   1. `tray-glyphs.nix`, by desktop id       the app has a glyph of its own
 #   2. THIS table, by the first `Categories=` that matches

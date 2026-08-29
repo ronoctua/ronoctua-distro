@@ -48,7 +48,7 @@ pkgs.testers.runNixOSTest {
       # The test framework names the node `machine`, and `base.nix` requires the
       # `noctua-` prefix (section 2). The two definitions collide at equal
       # priority; the `mkForce` decides, and the prefix goes on being asserted.
-      networking.hostName = lib.mkForce "noctua-teclado";
+      networking.hostName = lib.mkForce "noctua-keyboard";
       # No /persist in this VM: `base.nix` points the password hash there, and
       # the test does not log in — it uses `machine.succeed` as root and `sudo -u`.
       #
@@ -86,7 +86,7 @@ pkgs.testers.runNixOSTest {
       machine.start()
       machine.wait_for_unit("multi-user.target")
 
-      with subtest("o keyd sobe"):
+      with subtest("keyd comes up"):
           # `wait_for_unit` and not `is-active`: the service comes up in parallel with
           # the rest of the boot, and asking too early answers "activating".
           machine.wait_for_unit("keyd.service")
@@ -102,7 +102,7 @@ pkgs.testers.runNixOSTest {
           assert "overload(meta, f13)" in conf, conf
           assert "leftmeta" in conf, conf
 
-      with subtest("o keyd ACEITA o arquivo e CASA um teclado"):
+      with subtest("keyd ACCEPTS the file and MATCHES a keyboard"):
           # Writing a valid config in Nix and writing a config keyd understands are
           # different things. If it refused, the service would stay standing without
           # remapping anything — and nothing in systemd's journal would say so.
@@ -116,17 +116,17 @@ pkgs.testers.runNixOSTest {
           assert "DEVICE: match" in journal, journal
           assert "all.conf" in journal, journal
           for bad in ["error", "invalid", "syntax"]:
-              assert bad not in journal.lower(), f"o keyd reclamou: {journal}"
+              assert bad not in journal.lower(), f"keyd complained: {journal}"
 
-      with subtest("ele nao mexe em NENHUMA outra tecla"):
+      with subtest("it touches NO other key"):
           # What limits the damage of a mistake here: one key remapped, all the
           # others passing straight through. One more line in the `[main]` section is
           # one key that stops working the way the person expects.
           main = conf.split("[main]")[1]
           lines = [l.strip() for l in main.splitlines() if l.strip() and "=" in l]
-          assert len(lines) == 1, f"o keyd remapeia mais de uma tecla: {lines}"
+          assert len(lines) == 1, f"keyd remaps more than one key: {lines}"
 
-      with subtest("o niri escuta a tecla que o keyd emite"):
+      with subtest("niri listens for the key keyd emits"):
           # The two ends of the same contract: keyd emits `f13`, niri binds `F13` to
           # the leader. If one changes without the other, touching Super does nothing
           # — with no error, anywhere.
@@ -135,7 +135,7 @@ pkgs.testers.runNixOSTest {
           # And a HELD Super goes on being a modifier in the chords.
           assert "Mod+Left { focus-column-left; }" in kdl, kdl
 
-      with subtest("as opcoes de xkb chegam ao compositor da SESSAO"):
+      with subtest("the xkb options reach the SESSION's compositor"):
           # `keyboard-options-do-what-they-say` compiles that same string and
           # reads the symbols back — what is missing there, and only a booted
           # system answers, is whether the string SURVIVES the module: it is
@@ -143,10 +143,10 @@ pkgs.testers.runNixOSTest {
           # and an option that never reaches the config is an accent key that
           # does not accent, with the keymap perfectly correct one layer below.
           assert 'options "${nodes.machine.ronoctua.keyboard.options}"' in kdl, (
-              "as opcoes de xkb nao chegaram ao config do niri:\n" + kdl
+              "the xkb options did not reach niri's config:\n" + kdl
           )
 
-      with subtest("o rodape sobe como servico da sessao, por caminho do store"):
+      with subtest("the footer comes up as a session service, by store path"):
           # IT DID NOT COME UP. The binary was not even installed, and the leader's
           # bind spawned the NAME `ronoctua-shell` — in production the whole system
           # was left with no modeline, no minibuffer and no leader, and no check
@@ -163,19 +163,19 @@ pkgs.testers.runNixOSTest {
           assert "/nix/store/" in unit, unit
           assert "bin/ronoctua-shell" in unit, unit
           assert 'spawn "/nix/store/' in kdl, (
-              "o bind da leader spawna um NOME; o PATH de uma unidade e minimo "
-              f"e o nome nao resolve:\n{kdl}"
+              "the leader's bind spawns a NAME; a unit's PATH is minimal "
+              f"and the name does not resolve:\n{kdl}"
           )
 
-      with subtest("os binds de emergencia existem, e FORA da leader"):
+      with subtest("the emergency binds exist, and OUTSIDE the leader"):
           # They only serve for when the leader does not answer. With `Mod+` in
           # front, they would be the key locked inside the safe.
           for press_key in ["Ctrl+Alt+L", "Ctrl+Shift+L", "Ctrl+Alt+Delete"]:
-              assert f"\n    {press_key} " in kdl, f"falta o bind {press_key}:\n{kdl}"
-              assert f"Mod+{press_key}" not in kdl, f"{press_key} saiu com o prefixo da leader"
+              assert f"\n    {press_key} " in kdl, f"the bind {press_key} is missing:\n{kdl}"
+              assert f"Mod+{press_key}" not in kdl, f"{press_key} came out with the leader's prefix"
           assert "keyboard-restore" in kdl, kdl
 
-      with subtest("com o keyd DERRUBADO, o USUARIO o levanta de volta"):
+      with subtest("with keyd BROUGHT DOWN, the USER brings it back up"):
           # THE DESTRUCTIVE TEST. It is the only proof that the net catches: without
           # it, "there is a way back" is a claim.
           #

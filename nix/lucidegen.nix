@@ -74,10 +74,10 @@ let
           # The scripts' DIRECTORY, and not the file: the generator imports
           # `lexicon.py`, the module the three generators share.
           cmd = ''
-            unzip -q ${icons} -d conjunto
+            unzip -q ${icons} -d set_of
             gen() {
               python3 ${./scripts}/gen-lucidedb.py \
-                --icons conjunto/icons \
+                --icons set_of/icons \
                 --font ${lucide}/share/fonts/truetype/Lucide.ttf \
                 --lexicon ${lexiconFile} \
                 --other ${fonts.noctua-iosevka-core}/share/fonts/truetype/noctua-iosevka/NoctuaIosevkaNerdFontMono-Regular.ttf \
@@ -93,7 +93,7 @@ let
           ''
             runHook preBuild
             mkdir -p $out
-            echo "### fixture negativo: o gerador DEVE falhar ###"
+            echo "### negative fixture: the generator MUST fail ###"
 
             # NO pipe: in `cmd | tee` the exit code is `tee`'s, which
             # is always 0 — the test would report success with the generator failing
@@ -106,10 +106,10 @@ let
             cat $out/out_text.txt
 
             if [ "$rc" -eq 0 ]; then
-              echo "ERRO: o gerador ACEITOU a faixa que colide com o Nerd Fonts." >&2
+              echo "ERROR: the generator ACCEPTED the range that collides with Nerd Fonts." >&2
               exit 1
             fi
-            echo "OK: o gerador recusou, como devia (codigo $rc)"
+            echo "OK: the generator refused, as it should (code $rc)"
             runHook postBuild
           ''
         else
@@ -123,17 +123,17 @@ let
       dontInstall = true;
 
       meta = {
-        description = "Base do navegador de icones Lucide";
+        description = "Lucide icon browser database";
         platforms = lib.platforms.all;
       };
     };
 in
 assert lib.assertMsg (fromPackage == upstreamVersion) ''
-  o lucide do nixpkgs esta em ${fromPackage}, e o nix/lucidegen.nix declara ${upstreamVersion}.
+  nixpkgs' lucide is at ${fromPackage}, and nix/lucidegen.nix declares ${upstreamVersion}.
 
-  A fonte e o conjunto de icones tem de vir da MESMA versao: subir uma sem a
-  outra faz o gerador parar na comparacao de nomes, que e onde tem de parar.
-  Suba as duas de proposito — a URL do zip tambem tem a versao, e o hash junto.
+  The font and the icon set have to come from the SAME version: raising one without the
+  other makes the generator stop at the name comparison, which is where it has to stop.
+  Raise both deliberately — the zip's URL also carries the version, and the hash with it.
 '';
 {
   inherit upstreamVersion base;
@@ -146,7 +146,7 @@ assert lib.assertMsg (fromPackage == upstreamVersion) ''
   # 1,668 icons would draw the Nerd Fonts glyph occupying the same codepoint, and the
   # screen would have no way to give it away: out would come a pretty, wrong icon.
   rangeTakenFails = mkGen {
-    name = "ronoctua-lucidedb-fixture-negativo";
+    name = "ronoctua-lucidedb-negative-fixture";
     declaredBase = "E038";
     expectFailure = true;
   };

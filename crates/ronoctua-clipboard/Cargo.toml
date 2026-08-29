@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-clipboard"
-description = "Historico de clipboard: fila em memoria, filtro de segredo e QR (secao 4.2)."
+description = "Clipboard history: an in-memory queue, a secret filter and QR (section 4.2)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

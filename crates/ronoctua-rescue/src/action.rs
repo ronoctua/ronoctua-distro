@@ -180,7 +180,7 @@ mod tests {
                 let Some(line) = line_of(a.run) else { continue };
                 assert!(
                     line.contains(&"--user".to_owned()),
-                    "`{}` sem --user pediria privilegio para reiniciar a propria sessao: {line:?}",
+                    "`{}` without --user would ask for privilege to restart its own session: {line:?}",
                     a.id
                 );
             }
@@ -194,7 +194,7 @@ mod tests {
                 let Some(line) = line_of(a.run) else { continue };
                 assert!(
                     !line.contains(&"--user".to_owned()),
-                    "`{}` com --user procuraria a unidade no lugar errado: {line:?}",
+                    "`{}` with --user would look for the unit in the wrong place: {line:?}",
                     a.id
                 );
             }
@@ -210,18 +210,18 @@ mod tests {
         // Outside Nix there is no store path to find, and the test says so
         // instead of passing by not looking.
         let Some(_) = SYSTEMCTL else {
-            eprintln!("sem RONOCTUA_SYSTEMCTL: o teste dos caminhos nao roda fora do Nix");
+            eprintln!("no RONOCTUA_SYSTEMCTL: the path test does not run outside Nix");
             return;
         };
         for a in all_of() {
             let Some(built) = command_of(a.run) else {
                 continue;
             };
-            let c = built.unwrap_or_else(|v| panic!("`{}` sem a variavel {v}", a.id));
+            let c = built.unwrap_or_else(|v| panic!("`{}` without the variable {v}", a.id));
             let program = c.get_program().to_string_lossy().into_owned();
             assert!(
                 program.starts_with("/nix/store/"),
-                "`{}` roda `{program}` por nome",
+                "`{}` runs `{program}` by name",
                 a.id
             );
         }
@@ -236,7 +236,7 @@ mod tests {
             let is_ours = matches!(a.run, Run::Own(_));
             assert!(
                 has_command || is_ours,
-                "`{}` nao roda nada e nao e nossa",
+                "`{}` runs nothing and is not ours",
                 a.id
             );
         }
@@ -249,7 +249,7 @@ mod tests {
                 assert_eq!(
                     a.tier,
                     Tier::Password,
-                    "`{}` desliga a maquina sem perguntar",
+                    "`{}` shuts the machine down without asking",
                     a.id
                 );
             }

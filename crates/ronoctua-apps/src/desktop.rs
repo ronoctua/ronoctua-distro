@@ -53,8 +53,8 @@ pub fn fields(text: &str) -> Vec<(&str, &str)> {
         if !inside {
             continue;
         }
-        if let Some((key, valor)) = l.split_once('=') {
-            out.push((key.trim_end(), valor.trim_start()));
+        if let Some((key, value)) = l.split_once('=') {
+            out.push((key.trim_end(), value.trim_start()));
         }
     }
     out
@@ -160,8 +160,8 @@ mod tests {
     /// The group may not be the file's first.
     #[test]
     fn a_group_in_the_middle_of_the_file_is_found() {
-        let f = "[Outra Coisa]\nName=Errado\n[Desktop Entry]\nName=Certo\n";
-        assert_eq!(raw_bytes(&fields(f), "Name"), Some("Certo"));
+        let f = "[Something Else]\nName=Wrong\n[Desktop Entry]\nName=Right\n";
+        assert_eq!(raw_bytes(&fields(f), "Name"), Some("Right"));
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(
             localized(&c, "Name", "en_US"),
             Some("Calculator"),
-            "o shaviano venceu: `en@shaw` nao pode casar `en`"
+            "Shavian won: `en@shaw` must not match `en`"
         );
         assert_eq!(localized(&c, "Name", "sr_RS"), Some("Calculator"));
         // And the ENCODING still comes off: `pt_BR.UTF-8` is the same `pt_BR`.
@@ -212,7 +212,7 @@ mod tests {
         let c = fields(f);
         assert!(boolean(&c, "NoDisplay"));
         assert!(!boolean(&c, "Hidden"), "`False` e falso");
-        assert!(!boolean(&c, "Terminal"), "`1` nao e booleano da spec");
+        assert!(!boolean(&c, "Terminal"), "`1` is not a boolean by the spec");
         assert!(!boolean(&c, "Ausente"));
     }
 

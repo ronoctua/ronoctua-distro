@@ -87,7 +87,7 @@ de baixar 23 GiB para chegar nele.
 ```
 ronoctua.browser.enable = true;    # o Chrome
 ronoctua.editor.emacs   = true;    # o Emacs e o Doom
-ronoctua.media.enable   = true;    # ffmpeg, VLC, mpv, gstreamer
+ronoctua.media.enable   = true;    # VLC, mpv, gstreamer (o ffmpeg vem sempre)
 ronoctua.dev.toolchains = true;    # rust, go, python, node, gcc
 ronoctua.dev.android    = true;    # Android Studio, SDK, Flutter
 ronoctua.fonts.full     = true;    # as 27 variantes da Iosevka

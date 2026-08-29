@@ -163,12 +163,12 @@ pub fn host_rescue(program: &str, args: &[String]) -> Result<()> {
 /// The body of both: everything is the same but the window's identity.
 fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) -> Result<()> {
     let conn = Connection::connect_to_env()
-        .context("nao ha compositor Wayland acessivel (WAYLAND_DISPLAY esta definida?)")?;
-    let (globals, fila) = registry_queue_init(&conn).context("registry do Wayland")?;
-    let qh: QueueHandle<TerminalWindow> = fila.handle();
+        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
+    let (globals, queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let qh: QueueHandle<TerminalWindow> = queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("o compositor nao expoe xdg_shell")?;
+    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
 
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the compositor (invariant 4).
@@ -183,10 +183,11 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
     let (columns, lines) = (80u16, 24u16);
     let program = program.map_or_else(ronoctua_term::pty::default_program, ToOwned::to_owned);
     let pty = Arc::new(
-        Pty::open(&program, args, columns, lines).with_context(|| format!("abrir {program}"))?,
+        Pty::open(&program, args, columns, lines).with_context(|| format!("open {program}"))?,
     );
-    let vt = Arc::new(Terminal::fresh(columns, lines, engine).context("subir a thread do motor")?);
-    tracing::info!(engine = vt.name(), %program, "terminal aberto");
+    let vt =
+        Arc::new(Terminal::fresh(columns, lines, engine).context("start the engine's thread")?);
+    tracing::info!(engine = vt.name(), %program, "terminal opened");
 
     let mut cycle: EventLoop<TerminalWindow> = EventLoop::try_new().context("calloop")?;
     // The `ping` wakes the loop when the PTY has news. It carries no data: the
@@ -194,7 +195,7 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
     // bytes through here would make them go through two queues, and the second
     // one could reorder them against what the keyboard wrote.
     let (ping, face) = smithay_client_toolkit::reexports::calloop::ping::make_ping()
-        .context("criar o ping do pty")?;
+        .context("create the pty's ping")?;
     cycle
         .handle()
         .insert_source(face, |(), (), j: &mut TerminalWindow| j.paint())
@@ -218,13 +219,13 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
                     Stream::Follow
                 });
                 if let Err(e) = r {
-                    tracing::warn!(error = %e, "a leitura do pty terminou com erro");
+                    tracing::warn!(error = %e, "reading the pty ended with an error");
                 }
                 // End of the program: it wakes the loop one last time so it
                 // notices and closes the window.
                 ping.ping();
             })
-            .context("subir a thread do pty")?;
+            .context("start the pty's thread")?;
     }
 
     let mut state = TerminalWindow {
@@ -247,9 +248,9 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
         vt,
     };
 
-    WaylandSource::new(conn, fila)
+    WaylandSource::new(conn, queue)
         .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("nao consegui pendurar o Wayland: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
 
     let signal = cycle.get_signal();
     cycle
@@ -258,11 +259,51 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
                 signal.stop();
             }
         })
-        .context("loop de eventos")?;
+        .context("event loop")?;
     Ok(())
 }
 
 /// The terminal's window.
+/// How many cells fit in a window of `width` x `height` pixels.
+///
+/// # Why it is a free function and not a method
+///
+/// Because it is the one thing here that can be WRONG in a way nothing shows,
+/// and a method on a struct that needs a Wayland connection cannot be tested.
+/// Free, it is arithmetic over two numbers, and the test runs in microseconds.
+///
+/// **Integer arithmetic, without measuring text**: the cell is exactly 0.600 x
+/// the font size at normal width, including in the Nerd Fonts. Measuring here
+/// would be trading one calculation for a shaping call on every `configure`.
+///
+/// It is the BUFFER's cell, the same one the drawer uses. With the footer's,
+/// the arithmetic would give more columns than fit and the text would go out
+/// past the right edge with no error at all.
+///
+/// # And the margin comes off, TWICE — one on each side
+///
+/// The paragraph above says the text would otherwise leak past the right edge
+/// with no error at all, and that is exactly what WAS happening:
+/// `paint::spans_of` shifts every run by `CONTENT_INSET`, and this counted
+/// columns across the whole window. The last two columns of every terminal
+/// were written outside it, and the compositor does not clip.
+///
+/// `Host::context_of` in `buffer.rs` already subtracted it, and `render-png`
+/// adds it back to work out a window's size from a cell count. Three places,
+/// one arithmetic; this was the one that disagreed.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn cells_that_fit(width: u32, height: u32) -> (u16, u16) {
+    let cell_width_px = tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM;
+    let cell_height_px = tokens::font::SIZE_LARGE * tokens::font::LINE_HEIGHT;
+    let columns = ((width as f32 / cell_width_px) as u32)
+        .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
+        .clamp(1, u32::from(u16::MAX)) as u16;
+    let lines = ((height as f32 / cell_height_px) as u32)
+        .saturating_sub(u32::from(tokens::space::CONTENT_INSETY) * 2)
+        .clamp(1, u32::from(u16::MAX)) as u16;
+    (columns, lines)
+}
+
 struct TerminalWindow {
     conn: Connection,
     registry: RegistryState,
@@ -308,7 +349,7 @@ impl TerminalWindow {
             return;
         }
         let Ok(grid) = self.vt.grid() else {
-            tracing::info!("a thread do motor saiu; fechando o terminal");
+            tracing::info!("the engine's thread left; closing the terminal");
             self.quit = true;
             return;
         };
@@ -334,16 +375,16 @@ impl TerminalWindow {
             ronoctua_render::Atlas::Pinned,
             &spans,
         ) {
-            tracing::error!(error = %e, "preparar texto falhou");
+            tracing::error!(error = %e, "preparing the text failed");
             return;
         }
         if let Err(e) = gpu.frame(|pass| text.draw(ronoctua_render::Atlas::Pinned, pass)) {
-            tracing::error!(error = %e, "desenhar o frame falhou");
+            tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
-        tracing::info!(spans = spans.len(), "terminal desenhado no xdg_toplevel");
+        tracing::info!(spans = spans.len(), "terminal drawn on the xdg_toplevel");
         if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "flush falhou");
+            tracing::warn!(error = %e, "the flush failed");
         }
     }
 
@@ -354,16 +395,7 @@ impl TerminalWindow {
     /// Measuring here would be trading one calculation for a shaping call on
     /// every `configure`.
     fn recount(&mut self) {
-        // The BUFFER's size, the same one the drawer uses. With the footer's, the
-        // arithmetic would give more columns than fit, and the text would go out
-        // past the right edge with no error at all.
-        let cell_width_px = tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM;
-        let altura_celula = tokens::font::SIZE_LARGE * tokens::font::LINE_HEIGHT;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let columns = ((self.width as f32 / cell_width_px) as u32).clamp(1, u32::from(u16::MAX));
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let lines = ((self.height as f32 / altura_celula) as u32).clamp(1, u32::from(u16::MAX));
-        let (columns, lines) = (columns as u16, lines as u16);
+        let (columns, lines) = cells_that_fit(self.width, self.height);
         if (columns, lines) == (self.columns, self.lines) {
             return;
         }
@@ -373,10 +405,10 @@ impl TerminalWindow {
         // width; only the pty would leave the grid at the old size, and the
         // difference would show up as cut text with no error at all.
         if let Err(e) = self.vt.resize(columns, lines) {
-            tracing::warn!(error = %e, "redimensionar o motor falhou");
+            tracing::warn!(error = %e, "resizing the engine failed");
         }
         if let Err(e) = self.pty.resize(columns, lines) {
-            tracing::warn!(error = %e, "redimensionar o pty falhou");
+            tracing::warn!(error = %e, "resizing the pty failed");
         }
     }
 
@@ -394,7 +426,7 @@ impl TerminalWindow {
                     .cast::<std::ffi::c_void>(),
             ),
         ) else {
-            tracing::error!("ponteiros do Wayland nulos");
+            tracing::error!("null Wayland pointers");
             return;
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
@@ -421,11 +453,11 @@ impl TerminalWindow {
                 Ok(t) => {
                     self.text = Some(t);
                     self.gpu = Some(g);
-                    tracing::info!("contexto grafico do terminal pronto");
+                    tracing::info!("the terminal's graphics context is ready");
                 }
-                Err(e) => tracing::error!(error = %e, "desenhador falhou"),
+                Err(e) => tracing::error!(error = %e, "the renderer failed"),
             },
-            Err(e) => tracing::error!(error = %e, "sem contexto grafico"),
+            Err(e) => tracing::error!(error = %e, "no graphics context"),
         }
     }
 }
@@ -516,7 +548,7 @@ impl SeatHandler for TerminalWindow {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
             match self.seats.get_keyboard(qh, &seat, None) {
                 Ok(k) => self.keyboard = Some(k),
-                Err(e) => tracing::warn!(error = %e, "sem teclado; nao da para digitar"),
+                Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
     }
@@ -549,7 +581,7 @@ impl KeyboardHandler for TerminalWindow {
         _: &[u32],
         _: &[Keysym],
     ) {
-        tracing::debug!("o terminal ganhou o foco de teclado");
+        tracing::debug!("the terminal gained keyboard focus");
     }
 
     fn leave(
@@ -574,7 +606,7 @@ impl KeyboardHandler for TerminalWindow {
             return;
         };
         if let Err(e) = self.pty.write_bytes(&bytes) {
-            tracing::warn!(error = %e, "escrever no pty falhou; fechando");
+            tracing::warn!(error = %e, "writing to the pty failed; closing");
             self.quit = true;
         }
         // It does NOT redraw here. The echo comes from the program through the pty,
@@ -678,6 +710,7 @@ smithay_client_toolkit::delegate_dispatch2!(TerminalWindow);
 #[cfg(test)]
 mod tests {
     use super::{grid_list, key_bytes};
+    use ronoctua_tokens as tokens;
     use smithay_client_toolkit::seat::keyboard::Keysym;
 
     #[test]
@@ -688,7 +721,7 @@ mod tests {
         let rule = super::floating_rules();
         assert!(
             rule.contains(&super::APP_ID_MONITOR.replace('.', r"\.")),
-            "a regra nao cita o app id da janela:\n{rule}"
+            "the rule does not name the window's app id:\n{rule}"
         );
         // The dots are escaped: `br.ronoctua.monitor` as a regex would also
         // match `brXronoctuaYmonitor`, and — worse — is not what one reads.
@@ -759,7 +792,42 @@ mod tests {
                 // the comparator, not to the screen.
                 assert_eq!(lines, &vec!["o".to_owned(), "i".to_owned()]);
             }
-            otherwise => panic!("nao virou grade: {otherwise:?}"),
+            otherwise => panic!("it did not become a grid: {otherwise:?}"),
         }
+    }
+
+    #[test]
+    fn the_terminal_counts_only_the_cells_it_can_draw_in() {
+        // THE DEFECT: `paint::spans_of` shifts every run by `CONTENT_INSET`,
+        // and this counted columns across the whole window. The last two
+        // columns of every terminal were written outside it — and the
+        // compositor does not clip, so there was no error anywhere.
+        //
+        // The assertion is the INVERSE of what `render-png` does to work out a
+        // window's size from a cell count, which is what makes the two agree by
+        // construction instead of by coincidence.
+        let cell_w = tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM;
+        let cell_h = tokens::font::SIZE_LARGE * tokens::font::LINE_HEIGHT;
+        for width in [200_u32, 640, 800, 1280, 1920, 3840] {
+            for height in [200_u32, 600, 1080] {
+                let (columns, lines) = super::cells_that_fit(width, height);
+                let wanted = f32::from(columns + tokens::space::CONTENT_INSET * 2) * cell_w;
+                assert!(
+                    wanted <= width as f32,
+                    "at {width} px the terminal asked for {columns} columns, \
+                     which with the margin is {wanted} px"
+                );
+                let tall = f32::from(lines + tokens::space::CONTENT_INSETY * 2) * cell_h;
+                assert!(
+                    tall <= height as f32,
+                    "at {height} px it asked for {lines} lines"
+                );
+            }
+        }
+        // AND NEVER ZERO. A window narrower than the margin is one the
+        // compositor may still hand over, and a grid of zero columns is a panic
+        // waiting inside the engine.
+        let (columns, lines) = super::cells_that_fit(1, 1);
+        assert!(columns >= 1 && lines >= 1, "the grid cannot be empty");
     }
 }

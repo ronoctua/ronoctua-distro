@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-disks"
-description = "A unica fronteira com o udisks2: discos, particoes e pendrives."
+description = "The one boundary with udisks2: disks, partitions and memory sticks."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

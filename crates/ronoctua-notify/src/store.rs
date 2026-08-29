@@ -165,7 +165,7 @@ pub fn read_preferences_from(dir: &Path) -> Preferences {
                 path = %path.display(),
                 rules = p.rules.len(),
                 adjustments = p.adjustments.len(),
-                "preferencias de notificacao lidas"
+                "notification preferences read"
             );
             p
         }
@@ -176,7 +176,7 @@ pub fn read_preferences_from(dir: &Path) -> Preferences {
             tracing::error!(
                 path = %path.display(),
                 error = %e,
-                "preferencias de notificacao ilegiveis; seguindo com as da distro"
+                "the notification preferences are unreadable; carrying on with the distro's"
             );
             Preferences::default()
         }
@@ -209,7 +209,7 @@ pub fn read_history_from(dir: &Path) -> Vec<Record> {
                 path = %path.display(),
                 lidas = before,
                 mantidas = v.len(),
-                "historico de notificacoes lido"
+                "notification history read"
             );
             v
         }
@@ -409,7 +409,7 @@ mod tests {
     fn broken_preferences_do_not_take_the_shell_down() {
         // A hand-edited file that stopped parsing is not a reason for the
         // desktop not to come up.
-        assert!(serde_json::from_str::<Preferences>("{ nao e json").is_err());
+        assert!(serde_json::from_str::<Preferences>("{ i am not json").is_err());
         assert!(Preferences::default().rules.is_empty());
     }
 }

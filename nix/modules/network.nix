@@ -38,12 +38,12 @@ let
       <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
        "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
       <busconfig>
-        <!-- So o root levanta o nmAgent: e ele que tem /dev/tpmrm0. -->
+        <!-- Only root brings up the nmAgent: it is the one with /dev/tpmrm0. -->
         <policy user="root">
           <allow own="org.ronoctua.agent"/>
         </policy>
 
-        <!-- O user_name da distro pede forPrefix guardar e esquecer, e nada alem. -->
+        <!-- The distro's user_name asks to store and to forget, and nothing beyond that. -->
         <policy user="${config.ronoctua.user}">
           <allow send_destination="org.ronoctua.agent"
                  send_interface="org.ronoctua.Network1"/>
@@ -66,8 +66,8 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Liga a camada de rede da distro. Desligar deixa a máquina sem
-        gerente de rede nenhum — só faz sentido em teste.
+        Switches the distro's network layer on. Switching it off leaves the machine with
+        no network manager at all — it only makes sense in a test.
       '';
     };
 
@@ -76,12 +76,12 @@ in
       default = "BR";
       example = "US";
       description = ''
-        Domínio regulatório do rádio, em ISO 3166-1 alfa-2.
+        The radio's regulatory domain, in ISO 3166-1 alpha-2.
 
-        Não é papelada: ele decide quais canais e qual potência o rádio
-        pode usar. Sem domínio o kernel assume o mais restritivo do mundo,
-        e some justamente a parte alta de 5 GHz, onde há canais wide e
-        vazios.
+        It is not paperwork: it decides which channels and what power the radio
+        may use. With no domain the kernel assumes the most restrictive in the world,
+        and precisely the upper part of 5 GHz goes away, where the wide and
+        empty channels are.
       '';
     };
 
@@ -89,12 +89,12 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Liga o nmAgent de segredo: a senha do Wi-Fi sai do arquivo de perfil
-        e passa a viver selada no TPM2.
+        Switches on the secret nmAgent: the Wi-Fi password comes out of the profile file
+        and goes on to live sealed in the TPM2.
 
-        Desligar restored ao comportamento do mundo — `psk=<senha>` dentro do
-        keyfile. Existe como opção porque uma máquina sem TPM não tem onde
-        selar, e falhar o boot por isso seria pior que guardar em arquivo.
+        Switching it off goes back to the world's behaviour — `psk=<password>` inside the
+        keyfile. It exists as an option because a machine with no TPM has nowhere
+        to seal, and failing the boot over that would be worse than storing it in a file.
       '';
     };
 
@@ -102,8 +102,8 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Aplica o ajuste de pilha TCP descrito neste módulo. Existe forPrefix
-        poder ser desligado num teste que queira o padrão do kernel.
+        Applies the TCP stack tuning described in this module. It exists so
+        that it can be switched off in a test that wants the kernel's default.
       '';
     };
   };
@@ -252,7 +252,7 @@ in
     # machine that is simply out of range.
     # -------------------------------------------------------------------
     systemd.services.ronoctua-network-console = lib.mkIf cfg.nmAgent {
-      description = "Pergunta a senha do Wi-Fi no console quando ninguem esta logado";
+      description = "Asks for the Wi-Fi password on the console when nobody is logged in";
       after = [
         "NetworkManager.service"
         "ronoctua-network-agent.service"
@@ -280,7 +280,7 @@ in
     };
 
     systemd.services.ronoctua-network-agent = lib.mkIf cfg.nmAgent {
-      description = "Agente de segredo do NetworkManager (senha selada no TPM2)";
+      description = "NetworkManager's secret agent (password sealed in the TPM2)";
       # AFTER NetworkManager: registering with `AgentManager` fails if it is
       # not on the bus yet.
       after = [

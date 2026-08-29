@@ -128,8 +128,26 @@ rec {
   # not at the file that wrote it. Defined here, at column 0, they can be called
   # from any indentation.
   prelude = ''
-    def start_xvfb():
+    def start_xvfb(brain=False):
         machine.succeed("mkdir -p /run/user/0 && chmod 700 /run/user/0")
+        # AND NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF.
+        #
+        # The footer wakes a brain beside it when there is no systemd unit for
+        # one — which in these VMs is always — and the update task's default
+        # window is the AFTERNOON, 13h to 18h. So the same battery passed at
+        # noon and failed at half past one: the brain announced, its line took
+        # a row, and three tests that assert "the footer at rest is two lines"
+        # measured three. Nothing in the code had changed; the CLOCK had.
+        #
+        # A machine under test has no business rebuilding its own system, so it
+        # is told not to. `brain=True` is for the one test that photographs the
+        # brain's line and therefore needs it to speak.
+        machine.succeed("mkdir -p /root/.config/ronoctua")
+        machine.succeed(
+            "printf '%s' "
+            f"'{{\"tasks\":{{\"system-update\":{{\"enabled\":{str(brain).lower()}}}}}}}'"
+            " > /root/.config/ronoctua/brain.json"
+        )
         machine.succeed(
             "systemd-run --unit=xvfb "
             "${pkgs.xorg-server}/bin/Xvfb :99 -screen 0 ${toString width}x${toString height}x24"
@@ -176,7 +194,7 @@ rec {
         # assert turns that into a message.
         journal = machine.succeed(f"journalctl -u {unit} --no-pager")
         assert "software EGL renderers are skipped" not in journal, (
-            "o niri caiu no backend DRM; DISPLAY nao chegou nele"
+            "niri fell into the DRM backend; DISPLAY did not reach it"
         )
 
 
@@ -193,9 +211,9 @@ rec {
             if '"niri"' not in line:
                 continue
             m = re.search(r"(\d+)x(\d+)\+-?\d+\+-?\d+\s+\+(-?\d+)\+(-?\d+)", line)
-            assert m, f"nao consegui ler a geometria da janela do niri: {line!r}"
+            assert m, f"could not read the geometry of niri's window: {line!r}"
             return tuple(int(g) for g in m.groups())
-        raise AssertionError(f"a janela do niri nao esta mapeada no X:\n{tree_out}")
+        raise AssertionError(f"niri's window is not mapped in X:\n{tree_out}")
 
 
     def focus_niri():
@@ -212,12 +230,12 @@ rec {
         for line in tree_out.splitlines():
             if '"niri"' in line:
                 m = re.search(r"(0x[0-9a-fA-F]+)", line)
-                assert m, f"nao achei o id da janela do niri: {line!r}"
+                assert m, f"could not find the id of niri's window: {line!r}"
                 machine.succeed(
                     f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool windowfocus {m.group(1)}"
                 )
                 return m.group(1)
-        raise AssertionError(f"a janela do niri nao esta mapeada:\n{tree_out}")
+        raise AssertionError(f"niri's window is not mapped:\n{tree_out}")
 
 
     def socket_of(unit):

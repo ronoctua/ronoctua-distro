@@ -79,9 +79,9 @@ impl Offscreen {
         let adapter = match adapter_of(wgpu::Backends::VULKAN) {
             Some(a) => a,
             None => adapter_of(wgpu::Backends::GL).context(
-                "nenhum adaptador grafico serve, nem por Vulkan nem por GL.\n\
-                 Num ambiente sem GPU, o lavapipe do Mesa funciona — e o que\n\
-                 os testes usam.",
+                "no graphics adapter will do, neither by Vulkan nor by GL.\n\
+                 In an environment with no GPU, Mesa's lavapipe works — it is what\n\
+                 the tests use.",
             )?,
         };
 
@@ -96,12 +96,12 @@ impl Offscreen {
             required_limits: limits,
             ..Default::default()
         }))
-        .context("o adaptador nao entregou dispositivo")?;
+        .context("the adapter handed over no device")?;
 
         let width = width.clamp(1, ceiling);
         let height = height.clamp(1, ceiling);
         let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("alvo"),
+            label: Some("target"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -151,7 +151,7 @@ impl Offscreen {
         {
             let [r, g, b, a] = background;
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("limpar"),
+                label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -192,7 +192,7 @@ impl Offscreen {
         let unpadded = self.width * 4;
         let padded = unpadded.div_ceil(ROW_ALIGN) * ROW_ALIGN;
         let scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("leitura"),
+            label: Some("reading"),
             size: u64::from(padded) * u64::from(self.height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -200,7 +200,7 @@ impl Offscreen {
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("leitura"),
+                label: Some("reading"),
             });
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -236,12 +236,12 @@ impl Offscreen {
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
         heard
             .recv()
-            .context("o mapeamento da leitura nunca respondeu")?
-            .context("mapear o buffer de leitura falhou")?;
+            .context("the read mapping never answered")?
+            .context("mapping the read buffer failed")?;
 
         let padded_bytes = slice
             .get_mapped_range()
-            .context("a faixa mapeada nao veio")?;
+            .context("the mapped range did not come")?;
         let mut out = Vec::with_capacity((unpadded * self.height) as usize);
         for row in 0..self.height {
             let from = (row * padded) as usize;
@@ -333,5 +333,5 @@ pub fn write_png(path: &std::path::Path, rgba: &[u8], width: u32, height: u32) -
     chunk(&mut png, b"IDAT", &z);
     chunk(&mut png, b"IEND", &[]);
 
-    std::fs::write(path, png).with_context(|| format!("nao consegui escrever {}", path.display()))
+    std::fs::write(path, png).with_context(|| format!("could not write {}", path.display()))
 }

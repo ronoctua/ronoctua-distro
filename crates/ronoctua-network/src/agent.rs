@@ -38,7 +38,7 @@ use crate::secret;
 pub const AGENT_PATH: &str = "/org/freedesktop/NetworkManager/SecretAgent";
 
 /// Our own object, for the shell to request sealing.
-pub const RONOCTUA_PATH: &str = "/org/ronoctua/Rede";
+pub const RONOCTUA_PATH: &str = "/org/ronoctua/Network";
 
 /// How we identify ourselves to NetworkManager.
 pub const IDENTIFIER: &str = "org.ronoctua.agent";
@@ -91,12 +91,12 @@ impl Agent {
         connection: HashMap<String, HashMap<String, OwnedValue>>,
         _path: zbus::zvariant::OwnedObjectPath,
         section: String,
-        _dicas: Vec<String>,
+        _hints: Vec<String>,
         flags: u32,
     ) -> Result<HashMap<String, HashMap<String, OwnedValue>>, Failure> {
         if section != SECURITY_SECTION {
             return Err(Failure::NotSupported(format!(
-                "este agente só sabe de `{SECURITY_SECTION}`, e pediram `{section}`"
+                "this agent only knows about `{SECURITY_SECTION}`, and `{section}` was asked for"
             )));
         }
 
@@ -107,7 +107,7 @@ impl Agent {
         // `NoSecrets` here sends the question to whoever can type the new one.
         if flags & ASK_AGAIN != 0 {
             return Err(Failure::NoSecrets(
-                "o NetworkManager pediu senha nova; a guardada não serve".into(),
+                "NetworkManager asked for a new password; the stored one does not do".into(),
             ));
         }
 
@@ -118,21 +118,21 @@ impl Agent {
             // The reason goes to the daemon's log, and NOT to the bus: the
             // `systemd-creds` message may mention the TPM's path and state,
             // and the one asking is a service, not a person.
-            tracing::info!(error = %e, "sem senha guardada para esta rede");
-            Failure::NoSecrets("não há senha guardada para esta rede".into())
+            tracing::info!(error = %e, "no password stored for this network");
+            Failure::NoSecrets("there is no password stored for this network".into())
         })?;
 
         let mut security = HashMap::new();
         security.insert(
             "psk".to_owned(),
             OwnedValue::try_from(Value::from(password))
-                .map_err(|e| Failure::NoSecrets(format!("empacotar a senha: {e}")))?,
+                .map_err(|e| Failure::NoSecrets(format!("pack the password: {e}")))?,
         );
         Ok(HashMap::from([(SECURITY_SECTION.to_owned(), security)]))
     }
 
     /// Request cancelled. There is nothing to undo: the read is synchronous and short.
-    fn cancel_get_secrets(&self, _path: zbus::zvariant::OwnedObjectPath, _secao: String) {}
+    fn cancel_get_secrets(&self, _path: zbus::zvariant::OwnedObjectPath, _section: String) {}
 
     /// NM asking us to STORE what it has.
     ///
@@ -141,7 +141,7 @@ impl Agent {
     /// Sealing everything NM sends would make "do not remember" store it anyway.
     fn save_secrets(
         &self,
-        _conexao: HashMap<String, HashMap<String, OwnedValue>>,
+        _connection: HashMap<String, HashMap<String, OwnedValue>>,
         _path: zbus::zvariant::OwnedObjectPath,
     ) {
     }
@@ -156,9 +156,9 @@ impl Agent {
         _path: zbus::zvariant::OwnedObjectPath,
     ) {
         if let Some(ssid) = ssid_of(&connection)
-            && let Err(e) = secret::apagar(&ssid)
+            && let Err(e) = secret::erase(&ssid)
         {
-            tracing::warn!(error = %e, "não consegui apagar o segredo da rede");
+            tracing::warn!(error = %e, "could not erase the network's secret");
         }
     }
 }
@@ -182,12 +182,12 @@ impl Ronoctua {
     /// The TPM refused, or the directory could not be created.
     fn store(&self, ssid: String, password: String) -> zbus::fdo::Result<()> {
         secret::seal(&ssid, &password).map_err(|e| {
-            tracing::warn!(error = %e, "nao consegui selar a senha");
+            tracing::warn!(error = %e, "could not seal the password");
             // The TPM's message goes to the log; for the caller, enough
             // to decide what to do.
-            zbus::fdo::Error::Failed("o TPM recusou guardar a senha".into())
+            zbus::fdo::Error::Failed("the TPM refused to store the password".into())
         })?;
-        tracing::info!("senha selada no TPM");
+        tracing::info!("password sealed in the TPM");
         Ok(())
     }
 
@@ -197,8 +197,7 @@ impl Ronoctua {
     ///
     /// The file exists and could not be removed.
     fn forget(&self, ssid: String) -> zbus::fdo::Result<()> {
-        secret::apagar(&ssid)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("apagar o segredo: {e}")))
+        secret::erase(&ssid).map_err(|e| zbus::fdo::Error::Failed(format!("erase the secret: {e}")))
     }
 
     /// Is there a stored password for this network?
@@ -226,8 +225,8 @@ mod tests {
     #[test]
     fn the_ssid_comes_from_the_nm_dictionary() {
         assert_eq!(
-            ssid_of(&connection_with_ssid(b"casa")).as_deref(),
-            Some("casa")
+            ssid_of(&connection_with_ssid(b"home")).as_deref(),
+            Some("home")
         );
     }
 
@@ -242,7 +241,7 @@ mod tests {
         // loop — NM asks, we hand over the old one, it fails, it asks again.
         // Without reaching the disk: the flag decides first.
         let r = Agent.get_secrets(
-            connection_with_ssid(b"casa"),
+            connection_with_ssid(b"home"),
             zbus::zvariant::OwnedObjectPath::try_from("/org/freedesktop/NetworkManager/Settings/1")
                 .unwrap(),
             SECURITY_SECTION.to_owned(),
@@ -257,7 +256,7 @@ mod tests {
         // `NotSupported` and not `NoSecrets`: saying "I do not have it" for a VPN
         // section would make NM keep asking this agent.
         let r = Agent.get_secrets(
-            connection_with_ssid(b"casa"),
+            connection_with_ssid(b"home"),
             zbus::zvariant::OwnedObjectPath::try_from("/org/freedesktop/NetworkManager/Settings/1")
                 .unwrap(),
             "vpn".to_owned(),

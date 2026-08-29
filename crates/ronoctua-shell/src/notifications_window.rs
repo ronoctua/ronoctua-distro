@@ -68,11 +68,10 @@ const FIRST_OF_LIST: u16 = 2;
 
 /// The margin inside the window, in cells.
 ///
-/// The same difference the file manager's window pays, and for the same reason
-/// written there: the rows already carry a gutter, so what this owes is what is
-/// left over.
-const CONTENT_MARGIN: u16 =
-    tokens::space::BUFFER_MARGINX.saturating_sub(tokens::space::FILES_GUTTER);
+/// The same difference every other surface pays, and for the reason written at
+/// [`crate::chrome::FIELDS_LEAD`]: the rows already carry a gutter, so what a
+/// surface owes is what is left over.
+const CONTENT_MARGIN: u16 = crate::chrome::FIELDS_LEAD;
 
 /// How often the window re-reads what the footer wrote.
 ///
@@ -90,12 +89,12 @@ const REREAD: std::time::Duration = std::time::Duration::from_secs(2);
 /// `xdg_shell`.
 pub fn host_it() -> Result<()> {
     let conn = Connection::connect_to_env()
-        .context("nao ha compositor Wayland acessivel (WAYLAND_DISPLAY esta definida?)")?;
-    let (globals, fila) = registry_queue_init(&conn).context("registry do Wayland")?;
-    let qh: QueueHandle<NotificationsWindow> = fila.handle();
+        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
+    let (globals, queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let qh: QueueHandle<NotificationsWindow> = queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("o compositor nao expoe xdg_shell")?;
+    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
 
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the COMPOSITOR (invariant 4).
@@ -108,15 +107,16 @@ pub fn host_it() -> Result<()> {
     window.commit();
 
     let mut cycle: EventLoop<NotificationsWindow> = EventLoop::try_new().context("calloop")?;
-    let alca = cycle.handle();
-    alca.insert_source(
-        timer::Timer::from_duration(REREAD),
-        |_, (), state: &mut NotificationsWindow| {
-            state.reread();
-            timer::TimeoutAction::ToDuration(REREAD)
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o relogio: {e}"))?;
+    let handle = cycle.handle();
+    handle
+        .insert_source(
+            timer::Timer::from_duration(REREAD),
+            |_, (), state: &mut NotificationsWindow| {
+                state.reread();
+                timer::TimeoutAction::ToDuration(REREAD)
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("could not hang the clock: {e}"))?;
 
     let mut state = NotificationsWindow {
         conn: conn.clone(),
@@ -147,9 +147,9 @@ pub fn host_it() -> Result<()> {
     };
     state.reread();
 
-    WaylandSource::new(conn, fila)
+    WaylandSource::new(conn, queue)
         .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("nao consegui pendurar o Wayland: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
 
     let signal = cycle.get_signal();
     cycle
@@ -158,7 +158,7 @@ pub fn host_it() -> Result<()> {
                 signal.stop();
             }
         })
-        .context("loop de eventos")?;
+        .context("event loop")?;
     Ok(())
 }
 
@@ -294,7 +294,7 @@ impl NotificationsWindow {
                     adjustments: self.book.adjustments.clone(),
                 };
                 if let Err(e) = self.notes.save_preferences(&prefs) {
-                    tracing::warn!(error = %e, "nao consegui gravar as preferencias");
+                    tracing::warn!(error = %e, "could not write the preferences");
                 }
             }
         }
@@ -303,7 +303,7 @@ impl NotificationsWindow {
 
     fn save_history(&mut self) {
         if let Err(e) = self.notes.save_history(&mut self.records) {
-            tracing::warn!(error = %e, "nao consegui gravar o historico");
+            tracing::warn!(error = %e, "could not write the history");
         }
     }
 
@@ -327,7 +327,7 @@ impl NotificationsWindow {
             std::ptr::NonNull::new(self.conn.backend().display_ptr().cast()),
             std::ptr::NonNull::new(self.window.wl_surface().id().as_ptr().cast()),
         ) else {
-            tracing::error!("ponteiros do Wayland nulos");
+            tracing::error!("null Wayland pointers");
             return;
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
@@ -342,7 +342,7 @@ impl NotificationsWindow {
             )
         };
         let Ok(g) = gpu else {
-            tracing::error!("sem GPU utilizavel; a janela nao vai desenhar");
+            tracing::error!("no usable GPU; the window will not draw");
             return;
         };
         match ronoctua_render::Text::new(
@@ -352,11 +352,11 @@ impl NotificationsWindow {
             tokens::font::SIZE_LARGE,
         ) {
             Ok(t) => self.text = Some(t),
-            Err(e) => tracing::error!(error = %e, "montar o texto falhou"),
+            Err(e) => tracing::error!(error = %e, "assembling the text failed"),
         }
         match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
             Ok(q) => self.quads = Some(q),
-            Err(e) => tracing::error!(error = %e, "pipeline de quad falhou"),
+            Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
         }
         self.gpu = Some(g);
     }
@@ -406,6 +406,7 @@ impl NotificationsWindow {
             column: margin,
             line: 0,
             color: tokens::color::TEXT_PRIMARY,
+            edge: false,
         });
 
         // LINE 1: what the last action said, or the keys.
@@ -423,6 +424,7 @@ impl NotificationsWindow {
             column: margin,
             line: 1,
             color: tokens::color::TEXT_SECONDARY,
+            edge: false,
         });
 
         let line_px = tokens::metrics::line_height(size);
@@ -445,6 +447,7 @@ impl NotificationsWindow {
                     column: margin + f.at,
                     line: y,
                     color: f.color,
+                    edge: false,
                 });
             }
         }
@@ -461,7 +464,7 @@ impl NotificationsWindow {
             ronoctua_render::Atlas::Pinned,
             &spans,
         ) {
-            tracing::error!(error = %e, "preparar texto falhou");
+            tracing::error!(error = %e, "preparing the text failed");
             return;
         }
         if let Some(q) = self.quads.as_mut() {
@@ -480,11 +483,11 @@ impl NotificationsWindow {
             }
             text.draw(ronoctua_render::Atlas::Pinned, pass)
         }) {
-            tracing::error!(error = %e, "desenhar o frame falhou");
+            tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
         if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "flush falhou");
+            tracing::warn!(error = %e, "the flush failed");
         }
     }
 
@@ -575,13 +578,13 @@ impl SeatHandler for NotificationsWindow {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
             match self.seats.get_keyboard(qh, &seat, None) {
                 Ok(k) => self.keyboard = Some(k),
-                Err(e) => tracing::warn!(error = %e, "sem teclado; nao da para digitar"),
+                Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
         }
         if cap == Capability::Pointer && self.pointer.is_none() {
             match self.seats.get_pointer(qh, &seat) {
                 Ok(p) => self.pointer = Some(p),
-                Err(e) => tracing::warn!(error = %e, "sem ponteiro; so teclado"),
+                Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
             }
         }
     }

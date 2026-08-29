@@ -113,7 +113,7 @@ def sign(key: pathlib.Path, payload: bytes) -> bytes:
             check=False,
         )
         if done.returncode != 0:
-            sys.exit(f"ERRO: openssl recusou assinar: {done.stderr.decode(errors='replace')}")
+            sys.exit(f"ERROR: openssl refused to sign: {done.stderr.decode(errors='replace')}")
         return done.stdout
 
 
@@ -124,7 +124,7 @@ def public_der(key: pathlib.Path) -> bytes:
         check=False,
     )
     if done.returncode != 0:
-        sys.exit(f"ERRO: openssl nao leu a chave: {done.stderr.decode(errors='replace')}")
+        sys.exit(f"ERROR: openssl did not read the key: {done.stderr.decode(errors='replace')}")
     return done.stdout
 
 
@@ -136,14 +136,14 @@ def main() -> None:
     parser.add_argument(
         "--id-file",
         type=pathlib.Path,
-        help="onde escrever o id, para quem precisa dele sem reler o .crx",
+        help="where to write the id, for whoever needs it without rereading the .crx",
     )
     args = parser.parse_args()
 
     if not args.source.is_dir():
-        sys.exit(f"ERRO: {args.source} nao e um diretorio")
+        sys.exit(f"ERROR: {args.source} is not a directory")
     if not (args.source / "manifest.json").is_file():
-        sys.exit(f"ERRO: {args.source} nao tem manifest.json")
+        sys.exit(f"ERROR: {args.source} has no manifest.json")
 
     der = public_der(args.key)
     identifier = crx_id(der)

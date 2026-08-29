@@ -1,0 +1,57 @@
+[package]
+name = "ronoctua-brain"
+description = "The brain: what the machine does on its own, when it may do it, and what happened."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE BORDER, ONE CRATE — the shape `ronoctua-transfers`, `ronoctua-memory` and
+# `ronoctua-network` already have. What this one owns is WHEN: which task is
+# due, whether the machine can afford it right now, and what happened last
+# time. It does not draw, does not translate, does not speak Wayland, and it
+# runs no privileged command itself.
+[dependencies]
+# THE PULSE, and the only crate allowed to read `/proc`. The brain refuses to
+# start anything while the machine is busy, and it learns that the machine is
+# busy by ASKING — a scheduler that opened `/proc/pressure/cpu` for itself
+# would be the second border that crate exists to prevent.
+ronoctua-memory = { path = "../ronoctua-memory" }
+# The types `ronoctua-memory` speaks: `Pressure`, `Reading`, `Gauge`. Naming
+# them is not a dependency on the display list — nothing here builds one.
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+# `when::Zone` — THE TZif READER, and the only reason this line exists.
+#
+# A schedule that says "in the afternoon" is a schedule in the person's own
+# time, and turning an instant into a local hour needs the machine's zone.
+# There are three ways to get one and two of them are worse: `localtime_r`
+# needs `unsafe`, which this crate forbids, and a second TZif reader would be
+# the same hundred lines in a second place — the one already here is checked
+# against `coreutils date` on the machine's real zone. Nothing else of this
+# crate is used, and `moment::Offset` is the seam, so a test drives a zone that
+# jumps without a fixture.
+ronoctua-files = { path = "../ronoctua-files" }
+anyhow.workspace = true
+tracing.workspace = true
+# The wire, and the two files. One JSON object per line on the socket, for the
+# reason `ronoctua-transfers` writes down: a whitespace grammar loses half of a
+# value that contains a space without saying so.
+serde = { workspace = true }
+serde_json.workspace = true
+
+# THE DAEMON, as its own binary.
+#
+# A `[[bin]]` so `nix/rust.nix` can extract JUST this: a derivation references
+# what its BYTES cite, and shipping the whole workspace to decide when to run
+# an update would put the renderer, wgpu and the wasm runtime inside a unit
+# that has no screen.
+[[bin]]
+name = "ronoctua-brain"
+path = "src/bin/daemon.rs"
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+[lints]
+workspace = true

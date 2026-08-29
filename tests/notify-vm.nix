@@ -70,11 +70,11 @@ pkgs.testers.runNixOSTest {
 
 
     def footer_height():
-        """Altura real da superficie na tela, em px."""
+        """The surface's real height on screen, in px."""
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         raw = machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
             f"-crop 1x{h}+2+0 +repage -depth 8 txt:-"
         )
         colors = [l.split("#")[1][:6] for l in raw.splitlines()[1:] if "#" in l]
@@ -86,7 +86,7 @@ pkgs.testers.runNixOSTest {
             height += 1
         return height
 
-    def wait_for_height(expected, tentativas=20):
+    def wait_for_height(expected, attempts=20):
         """Wait for the surface to reach the given height, and report the value.
 
         Two lessons in one helper: `assert x == y` with no message hides the
@@ -94,14 +94,14 @@ pkgs.testers.runNixOSTest {
         ahead of the COMPOSITOR — the footer has drawn, niri has not composed yet.
         """
         seen_now = None
-        for _ in range(tentativas):
+        for _ in range(attempts):
             seen_now = footer_height()
             if seen_now == expected:
                 return seen_now
             machine.sleep(1)
         raise AssertionError(
-            f"o rodape tem {seen_now} px, esperava {expected} "
-            f"(depois de {tentativas}s)"
+            f"the footer is {seen_now} px, expected {expected} "
+            f"(after {attempts}s)"
         )
 
 
@@ -109,23 +109,23 @@ pkgs.testers.runNixOSTest {
     def layers():
         out_text = machine.succeed(f"${ronoctua-shell}/bin/niri-contract {sock}")
         for line in out_text.splitlines():
-            if line.startswith("camadas:"):
+            if line.startswith("layers:"):
                 return line
-        raise AssertionError(f"niri-contract nao listou camadas:\n{out_text}")
+        raise AssertionError(f"niri-contract did not list layers:\n{out_text}")
 
 
-    def notificar(resumo, urgencia="normal", corpo=""):
+    def notify(summary, urgency="normal", body=""):
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 "
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
-            f"${pkgs.libnotify}/bin/notify-send -u {urgencia} "
-            f"-a testes '{resumo}' '{corpo}'"
+            f"${pkgs.libnotify}/bin/notify-send -u {urgency} "
+            f"-a testes '{summary}' '{body}'"
         )
         machine.sleep(1)
 
 
     def control(command):
-        # `comando <id>`, and not one word per feature.
+        # `command <id>`, and not one word per feature.
         #
         # The socket spoke a vocabulary of its own (`historico`, `dispensar`)
         # parallel to that of the command ids. Now it speaks COMMAND, and this
@@ -143,7 +143,7 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
-    with subtest("o rodape sobe com o daemon de notificacoes no barramento"):
+    with subtest("the footer comes up with the notification daemon on the bus"):
         # A SESSION bus of its own: the daemon claims
         # `org.freedesktop.Notifications`, and if there is another one on the
         # machine the name is refused. In this VM there is not, but the explicit
@@ -175,16 +175,16 @@ pkgs.testers.runNixOSTest {
         # THE PAINTING, and not only the daemon: measuring the height before the
         # first `configure` gives zero pixels, with no error at all.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'layout do rodape resolvido'",
+            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
             timeout=90,
         )
         wait_for_height(FOOTER)
 
-    with subtest("tres notificacoes, UMA na tela"):
+    with subtest("three notifications, ONE on screen"):
         for i in (1, 2, 3):
-            notificar(f"mensagem {i}")
+            notify(f"message {i}")
         journal = machine.succeed("journalctl -u footer --no-pager")
-        assert journal.count("notificacao recebida") == 3, journal
+        assert journal.count("notification received") == 3, journal
 
         # The queue counts the ones that are WAITING: 2, not 3. The one on the
         # band is not pending.
@@ -196,7 +196,7 @@ pkgs.testers.runNixOSTest {
             "journalctl -u footer --no-pager | grep -q 'pending=2'", timeout=30
         )
 
-    with subtest("a faixa aparece ACIMA da modeline, na MESMA superficie"):
+    with subtest("the band appears ABOVE the modeline, on the SAME surface"):
         # THE BAND LASTS SECONDS, so it is raised HERE and measured at once.
         # Measuring after another subtest is measuring an empty band: three
         # normal notifications are eighteen seconds of screen, and the checks in
@@ -208,13 +208,13 @@ pkgs.testers.runNixOSTest {
             control("notif-dismiss")
         wait_for_height(FOOTER)
 
-        notificar("uma linha discreta")
+        notify("one discreet line")
         # A brief notification is ONE line above the pair. The log says which,
         # and the height is what proves it reached the screen.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'band=1'", timeout=30
         )
-        wait_for_height(WITH_ONE, tentativas=5)
+        wait_for_height(WITH_ONE, attempts=5)
 
         # THE CLAUSE ONLY THE VM PROVES. The owner asked for a line above the
         # modeline and not a floating toast; what makes that legal is that it is
@@ -222,37 +222,37 @@ pkgs.testers.runNixOSTest {
         c = layers()
         print(c)
         assert c.count("ronoctua-footer") == 1, (
-            f"a faixa criou uma SEGUNDA superficie (invariante 14):\n{c}"
+            f"the band created a SECOND surface (invariant 14):\n{c}"
         )
 
-    with subtest("a critica some sozinha, e continua nao lida"):
+    with subtest("the critical one goes away on its own, and stays unread"):
         # THE RULE THIS REPLACED said a critical one never expires. The band
         # pushes the content up while it is there, so one that never leaves is a
         # permanent tax on every window — the owner's decision, and this is
         # where it is proved rather than asserted.
-        notificar("bateria em 3%", urgencia="critical", corpo="troque de tomada")
+        notify("battery at 3%", urgency="critical", body="change sockets")
         # Loud, and TWO lines: the summary and the body. `Show::Full` is up to
         # three, and the third is the row of actions — this one has none, and a
         # band with an empty line is a band lying about its size.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'band=2 loud=true'", timeout=30
         )
-        wait_for_height(WITH_TWO, tentativas=5)
+        wait_for_height(WITH_TWO, attempts=5)
         # `long` is 20 s. Well past it, the band is gone and the pair is back.
-        wait_for_height(FOOTER, tentativas=40)
+        wait_for_height(FOOTER, attempts=40)
         # AND IT IS STILL UNREAD. Leaving the screen and being seen are not the
         # same event, which is the whole point of the count surviving the band.
         #
         # The LAST line the queue logged is the one that counts: the ones before
         # it are the states it passed through.
         last = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'fila de notificacoes' | tail -1"
+            "journalctl -u footer --no-pager | grep 'notification queue' | tail -1"
         ).strip()
         print(last)
         assert "unread=" in last, last
-        assert "unread=0 " not in last, "a critica saiu da tela E do contador"
+        assert "unread=0 " not in last, "the critical one left the screen AND the counter"
 
-    with subtest("uma tag do barramento cai no catalogo"):
+    with subtest("a tag from the bus lands in the catalogue"):
         # THE OTHER DOOR into the catalogue: an app of ours that is not the
         # shell names itself with a hint, and the entry recognises it. Without
         # this it would have to be recognised by its summary — an English
@@ -261,11 +261,11 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 "
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
             "${pkgs.libnotify}/bin/notify-send -a testes "
-            "--hint=string:tags:memory-killed 'algo fechou' 'por falta de memoria'"
+            "--hint=string:tags:memory-killed 'something closed' 'for lack of memory'"
         )
         machine.sleep(2)
         decided = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'notificacao decidida' | tail -1"
+            "journalctl -u footer --no-pager | grep 'notification decided' | tail -1"
         ).strip()
         print(decided)
         # THE QUOTES ARE PART OF IT: `tracing` writes a string field as
@@ -278,7 +278,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(4):
             control("notif-dismiss")
 
-    with subtest("o caminho do arquivo chega pelas DUAS convencoes"):
+    with subtest("the file's path arrives by BOTH conventions"):
         # The compositor puts a screenshot's `file://` URL in the icon field;
         # libnotify puts it in the standard `image-path` hint and leaves the
         # icon empty. Reading only the first made every action that needs a file
@@ -286,53 +286,53 @@ pkgs.testers.runNixOSTest {
         # were expected, and nothing failing.
         for _ in range(4):
             control("notif-dismiss")
-        machine.succeed("touch /root/uma-imagem.png")
+        machine.succeed("touch /root/an-image.png")
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 "
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
             "${pkgs.libnotify}/bin/notify-send -a testes "
-            "--hint=string:image-path:file:///root/uma-imagem.png "
-            "'com imagem' 'pelo hint'"
+            "--hint=string:image-path:file:///root/an-image.png "
+            "'with an image' 'through the hint'"
         )
         machine.sleep(1)
         got = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'notificacao recebida' | tail -1"
+            "journalctl -u footer --no-pager | grep 'notification received' | tail -1"
         ).strip()
         print(got)
-        assert 'icon="file:///root/uma-imagem.png"' in got, got
+        assert 'icon="file:///root/an-image.png"' in got, got
 
-    with subtest("o gerenciador abre ABAIXO do minibuffer, na MESMA superficie"):
+    with subtest("the manager opens BELOW the minibuffer, on the SAME surface"):
         control("notif-history")
         expanded = footer_height()
-        assert expanded > FOOTER, f"o gerenciador nao expandiu: {expanded} px"
+        assert expanded > FOOTER, f"the manager did not expand: {expanded} px"
 
         c = layers()
         print(c)
         assert c.count("ronoctua-footer") == 1, (
-            f"o gerenciador criou uma SEGUNDA superficie (invariante 14):\n{c}"
+            f"the manager created a SECOND surface (invariant 14):\n{c}"
         )
 
         # And the content is there, on the screen, below the footer's two lines.
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
             f"-crop {w}x{expanded - FOOTER}+0+{h - expanded + FOOTER} +repage "
             "-colorspace gray -negate -resize 400% /tmp/hist.png"
         )
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/hist.png stdout --psm 6 2>/dev/null"
         ).strip()
-        print(f"OCR do gerenciador: {read_back!r}")
-        assert "mensagem" in read_back.lower() or "bateria" in read_back.lower(), (
-            f"o gerenciador nao esta na tela; OCR leu {read_back!r}"
+        print(f"OCR of the manager: {read_back!r}")
+        assert "message" in read_back.lower() or "battery" in read_back.lower(), (
+            f"the manager is not on screen; OCR read {read_back!r}"
         )
 
-    with subtest("fechar o gerenciador devolve as duas linhas"):
+    with subtest("closing the manager gives the two lines back"):
         control("notif-history")
         wait_for_height(FOOTER)
 
-    with subtest("o historico sobrevive ao rodape reiniciar"):
+    with subtest("the history survives the footer restarting"):
         # FIFTEEN DAYS ON DISK, and this is the half a VM can prove: the file is
         # written where the footer says it is, and a fresh process reads it.
         machine.wait_until_succeeds(
@@ -344,11 +344,11 @@ pkgs.testers.runNixOSTest {
         assert int(before) >= 4, f"o historico tem {before} registros"
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'historico de notificacoes lido'",
+            "journalctl -u footer --no-pager | grep -q 'notification history read'",
             timeout=60,
         )
         after = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'historico de notificacoes lido' | tail -1"
+            "journalctl -u footer --no-pager | grep 'notification history read' | tail -1"
         )
         print(after)
         assert f"lidas={before}" in after, after

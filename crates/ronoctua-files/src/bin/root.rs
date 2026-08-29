@@ -44,7 +44,7 @@ fn main() -> Result<()> {
         .nth(1)
         .unwrap_or_else(|| STAGING.to_owned());
     let request = Staged::read_from(Path::new(&staging))
-        .with_context(|| format!("ler o pedido em {staging}"))?;
+        .with_context(|| format!("read the request at {staging}"))?;
     check(&request.path)?;
     act(&request)?;
     // The request is consumed. Left behind, the next `systemctl start` — from
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
 /// component is a symlink.
 pub fn check(path: &Path) -> Result<()> {
     if !path.is_absolute() {
-        bail!("caminho relativo: {}", path.display());
+        bail!("a relative path: {}", path.display());
     }
     // The PARENT is canonicalised and the last component is not: canonicalising
     // the whole path would resolve a final symlink, which is exactly what must
@@ -72,18 +72,21 @@ pub fn check(path: &Path) -> Result<()> {
     let parent = path.parent().unwrap_or(Path::new("/"));
     let real = parent
         .canonicalize()
-        .with_context(|| format!("{} nao existe", parent.display()))?;
+        .with_context(|| format!("{} does not exist", parent.display()))?;
     for forbidden in FORBIDDEN {
         if real.starts_with(forbidden) {
-            bail!("{} fica em {forbidden}, e isso nao se mexe", path.display());
+            bail!(
+                "{} is in {forbidden}, and that is not touched",
+                path.display()
+            );
         }
     }
     let here = real.join(path.file_name().unwrap_or_default());
     let meta = std::fs::symlink_metadata(&here)
-        .with_context(|| format!("{} nao existe", here.display()))?;
+        .with_context(|| format!("{} does not exist", here.display()))?;
     if meta.is_symlink() {
         bail!(
-            "{} e um link simbolico; mude o alvo, que e o que voce esta vendo",
+            "{} is a symbolic link; change the target, which is what you are looking at",
             here.display()
         );
     }
@@ -113,10 +116,10 @@ fn act(request: &Staged) -> Result<()> {
                 Some(rustix::fs::Gid::from_raw(gid)),
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
-            .with_context(|| format!("mudar o grupo de {}", request.path.display()))
+            .with_context(|| format!("change the group of {}", request.path.display()))
         }
         Verb::Chmod => {
-            let mode = u32::from_str_radix(&request.value, 8).context("modo invalido")?;
+            let mode = u32::from_str_radix(&request.value, 8).context("an invalid mode")?;
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(
                 &request.path,
@@ -126,7 +129,7 @@ fn act(request: &Staged) -> Result<()> {
         }
         Verb::Trim => {
             let fstrim = option_env!("RONOCTUA_FSTRIM")
-                .context("RONOCTUA_FSTRIM nao foi definida em nix/rust.nix")?;
+                .context("RONOCTUA_FSTRIM was not set in nix/rust.nix")?;
             let out = std::process::Command::new(fstrim)
                 .arg(&request.path)
                 .output()
@@ -146,7 +149,7 @@ mod tests {
     #[test]
     fn a_relative_path_is_refused() {
         let e = check(Path::new("host.nix")).unwrap_err();
-        assert!(e.to_string().contains("relativo"), "{e}");
+        assert!(e.to_string().contains("relative"), "{e}");
     }
 
     #[test]
@@ -160,7 +163,7 @@ mod tests {
                 continue;
             }
             let e = check(p).unwrap_err();
-            assert!(e.to_string().contains("nao se mexe"), "{path}: {e}");
+            assert!(e.to_string().contains("is not touched"), "{path}: {e}");
         }
     }
 
@@ -172,18 +175,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ronoctua-root-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("alvo"), b"x").unwrap();
-        std::os::unix::fs::symlink("alvo", dir.join("atalho")).unwrap();
-        let e = check(&dir.join("atalho")).unwrap_err();
-        assert!(e.to_string().contains("link simbolico"), "{e}");
+        std::fs::write(dir.join("target"), b"x").unwrap();
+        std::os::unix::fs::symlink("target", dir.join("shortcut")).unwrap();
+        let e = check(&dir.join("shortcut")).unwrap_err();
+        assert!(e.to_string().contains("symbolic link"), "{e}");
         // And the real file behind it is fine.
-        assert!(check(&dir.join("alvo")).is_ok());
+        assert!(check(&dir.join("target")).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_path_that_does_not_exist_is_refused() {
-        let e = check(Path::new("/tmp/isto-nao-existe-em-lugar-nenhum-42")).unwrap_err();
-        assert!(e.to_string().contains("nao existe"), "{e}");
+        let e = check(Path::new("/tmp/this-does-not-exist-anywhere-42")).unwrap_err();
+        assert!(e.to_string().contains("does not exist"), "{e}");
     }
 }

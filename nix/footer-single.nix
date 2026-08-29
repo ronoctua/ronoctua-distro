@@ -41,14 +41,14 @@ writeShellApplication {
     # Passing it by argument would force the caller to build a complete `env`
     # at both call sites, and the two would diverge.
     if [ $# -lt 2 ]; then
-      echo "ERRO: uso: ronoctua-footer-single <pidfile> <binario> [args...]" >&2
+      echo "ERROR: usage: ronoctua-footer-single <pidfile> <binary> [args...]" >&2
       exit 2
     fi
     pidfile="$1"
     binary="$2"
     shift 2
 
-    [ -x "$binary" ] || { echo "ERRO: '$binary' nao e executavel." >&2; exit 2; }
+    [ -x "$binary" ] || { echo "ERROR: '$binary' is not executable." >&2; exit 2; }
 
     # ---------------------------------------------------------------
     # Take the previous one down, and WAIT for it to die
@@ -68,7 +68,7 @@ writeShellApplication {
           sleep 0.1
         done
         if kill -0 "$previous" 2>/dev/null; then
-          echo "  o rodape anterior ($previous) ignorou o TERM; matando" >&2
+          echo "  the previous footer ($previous) ignored the TERM; killing it" >&2
           kill -9 "$previous" 2>/dev/null || true
           # No `wait`: it is not a child of THIS process. `kill -0` is what
           # answers, and it is what decides.
@@ -111,6 +111,6 @@ writeShellApplication {
     fi
     new_pid=$!
     echo "$new_pid" > "$pidfile"
-    echo "  rodape $new_pid de pe"
+    echo "  footer $new_pid standing"
   '';
 }

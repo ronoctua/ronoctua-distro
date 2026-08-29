@@ -131,7 +131,7 @@ fn from_env(texts: &Texts) -> Result<Answers> {
             bail!(
                 "{} ({}): {e}\n\
                  \n\
-                 Defina {var}. A TUI faz isso perguntando; sem terminal,\n\
+                 Set {var}. The TUI does that by asking; without terminal,\n\
                  o ambiente e a forma de responder.",
                 texts.t(q.label()),
                 q.label()

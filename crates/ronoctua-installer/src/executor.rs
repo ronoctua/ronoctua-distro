@@ -96,7 +96,7 @@ pub fn write_of(step: &Step, r: &Answers) -> Result<Option<Write>> {
     let path = step
         .command
         .get(1)
-        .context("passo de escrita sem caminho")?
+        .context("a write step with no path")?
         .clone();
     let e = match path.as_str() {
         LUKS_KEY_PATH => Write {
@@ -134,10 +134,10 @@ pub fn write_of(step: &Step, r: &Answers) -> Result<Option<Write>> {
             secrecy: Secrecy::Public,
         },
         otherwise => bail!(
-            "passo de escrita para `{otherwise}`, que este modulo nao conhece.\n\
+            "a write step for `{otherwise}`, which this module does not know.\n\
              \n\
-             Um passo novo em `plan::passos` precisa de um caso aqui —\n\
-             senao ele vira um `escrever` que nao escreve nada."
+             A new step in `plan::steps` needs a case here —\n\
+             otherwise it becomes a `write` that writes nothing."
         ),
     };
     Ok(Some(e))
@@ -162,21 +162,21 @@ pub fn offset_from(output: &str) -> Option<u64> {
 fn write_out(e: &Write) -> Result<()> {
     let p = Path::new(&e.path);
     if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("criar {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    let mut f = std::fs::File::create(p).with_context(|| format!("criar {}", p.display()))?;
+    let mut f = std::fs::File::create(p).with_context(|| format!("create {}", p.display()))?;
     if e.secrecy == Secrecy::Secret {
         f.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("modo 0600 em {}", p.display()))?;
+            .with_context(|| format!("mode 0600 on {}", p.display()))?;
     }
     f.write_all(e.content.as_bytes())
-        .with_context(|| format!("escrever {}", p.display()))?;
+        .with_context(|| format!("write {}", p.display()))?;
     Ok(())
 }
 
 /// Runs a command and passes each line of output along.
 fn run(command: &[String], ver: &mut dyn FnMut(Event)) -> Result<()> {
-    let (prog, args) = command.split_first().context("comando vazio")?;
+    let (prog, args) = command.split_first().context("an empty command")?;
     let mut child = Command::new(prog)
         .args(args)
         .stdout(Stdio::piped())
@@ -185,7 +185,7 @@ fn run(command: &[String], ver: &mut dyn FnMut(Event)) -> Result<()> {
         // on another channel is worse than having no output at all.
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("nao consegui rodar `{prog}`"))?;
+        .with_context(|| format!("could not run `{prog}`"))?;
 
     if let Some(output) = child.stdout.take() {
         for line in BufReader::new(output).lines().map_while(Result::ok) {
@@ -197,7 +197,7 @@ fn run(command: &[String], ver: &mut dyn FnMut(Event)) -> Result<()> {
             ver(Event::Line(line));
         }
     }
-    let st = child.wait().context("esperar o comando")?;
+    let st = child.wait().context("wait for the command")?;
     if !st.success() {
         bail!("`{prog}` saiu com {st}");
     }
@@ -213,23 +213,23 @@ fn password_hash(password: &str) -> Result<String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .context("nao consegui rodar `mkpasswd`")?;
+        .context("could not run `mkpasswd`")?;
     child
         .stdin
         .take()
         .context("mkpasswd sem stdin")?
         .write_all(password.as_bytes())
-        .context("passar a senha ao mkpasswd")?;
+        .context("pass the password to mkpasswd")?;
     let output = child.wait_with_output().context("esperar o mkpasswd")?;
     if !output.status.success() {
         bail!("`mkpasswd` saiu com {}", output.status);
     }
     let h = String::from_utf8(output.stdout)
-        .context("mkpasswd devolveu algo que nao e UTF-8")?
+        .context("mkpasswd gave back something that is not UTF-8")?
         .trim()
         .to_owned();
     if h.is_empty() {
-        bail!("`mkpasswd` devolveu vazio");
+        bail!("`mkpasswd` gave back nothing");
     }
     Ok(format!("{h}\n"))
 }
@@ -261,10 +261,10 @@ pub fn run_command(r: &Answers, flake: &str, ver: &mut dyn FnMut(Event)) -> Resu
         // protection for a new step nobody wired up, and the reason
         // this one has a name of its own.
         if step.command.first().map(String::as_str) == Some(SEAL) {
-            let diretorio = step.command.get(1).context("selagem sem diretorio")?;
-            let ssid = step.command.get(2).context("selagem sem SSID")?;
-            ronoctua_network::secret::seal_at(diretorio, ssid, &r.wifi_password)
-                .with_context(|| format!("passo `{}`", step.label))?;
+            let directory = step.command.get(1).context("sealing with no directory")?;
+            let ssid = step.command.get(2).context("sealing with no SSID")?;
+            ronoctua_network::secret::seal_at(directory, ssid, &r.wifi_password)
+                .with_context(|| format!("step `{}`", step.label))?;
             ver(Event::Finished { index });
             continue;
         }
@@ -281,9 +281,9 @@ pub fn run_command(r: &Answers, flake: &str, ver: &mut dyn FnMut(Event)) -> Resu
             if e.path == HOST_NIX_PATH || e.path == HOST_NIX_WORK_PATH {
                 e.content = host_nix(&r);
             }
-            write_out(&e).with_context(|| format!("passo `{}`", step.label))?;
+            write_out(&e).with_context(|| format!("step `{}`", step.label))?;
         } else {
-            run(&step.command, ver).with_context(|| format!("passo `{}`", step.label))?;
+            run(&step.command, ver).with_context(|| format!("step `{}`", step.label))?;
         }
 
         // RIGHT AFTER `disko`, which is what creates the swapfile, and before
@@ -298,7 +298,7 @@ pub fn run_command(r: &Answers, flake: &str, ver: &mut dyn FnMut(Event)) -> Resu
             let output = Command::new("btrfs")
                 .args(["inspect-internal", "map-swapfile", "-r", SWAPFILE_PATH])
                 .output()
-                .context("mapear o arquivo de swap")?;
+                .context("map the swap file")?;
             r.resume_offset = offset_from(&String::from_utf8_lossy(&output.stdout));
         }
 
@@ -320,7 +320,7 @@ mod tests {
         let mut r = Answers::default();
         r.set(Question::Disk, "/dev/nvme0n1".into());
         r.set(Question::Hostname, "noctua-teste".into());
-        r.set(Question::Password, "Zq7-senha-de-teste".into());
+        r.set(Question::Password, "Zq7-test-password".into());
         r.set(Question::Passphrase, "Kx9-passphrase-de-teste".into());
         r.set(Question::Language, "pt-BR".into());
         r
@@ -334,7 +334,7 @@ mod tests {
         // appear and the installation carries on as if it had.
         let r = answers();
         for p in steps(&r, "/mnt/etc/nixos") {
-            write_of(&p, &r).unwrap_or_else(|e| panic!("passo `{}`: {e}", p.label));
+            write_of(&p, &r).unwrap_or_else(|e| panic!("step `{}`: {e}", p.label));
         }
     }
 
@@ -348,10 +348,13 @@ mod tests {
         let key = p
             .iter()
             .find(|p| p.command.get(1).map(String::as_str) == Some(LUKS_KEY_PATH))
-            .expect("o plano tem de escrever a chave do LUKS");
+            .expect("the plan has to write the LUKS key");
         let e = write_of(key, &r).unwrap().unwrap();
         assert_eq!(e.content, r.passphrase);
-        assert!(!e.content.ends_with('\n'), "a chave saiu com quebra");
+        assert!(
+            !e.content.ends_with('\n'),
+            "the key came out with a line break"
+        );
     }
 
     #[test]
@@ -378,7 +381,10 @@ mod tests {
         // and can be copied. Section 9 admits neither password nor passphrase there.
         let r = answers();
         let s = host_nix(&r);
-        assert!(!s.contains(&r.password), "a senha vazou para o host.nix");
+        assert!(
+            !s.contains(&r.password),
+            "the password leaked into host.nix"
+        );
         assert!(
             !s.contains(&r.passphrase),
             "a passphrase vazou para o host.nix"
@@ -393,7 +399,11 @@ mod tests {
         let r = answers();
         for p in steps(&r, "/mnt/etc/nixos") {
             for arg in &p.command {
-                assert!(!arg.contains(&r.password), "senha em argv: {:?}", p.command);
+                assert!(
+                    !arg.contains(&r.password),
+                    "a password in argv: {:?}",
+                    p.command
+                );
                 assert!(
                     !arg.contains(&r.passphrase),
                     "passphrase em argv: {:?}",
@@ -409,7 +419,7 @@ mod tests {
         // With a header, which is the other form `btrfs` has printed.
         assert_eq!(offset_from("resume_offset 533760\n"), Some(533_760));
         assert_eq!(offset_from(""), None);
-        assert_eq!(offset_from("nao ha numero aqui"), None);
+        assert_eq!(offset_from("there is no number here"), None);
     }
 
     #[test]
@@ -419,14 +429,14 @@ mod tests {
         let key = p
             .iter()
             .position(|p| p.command.get(1).map(String::as_str) == Some(LUKS_KEY_PATH))
-            .expect("falta o passo da chave");
-        let primeiro_destrutivo = p
+            .expect("the key's step is missing");
+        let first_destructive = p
             .iter()
             .position(|p| p.destructive)
-            .expect("algum passo tem de ser destrutivo");
+            .expect("some step has to be destructive");
         assert!(
-            key < primeiro_destrutivo,
-            "a chave e escrita depois de o disco ja ter sido tocado"
+            key < first_destructive,
+            "the key is written after the disk has already been touched"
         );
     }
 
@@ -440,11 +450,14 @@ mod tests {
         let hash = p
             .iter()
             .position(|p| p.command.get(1).map(String::as_str) == Some(PASSWORD_HASH_PATH))
-            .expect("falta o passo do hash");
-        let instalar = p
+            .expect("the hash's step is missing");
+        let install_it = p
             .iter()
             .position(|p| p.command.first().map(String::as_str) == Some("nixos-install"))
-            .expect("falta o nixos-install");
-        assert!(hash < instalar, "o hash e escrito depois da instalacao");
+            .expect("nixos-install is missing");
+        assert!(
+            hash < install_it,
+            "the hash is written after the installation"
+        );
     }
 }

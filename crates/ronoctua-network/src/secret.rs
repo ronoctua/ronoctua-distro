@@ -81,8 +81,8 @@ pub fn name(ssid: &str) -> String {
 /// sealing write into the ISO — which is volatile — and the installed system would be born
 /// with no password at all, with nothing to flag it.
 #[must_use]
-pub fn path_at(diretorio: &str, ssid: &str) -> PathBuf {
-    Path::new(diretorio).join(format!("{}.cred", name(ssid)))
+pub fn path_at(directory: &str, ssid: &str) -> PathBuf {
+    Path::new(directory).join(format!("{}.cred", name(ssid)))
 }
 
 /// The path of a network's blob, in the default place.
@@ -115,10 +115,10 @@ pub fn seal(ssid: &str, password: &str) -> Result<()> {
 /// # Errors
 ///
 /// There is no TPM, `systemd-creds` refused, or the directory could not be created.
-pub fn seal_at(diretorio: &str, ssid: &str, password: &str) -> Result<()> {
-    let destination = path_at(diretorio, ssid);
+pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
+    let destination = path_at(directory, ssid);
     if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("criar {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
 
     let mut child = Command::new(SYSTEMD_CREDS_PATH)
@@ -139,9 +139,9 @@ pub fn seal_at(diretorio: &str, ssid: &str, password: &str) -> Result<()> {
     child
         .stdin
         .take()
-        .context("sem stdin para o systemd-creds")?
+        .context("no stdin for systemd-creds")?
         .write_all(password.as_bytes())
-        .context("mandar a senha para o systemd-creds")?;
+        .context("send the password to systemd-creds")?;
 
     let output = child
         .wait_with_output()
@@ -150,7 +150,7 @@ pub fn seal_at(diretorio: &str, ssid: &str, password: &str) -> Result<()> {
         // `systemd-creds`'s stderr says whether the TPM is absent, busy or
         // refusing. Passing it along is the difference between "it did not work" and knowing why.
         bail!(
-            "o TPM recusou selar: {}",
+            "the TPM refused to seal: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
@@ -182,7 +182,7 @@ pub fn open(ssid: &str) -> Result<String> {
     child
         .stdin
         .take()
-        .context("sem stdin para o systemd-creds")?
+        .context("no stdin for systemd-creds")?
         .write_all(&blob)
         .context("mandar o blob para o systemd-creds")?;
 
@@ -191,14 +191,14 @@ pub fn open(ssid: &str) -> Result<String> {
         .context("esperar o systemd-creds")?;
     if !output.status.success() {
         bail!(
-            "o TPM recusou abrir: {}",
+            "the TPM refused to unseal: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
 
     // The password may contain any byte; `from_utf8_lossy` would swap an invalid
     // byte for `U+FFFD` and the network would refuse the connection without saying why.
-    String::from_utf8(output.stdout).context("a senha guardada não é texto válido")
+    String::from_utf8(output.stdout).context("the stored password is not valid text")
 }
 
 /// Deletes a network's blob. Silent when there was none.
@@ -206,14 +206,14 @@ pub fn open(ssid: &str) -> Result<String> {
 /// # Errors
 ///
 /// The file exists and could not be removed.
-pub fn apagar(ssid: &str) -> Result<()> {
+pub fn erase(ssid: &str) -> Result<()> {
     let target = path(ssid);
     match std::fs::remove_file(&target) {
         Ok(()) => Ok(()),
         // Forgetting a network that was never remembered is not an error: it is the result
         // that was asked for.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("apagar {}", target.display())),
+        Err(e) => Err(e).with_context(|| format!("delete {}", target.display())),
     }
 }
 
@@ -252,8 +252,8 @@ mod tests {
         let c = path("../../etc/passwd");
         assert!(c.starts_with(DIRECTORY), "escapou: {}", c.display());
         let file = c.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(!file.contains('/'), "sobrou barra: {file}");
-        assert!(!file.contains(".."), "sobrou ponto-ponto: {file}");
+        assert!(!file.contains('/'), "a slash was left over: {file}");
+        assert!(!file.contains(".."), "a dot-dot was left over: {file}");
     }
 
     #[test]
@@ -261,15 +261,15 @@ mod tests {
         // A router with a malformed SSID exists. The crate's `ssid_name` already
         // uses `from_utf8_lossy`, so what arrives here may contain `U+FFFD` —
         // and it still has to become a creatable file name.
-        let estranho = String::from_utf8_lossy(&[0xff, 0xfe, b'a']).into_owned();
-        let n = name(&estranho);
+        let foreign = String::from_utf8_lossy(&[0xff, 0xfe, b'a']).into_owned();
+        let n = name(&foreign);
         assert!(!n.is_empty());
         assert!(n.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
     fn two_different_networks_do_not_share_the_same_blob() {
-        assert_ne!(name("casa"), name("casa "));
-        assert_ne!(path("casa"), path("Casa"));
+        assert_ne!(name("home"), name("home "));
+        assert_ne!(path("home"), path("Home"));
     }
 }

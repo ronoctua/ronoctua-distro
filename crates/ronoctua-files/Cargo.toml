@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-files"
-description = "A unica fronteira com o sistema de arquivos: listar, explicar e agir."
+description = "The one boundary with the file system: listing, explaining and acting."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

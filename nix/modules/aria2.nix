@@ -92,7 +92,7 @@ in
 {
   config = lib.mkIf cfg.enable {
     systemd.user.services.ronoctua-aria2 = {
-      description = "ronoctua — o motor de links da fila";
+      description = "ronoctua — the queue's link engine";
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];

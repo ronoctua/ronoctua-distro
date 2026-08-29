@@ -1,0 +1,63 @@
+[package]
+name = "ronoctua-design"
+description = "Every buffer's layout vocabulary: one implementation of each decision about the screen."
+# EVERYTHING SPELLED OUT, and never `version.workspace = true`.
+#
+# This crate is a member of the root workspace AND a path dependency of seven
+# buffers, each of which is a workspace of its own. `nix/buffers.nix` mirrors
+# the repository's layout inside the derivation, and in that tree a manifest
+# that inherits from a workspace root it cannot see fails with
+# `failed to load manifest ... workspace ... not found` — an error that names
+# neither the field nor the buffer. Every `buffers/*/Cargo.toml` spells its
+# metadata out for this reason; so does this one.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[features]
+# THE DEFAULT SIDE IS THE HOST'S, and it needs nothing at all.
+#
+# `cargo test`, `cargo clippy --workspace` and `cargo fmt --all` reach this
+# crate through the root workspace, and none of them has a `wasm32-wasip2`
+# target. If the bindings were unconditional, every one of those would compile
+# `wit-bindgen`'s proc macro against a WIT tree for a target it is not building
+# for — a minute of build time to prove nothing.
+default = [ "host" ]
+# Nothing but a name: the arithmetic below is the same on both sides, and what
+# the host adds is a `Palette` whose colours are `protocol::Color` names. A
+# feature with no dependency still earns its place — it is what makes
+# `default-features = false, features = [ "guest" ]` mean "the guest half, and
+# only that" instead of "the default, minus something".
+host = []
+# The guest half: the WIT bindings, the palette that resolves a role to the
+# generated enum, and the conversion from the display list this crate builds to
+# the one the component returns.
+guest = [ "dep:wit-bindgen" ]
+
+[dependencies]
+# THE SAME CRATE, COMPILED TWICE — not a host crate with a guest twin.
+#
+# `ronoctua-protocol` was built for exactly this and says so in its own
+# manifest: zero dependencies, `alloc` instead of `std` where possible,
+# "compiled both on the host and inside the `wasm32-wasip2` components
+# (invariant 12)". It had simply never had a consumer on the guest side. Taking
+# it here is what keeps the heading's arithmetic from having a second copy — and
+# a second copy is the whole defect this crate exists to close.
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+
+# ONLY UNDER `guest`. See the `bindings` module in `lib.rs` for why the
+# generation lives in a library at all.
+wit-bindgen = { version = "0.46", default-features = false, features = [ "macros" ], optional = true }
+
+[lints.rust]
+# The workspace's own two, spelled out for the same reason the package metadata
+# is: inside `nix/buffers.nix`'s mirrored tree there is no workspace to inherit
+# from, and `[lints] workspace = true` fails there.
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+needless_collect = "warn"
+redundant_clone = "warn"

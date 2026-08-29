@@ -40,15 +40,15 @@ FLOOR = 50
 
 # `Mod+Shift+Ctrl+Left cooldown-ms=150 { move-column-to-monitor-left; }`
 LINE = re.compile(
-    r"""^\s+Mod\+(?P<tecla>\S+)          # a tecla, ja sem o `Mod+`
+    r"""^\s+Mod\+(?P<press_key>\S+)          # the key, already without the `Mod+`
         (?P<props>(?:\s+[a-z-]+=\S+)*)   # optional properties
-        \s*\{\s*(?P<acao>[^}]+?);\s*\}   # the action, without the semicolon
+        \s*\{\s*(?P<action>[^}]+?);\s*\}   # the action, without the semicolon
     """,
     re.VERBOSE,
 )
 
 ACTIONS_OUT = ("spawn", "spawn-sh", "show-hotkey-overlay")
-TECLAS_FORA = ("Space",)
+KEYS_OUT = ("Space",)
 
 
 def binds(path: str) -> list[tuple[str, str, str]]:
@@ -73,9 +73,9 @@ def binds(path: str) -> list[tuple[str, str, str]]:
         m = LINE.match(line)
         if not m:
             continue
-        press_key, action = m.group("tecla"), m.group("acao").strip()
+        press_key, action = m.group("press_key"), m.group("action").strip()
         name = action.split()[0]
-        if name in ACTIONS_OUT or press_key in TECLAS_FORA:
+        if name in ACTIONS_OUT or press_key in KEYS_OUT:
             continue
         not_in.append((press_key, action, f"niri-{name}"))
     return not_in
@@ -83,17 +83,17 @@ def binds(path: str) -> list[tuple[str, str, str]]:
 
 def main() -> None:
     if len(sys.argv) != 3:
-        sys.exit("uso: gen-default-binds.py <default-config.kdl> <saida.rs>")
+        sys.exit("usage: gen-default-binds.py <default-config.kdl> <out.rs>")
     entry, out_path = sys.argv[1], sys.argv[2]
 
     table = binds(entry)
     if len(table) < FLOOR:
         sys.exit(
-            f"ERRO: so {len(table)} binds extraidos do config padrao do niri, "
+            f"ERROR: only {len(table)} binds extracted from niri's default config, "
             f"esperava ao menos {FLOOR}.\n"
-            "      O formato do arquivo provavelmente mudou. Uma tabela curta "
+            "      The file's shape has probably changed. A short table "
             "aqui\n"
-            "      nao quebra nada visivelmente: os atalhos apenas somem."
+            "      breaks nothing visibly: the shortcuts simply go away."
         )
 
     lines = [
@@ -126,7 +126,7 @@ def main() -> None:
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    print(f"{len(table)} binds padrao do niri -> {out_path}")
+    print(f"{len(table)} of niri's default binds -> {out_path}")
 
 
 if __name__ == "__main__":

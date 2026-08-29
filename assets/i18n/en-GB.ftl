@@ -59,6 +59,9 @@ buffer-format = format
 mode-format = format
 buffer-unicode = unicode
 mode-unicode = unicode
+buffer-brain = brain
+mode-brain = brain
+mode-update = update
 buffer-no-name = *no name*
 mode-unknown = unknown
 
@@ -76,6 +79,7 @@ state-full = full
 state-guard = guard
 state-choose = choice
 state-confirm = confirmation
+state-update = update
 
 ## Notifications
 
@@ -108,7 +112,7 @@ notif-rule-important-gets-room = Something important gets room
 notif-rule-small-things-are-quick = Small things go by quickly
 
 # The manager: three lists, and a heading each.
-notif-column-unread = Unread
+notif-column-happened = Received
 notif-column-suppressed = Filtered out
 notif-column-catalogue = Notifications and filters
 notif-read = read
@@ -205,16 +209,16 @@ inst-keys-edit = Enter continues · Esc goes back · Ctrl+C quits
 inst-keys-choose = ↑↓ choose · Enter continues · Esc goes back
 inst-keys-review = Enter runs · Esc goes back · Ctrl+C quits
 inst-keys-quit = Ctrl+C quits
-echo-no-on = { $sequencia } is not bound
+echo-no-on = { $sequence } is not bound
 # Same sequence, other case. Shown when the case IS the reason nothing
 # matched — Caps Lock or Shift. Without it the screen names the consequence
 # and hides the cause.
-echo-no-on-box = { $sequencia } is not bound — { $outra } is
+echo-no-on-box = { $sequence } is not bound — { $other } is
 echo-cancelled = Quit
 echo-no-window = No focused window
-echo-no-action = { $comando } does nothing yet
+echo-no-action = { $command } does nothing yet
 echo-no-buffer = The glyph browser was not built
-echo-no-opened = Could not open { $programa }
+echo-no-opened = Could not open { $program }
 cmd-window-left = Focus left
 cmd-window-right = Focus right
 cmd-window-up = Focus up
@@ -252,7 +256,7 @@ cmd-notif-dismiss = Dismiss notification
 cmd-keyboard-restore = Restore the keyboard
 group-notification = notification
 echo-keyboard-restored = Keyboard restored
-echo-keyboard-failed = Could not restore the keyboard: { $motivo }
+echo-keyboard-failed = Could not restore the keyboard: { $reason }
 
 ## Help — the shortcut manual (LEADER h s)
 
@@ -685,18 +689,18 @@ network-connecting = connecting…
 network-wired = wired
 network-saved = saved
 network-open = open
-network-password = Password for { $rede }
+network-password = Password for { $network }
 network-password-help = Kept by NetworkManager, outside the repository.
 
 # ECHOES — what the minibuffer says after the action.
-echo-network-connected = Connected to { $rede }
-echo-network-failed = Could not connect to { $rede }: { $motivo }
+echo-network-connected = Connected to { $network }
+echo-network-failed = Could not connect to { $network }: { $reason }
 echo-network-disconnected = Disconnected
-echo-network-forgotten = { $rede } forgotten
+echo-network-forgotten = { $network } forgotten
 echo-network-radio-on = Wi-Fi radio on
 echo-network-radio-off = Wi-Fi radio off
-echo-network-link = { $rede } · { $banda } · { $taxa } · signal { $sinal }
-echo-network-link-wired = { $rede } · { $taxa }
+echo-network-link = { $network } · { $band } · { $rate } · signal { $signal }
+echo-network-link-wired = { $network } · { $rate }
 echo-network-no-link = Not connected
 echo-network-unavailable = NetworkManager is not responding
 
@@ -709,9 +713,9 @@ cmd-syncthing-resume = Resume syncing
 group-syncthing = syncthing
 syncthing-line = Syncthing
 syncthing-idle = up to date
-syncthing-syncing = syncing { $porcento }%
+syncthing-syncing = syncing { $percent }%
 syncthing-stopped = stopped
-echo-syncthing-state = { $conectados } connected · { $porcento }% · ↑{ $envio } ↓{ $recepcao }
+echo-syncthing-state = { $connected } connected · { $percent }% · ↑{ $up } ↓{ $down }
 echo-syncthing-stopped = Syncthing is not responding
 echo-syncthing-paused = Syncing paused
 echo-syncthing-resumed = Syncing resumed
@@ -731,12 +735,12 @@ inst-step-wifi = Write the Wi-Fi network profile
 ## Network — the password sealed in the TPM (psk-flags)
 
 # The one-key question, after the connection succeeds.
-network-remember = Remember { $rede }?  s = yes · n = no
+network-remember = Remember { $network }?  s = yes · n = no
 # The list marker: tells "saved in NetworkManager" apart from "the password exists".
 network-no-tpm = in TPM
-echo-network-stored = Password for { $rede } sealed in the TPM
+echo-network-stored = Password for { $network } sealed in the TPM
 echo-network-no-stored = Connected. The password was not stored.
-echo-network-store-failed = Connected, but I could not store the password: { $motivo }
+echo-network-store-failed = Connected, but I could not store the password: { $reason }
 ## Out of memory
 notif-oom-app = system
 notif-oom-pressure = { $app } was stalling the machine for want of memory.
@@ -745,7 +749,7 @@ notif-oom-orphan = Something outside your buffers was closed: { $cgroup }
 
 ## The focused buffer's keymap
 which-buffer = Focused buffer
-hint-state = State: { $estado } — click cycles, Esc returns, Esc+arrows chooses
+hint-state = State: { $state } — click cycles, Esc returns, Esc+arrows chooses
 which-state = State of the focused buffer
 cmd-exemplo-reiniciar = Restart the example
 
@@ -853,11 +857,11 @@ rescue-failed = failed
 rescue-confirm = The same key again confirms; Esc cancels.
 rescue-needs-password = asks for your password
 rescue-read-only = read-only
-rescue-generated-by = Generated by { $origem }. Editing here disappears on the next rebuild.
+rescue-generated-by = Generated by { $source }. Editing here disappears on the next rebuild.
 rescue-no-windows = The compositor did not answer — or there is no window at all.
 rescue-empty = nothing to show
 rescue-back = Leaving the terminal gives this screen back.
-rescue-generation = generation { $numero }
+rescue-generation = generation { $number }
 rescue-door-console = console
 rescue-door-window = window
 
@@ -1054,8 +1058,36 @@ files-down = down
 files-up = up
 files-enter = open, or enter the directory
 files-parent = up one directory
-files-hint = type to filter · { $key } opens the action menu
-files-hint-sidebar = type to filter · { $key } opens the menu · { $side } goes to the sidebar
+files-hint = type to filter · { $key } opens the action menu · { $preview } preview · { $info } information
+files-hint-sidebar = type to filter · { $key } opens the menu · { $side } goes to the sidebar · { $preview } preview · { $info } information
+# The panels. `no-room` is what the toggle says when it turns one on at a width
+# that cannot hold it: the state flips anyway and the screen says why, which is
+# the shape `files-sidebar-only` already has. `says` is one fact in full on the
+# message line — a panel is twenty-four cells and a path is two hundred
+# characters, so the row that had to be cut is the row somebody wants to read.
+files-panel-no-room = there is no room for the panel at this width — it needs { $cells } columns
+files-fact-says = { $label }: { $value }
+# THE SECOND HALF OF THE HINT LINE, appended to whichever of the two above is
+# on screen. Two keys that are in no registry and no manual, so this line is
+# the only thing that says they exist — the lesson `C-o` already cost. The
+# separator lives here and not in the Rust: a `·` written in the code would be
+# a visual literal, which is what invariant 9 is about.
+files-hint-more = · { $columns } shows permissions, owner and group · { $facts } scrolls the facts
+# THE THIRD SENTENCE OF THE HINT LINE — the four sections and the two keys
+# that walk them. Its own line and not a longer `files-hint-more` for the same
+# reason that one is not a longer `files-hint`: the halves are about different
+# things. BOTH keys are named, because somebody told only about the way forward
+# has to guess that there is a way back.
+files-hint-panes = · { $next } goes to the next section, { $back } to the one before
+# WHAT THE PREVIEW SAYS WHEN THERE IS NO PICTURE. Not a refusal — those come
+# from `ronoctua-inspect` and win when there is one — but the answer for a
+# directory, a broken link, and a file nothing has been asked about. It used to
+# be a large icon of the file's type, which said what the listing's own icon
+# column already said and made an empty panel look full.
+files-no-preview = no preview
+# AND WHAT THE FACTS KEY SAYS WHEN THERE IS NOTHING TO SCROLL. From the
+# outside, a key that refuses and a key that is dead look the same.
+files-facts-all-shown = every fact is already on screen
 files-no-root-helper = changing the owner needs the installed system — the ronoctua-files-root unit is not here
 files-yes = yes, apply it
 files-no = no, leave it as it is
@@ -1080,6 +1112,8 @@ files-first = go to the first
 files-last = go to the last
 files-menu = action menu
 files-measure = measure the directory, or examine the file
+files-pane-next = go to the next section
+files-pane-previous = go back to the section before
 
 files-type-is = { $named }
 files-type-disagrees = the name says { $named }, the content says { $found }
@@ -1095,6 +1129,10 @@ files-nothing-here = this directory is empty
 #
 # The first five are ids of `OF_THE_VIEW` and of `menu.rs`;
 # `files-actions-have-text` derives them from the id on its own.
+files-preview = show or hide the preview
+files-facts = show or hide the facts
+files-facts-scroll = turn to the next page of facts
+files-columns = show or hide the permissions, the owner and the group
 files-sidebar = hide or show the sidebar
 files-sidebar-focus = go to the sidebar, and back
 files-eject = unmount the device
@@ -1271,6 +1309,75 @@ files-detail-broken = points at (does not exist)
 files-restore = put back where it came from
 files-no-trash = I do not know where the trash is; nothing was moved
 
+# ===================================================================
+# WHAT IS INSIDE A FILE — the preview and the facts panel
+#
+# `ronoctua-inspect` is the border with a file's CONTENT, and it does not
+# translate: it answers with a text KEY and its arguments, and whoever holds
+# the bundle turns the pair into a sentence (invariant 8). Every number below
+# arrives as DATA — what is written here is only the words around it.
+# ===================================================================
+
+# WHY THERE IS NO PICTURE. Drawn where the picture would be, centred under the
+# type's glyph, so each one has to say whether there is anything to be done
+# about it: "it failed" is not an answer, it is the absence of one.
+files-preview-none = there is no picture inside this kind of file
+files-preview-missing = { $program } is not installed, and it is what reads this format
+files-preview-too-big = too big for a preview ({ $amount })
+files-preview-failed = what came back was not a picture — the file may be damaged
+files-preview-slow = it went past { $seconds } s and was stopped — not the size, something is stuck
+
+# THE PANEL'S LEFT COLUMN. Short nouns, and short on purpose: the column is as
+# wide as the widest label here, so a needless word costs every other row.
+files-fact-dimensions = dimensions
+files-fact-duration = duration
+files-fact-container = format
+files-fact-video = video
+files-fact-audio = audio
+files-fact-rate = frame rate
+files-fact-sampling = sampling
+files-fact-channels = channels
+files-fact-bitrate = bit rate
+files-fact-title = title
+files-fact-artist = artist
+files-fact-album = album
+files-fact-camera = camera
+files-fact-lens = lens
+files-fact-taken = taken
+files-fact-iso = ISO
+files-fact-shutter = shutter
+files-fact-aperture = aperture
+files-fact-focal = focal length
+files-fact-place = place
+files-fact-pages = pages
+
+# AND THE RIGHT ONE, when the number needs a word around it. A unit is language
+# business — where it goes, and whether it is a word at all.
+files-value-pixels = { $width } × { $height }
+files-value-fps = { $fps } fps
+files-value-hertz = { $khz } kHz
+# ONE, TWO, OR A COUNT. Which numbers earn a word of their own is a decision of
+# the LANGUAGE, and this is the shape Fluent has for it — `$n` has to arrive as
+# a NUMBER (`Arg::Number`), or every branch but the last is unreachable.
+files-value-channels = { $n ->
+        [1] mono
+        [2] stereo
+       *[other] { $n } channels
+    }
+files-value-kbps = { $kbps } kbit/s
+files-value-millimetres = { $mm } mm
+files-value-seconds = { $s } s
+files-value-coordinates = { $lat }, { $lon }
+# THE PHOTOGRAPH CARRIES A PLACE AND THIS SCREEN IS NOT PRINTING IT. What
+# somebody needs before sending a picture to a stranger is not "hidden": it is
+# that the file still knows, and that sending the file sends the place too.
+files-value-place-withheld = written inside the file, not shown here — it goes wherever the photograph goes
+# The other selector, and a plural one: in en-GB `one` is 1 and nothing else.
+files-value-pages = { $n ->
+        [one] { $n } page
+       *[other] { $n } pages
+    }
+
 # === The transfer queue — `LEADER t` =======================================
 #
 # Seven operations used to go off to a thread saying nothing on screen: paste,
@@ -1415,3 +1522,218 @@ ext-send-link = download this link through ronoctua
 ext-send-media = download this page’s media
 ext-as-me = as you — not anonymous
 ext-anonymous = anonymous
+
+
+# ===================================================================
+# ONE CLICK UPDATES EVERYTHING — the sequence in `assets/updates.nix`
+#
+# The sequence is declared once and generated from there: the table, the two
+# runners, and this list of keys. `gen-updates.py` derives `update-<id>` and
+# `update-does-<id>` from every step's id and emits them to `keys.txt`, so a
+# step with no sentence in both languages cannot be written.
+#
+# The order below is the SEQUENCE'S order, which is the declaration's order —
+# there is no `order` field, on purpose, and sorting these alphabetically would
+# put back the second source the table exists to remove.
+# ===================================================================
+cmd-system-update = Update the system
+cmd-system-update-rehearsal = Rehearse the update
+
+# EACH STEP'S NAME, and under it the line that reaches the message line when the
+# cursor is on it — the same `{prefix}-does-<id>` shape the file manager and the
+# format buffer use. The name is what it is called; the line under it is what it
+# actually runs, and what it costs to be wrong about.
+update-flake-update = fetch the new versions
+update-does-flake-update = nix flake update on /etc/nixos: moves the pinned inputs forward and touches nothing but flake.lock. It needs the network, and on the ISO /etc/nixos is read-only — there the step is skipped and says so.
+update-system-rebuild = rebuild the system
+update-does-system-rebuild = nixos-rebuild switch, through the unit that already exists: it compiles, and it can bring a kernel that has never booted. The way back is the previous generation, in the boot menu. If it fails, the sequence stops here.
+update-store-collect-garbage = collect the store's garbage
+update-does-store-collect-garbage = nix-collect-garbage with no --delete-older-than: it deletes what nothing references, and the old generations stay — deleting them in the same breath would be deleting the way back.
+update-store-optimise = deduplicate the store
+update-does-store-optimise = nix store optimise: identical files become hard links. It runs after the collection, or it would optimise precisely what was about to be deleted.
+update-old-generations = remove the old generations
+update-does-old-generations = nix-collect-garbage --delete-older-than 30d: it deletes the way back. After it the boot menu has nothing to fall back to, which is why it ships off.
+update-journal-vacuum = trim the journal
+update-does-journal-vacuum = journalctl --vacuum-size=256M: it throws away the oldest record, this update's own included — which is the answer to "why did the rebuild fail?". It ships off.
+update-font-cache = rebuild the font cache
+update-does-font-cache = fc-cache -rf: from scratch, ignoring the timestamps, because a rebuild can have changed the font set and a stale cache with a fresh date is exactly what brings somebody here.
+update-tldr-cache = update the tldr pages
+update-does-tldr-cache = tldr --update, as you: the weekly unit downloads them as `nobody`, into a home nobody reads. It needs the network; without it the step is skipped, rather than waiting for a timeout and calling that a failure.
+update-rust-toolchains = update the Rust toolchains
+update-does-rust-toolchains = rustup update: it refreshes the channels already under ~/.rustup, and installs none. Here Rust comes from the flake, so that directory does not exist and the step is skipped saying so — it is for the machine where you put rustup there by hand.
+update-node-global = update npm's global packages
+update-does-node-global = npm update --global: it moves what is already in the global prefix and installs nothing. Node comes from the flake; the global prefix does not — without that directory the step is skipped and says so.
+update-pnpm-global = update pnpm's global packages
+update-does-pnpm-global = pnpm update --global: pnpm keeps a global store of its own, which is not npm's — which is why these are two steps and not one. Without its directory the step is skipped and says so.
+update-python-tools = update the uv tools
+update-does-python-tools = uv tool upgrade --all: it upgrades the tools under $XDG_DATA_HOME/uv/tools, one venv each, and adds none. uv comes from the flake; they do not — without that directory the step is skipped and says so.
+
+# WHY A STEP WAS SKIPPED. The path or the name it is about travels beside the
+# sentence as data (`Needs::about()`), which is why none of these names one.
+update-needs-always = nothing can make this step inapplicable
+update-needs-binary = this program is not on your PATH
+update-needs-directory = this directory does not exist
+update-needs-writable-file = this file does not exist, or cannot be written to
+update-needs-network = NetworkManager says this machine is not connected
+
+# WHAT A FAILURE DOES TO THE REST OF THE SEQUENCE. Two answers and no third:
+# this runs from a unit, and there is nobody to ask.
+update-on-failure-stop = if it fails, the sequence stops here
+update-on-failure-carry-on = if it fails, the sequence carries on to the next step
+
+# THE FOUR CLASSES A STEP CAN BE. They decide the order laws, and the view
+# groups by them.
+update-kind-move-inputs = moves the pinned inputs
+update-kind-apply-configuration = applies the configuration
+update-kind-refresh-cache = refreshes a cache
+update-kind-reclaim-space = reclaims disk space
+
+
+# ===================================================================
+# THE BRAIN'S SCREEN — LEADER s b, and a window of its own
+#
+# What the machine does BY ITSELF, when, and what came of it last time. No
+# sentence here spells a date: the buffer draws those ISO, because a component
+# cannot translate (invariant 11) and *19 Aug* against *19 ago* is exactly the
+# kind of thing it must not invent. What is written below is the words AROUND
+# the numbers, and never the numbers.
+#
+# TWO REGISTERS, and the second one is why the screen exists. `brain-hold-*`
+# says what a run is waiting FOR — a machine that is busy, not a run that broke
+# — and `brain-why-*` says why one did not happen at all. Neither of them ever
+# says that somebody was asked and did not answer: the update path never asks,
+# and `updates-never-ask` is the check that proves it. A reason on this screen
+# is the machine's, or a decision the person took on purpose.
+# ===================================================================
+cmd-brain-open = What the machine does by itself
+cmd-brain-run = Run it now
+cmd-brain-rehearse = Rehearse it, changing nothing
+cmd-brain-abort = Stop it
+cmd-brain-proceed = Start now, without the countdown
+cmd-brain-toggle-step = Switch this step on or off
+cmd-brain-reset-steps = Back to the steps the distro ships
+cmd-brain-interval = How often it runs
+cmd-brain-window = Which part of the day
+cmd-brain-switch = Switch this task off and on
+
+brain-title = What the machine does by itself
+brain-nothing = there is nothing the machine does by itself
+brain-hint = Enter opens · m r runs it now · m e rehearses · m o on and off
+brain-hint-update = m t a step on or off · m i how often · m w when · m a stops it · Esc goes back
+
+# THE THREE BLOCKS of the page behind, and the labels down their left edge.
+# That column is sixteen cells wide and the unit beside it is ten: these are
+# short because the columns are, and a longer word here is a word somebody
+# reads with its end cut off.
+brain-steps = what it runs
+brain-when = when it runs
+brain-doing = right now
+brain-outcome = outcome
+brain-last = the last run
+brain-every = every
+brain-days = days
+brain-part = part of the day
+brain-next = next
+brain-waiting = reason
+brain-soon = starts in
+brain-failed-at = it stopped at
+brain-rehearsal = a rehearsal — it changes nothing
+brain-never = never
+brain-changed = you changed
+brain-needs-root = it runs as root, with the whole machine's permissions
+
+# THE ONE TASK THERE IS, and under the cursor the quiet line saying what that
+# actually means — the rule the disk formatter's menus already follow, where
+# every row carries a second register.
+brain-task-system-update = Update the system
+brain-task-system-update-does = the machine brings its own software forward and builds the new system as a boot entry, without switching to it: nothing changes underneath a session that is open, and what starts it is the next reboot — a moment you choose.
+
+# ITS STEPS, in the order they run. The real command travels beside each one as
+# data, under the cursor, so these say what the step is FOR and not what it
+# types.
+
+# WHERE A TASK IS RIGHT NOW. Fourteen cells on the home page's last column, so
+# one short phrase each.
+brain-standing-idle = waiting
+brain-standing-queued = in the queue
+brain-standing-running = running now
+
+# AND HOW THE LAST RUN ENDED. `failed` is the honest word for a run that did
+# not finish; whether that was a fault or a decision is the reason's job, on
+# the line below it.
+brain-outcome-skipped = did not run
+brain-outcome-done = it worked
+brain-outcome-failed = it failed
+
+# WHAT A RUN IS WAITING FOR — the most important sentences on this screen.
+# NOTHING IS BROKEN AND NOTHING WAS LOST: the moment came, the machine was in
+# no state for it, and it waits for the next one. Each says what is in the way,
+# which is the thing somebody could act on if they wanted to.
+brain-hold-ram = RAM is busy
+brain-hold-cpu = CPU is busy
+brain-hold-battery = on battery
+brain-hold-busy = one at a time
+brain-hold-network = no network
+brain-hold-asleep = sleeping
+
+# AND WHY ONE DID NOT HAPPEN AT ALL. The first two go in a column seventeen
+# cells wide, beside the row's name; the rest have the width of a sentence.
+# `aborted` is NOT an error — it is the person having decided, and the screen
+# agreeing with them.
+brain-why-off = switched off
+brain-why-no-systemctl = no systemd here
+brain-why-runaway = it stopped reporting and the waiting was given up — it may well still be going
+brain-why-aborted = you stopped it — nothing went wrong
+brain-why-postponed = you said not now, and the next moment moved
+
+# WHICH PART OF THE DAY it may start in. The hours are the same digits in every
+# language; the words around them are not.
+brain-part-any = whenever the machine is free
+brain-part-night = night, 02:00 to 05:00
+brain-part-morning = morning, 08:00 to 12:00
+brain-part-afternoon = afternoon, 13:00 to 18:00
+brain-part-evening = evening, 19:00 to 23:00
+
+# THE BAND UNDER THE MINIBUFFER — one line, and only while a countdown runs.
+#
+# It is not the brain's screen: it is the warning that arrives without anybody
+# having asked for it, on a line of its own below the pair (invariant 14 — it is
+# the same surface growing, not a popup). Three sentences, because that is all
+# that fits: what is about to happen, and the two answers to it.
+#
+# The task's own name carries the subject — `brain-task-<id>` — so a task added
+# tomorrow inherits this sentence instead of needing one of its own.
+brain-band-soon = { $task } — starts in { $seconds } s
+brain-band-abort = not now
+brain-band-proceed = now
+hint-brain-countdown = how long is left before it starts
+
+# AND WHAT THE TWO ANSWERS COST. `not now` is not "never": the run leaves the
+# queue and the next moment moves, which is the only thing that actually stops
+# a countdown — taking it out of the queue alone would put it straight back in
+# on the next beat, and the person would answer the same question every half
+# minute.
+echo-brain-postponed = Not now — it comes back at its next moment
+echo-brain-proceeding = Starting now
+echo-brain-idle = There is nothing about to happen
+echo-brain-unreachable = The brain is not answering
+
+# THE UPDATE, WATCHED — the modeline's mark and the window it opens.
+#
+# The mark shows only while something runs and goes on its own. The window is a
+# command of its own because a mark one can only click is a mark the keyboard
+# cannot reach.
+cmd-update-watch = Watch the update
+hint-update-mark = click to watch the update happen
+echo-update-queued = In the queue — it starts when the machine is free
+echo-update-started = The update has started
+echo-update-nowhere = There is nothing here that can start it
+update-hint = ↑↓ a step · C-j C-k the output · G the end · Esc closes
+update-no-output = nothing has been said yet
+update-verdict-ran = it worked
+update-verdict-failed = it failed
+update-verdict-off = switched off
+update-verdict-skipped = did not apply
+update-verdict-rehearsed = only rehearsed
+update-verdict-stopped = it stopped here
+update-verdict-pending = still to come

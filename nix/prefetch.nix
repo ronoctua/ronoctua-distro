@@ -80,9 +80,9 @@ writeShellApplication {
     # own. If the answer is no, the query is broken, not the store.
     self="${placeholder "out"}"
     if ! nix-store --check-validity "$self" 2>/dev/null; then
-      echo "ERRO: a consulta de validade nao funciona nesta versao do nix." >&2
-      echo "      Ela respondeu que $self nao esta no store, e ele esta —" >&2
-      echo "      e sem ela tudo seria baixado de novo, em silencio." >&2
+      echo "ERROR: the validity query does not work in this version of nix." >&2
+      echo "      It answered that $self is not in the store, and it is —" >&2
+      echo "      and without it everything would be downloaded again, in silence." >&2
       exit 1
     fi
 
@@ -121,9 +121,9 @@ writeShellApplication {
       done
 
       if [ "$ok" != 1 ]; then
-        echo "ERRO: $name nao veio inteiro depois de $rounds retomadas." >&2
-        echo "      Ultimo tamanho: $(stat -c%s "$file" 2>/dev/null || echo 0) bytes." >&2
-        echo "      Esperado: $want" >&2
+        echo "ERROR: $name did not come whole after $rounds resumptions." >&2
+        echo "      Last size: $(stat -c%s "$file" 2>/dev/null || echo 0) bytes." >&2
+        echo "      Expected: $want" >&2
         exit 1
       fi
 

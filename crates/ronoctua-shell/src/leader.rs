@@ -78,7 +78,7 @@ pub enum Order {
 }
 
 /// The word a new footer says to the one it is going to replace.
-const YIELD: &str = "sair";
+const YIELD: &str = "quit";
 
 /// How long to wait for the previous footer to die before taking the socket by force.
 ///
@@ -113,7 +113,7 @@ fn yield_the_place(path: &std::path::Path) {
         // start — the caller's `remove_file` solves both.
         return;
     };
-    tracing::info!("ja ha um rodape neste display; pedindo o lugar a ele");
+    tracing::info!("there is already a footer on this display; asking it for the place");
     if writeln!(s, "{YIELD}").is_err() {
         return;
     }
@@ -125,14 +125,14 @@ fn yield_the_place(path: &std::path::Path) {
     let up_to = std::time::Instant::now() + PATIENCE;
     while std::time::Instant::now() < up_to {
         if UnixStream::connect(path).is_err() {
-            tracing::info!("o rodape anterior saiu");
+            tracing::info!("the previous footer left");
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     tracing::warn!(
-        "o rodape anterior nao saiu em {} ms; tomando o socket.\n\
-         Ele pode ficar com uma superficie na tela ate ser encerrado a mao.",
+        "the previous footer did not leave within {} ms; taking the socket.\n\
+             It may keep a surface on screen until it is shut down by hand.",
         PATIENCE.as_millis()
     );
 }
@@ -146,7 +146,7 @@ fn yield_the_place(path: &std::path::Path) {
 /// does not accept that even in a test.
 pub fn socket_path() -> Result<PathBuf> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR nao esta definida; sem ela nao ha onde por o socket")?;
+        .context("XDG_RUNTIME_DIR is not set; without it there is nowhere to put the socket")?;
     let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
     Ok(PathBuf::from(dir).join(format!("ronoctua-{display}.sock")))
 }
@@ -171,7 +171,7 @@ pub fn socket_path() -> Result<PathBuf> {
 /// fallback to `/tmp`.
 pub fn buffer_socket_path(pid: u32) -> Result<PathBuf> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR nao esta definida; sem ela nao ha onde por o socket")?;
+        .context("XDG_RUNTIME_DIR is not set; without it there is nowhere to put the socket")?;
     Ok(PathBuf::from(dir).join(format!("ronoctua-buffer-{pid}.sock")))
 }
 
@@ -209,7 +209,7 @@ pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<(String, String)>>
     }
     // `rsplit_once`, and the test is what said so: the SEQUENCE carries spaces
     // (`m f s`) and the id does not, so what separates them is the LAST space.
-    // Splitting on the first gave `("m", "f s salvar-arquivo")` — a plausible
+    // Splitting on the first gave `("m", "f s save-file")` — a plausible
     // pair that would have listed one key and run nothing.
     Ok(answer
         .lines()
@@ -277,11 +277,11 @@ pub fn buffer_states_at(path: &std::path::Path) -> Option<States> {
 /// Nobody listening there, or the buffer refused the id.
 pub fn buffer_state_at(path: &std::path::Path, order: &str) -> Result<()> {
     let mut stream = UnixStream::connect(path)
-        .with_context(|| format!("nenhum buffer escutando em {}", path.display()))?;
+        .with_context(|| format!("no buffer listening at {}", path.display()))?;
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
-    writeln!(stream, "{order}").context("nao consegui escrever no socket do buffer")?;
+    writeln!(stream, "{order}").context("could not write to the buffer's socket")?;
     let mut answer = String::new();
-    std::io::Read::read_to_string(&mut stream, &mut answer).context("o buffer nao respondeu")?;
+    std::io::Read::read_to_string(&mut stream, &mut answer).context("the buffer did not answer")?;
     anyhow::ensure!(
         answer.trim() == "ok",
         "o buffer recusou `{order}`: {}",
@@ -318,14 +318,14 @@ pub fn buffer_command(pid: u32, id: &str) -> Result<()> {
 /// Nobody listening there, or the buffer refused the id.
 pub fn buffer_command_at(path: &std::path::Path, id: &str) -> Result<()> {
     let mut stream = UnixStream::connect(path)
-        .with_context(|| format!("nenhum buffer escutando em {}", path.display()))?;
+        .with_context(|| format!("no buffer listening at {}", path.display()))?;
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
-    writeln!(stream, "command {id}").context("nao consegui escrever no socket do buffer")?;
+    writeln!(stream, "command {id}").context("could not write to the buffer's socket")?;
     // THE ANSWER IS READ, and not assumed. The buffer refuses an id it did not
     // declare, and a caller that never looked would report success for a key
     // that did nothing — the exact failure this whole path exists to avoid.
     let mut answer = String::new();
-    std::io::Read::read_to_string(&mut stream, &mut answer).context("o buffer nao respondeu")?;
+    std::io::Read::read_to_string(&mut stream, &mut answer).context("the buffer did not answer")?;
     anyhow::ensure!(
         answer.trim() == "ok",
         "o buffer recusou `{id}`: {}",
@@ -343,13 +343,13 @@ pub fn send_it(order: &str) -> Result<()> {
     let path = socket_path()?;
     let mut s = UnixStream::connect(&path).with_context(|| {
         format!(
-            "nao ha rodape escutando em {}.\n\
+            "there is no footer listening at {}.\n\
              \n\
-             `ronoctua-shell leader` avisa um rodape JA rodando; ele nao sobe um.",
+             `ronoctua-shell leader` tells a footer that is ALREADY running; it does not start one.",
             path.display()
         )
     })?;
-    writeln!(s, "{order}").context("nao consegui escrever no socket de controle")?;
+    writeln!(s, "{order}").context("could not write to the control socket")?;
     Ok(())
 }
 
@@ -362,7 +362,7 @@ pub fn listen(channel: Sender<Order>) -> bool {
     let path = match socket_path() {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!(error = %e, "sem socket de controle; a leader nao vai funcionar");
+            tracing::warn!(error = %e, "no control socket; the leader will not work");
             return false;
         }
     };
@@ -383,19 +383,19 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
     // is left here belongs to a process that no longer answers.
     let _ = std::fs::remove_file(&path);
 
-    let ouvinte = match UnixListener::bind(&path) {
+    let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
         Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "nao consegui abrir o socket");
+            tracing::warn!(error = %e, path = %path.display(), "could not open the socket");
             return false;
         }
     };
-    tracing::info!(path = %path.display(), "socket de controle aberto");
+    tracing::info!(path = %path.display(), "control socket opened");
 
     thread::Builder::new()
         .name("controle".into())
         .spawn(move || {
-            for connection in ouvinte.incoming() {
+            for connection in listener.incoming() {
                 let Ok(stream) = connection else { continue };
                 let mut line = String::new();
                 if BufReader::new(stream).read_line(&mut line).is_err() {
@@ -421,12 +421,15 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                             id: id.to_owned(),
                         },
                         _ => {
-                            tracing::warn!(order = line.trim(), "estado sem pid ou sem id");
+                            tracing::warn!(order = line.trim(), "a state with no pid or no id");
                             continue;
                         }
                     },
                     _ => {
-                        tracing::warn!(order = line.trim(), "ordem desconhecida no controle");
+                        tracing::warn!(
+                            order = line.trim(),
+                            "an unknown order on the control socket"
+                        );
                         continue;
                     }
                 };
@@ -435,7 +438,7 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                 }
             }
         })
-        .expect("a thread de controle nao pode falhar em nascer");
+        .expect("the control thread cannot fail to be born");
 
     true
 }
@@ -508,11 +511,11 @@ impl Leader {
     /// two columns fewer. The ellipsis said the same thing taking up
     /// more space — and in a footer where everything elides, space is the resource.
     #[must_use]
-    pub fn prefix(&self, gatilho: &str) -> String {
+    pub fn prefix(&self, trigger: &str) -> String {
         if self.sequence.is_empty() {
-            format!("{gatilho}-")
+            format!("{trigger}-")
         } else {
-            format!("{gatilho} {}-", ronoctua_keymap::notation(&self.sequence))
+            format!("{trigger} {}-", ronoctua_keymap::notation(&self.sequence))
         }
     }
 
@@ -522,16 +525,16 @@ impl Leader {
     /// error message that would be a lie: there the sequence ENDED, and with no
     /// destination. Two readings, two functions.
     #[must_use]
-    pub fn raw_prefix(&self, gatilho: &str) -> String {
+    pub fn raw_prefix(&self, trigger: &str) -> String {
         if self.sequence.is_empty() {
-            gatilho.to_owned()
+            trigger.to_owned()
         } else {
-            format!("{gatilho} {}", ronoctua_keymap::notation(&self.sequence))
+            format!("{trigger} {}", ronoctua_keymap::notation(&self.sequence))
         }
     }
 
     /// Activates the leader from scratch.
-    pub fn ativar(&mut self) {
+    pub fn activate(&mut self) {
         self.active_one = true;
         self.sequence.clear();
     }
@@ -588,7 +591,7 @@ impl Leader {
         use ronoctua_keymap::{Key, Mods, Sym};
         let last_one = *self.sequence.last()?;
 
-        let sem_mods = Key {
+        let no_mods = Key {
             mods: Mods {
                 ctrl: false,
                 alt: false,
@@ -599,7 +602,7 @@ impl Leader {
         };
         let other_case = |t: Key| -> Option<Key> {
             let Sym::Char(c) = t.sym else { return None };
-            let trocada = if c.is_uppercase() {
+            let swapped = if c.is_uppercase() {
                 c.to_lowercase().next()?
             } else if c.is_lowercase() {
                 c.to_uppercase().next()?
@@ -607,7 +610,7 @@ impl Leader {
                 return None;
             };
             Some(Key {
-                sym: Sym::Char(trocada),
+                sym: Sym::Char(swapped),
                 ..t
             })
         };
@@ -615,14 +618,14 @@ impl Leader {
         // IN ORDER OF MOST LIKELY CAUSE, and stopping at the first that matches.
         // Removing the modifier comes first because it is the case the person cannot
         // undo on their own.
-        let candidatas = [
-            Some(sem_mods).filter(|t| *t != last_one),
+        let candidates = [
+            Some(no_mods).filter(|t| *t != last_one),
             other_case(last_one),
-            other_case(sem_mods),
+            other_case(no_mods),
         ];
 
         let mut attempt = self.sequence.clone();
-        for target in candidatas.into_iter().flatten() {
+        for target in candidates.into_iter().flatten() {
             *attempt.last_mut()? = target;
             if !matches!(tree.resolve(&attempt), ronoctua_keymap::Resolution::Nothing) {
                 return Some(target);
@@ -631,6 +634,21 @@ impl Leader {
         None
     }
 }
+
+/// How `brain-abort` is typed, after the leader.
+///
+/// A constant and not a literal in two places: the BAND DRAWS IT, because a
+/// control whose key is only in the manual is a control nobody presses — and a
+/// sequence that lived in the table and again in the drawing would be two
+/// answers to "which key stops it", with the wrong one on screen.
+///
+/// `s` is the SYSTEM group — what the machine is doing to itself — and `a` is
+/// the letter the brain's own buffer already uses for the same verb under its
+/// local leader (`m a`). One letter, two prefixes, one meaning.
+pub const BRAIN_ABORT_KEYS: &str = "s a";
+
+/// The same, for `brain-proceed`. `p`, as in the buffer's `m p`.
+pub const BRAIN_PROCEED_KEYS: &str = "s p";
 
 /// The default keymap and the commands it references.
 ///
@@ -746,6 +764,58 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "memory-open",
             label: key::CMD_MEMORY_OPEN,
+        },
+        // `LEADER s b` — what the machine does BY ITSELF. The panel's own
+        // commands are not here either: they live in the buffer's descriptor,
+        // under `SPC m`, and its host resolves them while it holds the
+        // keyboard.
+        Command {
+            id: "brain-open",
+            label: key::CMD_BRAIN_OPEN,
+        },
+        // AND THE COUNTDOWN'S TWO ANSWERS, which are the band's two controls.
+        //
+        // They are registered HERE, and not only in the buffer, because the
+        // line they belong to is the FOOTER'S: it appears with no window open
+        // and it is clickable, and the mouse may not reach a door the keyboard
+        // does not. The buffer has its own `m a` and `m p` for the same two
+        // verbs — same letters, its own prefix — and the two never meet: a
+        // buffer's sequence is resolved by the buffer's process.
+        Command {
+            id: "brain-abort",
+            label: key::CMD_BRAIN_ABORT,
+        },
+        Command {
+            id: "brain-proceed",
+            label: key::CMD_BRAIN_PROCEED,
+        },
+        // `LEADER s u` — THE WHOLE UPDATE, BY HAND, WITH NO BRAIN IN IT.
+        //
+        // The brain decides WHEN the machine updates itself; this is the
+        // person deciding it is now. The two are not two sequences: this
+        // starts the same unit the brain starts, and neither of them holds a
+        // list of steps — `assets/updates.nix` does, and everything else is
+        // generated from it. That is why there is no way to add a step to one
+        // and not the other: there is only one place a step can be added.
+        //
+        // It works with the daemon down, on purpose. A scheduler that is not
+        // running must not be able to stop a person from updating their own
+        // machine — see `update_window::begin`.
+        Command {
+            id: "system-update",
+            label: key::CMD_SYSTEM_UPDATE,
+        },
+        // AND THE WINDOW THAT WATCHES ONE HAPPEN — the door the modeline's
+        // animated mark opens.
+        //
+        // It is a command of the registry and not a key of a view for the same
+        // reason `brain-abort` is: the mark appears on the footer's own line,
+        // with no window open, and the mouse may not reach a door the keyboard
+        // does not. It also opens with NOTHING running, which is when somebody
+        // wants to read what the last run did.
+        Command {
+            id: "update-watch",
+            label: key::CMD_UPDATE_WATCH,
         },
         Command {
             id: "monitor-bottom",
@@ -1107,7 +1177,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // resolves a chord is the compositor.
         //
         // So that there are not two truths again, niri's chord binds
-        // are GENERATED from this same command table — see `actions::acordes`
+        // are GENERATED from this same command table — see `actions::chords`
         // and `nix/niri-binds.nix`.
         ("w h", "window-left", None),
         ("w l", "window-right", None),
@@ -1230,6 +1300,29 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // SYSTEM's hardware and sits beside the memory panel, and `f` is free
         // there: the file manager's `f` is a prefix of its own, one level up.
         ("s f", "format-open", None),
+        // `LEADER s b` — the brain's screen. `b` for brain, and it is free
+        // here: the first-level `b` is the buffer group, one level up.
+        ("s b", "brain-open", None),
+        // AND THE TWO THE BAND DRAWS. They are not under `s b` because that is
+        // a COMMAND, and hanging a sequence off a command is the collision
+        // `PrefixWithCommand` exists to flag. They sit beside it instead, which
+        // is where they belong anyway: they act on what the machine ANNOUNCED,
+        // and one does not have to open a screen to answer it.
+        (BRAIN_ABORT_KEYS, "brain-abort", None),
+        (BRAIN_PROCEED_KEYS, "brain-proceed", None),
+        // `LEADER s u` — `u` for update, under the SYSTEM group, beside the
+        // memory panel and the disk formatter. It was free, and it is where
+        // somebody looks for "do something to this machine".
+        //
+        // It is NOT under `s b`, which is a command: hanging a sequence off a
+        // command is the collision `PrefixWithCommand` exists to flag, and it
+        // is the same reason the countdown's two answers sit beside the brain's
+        // screen rather than under it.
+        ("s u", "system-update", None),
+        // `s w` — `w` for WINDOW, the letter the file manager, the transfer
+        // queue and the notification manager already use for their second
+        // door. Four views, one letter.
+        ("s w", "update-watch", None),
         ("q q", "session-quit", None),
         // `LEADER :` — `M-x`'s key in Doom, which is where the concept
         // comes from. It used to be `x`, which in Doom is the scratch buffer and not the locator.
@@ -1284,7 +1377,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     const GROUPS: &[(&str, &str)] = &[
         ("b", key::GROUP_BUFFER),
         // `f` HAD NO LABEL until now. `f f` existed and the group it hangs off
-        // showed up in which-key with `keymap.sem-rotulo` — a prefix that says
+        // showed up in which-key with `keymap.no-label` — a prefix that says
         // nothing about where it leads. It has two items now, and a name.
         ("f", key::GROUP_FILE),
         ("w", key::GROUP_WINDOW),
@@ -1359,23 +1452,25 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ])
         .collect();
 
-    let mut ligacoes = Vec::with_capacity(BINDINGS.len() + ranges.len());
+    let mut bindings = Vec::with_capacity(BINDINGS.len() + ranges.len());
     for (seq, command, argument) in BINDINGS
         .iter()
         .map(|(s, c, a)| ((*s).to_owned(), *c, *a))
         .chain(ranges.into_iter().map(|(s, c, a)| (s, c, Some(a))))
     {
         let cmd = registry.search(command).ok_or_else(|| {
-            anyhow::anyhow!("a ligacao `{seq}` aponta para o comando `{command}`, que nao existe")
+            anyhow::anyhow!(
+                "the binding `{seq}` points at the command `{command}`, which does not exist"
+            )
         })?;
         // A COMMAND WITH AN ARGUMENT ONLY ACCEPTS A BINDING WITH AN ARGUMENT, and the
         // converse too: `workspace-go` with no number does not know where to go, and
         // `buffer-close` with a number receives something it silently ignores.
         anyhow::ensure!(
             crate::actions::with_argument(command).is_some() == argument.is_some(),
-            "a ligacao `{seq}` e o comando `{command}` discordam sobre argumento"
+            "the binding `{seq}` and the command `{command}` disagree about the argument"
         );
-        ligacoes.push(Binding {
+        bindings.push(Binding {
             sequence: parse_sequence(&seq)?,
             command,
             label: cmd.label,
@@ -1388,13 +1483,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         .map(|(seq, label)| parse_sequence(seq).map(|sequence| GroupNode { sequence, label }))
         .collect();
 
-    let tree = Tree::build_it(&ligacoes, &groups?).map_err(|collisions| {
+    let tree = Tree::build_it(&bindings, &groups?).map_err(|collisions| {
         let list = collisions
             .iter()
             .map(|c| format!("  - {c}"))
             .collect::<Vec<_>>()
             .join("\n");
-        anyhow::anyhow!("o keymap padrao tem colisao:\n{list}")
+        anyhow::anyhow!("the default keymap has a collision:\n{list}")
     })?;
 
     Ok((tree, registry))
@@ -1460,11 +1555,7 @@ pub const OF_NETWORK_VIEW: &[(&str, &str)] = &[
 pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     let mut out: std::collections::BTreeSet<&'static str> =
         tree.reachable_commands().into_iter().collect();
-    out.extend(
-        crate::actions::acordes_completos()
-            .into_iter()
-            .map(|a| a.command),
-    );
+    out.extend(crate::actions::full_chords().into_iter().map(|a| a.command));
     out.extend(
         crate::actions::emergency()
             .into_iter()
@@ -1494,7 +1585,7 @@ mod tests {
         use std::io::{BufRead as _, Write as _};
 
         let path =
-            std::env::temp_dir().join(format!("ronoctua-estados-{}.sock", std::process::id()));
+            std::env::temp_dir().join(format!("ronoctua-states-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
 
@@ -1521,7 +1612,7 @@ mod tests {
             }
         });
 
-        let (now, listed) = super::buffer_states_at(&path).expect("ler os estados");
+        let (now, listed) = super::buffer_states_at(&path).expect("read the states");
         // THE CURRENT ONE IS THE FIRST LINE and is NOT in the list — that is the
         // whole reason the shape differs from the keymap's.
         assert_eq!(now, "filter");
@@ -1534,7 +1625,7 @@ mod tests {
             ]
         );
 
-        super::buffer_state_at(&path, "state sheet").expect("pedir o estado");
+        super::buffer_state_at(&path, "state sheet").expect("ask for the state");
         super::buffer_state_at(&path, "state-next").expect("girar");
         served.join().expect("a thread do buffer");
         assert_eq!(
@@ -1552,7 +1643,7 @@ mod tests {
     /// to ignore the ones that matter.
     #[test]
     fn a_window_that_is_not_ours_answers_nothing() {
-        let path = std::env::temp_dir().join("ronoctua-nao-existe.sock");
+        let path = std::env::temp_dir().join("ronoctua-does-not-exist.sock");
         let _ = std::fs::remove_file(&path);
         assert!(super::buffer_states_at(&path).is_none());
     }
@@ -1583,7 +1674,7 @@ mod tests {
                     .read_line(&mut line)
                     .expect("ler");
                 let reply = match line.trim() {
-                    "keymap" => "m f s salvar-arquivo\nm f r recarregar-arquivo".to_owned(),
+                    "keymap" => "m f s save-file\nm f r reload-file".to_owned(),
                     order => {
                         seen.lock().expect("lock").push(order.to_owned());
                         "ok".to_owned()
@@ -1597,18 +1688,18 @@ mod tests {
         assert_eq!(
             keymap,
             vec![
-                ("m f s".to_owned(), "salvar-arquivo".to_owned()),
-                ("m f r".to_owned(), "recarregar-arquivo".to_owned()),
+                ("m f s".to_owned(), "save-file".to_owned()),
+                ("m f r".to_owned(), "reload-file".to_owned()),
             ],
-            "a sequencia leva espacos, entao so o PRIMEIRO separa dela o id"
+            "the sequence carries spaces, so only the FIRST one separates the id from it"
         );
 
-        super::buffer_command_at(&path, "salvar-arquivo").expect("rodar o comando");
+        super::buffer_command_at(&path, "save-file").expect("run the command");
         served.join().expect("a thread do falso buffer");
         assert_eq!(
             *ran.lock().expect("lock"),
-            vec!["command salvar-arquivo".to_owned()],
-            "o comando tem de chegar do lado do buffer, e nao so ser enviado"
+            vec!["command save-file".to_owned()],
+            "the command has to arrive on the buffer's side, not just be sent"
         );
         let _ = std::fs::remove_file(&path);
     }
@@ -1618,11 +1709,11 @@ mod tests {
     /// showing a failure.
     #[test]
     fn no_buffer_listening_gives_an_empty_keymap() {
-        let path = std::env::temp_dir().join("ronoctua-nao-existe-mesmo.sock");
+        let path = std::env::temp_dir().join("ronoctua-really-does-not-exist.sock");
         let _ = std::fs::remove_file(&path);
         assert!(
             super::buffer_keymap_at(&path)
-                .expect("nao pode ser erro")
+                .expect("it cannot be an error")
                 .is_empty()
         );
     }
@@ -1649,20 +1740,20 @@ mod tests {
         use smithay_client_toolkit::reexports::calloop::channel;
 
         let dir = std::env::temp_dir().join(format!("ronoctua-teste-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("diretorio temporario");
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
         let path = dir.join("controle.sock");
 
-        let (envio1, recebe1) = channel::channel::<Order>();
+        let (sender1, receiver1) = channel::channel::<Order>();
         assert!(
-            listen_on(&path, envio1),
-            "o primeiro rodape tem de conseguir abrir o socket"
+            listen_on(&path, sender1),
+            "the first footer has to manage to open the socket"
         );
 
         // THE SECOND. It is the one that has to ask for the place.
-        let (envio2, _recebe2) = channel::channel::<Order>();
+        let (sender2, _receiver2) = channel::channel::<Order>();
         assert!(
-            listen_on(&path, envio2),
-            "o segundo rodape tem de conseguir assumir o socket"
+            listen_on(&path, sender2),
+            "the second footer has to manage to take over the socket"
         );
 
         // calloop's channel does not block, and the first one's control thread
@@ -1670,18 +1761,20 @@ mod tests {
         // short wait with an early exit measures the mechanism, not the machine.
         let up_to = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            match recebe1.try_recv() {
+            match receiver1.try_recv() {
                 Ok(Order::Quit) => break,
-                Ok(otherwise_one) => panic!("o primeiro recebeu {otherwise_one:?} em vez de sair"),
+                Ok(otherwise_one) => {
+                    panic!("the first one got {otherwise_one:?} instead of leaving")
+                }
                 Err(_) if std::time::Instant::now() < up_to => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 Err(_) => panic!(
-                    "o primeiro rodape NAO foi avisado de que perdeu o display.\n\
+                    "the first footer was NOT told it had lost the display.\n\
                      \n\
-                     Ele continua vivo, com a superficie na tela e o teclado no\n\
-                     seat. Se ele estiver com a leader aberta, e ele que recebe\n\
-                     as teclas que o rodape novo esta esperando."
+             It is still alive, with its surface on screen and the keyboard in\n\
+                     the seat. If it has the leader open, it is the one that receives\n\
+             the keys the new footer is waiting for."
                 ),
             }
         }
@@ -1697,14 +1790,14 @@ mod tests {
     /// if the screen tells them that the other case is the one that exists.
     #[test]
     fn the_message_points_at_the_other_case() {
-        let (tree, _) = default_of().expect("o keymap padrao tem de fechar");
+        let (tree, _) = default_of().expect("the default keymap has to close");
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         match l.key(&tree, Key::simple(Sym::Char('I'))) {
             Effect::Close {
                 other_case: Some(t),
             } => assert_eq!(t.sym, Sym::Char('i'), "a sugestao tem de ser a minuscula"),
-            otherwise => panic!("`I` devia encerrar apontando `i`; veio {otherwise:?}"),
+            otherwise => panic!("`I` should end pointing at `i`; got {otherwise:?}"),
         }
     }
 
@@ -1713,16 +1806,16 @@ mod tests {
         // The suggestion must not become noise: a key that exists in no case at
         // all ends without pointing at anything, and one that HAS no case (a digit,
         // punctuation) too.
-        let (tree, _) = default_of().expect("o keymap padrao tem de fechar");
+        let (tree, _) = default_of().expect("the default keymap has to close");
         for c in ['ç', '='] {
             let mut l = Leader::default();
-            l.ativar();
+            l.activate();
             assert!(
                 matches!(
                     l.key(&tree, Key::simple(Sym::Char(c))),
                     Effect::Close { other_case: None }
                 ),
-                "`{c}` nao existe em caixa nenhuma; nao ha o que sugerir"
+                "`{c}` exists in no case at all; there is nothing to suggest"
             );
         }
     }
@@ -1737,8 +1830,8 @@ mod tests {
     #[test]
     fn the_message_points_at_the_key_with_no_modifier() {
         use ronoctua_keymap::Mods;
-        let (tree, _) = default_of().expect("o keymap padrao tem de fechar");
-        let com_alt = Key {
+        let (tree, _) = default_of().expect("the default keymap has to close");
+        let with_alt = Key {
             mods: Mods {
                 ctrl: false,
                 alt: true,
@@ -1749,20 +1842,23 @@ mod tests {
         };
         // The premise: `M-i` is not bound to anything, and `i` is.
         assert!(matches!(
-            tree.resolve(&[com_alt]),
+            tree.resolve(&[with_alt]),
             ronoctua_keymap::Resolution::Nothing
         ));
 
         let mut l = Leader::default();
-        l.ativar();
-        match l.key(&tree, com_alt) {
+        l.activate();
+        match l.key(&tree, with_alt) {
             Effect::Close {
                 other_case: Some(t),
             } => {
                 assert_eq!(t.sym, Sym::Char('i'));
-                assert!(!t.mods.alt, "a sugestao tem de ser a tecla SEM o Alt");
+                assert!(
+                    !t.mods.alt,
+                    "the suggestion has to be the key WITHOUT the Alt"
+                );
             }
-            otherwise => panic!("`M-i` devia encerrar apontando `i`; veio {otherwise:?}"),
+            otherwise => panic!("`M-i` should end pointing at `i`; got {otherwise:?}"),
         }
     }
 
@@ -1772,9 +1868,9 @@ mod tests {
         // from one to the other would make the shortcut do SOMETHING ELSE, which is worse than
         // doing nothing. Here `w` followed by a non-existent key ends the sequence —
         // never `Run`.
-        let (tree, _) = default_of().expect("o keymap padrao tem de fechar");
+        let (tree, _) = default_of().expect("the default keymap has to close");
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         assert!(matches!(
             l.key(&tree, Key::simple(Sym::Char('w'))),
             Effect::Continue { .. }
@@ -1787,7 +1883,7 @@ mod tests {
                     other_case: Some(_)
                 }
             ),
-            "tem de encerrar apontando `t`, e NAO executar `window-float`"
+            "it has to end pointing at `t`, and NOT run `window-float`"
         );
     }
 
@@ -1799,9 +1895,9 @@ mod tests {
         // It asserts the INVARIANT, and not a fixed count: a hard-coded number
         // breaks on every new command and teaches people to update the test without reading
         // what it says — which is how a check stops verifying.
-        let (tree, registry) = default_of().expect("o keymap padrao tem de fechar");
+        let (tree, registry) = default_of().expect("the default keymap has to close");
 
-        assert!(tree.amount() > 0, "keymap vazio");
+        assert!(tree.amount() > 0, "an empty keymap");
 
         // NO ORPHAN COMMAND: every command in the registry has SOME key path
         // to it.
@@ -1819,8 +1915,8 @@ mod tests {
         // gets typed is a command only whoever read the code knows exists.
         let reachable = super::reachable(&tree);
         for c in registry.all_ones() {
-            assert!(!c.id.is_empty(), "comando sem id");
-            assert!(!c.label.is_empty(), "comando sem chave de rotulo");
+            assert!(!c.id.is_empty(), "a command with no id");
+            assert!(!c.label.is_empty(), "a command with no label key");
             // THE COMPOSITOR'S MIRRORED ONES ARE THE EXCEPTION, and the only one.
             //
             // They exist to be reachable by NAME (section 13); giving keys
@@ -1832,8 +1928,8 @@ mod tests {
             }
             assert!(
                 reachable.contains(&c.id),
-                "`{}` e comando NOSSO e nenhuma tecla o alcanca: \
-                 nem sequencia, nem acorde, nem bind de emergencia",
+                "`{}` is OUR command and no key reaches it: \
+             no sequence, no chord, no emergency bind",
                 c.id
             );
         }
@@ -1843,7 +1939,7 @@ mod tests {
         for id in reachable {
             assert!(
                 registry.search(id).is_some(),
-                "ha tecla apontando para `{id}`, que nao esta no registro"
+                "there is a key pointing at `{id}`, which is not in the registry"
             );
         }
     }
@@ -1854,7 +1950,7 @@ mod tests {
         // lost user has no way back.
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         assert!(matches!(
             l.key(&tree, Key::simple(Sym::Char('b'))),
             Effect::Continue { .. }
@@ -1870,7 +1966,7 @@ mod tests {
     fn a_key_with_no_binding_ends_instead_of_hanging() {
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         assert!(matches!(
             l.key(&tree, Key::simple(Sym::Char('ç'))),
             Effect::Close { .. }
@@ -1882,7 +1978,7 @@ mod tests {
     fn a_complete_sequence_runs_and_leaves() {
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         // `i n`, and not `g g`: the group became `i` for ICONS, because the
         // Nerd Fonts browser is the first collection and others are going to come in.
         l.key(&tree, Key::simple(Sym::Char('i')));
@@ -1903,7 +1999,7 @@ mod tests {
         let (tree, _) = default_of().unwrap();
         for n in 1..=9u8 {
             let mut l = Leader::default();
-            l.ativar();
+            l.activate();
             l.key(&tree, Key::simple(Sym::Tab));
             let d = char::from_digit(u32::from(n), 10).unwrap();
             match l.key(&tree, Key::simple(Sym::Char(d))) {
@@ -1912,10 +2008,10 @@ mod tests {
                     assert_eq!(
                         arg.parse::<u8>().unwrap(),
                         n,
-                        "a tecla e o argumento divergiram"
+                        "the key and the argument diverged"
                     );
                 }
-                otherwise => panic!("`TAB {d}` nao levou ao espaco {n}: {otherwise:?}"),
+                otherwise => panic!("`TAB {d}` did not lead to workspace {n}: {otherwise:?}"),
             }
         }
     }
@@ -1926,7 +2022,7 @@ mod tests {
         // nine fixed workspaces in the compositor, the last is the ninth.
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         l.key(&tree, Key::simple(Sym::Tab));
         assert_eq!(
             l.key(&tree, Key::simple(Sym::Char('0'))),
@@ -1942,7 +2038,7 @@ mod tests {
         let (tree, _) = default_of().unwrap();
         let ir = |seq: &[Key]| {
             let mut l = Leader::default();
-            l.ativar();
+            l.activate();
             let mut last = Effect::Close { other_case: None };
             for t in seq {
                 last = l.key(&tree, *t);
@@ -1955,11 +2051,11 @@ mod tests {
             let key = Key::simple(Sym::Char(c));
             assert!(
                 matches!(ir(&[tab, key]), Effect::Run(..)),
-                "`TAB {c}` nao leva a comando nenhum"
+                "`TAB {c}` leads to no command at all"
             );
             assert!(
                 matches!(ir(&[tab, m, key]), Effect::Run(..)),
-                "`TAB m {c}` nao leva a comando nenhum"
+                "`TAB m {c}` leads to no command at all"
             );
         }
         // And the arrows, in both.
@@ -1977,7 +2073,7 @@ mod tests {
     fn the_prefix_is_dooms_notation() {
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
-        l.ativar();
+        l.activate();
         assert_eq!(l.prefix("SPC"), "SPC-");
         assert_eq!(l.raw_prefix("SPC"), "SPC");
         l.key(&tree, Key::simple(Sym::Char('b')));
@@ -2001,7 +2097,7 @@ mod tests {
             "session-quit",
             "mx-open",
         ] {
-            assert!(registry.search(id).is_some(), "falta o comando {id}");
+            assert!(registry.search(id).is_some(), "the command {id} is missing");
         }
     }
 
@@ -2040,6 +2136,18 @@ mod tests {
             "rescue-open",
             "monitor-bottom",
             "memory-open",
+            // THE BRAIN. `brain-open` is the screen; the other two answer the
+            // countdown on the footer's own line, with no window open — which
+            // is why they are commands of the registry and not keys of a view.
+            "brain-open",
+            "brain-abort",
+            "brain-proceed",
+            // THE UPDATE, outside the brain. `system-update` starts the same
+            // unit the brain starts and `update-watch` opens the window the
+            // modeline's mark opens — which is why both are commands of the
+            // registry rather than keys of a view.
+            "system-update",
+            "update-watch",
             "glyphs-nerd-fonts",
             "unicode-symbols",
             "lucide-icons",
@@ -2102,7 +2210,7 @@ mod tests {
             if id.starts_with("niri-") {
                 continue;
             }
-            // The TWO workspace ones with an argument (`espaco-ir`, `espaco-levar`)
+            // The TWO workspace ones with an argument (`workspace-go`, `workspace-move`)
             // have no null action: the chord carries the number in the KDL itself, and
             // `only_a_chord_with_an_argument_escapes_the_action_table` guards that
             // exception from the other side.
@@ -2111,8 +2219,8 @@ mod tests {
             }
             assert!(
                 WITH_ACTION.contains(&id),
-                "`{id}` tem tecla e o `surface::run_command` nao o trata: \
-                 ele apareceria na lista e nao faria nada"
+                "`{id}` has a key and `surface::run_command` does not handle it: \
+                 it would show up in the list and do nothing"
             );
         }
         // And the inverse: an id in the list above that left the registry would become a
@@ -2120,7 +2228,7 @@ mod tests {
         for id in WITH_ACTION {
             assert!(
                 registry.search(id).is_some(),
-                "`{id}` esta na lista de tratados e nao existe mais"
+                "`{id}` is in the handled list and no longer exists"
             );
         }
     }

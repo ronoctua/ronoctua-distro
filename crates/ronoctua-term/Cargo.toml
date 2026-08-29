@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-term"
-description = "Trait do motor VT e a implementacao alacritty (secao 7.10)."
+description = "The VT engine trait and the alacritty implementation (section 7.10)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

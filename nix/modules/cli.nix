@@ -91,7 +91,7 @@
   # `tldr` needs its cache built once; without this the first run of every new
   # machine is a download that fails behind a captive portal.
   systemd.services.tealdeer-update = {
-    description = "Atualiza o cache do tldr";
+    description = "Updates the tldr cache";
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
     startAt = "weekly";

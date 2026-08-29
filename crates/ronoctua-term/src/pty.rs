@@ -94,23 +94,23 @@ impl Pty {
         // if it did, what controlled the terminal would be the shell itself, and the
         // child would be left without one.
         let master = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)
-            .context("nao consegui abrir um pty")?;
+            .context("could not open a pty")?;
         rustix::pty::grantpt(&master).context("grantpt")?;
         rustix::pty::unlockpt(&master).context("unlockpt")?;
 
         let name = rustix::pty::ptsname(&master, Vec::new()).context("ptsname")?;
-        let name = name.to_str().context("o nome do pty nao e UTF-8")?;
+        let name = name.to_str().context("the pty's name is not UTF-8")?;
 
         // The size goes in BEFORE the spawn: a shell born thinking the
         // screen is 80x24 and only afterwards receiving `SIGWINCH` has already printed the prompt
         // at the wrong width.
         resize_fd(master.as_fd(), columns, lines)?;
 
-        let escravo = std::fs::OpenOptions::new()
+        let secondary = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(name)
-            .with_context(|| format!("abrir {name}"))?;
+            .with_context(|| format!("open {name}"))?;
 
         let mut assembled = std::process::Command::new(SETSID_PATH);
         // WHAT THE TERMINAL OWES THE PROGRAM. Neither line overwrites what the
@@ -128,11 +128,11 @@ impl Pty {
             .arg("--ctty")
             .arg(program)
             .args(args)
-            .stdin(escravo.try_clone().context("clonar o escravo")?)
-            .stdout(escravo.try_clone().context("clonar o escravo")?)
-            .stderr(escravo)
+            .stdin(secondary.try_clone().context("clone the secondary")?)
+            .stdout(secondary.try_clone().context("clone the secondary")?)
+            .stderr(secondary)
             .spawn()
-            .with_context(|| format!("nao consegui rodar `{program}` no pty"))?;
+            .with_context(|| format!("could not run `{program}` in the pty"))?;
 
         // The slave goes out of scope here, and that is on purpose: as long as WE
         // keep it open, reading the master never returns end of file — the
@@ -147,7 +147,7 @@ impl Pty {
     /// The child closed the pty.
     pub fn write_bytes(&self, bytes: &[u8]) -> Result<()> {
         let mut f = std::fs::File::from(self.master.try_clone().context("clonar o mestre")?);
-        f.write_all(bytes).context("escrever no pty")?;
+        f.write_all(bytes).context("write to the pty")?;
         f.flush().context("esvaziar o pty")
     }
 
@@ -249,7 +249,7 @@ fn resize_fd(fd: std::os::fd::BorrowedFd<'_>, columns: u16, lines: u16) -> Resul
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    rustix::termios::tcsetwinsize(fd, size).context("informar o tamanho ao pty")?;
+    rustix::termios::tcsetwinsize(fd, size).context("tell the pty the size")?;
     Ok(())
 }
 
@@ -273,14 +273,14 @@ mod tests {
                 Stream::Follow
             }
         });
-        assert!(r.is_ok(), "bombear falhou: {r:?}");
+        assert!(r.is_ok(), "pumping failed: {r:?}");
         everything
     }
 
     #[test]
     fn the_program_runs_and_the_output_comes_back_through_the_pty() {
         let mut pty = Pty::open("sh", &["-c".into(), "echo ronoctua-pty-ok".into()], 40, 10)
-            .expect("abrir o pty");
+            .expect("open the pty");
         let seen_at = read_until(&pty, "ronoctua-pty-ok");
         pty.finish().unwrap();
         assert!(
@@ -293,14 +293,11 @@ mod tests {
     fn what_is_written_reaches_the_program() {
         // `cat` returns what it receives. It is the shortest test that proves the
         // INPUT path exists — without it the terminal would be just a viewer.
-        let mut pty = Pty::open("cat", &[], 40, 10).expect("abrir o pty");
-        pty.write_bytes(b"eco-de-volta\n").unwrap();
-        let seen_at = read_until(&pty, "eco-de-volta");
+        let mut pty = Pty::open("cat", &[], 40, 10).expect("open the pty");
+        pty.write_bytes(b"echo-back\n").unwrap();
+        let seen_at = read_until(&pty, "echo-back");
         pty.finish().unwrap();
-        assert!(
-            seen_at.contains("eco-de-volta"),
-            "o pty devolveu {seen_at:?}"
-        );
+        assert!(seen_at.contains("echo-back"), "o pty devolveu {seen_at:?}");
     }
 
     #[test]
@@ -309,7 +306,7 @@ mod tests {
         // not applied BEFORE the spawn, `stty size` would say 24 80 — the default
         // — and the prompt would be born at the wrong width.
         let mut pty =
-            Pty::open("sh", &["-c".into(), "stty size".into()], 37, 11).expect("abrir o pty");
+            Pty::open("sh", &["-c".into(), "stty size".into()], 37, 11).expect("open the pty");
         let seen_at = read_until(&pty, "11 37");
         pty.finish().unwrap();
         assert!(seen_at.contains("11 37"), "`stty size` disse {seen_at:?}");
@@ -319,9 +316,12 @@ mod tests {
     fn the_child_dies_with_the_pty() {
         // Without the `Drop`, every closed terminal would leave a shell running until
         // the end of the session — invisible, and only noticed through memory.
-        let mut pty = Pty::open("sleep", &["300".into()], 20, 5).expect("abrir o pty");
+        let mut pty = Pty::open("sleep", &["300".into()], 20, 5).expect("open the pty");
         assert!(pty.alive_flag().unwrap());
         pty.finish().unwrap();
-        assert!(!pty.alive_flag().unwrap(), "o filho sobreviveu ao encerrar");
+        assert!(
+            !pty.alive_flag().unwrap(),
+            "the child survived the shutdown"
+        );
     }
 }

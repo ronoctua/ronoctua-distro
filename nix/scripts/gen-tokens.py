@@ -10,9 +10,9 @@ would show up as the wrong colour on screen — not as an error.
 
 # Why the WIT enum matters more than it seems
 
-Without it, `cor` in the protocol is a free string: a buffer names
-`color.inexistente`, compiles, and the host falls into a silent fallback. That was
-exactly the state, and it is the same class as invariant 8's `[chave]`.
+Without it, `color` in the protocol is a free string: a buffer names
+`color.nonexistent`, compiles, and the host falls into a silent fallback. That was
+exactly the state, and it is the same class as invariant 8's `[key]`.
 With the enum, `wit-bindgen` generates a Rust enum in the guest and the wrong name does
 not exist — the error comes from the compiler, not from the screen.
 
@@ -71,11 +71,11 @@ def wit_ident(name: str) -> str:
     id = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     if not VALID_SEGMENT.match(id):
         print(
-            f"ERRO: o token `{name}` vira `{id}`, que nao e identificador WIT.\n"
-            "      Em WIT cada trecho separado por hifen comeca por LETRA — "
-            "`wifi-0` nao serve, `wifi-fraco` serve.\n"
-            "      O enum `icone` do WIT e gerado destes nomes; sem esta "
-            "recusa o build quebraria dentro de um buffer, longe daqui.",
+            f"ERROR: the token `{name}` becomes `{id}`, which is not a WIT identifier.\n"
+            "      In WIT every hyphen-separated piece starts with a LETTER — "
+            "`wifi-0` will not do, `wifi-weak` will.\n"
+            "      The WIT `icon` enum is generated from these names; without this "
+            "refusal the build would break inside a buffer, far from here.",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -85,7 +85,7 @@ def wit_ident(name: str) -> str:
 def parse_color(v: str) -> tuple[int, int, int, int]:
     m = re.fullmatch(r"0x([0-9A-Fa-f]{8})", v)
     if not m:
-        raise SystemExit(f"ERRO: cor mal formada: {v!r} (esperado 0xRRGGBBAA)")
+        raise SystemExit(f"ERROR: malformed colour: {v!r} (expected 0xRRGGBBAA)")
     n = int(m.group(1), 16)
     return (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF
 
@@ -109,7 +109,7 @@ def main() -> int:
         "--tray",
         type=pathlib.Path,
         required=True,
-        help="tray-glyphs.json: app id -> token de icone",
+        help="tray-glyphs.json: app id -> icon token",
     )
     ap.add_argument(
         "--categories",
@@ -122,7 +122,7 @@ def main() -> int:
         "--out-wit",
         type=pathlib.Path,
         required=True,
-        help="enum WIT de nomes de token validos (o (b) da secao 7.6)",
+        help="WIT enum of valid token names (section 7.6's (b))",
     )
     args = ap.parse_args()
 
@@ -142,12 +142,12 @@ def main() -> int:
     # UI review.
     forbidden = [k for k in colors if re.search(r"shadow|elevation|elevat", k, re.I)]
     if forbidden:
-        print("ERRO: token de sombra/elevacao encontrado:", file=sys.stderr)
+        print("ERROR: a shadow/elevation token found:", file=sys.stderr)
         for p in forbidden:
             print(f"       {p}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       O invariante 15 diz: sem cards, sem sombra, sem elevacao.", file=sys.stderr)
-        print("       'Nao existe token de sombra no design system' (secao 5.1).", file=sys.stderr)
+        print("       Invariant 15 says: no cards, no shadow, no elevation.", file=sys.stderr)
+        print("       'There is no shadow token in the design system' (section 5.1).", file=sys.stderr)
         return 1
 
     L = []
@@ -178,23 +178,23 @@ def main() -> int:
     A("pub mod font {")
     A(f'    /// `font.family.mono` — the system font, patched.')
     A(f'    pub const FAMILY_MONO: &str = "{typo["family"]["mono"]}";')
-    A(f'    /// `font.family.ui` — a mesma: o sistema e monoespacado por desenho.')
+    A(f'    /// `font.family.ui` — the same one: the system is monospaced by design.')
     A(f'    pub const FAMILY_UI: &str = "{typo["family"]["ui"]}";')
     for k, v in sorted(typo["size"].items()):
         A(f"    /// `font.size.{k}`, in logical px.")
         A(f"    pub const SIZE_{k.upper()}: f32 = {float(v)};")
     A("")
-    A("    /// Largura de celula, em fracao do tamanho da fonte.")
+    A("    /// Cell width, as a fraction of the font size.")
     A("    ///")
-    A("    /// **Medido, nao presumido**: as 135 faces tem UM avanco por largura,")
-    A("    /// e na largura normal ele e 600/1000 em — inclusive nos 10.473 glifos")
-    A("    /// Nerd Fonts, que sao de uma celula.")
+    A("    /// **Measured, not assumed**: the 135 faces have ONE advance per width,")
+    A("    /// and at the normal width it is 600/1000 em — including in the 10,473")
+    A("    /// Nerd Fonts glyphs, which are one cell wide.")
     A("    ///")
-    A("    /// E o que torna o layout do rodape aritmetica de inteiros: nao e")
-    A("    /// preciso medir texto para posicionar segmento (secoes 4.1 e 5.2).")
+    A("    /// It is what makes the footer's layout integer arithmetic: there is no")
+    A("    /// need to measure text to place a segment (sections 4.1 and 5.2).")
     A(f"    pub const CELL_WIDTH_EM: f32 = {float(typo['cellWidthEm'])};")
     A("")
-    A("    /// Altura de linha, em multiplos do tamanho da fonte.")
+    A("    /// Line height, as a multiple of the font size.")
     A(f"    pub const LINE_HEIGHT: f32 = {float(typo['lineHeight'])};")
     A("}")
     A("")
@@ -229,7 +229,7 @@ def main() -> int:
     #
     # The table had existed since the icons milestone and NEVER reached the Rust: the
     # `assets/icons/tray-glyphs.nix` was validated at build time (`gen-glyphdb.py`
-    # takes down anyone pointing at a non-existent token) and stopped there. The `Cadeia` in
+    # takes down anyone pointing at a non-existent token) and stopped there. The `Chain` in
     # `ronoctua-notify` has the field `glyphs: &BTreeMap<String, char>` and never
     # had anyone to build it.
     #
@@ -242,7 +242,7 @@ def main() -> int:
         # It should not happen — `gen-glyphdb.py` already rejects it. The guard is
         # here because the two generators read the SAME file through different
         # paths, and one of them can be changed without the other.
-        print(f"ERRO: tray aponta para token inexistente: {missing}", file=sys.stderr)
+        print(f"ERROR: the tray points at a token that does not exist: {missing}", file=sys.stderr)
         return 1
     A("/// A known application -> glyph, from `assets/icons/tray-glyphs.nix`.")
     A("///")
@@ -267,16 +267,16 @@ def main() -> int:
     categories = json.loads(args.categories.read_text(encoding="utf-8"))
     missing = sorted({c["token"] for c in categories} - set(icons))
     if missing:
-        print(f"ERRO: categoria aponta para token inexistente: {missing}", file=sys.stderr)
+        print(f"ERROR: a category points at a token that does not exist: {missing}", file=sys.stderr)
         return 1
-    vistas: set[str] = set()
+    seen: set[str] = set()
     for c in categories:
         # A repeated category would be a dead line: the first would already have
         # won, and whoever edited the second would see no effect at all.
-        if c["category"] in vistas:
-            print(f"ERRO: categoria repetida: {c['category']}", file=sys.stderr)
+        if c["category"] in seen:
+            print(f"ERROR: repeated category: {c['category']}", file=sys.stderr)
             return 1
-        vistas.add(c["category"])
+        seen.add(c["category"])
     A("/// The desktop entry `Categories=` -> glyph, IN PRECEDENCE ORDER.")
     A("///")
     A("/// From `assets/icons/category-glyphs.nix`. The order is the file's and not")
@@ -378,9 +378,9 @@ def main() -> int:
 
     print(
         f"OK: {len(colors)} cores, {len(spaces)} espacamentos, "
-        f"{len(icons)} icones -> {args.out.name} e {args.out_wit.name}"
+        f"{len(icons)} icons -> {args.out.name} and {args.out_wit.name}"
     )
-    print("OK: nenhum token de sombra/elevacao (invariante 15)")
+    print("OK: no shadow/elevation token (invariant 15)")
     return 0
 
 

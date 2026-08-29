@@ -199,8 +199,8 @@ impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownModifier(s) => write!(f, "modificador desconhecido em `{s}`"),
-            Self::UnknownSymbol(s) => write!(f, "tecla desconhecida em `{s}`"),
-            Self::EmptySequence => write!(f, "sequencia de teclas vazia"),
+            Self::UnknownSymbol(s) => write!(f, "an unknown key in `{s}`"),
+            Self::EmptySequence => write!(f, "an empty key sequence"),
         }
     }
 }
@@ -275,7 +275,7 @@ pub enum Collision {
         /// The command hanging off it.
         command: &'static str,
         /// A longer binding that passes through it.
-        estende: &'static str,
+        extends: &'static str,
     },
 }
 
@@ -290,11 +290,11 @@ impl std::fmt::Display for Collision {
             Self::PrefixWithCommand {
                 sequence,
                 command,
-                estende,
+                extends,
             } => write!(
                 f,
-                "`{sequence}` e comando (`{command}`) E prefixo de `{estende}`; \
-                 digitar a sequencia ficaria ambiguo"
+                "`{sequence}` is a command (`{command}`) AND a prefix of `{extends}`; \
+                 typing the sequence would be ambiguous"
             ),
         }
     }
@@ -368,19 +368,19 @@ impl Tree {
     ///
     /// It returns **every** collision found, not the first. Fixing a
     /// keymap one collision at a time, with a whole build between them, is expensive.
-    pub fn build_it(ligacoes: &[Binding], groups: &[GroupNode]) -> Result<Self, Vec<Collision>> {
+    pub fn build_it(bindings: &[Binding], groups: &[GroupNode]) -> Result<Self, Vec<Collision>> {
         let mut tree = Self::default();
         let mut collisions = Vec::new();
 
-        for l in ligacoes {
+        for l in bindings {
             let mut no = &mut tree.root;
             for t in &l.sequence {
                 no = no.children.entry(*t).or_default();
             }
-            if let Some((antigo, _, _)) = no.command {
+            if let Some((old, _, _)) = no.command {
                 collisions.push(Collision::Duplicate {
                     sequence: notation(&l.sequence),
-                    commands: (antigo, l.command),
+                    commands: (old, l.command),
                 });
             } else {
                 no.command = Some((l.command, l.label, l.argument));
@@ -434,7 +434,7 @@ impl Tree {
                     label: child
                         .group
                         .or(child.command.map(|(_, r, _)| r))
-                        .unwrap_or("keymap.sem-rotulo")
+                        .unwrap_or("keymap.no-label")
                         .to_owned(),
                     command: child.command.map(|(id, _, _)| id.to_owned()),
                     is_group: child.command.is_none(),
@@ -478,12 +478,12 @@ impl Tree {
 
 fn check_prefixes(no: &Node, path: &mut Vec<Key>, output: &mut Vec<Collision>) {
     if let Some((cmd, _, _)) = no.command
-        && let Some(estende) = first_command_below(no)
+        && let Some(extends) = first_command_below(no)
     {
         output.push(Collision::PrefixWithCommand {
             sequence: notation(path),
             command: cmd,
-            estende,
+            extends,
         });
     }
     for (t, child) in &no.children {
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn dooms_notation_reads_and_rewrites_the_same() {
         for s in ["SPC", "f", "C-x", "M-x", "C-M-S-s-a", "RET", "ESC", "TAB"] {
-            assert_eq!(Key::parse(s).unwrap().notation(), s, "falhou em {s}");
+            assert_eq!(Key::parse(s).unwrap().notation(), s, "it failed at {s}");
         }
     }
 
@@ -566,11 +566,11 @@ mod tests {
     fn the_insertion_order_does_not_change_the_diagnosis() {
         // The long binding may come before the short one. If the check were done
         // during insertion, one of the two cases would go unnoticed.
-        let curta_antes =
+        let short_before =
             Tree::build_it(&[lig("SPC f", "a.a"), lig("SPC f f", "b.b")], &[]).unwrap_err();
-        let longa_antes =
+        let long_before =
             Tree::build_it(&[lig("SPC f f", "b.b"), lig("SPC f", "a.a")], &[]).unwrap_err();
-        assert_eq!(curta_antes.len(), longa_antes.len());
+        assert_eq!(short_before.len(), long_before.len());
     }
 
     #[test]
@@ -592,13 +592,10 @@ mod tests {
     #[test]
     fn a_prefix_resolves_to_which_key() {
         let tree = Tree::build_it(
-            &[
-                lig("SPC f f", "arquivo.abrir"),
-                lig("SPC f s", "arquivo.salvar"),
-            ],
+            &[lig("SPC f f", "file.open"), lig("SPC f s", "file.save")],
             &[GroupNode {
                 sequence: parse_sequence("SPC f").unwrap(),
-                label: "grupo.arquivo",
+                label: "group.file",
             }],
         )
         .unwrap();
@@ -608,10 +605,10 @@ mod tests {
             Resolution::Prefix(e) => {
                 assert_eq!(e.len(), 1);
                 assert_eq!(e[0].key, "f");
-                assert_eq!(e[0].label, "grupo.arquivo");
+                assert_eq!(e[0].label, "group.file");
                 assert!(e[0].is_group);
             }
-            otherwise => panic!("esperava prefixo, veio {otherwise:?}"),
+            otherwise => panic!("expected a prefix, got {otherwise:?}"),
         }
 
         let spc_f = parse_sequence("SPC f").unwrap();
@@ -621,12 +618,12 @@ mod tests {
                 assert_eq!(keys, ["f", "s"]);
                 assert!(!e[0].is_group);
             }
-            otherwise => panic!("esperava prefixo, veio {otherwise:?}"),
+            otherwise => panic!("expected a prefix, got {otherwise:?}"),
         }
 
         assert_eq!(
             tree.resolve(&parse_sequence("SPC f f").unwrap()),
-            Resolution::Command("arquivo.abrir", None)
+            Resolution::Command("file.open", None)
         );
         assert_eq!(
             tree.resolve(&parse_sequence("SPC z").unwrap()),
@@ -648,7 +645,7 @@ mod tests {
         )
         .unwrap();
         let Resolution::Prefix(e) = tree.resolve(&parse_sequence("SPC").unwrap()) else {
-            panic!("esperava prefixo")
+            panic!("expected a prefix")
         };
         let keys: Vec<_> = e.iter().map(|x| x.key.as_str()).collect();
         assert_eq!(keys, ["a", "m", "z"]);

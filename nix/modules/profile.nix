@@ -51,8 +51,14 @@ in
     browser.enable = lib.mkDefault full;
     # Emacs 30 and the Doom dependencies, ~0,6 GiB.
     editor.emacs = lib.mkDefault full;
-    # ffmpeg-full, VLC, mpv, imagemagick, ghostscript and the gstreamer plugins,
-    # ~1,0 GiB.
+    # VLC, mpv, imagemagick, ghostscript and the gstreamer plugins.
+    #
+    # THE DECODERS ARE NO LONGER IN HERE. `ffmpeg-full`, `exiftool` and
+    # `poppler-utils` moved out from behind this switch by the owner's
+    # decision: they are format SUPPORT, and a reduced machine that cannot
+    # preview a video or read a photograph's metadata is not a reduced
+    # distro, it is a broken one. What this line still turns off is the
+    # things one installs to USE — which is the line this whole table draws.
     media.enable = lib.mkDefault full;
 
     # THE PRIMARY FACE IS NOT HERE, and that is the whole point of the line.

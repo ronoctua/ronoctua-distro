@@ -86,9 +86,18 @@ include!(concat!(env!("OUT_DIR"), "/tokens.rs"));
 // would be folded by the compiler and would verify nothing at run time — clippy
 // warns about exactly that. As a const assertion, the error shows up at build time, which
 // is where a broken generator ought to show up.
-const _: () = assert!(counts::COLORS >= 15, "geracao de cores veio truncada");
-const _: () = assert!(counts::ICONS >= 40, "geracao de icones veio truncada");
-const _: () = assert!(counts::SPACES >= 5, "geracao de espacamentos veio truncada");
+const _: () = assert!(
+    counts::COLORS >= 15,
+    "the colour generation came out truncated"
+);
+const _: () = assert!(
+    counts::ICONS >= 40,
+    "the icon generation came out truncated"
+);
+const _: () = assert!(
+    counts::SPACES >= 5,
+    "the spacing generation came out truncated"
+);
 
 /// Geometry derived from the tokens.
 ///
@@ -156,22 +165,22 @@ mod tests {
 
         // Black and white are fixed points in both spaces; if these
         // fail, the formula is inverted.
-        let preto = Color {
+        let black = Color {
             r: 0,
             g: 0,
             b: 0,
             a: 0xFF,
         }
         .to_linear();
-        let branco = Color {
+        let blank = Color {
             r: 255,
             g: 255,
             b: 255,
             a: 0xFF,
         }
         .to_linear();
-        assert_eq!(preto[0], 0.0);
-        assert!((branco[0] - 1.0).abs() < 1e-6);
+        assert_eq!(black[0], 0.0);
+        assert!((blank[0] - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -195,7 +204,7 @@ mod tests {
             let used = f32::from(n) * metrics::cell_width(s);
             assert!(
                 used <= width + f32::EPSILON,
-                "{n} colunas ocupam {used} px numa largura de {width}"
+                "{n} columns take {used} px in a width of {width}"
             );
         }
     }

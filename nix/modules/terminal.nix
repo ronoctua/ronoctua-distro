@@ -22,11 +22,11 @@ in
     type = lib.types.bool;
     default = true;
     description = ''
-      Instala o Ghostty como emulador estrangeiro (secao 7.10).
+      Installs Ghostty as the foreign emulator (section 7.10).
 
-      CUSTO: no Linux o Ghostty e GTK4 + libadwaita, entao puxa a stack do
-      GTK inteira para o closure. A secao 7.10 manda registrar isso, e esta
-      opcao existe para quem quiser medir o sistema sem ela.
+      COST: on Linux Ghostty is GTK4 + libadwaita, so it pulls the whole GTK
+      stack into the closure. Section 7.10 says to record that, and this
+      option exists for anyone who wants to measure the system without it.
     '';
   };
 

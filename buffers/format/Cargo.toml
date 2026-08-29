@@ -5,7 +5,7 @@
 
 [package]
 name = "ronoctua-buffer-format"
-description = "Formatar um disco: escolher o alvo, escolher para que serve, e confirmar."
+description = "Formatting a disk: choose the target, choose what it is for, and confirm."
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -15,7 +15,23 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.46", features = ["macros"] }
+# THE LAYOUT VOCABULARY, and the bindings with it.
+#
+# `wit-bindgen` is NOT a dependency here any more: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` a component needs. That is what makes
+# "one heading" a thing the compiler enforces rather than a thing seven files
+# agree on — and this buffer is the one that used to draw a rule under its
+# title and leave a blank cell after it.
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
+] }
+
+[lints.rust]
+# The same two as the host's workspace, repeated because this is another
+# workspace. There is no `allow` for generated code any more: the bindings live
+# in `ronoctua-design`, and so does the exemption they need.
+unsafe_code = "warn"
+missing_docs = "warn"
 
 [profile.release]
 opt-level = "s"

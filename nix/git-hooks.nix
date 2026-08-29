@@ -33,20 +33,20 @@ let
       root_dir=$(git rev-parse --show-toplevel)
       cd "$root_dir"
 
-      echo "pre-commit: formatacao…"
+      echo "pre-commit: formatting…"
       # `--check` covers both languages: the `.nix` files, the workspace and
       # the five buffer workspaces. And the message names the command that
       # WORKS — it used to say `nix fmt`, which until now hung reading stdin.
       # The formatter became a wrapper; the trap no longer exists.
       if ! nix fmt -- --check . >/dev/null 2>&1; then
-        echo "ERRO: ha arquivo fora de formato. Rode: nix fmt" >&2
+        echo "ERROR: a file is out of format. Run: nix fmt" >&2
         exit 1
       fi
 
       echo "pre-commit: clippy…"
       if ! nix build .#checks."$(nix eval --raw --impure \
             --expr 'builtins.currentSystem')".rust-clippy --no-link 2>&1 | tail -20; then
-        echo "ERRO: o clippy reclamou. Corrija prior de commitar." >&2
+        echo "ERROR: clippy complained. Fix it before committing." >&2
         exit 1
       fi
 

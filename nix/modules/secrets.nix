@@ -39,9 +39,9 @@ in
     # Enabled only when there is something to decrypt. An empty secrets.yaml would
     # make sops-nix fail at boot, which is worse than having no secret at all.
     default = builtins.pathExists secretsFile;
-    defaultText = lib.literalExpression "secrets/secrets.yaml existe";
+    defaultText = lib.literalExpression "secrets/secrets.yaml exists";
     description = ''
-      Liga o sops-nix. Ativa sozinho quando `secrets/secrets.yaml` existe.
+      Switches sops-nix on. It switches itself on when `secrets/secrets.yaml` exists.
     '';
   };
 
@@ -74,8 +74,8 @@ in
         {
           assertion = config.ronoctua.persist.enable;
           message = ''
-            ronoctua.secrets exige ronoctua.persist: a chave age deriva da
-            chave SSH do host, que vive em /persist (secao 7.11).
+            ronoctua.secrets requires ronoctua.persist: the age key derives from the
+            host's SSH key, which lives in /persist (section 7.11).
           '';
         }
       ];

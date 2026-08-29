@@ -78,11 +78,11 @@ in
     # exists precisely to be installed fast and added to afterwards.
     default = true;
     description = ''
-      A metade de dispositivos da barra lateral do gerenciador de arquivos:
-      discos, particoes e pendrives, montados e desmontados.
+      The device half of the file manager's sidebar:
+      disks, partitions and pen drives, mounted and unmounted.
 
-      Desligar deixa o gerenciador sem enxergar disco nenhum. Nada mais no
-      sistema depende disto.
+      Switching it off leaves the manager unable to see any disk at all. Nothing else in the
+      system depends on this.
     '';
   };
 

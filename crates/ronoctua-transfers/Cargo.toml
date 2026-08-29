@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-transfers"
-description = "A fila do trabalho demorado: quem copia, quem baixa, e quem diz onde esta."
+description = "The queue of slow work: what copies, what downloads, and what says where it is."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

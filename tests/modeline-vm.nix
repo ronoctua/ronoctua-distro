@@ -79,8 +79,8 @@ pkgs.testers.runNixOSTest {
 
     def modeline_ocr():
         w, h, x, y = niri_geometry()
-        print(f"janela do niri: {w}x{h}+{x}+{y}")
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        print(f"niri's window: {w}x{h}+{x}+{y}")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
 
         window = f"-crop {w}x{h}+{x}+{y} +repage"
         # Geometry in PIXELS, never `100%x35`: in ImageMagick the `%` applies
@@ -93,13 +93,13 @@ pkgs.testers.runNixOSTest {
         # nothing drawn" and immediately separates the two causes of an empty
         # OCR: a wrong crop or an absent drawing. Without this each hypothesis
         # costs a whole VM round.
-        print("faixa do rodape: " + machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd {band} "
+        print("the footer's band: " + machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd {band} "
             "-format 'cores=%k media=%[fx:mean]' info:"
         ))
 
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd {band} "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd {band} "
             # Only the band's top line: the bottom one is the minibuffer, empty
             # at rest, and it goes into the OCR as noise.
             f"-crop {w}x18+0+0 +repage "
@@ -118,28 +118,33 @@ pkgs.testers.runNixOSTest {
     start_xvfb()
     start_niri("niri", "${niri}")
 
-    with subtest("o rodape sobe ligado ao IPC do niri"):
+    with subtest("the footer comes up connected to niri's IPC"):
         sock = socket_of("niri")
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            # HOME, because the brain the footer wakes reads the person's
+            # preferences from under it. Without one there is no user config at
+            # all, the update task keeps its default afternoon window, and this
+            # test measured a three-line footer between 13h and 18h.
+            "--setenv=HOME=/root "
             f"--setenv=NIRI_SOCKET={sock} "
             "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_render=trace "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'layout do rodape resolvido'",
+            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
             timeout=60,
         )
 
         # Without NIRI_SOCKET the daemon degrades instead of failing — correct
         # behavior, but one that would make this test pass without testing
         # anything. This assert is what guarantees that the IPC did connect.
-        assert "sem IPC do niri" not in machine.succeed(
+        assert "no niri IPC" not in machine.succeed(
             "journalctl -u footer --no-pager"
-        ), "o rodape nao conectou no IPC; NIRI_SOCKET nao chegou"
+        ), "the footer did not connect to the IPC; NIRI_SOCKET did not arrive"
 
-    with subtest("sem janela, a modeline NAO inventa um buffer"):
+    with subtest("with no window, the modeline does NOT invent a buffer"):
         # The initial state matters: it is what shows up when the compositor comes up.
         #
         # There used to be a `*scratch*` there, inherited from Emacs — where the
@@ -150,7 +155,7 @@ pkgs.testers.runNixOSTest {
         assert "scratch" not in journal and "rascunho" not in journal, journal
         assert "segments=1" in journal, journal
 
-    with subtest("abrir uma janela muda a modeline"):
+    with subtest("opening a window changes the modeline"):
         machine.succeed(
             "systemd-run --unit=client ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -169,15 +174,15 @@ pkgs.testers.runNixOSTest {
             # The decisive question: did the COMPOSITOR see the window? If it
             # reports zero, the problem is the client; if it reports one, the
             # problem is ours. Without this the two hypotheses stay tied.
-            print("--- o que o niri diz que existe ---")
+            print("--- what niri says exists ---")
             print(machine.execute(
                 f"${ronoctua-shell}/bin/niri-contract {sock}")[1])
-            print("--- cliente ---")
-            print(machine.execute("systemctl status cliente --no-pager")[1])
+            print("--- client ---")
+            print(machine.execute("systemctl status client --no-pager")[1])
             print(machine.execute("journalctl -u client --no-pager")[1])
             print("--- niri ---")
             print(machine.execute("journalctl -u niri --no-pager")[1])
-            print("--- rodape ---")
+            print("--- footer ---")
             print(machine.execute("journalctl -u footer --no-pager")[1])
             raise
 
@@ -187,7 +192,7 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u footer --no-pager")
         assert 'id="mode" column=' in journal and "text=foot" in journal, journal
 
-    with subtest("o que esta na TELA e a modeline do buffer em foco"):
+    with subtest("what is ON SCREEN is the focused buffer's modeline"):
         # The link the log does not cover: color, atlas, coordinate and shaping.
         read_back = modeline_ocr()
         print(f"OCR: {read_back!r}")
@@ -196,13 +201,13 @@ pkgs.testers.runNixOSTest {
         # case where the OCR is reliable. Asserting the whole line would be
         # asserting tesseract's quality, not the footer's.
         assert "foot" in read_back.lower(), (
-            f"a modeline na tela nao mostra o buffer em foco.\n"
+            f"the modeline on screen does not show the focused buffer.\n"
             f"OCR leu: {read_back!r}\n"
-            f"Se o log mostra o texto certo e isto falha, o problema esta no\n"
-            f"desenho — nao no daemon."
+            f"If the log shows the right text and this fails, the problem is in\n"
+            f"drawing — not in the daemon."
         )
 
-    with subtest("uma janela ESTRANGEIRA nao ganha segmento de estado"):
+    with subtest("a FOREIGN window gets no state segment"):
         # THE SEGMENT THE BRANCH LEFT BEHIND. The context segment used to be the
         # git branch of the focused window's process, read by walking `/proc`
         # from the pid the compositor gives; it was removed because in
@@ -222,18 +227,18 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u footer --no-pager")
         lines = journal.splitlines()
         last_layout = max(
-            i for i, l in enumerate(lines) if "layout do rodape resolvido" in l
+            i for i, l in enumerate(lines) if "footer layout resolved" in l
         )
         block = lines[last_layout:]
         assert not any('id="state"' in l for l in block), (
-            "uma janela estrangeira ganhou estado: o niri nao nos diz em que\n"
-            "estado o `vim` esta, e escrever `normal` seria afirmar o que\n"
+            "a foreign window got a state: niri does not tell us what\n"
+            "state `vim` is in, and writing `normal` would be asserting what\n"
             "ninguem conferiu.\n" + "\n".join(block[:10])
         )
 
-    with subtest("fechar a janela devolve a modeline ao estado vazio"):
+    with subtest("closing the window gives the modeline back to the empty state"):
         # Proof that the daemon's state SHRINKS, and does not only grow: an
-        # `Estado` that only accumulates would pass everything above.
+        # `State` that only accumulates would pass everything above.
         machine.succeed("systemctl stop client")
         # Back to ONE segment: only the notification counter. With no focused
         # window there is no name and no mode to show.

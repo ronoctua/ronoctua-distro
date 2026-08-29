@@ -26,8 +26,12 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 15. **Sem cards, sem sombra, sem elevação.**
 16. `noctua` e `ronoctua-distro` definidos em **um único lugar** cada — `nix/modules/base.nix`.
 17. **Sem Docker.**
-18. **Todo NOME, COMENTÁRIO e COMMIT são inglês** — arquivo, comando, check, chave, `[[bin]]`,
-    identificador, `//`, `#`, docstring. pt-BR só nos 6 docs, no VALOR de chave e na **tag de busca**.
+18. **Todo NOME, COMENTÁRIO, MENSAGEM e COMMIT são inglês** — arquivo, comando, check, chave,
+    `[[bin]]`, identificador (`let`, `fn` e parâmetro inclusive), `//`, `#`, docstring, `assert`,
+    `bail!`, `.context`, saída de check e ajuda de linha de comando; cobra o `english-names`.
+    pt-BR **só onde existe o par en-GB**: os 6 docs, o VALOR de chave nos DOIS `.ftl`, a tag de
+    busca e o léxico. **Onde cabe um idioma só, ele é o INGLÊS** — descrição de unidade,
+    `.desktop`, manifesto da extensão, alias do shell, `Job::trouble`.
 
 Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção implícita.
 
@@ -66,9 +70,19 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   comandos da vista sob `C-` — **nunca `M-`, que é a família dos acordes do compositor**;
   `Backspace` vazio SOBE; o direito só FOCA, e a linha na TELA não é a da listagem. Permissão
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
-- **A barra lateral são `Field`s a MAIS na MESMA `Row`**, nunca uma segunda lista: rolagem, paginação e hit-test não mudam, porque `field_at` anda da DIREITA. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `screenshot-path` do niri, que sem isso escrevia em `~/Pictures`). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-o` atravessa, `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**.
-- **Só o `ronoctua-disks` fala udisks2, e ele NÃO escreve regra polkit** — a do upstream já separa removível (`allow_active: yes`) de sistema (`auth_admin_keep`) pelo `HintSystem`, e uma nossa só poderia ALARGAR. **Não há agente polkit na sessão** (só `pkttyagent`, no resgate): toda chamada leva `auth.no_user_interaction`, e volume de SISTEMA não oferece montar — manda ao terminal root. `HintIgnore` vira `quiet` e anda no `C-h` dos dotfiles. O `override` tira só o `xfsprogs` (538,3 → 343,2 MiB; 258 eram Python do `xfs_scrub`, e montar XFS é do KERNEL). Sinal do `ObjectManager` numa thread, mandando o `Rack` INTEIRO — o relógio do rodapé só bate com a vista aberta, e a janela não tem relógio nenhum.
-- **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. O mesmo nos DOIS menus do gerenciador, por `{prefixo}-does-<id>` e `cursor_explains()` — a `Explanation` só respondia ao PONTEIRO, e o que o mouse faz o teclado faz. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC b s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.
+  **Prévia e infos nascem LIGADAS** (`C-v`/`C-i` ainda escondem) e por isso a região sobe ao teto
+  com o gerenciador aberto — a ALTURA deixou de responder ao que foi digitado, e o `leader-vm` lê
+  a TELA. Sem foco, painel não pede linha nenhuma. A ficha ROLA (`C-.`, e a barra diz que cortou);
+  permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
+  os MESMOS da linha — mesma `Hit`, mesma máquina. **As seções são
+  INDEPENDENTES**: `Panes::section_at` diz em que seção um cell está, e é quem a
+  faixa, a roda e o foco perguntam — painel acende a si mesmo, e o gesto rola só
+  a seção sob o ponteiro (a listagem é da PORTA; figura não rola, e engole).
+  Barra lateral tem `side_offset` PRÓPRIO: linha `n` deixou de ser a linha `n`
+  dela. **Clique SELECIONA; o segundo é que abre** — na listagem e na lateral.
+- **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `screenshot-path` do niri, que sem isso escrevia em `~/Pictures`). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-o` atravessa, `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**.
+- **Só o `ronoctua-disks` fala udisks2, e ele NÃO escreve regra polkit** — a do upstream já separa removível (`allow_active: yes`) de sistema (`auth_admin_keep`) pelo `HintSystem`, e uma nossa só poderia ALARGAR. **Não há agente polkit na sessão** (só `pkttyagent`, no resgate): toda chamada leva `auth.no_user_interaction`. E a razão é do DONO, não do desenho: ele nem sempre vê o pedido de digital, ou está longe do laptop — pedido não visto vira recusa no relatório, sobre algo que ninguém viu. **Nada que o sistema faça sozinho pode PERGUNTAR**, e volume de SISTEMA não oferece montar — manda ao terminal root. `HintIgnore` vira `quiet` e anda no `C-h` dos dotfiles. O `override` tira só o `xfsprogs` (538,3 → 343,2 MiB; 258 eram Python do `xfs_scrub`, e montar XFS é do KERNEL). Sinal do `ObjectManager` numa thread, mandando o `Rack` INTEIRO — o relógio do rodapé só bate com a vista aberta, e a janela não tem relógio nenhum.
+- **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC b s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.
 - **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
   lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um por USUÁRIO. `t t` no
   rodapé, `t w` no buffer wasip2 — e o cursor é o **id**, que a lista reordena. `t a`/`t v`/`t u`/`t l`
@@ -85,11 +99,48 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   cinco vias de detecção, e há check. Injeta só sob `activeTab`; a chave que dá o id nasce NA máquina (inv. 13). **O app não depende dela** — cada coisa do popup tem tecla, e há check dos DOIS lados.
 - **`LEADER n` é notificação, e TUDO sai de `assets/notifications.nix`** — catálogo, filtros e as chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações); **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e envelope na BORDA DIREITA para marcar lida; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade. Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide — o gerenciador diz qual. Suprimida não aparece **e não conta**. Clicar no sino abre; `n h` no rodapé (duas colunas), `n w` em janela, uma `View` só; na lista, envelope e lixeira por linha (`Espaço` e `d`, que o gerador recusa como letra de ação). 15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
 - **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders` FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo: `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
-- **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix`, `*.ftl`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9. **Layout é aritmética de inteiros**, em duas fases: preferência (`min_cols`), e "nada vaza da tela".
+- **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix`, `*.ftl`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9. **Layout é aritmética de inteiros**, em duas fases: preferência, e "nada vaza da tela".
+- **Layout é do `ronoctua-design`** — UM crate compilado dos dois lados (ele é dono das bindings do
+  WIT; nenhum buffer chama `generate!`). **DOIS TRILHOS**: texto recua por `chrome::INSET`, régua e
+  seleção sangram de borda a borda e não passam pela margem. **UM cabeçalho**, de três células —
+  ar, título, ar — e **régua nenhuma**; `Command::Rule { line }` é a fronteira no FIM da linha.
+  `chrome` é o recuo das duas portas; só modeline, minibuffer e faixa ficam com `modeline.edgeLeft`.
+  **Separador NENHUM se escreve à mão**: `chrome::rule` recebe a LARGURA da superfície (não há
+  parâmetro de recuo) e `chrome::divider` recebe o FUNDO (não uma altura) — os oito sites erravam
+  ou de um jeito (`x: margin*cell` com `width: self.width`: buraco à esquerda, cortado à direita)
+  ou do outro (`linhas × altura_de_linha`, que com 26,5 px sempre para antes da borda). Quem cobra
+  é o `separators-come-from-chrome`.
 - **Buffers nativos são componentes wasip2.** Devolvem display list; rasteriza o `ronoctua-render`,
   posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
   `Instance`. Cinco primitivas: texto, régua, grade, seleção e **`svg`** (TRAVA `vector`), e **campo
   de record cruza por POSIÇÃO** e só depois pelo nome.
+- **`LEADER s b` é o cérebro** (`ronoctua-brain`), o daemon que decide QUANDO a máquina mexe em si
+  mesma — molde do `ronoctua-transfers`: unidade de usuário, `session.slice`, socket JSON por linha,
+  estado inteiro e nunca delta. A porta para features novas é o `trait Task`, e ela é uma promessa de
+  CINCO lugares: `src/tasks/<id>.rs`, uma linha em `tasks()`, duas chaves nos dois idiomas, uma linha
+  na home do buffer, um padrão em `prefs`. Quatro dos métodos são PUROS — é o que faz um ano de
+  agenda caber em milissegundos de teste. Ele **não** é uma segunda fronteira com o `/proc` (é o
+  `ronoctua-memory`, que ganhou `cpu_pressure` e `on_battery`), não segura teclado e não roda nada
+  privilegiado: pede ao systemd. Capacidade `brain` PRÓPRIA — `system` é "quanta RAM, quem come";
+  esta termina com a máquina reconstruindo o próprio sistema operacional. `tune` é efeito e não
+  demanda, porque demanda é verbo mais ÍNDICE e preferência carrega VALOR.
+- **A atualização é declarada, e o brain só escolhe a hora** — `assets/updates.nix` gera a tabela
+  Rust, as chaves que os dois idiomas devem, os dois roteiros e a recusa. O brain LÊ essa tabela
+  (`build.rs`); ele já declarou os passos por conta e os ids saíram **disjuntos** dos da sequência.
+  A colisão com o invariante 6 é estrutural: passo cujo programa a flake não põe **não pode nascer
+  ligado**, não roda como root e tem de declarar a própria pré-condição; e passo nenhum instala.
+  **Nada disso PERGUNTA** — regra polkit devolvendo `YES`, sem `sudo`, sem `pkexec`, sem
+  `systemd-run`; e há check. **A faixa do brain fica COLADA abaixo do minibuffer** (não na última
+  linha da superfície, que se moveria com a expansão): ícone, frase, contagem no relógio de 1 s que
+  o rodapé já bate, e dois botões que têm tecla.
+- **`C-v` e `C-i` são prévia e fatos no gerenciador** — colunas à direita a partir de
+  `space.files.panelsFrom`, faixa embaixo abaixo disso, e **as duas viram juntas**. Só o
+  `ronoctua-inspect` decodifica (crate PRÓPRIO: o `ronoctua-files` constrói o binário que roda como
+  ROOT). Cinco programas externos, e só o `ffmpeg` faz pixel — medido: o `magick` estourou num DNG
+  de 17 MB e o ffmpeg fez o mesmo em 0,21 s. RAW é a prévia EMBUTIDA pelo `exiftool`, porque o
+  ffmpeg decodifica os planos lineares e sai quase preto. Todo caminho externo devolve imagem no
+  **stdout** e quem decodifica é o `image`: `Rgba` nasce num lugar só. **Recusa é VALOR, não ausência** — painel em branco e painel recusado são
+  iguais na tela, e só um tem frase. GPS não é mostrado, e a linha DIZ que o arquivo o carrega.
 - **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava: o host amostra
   (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer desenha e pede
   por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread.
@@ -121,7 +172,7 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Nunca peça `Family::Monospace`**: fallback, **4 447 ms** contra 0,76 ms. **Buffer não tem parser
   de JSON**: campo nenhum leva caractere cru. **Token vira WIT**: segmento começa por LETRA.
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
-- **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO. **Uma run ocupa `heights.of(escala)` CÉLULAS, e a escala alarga tanto quanto sobe**: `Large` são DUAS, e a régua em `line+1` virava sublinhado. Título é do tamanho do CORPO — hierarquia é cor, régua e ar, nunca tamanho; os dois `DisplayList::nothing_*` cobram isso em TODO buffer, em TODO estado.
+- **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO. **Uma run ocupa `heights.of(escala)` CÉLULAS, e a escala alarga tanto quanto sobe**: `Large` são DUAS, e a régua em `line+1` virava sublinhado. Título é do tamanho do CORPO — hierarquia é cor e ar, nunca tamanho nem régua; os dois `DisplayList::nothing_*` cobram isso em TODO buffer, em TODO estado.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
@@ -137,6 +188,21 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio; hibernação depende do NOCOW (`lsattr` → `C`). **PCR 15 exige UKI medida.**
 - **`#[repr(C)]` promete ARRANJAR, não conferir** — layout errado de FFI não dá diagnóstico: confira com `sizeof` em C. Ghostty: `Point` tem união (24B), `GridRef` é *sized struct*, `Cell` é `uint64_t`. No libtorrent isso virou check (`torrent-layout-matches-cxx`), e o `-fvisibility=hidden` esconde o `extern "C"` TAMBÉM — precisa de `__attribute__((visibility("default")))`. **Componente wasip2 não pode ser membro do workspace do host** (`rust-lld` recusa o version script mudo); **`char` é embutido do WIT**. **API gráfica mudou muito — leia a fonte.**
   **nixpkgs 26.05:** `noto-fonts-emoji` → `noto-fonts-color-emoji`; `nixfmt-rfc-style` → `nixfmt`; `xorg.libX11` → `libx11`; `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. **Atributo dinâmico em duas sentenças** é erro de avaliação: um attrset só.
+- **`take` é TETO, nunca contagem — e o `usize::MAX` é sentinela.** `View::rows` pede "todas"; enquanto
+  `take` só limitava um iterador finito isso era grátis, mas no dia em que a função passou a
+  MATERIALIZAR linhas virou pedido de 2⁶⁴ `Row` vazias. Vinte e sete testes crescendo esse `Vec` ao
+  mesmo tempo comeram os 14,6 GiB em segundos, e **o `systemd-oomd` mata o cgroup INTEIRO da janela**
+  (`app.slice`, desde a migração do Omarchy 4): o agente morre junto e não sobra rastro na sessão —
+  seis vezes em vinte minutos. Processo morto por OOM **não gera core dump**; "o terminal fechou
+  sozinho" + `coredumpctl` vazio = suspeite de OOM primeiro (`journalctl -b | grep 'oom-kill'`).
+  Bateria pesada vai em jaula: `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=512M`.
+- **O gerenciador tem QUATRO seções, e `Section` é a única definição de cada uma** — onde começa
+  (`from`..`to`, `top`/`lines`), o que tem (`rows`, já no deslocamento dela) e quanto tem (`total`).
+  `region_rows` achata, `hit` lê, as barras e a roda perguntam. Quem decidiu isso em vários lugares
+  produziu, um a um, TODOS os defeitos que o dono reportou: clicar em pasta subindo um nível, a
+  lateral sem hover nas duas primeiras linhas, a faixa acendendo a listagem, e o topo da prévia se
+  mexendo ao rolar a listagem (era `chrome - offset`). **A faixa de baixo não é da região**: tem
+  linhas próprias, o `row_count` não a conta e as portas a desenham por `strip_rows`.
 - **Spawn em unidade do systemd: use CAMINHO, nunca nome** — o `PATH` é mínimo e a falha aparece longe da causa. O caminho do store vem por `option_env!`, posto no `nix/rust.nix`. E **`min_cols` é piso de PREFERÊNCIA**; o que não cede é "nada vaza da tela". `Shrink`≠`removable`. **Upstream do Niri: `niri-wm/niri`**, por calendário — pinar tag, nunca `main`. Blur da 26.04 não.
 
 ## Como trabalhar — o dono cobrou o TEMPO duas vezes, e a causa era sempre a mesma

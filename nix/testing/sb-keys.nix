@@ -40,7 +40,7 @@ runCommand "ronoctua-test-sb-keys"
       util-linux
     ];
     meta = {
-      description = "Chaves de Secure Boot descartaveis, so para os testes de VM";
+      description = "Disposable Secure Boot keys, for the VM tests alone";
       platforms = lib.platforms.linux;
     };
   }
@@ -56,12 +56,12 @@ runCommand "ronoctua-test-sb-keys"
 
     # One authority per level, as the Secure Boot chain expects:
     # PK signs KEK, KEK signs db, db signs the UKI.
-    for nivel in PK KEK db; do
+    for level in PK KEK db; do
       openssl req -newkey rsa:2048 -nodes \
-        -keyout $out/keys/$nivel/$nivel.key \
+        -keyout $out/keys/$level/$level.key \
         -new -x509 -sha256 -days 3650 \
-        -subj "/CN=ronoctua teste $nivel/" \
-        -out $out/keys/$nivel/$nivel.pem 2>/dev/null
+        -subj "/CN=ronoctua test $level/" \
+        -out $out/keys/$level/$level.pem 2>/dev/null
     done
 
     # No real secret here, but the right mode all the same: a world-readable
@@ -71,11 +71,11 @@ runCommand "ronoctua-test-sb-keys"
 
     # A warning in the directory itself. If one day someone points the production
     # `pkiBundle` here, let them at least find this.
-    cat > $out/LEIA-ME.txt <<'AVISO'
-    Chaves de Secure Boot DESCARTAVEIS, geradas em tempo de build.
+    cat > $out/README.txt <<'NOTICE'
+    DISPOSABLE Secure Boot keys, generated at build time.
 
-    A chave privada esta no /nix/store e portanto e publica. Servem so para
-    os testes de VM da ronoctua-distro. Nao aponte `boot.lanzaboote.pkiBundle`
-    de uma maquina real para ca.
-    AVISO
+    The private key is in /nix/store and is therefore public. They serve only for
+    ronoctua-distro's VM tests. Do not point `boot.lanzaboote.pkiBundle`
+    from a real machine at these.
+    NOTICE
   ''

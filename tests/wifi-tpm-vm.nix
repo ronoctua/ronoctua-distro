@@ -79,22 +79,22 @@ pkgs.testers.runNixOSTest {
     # The password is a TEST one and lives only in this VM. No real secret goes
     # into a file of the repository (section 9) — and the value is assembled in
     # pieces so as not to look like a leaked password to the `secrets-out-of-repo` check.
-    PASSWORD = "senha" + "-de-teste-" + "do-radio-99"
-    SSID = "rede-de-teste"
+    PASSWORD = "test" + "-password-" + "of-the-radio-99"
+    SSID = "test-network"
     BLOB = "/persist/etc/ronoctua/wifi"
 
-    with subtest("o TPM2 existe e responde"):
+    with subtest("the TPM2 exists and answers"):
         machine.succeed("test -c /dev/tpmrm0")
 
-    with subtest("o agente sobe e reivindica o nome no barramento"):
+    with subtest("the agent comes up and claims the name on the bus"):
         machine.wait_for_unit("ronoctua-network-agent.service")
-        # Without the well-known name, the footer would call `Guardar` and get
+        # Without the well-known name, the footer would call `Store` and get
         # "name has no owner" — the same error as an absent daemon.
         machine.succeed(
             "busctl --system list | grep -q org.ronoctua.agent"
         )
 
-    with subtest("selar guarda a senha, e o que fica no disco NAO e ela"):
+    with subtest("sealing stores the password, and what stays on disk is NOT it"):
         machine.succeed(
             f"echo -n '{PASSWORD}' | systemd-creds encrypt --with-key=tpm2 "
             f"--name=$(printf %s '{SSID}' | od -An -tx1 | tr -d ' \\n') "
@@ -107,24 +107,24 @@ pkgs.testers.runNixOSTest {
         print(files)
         machine.fail(f"grep -r -- '{PASSWORD}' {BLOB}")
 
-    with subtest("e o TPM devolve a senha inteira de volta"):
+    with subtest("and the TPM gives the whole password back"):
         item_name = machine.succeed(
             f"printf %s '{SSID}' | od -An -tx1 | tr -d ' \\n'"
         ).strip()
         restored = machine.succeed(
             f"systemd-creds decrypt --name={item_name} {BLOB}/{item_name}.cred -"
         )
-        assert restored == PASSWORD, f"o TPM devolveu {restored!r}, esperado {PASSWORD!r}"
+        assert restored == PASSWORD, f"the TPM gave back {restored!r}, expected {PASSWORD!r}"
 
     # THE KEYFILE WITHOUT `psk=` IS NOT CHECKED HERE, on purpose.
     #
     # Writing the file inside the test and then looking in it would prove that
     # the test knows how to write, and nothing about the installer. What covers
-    # that is `plano::tests::the_wifi_password_goes_neither_through_argv_nor_through_host_nix`,
-    # which reads the real `perfil_wifi` — and which fails when the `psk=` comes
+    # that is `plan::tests::the_wifi_password_goes_neither_through_argv_nor_through_host_nix`,
+    # which reads the real `wifi_profile` — and which fails when the `psk=` comes
     # back, checked by mutation.
 
-    with subtest("a senha sobrevive a um reboot — e e esse o ponto"):
+    with subtest("the password survives a reboot — and that is the point"):
         # With no PCR in the policy, the blob opens after a reboot. If someone adds
         # `--tpm2-pcrs=` without thinking, HERE is where it shows up: the `decrypt`
         # starts failing after the boot, and the symptom in the real world would be
@@ -138,6 +138,6 @@ pkgs.testers.runNixOSTest {
         restored = machine.succeed(
             f"systemd-creds decrypt --name={item_name} {BLOB}/{item_name}.cred -"
         )
-        assert restored == PASSWORD, "o blob nao abriu depois do reboot"
+        assert restored == PASSWORD, "the blob did not open after the reboot"
   '';
 }

@@ -78,21 +78,21 @@ pkgs.testers.runNixOSTest {
         m.wait_for_unit("multi-user.target")
         m.wait_for_unit("user@1000.service")
 
-    with subtest("o oomd esta de pe, e nao pulado em silencio"):
+    with subtest("oomd is standing, and not skipped in silence"):
         # `systemd-oomd.service` is Condition-gated on /proc/pressure/*. A failed
         # condition is not an error: the unit is SKIPPED and nothing says so.
         large.succeed("systemctl is-active systemd-oomd")
         large.succeed("test -e /proc/pressure/memory")
 
-    with subtest("ele vigia os aplicativos, e nao o desktop"):
+    with subtest("it watches the applications, and not the desktop"):
         dump = large.succeed("oomctl")
         print(dump)
-        assert "app.slice" in dump, f"a app.slice nao esta sendo vigiada:\n{dump}"
+        assert "app.slice" in dump, f"app.slice is not being watched:\n{dump}"
         # The two that would put the compositor and the footer in the candidate
         # set. `session.slice` is where they live; `/` is the root slice, whose
         # candidates include everything.
         assert "session.slice" not in dump, f"a session.slice virou candidata:\n{dump}"
-        assert "\n\tPath: /\n" not in dump, f"a raiz virou candidata:\n{dump}"
+        assert "\n\tPath: /\n" not in dump, f"the root became a candidate:\n{dump}"
 
     # THE STAND-IN COMES UP FIRST, and not only because the next subtest reads
     # its slice: `session.slice` does not EXIST until something runs in it, so
@@ -111,7 +111,7 @@ pkgs.testers.runNixOSTest {
             "systemctl --user --machine=noctua@ is-active stand-in.service", timeout=30
         )
 
-    with subtest("a protecao do desktop chega ao fim da corrente"):
+    with subtest("the desktop's protection reaches the end of the chain"):
         # `memory.min` is capped by every ancestor: this file reads the EFFECTIVE
         # value at the leaf, which is the only number that says whether the four
         # drop-ins actually took.
@@ -125,7 +125,7 @@ pkgs.testers.runNixOSTest {
             expected = total * ${toString minPercent} / 100
             assert got[name] > 0, f"{name}: memory.min efetivo e ZERO — a corrente quebrou"
             assert abs(got[name] - expected) < expected * 0.15, (
-                f"{name}: memory.min {got[name]} nao bate com "
+                f"{name}: memory.min {got[name]} does not match "
                 f"${toString minPercent}% de {total}"
             )
 
@@ -137,16 +137,16 @@ pkgs.testers.runNixOSTest {
         print(f"memory.min: small={got['small']} large={got['large']}")
         ratio = got["large"] / got["small"]
         assert 1.7 < ratio < 2.3, (
-            f"o dobro de RAM tinha de dar o dobro de reserva; deu {ratio:.2f}x "
+            f"twice the RAM had to give twice the reserve; it gave {ratio:.2f}x "
             f"({got['small']} -> {got['large']})"
         )
 
-    with subtest("o zram absorve antes do disco"):
+    with subtest("zram absorbs it before the disk does"):
         swaps = large.succeed("swapon --show=NAME,PRIO --noheadings")
         print(swaps)
-        assert "zram" in swaps, f"sem zram, a maquina troca direto no disco:\n{swaps}"
+        assert "zram" in swaps, f"with no zram, the machine swaps straight onto the disk:\n{swaps}"
 
-    with subtest("o aplicativo morre, e o que esta na session.slice nao e tocado"):
+    with subtest("the application dies, and what is in session.slice is not touched"):
         # The hog, in the slice oomd may kill. `MemoryHigh` keeps the allocation
         # bounded: what thrashes is this one cgroup, so pressure rises inside
         # `app.slice` while the virtual machine itself is never at risk.
@@ -181,10 +181,10 @@ pkgs.testers.runNixOSTest {
         assert "0" == large.succeed(
             "systemctl --user --machine=noctua@ show stand-in.service "
             "-p NRestarts --value"
-        ).strip(), "o que esta na session.slice foi reiniciado, logo foi morto"
+        ).strip(), "what is in session.slice was restarted, so it was killed"
         large.succeed("systemctl --user --machine=noctua@ is-active stand-in.service")
 
-    with subtest("foi o oomd, com os numeros configurados"):
+    with subtest("it was oomd, with the configured numbers"):
         # NOT a grep for "killed". That word is logged by the USER MANAGER, not
         # by oomd, so matching it would pass on a kernel OOM kill too — which is
         # the outcome this whole design exists to avoid, and the one a lazy
@@ -198,13 +198,13 @@ pkgs.testers.runNixOSTest {
         # 257 and would otherwise drop with a warning and no failure.
         said = large.succeed("journalctl -u systemd-oomd --no-pager")
         assert "for killing due to memory pressure" in said, (
-            f"quem matou nao foi o oomd:\n{said[-2000:]}"
+            f"what killed it was not oomd:\n{said[-2000:]}"
         )
         assert "app.slice" in said
-        assert "> 50.00%" in said, f"o limite configurado nao e o que valeu:\n{said[-2000:]}"
-        assert "for > 15s" in said, f"a duracao configurada nao valeu:\n{said[-2000:]}"
+        assert "> 50.00%" in said, f"the configured limit is not the one that held:\n{said[-2000:]}"
+        assert "for > 15s" in said, f"the configured duration did not hold:\n{said[-2000:]}"
 
-    with subtest("a tabela dos dois perfis existe, e diz qual volta ao reiniciar"):
+    with subtest("the table of both profiles exists, and says which one comes back on restart"):
         # It is what `LEADER s m` reads in order to loosen the policy: the
         # numbers live in Nix and cross as text. A panel that computed them
         # would be a second copy to keep in step (invariant 5).
@@ -214,7 +214,7 @@ pkgs.testers.runNixOSTest {
         assert "strict ceiling=70% pressure=50% duration=15s" in table
         assert "tolerant ceiling=90% pressure=70% duration=60s" in table
 
-    with subtest("o systemd ACEITA a troca em execucao, e em que escala ele reporta"):
+    with subtest("systemd ACCEPTS the switch at runtime, and on which scale it reports"):
         # THE TWO QUESTIONS THIS SUBTEST EXISTS FOR, and neither was safe to
         # assume:
         #
@@ -238,7 +238,7 @@ pkgs.testers.runNixOSTest {
             "-p ManagedOOMMemoryPressureLimit --value"
         ).strip())
         assert before * 1000 // scale == 500, (
-            f"50% configurado veio como {before}, que da {before * 1000 // scale} por mil"
+            f"50% configured came back as {before}, which is {before * 1000 // scale} per thousand"
         )
 
         # `--runtime` is not tidiness: WITHOUT it systemd writes a drop-in to
@@ -254,8 +254,8 @@ pkgs.testers.runNixOSTest {
             "-p ManagedOOMMemoryPressureLimit --value"
         ).strip())
         assert loosened * 1000 // scale == 700, (
-            f"o systemd nao aceitou afrouxar em execucao: {loosened} "
-            f"da {loosened * 1000 // scale} por mil, esperava 700"
+            f"systemd did not accept loosening at runtime: {loosened} "
+            f"gives {loosened * 1000 // scale} per thousand, expected 700"
         )
 
         # AND THE DURATION COMES FORMATTED, not in microseconds — which is the
@@ -274,7 +274,7 @@ pkgs.testers.runNixOSTest {
         large.fail("test -e /etc/systemd/user.control/app.slice.d/50-MemoryHigh.conf")
         large.succeed("ls /run/user/1000/systemd/user.control/app.slice.d/")
 
-    with subtest("gravar o perfil permanente escreve UMA linha, e recusa o que nao entende"):
+    with subtest("writing the permanent profile writes ONE line, and refuses what it does not understand"):
         # The unit is what has the privilege; the panel only starts it. Here it
         # is started directly, which is the same thing minus polkit — and polkit
         # is asserted by the `memory-policy-shape` check, on the generated rule.
@@ -286,7 +286,7 @@ pkgs.testers.runNixOSTest {
         written = large.succeed("cat /etc/nixos/host.nix")
         print(written)
         assert 'ronoctua.memory.profile = "tolerant";' in written
-        assert written.rstrip().endswith("}"), "o arquivo perdeu a chave de fechamento"
+        assert written.rstrip().endswith("}"), "the file lost its closing brace"
 
         # TWICE DOES NOT WRITE TWICE. The old line goes before the new one
         # arrives — two of them would be an evaluation error the next rebuild,
@@ -298,7 +298,7 @@ pkgs.testers.runNixOSTest {
 
         # AND IT REFUSES A FILE IT DOES NOT RECOGNISE, instead of writing into
         # the middle of one.
-        large.succeed("printf 'nao sou um host.nix\\n' > /etc/nixos/host.nix")
+        large.succeed("printf 'I am not a host.nix\\n' > /etc/nixos/host.nix")
         large.fail("systemctl start ronoctua-memory-profile@tolerant.service")
   '';
 }

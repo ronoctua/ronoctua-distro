@@ -159,7 +159,7 @@ impl Grid {
         let mut out = Vec::new();
         if (self.columns, self.lines) != (otherwise_one.columns, otherwise_one.lines) {
             out.push(format!(
-                "tamanho: {}x{} contra {}x{}",
+                "size: {}x{} against {}x{}",
                 self.columns, self.lines, otherwise_one.columns, otherwise_one.lines
             ));
             return out;
@@ -173,7 +173,7 @@ impl Grid {
                     canonical(otherwise_one.cell(l, c).c),
                 );
                 if a != b {
-                    out.push(format!("celula {l},{c}: {a:?} contra {b:?}"));
+                    out.push(format!("cell {l},{c}: {a:?} against {b:?}"));
                 }
             }
         }
@@ -264,7 +264,7 @@ mod tests {
         // hundreds of lines of noise, hiding the single cause.
         let d = Grid::fresh_one(4, 1).diff(&Grid::fresh_one(8, 1));
         assert_eq!(d.len(), 1);
-        assert!(d[0].starts_with("tamanho"));
+        assert!(d[0].starts_with("size"));
     }
 
     #[test]

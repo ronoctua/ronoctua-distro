@@ -313,7 +313,7 @@ mod tests {
         keys.sort_unstable();
         let before = keys.len();
         keys.dedup();
-        assert_eq!(before, keys.len(), "duas linhas do menu com a mesma tecla");
+        assert_eq!(before, keys.len(), "two menu rows with the same key");
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
             assert_eq!(
                 a.label,
                 format!("{KEY_PREFIX_OF}{}", a.id),
-                "a linha `{}` mostra o texto de outra",
+                "the row `{}` shows another one's text",
                 a.id
             );
         }

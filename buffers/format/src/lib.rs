@@ -28,26 +28,36 @@
 //! distro does not carry the program that writes it. Both could have been left
 //! out; both would then be somebody searching a screen for something that is
 //! not there, which is the failure this repository refuses everywhere else.
-
-#![allow(unsafe_code, missing_docs)]
+//!
+//! # And the geometry is no longer decided here
+//!
+//! Every number that put something on the screen used to live in this file: a
+//! gutter of two cells, a cell of air at the right border, a gap of two between
+//! columns, and a `title()` that drew a rule and left a blank cell under it.
+//! `ronoctua-design` owns all four now, and two of them turned out to be the
+//! SAME MARGIN TWICE.
+//!
+//!   - `buffer.rs`'s `context_of` already takes `space.buffer.marginX` off BOTH
+//!     sides before it reports `columns`, so a gutter here was an indent inside
+//!     an indent — and the cell reserved at the right border was air outside air.
+//!     This buffer was the concrete instance of the "margin of its own, usually
+//!     excessive" the screen was photographed for. Both are gone; nothing below
+//!     starts anywhere but at cell zero.
+//!   - the rule under the title is gone with them. What separates a heading from
+//!     its content is whitespace, and `Screen::heading` is the one place that
+//!     says how much of it.
+//!
+//! What is NOT delegated is a single refusal below. They are what this buffer
+//! IS, and a change of who decides the geometry does not touch them.
 
 use std::cell::RefCell;
 
-wit_bindgen::generate!({
-    world: "buffer",
-    path: "../../crates/ronoctua-protocol/wit",
-    generate_all,
-    // The rack arrives whenever udisks says anything, and most of what udisks
-    // says changes nothing that is drawn. Comparing needs `PartialEq`, which
-    // `wit-bindgen` does not derive.
-    additional_derives: [PartialEq],
-});
-
-use exports::ronoctua::buffer::view::Guest;
-use ronoctua::buffer::types::{
-    Capability, Color, Command, Context, Descriptor, Device, Effect, Icon, Input, LineCommand,
-    Plan, Rack, Recipe, Scale, Text, TextCommand, Tone,
+use ronoctua_design::guest::Wit;
+use ronoctua_design::types::{
+    AIR, BufferState, Capability, Color, Column, Command, Context, Descriptor, Device, Effect, GAP,
+    Guest, ICON, Icon, Input, Layout, Plan, Rack, Recipe, Role, Run, Screen, Table, Tone,
 };
+use ronoctua_design::wide;
 
 /// Every text key this buffer names.
 ///
@@ -150,9 +160,14 @@ enum Said {
     Trouble(String),
 }
 
-/// Which screen is on.
+/// Which of the three questions is on.
+///
+/// `Question` and not `Screen`: the frame under construction is
+/// [`ronoctua_design::types::Screen`] now, and one name for two things is how a
+/// reader stops knowing which is which. The three cases are the three questions
+/// this buffer asks, which is what the type was always about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Screen {
+enum Question {
     /// Every disk, one per row. Which one?
     List,
     /// Five filesystems and a name. What for?
@@ -203,7 +218,7 @@ const MISSING: usize = RECIPES.len();
 /// Everything this buffer remembers between calls.
 struct State {
     rack: Rack,
-    screen: Screen,
+    screen: Question,
     /// The cursor on the list, as a device ID and never a row number.
     ///
     /// The rack is re-read and re-sorted whenever udisks says anything — a
@@ -237,7 +252,7 @@ impl State {
             rack: Rack {
                 devices: Vec::new(),
             },
-            screen: Screen::List,
+            screen: Question::List,
             on: None,
             recipe: 0,
             yes: false,
@@ -251,9 +266,9 @@ impl State {
 
     fn state_id(&self) -> String {
         match self.screen {
-            Screen::List => STATES[0].0,
-            Screen::Choose => STATES[1].0,
-            Screen::Confirm => STATES[2].0,
+            Question::List => STATES[0].0,
+            Question::Choose => STATES[1].0,
+            Question::Confirm => STATES[2].0,
         }
         .to_owned()
     }
@@ -302,6 +317,37 @@ fn bytes_exactly(n: u64) -> String {
     format!("{n} B")
 }
 
+/// Two readings the screen cannot tell apart.
+///
+/// # Why this is written out and not `==`
+///
+/// Because the bindings are `ronoctua-design`'s now, generated ONCE for every
+/// buffer, and this is the only one that ever compared a whole record. Asking
+/// the shared generation for `additional_derives: [PartialEq]` would put the
+/// derive on all thirty-odd records of the WIT for the sake of one comparison
+/// in one component; the comparison is nine fields, and here they are.
+///
+/// The list is ORDERED, and comparing it in order is right: udisks sorts by
+/// device node, so two readings that differ only in order are two different
+/// screens.
+fn same_rack(a: &Rack, b: &Rack) -> bool {
+    a.devices.len() == b.devices.len() && a.devices.iter().zip(&b.devices).all(same_device)
+}
+
+/// The same, for one device. Every field, because every field is drawn or
+/// decides something that is.
+fn same_device((a, b): (&Device, &Device)) -> bool {
+    a.id == b.id
+        && a.name == b.name
+        && a.node == b.node
+        && a.kind == b.kind
+        && a.bytes == b.bytes
+        && a.mounted == b.mounted
+        && a.removable == b.removable
+        && a.needed == b.needed
+        && a.whole == b.whole
+}
+
 /// May this device be written over?
 ///
 /// The host's answer, carried on the row. This buffer does not second-guess it
@@ -314,22 +360,109 @@ const fn spare(d: &Device) -> bool {
 // Drawing.
 // ---------------------------------------------------------------------------
 
-/// Where the left edge of everything is.
-///
-/// TWO CELLS, AND NOT ZERO. A glyph in column 0 sits against the window's edge
-/// and reads as a glyph that was cut off rather than one that starts there —
-/// the defect this repository has now paid for three times, most recently in
-/// the file manager's sidebar. Every column below is measured from here.
-const GUTTER: u16 = 2;
+// ---------------------------------------------------------------------------
+// How wide one drawing is — the only geometry a caller still decides.
+//
+// `GUTTER` and `EDGE_RIGHT` used to open this section, and both are gone. They
+// were the host's own margin paid a second time: `buffer.rs`'s `context_of`
+// subtracts `space.buffer.marginX` from BOTH sides before it reports
+// `columns`, so cell zero is already inside the window and `columns` already
+// stops short of its right border. `GAP` is gone too — the air between two
+// columns is `ronoctua_design::GAP`, once, for every buffer.
+//
+// What is left below is how wide a THING is: a device node is fourteen cells
+// because `/dev/nvme0n1p1` is fourteen. Those belong to whoever draws the
+// thing; the arithmetic that places them is `Table`'s.
+// ---------------------------------------------------------------------------
 
-/// The air between the last thing drawn and the window's right border.
+/// The columns of this buffer's three tables, by name.
 ///
-/// The twin of [`GUTTER`], and it exists for the reason this repository has now
-/// written down three times: a number that ends against the edge reads as a
-/// number that was CUT OFF. `assets/tokens/space.nix` says so in
-/// `modeline.edgeRight` and `files.edgeRight`; a component receives no token
-/// values (invariant 11), so here it is the same decision spelled out again.
-const EDGE_RIGHT: u16 = 1;
+/// `&'static str` ids and not numbers, because a `Layout` answers by name: a
+/// column that gave way is a column that is not in the answer, and every row
+/// below is built as though every column were there.
+mod field {
+    /// The list: what kind of disk, what it is called, where it lives.
+    pub const ICON: &str = "icon";
+    pub const NAME: &str = "name";
+    pub const NODE: &str = "node";
+    /// The list's facts: the filesystem on it, how big, and whole or part.
+    pub const KIND: &str = "kind";
+    pub const SIZE: &str = "size";
+    pub const WHAT: &str = "what";
+    /// The one place to type: the word `name`, the field, and the limit.
+    pub const LABEL: &str = "label";
+    pub const VALUE: &str = "value";
+    pub const HINT: &str = "hint";
+    /// The detail line: the sentence, and the number that qualifies it.
+    pub const SAID: &str = "said";
+    pub const FACTS: &str = "facts";
+}
+
+/// The order the columns give way in — **the highest goes first**.
+///
+/// It is a statement about what each screen is FOR, and not a priority in the
+/// ordinary sense. On the list: the word naming the filesystem goes before the
+/// size, because two sticks are told apart by how big they are and not by both
+/// saying `vfat`; then the node, then the name, and the glyph last, because two
+/// cells answer "may I write to this" faster than any sentence. Nowhere does
+/// the reason a disk must not be touched give way — it is not a column, it is
+/// [`rest_from`].
+mod give {
+    pub const KIND: u8 = 9;
+    pub const SIZE: u8 = 8;
+    pub const NODE: u8 = 5;
+    pub const NAME: u8 = 3;
+    pub const ICON: u8 = 1;
+    /// The limit beside the field is precision about a rule the field already
+    /// enforces: it goes before either of the other two.
+    pub const HINT: u8 = 9;
+    pub const LABEL: u8 = 2;
+    pub const VALUE: u8 = 1;
+    /// And so does the exact byte count under the cursor, for the same reason.
+    pub const FACTS: u8 = 9;
+}
+
+/// A device node: `/dev/nvme0n1p1`, and there is nothing longer.
+const NODE: u16 = 14;
+
+/// A filesystem's name. `exfat` is the longest of the five this build writes,
+/// and `format-blank` is the word an unwritten partition gets instead.
+const KIND: u16 = 8;
+
+/// A size as a person reads it: `1023.9 GiB` is the widest [`size`] returns.
+const SIZE: u16 = 10;
+
+/// The narrowest the last column may be squeezed to before a fixed one is
+/// dropped instead. `o disco inteiro` is fifteen cells, and it is the longer of
+/// the two languages.
+const WHAT: u16 = 15;
+
+/// How narrow and how wide the name column may be.
+///
+/// It is worked out from the widest name ON THE SCREEN and then clamped, rather
+/// than fixed: a fixed column would either cut `SanDisk Cruzer Blade` or leave a
+/// hand's width of nothing in front of `/dev/sda`, and both read as a bug in
+/// the drawing.
+const NAME_MIN: u16 = 8;
+/// See [`NAME_MIN`].
+const NAME_MAX: u16 = 24;
+
+/// The word `name` in front of the one place to type. `nome` and `name`.
+const NAME_LABEL: u16 = 8;
+
+/// The field itself: everything [`NAME_LIMIT`] allows, plus the cursor's own
+/// cell — the cursor is a glyph and not a colour, so it is visible on a
+/// screenshot and to somebody who cannot tell two greys apart.
+const NAME_FIELD: u16 = NAME_LIMIT as u16 + 1;
+
+/// The sentence beside the field, at its longest: `up to 11 letters or numbers`
+/// is twenty-seven cells and `até 11 letras ou números` is twenty-four.
+///
+/// A number this file DECLARES, the way `SHEET_LABEL` does: the buffer sends a
+/// key and the host translates it (invariant 11), so what it reserved is all
+/// anyone can go on. A third language longer than this elides, and there is no
+/// check comparing the two — see the report this migration came with.
+const NAME_HINT: u16 = 27;
 
 /// How little room the technical sentence may be left with before the number
 /// beside it gives way.
@@ -337,83 +470,170 @@ const EDGE_RIGHT: u16 = 1;
 /// Below this the sentence is elided to a stub and says nothing, which is worse
 /// than a screen with no exact byte count: the count is precision added to
 /// something the sentence already carries, and the sentence has no second place
-/// to be.
-const LEAST_SENTENCE: u16 = 24;
+/// to be. It is the FLOOR of a fill column now, which is the same two phases
+/// spelled out once instead of a comparison written here by hand.
+const SENTENCE: u16 = 24;
 
-/// The gap between one column of a row and the next.
+/// How many rows at the bottom belong to the foot.
 ///
-/// Also not zero, and for the same reason one step down: two words that touch
-/// read as one word. The size and the reason beside it are the pair that would
-/// run together first, because both are short.
-const GAP: u16 = 2;
+/// Three: what just happened, what the cursor is on, and what the keys do. The
+/// list stops here — it used to reserve two, and the row it took was the one
+/// that says a disk is being written.
+const FOOT: u16 = 3;
 
-fn put(out: &mut Vec<Command>, line: u16, column: u16, content: Text, color: Color, width: u16) {
-    out.push(Command::Text(TextCommand {
-        line,
-        column,
-        content,
-        color,
-        scale: Scale::Normal,
-        max_width: width,
-    }));
+/// The first row the foot owns — where the content has to stop.
+const fn foot_top(lines: u16) -> u16 {
+    lines.saturating_sub(FOOT)
 }
 
-/// The title, the rule under it, and the empty cell after the rule.
+/// The foot's three rows, in order: what happened, what the cursor is on, and
+/// what the keys do.
 ///
-/// # Why the title is the BODY's size, and not the glyph's
-///
-/// It used to ask for `Scale::Large`, which is the size a GLYPH is drawn at in
-/// the browsers: 40 px against the body's 20. Two things came of that, and the
-/// screen reported both at once.
-///
-/// A sentence at 40 px is uncomfortable to read at the top of a window where
-/// every other line is 20 px — which is the same complaint `font.size.xlarge`
-/// already carries in writing, from the pass where the glyph browser's header
-/// and footer grew along with the icons. And a 40 px run has a line box of
-/// 58 px, so it covers TWO cells of the 29 px grid: the rule at `line + 1` was
-/// landing on the title's own baseline and came out as an underline touching
-/// the descenders.
-///
-/// THE HIERARCHY WAS NEVER THE SIZE. `colors.nix` says so in its opening
-/// lines: emphasis is by weight and colour, separation is by whitespace and a
-/// one-line rule. What marks this line as a title is the accent glyph in front
-/// of it, the rule under it and the blank cell after that — and it now costs
-/// one cell instead of two, which a window that has to fit a list of disks
-/// notices.
-///
-/// # The air, on both sides
-///
-/// Above: the title is the first row, and the buffer's own top margin is what
-/// stands between it and the window's edge. Below: the descenders stop at the
-/// bottom of the title's own cell and the rule's ink sits near the middle of
-/// the NEXT one, so better than half a cell separates them — and under the
-/// rule comes a whole empty cell before the first row of content. Nothing
-/// leans on anything.
-fn title(out: &mut Vec<Command>, icon: Icon, text: &str, tint: Color, ctx: &Context) -> u16 {
-    out.push(Command::Text(TextCommand {
-        line: 0,
-        column: GUTTER,
-        content: Text::Icon(icon),
-        color: tint,
-        scale: Scale::Normal,
-        max_width: 2,
-    }));
-    out.push(Command::Text(TextCommand {
-        line: 0,
-        column: GUTTER + 3,
-        content: Text::Key(text.to_owned()),
-        color: Color::TextPrimary,
-        scale: Scale::Normal,
-        max_width: ctx.columns.saturating_sub(GUTTER + 3),
-    }));
-    out.push(Command::Rule(LineCommand {
-        line: 1,
-        color: Color::RuleDefault,
-    }));
-    3
+/// Derived from [`FOOT`] rather than counted back from the last line by hand,
+/// so the rows the foot writes on and the reservation the list makes cannot
+/// drift apart — they are the same number, read twice.
+const fn foot_rows(lines: u16) -> (u16, u16, u16) {
+    let last = lines.saturating_sub(1);
+    (
+        last.saturating_sub(FOOT - 1),
+        last.saturating_sub(FOOT - 2),
+        last,
+    )
 }
 
-/// The last line: what the keys do, and above it what just happened.
+/// A run whose colour the design crate's vocabulary has no name for.
+///
+/// # THE ONE THING THAT WOULD NOT GO INTO `Role`
+///
+/// [`Role`] is seven parts wide — title, body, quiet, dim, accent, rule, band —
+/// and every one of them is a shade of "how loud". This screen needs three that
+/// are not: what is HAPPENING, what WENT WELL and what BROKE. They are not
+/// decoration here. The reason a disk must not be touched, the line saying a
+/// disk is being written, and the word `yes` on the last question before a disk
+/// is erased are three places where the colour IS part of the message, and
+/// putting them on `accent` would have made `yes` the same colour as `no`.
+///
+/// So the geometry — every line, every column, every budget and every scale —
+/// is the design crate's, and only the colour is put back afterwards. The runs
+/// still go through `Screen::put`, so `Screen::check` sees the whole frame. The
+/// day `Role` grows a warning, a success and an error, this struct and the loop
+/// in [`Draw::finish`] are one deletion.
+struct Repaint {
+    line: u16,
+    column: u16,
+    color: Color,
+}
+
+/// The frame under construction: the design crate's screen, and the colours it
+/// cannot name.
+struct Draw {
+    screen: Screen<Wit>,
+    tints: Vec<Repaint>,
+}
+
+impl Draw {
+    /// A fresh frame for the context the host just sent.
+    fn of(ctx: &Context) -> Self {
+        Self {
+            screen: Screen::<Wit>::of(ctx),
+            tints: Vec::new(),
+        }
+    }
+
+    /// A run on a given row, in a colour [`Role`] does not have.
+    ///
+    /// The row does not move: a row of columns is several runs at one line.
+    fn tint_at(&mut self, line: u16, run: Run<Icon>, color: Color) {
+        self.tints.push(Repaint {
+            line,
+            column: run.column,
+            color,
+        });
+        self.screen.put(line, run);
+    }
+
+    /// The same, on the current row, moving past its whole box afterwards.
+    fn tinted(&mut self, run: Run<Icon>, color: Color) {
+        let at = self.screen.row();
+        self.tints.push(Repaint {
+            line: at,
+            column: run.column,
+            color,
+        });
+        let cells = self.screen.put(at, run);
+        self.screen.skip(cells);
+    }
+
+    /// Is there still a row above the foot?
+    ///
+    /// # PHASE TWO, ON THE VERTICAL
+    ///
+    /// The rows are a PREFERENCE, exactly as the heading's air is; what never
+    /// gives way is that nothing leaks off the screen, because the compositor
+    /// does not clip. A row drawn under this line is a row drawn ON the
+    /// sentence that says a disk is being written — which is the one line on
+    /// this screen that must never be covered.
+    ///
+    /// `Table` resolves the same two phases across; this is the same question
+    /// down, and it is the buffer's because only the buffer knows which of its
+    /// rows may be left out.
+    fn has_room(&self) -> bool {
+        self.screen.row() < foot_top(self.screen.lines())
+    }
+
+    /// The frame, as the component returns it.
+    ///
+    /// A run is found again by `(line, column)`, which identifies one uniquely:
+    /// `nothing_overlaps` is exactly the promise that no two runs on a row can
+    /// reach each other, so no two can start on the same cell either.
+    fn finish(self) -> Vec<Command> {
+        let mut out = self.screen.finish_wit();
+        for c in &mut out {
+            let Command::Text(t) = c else {
+                continue;
+            };
+            if let Some(p) = self
+                .tints
+                .iter()
+                .find(|p| p.line == t.line && p.column == t.column)
+            {
+                t.color = p.color;
+            }
+        }
+        out
+    }
+}
+
+/// Where a row's reason begins, and how much of the row is left for it.
+///
+/// # A SPAN, which is the one thing `Table` cannot declare
+///
+/// The sentence saying why a disk must not be touched takes the room the
+/// filesystem, the size and the word after them would have used — none of the
+/// three matters about a disk nobody may write to, and the sentence is the one
+/// column that is never dropped. `Row::put` gives a run exactly one column and
+/// overwrites anything else, on purpose, so this is arithmetic over the LAYOUT:
+/// the first of the three that survived, through to where the table ends.
+///
+/// The order below is the order they give way in, so the first survivor is
+/// always the leftmost one there is, and the span is never a hole.
+fn rest_from(layout: &Layout) -> Option<(u16, u16)> {
+    let at = [field::KIND, field::SIZE, field::WHAT]
+        .into_iter()
+        .find_map(|id| layout.field(id))?
+        .at;
+    Some((at, layout.ends().saturating_sub(at)))
+}
+
+/// The disk this question is about, said the way the row above said it.
+///
+/// One function for two screens: `choose` and `confirm` are asking about the
+/// same device, and two `format!`s would be two answers to "what do we call it"
+/// that drift the first time either is edited.
+fn told(d: &Device) -> String {
+    format!("{}  {}  {}", d.name, d.node, size(d.bytes))
+}
+
 /// What the cursor is on, said twice — a label above, and the truth below.
 ///
 /// A key for the vocabulary and a string for the machine's own identifiers: a
@@ -436,132 +656,87 @@ struct Detail {
 /// one line, one of them still and one of them moving, is a line whose motion
 /// reads as a glitch — and the eye that learns to ignore the hint would learn
 /// to ignore the detail with it.
-fn foot(out: &mut Vec<Command>, hint: &str, said: Option<&Said>, detail: &Detail, ctx: &Context) {
-    let last = ctx.lines.saturating_sub(1);
+///
+/// # The sentence and the number are a TABLE now
+///
+/// They used to be two fields placed by hand, right to left: the number's
+/// column computed first because it BOUNDED the other, a constant for the air
+/// at the window's border, and a comparison deciding whether the sentence had
+/// been left enough room. That is a fill column with a floor and a fixed column
+/// that gives way first — the same two phases every grid in this repository
+/// resolves in, written once. `EDGE_RIGHT` went with it: the host's margin is
+/// already outside `columns`, and a cell reserved inside it was air twice.
+///
+/// The screenshot that found the original defect (`…dos até 2 §1BO88p4 B`)
+/// cannot come back: the number is a column of its own, and two columns of a
+/// table do not meet in any language or at any width.
+fn foot(draw: &mut Draw, hint: &str, said: Option<&Said>, detail: &Detail) {
+    let (message, at, hint_at) = foot_rows(draw.screen.lines());
 
     // THE DETAIL, IN THE DIMMEST COLOUR THERE IS. That is the whole compromise:
     // somebody who does not know what FAT32 is never has to read this line, and
     // somebody who does never has to guess which of five rows means it.
-    let at = last.saturating_sub(1);
-
-    // THE RIGHT-HAND HALF IS PLACED FIRST, because it is what BOUNDS the other.
-    //
-    // THE FIRST VERSION DREW THE SENTENCE AT FULL WIDTH AND THE NUMBER OVER IT.
-    // A screenshot caught it — `…dos até 2 §1BO88p4 B` — and it is the same
-    // fault this project has now paid for four times: two fields placed by
-    // arithmetic with no single place deciding the air between them. So the
-    // number's column is computed FIRST, and the sentence is given the room
-    // that is left, minus a gap. Neither can reach the other, in any language
-    // and at any window width.
-    //
-    // `EDGE_RIGHT` in front of the number for the reason `space.nix` already
-    // records twice: a count against the window's border reads as a number that
-    // was CUT OFF, not as one that ended.
-    let width = u16::try_from(detail.facts.chars().count()).unwrap_or(u16::MAX);
-    let from = ctx.columns.saturating_sub(width + EDGE_RIGHT);
-    let room = from.saturating_sub(GUTTER + GAP);
-    // AND THE NUMBER GIVES WAY FIRST when the window cannot hold both. It adds
-    // precision to something the sentence already says; the sentence has no
-    // second place to be.
-    let showing = !detail.facts.is_empty() && room >= LEAST_SENTENCE;
-    put(
-        out,
-        at,
-        GUTTER,
-        Text::Key(detail.said.to_owned()),
-        Color::TextDim,
-        if showing {
-            room
-        } else {
-            ctx.columns.saturating_sub(GUTTER)
-        },
-    );
-    if showing {
-        put(
-            out,
-            at,
-            from,
-            Text::Data(detail.facts.clone()),
-            Color::TextDim,
-            width,
-        );
+    let mut table = Table::across(draw.screen.columns()).with(Column::fill(field::SAID, SENTENCE));
+    // AN EMPTY COUNT IS NOT A COLUMN OF ZERO CELLS. A column still costs the
+    // cell of air after it, so asking for one that will never be drawn lays the
+    // sentence out against a width the screen does not have.
+    let facts = wide(&detail.facts);
+    if facts > 0 {
+        table = table.with(Column::fixed(field::FACTS, facts, give::FACTS));
     }
+    let layout = table.resolve();
+    let mut row = draw.screen.row_of(at, &layout);
+    row.put(field::SAID, Run::label(detail.said).quiet());
+    row.put(field::FACTS, Run::datum(&detail.facts).quiet());
+    let _ = row.done();
 
     if let Some(what) = said {
-        let (content, colour) = match what {
-            Said::Working => (Text::Key(key::WORKING.to_owned()), Color::StateWarning),
-            Said::Done => (Text::Key(key::DONE.to_owned()), Color::StateSuccess),
-            Said::Trouble(why) => (Text::Data(why.clone()), Color::StateError),
+        let (run, colour) = match what {
+            Said::Working => (Run::label(key::WORKING), Color::StateWarning),
+            Said::Done => (Run::label(key::DONE), Color::StateSuccess),
+            Said::Trouble(why) => (Run::datum(why), Color::StateError),
         };
-        put(
-            out,
-            last.saturating_sub(2),
-            GUTTER,
-            content,
-            colour,
-            ctx.columns.saturating_sub(GUTTER),
-        );
+        draw.tint_at(message, run, colour);
     }
-    put(
-        out,
-        last,
-        GUTTER,
-        Text::Key(hint.to_owned()),
-        Color::TextDim,
-        ctx.columns.saturating_sub(GUTTER),
-    );
+    draw.screen.put(hint_at, Run::label(hint).quiet());
 }
 
-/// A row that is chosen, drawn as chosen.
-fn mark(out: &mut Vec<Command>, line: u16, chosen: bool) {
+/// A row that is chosen, drawn as chosen — by COLOUR, never by a box or an
+/// outline (invariant 15).
+fn mark(draw: &mut Draw, line: u16, chosen: bool) {
     if chosen {
-        out.push(Command::Selection(LineCommand {
-            line,
-            color: Color::SurfaceSelection,
-        }));
+        draw.screen.band(line);
     }
 }
 
 impl State {
     /// The disks, one per row. *Which one?*
-    fn list(&mut self, ctx: &Context) -> Vec<Command> {
-        let mut out = Vec::new();
-        let line = title(&mut out, Icon::Disk, key::TITLE, Color::StateAccent, ctx);
+    fn list(&mut self, draw: &mut Draw) {
+        let line = draw.screen.heading(Icon::Disk, key::TITLE);
 
         if self.rack.devices.is_empty() {
             self.list_top = None;
-            put(
-                &mut out,
-                line,
-                GUTTER,
-                Text::Key(key::EMPTY.to_owned()),
-                Color::TextSecondary,
-                ctx.columns.saturating_sub(GUTTER),
-            );
-            foot(&mut out, key::HINT_LIST, self.said(), &self.detail(), ctx);
-            return out;
+            draw.screen
+                .put(line, Run::label(key::EMPTY).playing(Role::Body));
+            foot(draw, key::HINT_LIST, self.said(), &self.detail());
+            return;
         }
 
         self.list_top = Some(line);
-        // The last two lines belong to the message and the hint.
-        let room = usize::from(self.lines.saturating_sub(line + 2)).max(1);
+        // The last three lines belong to the message, the detail and the hint.
+        let room = usize::from(foot_top(draw.screen.lines()).saturating_sub(line)).max(1);
 
-        // WHERE EACH COLUMN STARTS, worked out from the widest name on the
-        // screen rather than from a constant. A fixed column would either
-        // truncate `SanDisk Cruzer Blade` or leave a hand's width of nothing in
-        // front of `/dev/sda`, and both look like a bug in the drawing.
-        let widest = self
+        // HOW WIDE THE NAME COLUMN IS, worked out from the widest name on the
+        // screen rather than from a constant — see [`NAME_MIN`].
+        let name = self
             .rack
             .devices
             .iter()
             .take(room)
-            .map(|d| d.name.chars().count())
+            .map(|d| wide(&d.name))
             .max()
-            .unwrap_or(0);
-        let name_width = u16::try_from(widest).unwrap_or(u16::MAX).clamp(8, 24);
-        let node_at = GUTTER + 3 + name_width + GAP;
-        let node_width = 14;
-        let after_node = node_at + node_width + GAP;
+            .unwrap_or(0)
+            .clamp(NAME_MIN, NAME_MAX);
 
         // AND WHAT GETS SACRIFICED WHEN THE WINDOW IS NARROW, which is a
         // decision and not an accident.
@@ -573,32 +748,33 @@ impl State {
         // window. A colour alone is a rule somebody has to already know, which
         // is exactly what this screen exists not to require.
         //
-        // So the reason is the one column that is never dropped, and on a row
-        // that HAS one it takes the space the filesystem and the size would
-        // have used: neither of those matters about a disk nobody may write to.
-        let kind_width = 8;
-        let size_width = 10;
-        let facts_fit = after_node + kind_width + GAP + size_width <= ctx.columns;
+        // So the reason is the one thing that is never dropped: it is not a
+        // column at all, it is [`rest_from`], and it takes the room the facts
+        // would have used. What the table decides is the order the FACTS give
+        // way in, and that order is [`give`].
+        let layout = Table::across(draw.screen.columns())
+            .with(Column::fixed(field::ICON, ICON, give::ICON))
+            .with(Column::fixed(field::NAME, name, give::NAME))
+            .with(Column::fixed(field::NODE, NODE, give::NODE))
+            .with(Column::fixed(field::KIND, KIND, give::KIND))
+            .with(Column::fixed(field::SIZE, SIZE, give::SIZE))
+            .with(Column::fill(field::WHAT, WHAT))
+            .resolve();
 
         for (n, d) in self.rack.devices.iter().take(room).enumerate() {
             let at = line + u16::try_from(n).unwrap_or(0);
-            let chosen = self.on.as_deref() == Some(d.id.as_str());
-            mark(&mut out, at, chosen);
+            mark(draw, at, self.on.as_deref() == Some(d.id.as_str()));
 
             // MUTED MEANS "NOT ON OFFER", and it is never the only thing that
             // says so: the reason is spelled out on the same row.
             //
-            // `TextSecondary` and NOT `TextDim`, which is what it was until a
-            // VM read the screen back: dim text under the cursor's own band is
-            // the lowest-contrast pair the palette has, and the row went
+            // `Role::Body` and NOT `Role::Quiet`, which is what it was until a
+            // VM read the screen back: the dimmest grey under the cursor's own
+            // band is the lowest-contrast pair the palette has, and the row went
             // unreadable exactly when somebody had moved onto it to find out
             // why. A row nobody may use still has to be a row somebody can
             // READ.
-            let tint = if spare(d) {
-                Color::TextPrimary
-            } else {
-                Color::TextSecondary
-            };
+            let tint = if spare(d) { Role::Title } else { Role::Body };
             let glyph = if !spare(d) {
                 Icon::Readonly
             } else if d.removable {
@@ -606,142 +782,71 @@ impl State {
             } else {
                 Icon::Disk
             };
-            put(&mut out, at, GUTTER, Text::Icon(glyph), tint, 2);
-            put(
-                &mut out,
-                at,
-                GUTTER + 3,
-                Text::Data(d.name.clone()),
-                tint,
-                name_width,
-            );
-            put(
-                &mut out,
-                at,
-                node_at,
-                Text::Data(d.node.clone()),
-                Color::TextSecondary,
-                node_width,
-            );
 
-            if !spare(d) {
-                // THE REASON, TAKING THE WHOLE REST OF THE ROW.
-                put(
-                    &mut out,
+            let mut row = draw.screen.row_of(at, &layout);
+            row.put(field::ICON, Run::glyph(glyph).playing(tint));
+            row.put(field::NAME, Run::datum(&d.name).playing(tint));
+            row.put(field::NODE, Run::datum(&d.node).playing(Role::Body));
+            if spare(d) {
+                // AN EMPTY `kind` IS A SENTENCE AND NOT A BLANK. A partition
+                // with nothing written on it is the most ordinary thing this
+                // screen is for, and a gap where the others have a word reads
+                // as a row that failed to load.
+                let kind = if d.kind.is_empty() {
+                    Run::label(key::BLANK)
+                } else {
+                    Run::datum(&d.kind)
+                };
+                row.put(field::KIND, kind.playing(Role::Body));
+                row.put(field::SIZE, Run::datum(&size(d.bytes)).playing(Role::Body));
+                // AND THE LAST COLUMN SAYS WHAT THE ROW IS. `whole` decides
+                // which question comes next — a whole disk gets a new partition
+                // table and a partition cannot — so it is on the row rather
+                // than discovered one screen later.
+                let k = if d.whole { key::WHOLE } else { key::PART };
+                row.put(field::WHAT, Run::label(k).quiet());
+                let _ = row.done();
+                continue;
+            }
+            let _ = row.done();
+
+            // THE REASON, TAKING THE WHOLE REST OF THE ROW — and in the one
+            // colour the seven roles do not have. See [`Repaint`].
+            if let Some((from, width)) = rest_from(&layout) {
+                draw.tint_at(
                     at,
-                    after_node,
-                    Text::Data(d.needed.clone()),
+                    Run::datum(&d.needed).at(from).within(width),
                     Color::StateWarning,
-                    ctx.columns.saturating_sub(after_node),
-                );
-                continue;
-            }
-
-            if !facts_fit {
-                // TOO NARROW FOR THE FACTS, so what stays is what the next
-                // question needs: whole disk or one part of it.
-                let k = if d.whole { key::WHOLE } else { key::PART };
-                put(
-                    &mut out,
-                    at,
-                    after_node,
-                    Text::Key(k.to_owned()),
-                    Color::TextDim,
-                    ctx.columns.saturating_sub(after_node),
-                );
-                continue;
-            }
-
-            // AN EMPTY `kind` IS A SENTENCE AND NOT A BLANK. A partition with
-            // nothing written on it is the most ordinary thing this screen is
-            // for, and a gap where the others have a word reads as a row that
-            // failed to load.
-            let kind = if d.kind.is_empty() {
-                Text::Key(key::BLANK.to_owned())
-            } else {
-                Text::Data(d.kind.clone())
-            };
-            put(
-                &mut out,
-                at,
-                after_node,
-                kind,
-                Color::TextSecondary,
-                kind_width,
-            );
-            let size_at = after_node + kind_width + GAP;
-            put(
-                &mut out,
-                at,
-                size_at,
-                Text::Data(size(d.bytes)),
-                Color::TextSecondary,
-                size_width,
-            );
-
-            // AND THE LAST COLUMN SAYS WHAT THE ROW IS. `whole` decides which
-            // question comes next — a whole disk gets a new partition table and
-            // a partition cannot — so it is on the row rather than discovered
-            // one screen later. It is the first thing dropped when the window
-            // cannot hold it, because the two screens after this one repeat it.
-            let what_at = size_at + size_width + GAP;
-            if what_at < ctx.columns {
-                let k = if d.whole { key::WHOLE } else { key::PART };
-                put(
-                    &mut out,
-                    at,
-                    what_at,
-                    Text::Key(k.to_owned()),
-                    Color::TextDim,
-                    ctx.columns.saturating_sub(what_at),
                 );
             }
         }
 
-        foot(&mut out, key::HINT_LIST, self.said(), &self.detail(), ctx);
-        out
+        foot(draw, key::HINT_LIST, self.said(), &self.detail());
     }
 
     /// Five filesystems and a name. *What for?*
-    fn choose(&self, ctx: &Context) -> Vec<Command> {
-        let mut out = Vec::new();
-        let mut line = title(
-            &mut out,
-            Icon::Disk,
-            key::CHOOSE_TITLE,
-            Color::StateAccent,
-            ctx,
-        );
+    fn choose(&self, draw: &mut Draw) {
+        draw.screen.heading(Icon::Disk, key::CHOOSE_TITLE);
 
         // WHICH DISK, ON THE SCREEN THAT ASKS ABOUT IT. The title cannot say it
         // — a key is looked up whole, with no arguments (invariant 11) — so the
         // name goes on a line of its own, right under it, where somebody who
         // arrived here by pressing `Enter` twice can still see what they chose.
-        if let Some(t) = self.target.as_ref() {
-            put(
-                &mut out,
-                line,
-                GUTTER,
-                Text::Data(format!("{}  {}  {}", t.name, t.node, size(t.bytes))),
-                Color::TextSecondary,
-                ctx.columns.saturating_sub(GUTTER),
-            );
-            line += 2;
+        if let Some(t) = self.target.as_ref()
+            && draw.has_room()
+        {
+            draw.screen.line(Run::datum(&told(t)).playing(Role::Body));
+            draw.screen.skip(AIR);
         }
 
         for (n, (_, text, _)) in RECIPES.iter().enumerate() {
-            let at = line + u16::try_from(n).unwrap_or(0);
-            mark(&mut out, at, n == self.recipe);
-            put(
-                &mut out,
-                at,
-                GUTTER,
-                Text::Key((*text).to_owned()),
-                Color::TextPrimary,
-                ctx.columns.saturating_sub(GUTTER),
-            );
+            if !draw.has_room() {
+                break;
+            }
+            let at = draw.screen.row();
+            mark(draw, at, n == self.recipe);
+            draw.screen.line(Run::label(text).playing(Role::Title));
         }
-        let mut at = line + u16::try_from(RECIPES.len()).unwrap_or(0);
 
         // XFS, DRAWN AND REFUSED — and reachable, which is the part that took
         // a second pass. It could have been left off the list and nobody would
@@ -751,78 +856,50 @@ impl State {
         // The row says the program that writes it is not installed, which is a
         // fact about this distro and not about their disk; the line under the
         // cursor names the program.
-        mark(&mut out, at, self.recipe == MISSING);
-        put(
-            &mut out,
-            at,
-            GUTTER,
-            Text::Icon(Icon::Readonly),
-            Color::TextSecondary,
-            2,
-        );
-        put(
-            &mut out,
-            at,
-            GUTTER + 3,
-            Text::Key(key::RECIPE_MISSING.to_owned()),
-            Color::TextSecondary,
-            ctx.columns.saturating_sub(GUTTER + 3),
-        );
-        at += 2;
+        if draw.has_room() {
+            let at = draw.screen.row();
+            mark(draw, at, self.recipe == MISSING);
+            draw.screen
+                .put(at, Run::glyph(Icon::Readonly).playing(Role::Body));
+            draw.screen.line(
+                Run::label(key::RECIPE_MISSING)
+                    .playing(Role::Body)
+                    .at(ICON + GAP),
+            );
+            draw.screen.skip(AIR);
+        }
 
         // THE ONE PLACE TO TYPE. The cursor is a glyph and not a colour, so it
         // is visible on a screenshot and to somebody who cannot tell the two
         // greys apart.
-        put(
-            &mut out,
-            at,
-            GUTTER,
-            Text::Key(key::NAME.to_owned()),
-            Color::TextSecondary,
-            8,
-        );
-        put(
-            &mut out,
-            at,
-            GUTTER + 8 + GAP,
-            Text::Data(format!("{}_", self.name)),
-            Color::TextPrimary,
-            u16::try_from(NAME_LIMIT).unwrap_or(11) + 1,
-        );
-        put(
-            &mut out,
-            at,
-            GUTTER + 8 + GAP + u16::try_from(NAME_LIMIT).unwrap_or(11) + 1 + GAP,
-            Text::Key(key::NAME_LIMIT.to_owned()),
-            Color::TextDim,
-            ctx.columns.saturating_sub(GUTTER + 24),
-        );
+        if draw.has_room() {
+            let layout = Table::across(draw.screen.columns())
+                .with(Column::fixed(field::LABEL, NAME_LABEL, give::LABEL))
+                .with(Column::fixed(field::VALUE, NAME_FIELD, give::VALUE))
+                .with(Column::fixed(field::HINT, NAME_HINT, give::HINT))
+                .resolve();
+            let at = draw.screen.row();
+            let mut row = draw.screen.row_of(at, &layout);
+            row.put(field::LABEL, Run::label(key::NAME).playing(Role::Body));
+            row.put(
+                field::VALUE,
+                Run::datum(&format!("{}_", self.name)).playing(Role::Title),
+            );
+            row.put(field::HINT, Run::label(key::NAME_LIMIT).quiet());
+            let _ = row.done();
+        }
 
-        foot(&mut out, key::HINT_CHOOSE, None, &self.detail(), ctx);
-        out
+        foot(draw, key::HINT_CHOOSE, None, &self.detail());
     }
 
     /// Two rows, and `no` is the first. *Are you sure?*
-    fn confirm(&self, ctx: &Context) -> Vec<Command> {
-        let mut out = Vec::new();
-        let mut line = title(
-            &mut out,
-            Icon::Warning,
-            key::CONFIRM_TITLE,
-            Color::StateWarning,
-            ctx,
-        );
+    fn confirm(&self, draw: &mut Draw) {
+        draw.screen.heading(Icon::Warning, key::CONFIRM_TITLE);
 
-        if let Some(t) = self.target.as_ref() {
-            put(
-                &mut out,
-                line,
-                GUTTER,
-                Text::Data(format!("{}  {}  {}", t.name, t.node, size(t.bytes))),
-                Color::TextPrimary,
-                ctx.columns.saturating_sub(GUTTER),
-            );
-            line += 1;
+        if let Some(t) = self.target.as_ref()
+            && draw.has_room()
+        {
+            draw.screen.line(Run::datum(&told(t)).playing(Role::Title));
             // AND WHAT "EVERYTHING" MEANS HERE. On a whole disk it is every
             // partition on it, which is more than the row above shows and is
             // exactly the surprise this screen exists to prevent.
@@ -831,15 +908,8 @@ impl State {
             } else {
                 key::CONFIRM_PART
             };
-            put(
-                &mut out,
-                line,
-                GUTTER,
-                Text::Key(scope.to_owned()),
-                Color::StateWarning,
-                ctx.columns.saturating_sub(GUTTER),
-            );
-            line += 2;
+            draw.tinted(Run::label(scope), Color::StateWarning);
+            draw.screen.skip(AIR);
         }
 
         // NO IS FIRST, AND IT IS WHERE THE CURSOR STARTS. Somebody who arrived
@@ -847,26 +917,40 @@ impl State {
         // rhythm goes back, not ahead. It costs one deliberate keystroke to
         // erase a disk, which is the right price.
         for (n, (text, colour)) in [
-            (key::CONFIRM_NO, Color::TextPrimary),
-            (key::CONFIRM_YES, Color::StateError),
+            (key::CONFIRM_NO, None),
+            (key::CONFIRM_YES, Some(Color::StateError)),
         ]
-        .iter()
+        .into_iter()
         .enumerate()
         {
-            let at = line + u16::try_from(n).unwrap_or(0);
-            mark(&mut out, at, self.yes == (n == 1));
-            put(
-                &mut out,
-                at,
-                GUTTER,
-                Text::Key((*text).to_owned()),
-                *colour,
-                ctx.columns.saturating_sub(GUTTER),
-            );
+            if !draw.has_room() {
+                break;
+            }
+            let at = draw.screen.row();
+            mark(draw, at, self.yes == (n == 1));
+            let run = Run::label(text).playing(Role::Title);
+            // AND `yes` IS RED, which no role names. See [`Repaint`].
+            match colour {
+                Some(c) => draw.tinted(run, c),
+                None => {
+                    draw.screen.line(run);
+                }
+            }
         }
 
-        foot(&mut out, key::HINT_CONFIRM, None, &self.detail(), ctx);
-        out
+        foot(draw, key::HINT_CONFIRM, None, &self.detail());
+    }
+
+    /// Whichever question is on, drawn into the frame.
+    ///
+    /// One place, so a test asks exactly what `render` asks: the precedence
+    /// between the three lives here and nowhere else.
+    fn draw(&mut self, draw: &mut Draw) {
+        match self.screen {
+            Question::List => self.list(draw),
+            Question::Choose => self.choose(draw),
+            Question::Confirm => self.confirm(draw),
+        }
     }
 
     /// The technical line for whichever row the cursor is on.
@@ -889,7 +973,7 @@ impl State {
     /// one, because the two would be reading the cursor from different places.
     fn detail(&self) -> Detail {
         match self.screen {
-            Screen::List => match self.focused() {
+            Question::List => match self.focused() {
                 None => Detail {
                     said: key::TECH_NOTHING,
                     facts: String::new(),
@@ -915,7 +999,7 @@ impl State {
             // is the honest label and `vfat (FAT32), até 4 GiB por arquivo` is
             // the honest answer; neither replaces the other, and they are one
             // arrow key apart.
-            Screen::Choose => Detail {
+            Question::Choose => Detail {
                 said: self.tech(),
                 facts: self
                     .target
@@ -927,7 +1011,7 @@ impl State {
             // filesystem, onto which node, under which name. It is the closest
             // thing to the command somebody would have typed, and it is on the
             // screen where being sure is the entire question.
-            Screen::Confirm => Detail {
+            Question::Confirm => Detail {
                 said: self.tech(),
                 facts: match self.target.as_ref() {
                     None => String::new(),
@@ -955,7 +1039,7 @@ impl State {
 
     fn move_by(&mut self, down: bool) {
         match self.screen {
-            Screen::List => {
+            Question::List => {
                 if self.rack.devices.is_empty() {
                     return;
                 }
@@ -974,7 +1058,7 @@ impl State {
                 };
                 self.on = Some(self.rack.devices[to].id.clone());
             }
-            Screen::Choose => {
+            Question::Choose => {
                 // `MISSING` AND NOT `len() - 1`: the walk covers the row that
                 // refuses, exactly as the list's walk covers the disk that
                 // refuses.
@@ -994,14 +1078,14 @@ impl State {
             // TWO ROWS, SO EITHER ARROW SWAPS THEM. Clamping instead would make
             // `up` on the first row do nothing, and a key that does nothing on
             // a two-row list reads as a key that did not arrive.
-            Screen::Confirm => self.yes = !self.yes,
+            Question::Confirm => self.yes = !self.yes,
         }
     }
 
     /// `Enter`.
     fn forward(&mut self) -> Vec<Effect> {
         match self.screen {
-            Screen::List => {
+            Question::List => {
                 let Some(d) = self.focused() else {
                     return vec![];
                 };
@@ -1016,10 +1100,10 @@ impl State {
                 self.recipe = 0;
                 self.name.clear();
                 self.said = None;
-                self.screen = Screen::Choose;
+                self.screen = Question::Choose;
                 vec![Effect::Redraw]
             }
-            Screen::Choose => {
+            Question::Choose => {
                 // THE THIRD REFUSAL, and the same one twice: a row that names
                 // something this build cannot do does not move forward, and it
                 // says nothing new when pressed — the reason is already on the
@@ -1028,16 +1112,16 @@ impl State {
                     return vec![];
                 }
                 self.yes = false;
-                self.screen = Screen::Confirm;
+                self.screen = Question::Confirm;
                 vec![Effect::Redraw]
             }
-            Screen::Confirm => {
+            Question::Confirm => {
                 if !self.yes {
-                    self.screen = Screen::Choose;
+                    self.screen = Question::Choose;
                     return vec![Effect::Redraw];
                 }
                 let Some(t) = self.target.as_ref() else {
-                    self.screen = Screen::List;
+                    self.screen = Question::List;
                     return vec![Effect::Redraw];
                 };
                 let Some(recipe) = RECIPES.get(self.recipe) else {
@@ -1046,7 +1130,7 @@ impl State {
                     // state entered by name from the modeline arrives here
                     // without having walked, and an index one past the end
                     // would be a panic in the component rather than a refusal.
-                    self.screen = Screen::Choose;
+                    self.screen = Question::Choose;
                     return vec![Effect::Redraw];
                 };
                 let plan = Plan {
@@ -1066,7 +1150,7 @@ impl State {
                 // being written is on that list and is about to change; a
                 // waiting screen would hide the one thing worth watching. What
                 // says a disk is being written is the message line.
-                self.screen = Screen::List;
+                self.screen = Question::List;
                 self.said = Some(Said::Working);
                 vec![Effect::Format(plan), Effect::Redraw]
             }
@@ -1078,14 +1162,14 @@ impl State {
         match self.screen {
             // ONE LEVEL, AND THE BUFFER IS WHAT WALKS. `Esc` on the first
             // screen is the host's to act on, and it closes the window.
-            Screen::List => vec![],
-            Screen::Choose => {
-                self.screen = Screen::List;
+            Question::List => vec![],
+            Question::Choose => {
+                self.screen = Question::List;
                 self.target = None;
                 vec![Effect::Redraw]
             }
-            Screen::Confirm => {
-                self.screen = Screen::Choose;
+            Question::Confirm => {
+                self.screen = Question::Choose;
                 vec![Effect::Redraw]
             }
         }
@@ -1093,7 +1177,7 @@ impl State {
 
     /// A letter, which only ever means the name.
     fn letter(&mut self, c: char) -> Vec<Effect> {
-        if self.screen != Screen::Choose {
+        if self.screen != Question::Choose {
             return vec![];
         }
         // WHAT A LABEL MAY HOLD, decided here and not by udisks refusing later.
@@ -1112,7 +1196,7 @@ impl State {
 
     /// A fresh reading arrived.
     fn racked(&mut self, rack: Rack) -> Vec<Effect> {
-        if self.rack == rack {
+        if same_rack(&self.rack, &rack) {
             return vec![];
         }
         self.rack = rack;
@@ -1148,7 +1232,7 @@ impl State {
     /// teaches people that silence means failure, and this one has just spent
     /// three questions earning the opposite.
     fn formatted(&mut self, done: bool, trouble: String) -> Vec<Effect> {
-        self.screen = Screen::List;
+        self.screen = Question::List;
         self.target = None;
         self.said = Some(if done {
             Said::Done
@@ -1169,19 +1253,19 @@ impl State {
     /// having said nothing.
     fn enter(&mut self, id: &str) -> Vec<Effect> {
         let to = match id {
-            "normal" => Screen::List,
-            "choose" => Screen::Choose,
-            "confirm" => Screen::Confirm,
+            "normal" => Question::List,
+            "choose" => Question::Choose,
+            "confirm" => Question::Confirm,
             // AN ID THIS BUFFER DID NOT DECLARE. The host only ever sends one
             // it was told, so this is a defect on the other side rather than a
             // person's mistake — and guessing at the nearest screen would hide
             // it.
             _ => return vec![],
         };
-        if to != Screen::List && self.target.is_none() {
+        if to != Question::List && self.target.is_none() {
             self.target = self.focused().filter(|d| spare(d)).cloned();
         }
-        if to == Screen::Confirm {
+        if to == Question::Confirm {
             self.yes = false;
         }
         self.screen = to;
@@ -1193,7 +1277,7 @@ impl State {
         let Some(top) = self.list_top else {
             return vec![];
         };
-        if self.screen != Screen::List || line < top {
+        if self.screen != Question::List || line < top {
             return vec![];
         }
         let n = usize::from(line - top);
@@ -1218,7 +1302,7 @@ impl State {
             Input::Cancel => self.back(),
             Input::Character(c) => self.letter(c),
             Input::Delete => {
-                if self.screen == Screen::Choose && self.name.pop().is_some() {
+                if self.screen == Question::Choose && self.name.pop().is_some() {
                     vec![Effect::Redraw]
                 } else {
                     vec![]
@@ -1242,7 +1326,8 @@ impl State {
             | Input::Paste(_)
             | Input::Toggle
             | Input::Survey(_)
-            | Input::Queue(_) => vec![],
+            | Input::Queue(_)
+            | Input::Mind(_) => vec![],
         }
     }
 }
@@ -1256,7 +1341,7 @@ impl Guest for Component {
             mode: "format".into(),
             states: STATES
                 .iter()
-                .map(|(id, letter, tone)| ronoctua::buffer::types::BufferState {
+                .map(|(id, letter, tone)| BufferState {
                     id: (*id).into(),
                     letter: *letter,
                     tone: *tone,
@@ -1278,11 +1363,9 @@ impl Guest for Component {
     fn render(ctx: Context) -> Vec<Command> {
         STATE.with_borrow_mut(|s| {
             s.lines = ctx.lines;
-            match s.screen {
-                Screen::List => s.list(&ctx),
-                Screen::Choose => s.choose(&ctx),
-                Screen::Confirm => s.confirm(&ctx),
-            }
+            let mut draw = Draw::of(&ctx);
+            s.draw(&mut draw);
+            draw.finish()
         })
     }
 
@@ -1303,4 +1386,316 @@ impl Guest for Component {
     }
 }
 
-export!(Component);
+ronoctua_design::bindings::export!(Component with_types_in ronoctua_design::bindings);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ronoctua_design::types::{Heights, Text};
+
+    /// The production heights, as the host computes them.
+    ///
+    /// `typography.nix`'s five sizes against a line height of 1.45, in cells of
+    /// the body's own: `20 × 1.45 = 29 px` is one cell, so `Small`, `Base` and
+    /// `Normal` are one and `Large` and `Huge` are TWO. Two is where every
+    /// geometry defect in this repository came from, and it is why the tests
+    /// below ask the host's own questions instead of counting rows.
+    const fn heights() -> Heights {
+        Heights {
+            small: 1,
+            base: 1,
+            normal: 1,
+            large: 2,
+            huge: 2,
+        }
+    }
+
+    const fn context(columns: u16, lines: u16) -> Context {
+        Context {
+            columns,
+            lines,
+            heights: heights(),
+        }
+    }
+
+    /// The three widths the report asks about: a footer's expansion, an
+    /// ordinary window, and a wide one.
+    const WIDTHS: [u16; 3] = [46, 80, 110];
+
+    /// The id of the disk the running system needs — the one that refuses.
+    const NEEDED: &str = "/org/freedesktop/UDisks2/block_devices/root";
+
+    fn device(id: &str, name: &str, node: &str, kind: &str, needed: &str, whole: bool) -> Device {
+        Device {
+            id: id.into(),
+            name: name.into(),
+            node: node.into(),
+            kind: kind.into(),
+            bytes: 32 * 1024 * 1024 * 1024,
+            mounted: false,
+            removable: !needed.is_empty(),
+            needed: needed.into(),
+            whole,
+        }
+    }
+
+    /// The three rows this screen is about: a stick, a partition with nothing
+    /// written on it, and the disk the running system lives on.
+    fn rack() -> Rack {
+        Rack {
+            devices: vec![
+                device("id-1", "SanDisk Cruzer Blade", "/dev/sda", "vfat", "", true),
+                device("id-2", "disk", "/dev/sdb1", "", "", false),
+                device(NEEDED, "system", "/dev/nvme0n1p2", "btrfs", "/", false),
+            ],
+        }
+    }
+
+    /// A buffer that has read a rack and is on one of the three questions.
+    fn ready(question: Question) -> State {
+        let mut s = State::fresh();
+        s.racked(rack());
+        s.target = s.focused().cloned();
+        s.screen = question;
+        s
+    }
+
+    /// Everything the buffer would send for this state and this window.
+    fn frame(s: &mut State, columns: u16, lines: u16) -> Vec<Command> {
+        s.lines = lines;
+        let mut draw = Draw::of(&context(columns, lines));
+        s.draw(&mut draw);
+        draw.screen
+            .check()
+            .unwrap_or_else(|e| panic!("{:?} at {columns}x{lines}: {e}", s.screen));
+        draw.finish()
+    }
+
+    /// THE TWO QUESTIONS THE HOST ASKS, ASKED OF ALL THREE OF THIS BUFFER'S.
+    ///
+    /// `Screen::check` is `DisplayList::nothing_is_covered` and
+    /// `nothing_overlaps` — the host's own code, not a second copy of it — and
+    /// it answers in milliseconds instead of minutes in Nix.
+    ///
+    /// # Why the sweep starts at seven lines
+    ///
+    /// Because the list insists on ONE row even when the window has no room
+    /// for it (`.max(1)`, which is what the buffer always did): at six lines
+    /// the heading's content row and the message line are the same row, and
+    /// the disk lands on `format-working`. Seven is the first height where
+    /// every state places, and the footer's own expansion ceiling is twelve —
+    /// so nothing real is below the floor. See the report this came with.
+    #[test]
+    fn every_question_survives_the_hosts_two_questions() {
+        for columns in WIDTHS {
+            for lines in 7..=40u16 {
+                for question in [Question::List, Question::Choose, Question::Confirm] {
+                    for said in [
+                        None,
+                        Some(Said::Working),
+                        Some(Said::Done),
+                        Some(Said::Trouble("udisks refused the request".into())),
+                    ] {
+                        let mut s = ready(question);
+                        s.said = said;
+                        s.name = "PENDRIVE".into();
+                        let _ = frame(&mut s, columns, lines);
+                        // And with the cursor on the row that refuses, which is
+                        // where the detail line and the row itself both change.
+                        let mut on_refusal = ready(question);
+                        on_refusal.on = Some(NEEDED.into());
+                        on_refusal.recipe = MISSING;
+                        let _ = frame(&mut on_refusal, columns, lines);
+                    }
+                }
+                // A rack that has not arrived yet is a screen too.
+                let mut empty = State::fresh();
+                let _ = frame(&mut empty, columns, lines);
+            }
+        }
+    }
+
+    /// THE HEADING IS A GLYPH AND A TITLE, AND THERE IS NO RULE.
+    ///
+    /// It used to be three commands and a blank row: an icon, a key, a
+    /// `Command::Rule` on line 1, and content from line 3. What separates a
+    /// title from its content is whitespace now, and this file no longer has an
+    /// opinion about how much.
+    #[test]
+    fn the_heading_is_a_glyph_and_a_title_and_no_rule() {
+        for question in [Question::List, Question::Choose, Question::Confirm] {
+            for columns in WIDTHS {
+                let mut s = ready(question);
+                let out = frame(&mut s, columns, 24);
+                assert!(
+                    !out.iter().any(|c| matches!(c, Command::Rule(_))),
+                    "{question:?}: a rule came back"
+                );
+                let Command::Text(glyph) = &out[0] else {
+                    panic!("{question:?}: the first command is the heading's glyph");
+                };
+                let Command::Text(title) = &out[1] else {
+                    panic!("{question:?}: the second command is the heading's title");
+                };
+                assert!(matches!(glyph.content, Text::Icon(_)), "{question:?}");
+                assert!(matches!(title.content, Text::Key(_)), "{question:?}");
+                assert_eq!(glyph.line, title.line, "{question:?}: one row");
+                // AT CELL ZERO, which is the whole of `GUTTER`'s death: the
+                // host's margin already moved the buffer in on both sides.
+                assert_eq!(glyph.column, 0, "{question:?}");
+                assert_eq!(title.column, ICON + GAP, "{question:?}");
+            }
+        }
+    }
+
+    /// NOTHING LEAKS OFF THE SCREEN, field by field.
+    ///
+    /// `nothing_overlaps` only asks it of the LAST run on a row; this asks it
+    /// of every one, which is what catches a budget handed out against a width
+    /// the window does not have.
+    #[test]
+    fn no_field_ends_past_the_columns() {
+        for question in [Question::List, Question::Choose, Question::Confirm] {
+            for columns in WIDTHS {
+                let mut s = ready(question);
+                s.name = "PENDRIVE".into();
+                s.said = Some(Said::Trouble("udisks refused the request".into()));
+                for c in &frame(&mut s, columns, 24) {
+                    let Command::Text(t) = c else {
+                        continue;
+                    };
+                    // The host's own accounting: a key claims its whole budget,
+                    // data claims its length, a glyph claims its scale in cells.
+                    let budget = if t.max_width == 0 {
+                        columns.saturating_sub(t.column)
+                    } else {
+                        t.max_width
+                    };
+                    let wide = match &t.content {
+                        Text::Key(_) => budget,
+                        Text::Data(x) => u16::try_from(x.chars().count())
+                            .unwrap_or(u16::MAX)
+                            .min(budget),
+                        Text::Icon(_) => budget.min(1),
+                    };
+                    assert!(
+                        t.column.saturating_add(wide) <= columns,
+                        "{question:?} at {columns}: {:?} starts at {} and reaches {}",
+                        t.content,
+                        t.column,
+                        t.column.saturating_add(wide)
+                    );
+                }
+            }
+        }
+    }
+
+    /// NOTHING STARTS AT A GUTTER OF ITS OWN.
+    ///
+    /// The buffer used to indent everything by two cells inside a window the
+    /// host had already indented. Every row now begins at cell zero.
+    #[test]
+    fn the_left_edge_is_cell_zero() {
+        for question in [Question::List, Question::Choose, Question::Confirm] {
+            let mut s = ready(question);
+            let out = frame(&mut s, 80, 24);
+            let leftmost = out
+                .iter()
+                .filter_map(|c| match c {
+                    Command::Text(t) => Some(t.column),
+                    _ => None,
+                })
+                .min();
+            assert_eq!(leftmost, Some(0), "{question:?}");
+        }
+    }
+
+    /// THE FIRST REFUSAL: a disk the running system needs is DRAWN, reachable,
+    /// and its `Enter` does not move.
+    #[test]
+    fn a_disk_the_system_needs_is_drawn_and_refuses() {
+        let mut s = ready(Question::List);
+        s.on = Some(NEEDED.into());
+        // It is on the screen, with the reason beside it — never omitted.
+        let out = frame(&mut s, 80, 24);
+        assert!(
+            out.iter().any(|c| matches!(
+                c,
+                Command::Text(t) if matches!(&t.content, Text::Data(x) if x == "system")
+            )),
+            "the disk the system needs fell off the list"
+        );
+        assert!(
+            out.iter().any(|c| matches!(
+                c,
+                Command::Text(t)
+                    if matches!(&t.content, Text::Data(x) if x == "/")
+                        && matches!(t.color, Color::StateWarning)
+            )),
+            "the reason is not on the row, or lost its colour"
+        );
+        // And pressing it does nothing at all.
+        assert!(s.forward().is_empty(), "a needed disk moved forward");
+        assert_eq!(s.screen, Question::List);
+    }
+
+    /// THE SECOND REFUSAL: the first `Enter` on the confirmation goes BACK,
+    /// because `no` is the first row and where the cursor starts.
+    #[test]
+    fn the_first_enter_on_the_confirmation_goes_back() {
+        let mut s = ready(Question::Confirm);
+        assert!(!s.yes, "the cursor starts on `no`");
+        let out = s.forward();
+        assert_eq!(s.screen, Question::Choose, "it went ahead");
+        assert!(
+            !out.iter().any(|e| matches!(e, Effect::Format(_))),
+            "a disk was ordered erased by the first Enter"
+        );
+        // And `yes` is drawn in the one colour that says what it costs.
+        let mut ahead = ready(Question::Confirm);
+        ahead.yes = true;
+        let frame = frame(&mut ahead, 80, 24);
+        assert!(
+            frame.iter().any(|c| matches!(
+                c,
+                Command::Text(t)
+                    if matches!(&t.content, Text::Key(k) if k == key::CONFIRM_YES)
+                        && matches!(t.color, Color::StateError)
+            )),
+            "`yes` lost its colour"
+        );
+    }
+
+    /// THE THIRD REFUSAL: the row naming a filesystem this build cannot write
+    /// is on the list, reachable, and does not move forward.
+    #[test]
+    fn the_row_for_a_missing_program_refuses() {
+        let mut s = ready(Question::Choose);
+        s.recipe = MISSING;
+        let out = frame(&mut s, 80, 24);
+        assert!(
+            out.iter().any(|c| matches!(
+                c,
+                Command::Text(t) if matches!(&t.content, Text::Key(k) if k == key::RECIPE_MISSING)
+            )),
+            "the row that refuses is not drawn"
+        );
+        assert!(s.forward().is_empty(), "a missing program moved forward");
+        assert_eq!(s.screen, Question::Choose);
+    }
+
+    /// A rack that has not changed does not redraw, without `PartialEq` on the
+    /// generated records.
+    #[test]
+    fn the_same_reading_twice_draws_once() {
+        let mut s = State::fresh();
+        assert!(!s.racked(rack()).is_empty(), "the first reading draws");
+        assert!(s.racked(rack()).is_empty(), "the same reading draws again");
+        let mut other = rack();
+        other.devices[0].bytes += 1;
+        assert!(
+            !s.racked(other).is_empty(),
+            "a byte of difference is a redraw"
+        );
+    }
+}

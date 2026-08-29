@@ -52,7 +52,7 @@ const SPANS: [&str; 5] = [
     "NORMAL",
     "*scratch*",
     "fundamental",
-    "projeto/src/arquivo.rs",
+    "project/src/file.rs",
     "12:34",
 ];
 
@@ -127,38 +127,38 @@ fn main() -> std::process::ExitCode {
     const CEILING_MS: f64 = 300.0;
 
     println!(
-        "primeira moldagem de {} trechos, sistema novo a cada vez\n",
+        "first shaping of {} runs, a fresh system every time\n",
         SPANS.len()
     );
 
     let name = Family::Name(tokens::font::FAMILY_MONO);
     let cases: [Case<'_>; 4] = [
         ("upstream + Monospace", upstream_system, Family::Monospace),
-        ("upstream + nome exato", upstream_system, name),
+        ("upstream + the exact name", upstream_system, name),
         ("nosso    + Monospace", our_system, Family::Monospace),
-        ("nosso    + nome exato  <- producao", our_system, name),
+        ("ours     + the exact name  <- production", our_system, name),
     ];
 
-    let mut producao = f64::MAX;
+    let mut production = f64::MAX;
     for (label, assemble, fam) in cases {
         let ms = measure(assemble(), fam, Shaping::Advanced);
         println!("  {label:36} {ms:9.1} ms");
-        if label.contains("producao") {
-            producao = ms;
+        if label.contains("production") {
+            production = ms;
         }
     }
 
     println!();
-    println!("producao: {producao:.1} ms   teto {CEILING_MS:.0} ms");
+    println!("production: {production:.1} ms   ceiling {CEILING_MS:.0} ms");
 
-    if producao > CEILING_MS {
+    if production > CEILING_MS {
         eprintln!(
-            "\nERRO: a moldagem de producao passou de {CEILING_MS:.0} ms.\n\
+            "\nERROR: production shaping went past {CEILING_MS:.0} ms.\n\
              \n\
-             O suspeito no 1 e a familia ter voltado a ser generica: o\n\
-             cosmic-text aponta `Monospace` para `Noto Sans Mono`, que nao\n\
-             esta no nosso banco, e a busca falha para dentro do fallback.\n\
-             Ver `Texto::new` em crates/ronoctua-render/src/text.rs."
+             Suspect number 1 is the family going back to being generic: the\n\
+             cosmic-text points `Monospace` at `Noto Sans Mono`, which is not\n\
+             in our database, and the search fails into the fallback.\n\
+             See `Text::new` in crates/ronoctua-render/src/text.rs."
         );
         return std::process::ExitCode::FAILURE;
     }

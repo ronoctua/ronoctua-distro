@@ -40,7 +40,7 @@ runCommand "ronoctua-niri-actions" { } ''
   # The generator already stops below 100 actions; this is the second net, in
   # case it exits successfully and writes nothing.
   if [ ! -s $out/niri-actions.rs ] || [ ! -s $out/binds-default.rs ]; then
-    echo "ERRO: uma das tabelas do niri saiu vazia." >&2
+    echo "ERROR: one of niri's tables came out empty." >&2
     exit 1
   fi
 ''

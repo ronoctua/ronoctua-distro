@@ -12,7 +12,7 @@
 //!
 //! A manual written by hand is the second copy of the shortcut table, and the
 //! day it lies is the day someone trusts it. Here the lines come out of
-//! [`crate::actions::acordes`] and [`crate::actions::emergency`] at the moment
+//! [`crate::actions::chords`] and [`crate::actions::emergency`] at the moment
 //! of opening: changing a shortcut changes the manual, with no intermediate
 //! step. It is the same reason niri's binds are generated.
 //!
@@ -41,11 +41,11 @@ pub struct Line {
 
 /// Assembles the whole manual, in the active language.
 ///
-/// `acorde` is how the chords' key appears — `SUPER` in production, `ALT` in
+/// `chord` is how the chords' key appears — `SUPER` in production, `ALT` in
 /// the nested session. It comes from outside because whoever knows that is
 /// whoever defines the bind (see [`crate::leader_chord`]), and not this module.
 #[must_use]
-pub fn assemble(texts: &Texts, acorde: &str) -> Vec<Line> {
+pub fn assemble(texts: &Texts, chord: &str) -> Vec<Line> {
     let mut out = vec![Line {
         key: String::new(),
         description: texts.t(key::HELP_CHORDS),
@@ -54,9 +54,9 @@ pub fn assemble(texts: &Texts, acorde: &str) -> Vec<Line> {
 
     // THE CHORDS, in the table's order — which is the order in which they make
     // sense together (focus, move, window, spaces, open), and not alphabetical.
-    for a in crate::actions::acordes_completos() {
+    for a in crate::actions::full_chords() {
         out.push(Line {
-            key: format!("{acorde} + {}", a.shows),
+            key: format!("{chord} + {}", a.shows),
             description: texts.t(&a.label()),
             title: false,
         });
@@ -98,10 +98,10 @@ mod tests {
         // discoverable anywhere — worse than before.
         let texts = Texts::from_env();
         let m = super::assemble(&texts, "SUPER");
-        for a in crate::actions::acordes_completos() {
+        for a in crate::actions::full_chords() {
             assert!(
                 m.iter().any(|l| l.key.ends_with(a.shows)),
-                "o acorde `{}` nao aparece no manual",
+                "the chord `{}` does not appear in the manual",
                 a.shows
             );
         }
@@ -109,7 +109,7 @@ mod tests {
         for (key, _, _) in crate::actions::emergency() {
             assert!(
                 m.iter().any(|l| l.key == key),
-                "o bind de emergencia `{key}` nao aparece no manual"
+                "the emergency bind `{key}` does not appear in the manual"
             );
         }
     }
@@ -121,13 +121,13 @@ mod tests {
         // LATE: in the manual, which is opened once a month.
         let texts = Texts::from_env();
         for l in super::assemble(&texts, "SUPER") {
-            assert!(!l.description.is_empty(), "linha sem descricao");
+            assert!(!l.description.is_empty(), "a row with no description");
             assert!(
                 !l.description.starts_with('['),
-                "chave de texto faltando: {}",
+                "a missing text key: {}",
                 l.description
             );
-            assert!(l.title || !l.key.is_empty(), "atalho sem tecla");
+            assert!(l.title || !l.key.is_empty(), "a shortcut with no key");
         }
     }
 

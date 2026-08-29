@@ -629,7 +629,10 @@ mod tests {
             f.tick(t0 + Life::Long.how_long() + Duration::from_secs(1))
                 .changed
         );
-        assert!(f.showing().is_none(), "a critica ficou na tela para sempre");
+        assert!(
+            f.showing().is_none(),
+            "the critical one stayed on screen forever"
+        );
     }
 
     #[test]
@@ -807,7 +810,7 @@ mod tests {
             "git".into(),
             None,
             "push ok".into(),
-            "linha 1\nlinha 2".into(),
+            "line 1\nline 2".into(),
             Urgency::Normal,
         );
         assert_eq!(x.line(), "git: push ok");
@@ -820,14 +823,14 @@ mod tests {
         let x = Notification::fresh_one(
             1,
             "niri".into(),
-            Some("file:///home/x/Imagens/Captura%20de%20tela.png".into()),
+            Some("file:///home/x/Pictures/Screenshot.png".into()),
             "Screenshot captured".into(),
             String::new(),
             Urgency::Normal,
         );
         assert_eq!(
             x.file().unwrap().to_str().unwrap(),
-            "/home/x/Imagens/Captura de tela.png"
+            "/home/x/Pictures/Screenshot.png"
         );
         // A plain icon NAME is not a file, and must not be treated as one.
         let y = Notification::fresh_one(

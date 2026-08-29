@@ -75,9 +75,9 @@ impl Bin {
     /// When the directories cannot be created.
     pub fn ensure(&self) -> Result<()> {
         std::fs::create_dir_all(self.files())
-            .with_context(|| format!("criar {}", self.files().display()))?;
+            .with_context(|| format!("create {}", self.files().display()))?;
         std::fs::create_dir_all(self.info())
-            .with_context(|| format!("criar {}", self.info().display()))?;
+            .with_context(|| format!("create {}", self.info().display()))?;
         Ok(())
     }
 
@@ -106,18 +106,18 @@ impl Bin {
             std::path::absolute(path).with_context(|| format!("resolver {}", path.display()))?;
         let name = absolute
             .file_name()
-            .context("um caminho sem nome nao pode ir para a lixeira")?
+            .context("a path with no name cannot go to the trash")?
             .to_string_lossy()
             .into_owned();
         self.ensure()?;
 
         let here = std::fs::symlink_metadata(&absolute)
-            .with_context(|| format!("{} nao existe", absolute.display()))?
+            .with_context(|| format!("{} does not exist", absolute.display()))?
             .dev();
         if self.device() != Some(here) {
             bail!(
-                "{} esta em outro sistema de arquivos que a lixeira; \
-                 mover para la seria copiar o conteudo inteiro",
+                "{} is on a different filesystem from the trash; \
+                 moving it there would copy the whole content",
                 absolute.display()
             );
         }
@@ -131,15 +131,14 @@ impl Bin {
             stamp(now, zone)
         );
         let note_at = self.info().join(format!("{chosen}.trashinfo"));
-        std::fs::write(&note_at, note)
-            .with_context(|| format!("escrever {}", note_at.display()))?;
+        std::fs::write(&note_at, note).with_context(|| format!("write {}", note_at.display()))?;
 
         let landing = self.files().join(&chosen);
         if let Err(e) = std::fs::rename(&absolute, &landing) {
             // The note is only useful with the file. Leaving it behind would
             // put a phantom in every other trash browser on the system.
             let _ = std::fs::remove_file(&note_at);
-            return Err(e).with_context(|| format!("mover {} para a lixeira", absolute.display()));
+            return Err(e).with_context(|| format!("move {} to the trash", absolute.display()));
         }
         Ok(chosen)
     }
@@ -154,10 +153,14 @@ impl Bin {
         let note_at = self.info().join(format!("{name}.trashinfo"));
         let note = std::fs::read_to_string(&note_at)
             .with_context(|| format!("ler {}", note_at.display()))?;
-        let origin = origin_of(&note)
-            .with_context(|| format!("{} nao diz de onde o arquivo veio", note_at.display()))?;
+        let origin = origin_of(&note).with_context(|| {
+            format!(
+                "{} does not say where the file came from",
+                note_at.display()
+            )
+        })?;
         if origin.exists() {
-            bail!("ja existe algo em {}", origin.display());
+            bail!("there is already something at {}", origin.display());
         }
         if let Some(parent) = origin.parent() {
             std::fs::create_dir_all(parent)
@@ -260,16 +263,16 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("ronoctua-trash-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("criar diretorio de teste");
+        std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
     }
 
     #[test]
     fn a_path_survives_the_round_trip_through_the_encoding() {
         for original in [
-            "/home/pessoa/um arquivo.txt",
+            "/home/person/a file.txt",
             "/home/pessoa/acentuação.md",
-            "/home/pessoa/100% meu#1.txt",
+            "/home/person/100% mine#1.txt",
             "/home/pessoa/simples",
         ] {
             assert_eq!(
@@ -317,20 +320,14 @@ mod tests {
         let bin = Bin::at(root.join("Trash"));
         std::fs::create_dir_all(root.join("a")).unwrap();
         std::fs::create_dir_all(root.join("b")).unwrap();
-        std::fs::write(root.join("a/notas.txt"), b"primeiro").unwrap();
-        std::fs::write(root.join("b/notas.txt"), b"segundo").unwrap();
+        std::fs::write(root.join("a/notas.txt"), b"first").unwrap();
+        std::fs::write(root.join("b/notas.txt"), b"second").unwrap();
 
         let first = bin.put(&root.join("a/notas.txt"), 0, &Zone::utc()).unwrap();
         let second = bin.put(&root.join("b/notas.txt"), 0, &Zone::utc()).unwrap();
         assert_ne!(first, second);
-        assert_eq!(
-            std::fs::read(bin.files().join(&first)).unwrap(),
-            b"primeiro"
-        );
-        assert_eq!(
-            std::fs::read(bin.files().join(&second)).unwrap(),
-            b"segundo"
-        );
+        assert_eq!(std::fs::read(bin.files().join(&first)).unwrap(), b"first");
+        assert_eq!(std::fs::read(bin.files().join(&second)).unwrap(), b"second");
 
         // And each goes back to its OWN directory.
         assert_eq!(bin.restore(&second).unwrap(), root.join("b/notas.txt"));
@@ -343,15 +340,15 @@ mod tests {
         let root = scratch("occupied");
         let bin = Bin::at(root.join("Trash"));
         let file = root.join("x.txt");
-        std::fs::write(&file, b"antigo").unwrap();
+        std::fs::write(&file, b"old").unwrap();
         let name = bin.put(&file, 0, &Zone::utc()).unwrap();
-        std::fs::write(&file, b"novo").unwrap();
+        std::fs::write(&file, b"new").unwrap();
 
         let e = bin.restore(&name).unwrap_err();
-        assert!(e.to_string().contains("ja existe"), "{e}");
+        assert!(e.to_string().contains("already something at"), "{e}");
         // And the new file is untouched: a refusal that damaged something
         // would be worse than the overwrite it refused.
-        assert_eq!(std::fs::read(&file).unwrap(), b"novo");
+        assert_eq!(std::fs::read(&file).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&root);
     }
 

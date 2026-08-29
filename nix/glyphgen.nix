@@ -90,7 +90,7 @@ let
           ''
             runHook preBuild
             mkdir -p $out
-            echo "### fixture negativo: o gerador DEVE falhar ###"
+            echo "### negative fixture: the generator MUST fail ###"
 
             # NO pipe here, on purpose. In `cmd | tee`, the pipeline's exit
             # code is `tee`'s, which is always 0 — so the test
@@ -104,14 +104,14 @@ let
 
             if [ $rc -eq 0 ]; then
               echo "" >&2
-              echo "ERRO: o gerador ACEITOU um token de icone inexistente." >&2
-              echo "      A guarda da secao 6.3 nao esta funcionando, e um" >&2
+              echo "ERROR: the generator ACCEPTED an icon token that does not exist." >&2
+              echo "      Section 6.3's guard is not working, and a" >&2
               echo "      codepoint errado passaria despercebido." >&2
               exit 1
             fi
-            grep -q "tokens de icone que nao resolvem" $out/out_text.txt \
-              || { echo "ERRO: falhou, mas nao pela razao esperada" >&2; exit 1; }
-            echo "OK: token inexistente derruba o build, como deve"
+            grep -q "icon tokens that do not resolve" $out/out_text.txt \
+              || { echo "ERROR: it failed, but not for the expected reason" >&2; exit 1; }
+            echo "OK: a token that does not exist takes the build down, as it should"
             runHook postBuild
           ''
         else
@@ -125,14 +125,14 @@ let
       dontInstall = true;
 
       meta = {
-        description = "Tabela de tokens de icone e base de glifos, geradas do arquivo de fonte real";
+        description = "Icon token table and glyph database, generated from the real font file";
         platforms = lib.platforms.all;
       };
     };
 
   # A token that exists nowhere — section 6.3's negative fixture.
   badTokens = writeText "icon-tokens-bad.json" (
-    builtins.toJSON ((import iconTokensFile) // { fixture-negativo = "md-este-glifo-nao-existe"; })
+    builtins.toJSON ((import iconTokensFile) // { negative-fixture = "md-this-glyph-does-not-exist"; })
   );
 in
 {
@@ -147,7 +147,7 @@ in
   # Proves the guard works. Without this, "the build fails if the codepoint does
   # not exist" is an untested claim.
   negativeFixture = mkGen {
-    name = "ronoctua-glyphdb-fixture-negativo";
+    name = "ronoctua-glyphdb-negative-fixture";
     tokens = badTokens;
     expectFailure = true;
   };

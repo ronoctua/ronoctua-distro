@@ -229,7 +229,7 @@ pub fn refusal(identity: Identity, cookies: &Cookies) -> Option<&'static str> {
     }
     match cookies {
         Cookies::Nowhere => Some(
-            "esta instalacao nao tem de onde tirar os cookies; \
+            "this installation has nowhere to take the cookies from; \
              veja ronoctua.transfers.cookies",
         ),
         Cookies::Browser(_) | Cookies::File(_) => None,
@@ -398,8 +398,8 @@ mod tests {
         // cookies can invalidate them — which looks like the browser logging
         // itself out. Somebody who exported a file meant it.
         assert_eq!(
-            Cookies::of(Some("/casa/alguem/cookies.txt"), Some("chrome")),
-            Cookies::File(PathBuf::from("/casa/alguem/cookies.txt"))
+            Cookies::of(Some("/home/someone/cookies.txt"), Some("chrome")),
+            Cookies::File(PathBuf::from("/home/someone/cookies.txt"))
         );
         assert_eq!(
             Cookies::of(None, Some("chrome+basictext")),
@@ -433,11 +433,11 @@ mod tests {
     #[test]
     fn the_token_file_is_read_the_way_yt_dlp_spells_it() {
         let text = "\
-# um comentario, e uma nota que nao e token
+# a comment, and a note that is not a token
 web.gvs+MnQ_ABCDEF
 tv.player+ZZZ
 
-uma linha solta sem mais
+a loose line with nothing more
 mweb.gvs+QQQ
 ";
         assert_eq!(
@@ -472,22 +472,21 @@ mweb.gvs+QQQ
     #[test]
     fn the_jar_gives_up_only_what_belongs_to_that_address() {
         let header =
-            header_at(JAR, "https://www.youtube.com/watch?v=x", 1_000_000_000).expect("cabecalho");
+            header_at(JAR, "https://www.youtube.com/watch?v=x", 1_000_000_000).expect("header");
         assert!(header.starts_with("Cookie: "));
         assert!(header.contains("SID=abc"), "{header}");
         // `#HttpOnly_` is a PREFIX on a real line, not a comment. Reading it as
         // one drops exactly the cookies that carry a session.
         assert!(header.contains("HSID=def"), "{header}");
         // Expired, another site's, and a path that does not match.
-        assert!(!header.contains("VELHO"), "{header}");
+        assert!(!header.contains("OLD"), "{header}");
         assert!(!header.contains("ALHEIO"), "{header}");
         assert!(!header.contains("SOPATH"), "{header}");
     }
 
     #[test]
     fn a_secure_cookie_never_goes_over_plain_http() {
-        let over_http =
-            header_at(JAR, "http://www.youtube.com/", 1_000_000_000).expect("cabecalho");
+        let over_http = header_at(JAR, "http://www.youtube.com/", 1_000_000_000).expect("header");
         assert!(!over_http.contains("SID=abc"), "{over_http}");
         assert!(over_http.contains("SEMTLS"), "{over_http}");
     }
@@ -516,14 +515,14 @@ mweb.gvs+QQQ
         // dotted domain as an address it must refuse, and a test fixture is not
         // worth teaching it an exception.
         assert_eq!(
-            parts_of("https://alguem:senha@localhost:8443/a"),
+            parts_of("https://someone:password@localhost:8443/a"),
             Some((true, "localhost".to_owned(), "/a".to_owned()))
         );
         assert_eq!(
             parts_of("http://exemplo"),
             Some((false, "exemplo".to_owned(), "/".to_owned()))
         );
-        assert_eq!(parts_of("nao-e-endereco"), None);
+        assert_eq!(parts_of("not-an-address"), None);
     }
 
     #[test]

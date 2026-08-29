@@ -7,17 +7,6 @@
 # grid without measuring anything — which is what the footer needs in order to be integer
 # arithmetic.
 {
-  # Scale in cells.
-  cell = {
-    "0" = 0;
-    "1" = 1;
-    "2" = 2;
-    "3" = 3;
-    "4" = 4;
-    "6" = 6;
-    "8" = 8;
-  };
-
   # Spacing between modeline segments, in cells. There is no internal
   # padding: the segments are text, not boxes.
   modeline = {
@@ -86,8 +75,102 @@
     # `sidebarGutter` is the cell BEFORE the sidebar's glyph — the screen's own
     # edge. `sidebarEject` is the air BEFORE the eject glyph, so it does not
     # touch the rule that separates the two lists.
-    sidebarGutter = 1;
+    #
+    # # AND `sidebarGutter` IS ZERO NOW, which is not a retraction of any of it
+    #
+    # The paragraph above is still true and the cell is still there: it is
+    # `chrome::FIELDS_LEAD` that pays it. When this token was written the
+    # footer's files `Grid` was "the one grid in the shell built without a
+    # `start()`" — the sentence three lines up — so the sidebar genuinely had
+    # nothing between its glyph and the border and had to buy the cell itself.
+    # `chrome::INSET` arrived afterwards and every row of the manager, the
+    # sidebar's included, now begins `INSET - files.gutter` cells in. A row that
+    # ALSO carried a gutter of its own paid twice, and the owner measured the
+    # result off the screen: the sidebar's glyph 21 px from the edge with 14 px
+    # between it and its own name — *"o espaçamento à esquerda deve ser
+    # reduzido"*. One cell in, and the two sides of the glyph are even.
+    #
+    # It stays a NAMED ZERO rather than disappearing, exactly as `content.insetY`
+    # does one block below: the cell has an argument, and the argument is now
+    # answered somewhere else. Deleting the name would delete the answer with it.
+    sidebarGutter = 0;
     sidebarEject = 1;
+
+    # THE AIR AROUND THE PREVIEW'S PICTURE, in PIXELS and not in cells — the
+    # fourth block in this file measured that way, and for the same reason
+    # `panelPixels` two paragraphs down is: it is the size of a PICTURE, and a
+    # picture has no cells.
+    #
+    # `Area::fit_into` centres what it is given inside the box it is given, so
+    # the picture was already centred — and it still touched two borders,
+    # because whichever of the two dimensions is the tight one ends up exactly
+    # as long as the box. Photographed in both doors: against the TOP edge in
+    # the window and against the RIGHT rule in the footer. A photograph flush
+    # against a rule reads as a photograph that was CUT, which is the sentence
+    # this file already carries about the unread counter, the date column and
+    # the sidebar's glyph.
+    #
+    # Six, and it is bounded from both sides. Below about four the air stops
+    # being visible at all next to a one-pixel rule; a whole cell (10,8 px in the
+    # footer, 14,4 in the window) is more than the gap between two columns of
+    # text, and the picture would read as belonging to neither panel. Six is
+    # rather more than half of the half-cell the rule already leaves beside it,
+    # so what one sees between the line and the ink is about one cell — the same
+    # air the text beside it gets.
+    pictureAir = 6;
+
+    # THE LARGEST A PREVIEW IS EVER DECODED TO, in PIXELS and not in cells —
+    # the third block in this file measured that way, after `rule.thickness`
+    # and the browser extension's popup.
+    #
+    # It has to be pixels: it is the size of a PICTURE, and a picture has no
+    # cells. The widest a panel gets is about forty cells, which is some 300 px
+    # at `font.size.large`, so 512 is headroom and not appetite.
+    #
+    # It is also what bounds the GPU, and that is the half that is arithmetic
+    # rather than taste. `ronoctua-render`'s image pipeline keeps thirty-nine
+    # textures between frames; 512 px of RGBA is 1 MiB each, so 41 MiB. At
+    # 1200 px the same thirty-nine would be 224 MiB of footer.
+    #
+    # The decoder quantises what it is asked for to 128, 256 or 512, so that
+    # dragging a window's edge does not decode a phone photograph again on
+    # every `configure`.
+    panelPixels = 512;
+
+    # FROM THIS WIDTH ON, THE TWO PANELS SIT ON THE RIGHT — one column each.
+    # Below it they do not disappear: they move to a short strip along the
+    # BOTTOM, side by side. The owner's sentence is binary, and so is this
+    # number: right-hand columns or bottom strip, never one of each.
+    #
+    # The arithmetic, and it is arithmetic and not taste. A panel's floor is
+    # `Dimensions  3024 x 4032` — the widest ordinary fact, twenty-three cells
+    # — plus the air on its right, so twenty-four; two of them plus the rule
+    # that separates each from what is on its left is 24 + 1 + 24 + 1 = 50.
+    # What is left at 96 is 46 cells, which is EXACTLY what a listing wants to
+    # keep the icon, the name at its floor, the size and the date:
+    # 1 + (2+1) + (12+1) + (10+1) + (16+1) + 1. One cell narrower and the date
+    # goes; that is the point where a listing squeezed between two panels stops
+    # being a table and the strip is the better shape.
+    #
+    # It is a PREFERENCE, and not what holds: what holds is that nothing leaks
+    # off the screen, and `files::right_columns` withdraws the pair ENTIRELY —
+    # never half of one — when honouring it would push a column past the edge.
+    panelsFrom = 96;
+
+    # HOW MANY LINES THE BOTTOM STRIP TAKES, when the panels are down there.
+    #
+    # Four, and the number is the footer's own ceiling doing the arguing.
+    # `expansion.maxLines` is twelve; four leaves eight, which is the path, the
+    # header and six rows of listing — a page one can still work in. Three
+    # leaves a preview two lines tall once the file's name is on one of them,
+    # and at that size a photograph is a smudge rather than a picture; five
+    # leaves five rows, which is where the listing stops being the thing one
+    # opened.
+    #
+    # The window door has no ceiling and pays the same four: the strip is a
+    # glance, not a second view, and a strip that grew with the window would
+    # take the height the listing exists to use.
+    stripLines = 4;
   };
 
   # The TRANSFER queue's row, in cells.
@@ -107,25 +190,50 @@
     bar = 12;
   };
 
-  # The content's margin inside a BUFFER, in cells.
+  # WHERE CONTENT STARTS, in cells. ONE NUMBER, EVERY SURFACE.
   #
-  # It is not box padding (invariant 15): it is where the text starts inside the
-  # window the compositor gave.
+  # It is not box padding (invariant 15): it is where the text begins inside
+  # whatever it was given — a compositor's window, or the footer's expanded
+  # region.
   #
-  # HORIZONTAL YES, VERTICAL NO — and the asymmetry belongs to the FONT, not to taste.
+  # # It used to be called `buffer.marginX`, and the name was the defect
+  #
+  # Named after the buffer, it reached the buffers and nothing else. The
+  # footer's own region reached for `modeline.edgeLeft` instead, and the file
+  # manager's listing for `files.gutter` — so the SAME view, drawn in the
+  # footer and drawn in its own window, began at two different distances from
+  # the screen's edge. Measured: 10,8 px in the footer against 24,0 px in the
+  # window, a factor of 2,2. The owner reported it as "in the minibuffer region
+  # it comes out glued to the edge, and the window version has different
+  # spacing" — and he was reading two numbers, not one number badly applied.
+  #
+  # The residue, after this: the footer's cell is `font.size.base` and the
+  # window's is `font.size.large`, so two cells are 21,6 px against 24,0 px.
+  # A fifth of a cell. That difference is the grid's, not the layout's, and no
+  # eye finds it.
+  #
+  # # The one exception, and it is written down
+  #
+  # `modeline.edgeLeft`/`edgeRight` still apply to the modeline and the
+  # minibuffer, and only to them. Those two are a STATUS LINE and not content —
+  # their own comment already argues that two cells there "would start to look
+  # like a margin". A status line is peripheral reference; content is what one
+  # reads.
+  #
+  # # HORIZONTAL YES, VERTICAL NO — and the asymmetry belongs to the FONT
   #
   # Horizontally the ink occupies the whole advance: the Nerd glyphs go from 0 to
-  # 600 units in an advance of 600, with no lateral slack at all. With no margin the
-  # first character touches the window's edge, and it looks like clipping.
+  # 600 units in an advance of 600, with no lateral slack at all. With no inset the
+  # first character touches the edge, and it looks like clipping.
   #
   # Vertically the slack ALREADY COMES IN THE LINE BOX: the font's box is 1.25 em
   # (ascender 0.965 + descender 0.285) and the line height is 1.45, so every
-  # run already carries 0.10 em of air above and 0.10 below. One cell of
-  # margin on top of that is slack over slack — it becomes a blank line at the
-  # top and another at the end of the buffer, which is exactly what showed up on screen.
-  buffer = {
-    marginX = 2;
-    marginY = 0;
+  # run already carries 0.10 em of air above and 0.10 below. One cell on top of
+  # that is slack over slack — it becomes a blank line at the top and another at
+  # the end, which is exactly what showed up on screen.
+  content = {
+    inset = 2;
+    insetY = 0;
   };
 
   # HOW FAR THE EXPANSION MAY GROW — the which-key list, the `M-x`
@@ -166,7 +274,23 @@
     twoColumnsFrom = 80;
   };
 
-  # THE BROWSER EXTENSION'S POPUP, and this is the one block in this file
+  # THE RULE'S THICKNESS, and this is the SECOND block in this file measured in
+  # PIXELS rather than in cells (the browser extension's, below, was the first).
+  #
+  # It has to be, and the reason is what changed about the rule. It used to be
+  # drawn as a line of `─` glyphs — a GLYPH, so it occupied a whole cell, began
+  # wherever the text's margin began, and was eighty cells long whatever the
+  # window measured. That is three defects in one line: a gap on the left, a
+  # spill on the right below eighty-two columns, and a thickness nobody chose.
+  #
+  # It is a quad now, drawn edge to edge at the BOTTOM of the row it names, and
+  # a quad's height is a distance and not a count of cells. One logical pixel is
+  # what `colors.nix` has always described it as: "One line, one logical pixel."
+  rule = {
+    thickness = 1;
+  };
+
+  # THE BROWSER EXTENSION'S POPUP, and this is the THIRD block in this file
   # measured in PIXELS rather than in cells.
   #
   # Everything else here is a count of terminal cells, because everything else

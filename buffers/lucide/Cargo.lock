@@ -121,8 +121,20 @@ dependencies = [
 name = "ronoctua-buffer-lucide"
 version = "0.1.0"
 dependencies = [
+ "ronoctua-design",
+]
+
+[[package]]
+name = "ronoctua-design"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-protocol",
  "wit-bindgen",
 ]
+
+[[package]]
+name = "ronoctua-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "semver"

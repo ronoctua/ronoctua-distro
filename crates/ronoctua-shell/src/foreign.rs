@@ -48,7 +48,7 @@ pub fn scope_name() -> Result<String> {
     // dependency fewer to generate a name systemd only needs to be
     // unique, and the kernel already offers it.
     let uuid = std::fs::read_to_string("/proc/sys/kernel/random/uuid")
-        .context("nao consegui ler um uuid do kernel")?;
+        .context("could not read a uuid from the kernel")?;
     Ok(format!("{SCOPE_PREFIX}{}", uuid.trim()))
 }
 
@@ -206,17 +206,17 @@ pub enum Launch {
 ///
 /// What changes is not the `status()` — it is **who waits for it**.
 #[must_use]
-pub fn launch(scope: &str, direto: &[String], cmd: &[String]) -> Launch {
+pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
     let Some((prog, rest)) = cmd.split_first() else {
         return Launch::Failed {
             program: String::new(),
-            error: "comando vazio".to_owned(),
+            error: "an empty command".to_owned(),
         };
     };
-    let Some((program, args)) = direto.split_first() else {
+    let Some((program, args)) = direct.split_first() else {
         return Launch::Failed {
             program: String::new(),
-            error: "comando direto vazio".to_owned(),
+            error: "an empty direct command".to_owned(),
         };
     };
 
@@ -275,8 +275,8 @@ const DISPLAY_CEILING: u8 = 100;
 ///
 /// It starts at `:1` because `:0` is usually a actual X server.
 #[must_use]
-pub fn first_free_display(ocupados: &[u8]) -> Option<u8> {
-    (1..DISPLAY_CEILING).find(|n| !ocupados.contains(n))
+pub fn first_free_display(taken: &[u8]) -> Option<u8> {
+    (1..DISPLAY_CEILING).find(|n| !taken.contains(n))
 }
 
 /// The display numbers already in use, read from the socket directory.
@@ -327,14 +327,14 @@ pub fn command_with_satellite(
     args: &[String],
     working_directory: Option<&str>,
 ) -> Vec<String> {
-    let mut interno = vec![
+    let mut internal = vec![
         me.to_owned(),
         "satellite".to_owned(),
         display.to_string(),
         program.to_owned(),
     ];
-    interno.extend_from_slice(args);
-    let (prog, rest) = interno.split_first().expect("nunca vazio");
+    internal.extend_from_slice(args);
+    let (prog, rest) = internal.split_first().expect("never empty");
     scope_command(scope, working_directory, prog, rest)
 }
 
@@ -357,7 +357,7 @@ pub fn satellite_of(display: u8, program: &str, args: &[String]) -> Result<()> {
             Some(s)
         }
         Err(e) => {
-            tracing::warn!(error = %e, program, "sem satellite; um app X11 nao vai abrir");
+            tracing::warn!(error = %e, program, "no satellite; an X11 app will not open");
             None
         }
     };
@@ -373,7 +373,7 @@ pub fn satellite_of(display: u8, program: &str, args: &[String]) -> Result<()> {
     }
     let st = cmd
         .status()
-        .with_context(|| format!("nao consegui rodar `{program}`"));
+        .with_context(|| format!("could not run `{program}`"));
 
     // The satellite dies WITH the app: one per scope is only worth anything if it does not
     // outlive the scope. Outliving it, every closed buffer would leave an
@@ -394,7 +394,7 @@ fn wait_for_satellite(display: u8, target: &str) -> Result<std::process::Child> 
     let mut satellite = std::process::Command::new(SATELLITE)
         .arg(target)
         .spawn()
-        .context("nao consegui subir o xwayland-satellite")?;
+        .context("could not start xwayland-satellite")?;
 
     let socket = Path::new(X_SOCKETS).join(format!("X{display}"));
     // An ACTIVE, short wait, with a ceiling. The satellite comes up in tens of
@@ -405,12 +405,12 @@ fn wait_for_satellite(display: u8, target: &str) -> Result<std::process::Child> 
         if std::time::Instant::now() > limit {
             let _ = satellite.kill();
             bail!(
-                "o xwayland-satellite nao criou {} em 10 s",
+                "xwayland-satellite did not create {} in 10 s",
                 socket.display()
             );
         }
         if let Some(st) = satellite.try_wait().context("consultar o satellite")? {
-            bail!("o xwayland-satellite saiu com {st} antes de criar o socket");
+            bail!("xwayland-satellite exited with {st} before creating the socket");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -509,7 +509,7 @@ mod tests {
     fn a_scope_of_another_prefix_does_not_count() {
         // Somebody else's scope that happens to end in `.scope` is not ours.
         assert_eq!(
-            scope_from_cgroup("0::/user.slice/outra-coisa.scope\n"),
+            scope_from_cgroup("0::/user.slice/something-else.scope\n"),
             None
         );
     }
@@ -518,7 +518,7 @@ mod tests {
     fn a_pid_that_does_not_exist_becomes_an_orphan() {
         // The process dies between niri's event and the procfs read.
         // It happens every time a window closes quickly.
-        let tmp = std::env::temp_dir().join("ronoctua-teste-procfs-vazio");
+        let tmp = std::env::temp_dir().join("ronoctua-test-empty-procfs");
         assert_eq!(origin_at(&tmp, 999_999), Origin::Orphan);
     }
 
@@ -572,7 +572,7 @@ mod tests {
     fn a_missing_socket_directory_is_not_an_error() {
         // With no `/tmp/.X11-unix` there is no X running. Zero occupied is the right
         // answer; failing here would prevent opening the first X11 buffer.
-        let nothing = std::env::temp_dir().join("ronoctua-x11-que-nao-existe");
+        let nothing = std::env::temp_dir().join("ronoctua-x11-that-does-not-exist");
         assert!(super::taken_displays_in(&nothing).is_empty());
     }
 
@@ -596,7 +596,7 @@ mod tests {
         assert!(c.contains(&"satellite".to_owned()));
         assert!(
             c.contains(&"3".to_owned()),
-            "o display nao foi passado: {c:?}"
+            "the display was not passed: {c:?}"
         );
         // The app comes AFTER the display, otherwise `satellite_of` would treat it as a
         // display number.
@@ -617,17 +617,17 @@ mod tests {
 
         assert!(
             c.contains(&format!("--slice={APP_SLICE}")),
-            "a slice tem de ser DITA: o padrao do --user esta documentado errado"
+            "the slice has to be SAID: --user's default is documented wrongly"
         );
         assert!(
             c.contains(&"--property=OOMPolicy=kill".to_owned()),
-            "sem isso o escopo morre pela metade"
+            "without this the scope dies half-way"
         );
 
         let choom = c
             .iter()
             .position(|a| a.ends_with("choom"))
-            .expect("sem choom o app fica no mesmo nivel do compositor");
+            .expect("without choom the app sits at the same level as the compositor");
         assert_eq!(c[choom + 1], "-n");
         assert_eq!(c[choom + 2], APP_OOM_SCORE_ADJUST.to_string());
         // The `--` is what stops `choom` from reading `-e` as its own.
@@ -647,9 +647,12 @@ mod tests {
         assert_eq!(c[0], "systemd-run");
         assert!(
             c.contains(&"--scope".to_owned()),
-            "sem --scope nao ha cgroup"
+            "with no --scope there is no cgroup"
         );
-        assert!(c.contains(&"--user".to_owned()), "a sessao e do usuario");
+        assert!(
+            c.contains(&"--user".to_owned()),
+            "the session belongs to the user"
+        );
         assert!(c.contains(&"--unit=ronoctua-buffer-x".to_owned()));
         // The program comes AFTER the options; inverted, systemd-run would treat
         // our options as the program's arguments.
@@ -672,15 +675,15 @@ mod tests {
     fn when_nothing_comes_up_the_verdict_says_which_program() {
         let v = launch(
             "scope-x",
-            &["ronoctua-programa-que-nao-existe".to_owned()],
-            &["ronoctua-systemd-run-que-nao-existe".to_owned()],
+            &["ronoctua-program-that-does-not-exist".to_owned()],
+            &["ronoctua-systemd-run-that-does-not-exist".to_owned()],
         );
         match v {
             Launch::Failed { program, error } => {
-                assert_eq!(program, "ronoctua-programa-que-nao-existe");
-                assert!(!error.is_empty(), "o erro do sistema tem de chegar junto");
+                assert_eq!(program, "ronoctua-program-that-does-not-exist");
+                assert!(!error.is_empty(), "the system's error has to come along");
             }
-            otherwise => panic!("esperava Falhou, veio {otherwise:?}"),
+            otherwise => panic!("expected Failed, got {otherwise:?}"),
         }
     }
 

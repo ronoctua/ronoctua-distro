@@ -38,6 +38,9 @@
   glyphdb,
   unicodedb,
   lucidedb,
+  # The generated update table, so `updates-have-text` reads the list the
+  # generator DERIVED instead of a hand-written copy of it.
+  updatesTable,
   iconSuperpack,
   rust,
   buffers,
@@ -157,10 +160,10 @@ let
     # ZERO FONTS IS THE DEFECT. An empty `fc-list` means that every text that
     # goes through fontconfig comes out in little boxes.
     n=$(fc-list 2>/dev/null | wc -l)
-    echo "o fontconfig enxerga $n fontes"
+    echo "fontconfig sees $n fonts"
     [ "$n" -gt 0 ] || {
-      echo "ERRO: NENHUMA fonte visivel pelo FONTCONFIG_FILE do aninhado." >&2
-      echo "      Todo texto de app estrangeiro — e as mensagens de erro do" >&2
+      echo "ERROR: NO font at all is visible through the nested FONTCONFIG_FILE." >&2
+      echo "      Every foreign app's text — and this compositor's own error" >&2
       echo "      compositor — sairia em tofu." >&2
       exit 1
     }
@@ -173,11 +176,11 @@ let
       echo "  $g -> $matched"
       case "$matched" in
         *NoctuaIosevka*) ;;
-        *) echo "ERRO: \`$g\` caiu em '$matched', e nao na nossa fonte." >&2
+        *) echo "ERROR: \`$g\` fell through to '$matched', and not to our font." >&2
            exit 1 ;;
       esac
     done
-    echo "OK: o fontconfig do aninhado acha fonte, e e a nossa"
+    echo "OK: the nested fontconfig finds a font, and it is ours"
   '';
 
   # NIRI'S CONFIG IS VALID — BOTH of them, the production one and the nested one.
@@ -200,14 +203,14 @@ let
                "${devApp.config}"; do
       echo "validando $cfg"
       if ! niri validate --config "$cfg" 2>errors.txt; then
-        echo "ERRO: o niri RECUSOU o config gerado." >&2
-        echo "      Um config recusado nao e um atalho quebrado: e o" >&2
-        echo "      compositor caindo no padrao dele, sem nada nosso." >&2
+        echo "ERROR: niri REFUSED the generated config." >&2
+        echo "      A refused config is not a broken shortcut: it is the" >&2
+        echo "      compositor falling back to ITS default, with nothing of ours." >&2
         cat errors.txt >&2
         exit 1
       fi
     done
-    echo "OK: os dois configs do niri sao validos"
+    echo "OK: both niri configs are valid"
   '';
 
   # A CAPTURE LANDS IN A DIRECTORY THE DISTRO DECLARED.
@@ -236,7 +239,7 @@ let
   screenshots-land-in-a-declared-directory =
     mkCheck "screenshots-land-in-a-declared-directory" [ pkgs.python3 ]
       ''
-        python3 - <<'FIM'
+        python3 - <<'END'
         import pathlib, re, sys
 
         config = pathlib.Path(
@@ -245,10 +248,10 @@ let
 
         line = re.search(r'^\s*screenshot-path\s+"([^"]+)"', config, re.M)
         if not line:
-            print("ERRO: o config do niri nao tem `screenshot-path`.", file=sys.stderr)
+            print("ERROR: niri's config has no `screenshot-path`.", file=sys.stderr)
             print("", file=sys.stderr)
-            print("       Sem ele o niri usa o padrao DELE, ~/Pictures/Screenshots/,", file=sys.stderr)
-            print("       que esta distro nao declara e nao cria. A captura sai, e", file=sys.stderr)
+            print("       Without it niri uses ITS default, ~/Pictures/Screenshots/,", file=sys.stderr)
+            print("       which this distro neither declares nor creates. The screenshot lands, and", file=sys.stderr)
             print("       nenhum erro aparece em lugar nenhum.", file=sys.stderr)
             raise SystemExit(1)
         written = line.group(1)
@@ -259,30 +262,30 @@ let
         table = pathlib.Path("${../nix/user-dirs.nix}").read_text()
         entry = re.search(r'^\s*screenshot\s*=\s*"([^"]+)"\s*;', table, re.M)
         if not entry:
-            print("ERRO: nix/user-dirs.nix nao tem a entrada `screenshot`.", file=sys.stderr)
+            print("ERROR: nix/user-dirs.nix has no `screenshot` entry.", file=sys.stderr)
             raise SystemExit(1)
         declared = entry.group(1)
 
         wanted = f"~/{declared}/"
         if not written.startswith(wanted):
-            print("ERRO: a captura nao cai na pasta declarada.", file=sys.stderr)
+            print("ERROR: the screenshot does not land in the declared folder.", file=sys.stderr)
             print("", file=sys.stderr)
-            print(f"       niri escreve em: {written}", file=sys.stderr)
-            print(f"       a distro declara: {wanted}", file=sys.stderr)
+            print(f"       niri writes to: {written}", file=sys.stderr)
+            print(f"       the distro declares: {wanted}", file=sys.stderr)
             print("", file=sys.stderr)
-            print("       As duas saem de nix/user-dirs.nix de proposito: e o", file=sys.stderr)
-            print("       arquivo que CRIA a pasta, por xdg.userDirs, e o que a", file=sys.stderr)
-            print("       barra lateral do gerenciador aponta.", file=sys.stderr)
+            print("       Both come out of nix/user-dirs.nix on purpose: it is the", file=sys.stderr)
+            print("       file that CREATES the folder, through xdg.userDirs, and the one the", file=sys.stderr)
+            print("       manager's sidebar points at.", file=sys.stderr)
             raise SystemExit(1)
 
         # And the name has to say WHEN, or a second capture overwrites the first.
         if "%" not in written:
-            print("ERRO: o nome da captura nao tem strftime nenhum.", file=sys.stderr)
-            print(f"       {written} — a segunda captura apaga a primeira.", file=sys.stderr)
+            print("ERROR: the screenshot's name has no strftime in it at all.", file=sys.stderr)
+            print(f"       {written} — the second screenshot erases the first.", file=sys.stderr)
             raise SystemExit(1)
 
-        print(f"OK: a captura cai em {wanted}, que a distro declara e cria")
-        FIM
+        print(f"OK: the screenshot lands in {wanted}, which the distro declares and creates")
+        END
       '';
 
   # THE DISKS MODULE ADDS NO POLKIT RULE OF ITS OWN.
@@ -306,7 +309,7 @@ let
   disks-adds-no-polkit-rule-of-its-own =
     mkCheck "disks-adds-no-polkit-rule-of-its-own" [ pkgs.python3 ]
       ''
-        python3 - <<'FIM'
+        python3 - <<'END'
         import pathlib, re, sys
 
         modules = pathlib.Path("${../nix/modules}")
@@ -315,19 +318,19 @@ let
 
         # 1. THE MODULE ACTUALLY TURNS UDISKS ON.
         if not re.search(r"^\s*enable = true;", disks, re.M):
-            wrong.append("nix/modules/disks.nix nao liga o udisks2")
+            wrong.append("nix/modules/disks.nix does not switch udisks2 on")
         if "services.udisks2" not in disks:
-            wrong.append("nix/modules/disks.nix nao fala de services.udisks2")
+            wrong.append("nix/modules/disks.nix does not mention services.udisks2")
 
         # 2. AND WRITES NO RULE.
         if "polkit" in disks and "extraConfig" in disks:
-            wrong.append("nix/modules/disks.nix escreve uma regra polkit")
+            wrong.append("nix/modules/disks.nix writes a polkit rule")
 
         # 3. NOR DOES ANY OTHER MODULE NAME A UDISKS ACTION.
         for f in sorted(modules.glob("*.nix")):
             body = f.read_text()
             if "org.freedesktop.udisks2." in body.lower():
-                wrong.append(f"{f.name} nomeia uma acao do udisks2 numa regra polkit")
+                wrong.append(f"{f.name} names a udisks2 action in a polkit rule")
 
         # 4. AND THE FOUR RULES THAT SHOULD EXIST STILL DO.
         #    An "assert the absence" check that never asserts a presence goes
@@ -335,19 +338,19 @@ let
         for name in ["files.nix", "rescue.nix", "memory.nix", "keyboard.nix"]:
             body = (modules / name).read_text()
             if "polkit.addRule" not in body:
-                wrong.append(f"{name} perdeu a regra polkit que DEVE ter")
+                wrong.append(f"{name} lost the polkit rule it MUST have")
 
         if wrong:
-            print("ERRO: a postura de privilegio dos discos mudou.", file=sys.stderr)
+            print("ERROR: the disks' privilege posture changed.", file=sys.stderr)
             print("", file=sys.stderr)
             for w in wrong:
                 print("       " + w, file=sys.stderr)
             print("", file=sys.stderr)
-            print("       O udisks2 ja separa removivel de sistema pelo HintSystem,", file=sys.stderr)
-            print("       e a regra dele e mais estreita do que qualquer uma nossa.", file=sys.stderr)
+            print("       udisks2 already separates removable from system by HintSystem,", file=sys.stderr)
+            print("       and its rule is narrower than any of ours could be.", file=sys.stderr)
             raise SystemExit(1)
-        print("OK: udisks2 ligado, nenhuma regra nossa, e as quatro que existem continuam la")
-        FIM
+        print("OK: udisks2 on, no rule of ours, and the four that exist are still there")
+        END
       '';
 
   # THE TOOL LIST OF UDISKS IS PINNED, AND SO IS WHAT WE ASK OF IT.
@@ -370,7 +373,7 @@ let
   # the proxy module for method declarations, which is the rule
   # `switches-that-do-nothing-say-so` states: the comments do not count.
   disks-tools-are-pinned = mkCheck "disks-tools-are-pinned" [ pkgs.python3 pkgs.binutils ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     module = pathlib.Path("${../nix/modules/disks.nix}").read_text()
@@ -380,19 +383,19 @@ let
     # 1. THE ONE OVERRIDE IS STILL THERE. A nixpkgs bump that re-adds the
     #    258 MiB of Python has to fail here, and not on somebody's ISO.
     if not re.search(r"xfsprogs\s*=\s*pkgs\.emptyDirectory\s*;", module):
-        wrong.append("o override de xfsprogs saiu de nix/modules/disks.nix")
+        wrong.append("the xfsprogs override left nix/modules/disks.nix")
 
     # 2. AND IT IS STILL THE ONLY ONE. A tool quietly dropped is a
     #    `mount.<type>` quietly missing, which is a stick that will not mount
     #    and nothing saying why.
     block = re.search(r"pkgs\.udisks\.override\s*\{(.*?)\n  \};", module, re.S)
     if not block:
-        wrong.append("nao achei o bloco `pkgs.udisks.override` em disks.nix")
+        wrong.append("could not find the `pkgs.udisks.override` block in disks.nix")
     else:
         named = set(re.findall(r"^\s*(\w+)\s*=", block.group(1), re.M))
         extra = named - {"xfsprogs"}
         if extra:
-            wrong.append(f"disks.nix sobrescreve mais do que xfsprogs: {sorted(extra)}")
+            wrong.append(f"disks.nix overrides more than xfsprogs: {sorted(extra)}")
 
     # 3. WHAT WE ASK OF UDISKS, AND WHAT WE MUST NOT.
     def declared(name):
@@ -408,13 +411,13 @@ let
     for verb in ["check", "repair", "resize", "set_label", "take_ownership"]:
         if declared(verb):
             wrong.append(
-                f"udisks.rs declara `{verb}`, que o override de xfsprogs torna impossivel"
+                f"udisks.rs declares `{verb}`, which the xfsprogs override makes impossible"
             )
 
     # 4. AND THE FIVE THAT EXIST STILL DO, or this goes green on an empty file.
     for verb in ["mount", "unmount", "eject", "power_off", "format"]:
         if not declared(verb):
-            wrong.append(f"udisks.rs perdeu `{verb}`, que a barra lateral usa")
+            wrong.append(f"udisks.rs lost `{verb}`, which the sidebar uses")
 
     # 5. AND THE FIVE THIS BUILD CAN WRITE ARE THE FIVE IT OFFERS.
     #
@@ -425,20 +428,20 @@ let
     protocol = pathlib.Path("${../crates/ronoctua-protocol/src/lib.rs}").read_text()
     body = re.search(r"pub const fn filesystem\(self\)[^\n]*\n(.*?)\n    \}", protocol, re.S)
     if not body:
-        wrong.append("nao achei `Recipe::filesystem` no protocolo")
+            wrong.append("could not find `Recipe::filesystem` in the protocol")
     else:
         offered = set(re.findall(r'=> "([a-z0-9]+)"', body.group(1)))
         if offered != {"vfat", "exfat", "ntfs", "ext4", "btrfs"}:
-            wrong.append(f"os sistemas oferecidos mudaram: {sorted(offered)}")
+            wrong.append(f"the filesystems on offer changed: {sorted(offered)}")
 
     if wrong:
-        print("ERRO: o que pedimos ao udisks2 e o que ele carrega discordam.", file=sys.stderr)
+        print("ERROR: what we ask of udisks2 and what it carries disagree.", file=sys.stderr)
         print("", file=sys.stderr)
         for w in wrong:
             print("       " + w, file=sys.stderr)
         raise SystemExit(1)
-    print("OK: so xfsprogs sai, os cinco verbos existem, e o XFS nao e oferecido")
-    FIM
+        print("OK: only xfsprogs goes, the five verbs exist, and XFS is not offered")
+    END
 
     # AND THE BUILT PACKAGE AGREES WITH THE OVERRIDE.
     #
@@ -455,30 +458,30 @@ let
     forced=$(strings ${slimUdisks}/libexec/udisks2/udisksd \
       | grep -E '^/nix/store/.*/bin(:|$)' | head -1)
     [ -n "$forced" ] || {
-      echo "ERRO: nao achei o PATH forcado dentro do udisksd." >&2
-      echo "      Sem ele o patch do nixpkgs mudou, e o override de" >&2
-      echo "      xfsprogs deixa de significar o que este check afirma." >&2
+      echo "ERROR: could not find the forced PATH inside udisksd." >&2
+      echo "      Without it the nixpkgs patch changed, and the override of" >&2
+      echo "      xfsprogs stops meaning what this check claims." >&2
       exit 1; }
 
     case "$forced" in
       *xfsprogs*)
-        echo "ERRO: o xfsprogs voltou ao PATH do udisksd, e com ele 212 MiB." >&2
-        echo "      Medido: 305,4 MiB de xfsprogs-bin, dos quais 258,0 sao um" >&2
-        echo "      ambiente python3 para o xfs_scrub — e esta distro e btrfs." >&2
+        echo "ERROR: xfsprogs is back on udisksd's PATH, and 212 MiB with it." >&2
+        echo "      Measured: 305.4 MiB of xfsprogs-bin, of which 258.0 are a" >&2
+        echo "      python3 environment for xfs_scrub — and this distro is btrfs." >&2
         exit 1 ;;
     esac
 
-    for ajudante in exfat ntfs3g dosfstools util-linux; do
+    for helper in exfat ntfs3g dosfstools util-linux; do
       case "$forced" in
-        *"$ajudante"*) ;;
+        *"$helper"*) ;;
         *)
-          echo "ERRO: $ajudante saiu do PATH do udisksd." >&2
-          echo "      Um pendrive formatado assim deixa de montar, e o" >&2
-          echo "      sintoma e uma linha da barra lateral que nao faz nada." >&2
+          echo "ERROR: $helper left udisksd's PATH." >&2
+          echo "      A pen drive formatted like that stops mounting, and the" >&2
+          echo "      symptom is a sidebar row that does nothing." >&2
           exit 1 ;;
       esac
     done
-    echo "OK: o PATH forcado do udisksd nao tem xfsprogs e tem os quatro ajudantes"
+    echo "OK: udisksd's forced PATH has no xfsprogs and has the four helpers"
   '';
 
   # PERSISTENCE TAKES ITS ROOT AS A PARAMETER.
@@ -506,7 +509,7 @@ let
   persistence-takes-its-root-as-a-parameter =
     mkCheck "persistence-takes-its-root-as-a-parameter" [ pkgs.python3 ]
       ''
-        python3 - <<'FIM'
+        python3 - <<'END'
         import pathlib, re, sys
 
         # WHERE THE ENVIRONMENT MAY BE READ AT ALL. Both are named for what they
@@ -536,20 +539,20 @@ let
                 found = [w for w in FINDERS if w in inside]
                 if found:
                     bad.append(
-                        f"{f.relative_to(crates)}: `{name}` escreve E acha o "
-                        f"diretorio ({', '.join(found)})"
+                        f"{f.relative_to(crates)}: `{name}` writes AND finds the "
+                        f"directory ({', '.join(found)})"
                     )
 
         if bad:
-            print("ERRO: persistencia que acha a propria raiz.", file=sys.stderr)
+            print("ERROR: persistence that finds its own root.", file=sys.stderr)
             print("", file=sys.stderr)
             for b in bad:
                 print("       " + b, file=sys.stderr)
             print("", file=sys.stderr)
-            print("       Uma funcao que le ou escreve NAO decide onde. Quem acha", file=sys.stderr)
-            print("       o diretorio e o aplicativo, uma vez, e entrega a", file=sys.stderr)
-            print("       resposta — senao `cargo test` escreve na casa de quem o", file=sys.stderr)
-            print("       roda, que foi o que aconteceu com a barra lateral.", file=sys.stderr)
+            print("       A function that reads or writes does NOT decide where. What finds", file=sys.stderr)
+            print("       the directory is the application, once, and it hands over the", file=sys.stderr)
+            print("       answer — otherwise `cargo test` writes into the home of whoever", file=sys.stderr)
+            print("       runs it, which is what happened with the sidebar.", file=sys.stderr)
             raise SystemExit(1)
 
         # AND OS LOCALIZADORES CONTINUAM EXISTINDO. Without this the check goes
@@ -561,10 +564,10 @@ let
             if w in f.read_text()
         )
         if finders < 2:
-            print("ERRO: nao achei as funcoes que localizam os diretorios.", file=sys.stderr)
+            print("ERROR: could not find the functions that locate the directories.", file=sys.stderr)
             raise SystemExit(1)
-        print(f"OK: nada que persiste acha a propria raiz ({finders} localizadoras)")
-        FIM
+        print(f"OK: nothing that persists finds its own root ({finders} locators)")
+        END
       '';
 
   # THE KEYBOARD LAYOUT REALLY EXISTS.
@@ -587,15 +590,15 @@ let
   # the failure this is here to prevent, because the symptom (a password box on
   # startup) looks like a Chrome setting and is not.
   browser-has-no-keyring = mkCheck "browser-has-no-keyring" [ pkgs.jq ] ''
-    sistema=${self.nixosConfigurations.vm.config.system.build.toplevel}
+    system_path=${self.nixosConfigurations.vm.config.system.build.toplevel}
 
     # 1) The flag reached the wrapper the user actually runs.
-    chrome=$(readlink -f "$sistema/sw/bin/google-chrome-stable" 2>/dev/null \
-             || readlink -f "$sistema/sw/bin/google-chrome" 2>/dev/null || true)
-    [ -n "$chrome" ] || { echo "ERRO: o Chrome nao esta no closure do sistema" >&2; exit 1; }
+    chrome=$(readlink -f "$system_path/sw/bin/google-chrome-stable" 2>/dev/null \
+             || readlink -f "$system_path/sw/bin/google-chrome" 2>/dev/null || true)
+    [ -n "$chrome" ] || { echo "ERROR: Chrome is not in system_path's closure" >&2; exit 1; }
     grep -q -- "--password-store=basic" "$chrome" || {
-      echo "ERRO: o wrapper do Chrome nao tem --password-store=basic." >&2
-      echo "      Sem ele o Chrome procura um Secret Service e pede senha." >&2
+      echo "ERROR: Chrome's wrapper has no --password-store=basic." >&2
+      echo "      Without it Chrome looks for a Secret Service and asks for a password." >&2
       exit 1; }
     echo "OK: --password-store=basic no wrapper"
 
@@ -604,17 +607,17 @@ let
     # `nix-store -qR` and not a grep over the config: the point is what ends up
     # ON THE MACHINE, and a dependency that pulls the keyring in does not appear
     # in any option.
-    found=$(nix-store -qR "$sistema" 2>/dev/null | grep -E "gnome-keyring|kwallet" || true)
+    found=$(nix-store -qR "$system_path" 2>/dev/null | grep -E "gnome-keyring|kwallet" || true)
     if [ -n "$found" ]; then
       echo "ERRO: um Secret Service entrou no closure:" >&2
       echo "$found" | sed 's/^/       /' >&2
       echo "" >&2
-      echo "      Com ele instalado o Chrome volta a pedir senha ao abrir," >&2
-      echo "      e o prompt e do keyring, nao do Chrome: nenhuma opcao do" >&2
-      echo "      navegador o desliga." >&2
+      echo "      With it installed Chrome asks for a password again on opening," >&2
+      echo "      and the prompt is the keyring's, not Chrome's: no option in the" >&2
+      echo "      browser switches it off." >&2
       exit 1
     fi
-    echo "OK: nenhum gnome-keyring nem kwallet no closure"
+    echo "OK: no gnome-keyring and no kwallet in the closure"
   '';
 
   # The nine directories of section 2 reach `user-dirs.dirs`.
@@ -631,7 +634,7 @@ let
     dirs=${
       self.nixosConfigurations.vm.config.home-manager.users.noctua.xdg.configFile."user-dirs.dirs".source
     }
-    echo "arquivo gerado: $dirs"
+    echo "generated file: $dirs"
 
     expected="XDG_DESKTOP_DIR=/home/noctua/main/temp
     XDG_DOCUMENTS_DIR=/home/noctua/main/archive
@@ -651,18 +654,18 @@ let
       value=''${pair#*=}
       line=$(grep -E "^$key=" "$dirs" || true)
       if [ -z "$line" ]; then
-        echo "ERRO: $key nao esta no user-dirs.dirs gerado" >&2; exit 1
+        echo "ERROR: $key is not in the generated user-dirs.dirs" >&2; exit 1
       fi
       # The generated value is quoted and uses `$HOME`.
       got=$(echo "$line" | sed -e 's/^[^=]*=//' -e 's/^"//' -e 's/"$//' -e "s|\\\$HOME|/home/noctua|")
       if [ "$got" != "$value" ]; then
-        echo "ERRO: $key = $got, esperado $value" >&2; exit 1
+        echo "ERROR: $key = $got, expected $value" >&2; exit 1
       fi
       echo "  OK  $key = $got"
     done || missing=1
     [ "$missing" = 0 ] || exit 1
 
-    echo "OK: os dez diretorios da secao 2 chegam ao user-dirs.dirs"
+    echo "OK: section 2's ten directories reach user-dirs.dirs"
   '';
 
   # THE LOCALE AND THE TIMEZONE EXIST, and the check is where that gets asked.
@@ -691,25 +694,25 @@ let
   wifi-console-asks-once = mkCheck "wifi-console-asks-once" [ ] ''
     unit=${self.nixosConfigurations.vm.config.systemd.services.ronoctua-network-console.serviceConfig.Type}
     test "$unit" = "oneshot" || {
-      echo "ERRO: o servico do console e \`$unit\`, e nao oneshot." >&2
-      echo "      Com Restart ele perguntaria a senha em laco." >&2
+      echo "ERROR: the console's service is \`$unit\`, and not oneshot." >&2
+      echo "      With Restart it would ask for the password in a loop." >&2
       exit 1; }
 
     exec_start=${self.nixosConfigurations.vm.config.systemd.services.ronoctua-network-console.serviceConfig.ExecStart}
     case "$exec_start" in
       /nix/store/*) ;;
-      *) echo "ERRO: ExecStart nao e caminho do store: $exec_start" >&2; exit 1 ;;
+      *) echo "ERROR: ExecStart is not a store path: $exec_start" >&2; exit 1 ;;
     esac
 
     wanted="${lib.concatStringsSep " " self.nixosConfigurations.vm.config.systemd.services.ronoctua-network-console.wantedBy}"
     case " $wanted " in
       *" multi-user.target "*) ;;
-      *) echo "ERRO: o servico nao e puxado por multi-user.target: $wanted" >&2
-         echo "      Ele existe para o boot que NAO chega ao grafico." >&2
+      *) echo "ERROR: the service is not pulled in by multi-user.target: $wanted" >&2
+         echo "      It exists for the boot that does NOT reach graphics." >&2
          exit 1 ;;
     esac
 
-    echo "OK: a pergunta de console e oneshot, por caminho, no multi-user"
+    echo "OK: the console question is oneshot, by path, in multi-user"
   '';
 
   locale-exists = mkCheck "locale-exists" [ ] ''
@@ -719,9 +722,9 @@ let
     zone=${self.nixosConfigurations.vm.config.time.timeZone}
 
     grep -qE "^$locale/UTF-8" "$supported" || {
-      echo "ERRO: a locale \`$locale\` nao esta no SUPPORTED do glibc." >&2
-      echo "      O sistema cairia no \`C\`: data em ordem americana, sem" >&2
-      echo "      acento na ordenacao, e nada dizendo por que." >&2
+      echo "ERROR: the locale \`$locale\` is not in glibc's SUPPORTED." >&2
+      echo "      system_path would fall through to \`C\`: dates in American order, with no" >&2
+      echo "      no accent in the sorting, and nothing saying why." >&2
       exit 1; }
 
     # The measurement key is the one that must NOT follow the language: it is
@@ -729,16 +732,16 @@ let
     measurement=${self.nixosConfigurations.vm.config.i18n.extraLocaleSettings.LC_MEASUREMENT or ""}
     case "$measurement" in
       en_US*|en_PH*|""|C|C.UTF-8|POSIX)
-        echo "ERRO: LC_MEASUREMENT = \`$measurement\` nao e metrico." >&2
-        echo "      Escolher ingles americano escolhe um idioma, nunca polegada." >&2
+      echo "ERROR: LC_MEASUREMENT = \`$measurement\` is not metric." >&2
+      echo "      Choosing American English chooses a language, never an inch." >&2
         exit 1 ;;
     esac
 
     awk -F'\t' '!/^#/ { print $3 }' "$tab" | grep -qx "$zone" || {
-      echo "ERRO: o fuso \`$zone\` nao existe no tzdb." >&2
+      echo "ERROR: the zone \`$zone\` does not exist in the tzdb." >&2
       exit 1; }
 
-    echo "OK: locale \`$locale\`, medida metrica, fuso \`$zone\`"
+    echo "OK: locale \`$locale\`, metric measurements, zone \`$zone\`"
   '';
 
   keyboard-layout-exists = mkCheck "keyboard-layout-exists" [ ] ''
@@ -748,9 +751,9 @@ let
     variantName="${keyboard.variant}"
 
     grep -qE "^ +$layout +" "$lst" || {
-      echo "ERRO: o layout \`$layout\` nao existe no xkeyboard-config." >&2
-      echo "      O xkb NAO recusa: ele cai no \`us\` e o keyboard inteiro" >&2
-      echo "      passa a digitar outra coisa, sem erro nenhum." >&2
+      echo "ERROR: the layout \`$layout\` does not exist in xkeyboard-config." >&2
+      echo "      xkb does NOT refuse: it falls back to \`us\` and the whole keyboard" >&2
+      echo "      starts typing something else, with no error at all." >&2
       exit 1; }
 
     # ONE BY ONE, and there is more than one now.
@@ -762,15 +765,15 @@ let
     # defect: a check that cannot see is as bad as no check.
     for o in $(echo "$optionName" | tr ',' ' '); do
       grep -qE "^ +$o +" "$lst" || {
-        echo "ERRO: a opcao \`$o\` nao existe no xkeyboard-config." >&2
-        echo "      O xkb NAO recusa: ele IGNORA a opcao e segue em frente," >&2
-        echo "      entao a acentuacao simplesmente nao acontece, sem erro." >&2
+        echo "ERROR: the option \`$o\` does not exist in xkeyboard-config." >&2
+        echo "      xkb does NOT refuse it: it IGNORES the option and carries on," >&2
+        echo "      so the accents simply do not happen, with no error." >&2
         exit 1; }
     done
 
     if [ -n "$variantName" ]; then
       grep -qE "^ +$variantName +$layout:" "$lst" || {
-        echo "ERRO: a variante \`$variantName\` nao existe para \`$layout\`." >&2
+        echo "ERROR: the variant \`$variantName\` does not exist for \`$layout\`." >&2
         exit 1; }
     fi
 
@@ -778,10 +781,10 @@ let
     # installer runs on a TTY: a wrong name here gives a US keyboard at the moment
     # of typing the disk's passphrase.
     test -e ${pkgs.kbd}/share/keymaps/i386/qwerty/${keyboard.console}.map.gz || {
-      echo "ERRO: o keymap de console \`${keyboard.console}\` nao existe no kbd." >&2
+      echo "ERROR: the console keymap \`${keyboard.console}\` does not exist in kbd." >&2
       exit 1; }
 
-    echo "OK: layout $layout, opcao $optionName, console ${keyboard.console}"
+    echo "OK: layout $layout, option $optionName, console ${keyboard.console}"
   '';
 
   # AND THE OPTIONS DO WHAT THEIR NAMES PROMISE — the keymap, compiled.
@@ -820,11 +823,11 @@ let
           --layout ${keyboard.layout} \
           ${lib.optionalString (keyboard.variant != "") "--variant ${keyboard.variant} "}\
           --options "${keyboard.options}" > keymap.xkb 2> errors.txt || {
-            echo "ERRO: o keymap nem compilou:" >&2; cat errors.txt >&2; exit 1; }
+            echo "ERROR: the keymap did not even compile:" >&2; cat errors.txt >&2; exit 1; }
 
         # The ignored-option message, which is the silent failure by name.
         if grep -q "was ignored" errors.txt; then
-          echo "ERRO: o xkb IGNOROU uma opcao e seguiu em frente:" >&2
+          echo "ERROR: xkb IGNORED an option and carried on:" >&2
           cat errors.txt >&2
           exit 1
         fi
@@ -832,21 +835,21 @@ let
         # Compose, wherever the answer put it — the symbol is what matters, and
         # not which key carries it.
         grep -q "Multi_key" keymap.xkb || {
-          echo "ERRO: nenhuma tecla virou Compose (\`Multi_key\`) no keymap." >&2
-          echo "      Sem ela nao existe \`a\`, \`a~\` nem \`c,\` neste teclado." >&2
+          echo "ERROR: no key became Compose (\`Multi_key\`) in the keymap." >&2
+          echo "      Without it there is no \`a\`, \`a~\` or \`c,\` on this keyboard." >&2
           exit 1; }
 
         # And Caps Lock, which left the Caps Lock key and has to be somewhere.
         for side in LFSH RTSH; do
           grep -A 3 "key <$side>" keymap.xkb | grep -q "Caps_Lock" || {
-            echo "ERRO: o Shift <$side> nao alterna o Caps Lock." >&2
-            echo "      A tecla Caps virou Compose; sem os dois Shifts, o Caps" >&2
-            echo "      Lock deixou de existir e ninguem foi avisado." >&2
+          echo "ERROR: Shift <$side> does not toggle Caps Lock." >&2
+            echo "      The Caps key became Compose; without both Shifts, Caps" >&2
+          echo "      Lock stopped existing and nobody was told." >&2
             grep -A 3 "key <$side>" keymap.xkb >&2
             exit 1; }
         done
 
-        echo "OK: Compose existe no keymap e os dois Shifts alternam o Caps Lock"
+        echo "OK: Compose exists in the keymap and both Shifts toggle Caps Lock"
       '';
 
   # THE INSTALLER'S DEFAULTS ARE THE SYSTEM'S DEFAULTS.
@@ -869,7 +872,7 @@ let
           wanted="$2"
           found=$(grep -oP "pub const $1: &str = \"\K[^\"]*" "$src" | head -1)
           [ "$found" = "$wanted" ] || {
-            echo "ERRO: $1 e \`$found\` no instalador e \`$wanted\` no Nix." >&2
+            echo "ERROR: $1 is \`$found\` in the installer and \`$wanted\` in the Nix." >&2
             failed=1
           }
         }
@@ -877,7 +880,7 @@ let
         agree DEFAULT_COMPOSE "${keyboard.compose}"
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: o instalador e o nix/keyboard-xkb.nix concordam"
+        echo "OK: the installer and nix/keyboard-xkb.nix agree"
       '';
 
   # EVERY COMPOSITOR ACTION HAS A TRANSLATION IN BOTH LANGUAGES.
@@ -897,7 +900,7 @@ let
 
     table_src = pathlib.Path("${niriActions}/niri-actions.rs").read_text()
     key_names = re.findall(r'key: "(cmd-niri-[a-z0-9-]+)"', table_src)
-    assert len(key_names) > 100, f"so {len(key_names)} acoes na tabela gerada"
+    assert len(key_names) > 100, f"only {len(key_names)} actions in the generated table"
 
     absent = []
     for language in ("pt-BR", "en-GB"):
@@ -906,55 +909,55 @@ let
         absent += [f"{language}: {c}" for c in key_names if c not in present]
 
     if absent:
-        print("ERRO: acao do niri sem traducao:", file=sys.stderr)
+        print("ERROR: a niri action with no translation:", file=sys.stderr)
         for f in absent:
             print(f"  {f}", file=sys.stderr)
         print(
-            "\nA lista de acoes vem do niri PINADO. Se ele subiu de versao,\n"
-            "as acoes novas precisam entrar nos dois .ftl — senao elas\n"
-            "aparecem como `[chave]` no localizador.",
+            "\nThe action list comes from the PINNED niri. If it went up a version,\n"
+            "the new actions have to go into both .ftl files — otherwise they\n"
+            "show up as `[key]` in the finder.",
             file=sys.stderr,
         )
         sys.exit(1)
-    print(f"OK: as {len(key_names)} acoes do niri estao nos dois idiomas")
+    print(f"OK: niri's {len(key_names)} actions are in both languages")
     PY
   '';
 
   # THE SUBMENU MARK DOES NOT LIVE IN THE TRANSLATION.
   #
-  # It used to: `group-window = +janela`, and the `+` was part of the text. That
+  # It used to: `group-window = +window`, and the `+` was part of the text. That
   # is why three of the six groups ended up without it — nothing forced it, and
   # the omission showed up nowhere. Now whoever puts the `+` on is the drawing,
-  # out of the tree's `e_grupo`, and no group has any way of escaping.
+  # out of the tree's `is_group`, and no group has any way of escaping.
   #
-  # This check stops it from coming back: a `+` in the .ftl would give `++janela`
+  # This check stops it from coming back: a `+` in the .ftl would give `++window`
   # on screen, which is the loud symptom of a mark in two places.
   group-mark-outside-translation = mkCheck "group-mark-outside-translation" [ ] ''
-    if grep -nE '^grupo-[a-z-]+ *= *\+' ${../assets/i18n}/*.ftl; then
-      echo "ERRO: ha rotulo de grupo com \`+\` na traducao." >&2
-      echo "      A marca e posta no DESENHO (surface::MARCA_DE_GRUPO);" >&2
-      echo "      escrita aqui, ela sai duplicada — e so em alguns grupos." >&2
+    if grep -nE '^group-[a-z-]+ *= *\+' ${../assets/i18n}/*.ftl; then
+      echo "ERROR: there is a group label with a \`+\` in the translation." >&2
+      echo "      The mark is put on in the DRAWING (surface::GROUP_MARK);" >&2
+      echo "      written here, it comes out doubled — and only in some groups." >&2
       exit 1
     fi
-    echo "OK: a marca de submenu nao esta em nenhuma traducao"
+    echo "OK: the submenu mark is in no translation"
   '';
 
   # And the other way round: a key in only one language BRINGS THE BUILD DOWN.
   # Without this fixture, the check above would pass with the generator broken.
   i18n-missing-key-fails = mkCheck "i18n-missing-key-fails" [ pkgs.python3 ] ''
     cp -r ${../assets/i18n} bad && chmod -R +w bad
-    echo 'so-em-ingles = orphan' >> bad/en-GB.ftl
+    echo 'only-in-english = orphan' >> bad/en-GB.ftl
 
     if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs 2>errors.txt; then
-      echo "ERRO: o gerador ACEITOU uma chave que existe em so um idioma" >&2
+      echo "ERROR: the generator ACCEPTED a key that exists in only one language" >&2
       exit 1
     fi
-    grep -q 'so-em-ingles' errors.txt || {
-      echo "ERRO: falhou, mas a mensagem nao diz qual chave" >&2
+    grep -q 'only-in-english' errors.txt || {
+      echo "ERROR: it failed, but the message does not say which key" >&2
       cat errors.txt >&2
       exit 1
     }
-    echo "OK: chave em so um idioma derruba o build, dizendo qual"
+    echo "OK: a key in only one language takes the build down, saying which"
   '';
 
   # A TOKEN THAT DOES NOT EXIST DOES NOT COMPILE IN THE BUFFER — section 7.6.
@@ -962,32 +965,32 @@ let
   # "The build generates (a) the shell's Rust table and (b) the WIT enum of valid
   # names. A token that does not exist becomes a **compile error in the guest**."
   #
-  # Before, `cor` was `record cor { token: string }`: a buffer cited
-  # `color.inexistente`, compiled, and the host fell into a silent fallback —
+  # Before, `color` was `record color { token: string }`: a buffer cited
+  # `color.nonexistent`, compiled, and the host fell into a silent fallback —
   # the same class as invariant 8's `[api_key]`.
   #
   # # Why this check is STRUCTURAL, and not "compile and watch it fail"
   #
-  # The guarantee does not come from a test: it comes from `cor` being an ENUM.
+  # The guarantee does not come from a test: it comes from `color` being an ENUM.
   # Citing a case that does not exist in an enum is a compile error in Rust —
   # that is a property of the language, and failing it here would be testing rustc.
   #
-  # What CAN break, and is therefore what is asserted: `cor` going back to being
+  # What CAN break, and is therefore what is asserted: `color` going back to being
   # a record with a string, or the two generated artifacts diverging. Those are
   # the only two ways for the guarantee to be lost, and both are covered.
   invalid-token-fails-build = mkCheck "invalid-token-fails-build" [ pkgs.python3 ] ''
     wit=${wit}/deps/tokens/tokens.wit
     rs=${tokensRs}/tokens.rs
 
-    # 1. `cor` is an enum. If it goes back to being a record with a string, the guarantee is gone.
+    # 1. `color` is an enum. If it goes back to being a record with a string, the guarantee is gone.
     grep -qE '^\s*enum color \{' "$wit" || {
-      echo "ERRO: \`color\` nao e mais um enum no WIT." >&2
-      echo "      Com string livre, token inexistente compila no guest e" >&2
-      echo "      falha em silencio na tela. Ver a secao 7.6." >&2
+      echo "ERROR: \`color\` is no longer an enum in the WIT." >&2
+      echo "      With a free string, a token that does not exist compiles in the guest and" >&2
+      echo "      fails silently on screen. See section 7.6." >&2
       exit 1
     }
     if grep -qE 'record color|token:\s*string' "$wit"; then
-      echo "ERRO: \`color\` voltou a carregar string." >&2
+      echo "ERROR: \`color\` is carrying a string again." >&2
       exit 1
     fi
 
@@ -1007,9 +1010,9 @@ let
     only_wit, only_rs = in_wit - in_rs, in_rs - in_wit
     if only_wit or only_rs:
         for n in sorted(only_wit):
-            print(f"ERRO: `{n}` esta no WIT e nao na ponte Rust", file=sys.stderr)
+            print(f"ERROR: `{n}` is in the WIT and not in the Rust bridge", file=sys.stderr)
         for n in sorted(only_rs):
-            print(f"ERRO: `{n}` esta na ponte Rust e nao no WIT", file=sys.stderr)
+            print(f"ERROR: `{n}` is in the Rust bridge and not in the WIT", file=sys.stderr)
         raise SystemExit(1)
     print(f"OK: {len(in_wit)} cores, mesmas nos dois artefatos gerados")
 
@@ -1042,18 +1045,18 @@ let
     only_wit, only_rs = icon_wit - icon_rs, icon_rs - icon_wit
     if only_wit or only_rs:
         for n in sorted(only_wit):
-            print(f"ERRO: icone `{n}` esta no WIT e nao no Rust", file=sys.stderr)
+            print(f"ERROR: the icon `{n}` is in the WIT and not in the Rust", file=sys.stderr)
         for n in sorted(only_rs):
-            print(f"ERRO: icone `{n}` esta no Rust e nao no WIT", file=sys.stderr)
+            print(f"ERROR: the icon `{n}` is in the Rust and not in the WIT", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {len(icon_wit)} icones, mesmos nos dois artefatos gerados")
+    print(f"OK: {len(icon_wit)} icons, the same in both generated artefacts")
     PY
 
     # 3. The host's bridge must have no default arm: `_ =>` has to give back
     #    `None`, and not a color. A `_ => TEXT_DIM` would bring the fallback back.
     if grep -qE '_ => color::' "$rs"; then
-      echo "ERRO: a ponte do host tem fallback para uma cor de verdade." >&2
-      echo "      Nome invalido tem de virar \`None\`, nao uma cor bonita." >&2
+      echo "ERROR: the host's bridge has a fallback to a real colour." >&2
+      echo "      An invalid name has to become \`None\`, not a pretty colour." >&2
       exit 1
     fi
   '';
@@ -1090,15 +1093,15 @@ let
     printf 'maintainer = "fulano.real%sprovedor.com"\n' '@' > tree_out/sub/meta.nix
 
     if python3 ${../nix/scripts/scan-secrets.py} tree_out 2>errors.txt; then
-      echo "ERRO: a varredura NAO acusou os segredos plantados." >&2
+      echo "ERROR: the scan did NOT report the planted secrets." >&2
       exit 1
     fi
 
     # Every form has to show up: one regex can break without the others.
-    for forma in "chave privada" "hash de senha" "chave age" \
-                 "token de servico" "PSK de wifi" "e-mail"; do
-      grep -q "$forma" errors.txt || {
-        echo "ERRO: a varredura nao acusou: $forma" >&2
+    for shape in "private key" "password hash" "age key" \
+                 "service token" "wifi PSK" "e-mail"; do
+      grep -q "$shape" errors.txt || {
+        echo "ERROR: the scan did not report: $shape" >&2
         cat errors.txt >&2
         exit 1
       }
@@ -1106,11 +1109,11 @@ let
 
     # And the secret must NOT show up in the output: the CI log would publish it.
     if grep -qE 'A1b2C3d4|QQPQZRHW4|SenhaDoWifi' errors.txt; then
-      echo "ERRO: a varredura imprimiu o proprio segredo." >&2
+      echo "ERROR: the scan printed the secret itself." >&2
       exit 1
     fi
 
-    echo "OK: as seis formas derrubam o check, e nenhuma vaza na mensagem"
+    echo "OK: all six shapes take the check down, and none leaks into the message"
   '';
 
   # Notifications, history and the proof that there is no second surface.
@@ -1151,22 +1154,22 @@ let
   #
   # What it asserts beyond "the file exists": the total (the intersection of the
   # UCD with the `cmap`), and that the TWO fields only this buffer has arrived —
-  # the `mostra` of the combining marks and the `largura` of the double-advance
+  # the `sample` of the combining marks and the `width` of the double-advance
   # ones. Without them the database looks whole and the screen lies on 325
   # characters.
   unicode-table-generated = mkCheck "unicode-table-generated" [ pkgs.jq ] ''
     db=${unicodedb.db}
     for f in unicode.json coverage.md; do
-      [ -s "$db/$f" ] || { echo "ERRO: $f ausente ou vazio" >&2; exit 1; }
+      [ -s "$db/$f" ] || { echo "ERROR: $f is missing or empty" >&2; exit 1; }
     done
 
     n=$(jq 'length' "$db/unicode.json")
-    echo "caracteres na base: $n"
+    echo "characters in the database: $n"
     [ "$n" -gt 7000 ] || { echo "ERRO: base pequena demais ($n)" >&2; exit 1; }
 
     # THE MANDATORY FIELDS, in every record.
     jq -e 'all(.cp and .name and .shows and .family)' "$db/unicode.json" >/dev/null \
-      || { echo "ERRO: registro sem cp, nome, mostra ou familia" >&2; exit 1; }
+      || { echo "ERROR: a record with no cp, name, sample or family" >&2; exit 1; }
 
     # `mostra` IS A LIST OF NUMBERS, and not text.
     #
@@ -1176,7 +1179,7 @@ let
     # silently, and only on those two.
     jq -e 'all(.shows | type == "array" and all(type == "number"))' \
       "$db/unicode.json" >/dev/null \
-      || { echo "ERRO: \`shows\` deixou de ser lista de codepoints" >&2; exit 1; }
+      || { echo "ERROR: \`shows\` stopped being a list of codepoints" >&2; exit 1; }
 
     # NO string field carries punctuation that would break the `split`.
     #
@@ -1188,17 +1191,17 @@ let
     bads=$(jq '[.[] | to_entries[] | select(.value | type == "string")
                  | select(.value | test("[\"{},\\[\\]]"))] | length' "$db/unicode.json")
     [ "$bads" = 0 ] || {
-      echo "ERRO: $bads campos de string com pontuacao de JSON." >&2
-      echo "      O componente divide os registros por \`},\` e nao tem parser." >&2
+      echo "ERROR: $bads string fields with JSON punctuation." >&2
+      echo "      The component splits the records on \`},\` and has no parser." >&2
       exit 1; }
 
     combining=$(jq '[.[] | select(.width == 0)] | length' "$db/unicode.json")
     wide=$(jq '[.[] | select(.width == 2)] | length' "$db/unicode.json")
-    echo "combinantes: $combining   largura dupla: $wide"
-    [ "$combining" -gt 100 ] || { echo "ERRO: as marcas combinantes sumiram" >&2; exit 1; }
-    [ "$wide" -gt 0 ] || { echo "ERRO: os de largura dupla sumiram" >&2; exit 1; }
+    echo "combining: $combining   double width: $wide"
+    [ "$combining" -gt 100 ] || { echo "ERROR: the combining marks went away" >&2; exit 1; }
+    [ "$wide" -gt 0 ] || { echo "ERROR: the double-width ones went away" >&2; exit 1; }
 
-    echo "OK: base de simbolos gerada da fonte real, com mostra e largura"
+    echo "OK: symbol database generated from the real font, with sample and width"
   '';
 
   # THE UCD VERSION GUARD SPEAKS — the negative fixture.
@@ -1206,10 +1209,10 @@ let
   # Without it the guard would be a promise, and the glyph one has already shown
   # that an unverified promise is the same thing as an absent guard.
   unicode-version-mismatch-fails = mkCheck "unicode-version-mismatch-fails" [ ] ''
-    grep -q "a versao do Unicode Character Database divergiu" \
+    grep -q "the Unicode Character Database version diverged" \
       ${unicodedb.versionMismatchFails}/out_text.txt \
-      || { echo "ERRO: a mensagem nao diz que as versoes divergem" >&2; exit 1; }
-    echo "OK: UCD de outra versao derruba o build, dizendo qual"
+      || { echo "ERROR: the message does not say the versions diverge" >&2; exit 1; }
+    echo "OK: a UCD of another version takes the build down, saying which"
   '';
 
   # THE 5 MS BUDGET, on the new component too.
@@ -1232,15 +1235,15 @@ let
   lucide-table-generated = mkCheck "lucide-table-generated" [ pkgs.jq ] ''
     db=${lucidedb.db}
     for f in lucide.json coverage.md NoctuaLucide.ttf; do
-      [ -s "$db/$f" ] || { echo "ERRO: $f ausente ou vazio" >&2; exit 1; }
+      [ -s "$db/$f" ] || { echo "ERROR: $f is missing or empty" >&2; exit 1; }
     done
 
     n=$(jq 'length' "$db/lucide.json")
-    echo "icones na base: $n"
-    [ "$n" = 1668 ] || { echo "ERRO: a base tem $n icones e devia ter 1668" >&2; exit 1; }
+    echo "icons in the database: $n"
+    [ "$n" = 1668 ] || { echo "ERROR: the database has $n icons and should have 1668" >&2; exit 1; }
 
     jq -e 'all(.name and .cp and .lcp and .cats and .nodes)' "$db/lucide.json" >/dev/null \
-      || { echo "ERRO: registro sem nome, cp, lcp, cats ou nos" >&2; exit 1; }
+      || { echo "ERROR: a record with no name, cp, lcp, cats or nos" >&2; exit 1; }
 
     # THE TWO CODEPOINTS ARE FROM DIFFERENT RANGES.
     #
@@ -1248,11 +1251,11 @@ let
     # — and with it the reason for the buffer not drawing 634 wrong icons.
     not_in=$(jq '[.[] | select(.cp < 991232 or .cp > 993667)] | length' "$db/lucide.json")
     [ "$not_in" = 0 ] || {
-      echo "ERRO: $not_in icones desenham fora de U+F2000..U+F2683." >&2
-      echo "      A faixa de origem colide com 634 codepoints do Nerd Fonts." >&2
+      echo "ERROR: $not_in icons draw outside U+F2000..U+F2683." >&2
+      echo "      The source range collides with 634 Nerd Fonts codepoints." >&2
       exit 1; }
     merged=$(jq '[.[] | select(.cp == .lcp)] | length' "$db/lucide.json")
-    [ "$merged" = 0 ] || { echo "ERRO: $merged icones com cp == lcp" >&2; exit 1; }
+    [ "$merged" = 0 ] || { echo "ERROR: $merged icons with cp == lcp" >&2; exit 1; }
 
     # NO string field carries punctuation that would break the component's
     # `split`, which has no JSON parser (invariant 11). The `d` of the SVGs carries
@@ -1261,13 +1264,13 @@ let
     bads=$(jq '[.[] | to_entries[] | select(.value | type == "string")
                  | select(.value | test("[\"{},\\[\\]]"))] | length' "$db/lucide.json")
     [ "$bads" = 0 ] || {
-      echo "ERRO: $bads campos de string com pontuacao de JSON." >&2
+      echo "ERROR: $bads string fields with JSON punctuation." >&2
       exit 1; }
 
     cats=$(jq '[.[].cats[]] | unique | length' "$db/lucide.json")
-    [ "$cats" = 43 ] || { echo "ERRO: $cats categorias, e a 0.563.0 tem 43" >&2; exit 1; }
+    [ "$cats" = 43 ] || { echo "ERROR: $cats categories, and 0.563.0 has 43" >&2; exit 1; }
 
-    echo "OK: 1668 icones, 43 categorias, desenho e origem em faixas separadas"
+    echo "OK: 1668 icons, 43 categories, drawing and source in separate ranges"
   '';
 
   # THE COLLISION GUARD SPEAKS — the negative fixture.
@@ -1275,9 +1278,9 @@ let
   # It is not hypothetical: it is the measured defect. Without the guard, 634 of
   # the 1,668 icons would draw the Nerd Fonts glyph that occupies the same codepoint.
   lucide-range-taken-fails = mkCheck "lucide-range-taken-fails" [ ] ''
-    grep -q "colide com 634 codepoints" ${lucidedb.rangeTakenFails}/out_text.txt \
-      || { echo "ERRO: a mensagem nao diz quantos codepoints colidem" >&2; exit 1; }
-    echo "OK: a faixa de origem derruba o build, dizendo quantos colidem"
+    grep -q "collides with 634 codepoints" ${lucidedb.rangeTakenFails}/out_text.txt \
+      || { echo "ERROR: the message does not say how many codepoints collide" >&2; exit 1; }
+    echo "OK: the source range takes the build down, saying how many collide"
   '';
 
   # THE PANEL ANSWERS THE HOST — driven on the real component.
@@ -1340,7 +1343,7 @@ let
   #      footer's own region for exactly this reason, and the comment there says
   #      so — this makes it true rather than intended.
   footer-mouse-reaches-nothing-new = mkCheck "footer-mouse-reaches-nothing-new" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     shell = pathlib.Path("${self}/crates/ronoctua-shell/src")
@@ -1355,28 +1358,39 @@ let
         re.S,
     )
     if not body:
-        sys.exit("ERRO: `segment_clicked` sumiu ou mudou de forma")
+        sys.exit("ERROR: `segment_clicked` went away or changed shape")
     clicked = body.group(1)
     orders = set(re.findall(r'"(state-next|state-prev)"', clicked))
     if orders != {"state-next", "state-prev"}:
-        gaps.append("o clique manda " + repr(sorted(orders)) + ", e nao os dois do teclado")
+        gaps.append("the click sends " + repr(sorted(orders)) + ", and not the keyboard's two")
 
     # The SAME two the keyboard produces, on the other side of the socket.
     from_keys = set(re.findall(r'"(state-next|state-prev)"', buffer_host))
     rotates = "EscapeAct::Rotate" in buffer_host
     if not rotates:
-        gaps.append("o `Esc` do host nao gira mais: o clique ficaria sozinho")
+        gaps.append("the host's `Esc` no longer cycles: the click would be left alone")
 
-    # AND NOTHING ELSE. Two segments answer, and each has a key: the `state`
-    # rotates (what holding `Esc` and an arrow does) and the `notif` opens the
-    # manager (what `LEADER n h` does). A third would be a door only the mouse
-    # knows about.
+    # AND NOTHING ELSE. Three segments answer, and each has a key: the `state`
+    # rotates (what holding `Esc` and an arrow does), the `notif` opens the
+    # manager (`LEADER n h`), and the `update` opens the window that follows a
+    # run (`LEADER s w`). A fourth would be a door only the mouse knows about.
     acted = set(re.findall(r'if id == "([a-z-]+)"', clicked))
     acted |= set(re.findall(r'if id != "([a-z-]+)"', clicked))
-    if acted != {"state", "notif"}:
-        gaps.append("o clique age em " + repr(sorted(acted)) + ", fora do combinado")
+    if acted != {"state", "notif", "update"}:
+        gaps.append("the click acts on " + repr(sorted(acted)) + ", outside what was agreed")
     if '"notif-history"' not in clicked:
-        gaps.append("o clique no sino nao abre o gerenciador")
+        gaps.append("clicking the bell does not open the manager")
+    # THE UPDATE'S MARK, and BOTH halves of it.
+    #
+    # The mark only exists while something is running, so a click is the
+    # obvious way to reach the window and the tempting place to stop. The key
+    # is what makes it reachable at three in the morning when nothing is
+    # running — which is exactly when somebody wants to read what happened.
+    keymap = (shell / "leader.rs").read_text()
+    if '"update-watch"' not in clicked:
+        gaps.append("clicking the update's mark does not open the window")
+    if '"update-watch"' not in keymap:
+        gaps.append("the update's mark has no equivalent key")
 
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #
@@ -1390,17 +1404,47 @@ let
     # to, which is the whole defect. Planted, and the first version passed.
     enum = re.search(r"pub enum Hit \{(.*?)\n\}", band, re.S)
     if not enum:
-        sys.exit("ERRO: `band::Hit` sumiu ou mudou de forma")
+        sys.exit("ERROR: `band::Hit` went away or changed shape")
     hits = set(re.findall(r"^    ([A-Z]\w*)", enum.group(1), re.M))
     if hits != {"Read", "Action"}:
-        gaps.append("a faixa tem alvos " + repr(sorted(hits)) + ", fora do combinado")
-    # The keyboard's half of each.
-    keymap = (shell / "leader.rs").read_text()
+        gaps.append("the band has targets " + repr(sorted(hits)) + ", outside what was agreed")
+    # The keyboard's half of each. `keymap` is read above, with the modeline's
+    # own half — one read, because two would be two things to keep in step.
     if '"notif-dismiss"' not in keymap:
-        gaps.append("o circulo da faixa nao tem tecla equivalente")
+        gaps.append("the band's circle has no equivalent key")
     manager = (shell / "notifications.rs").read_text()
     if "a.key == Some(c)" not in manager:
-        gaps.append("a acao da faixa nao e alcancavel por letra no gerenciador")
+        gaps.append("the band's action is not reachable by letter in the manager")
+
+    # AND THE BRAIN'S LINE, below the minibuffer, for the same reason.
+    #
+    # It is the one place on this screen that appears WITHOUT being asked for
+    # and asks a question back — the machine is about to rebuild itself, and
+    # the two answers are on the line. If either of them were mouse-only, a
+    # person at the keyboard could watch the countdown run out with no way to
+    # stop it.
+    brain = (shell / "brain.rs").read_text()
+    brain_enum = re.search(r"pub enum Hit \{(.*?)\n\}", brain, re.S)
+    if not brain_enum:
+        sys.exit("ERROR: `brain::Hit` went away or changed shape")
+    brain_hits = set(re.findall(r"^    ([A-Z]\w*)", brain_enum.group(1), re.M))
+    if brain_hits != {"Abort", "Proceed"}:
+        gaps.append("the brain's line has targets " + repr(sorted(brain_hits)) + ", outside what was agreed")
+    for command in ('"brain-abort"', '"brain-proceed"'):
+        if command not in keymap:
+            gaps.append("the brain's line has no key for " + command)
+    # AND A CONTROL CANNOT BE BUILT WITHOUT SAYING WHAT IT DOES.
+    #
+    # This is structural rather than a count, and the first version of it was a
+    # count — it wanted four `explain: Some(` and found three, because the two
+    # controls share one builder. Counting occurrences measures how the source
+    # is factored, which is not the property.
+    #
+    # The property is that the builder DEMANDS the sentence: a `control` whose
+    # signature takes an `explain: String` cannot produce a target that has
+    # none, whatever a caller forgets.
+    if not re.search(r"fn control\([^)]*explain: String", brain, re.S):
+        gaps.append("the constructor of the brain line's control does not require an explanation")
 
     # THE MANAGER'S ROW TARGETS, and the keys that do the same thing.
     #
@@ -1408,16 +1452,16 @@ let
     # looks for what it expects passes on a THIRD target nobody gave a key to.
     rows_enum = re.search(r"pub enum Hit \{(.*?)\n\}", manager, re.S)
     if not rows_enum:
-        sys.exit("ERRO: `notifications::Hit` sumiu ou mudou de forma")
+        sys.exit("ERROR: `notifications::Hit` went away or changed shape")
     targets = set(re.findall(r"^    ([A-Z]\w*)", rows_enum.group(1), re.M))
     if targets != {"MarkRead", "Delete"}:
-        gaps.append("a lista tem alvos " + repr(sorted(targets)) + ", fora do combinado")
+        gaps.append("the list has targets " + repr(sorted(targets)) + ", outside what was agreed")
     for key, verb in (("Press::Space", "MarkRead"), ("Press::Letter('d')", "Delete")):
         if key not in manager:
-            gaps.append("o alvo " + verb + " da lista nao tem tecla equivalente")
+            gaps.append("the list's " + verb + " target has no equivalent key")
     # AND EVERY CONTROL EXPLAINS ITSELF on the message line, never in a tooltip.
     if band.count("explain: Some(") < 3:
-        gaps.append("um controle da faixa nao diz o que faz ao passar o ponteiro")
+        gaps.append("a control of the band does not say what it does on hover")
 
     # 3) NOTHING FLOATS.
     forbidden = ("xdg_popup", "XdgPopup", "create_popup", "Popup::")
@@ -1426,21 +1470,23 @@ let
         "buffer.rs",
         "files_window.rs",
         "band.rs",
+        "brain.rs",
+        "update_window.rs",
         "notifications.rs",
         "notifications_window.rs",
     ):
         text = (shell / name).read_text()
         for word in forbidden:
             if word in text:
-                gaps.append(name + ": " + word + " — invariante 14")
+                gaps.append(name + ": " + word + " — invariant 14")
 
     if gaps:
-        print("ERRO: o ponteiro ganhou porta propria.", file=sys.stderr)
+        print("ERROR: the pointer gained a door of its own.", file=sys.stderr)
         for g in gaps:
             print("       " + g, file=sys.stderr)
         raise SystemExit(1)
-    print("OK: modeline e faixa so fazem o que o teclado faz, e nada flutua")
-    FIM
+    print("OK: the modeline and the band only do what the keyboard does, and nothing floats")
+    END
   '';
 
   # THE STATE CONTRACT, ON EVERY BUFFER AT ONCE.
@@ -1471,6 +1517,613 @@ let
       ${buffers.example}/lib/ronoctua_buffer_example.wasm
   '';
 
+  # THE KEYS THE CODE ASKS FOR EXIST, and that is a different question from
+  # the one `i18n-complete` answers.
+  #
+  # `i18n-complete` compares the two bundles AGAINST EACH OTHER: it catches a
+  # key in one language and not the other, which is the common mistake. It
+  # cannot catch a key that is in neither — and a key in neither reaches the
+  # screen as `[files-fact-lens]`, in both languages, with every check green.
+  #
+  # `crates/ronoctua-inspect/src/lib.rs` names this check in its own `key`
+  # module docstring and it did not exist. The keys there are LITERALS rather
+  # than `ronoctua_i18n::key::*` constants, and they have to be: the generated
+  # constants only exist for keys already in the bundles, so a crate adding a
+  # key cannot name it that way until after somebody has written it. That is
+  # the one hole in invariant 8's "a missing key does not compile", and this is
+  # what closes it.
+  #
+  # `updates-have-text` does the same job for the update sequence, against the
+  # list its generator derives. This one has no generator, so it reads the
+  # constants.
+  inspect-keys-exist = mkCheck "inspect-keys-exist" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    root_dir = pathlib.Path("${self}")
+    source = (root_dir / "crates/ronoctua-inspect/src/lib.rs").read_text()
+
+    # The `key` module's constants, and only those: a literal anywhere else in
+    # the crate is a string, not a promise about a bundle.
+    block = re.search(r"pub mod key \{(.*?)\n\}", source, re.S)
+    if not block:
+        print("ERRO: o modulo `key` sumiu do ronoctua-inspect.", file=sys.stderr)
+        raise SystemExit(1)
+    owed = sorted(set(re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z][a-z0-9-]*)";', block.group(1))))
+    if not owed:
+        print("ERROR: no constant in the `key` module — what does the regex match?", file=sys.stderr)
+        raise SystemExit(1)
+
+    failed = 0
+    for language in ("pt-BR", "en-GB"):
+        text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
+        for k in owed:
+            if k not in have:
+                print(f"ERROR: {language} does not have `{k}`", file=sys.stderr)
+                failed = 1
+
+    if failed:
+        print("", file=sys.stderr)
+        print("A key missing from BOTH languages is invisible to", file=sys.stderr)
+        print("i18n-complete, which compares one language against the other. It reaches the", file=sys.stderr)
+        print("screen in square brackets, and nothing else reports it.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: the {len(owed)} keys ronoctua-inspect asks for exist in both languages")
+    END
+  '';
+
+  # THERE IS ONE LIST OF UPDATE COMMANDS, AND ONLY ONE.
+  #
+  # The owner asked for this in as many words: there must be no way to add an
+  # update step to the brain and not to the manual updater, or the other way
+  # round. It is not a promise anybody can keep by remembering — it is a
+  # property, and this is what makes it one.
+  #
+  # `assets/updates.nix` declares the sequence. From it the generator makes the
+  # Rust table, the text keys and the two shell runners; `nix/modules/update.nix`
+  # wraps those in units; `crates/ronoctua-brain` reads the same table through
+  # its `build.rs`; and `LEADER s u` starts the same units. Nothing along that
+  # path names a step.
+  #
+  # THE DEFECT IS NOT HYPOTHETICAL. The brain used to declare three steps of its
+  # own — `update-inputs`, `build`, `collect-garbage` — while the table declared
+  # twelve called `flake-update`, `system-rebuild`, `store-collect-garbage`.
+  # Not a subset of each other: disjoint. Every step name on screen was one the
+  # sequence does not use, and the row that says WHERE a run stopped took its id
+  # from the report the unit writes, so a failure looked up a key that did not
+  # exist. Two plausible files, no compiler between them.
+  #
+  # So: a step's id may appear in the declaration and in what is generated from
+  # it, and nowhere in any source we write. A second list cannot be added
+  # without this saying so, by name.
+  update-has-one-list =
+    mkCheck "update-has-one-list"
+      [
+        pkgs.python3
+      ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        root_dir = pathlib.Path("${self}")
+        table = pathlib.Path("${updatesTable.table}/updates.rs").read_text()
+
+        # The ids the ONE declaration produced.
+        ids = sorted(set(re.findall(r'^\s+id: "([a-z0-9-]+)",$', table, re.M)))
+        if len(ids) < 5:
+            print(f"ERROR: only {len(ids)} ids in the generated table — did the pattern change?", file=sys.stderr)
+            raise SystemExit(1)
+
+        # Where a step's name is allowed to be written by hand: the declaration
+        # itself, and the generator that reads it.
+        ALLOWED = {
+            "assets/updates.nix",
+            "nix/scripts/gen-updates.py",
+            "nix/updates.nix",
+        }
+
+        gaps = []
+        for source in sorted(root_dir.rglob("*")):
+            if source.is_dir() or source.suffix not in {".rs", ".nix", ".py"}:
+                continue
+            rel = source.relative_to(root_dir)
+            if str(rel) in ALLOWED or "target" in rel.parts or rel.parts[0] == ".git":
+                continue
+            try:
+                text = source.read_text()
+            except (UnicodeDecodeError, OSError):
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith(("//", "#", "///", "//!")):
+                    continue
+                for i in ids:
+                    if f'"{i}"' in line:
+                        gaps.append(f"{rel}:{n}: {i}")
+
+        if gaps:
+            print("ERROR: a step of the update is named outside the declaration.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for g in gaps:
+                print(f"       {g}", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       The sequence lives in assets/updates.nix and nowhere else.", file=sys.stderr)
+            print("       Whoever needs it READS the generated table; whoever needs to RUN it starts", file=sys.stderr)
+            print("       the units. An id written by hand is a second list, and two", file=sys.stderr)
+            print("       lists is exactly the defect the brain already had: three", file=sys.stderr)
+            print("       steps of its own, DISJOINT from the twelve the sequence runs.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: the {len(ids)} steps exist only in the declaration and in what comes out of it")
+        END
+      '';
+
+  # THE UNITS AND THE PATHS ARE NAMED IN NIX, AND RUST ONLY REPEATS THEM.
+  #
+  # Four strings cross from `nix/modules/update.nix` into Rust by being typed
+  # again: the two units the brain starts, the system unit the window follows,
+  # and the directory the report is written into. Nothing ties them together —
+  # rename a unit in the module and the Rust still compiles, still runs, and
+  # asks systemd for something that is not there.
+  #
+  # It is the same shape as `update-has-one-list` one block up, and the same
+  # shape as the defect that check exists for. There the sequence was declared
+  # twice; here a NAME is. A check is what turns "we typed it the same" into
+  # "it is the same".
+  #
+  # It reads the module's TEXT rather than an evaluated config on purpose: a
+  # NixOS evaluation costs a minute and this costs nothing, and what is being
+  # compared is a spelling.
+  update-names-agree = mkCheck "update-names-agree" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    root_dir = pathlib.Path("${self}")
+    module = (root_dir / "nix/modules/update.nix").read_text()
+
+    # What Rust says, and where it says it.
+    WRITTEN = {
+        "crates/ronoctua-brain/src/tasks/update.rs": ("UNIT", "REHEARSAL_UNIT"),
+        "crates/ronoctua-shell/src/update_window.rs": ("SYSTEM_UNIT", "SYSTEM_REPORT"),
+    }
+
+    gaps = []
+    seen = 0
+    for where, names in WRITTEN.items():
+        source = (root_dir / where).read_text()
+        for name in names:
+            m = re.search(rf'const {name}: &str = "([^"]+)";', source)
+            if not m:
+                gaps.append(f"{where}: `{name}` went away — did the pattern change?")
+                continue
+            seen += 1
+            said = m.group(1)
+            # A report path is a FILE inside the directory the module makes;
+            # what has to appear over there is the directory.
+            wanted = said.rsplit("/", 1)[0] if said.startswith("/") else said
+            # IT HAS TO BE BOUND, not merely mentioned.
+            #
+            # The first version asked whether the string appeared anywhere in
+            # the module, and that is not the question: the polkit rule lists
+            # the unit names too, as elements of an allow-list. Renaming the
+            # declaration and leaving that rule stale still passed — which is
+            # the worse half of the defect, a rule authorising a unit that no
+            # longer exists beside a unit nobody may start.
+            #
+            # The module gives each of these a NAME in its `let` and
+            # interpolates it into the attribute, so what has to be found is
+            # the binding: `systemUnit = "ronoctua-update-system.service";`.
+            # A list element (`"…",`) does not match, and that is the whole
+            # distinction.
+            # THE MODULE DECLARES A UNIT IN ONE OF TWO SHAPES, and both are
+            # declarations: the system pair is named in the `let` and
+            # interpolated (`systemUnit = "…";`), while the person's pair is
+            # written straight into the attribute
+            # (`systemd.user.services.ronoctua-update = {`). What is NOT a
+            # declaration is a list element, which is how the polkit rule
+            # mentions them — and that is the whole distinction this is drawing.
+            bound = re.search(rf'=\s*"{re.escape(wanted)}"\s*;', module)
+            attribute = None
+            if wanted.endswith(".service"):
+                bare = re.escape(wanted.removesuffix(".service"))
+                attribute = re.search(rf"systemd\.(?:user\.)?services\.{bare}\s*=", module)
+            if not bound and not attribute:
+                gaps.append(
+                    f"{where}: `{name}` = {said!r}, and nix/modules/update.nix does not DECLARE it"
+                )
+
+    if not seen:
+        print("ERROR: no constant found — did the pattern change?", file=sys.stderr)
+        raise SystemExit(1)
+    if gaps:
+        print("ERROR: a name from the Rust does not exist in the module that declares it.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print(f"       {g}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Renaming the unit in the Nix and leaving the Rust as it was compiles,", file=sys.stderr)
+        print("       runs, and asks systemd for something that does not exist — and the failure", file=sys.stderr)
+        print("       shows up far from the cause, on a screen somebody opened because they ALREADY", file=sys.stderr)
+        print("       something was wrong.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: the {seen} names the Rust repeats exist in nix/modules/update.nix")
+    END
+  '';
+
+  # THE UPDATE SEQUENCE OWES ITS WORDS, IN BOTH LANGUAGES.
+  #
+  # The generator emits the exact list of keys the table implies — `update-<id>`
+  # and `update-does-<id>` for every step, plus the closed vocabularies for the
+  # preconditions, the failure policies and the kinds. A step added without its
+  # two sentences would draw a bracketed key on the brain's page, which is
+  # invariant 8's failure mode.
+  #
+  # The same shape as `notifications-have-text`, and for the same reason: the
+  # list is DERIVED, so it cannot go stale the way a hand-written one does.
+  updates-have-text = mkCheck "updates-have-text" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    owed = [
+        line.strip()
+        for line in pathlib.Path("${updatesTable.table}/keys.txt").read_text().splitlines()
+        if line.strip()
+    ]
+    root_dir = pathlib.Path("${self}/assets/i18n")
+
+    failed = 0
+    for language in ("pt-BR", "en-GB"):
+        text = (root_dir / f"{language}.ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
+        for key in owed:
+            if key not in have:
+                print(f"ERROR: {language} does not have `{key}`", file=sys.stderr)
+                failed = 1
+
+    if failed:
+        print("", file=sys.stderr)
+        print("Every key lives in BOTH languages — one alone takes the i18n build down,", file=sys.stderr)
+        print("and this check says WHICH before it gets there.", file=sys.stderr)
+        raise SystemExit(1)
+        print(f"OK: the sequence's {len(owed)} keys exist in both languages")
+    END
+  '';
+
+  # AND THE GUARD REALLY DOES REFUSE.
+  #
+  # `nix/updates.nix` builds a table that must NOT pass — a step that installs,
+  # and a step enabled by default whose program the flake does not put on the
+  # machine — and records what the generator said about it. This check reads
+  # that recording.
+  #
+  # It is the shape `icons-unknown-token-fails` and `i18n-missing-key-fails`
+  # already use, and the reason is the same: a guard nobody exercises is a
+  # guard that stopped working quietly, and the day it matters is the day
+  # somebody adds `npm install -g` to a table that runs as root.
+  #
+  # Both sentences are demanded, not just a non-zero exit: a refusal for the
+  # WRONG reason is a refusal that will not survive the next edit.
+  updates-refusal-refuses = mkCheck "updates-refusal-refuses" [ pkgs.gnugrep ] ''
+    said=${updatesTable.negativeFixture}/out_text.txt
+    [ -f "$said" ] || {
+      echo "ERROR: the negative fixture did not record what the generator said (out_text.txt)." >&2
+      echo "      Without it, 'it failed' and 'it failed for the right reason' are the same thing." >&2
+      exit 1; }
+
+    failed=0
+    grep -q "invariant 6" "$said" || {
+      echo "ERROR: the refusal does not cite invariant 6." >&2
+      echo "      A step switched on outside the flake has to be refused FOR THAT." >&2
+      failed=1; }
+    grep -qi "install" "$said" || {
+      echo "ERROR: the refusal does not say the step INSTALLS." >&2
+      failed=1; }
+
+    [ "$failed" = 0 ] || { echo "--- what it said ---" >&2; cat "$said" >&2; exit 1; }
+    echo "OK: installing and switching on what the flake does not put there are refused, and for the right reason"
+  '';
+
+  # THE SEQUENCE NEVER ASKS FOR AUTHENTICATION, and that is a requirement
+  # rather than an accident.
+  #
+  # The owner reported it, and his words are the whole argument (translated,
+  # because a comment is English — invariant 18): sometimes the fingerprint
+  # reader asks him to approve something like a `sudo`, and sometimes he does
+  # not see the request, or he is far from the laptop. It is not that he
+  # refuses — it is that he could not approve.
+  #
+  # That decides the design of this whole feature. The brain exists to run the
+  # update AT A GOOD MOMENT, and a good moment is almost always one where
+  # nobody is looking at the screen. A prompt there is not a question: it is a
+  # silent failure shaped exactly like a refusal, and the report would say
+  # "you declined" about something the person never saw.
+  #
+  # There is no polkit agent in the session (only `pkttyagent`, in the rescue
+  # console), so any `AUTH_*` would already fail — but it would fail by
+  # accident. This check turns the absence into a requirement:
+  #
+  #   1. neither runner invokes `sudo`, `pkexec`, `pkttyagent` or
+  #      `systemd-run` (which also goes through polkit and is SYNCHRONOUS on
+  #      top of that — the trap that froze the footer once already);
+  #   2. the update's polkit rule returns `YES`, and not `AUTH_SELF_KEEP` nor
+  #      `AUTH_ADMIN`: the door is narrow because of what it NAMES — one verb,
+  #      two units, one user — never because it asks afterwards.
+  updates-never-ask =
+    let
+      runners = self.nixosConfigurations.noctua.config.ronoctua.update.package;
+      rule = self.nixosConfigurations.noctua.config.security.polkit.extraConfig;
+    in
+    mkCheck "updates-never-ask" [ pkgs.gnugrep pkgs.python3 ] ''
+      failed=0
+      for script in ${runners}/bin/ronoctua-update ${runners}/libexec/ronoctua-update-system; do
+        if found=$(grep -nE '(^|[^-[:alnum:]_])(sudo|pkexec|pkttyagent|systemd-run)([^-[:alnum:]_]|$)' "$script"); then
+          echo "ERRO: $script pede autenticacao:" >&2
+          echo "$found" >&2
+      echo "      The owner is not always near the laptop when this runs." >&2
+          failed=1
+        fi
+      done
+
+      python3 - <<'END'
+      import re, sys
+      rule = """${rule}"""
+      # The block that names the two update units, and what it returns.
+      block = re.search(
+          r"ronoctua-update-system\.service.*?\}\s*\)\s*;", rule, re.S
+      )
+      if not block:
+          print("ERROR: the update's polkit rule went away.", file=sys.stderr)
+          raise SystemExit(1)
+      text = block.group(0)
+      if "polkit.Result.YES" not in text:
+          print("ERROR: the update's rule does not give back YES.", file=sys.stderr)
+          raise SystemExit(1)
+      for asking in ("AUTH_SELF", "AUTH_ADMIN"):
+          if asking in text:
+              print(f"ERROR: the update's rule gives back {asking} — it ASKS.", file=sys.stderr)
+              print("      There is no polkit agent in the session, and the owner does not always see the request.", file=sys.stderr)
+              raise SystemExit(1)
+      END
+
+      [ "$failed" = 0 ] || exit 1
+      echo "OK: the sequence asks nothing of anybody — no sudo, no interactive polkit"
+    '';
+
+  # THE DESIGN CRATE'S TWO CONSTANTS AGREE WITH THE TOKENS THEY DEFINE.
+  #
+  # A buffer may not be told a token's value (invariant 11), so
+  # `ronoctua-design` carries `AIR` and `ICON` as numbers of its own. That is
+  # legitimate — both are DEFINITIONS rather than values — but a definition
+  # still has to stay true:
+  #
+  #   AIR  = 1   because the air is one line height, and a cell IS one line
+  #              height (`font.size.large` x `font.lineHeight`). If the cell
+  #              ever stopped being the unit of vertical rhythm, this would
+  #              quietly become "one cell of air, which is no longer a line".
+  #   ICON = 2   because `ceil(font.size.icon / font.size.large)`: the glyph is
+  #              drawn on the cell at 22 px and its advance exceeds the 12 px
+  #              cell, so it covers two columns. Raise `font.size.icon` past
+  #              two cells' worth and the title would be written ON TOP of the
+  #              glyph, in every buffer at once.
+  #
+  # One number, two homes, and this is what stops them drifting.
+  design-constants-match-tokens = mkCheck "design-constants-match-tokens" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import math, pathlib, re, sys
+
+    root_dir = pathlib.Path("${self}")
+    design = (root_dir / "crates/ronoctua-design/src/lib.rs").read_text()
+    typography = (root_dir / "assets/tokens/typography.nix").read_text()
+
+    def constant(name):
+        m = re.search(rf"pub const {name}: u16 = (\d+);", design)
+        if not m:
+            print(f"ERRO: `{name}` sumiu do ronoctua-design", file=sys.stderr)
+            raise SystemExit(1)
+        return int(m.group(1))
+
+    def token(leaf):
+        m = re.search(rf"^\s+{leaf}\s*=\s*([0-9.]+);", typography, re.M)
+        if not m:
+            print(f"ERRO: o token `{leaf}` sumiu de typography.nix", file=sys.stderr)
+            raise SystemExit(1)
+        return float(m.group(1))
+
+    failed = 0
+
+    air = constant("AIR")
+    if air != 1:
+        print(f"ERROR: AIR is {air}. The air is ONE line height, and a cell is", file=sys.stderr)
+        print("      one line height — so AIR is 1, or the definition changed.", file=sys.stderr)
+        failed = 1
+
+    icon = constant("ICON")
+    wanted = math.ceil(token("icon") / token("large"))
+    if icon != wanted:
+        print(f"ERROR: ICON is {icon} and the font asks for {wanted}", file=sys.stderr)
+        print(f"      (icon {token('icon')} px sobre large {token('large')} px).", file=sys.stderr)
+        print("      With the wrong number, the title is written ON TOP of the glyph.", file=sys.stderr)
+        failed = 1
+
+    if failed:
+        raise SystemExit(1)
+    print(f"OK: AIR={air} (one cell and one line), ICON={icon} cells for {token('icon')} px")
+    END
+  '';
+
+  # NOBODY DRAWS A HEADING OF THEIR OWN, AND NOBODY GENERATES BINDINGS.
+  #
+  # This is the check that makes "these mistakes cannot happen again" mean
+  # something. The report that started this work was four buffers with four
+  # different headings — with a rule, without one, with a blank row, without
+  # one, content starting at column 0, 1, 2 or 4 — and three browsers carrying
+  # three copies of one geometry with different numbers in them.
+  #
+  # Two greps, and each closes one half:
+  #
+  #   1. `wit_bindgen::generate!` may appear in ONE crate. That is what makes
+  #      the design crate unavoidable rather than merely available: a buffer
+  #      cannot quietly go back to building its own display list, because it
+  #      would have no types to build one out of.
+  #   2. no buffer declares a heading of its own. `heading` is the crate's word
+  #      for it; a `fn title(` reappearing under `buffers/` is the fifth answer
+  #      being written, and the four that existed are why this check does.
+  buffers-use-the-design-crate =
+    mkCheck "buffers-use-the-design-crate" [ pkgs.gnugrep pkgs.coreutils ]
+      ''
+          failed=0
+
+          expected="${self}/crates/ronoctua-design/src/lib.rs"
+          # THE INVOCATION, NOT THE WORD. Every migrated buffer's module header
+        # SAYS that `wit_bindgen::generate!` is gone and why — which is exactly
+        # the sentence a future reader needs, and exactly what a naive grep would
+        # report as the offence. Anchored to the start of a line, a comment's
+        # leading `//` no longer matches.
+        offenders=$(grep -rlE '^[[:space:]]*wit_bindgen::generate!' ${self}/buffers ${self}/crates || true)
+          for f in $offenders; do
+            if [ "$f" != "$expected" ]; then
+              echo "ERRO: $f gera bindings proprias — so o ronoctua-design gera." >&2
+              failed=1
+            fi
+          done
+          if ! grep -qE '^[[:space:]]*wit_bindgen::generate!' "$expected"; then
+            echo "ERRO: o ronoctua-design parou de gerar as bindings." >&2
+            failed=1
+          fi
+
+          if titles=$(grep -rn "fn title(" ${self}/buffers 2>/dev/null); then
+            echo "ERROR: a buffer went back to having a header of its own:" >&2
+            echo "$titles" >&2
+            echo "      There is one header, and it lives in Screen::heading." >&2
+            failed=1
+          fi
+
+          [ "$failed" = 0 ] || exit 1
+          echo "OK: one generator of bindings, and no header written by hand"
+      '';
+
+  # NO VIEW BUILDS ITS OWN SEPARATOR.
+  #
+  # The owner reported the same defect three times across two months, in three
+  # different views: *"there are horizontal lines that touch the right side of the
+  # screen and do not touch the left"*, and the vertical ones *"are not touching
+  # the bottom of the screen"*. It was never one view's bug. Every one of the eight
+  # sites wrote the rectangle out by hand, and every one of them made one of the
+  # same two mistakes: `x: margin * cell` with `width: self.width` — inset on the
+  # left, past the edge on the right — or `height: lines * line_height`, which
+  # with a fractional line height stops short of the bottom.
+  #
+  # So the rectangle is not written by hand any more. `chrome::rule` takes the
+  # surface's width and cannot express an inset; `chrome::divider` takes the
+  # BOTTOM and not a height, so "where does it end" is answered with the edge
+  # rather than with a count. This check is what keeps the ninth site from being
+  # written the old way — which is the whole of what the owner asked for: not
+  # that the lines be fixed, but that they stop coming back.
+  separators-come-from-chrome = mkCheck "separators-come-from-chrome" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    # The one file allowed to build one: it is the definition.
+    mine = "chrome.rs"
+    bad = []
+    for f in sorted(home.glob("*.rs")):
+        if f.name == mine:
+            continue
+        lines = f.read_text().split("\n")
+        for i, l in enumerate(lines):
+            if "Quad {" not in l:
+                continue
+            block = "\n".join(lines[i : i + 9])
+            if re.search(r"width: 1\.0|height: 1\.0|RULE_THICKNESS", block):
+                bad.append(f"{f.name}:{i + 1}")
+    if bad:
+        print("ERROR: a rule or a divider assembled by hand, outside chrome.rs:", file=sys.stderr)
+        for b in bad:
+            print(f"       {b}", file=sys.stderr)
+        print("       Use chrome::rule (the surface's width, no inset) or", file=sys.stderr)
+        print("       chrome::divider (which takes the BOTTOM, not a height).", file=sys.stderr)
+        sys.exit(1)
+
+    # AND THE DEFINITION STILL DEFINES. A check that only forbids would pass
+    # on the day somebody deleted the two functions and went back to hand.
+    src = (home / mine).read_text()
+    for fn in ("pub fn rule(", "pub fn divider("):
+        if fn not in src:
+            print(f"ERROR: chrome.rs lost `{fn}` — there is no longer one place.", file=sys.stderr)
+            sys.exit(1)
+    print("OK: the rules and the dividers come out of one place")
+    PY
+  '';
+
+  # NO LINE IS COMPOSED OF SEVERAL SECTIONS' FIELDS.
+  #
+  # The manager has four columns — the sidebar, the listing, the preview and the
+  # facts — and each is a `files::Section`: it says where it is, what it holds
+  # and how much of it there is. Both doors draw section by section, and
+  # `View::hit` resolves a point by finding the section first.
+  #
+  # What this refuses is the arrangement that came before it, in which one line
+  # carried every column's fields at once. It was cheap and it was wrong: a
+  # column's length, its offset and its top reached into its neighbours, and
+  # every defect the owner reported for weeks was one of those reaches — a click
+  # on a folder resolving to the path above it, the sidebar's first rows
+  # answering nothing, the facts' hover lighting the listing, one wheel gesture
+  # moving all four, the preview's top jumping whenever the listing scrolled.
+  # It ended by taking the machine down: a function that materialised one line
+  # per row turned `usize::MAX` into a request for 2^64 of them.
+  #
+  # So: nothing outside the section builder may concatenate one section's fields
+  # onto another's line. The flattening that remains is `cfg(test)`, and says so.
+  sections-do-not-share-a-line = mkCheck "sections-do-not-share-a-line" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    files = (home / "files.rs").read_text()
+
+    # THE BUILDER IS THE ONLY ONE. `Section` has to exist and carry its own
+    # content, or this check is guarding nothing.
+    for needed in ("pub struct Section", "pub content: Vec<Row>", "pub fn sections("):
+        if needed not in files:
+            print(f"ERROR: files.rs lost `{needed}` — the sections stopped being the source.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    # AND THE FLATTENING IS A TEST TOOL, never production.
+    for name in ("fn drawn_at(", "fn drawn("):
+        at = files.find(name)
+        if at == -1:
+            continue
+        before = files[max(0, at - 400) : at]
+        if "#[cfg(test)]" not in before:
+            print(f"ERROR: `{name.strip('(')}` is not under #[cfg(test)] —"
+                  " the flattening came back into production.", file=sys.stderr)
+            sys.exit(1)
+
+    # AND NOBODY BRINGS IT BACK UNDER ANOTHER NAME: a public function that
+    # returns a flat list of rows for the whole region is the shape that was
+    # removed.
+    banned = re.compile(r"pub fn (region_rows|rows_from|rows)\s*\(")
+    hit = banned.search(files)
+    if hit:
+        line = files[: hit.start()].count("\n") + 1
+        print(f"ERROR: files.rs:{line} gives back the region's lines flattened"
+              f" (`{hit.group(1)}`).", file=sys.stderr)
+        print("       The manager has FOUR sections; each door draws them one by one.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # AND THE DOORS DRAW SECTIONS.
+    for door in ("surface.rs", "files_window.rs"):
+        src = (home / door).read_text()
+        if ".sections(" not in src:
+            print(f"ERROR: {door} does not draw by section.", file=sys.stderr)
+            sys.exit(1)
+    print("OK: every section draws itself, and nothing composes one line out of several")
+    PY
+  '';
+
   # EVERY STATE A BUFFER DECLARES HAS A WORD, IN BOTH LANGUAGES.
   #
   # Same shape as `buffer-modes-have-text`, and the same failure it prevents: the
@@ -1481,7 +2134,7 @@ let
   # token, and a buffer whose base were called something else would draw itself
   # as permanently not-normal.
   buffer-states-have-text = mkCheck "buffer-states-have-text" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     root_dir = pathlib.Path("${self}")
@@ -1519,18 +2172,18 @@ let
             per_buffer[rs.parts[-3]] = found
 
     if not per_buffer:
-        sys.exit("ERRO: nenhum estado encontrado — o formato do bloco mudou?")
+        sys.exit("ERROR: no state found — did the block's shape change?")
 
     gaps = []
     for buffer, states in sorted(per_buffer.items()):
         if not states or states[0][0] != "normal":
-            gaps.append(buffer + ": o estado base e " + repr(states[:1]) + ", nao `normal`")
+            gaps.append(buffer + ": the base state is " + repr(states[:1]) + ", not `normal`")
         ids = [i for i, _ in states]
         letters = [l for _, l in states]
         if len(set(ids)) != len(ids):
-            gaps.append(buffer + ": id de estado repetido")
+            gaps.append(buffer + ": a repeated state id")
         if len(set(letters)) != len(letters):
-            gaps.append(buffer + ": duas letras iguais deixariam um estado inalcancavel")
+            gaps.append(buffer + ": two identical letters would leave a state unreachable")
 
     wanted = {i for states in per_buffer.values() for i, _ in states}
     for language in ("pt-BR", "en-GB"):
@@ -1538,16 +2191,16 @@ let
         have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
         for ident in sorted(wanted):
             if "state-" + ident not in have:
-                gaps.append(language + ": falta state-" + ident)
+                gaps.append(language + ": state-" + ident + " is missing")
 
     if gaps:
-        print("ERRO: estado de buffer mal declarado.", file=sys.stderr)
+        print("ERROR: a badly declared buffer state.", file=sys.stderr)
         for g in gaps:
             print("       " + g, file=sys.stderr)
         raise SystemExit(1)
     total = sum(len(v) for v in per_buffer.values())
-    print("OK: " + str(total) + " estados em " + str(len(per_buffer)) + " buffers, com texto nos dois idiomas")
-    FIM
+    print("OK: " + str(total) + " states in " + str(len(per_buffer)) + " buffers, with text in both languages")
+    END
   '';
 
   transfers-instance-fast = mkCheck "transfers-instance-fast" [ ] ''
@@ -1607,28 +2260,28 @@ let
         declared[field] = int(value)
 
     if not declared:
-        sys.exit("ERRO: nao achei numero nenhum em ffi.rs — o teste de layout sumiu")
+        sys.exit("ERROR: could not find a single number in ffi.rs — the layout test went away")
 
     failed = 0
     for name, value in sorted(measured.items()):
         if name not in declared:
-            print(f"ERRO: o C++ mede `{name}` = {value} e o Rust nao o declara", file=sys.stderr)
+            print(f"ERROR: the C++ measures `{name}` = {value} and the Rust does not declare it", file=sys.stderr)
             failed = 1
         elif declared[name] != value:
             print(
-                f"ERRO: `{name}`: o C++ mede {value}, o Rust diz {declared[name]}."
-                " Um FFI com layout errado nao da diagnostico — da registrador"
+                f"ERROR: `{name}`: C++ measures {value}, Rust says {declared[name]}."
+                " An FFI with the wrong layout gives no diagnostic — it gives a register"
                 " com conteudo errado.",
                 file=sys.stderr,
             )
             failed = 1
     for name in declared:
         if name not in measured:
-            print(f"ERRO: o Rust declara `{name}` e o C++ nao o mede", file=sys.stderr)
+            print(f"ERROR: the Rust declares `{name}` and the C++ does not measure it", file=sys.stderr)
             failed = 1
     if failed:
         sys.exit(1)
-    print(f"OK: {len(measured)} medidas do compilador C++ batem com as do Rust")
+    print(f"OK: {len(measured)} measurements from the C++ compiler match the Rust's")
     PY
   '';
 
@@ -1660,27 +2313,27 @@ let
     m = json.loads(pathlib.Path("${extension}/share/ronoctua-extension/manifest.json").read_text())
     forbidden = [
         ("web_accessible_resources", "qualquer pagina consegue `fetch` de chrome-extension://"),
-        ("content_scripts", "o que ele deixa no DOM e um marcador"),
-        ("externally_connectable", "entrega `chrome.runtime` a uma origem"),
+        ("content_scripts", "what it leaves in the DOM is a marker"),
+        ("externally_connectable", "it hands `chrome.runtime` to an origin"),
         ("host_permissions", "acesso permanente e o que torna o resto possivel"),
-        ("declarative_net_request", "a pagina infere pela propria requisicao"),
+        ("declarative_net_request", "the page infers it from the request itself"),
     ]
     failed = 0
     for key, why in forbidden:
         if key in m:
-            print(f"ERRO: o manifesto ganhou `{key}` — {why}", file=sys.stderr)
+            print(f"ERROR: the manifest gained `{key}` — {why}", file=sys.stderr)
             failed = 1
     # And the permissions: `activeTab` instead of standing access IS the whole
     # design. Without it the only alternative is `host_permissions`.
     if "activeTab" not in m.get("permissions", []):
-        print("ERRO: sem `activeTab` a extensao precisaria de acesso permanente", file=sys.stderr)
+        print("ERROR: with no `activeTab` the extension would need standing access", file=sys.stderr)
         failed = 1
     if m.get("manifest_version") != 3:
-        print("ERRO: MV2 nao tem `activeTab` com este significado", file=sys.stderr)
+        print("ERROR: MV2 does not have `activeTab` with this meaning", file=sys.stderr)
         failed = 1
     if failed:
         sys.exit(1)
-    print(f"OK: nenhuma das cinco vias de deteccao, e {len(m['permissions'])} permissoes")
+    print(f"OK: none of the five detection channels, and {len(m['permissions'])} permissions")
     PY
   '';
 
@@ -1716,7 +2369,7 @@ let
 
         # ---- NO SERVER HALF ----
         if [ -e "$plugin/getpot_bgutil_http.py" ]; then
-          echo "ERRO: o provedor HTTP foi instalado — isso pede um servidor de pe" >&2
+          echo "ERROR: the HTTP provider was installed — that asks for a server standing" >&2
           failed=1
         fi
         test -f "$plugin/getpot_bgutil_script.py" || {
@@ -1736,7 +2389,7 @@ let
         # arrived through shebangs of command-line entry points nothing
         # executes, and it was 249 MiB.
         if found=$(grep -e "-nodejs-" ${closure}/store-paths); then
-          echo "ERRO: o gerador arrasta o node, que ele nunca roda:" >&2
+          echo "ERROR: the generator drags node in, which it never runs:" >&2
           echo "$found" >&2
           failed=1
         fi
@@ -1750,18 +2403,18 @@ let
           --allow-write="$TMPDIR/cache/bgutil-ytdlp-pot-provider" \
           --allow-read="$TMPDIR/cache/bgutil-ytdlp-pot-provider,$home/node_modules" \
           "$home/src/generate_once.ts" --version 2>&1 | tail -1) || {
-          echo "ERRO: o gerador nao roda sem rede — falta algo no fecho" >&2
+          echo "ERROR: the generator does not run without a network — something is missing from the closure" >&2
           echo "$got" >&2
           exit 1
         }
         want=$(grep -oP "__version__ = '\K[^']+" "$plugin/getpot_bgutil.py")
         if [ "$got" != "$want" ]; then
-          echo "ERRO: o script diz $got e o plugin diz $want; um aviso por download" >&2
+          echo "ERROR: the script says $got and the plugin says $want; one warning per download" >&2
           failed=1
         fi
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: so o provedor de script, versao $got, e ele roda sem rede"
+        echo "OK: only the script provider, version $got, and it runs without a network"
       '';
 
   # THE APP DOES NOT DEPEND ON THE EXTENSION.
@@ -1795,13 +2448,13 @@ let
         failed = 0
         # ---- WHAT THE MENU TAKES OFF A PAGE ----
         if not wanted:
-            sys.exit("ERRO: nao achei `want:` nenhum na extensao — o check parou de olhar")
+            sys.exit("ERROR: could not find a single `want:` in the extension — the check stopped looking")
         for want in sorted(wanted):
             for command in (f"transfers-{want}", f"transfers-{want}-as-me"):
                 if command not in bound:
                     print(
-                        f"ERRO: a extensao oferece `{want}` e o teclado nao tem `{command}`."
-                        " Tudo que a extensao faz tem de ser possivel sem ela.",
+                        f"ERROR: the extension offers `{want}` and the keyboard has no `{command}`."
+                        " Everything the extension does has to be possible without it.",
                         file=sys.stderr,
                     )
                     failed = 1
@@ -1811,7 +2464,7 @@ let
             for command in ("transfers-add", "transfers-add-as-me"):
                 if command not in bound:
                     print(
-                        f"ERRO: a extensao manda link e o teclado nao tem `{command}`",
+                        f"ERROR: the extension sends a link and the keyboard has no `{command}`",
                         file=sys.stderr,
                     )
                     failed = 1
@@ -1822,17 +2475,17 @@ let
         # at which to ask; the keyboard has it as a PREFIX. Both must exist, or
         # one door does something the other cannot.
         if "toggle-identity" not in kinds:
-            print("ERRO: a extensao perdeu a chave de identidade", file=sys.stderr)
+            print("ERROR: the extension lost the identity key", file=sys.stderr)
             failed = 1
         if not any(c.endswith("-as-me") for c in bound):
-            print("ERRO: o teclado perdeu o grupo `t i`", file=sys.stderr)
+            print("ERROR: the keyboard lost the `t i` group", file=sys.stderr)
             failed = 1
 
         if failed:
             sys.exit(1)
         print(
-            f"OK: {len(wanted)} midias e o link avulso, cada um com tecla anonima "
-            "e tecla identificada"
+            f"OK: {len(wanted)} media kinds and the bare link, each with an anonymous key "
+            "and an identified key"
         )
         PY
       '';
@@ -1848,12 +2501,12 @@ let
     failed=0
     for f in ${extension}/share/ronoctua-extension/*.js; do
       if ! esbuild --log-level=warning --format=esm --target=chrome116 "$f" > /dev/null; then
-        echo "ERRO: $(basename "$f") nao compila — o service worker nunca subiria" >&2
+        echo "ERROR: $(basename "$f") does not compile — the service worker would never come up" >&2
         failed=1
       fi
     done
     [ "$failed" = 0 ] || exit 1
-    echo "OK: os quatro arquivos da extensao compilam para chrome116"
+    echo "OK: the extension's four files compile for chrome116"
   '';
 
   # AND NO TEXT AND NO COLOUR WRITTEN BY HAND.
@@ -1876,8 +2529,8 @@ let
         for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d+", text):
             row = text[: m.start()].count("\n") + 1
             print(
-                f"ERRO: {entry.name}:{row} tem cor a mao (`{m.group(0)}`)."
-                " Toda cor vem de assets/tokens/colors.nix (invariante 9).",
+                f"ERROR: {entry.name}:{row} has a colour by hand (`{m.group(0)}`)."
+                " Every colour comes from assets/tokens/colors.nix (invariant 9).",
                 file=sys.stderr,
             )
             failed = 1
@@ -1887,14 +2540,14 @@ let
             if m.group(1).strip():
                 row = text[: m.start()].count("\n") + 1
                 print(
-                    f"ERRO: {entry.name}:{row} escreve text direto na tela."
-                    " Todo text vem de assets/i18n (invariante 8).",
+                    f"ERROR: {entry.name}:{row} writes text straight onto the screen."
+                    " Every text comes from assets/i18n (invariant 8).",
                     file=sys.stderr,
                 )
                 failed = 1
     if failed:
         sys.exit(1)
-    print("OK: a extensao nao carrega palavra nem cor propria")
+    print("OK: the extension carries neither a word nor a colour of its own")
     PY
   '';
 
@@ -1929,14 +2582,14 @@ let
         except (UnicodeDecodeError, OSError):
             continue
         if private.search(text):
-            print(f"ERRO: chave privada em {entry.relative_to(root)}", file=sys.stderr)
+            print(f"ERROR: a private key in {entry.relative_to(root)}", file=sys.stderr)
             failed = 1
         if token.search(text):
-            print(f"ERRO: segredo do aria2 em {entry.relative_to(root)}", file=sys.stderr)
+            print(f"ERROR: aria2's secret in {entry.relative_to(root)}", file=sys.stderr)
             failed = 1
     if failed:
         sys.exit(1)
-    print("OK: nem chave privada nem token — os dois nascem NA maquina")
+    print("OK: neither a private key nor a token — both are born ON the machine")
     PY
   '';
 
@@ -2082,7 +2735,7 @@ let
         --out "$PWD/$language.png" | tee "$PWD/$language.txt"
     done
 
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, struct, sys, zlib
 
     def read(language):
@@ -2103,7 +2756,7 @@ let
             at += 12 + size
         width, height, depth, colour, _, _, laced = struct.unpack(">IIBBBBB", chunks[b"IHDR"])
         assert (depth, colour, laced) == (8, 6, 0), (
-            f"{language}: cabecalho diz {depth} bits, tipo {colour}, entrelacado {laced}"
+            f"{language}: the header says {depth} bits, type {colour}, interlaced {laced}"
         )
         rows = zlib.decompress(chunks[b"IDAT"])
         # ONE FILTER BYTE PER ROW, and ours is always 0 — nothing compresses, so
@@ -2111,20 +2764,20 @@ let
         # mean the writer changed and this reader did not.
         stride = width * 4 + 1
         assert len(rows) == stride * height, (
-            f"{language}: {len(rows)} bytes de pixel para {width}x{height}"
+            f"{language}: {len(rows)} pixel bytes for {width}x{height}"
         )
         pixels = []
         for n in range(height):
             row = rows[n * stride : (n + 1) * stride]
-            assert row[0] == 0, f"{language}: linha {n} veio com filtro {row[0]}"
+            assert row[0] == 0, f"{language}: line {n} came with filter {row[0]}"
             pixels.extend(
                 bytes(row[1 + i * 4 : 5 + i * 4]) for i in range(width)
             )
         said = pathlib.Path(f"{language}.txt").read_text()
         printed = re.search(r"(\d+)x(\d+) px", said)
-        assert printed, f"{language}: a ferramenta nao disse o tamanho: {said!r}"
+        assert printed, f"{language}: the tool did not say the size: {said!r}"
         assert (width, height) == (int(printed[1]), int(printed[2])), (
-            f"{language}: o cabecalho diz {width}x{height} e a ferramenta disse "
+            f"{language}: the header says {width}x{height} and the tool said "
             f"{printed[1]}x{printed[2]}"
         )
         return width, height, pixels
@@ -2134,7 +2787,7 @@ let
         width, height, pixels = read(language)
         if shape is None:
             shape = (width, height)
-        assert shape == (width, height), "as duas linguas sairam com tamanhos diferentes"
+        assert shape == (width, height), "the two languages came out at different sizes"
 
         # THE INK. The commonest colour is the background by construction — it is
         # what the frame was cleared with — so anything else is something drawn.
@@ -2146,18 +2799,18 @@ let
         share = ink / len(pixels)
         print(f"{language}: {width}x{height}, {len(tally)} cores, {share:.2%} de tinta")
         assert share > 0.005, (
-            f"{language}: so {share:.3%} da imagem nao e o fundo — isso e uma tela "
-            "limpa, nao um buffer desenhado"
+            f"{language}: only {share:.3%} of the image is not the background — that is a clean "
+            "screen, not a drawn buffer"
         )
         seen[language] = pixels
 
     # AND AS TRADUCOES DIFEREM NO PIXEL.
     assert seen["pt-BR"] != seen["en-GB"], (
-        "pt-BR e en-GB sairam pixel por pixel iguais: a chave nao esta sendo "
-        "traduzida antes de virar desenho"
+        "pt-BR and en-GB came out pixel for pixel identical: the key is not being "
+        "translated before it becomes a drawing"
     )
-    print("OK: o PNG e valido, tem tinta, e o idioma chega ate o pixel")
-    FIM
+    print("OK: the PNG is valid, has ink in it, and the language reaches the pixel")
+    END
   '';
 
   # ENDING THE SESSION MUST NOT PRINT AN ERROR.
@@ -2170,7 +2823,7 @@ let
   #   rm: cannot remove '/nix/store/…-ronoctua-niri-aninhado.kdl': Permission denied
   #   rm: cannot remove '/nix/store/…-ronoctua-niri-aninhado.kdl': Permission denied
   #
-  # The first: `encerrar` tried to delete the CONFIG, which became a store path
+  # The first: `shutdown` tried to delete the CONFIG, which became a store path
   # when it started being generated by Nix — immutable by construction. The
   # `rm -f` does not save it, because it silences "does not exist" and not "is
   # not yours".
@@ -2180,60 +2833,60 @@ let
   #
   # # Why it runs the REAL app
   #
-  # Because the criterion is "the output is clean", and a replica of `encerrar`
-  # inside the check would prove nothing about the `encerrar` that runs on the
+  # Because the criterion is "the output is clean", and a replica of `shutdown`
+  # inside the check would prove nothing about the `shutdown` that runs on the
   # owner's machine — and the lesson at the top of this file is exactly that.
   # With no display niri does not come up, the script falls into the error path,
-  # and it is the real `encerrar` that runs.
+  # and it is the real `shutdown` that runs.
   dev-exits-clean = mkCheck "dev-exits-clean" [ devApp ] ''
     export HOME=$TMPDIR
     export XDG_RUNTIME_DIR=$TMPDIR
     # A DISPLAY THAT DOES NOT EXIST. With none at all, the script stops at the
     # graphical-session guard BEFORE installing the trap, and the path this check
     # wants to exercise never runs. With a fake name it carries on, niri dies at
-    # startup, the waiting loop gives up — and `encerrar` really runs.
-    export WAYLAND_DISPLAY=nao-existe-1
+    # startup, the waiting loop gives up — and `shutdown` really runs.
+    export WAYLAND_DISPLAY=does-not-exist-1
     # It exits non-zero on purpose (niri does not come up here); what is measured
     # is what it PRINTS on ending.
     timeout 300 ronoctua-dev > out_text.txt 2> errors.txt || true
 
     if grep -qE "cannot remove|Permission denied" errors.txt; then
-      echo "ERRO: encerrar a sessao imprimiu erro de remocao:" >&2
+      echo "ERROR: shutting the session down printed a removal error:" >&2
       grep -E "cannot remove|Permission denied" errors.txt >&2
-      echo "      Caminho do store nao se apaga, e o '-f' nao cala isso." >&2
+      echo "      A store path is not deleted, and '-f' does not silence that." >&2
       exit 1
     fi
 
-    # AND ONLY ONCE. The log line comes out of `encerrar`; two means the cleanup
+    # AND ONLY ONCE. The log line comes out of `shutdown`; two means the cleanup
     # ran twice.
     #
     # HOW FAR THIS PROVES IT: here the script exits by the error path, so only the
     # EXIT trap fires. The duplicate the owner saw comes from Ctrl+C — INT cleans
     # up and EXIT cleans up again —, and reproducing it would require a compositor
-    # standing to interrupt. This check catches `encerrar` running twice on a
+    # standing to interrupt. This check catches `shutdown` running twice on a
     # normal exit; the other half is seen on screen, and its fix is the
     # `trap 'exit 130' INT` of dev.nix.
     #
     # The `|| true` is around the `grep -c`: with no match at all it exits 1, and
     # under `pipefail` that would bring the check down before it counted — which is
     # the same trap `pgrep` has already set twice in this file.
-    n=$( { cat out_text.txt errors.txt | grep -c "logs desta sessao:"; } || true )
+    n=$( { cat out_text.txt errors.txt | grep -c "logs of this session:"; } || true )
     [ "$n" = 1 ] || {
-      echo "ERRO: o encerrar rodou $n vezes; esperava 1." >&2
-      echo "      'trap … EXIT INT TERM' limpa pelo INT e de novo pelo EXIT." >&2
-      echo "--- saida:" >&2; tail -20 out_text.txt >&2
+      echo "ERROR: the shutdown ran $n times; expected 1." >&2
+      echo "      'trap … EXIT INT TERM' cleans up on INT and again on EXIT." >&2
+      echo "--- output:" >&2; tail -20 out_text.txt >&2
       echo "--- erro:" >&2; tail -20 errors.txt >&2
       exit 1
     }
 
-    echo "OK: encerrar a sessao sai limpo, e uma vez so"
+    echo "OK: shutting the session down comes out clean, and only once"
   '';
 
   # THE NESTED LOOP CALLS A COMMAND THAT EXISTS.
   #
   # # The defect this exists for, and it lasted from the first commit
   #
-  # `nix/dev.nix` handed the watcher `RONOCTUA_RELOAD_CMD='reconstruir'`, and
+  # `nix/dev.nix` handed the watcher `RONOCTUA_RELOAD_CMD='rebuild'`, and
   # the function it defines and exports is called `rebuild`. The watcher `eval`s
   # the string, gets "command not found", and swallows it with `|| true` — which
   # is correct, because a compile error is the normal case in a loop. So HOT
@@ -2255,25 +2908,25 @@ let
 
         cmd=$(sed -n "s/.*RONOCTUA_RELOAD_CMD='\([a-z_]*\)'.*/\1/p" "$script" | head -1)
         [ -n "$cmd" ] || {
-          echo "ERRO: nao achei o RONOCTUA_RELOAD_CMD no script do laco" >&2
+          echo "ERROR: could not find RONOCTUA_RELOAD_CMD in the loop's script" >&2
           exit 1
         }
         echo "o laco manda rodar: $cmd"
 
         grep -q "^  $cmd() {" "$script" || {
-          echo "ERRO: '$cmd' nao e uma funcao definida no script — o watcher vai" >&2
+          echo "ERROR: '$cmd' is not a function defined in the script — the watcher will" >&2
           echo "      receber 'command not found', engolir com '|| true', e o hot" >&2
-          echo "      reload nao vai disparar NUNCA, sem uma linha de aviso." >&2
+          echo "      reload will NEVER fire, with not one line of warning." >&2
           exit 1
         }
         # And exported: the watcher is ANOTHER process, and a function that is
         # not exported does not cross into it — same symptom, same silence.
         grep -qE "^  export -f .*\b$cmd\b" "$script" || {
-          echo "ERRO: '$cmd' nao e exportada; o watcher roda noutro processo" >&2
+          echo "ERROR: '$cmd' is not exported; the watcher runs in another process" >&2
           exit 1
         }
 
-        echo "OK: o laco chama '$cmd', que existe e atravessa para o watcher"
+        echo "OK: the loop calls '$cmd', which exists and crosses over to the watcher"
       '';
 
   # AND IT COMPILES THE SAME BINARY THE BUILD WOULD.
@@ -2300,14 +2953,14 @@ let
 
     for v in ${lib.concatStringsSep " " (lib.attrNames (rust.generated // rust.bufferComponents))}; do
       grep -q "^  export $v=" "$script" || {
-        echo "ERRO: o build assa $v e o laco nao a exporta — o binario do hot" >&2
-        echo "      reload vai sem ela, e a falha aparece longe daqui." >&2
+        echo "ERROR: the build bakes $v in and the loop does not export it — the hot" >&2
+        echo "      reload goes without it, and the failure shows up far from here." >&2
         failed=1
       }
     done
 
     [ "$failed" = 0 ] || exit 1
-    echo "OK: as $(grep -c '^  export RONOCTUA_' "$script") variaveis do laco cobrem o que o build assa"
+    echo "OK: the $(grep -c '^  export RONOCTUA_' "$script") variables of the loop cover what the build bakes in"
   '';
 
   # ===================================================================
@@ -2334,21 +2987,21 @@ let
 
         keys=$(grep -ohE '"rescue-[a-z0-9-]+"' "$src"/lib.rs | tr -d '"' | sort -u)
         [ -n "$keys" ] || {
-          echo "ERRO: nenhuma chave 'rescue-*' no registro — o grep casa o que?" >&2
+          echo "ERROR: no 'rescue-*' key in the registry — what does the grep match?" >&2
           exit 1
         }
 
         for k in $keys; do
           for language in pt-BR en-GB; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
-              echo "ERRO: falta '$k' em $language.ftl — a tela mostraria [$k]" >&2
+              echo "ERROR: '$k' is missing from $language.ftl — the screen would show [$k]" >&2
               failed=1
             }
           done
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$keys" | wc -l) chaves do resgate, nos dois idiomas"
+        echo "OK: $(echo "$keys" | wc -l) rescue keys, in both languages"
       '';
 
   # THE MIME TABLE CAME OUT WHOLE.
@@ -2358,10 +3011,10 @@ let
   # a reordered `mime-glyphs.nix` or a bumped `shared-mime-info` would break.
   mime-table-generated = mkCheck "mime-table-generated" [ pkgs.gnugrep pkgs.coreutils ] ''
     table=${mimeDb}/mimedb.rs
-    test -s "$table" || { echo "ERRO: a tabela saiu vazia" >&2; exit 1; }
+    test -s "$table" || { echo "ERROR: the table came out empty" >&2; exit 1; }
     for name in GLOBS MAGIC SUBCLASS ALIASES GENERIC ICON_OF_GENERIC ICON_OF_MIME; do
       grep -qE "pub static $name" "$table" || {
-        echo "ERRO: falta a tabela $name" >&2
+        echo "ERROR: the $name table is missing" >&2
         exit 1
       }
     done
@@ -2370,7 +3023,7 @@ let
     # HANDFUL of rows, which reads as "the database is small".
     globs=$(grep -c 'Glob {' "$table")
     [ "$globs" -ge 900 ] || { echo "ERRO: so $globs globs" >&2; exit 1; }
-    echo "OK: $globs padroes de nome, e as sete tabelas"
+    echo "OK: $globs name patterns, and the seven tables"
   '';
 
   # AND IT REFUSES A TABLE THAT DOES NOT ANSWER FOR EVERY GENERIC ICON.
@@ -2380,8 +3033,8 @@ let
   # — and the neutral square is indistinguishable from "I did not resolve it",
   # so nothing would say so.
   mime-unknown-icon-fails = mkCheck "mime-unknown-icon-fails" [ ] ''
-    test -s ${mimeDb.negativeFixture}/veredito
-    cat ${mimeDb.negativeFixture}/veredito
+    test -s ${mimeDb.negativeFixture}/verdict
+    cat ${mimeDb.negativeFixture}/verdict
   '';
 
   # EVERY ROW OF THE FILE MANAGER'S MENU HAS TEXT, IN BOTH LANGUAGES.
@@ -2411,7 +3064,7 @@ let
         # the same rule reaching the `.ftl`.
         ids=$(grep -oE '^ *id: "[a-z0-9-]+"' "$src"/menu.rs | grep -oE '"[^"]+"' | tr -d '"')
         [ -n "$ids" ] || {
-          echo "ERRO: nenhuma linha na tabela de acoes — o grep casa o que?" >&2
+          echo "ERROR: no row in the action table — what does the grep match?" >&2
           exit 1
         }
         # TWO KEYS PER ROW, and the second is the one that would rot quietly.
@@ -2426,7 +3079,7 @@ let
         for k in $keys; do
           for language in pt-BR en-GB; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
-              echo "ERRO: falta $k em $language.ftl — a tela mostraria a chave crua" >&2
+              echo "ERROR: $k is missing from $language.ftl — the screen would show the raw key" >&2
               failed=1
             }
           done
@@ -2440,15 +3093,15 @@ let
         side=$(grep -oE '^ *id: "[a-z0-9-]+"' "$src"/sidebar_menu.rs \
           | grep -oE '"[^"]+"' | tr -d '"')
         [ -n "$side" ] || {
-          echo "ERRO: nenhuma linha no menu da barra lateral." >&2
+          echo "ERROR: no row in the sidebar's menu." >&2
           exit 1
         }
         sidekeys=$(for i in $side; do echo "sidebar-$i"; echo "sidebar-does-$i"; done | sort -u)
         for k in $sidekeys; do
           for language in pt-BR en-GB; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
-              echo "ERRO: falta $k em $language.ftl — a linha do menu da barra" >&2
-              echo "      mostraria a chave crua." >&2
+              echo "ERROR: $k is missing from $language.ftl — the sidebar menu's" >&2
+              echo "      row would show the raw key." >&2
               failed=1
             }
           done
@@ -2466,14 +3119,14 @@ let
         for k in $view; do
           for language in pt-BR en-GB; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
-              echo "ERRO: falta $k em $language.ftl — a tecla nao teria nome" >&2
+              echo "ERROR: $k is missing from $language.ftl — the key would have no name" >&2
               failed=1
             }
           done
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$keys" "$sidekeys" "$view" | tr ' ' '\n' | sort -u | wc -l) chaves, nos dois idiomas"
+        echo "OK: $(echo "$keys" "$sidekeys" "$view" | tr ' ' '\n' | sort -u | wc -l) keys, in both languages"
       '';
 
   # NOTHING THE MOUSE DOES IS OUT OF THE KEYBOARD'S REACH.
@@ -2500,10 +3153,10 @@ let
 
         # --- every menu row has a key, and the keys do not collide ----------
         keys=$(grep -oE '^ *key: "[^"]+"' "$menu" | grep -oE '"[^"]+"' | tr -d '"')
-        [ -n "$keys" ] || { echo "ERRO: nenhuma tecla na tabela de acoes" >&2; exit 1; }
+        [ -n "$keys" ] || { echo "ERROR: no key in the action table" >&2; exit 1; }
         repeated=$(echo "$keys" | sort | uniq -d)
         [ -z "$repeated" ] || {
-          echo "ERRO: duas linhas do menu na mesma tecla: $repeated" >&2
+          echo "ERROR: two menu rows on the same key: $repeated" >&2
           failed=1
         }
 
@@ -2513,7 +3166,7 @@ let
         # it is added rather than the day somebody notices it has no key.
         variants=$(sed -n '/^pub enum Hit {/,/^}/p' "$view" \
           | grep -oE '^ {4}[A-Z][A-Za-z]*' | tr -d ' ')
-        [ -n "$variants" ] || { echo "ERRO: nao achei o enum Hit" >&2; exit 1; }
+        [ -n "$variants" ] || { echo "ERROR: could not find the Hit enum" >&2; exit 1; }
 
         for v in $variants; do
           case "$v" in
@@ -2523,7 +3176,7 @@ let
             Nothing|Menu|Choice) continue ;;
           esac
           grep -qE "Hit::$v" "$view" || {
-            echo "ERRO: a variante Hit::$v nao e produzida por nada" >&2
+            echo "ERROR: the variant Hit::$v is produced by nothing" >&2
             failed=1
           }
         done
@@ -2535,10 +3188,10 @@ let
         # the manual would not list.
         declared=$(sed -n '/^pub const OF_THE_VIEW/,/^];/p' "$view" \
           | grep -oE '^ *\("[^"]+"' | grep -oE '"[^"]+"' | tr -d '"')
-        [ -n "$declared" ] || { echo "ERRO: nao achei OF_THE_VIEW" >&2; exit 1; }
+        [ -n "$declared" ] || { echo "ERROR: could not find OF_THE_VIEW" >&2; exit 1; }
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$keys" | wc -l) teclas de menu, $(echo "$declared" | wc -l) da vista, e todo Hit tem dono"
+        echo "OK: $(echo "$keys" | wc -l) menu keys, $(echo "$declared" | wc -l) of the view's, and every Hit has an owner"
       '';
 
   # NOTHING THE FILE MANAGER SPAWNS COMES BY NAME.
@@ -2552,14 +3205,14 @@ let
     read_it=$(grep -ohE 'option_env!\("RONOCTUA_[A-Z_]+"\)' "$src"/*.rs "$src"/bin/*.rs \
       | grep -oE 'RONOCTUA_[A-Z_]+' | sort -u)
     [ -n "$read_it" ] || {
-      echo "ERRO: o crate nao le nenhuma variavel — o grep casa o que?" >&2
+      echo "ERROR: the crate reads no variable at all — what does the grep match?" >&2
       exit 1
     }
 
     for v in $read_it; do
       grep -qE "^ *$v = " ${../nix/rust.nix} || {
-        echo "ERRO: $v e lida pelo crate e nao esta em nix/rust.nix" >&2
-        echo "      O programa falharia longe da causa, com PATH minimo." >&2
+        echo "ERROR: $v is read by the crate and is not in nix/rust.nix" >&2
+        echo "      The program would fail far from the cause, with a minimal PATH." >&2
         failed=1
       }
     done
@@ -2568,13 +3221,13 @@ let
     # fail inside a systemd scope — the trap CLAUDE.md records.
     bare=$(grep -nE 'Command::new\("[a-z]' "$src"/*.rs "$src"/bin/*.rs || true)
     [ -z "$bare" ] || {
-      echo "ERRO: programa por NOME, nao por caminho:" >&2
+      echo "ERROR: a program by NAME, not by path:" >&2
       echo "$bare" >&2
       failed=1
     }
 
     [ "$failed" = 0 ] || exit 1
-    echo "OK: $(echo "$read_it" | wc -l) programas, todos por caminho de store"
+    echo "OK: $(echo "$read_it" | wc -l) programs, all by store path"
   '';
 
   # THE PRIVILEGED DOOR IS AS NARROW AS THE CODE SAYS IT IS.
@@ -2600,23 +3253,23 @@ let
         failed=0
 
         unit=$(grep -oE 'pub const UNIT: &str = "[^"]+"' "$crate" | grep -oE '"[^"]+"' | tr -d '"')
-        [ -n "$unit" ] || { echo "ERRO: o crate nao nomeia a unidade" >&2; exit 1; }
+        [ -n "$unit" ] || { echo "ERROR: the crate does not name the unit" >&2; exit 1; }
 
         grep -qE "unit = \"$unit\"" "$module" || {
-          echo "ERRO: o crate pede '$unit' e o modulo nao a define" >&2
+          echo "ERROR: the crate asks for '$unit' and the module does not define it" >&2
           failed=1
         }
         grep -qE 'action.lookup\("unit"\) == "\$\{unit\}"' "$module" || {
-          echo "ERRO: a regra polkit nao compara a unidade com a do modulo" >&2
+          echo "ERROR: the polkit rule does not compare the unit with the module's" >&2
           failed=1
         }
         grep -qE 'action.lookup\("verb"\) == "start"' "$module" || {
-          echo "ERRO: a regra polkit nao limita o verbo a 'start'" >&2
-          echo "      Sem isso ela para, reinicia e recarrega qualquer coisa." >&2
+          echo "ERROR: the polkit rule does not limit the verb to 'start'" >&2
+          echo "      Without that it stops, restarts and reloads anything at all." >&2
           failed=1
         }
         grep -qE 'subject.user == "\$\{user\}"' "$module" || {
-          echo "ERRO: a regra polkit nao limita o usuario" >&2
+          echo "ERROR: the polkit rule does not limit the user" >&2
           failed=1
         }
 
@@ -2624,7 +3277,7 @@ let
         # two is privilege granted to something nobody audited.
         units=$(grep -cE '^ *systemd.services.ronoctua-files' "$module" || true)
         [ "$units" = 1 ] || {
-          echo "ERRO: o modulo declara $units unidades privilegiadas; a regra nomeia uma" >&2
+          echo "ERROR: the module declares $units privileged units; the rule names one" >&2
           failed=1
         }
 
@@ -2637,7 +3290,7 @@ let
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: uma unidade ($unit), verbo start, um usuario, quatro verbos que nao apagam"
+        echo "OK: one unit ($unit), the verb start, one user, four verbs that do not delete"
       '';
 
   # THE HOST'S LIBRARIES NEVER GO ON `LD_LIBRARY_PATH` — except for NVIDIA.
@@ -2673,8 +3326,8 @@ let
         # THE ORDINARY PATH EXISTS: a check that only forbids goes green on a
         # script that stopped setting up graphics at all.
         grep -q 'ronoctua-graphics/lib' "$script" || {
-          echo "ERRO: o laco nao poe o mesa do Nix no LD_LIBRARY_PATH." >&2
-          echo "      Sem ele o niri sobe sem EGL e morre com DisplayNotSupported." >&2
+          echo "ERROR: the loop does not put Nix's mesa on LD_LIBRARY_PATH." >&2
+          echo "      Without it niri comes up with no EGL and dies with DisplayNotSupported." >&2
           failed=1
         }
 
@@ -2684,19 +3337,19 @@ let
         # all. Grepping for the branch's presence would not do: the branch could
         # be there and a second export outside it.
         outside=$(awk '
-          /if \[ "\$only_nvidia" = sim \]/ { inside = 1 }
+          /if \[ "\$only_nvidia" = yes \]/ { inside = 1 }
           inside && /^      fi$/ { inside = 0; next }
           !inside { print }
         ' "$script" | grep -n '/usr/lib' || true)
         if [ -n "$outside" ]; then
-          echo "ERRO: o laco poe biblioteca do HOST no caminho fora do ramo NVIDIA:" >&2
+          echo "ERROR: the loop puts a HOST library on the path outside the NVIDIA branch:" >&2
           echo "$outside" >&2
-          echo "      Junto vai a libc do host, e ela nao combina com o ld.so do Nix." >&2
+          echo "      The host's libc goes with it, and it does not match Nix's ld.so." >&2
           failed=1
         fi
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: o driver vem do Nix, e o do host so no ramo NVIDIA"
+        echo "OK: the driver comes from Nix, and the host's only on the NVIDIA branch"
       '';
 
   # THE GENERATED MIME TABLE IS A BUILD INPUT, AND STAYS ONE.
@@ -2727,12 +3380,12 @@ let
     in
     mkCheck "files-closure-has-no-mime-db" [ pkgs.gnugrep pkgs.coreutils ] ''
       if found=$(grep -e '-ronoctua-mimedb-' ${closure}/store-paths); then
-        echo "ERRO: a tabela gerada esta no closure de EXECUCAO:" >&2
+        echo "ERROR: the generated table is in the RUNTIME closure:" >&2
         echo "$found" >&2
-        echo "      Ela e lida em tempo de COMPILACAO — o build.rs a copia para" >&2
-        echo "      OUT_DIR e o binario carrega os DADOS. Uma referencia aqui" >&2
-        echo "      significa que alguem passou a le-la em execucao, e com ela" >&2
-        echo "      vem o shared-mime-info inteiro." >&2
+        echo "      It is read at COMPILE time — build.rs copies it to" >&2
+        echo "      OUT_DIR and the binary carries the DATA. A reference here" >&2
+        echo "      means somebody started reading it at run time, and with it" >&2
+        echo "      comes the whole shared-mime-info." >&2
         exit 1
       fi
 
@@ -2741,11 +3394,11 @@ let
       # already learned. `bsdtar` is the file manager's one new runtime
       # reference, so its absence means the compressing half is gone.
       grep -q -e '-libarchive-' ${closure}/store-paths || {
-        echo "ERRO: o libarchive nao esta no closure; o `bsdtar` do gerenciador" >&2
-        echo "      sumiu, e comprimir e extrair falhariam por caminho ausente." >&2
+        echo "ERROR: libarchive is not in the closure; the manager's `bsdtar`" >&2
+        echo "      went away, and compressing and extracting would fail on a missing path." >&2
         exit 1
       }
-      echo "OK: $(wc -l < ${closure}/store-paths) caminhos; a tabela nao esta em execucao e o bsdtar esta"
+      echo "OK: $(wc -l < ${closure}/store-paths) paths; the table is not in the runtime and bsdtar is"
     '';
 
   # THE COLUMNS GIVE WAY IN THE ORDER THE CODE STATES.
@@ -2761,16 +3414,16 @@ let
     order=$(sed -n '/^pub const GIVE_WAY/,/^];/p' "$view" | grep -oE 'Column::[A-Za-z]+' | tr -d ' ')
     first=$(echo "$order" | head -1)
     [ "$first" = "Column::Group" ] || {
-      echo "ERRO: a primeira coluna a ceder virou $first, e era o grupo." >&2
-      echo "      Se a mudanca e proposital, o teste ao lado de GIVE_WAY diz por que." >&2
+      echo "ERROR: the first column to give way became $first, and it was the group." >&2
+      echo "      If the change is deliberate, the test next to GIVE_WAY says why." >&2
       exit 1
     }
     echo "$order" | grep -q 'Column::Name' && {
-      echo "ERRO: o nome esta em GIVE_WAY. Ele nunca cede: uma tabela sobre" >&2
-      echo "      arquivos que nao diz quais e uma tabela sobre nada." >&2
+      echo "ERROR: the name is in GIVE_WAY. It never gives way: a table about" >&2
+      echo "      files that does not say which ones is a table about nothing." >&2
       exit 1
     }
-    echo "OK: cede na ordem $(echo "$order" | tr '\n' ' ')"
+    echo "OK: gives way in the order $(echo "$order" | tr '\n' ' ')"
   '';
 
   # NOTHING THE CONSOLE SPAWNS COMES BY NAME.
@@ -2789,7 +3442,7 @@ let
     read_it=$(grep -ohE 'option_env!\("RONOCTUA_[A-Z_]+"\)' "$src"/*.rs \
       | grep -oE 'RONOCTUA_[A-Z_]+' | sort -u)
     [ -n "$read_it" ] || {
-      echo "ERRO: o console nao le variavel nenhuma — ele spawna por nome?" >&2
+      echo "ERROR: the console reads no variable at all — does it spawn by name?" >&2
       exit 1
     }
     echo "o console le: $(echo "$read_it" | tr '\n' ' ')"
@@ -2799,15 +3452,15 @@ let
       case " $baked " in
         *" $v "*) ;;
         *)
-          echo "ERRO: o console le $v e o build nao a assa — ele cairia" >&2
-          echo "      no 'PATH' minimo de uma unidade e falharia longe daqui." >&2
+          echo "ERROR: the console reads $v and the build does not bake it in — it would fall" >&2
+          echo "      on a unit's minimal 'PATH' and would fail far from here." >&2
           failed=1
           ;;
       esac
     done
 
     [ "$failed" = 0 ] || exit 1
-    echo "OK: todo programa do resgate vem por caminho de store"
+    echo "OK: every rescue program comes by store path"
   '';
 
   # THE POLKIT RULE ALLOWS EXACTLY WHAT THE CONSOLE ASKS FOR.
@@ -2829,9 +3482,9 @@ let
         pkgs.coreutils
       ]
       ''
-        cat > rule.js <<'FIM'
+        cat > rule.js <<'END'
         ${rule}
-        FIM
+        END
         # THE WHOLE CRATE, and not just the registry. The unit that installs an
         # edited `host.nix` is named in `edit.rs` — this check found that by
         # refusing, which is what a two-way comparison is for.
@@ -2850,8 +3503,8 @@ let
             keyd.service) continue ;;
           esac
           grep -qF "\"$u\"" rule.js || {
-            echo "ERRO: o console pede '$u' e a regra de polkit nao a permite;" >&2
-            echo "      a linha falharia na frente da pessoa." >&2
+            echo "ERROR: the console asks for '$u' and the polkit rule does not allow it;" >&2
+            echo "      the row would fail in front of the person." >&2
             failed=1
           }
         done
@@ -2859,14 +3512,14 @@ let
         # And back: every unit the rule names has to be one the console asks for.
         for u in $(grep -ohE '"ronoctua-rescue[A-Za-z@.-]*\.service"' rule.js | tr -d '"' | sort -u); do
           grep -rqF "\"$u\"" "$src" || {
-            echo "ERRO: a regra permite '$u' e nenhuma linha do console a pede —" >&2
-            echo "      privilegio concedido a ninguem, que e o que ninguem audita." >&2
+            echo "ERROR: the rule allows '$u' and no console row asks for it —" >&2
+            echo "      a privilege granted to nobody, which is what nobody audits." >&2
             failed=1
           }
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: a regra permite exatamente o que o console pede"
+        echo "OK: the rule allows exactly what the console asks for"
       '';
 
   # `Ctrl+Alt+Del` IS OURS — and the hard way out stays systemd's.
@@ -2889,15 +3542,15 @@ let
     in
     mkCheck "ctrl-alt-del-is-ours" [ ] ''
       [ "${aimed}" = "ronoctua-rescue.target" ] || {
-        echo "ERRO: o Ctrl+Alt+Del aponta para '${aimed}', que nao e o resgate." >&2
+        echo "ERROR: Ctrl+Alt+Del points at '${aimed}', which is not the rescue." >&2
         exit 1
       }
       wants="${lib.concatStringsSep " " target.wants}"
       case "$wants" in
         *ronoctua-rescue.service*) ;;
         *)
-          echo "ERRO: o ctrl-alt-del.target nao abre o resgate; ele quer: $wants" >&2
-          echo "      Uma tecla tomada que nao abre nada e uma tecla perdida." >&2
+          echo "ERROR: ctrl-alt-del.target does not open the rescue; it wants: $wants" >&2
+          echo "      A key that is taken and opens nothing is a key thrown away." >&2
           exit 1
           ;;
       esac
@@ -2905,14 +3558,14 @@ let
       # The way out that does not pass through us.
       [ "${burst}" = "reboot-force" ] || {
         echo "ERRO: CtrlAltDelBurstAction e '${burst}'; os sete toques em dois" >&2
-        echo "      segundos eram a unica saida com tudo travado." >&2
+        echo "      seconds were the only way out with everything locked up." >&2
         exit 1
       }
 
-      echo "OK: um toque abre o resgate, sete ainda reiniciam a forca"
+      echo "OK: one press opens the rescue, seven still force a reboot"
     '';
 
-  # O CONSOLE DE RESGATE NÃO CARREGA COMPILADOR.
+  # THE RESCUE CONSOLE CARRIES NO COMPILER.
   #
   # He exists for a machine that is broken, and the cheapest way to make him
   # useless is to link something that drags a toolchain: `ronoctua-term` cites
@@ -2941,7 +3594,7 @@ let
           fi
         done
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(wc -l < ${closure}/store-paths) caminhos, e nenhum compilador"
+        echo "OK: $(wc -l < ${closure}/store-paths) paths, and no compiler"
       '';
 
   # WHATEVER THE SHELL LOOKS FOR NEXT DOOR, THE DEV LOOP HAS TO BUILD.
@@ -2966,27 +3619,32 @@ let
       ''
         shell=${../crates/ronoctua-shell/src}
         queue=${../crates/ronoctua-transfers/src}
+        # AND THE BRAIN'S, for the same reason the queue's is here: it looks its
+        # own daemon up beside `current_exe()`, so the nested loop has to build
+        # that binary or the footer would find yesterday's one and nothing would
+        # say so.
+        brain=${../crates/ronoctua-brain/src}
         failed=0
 
         # The names come from the CODE that looks them up, never from a list
         # written here: a list would be a third place to keep in step.
-        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" \
+        beside=$(grep -rhoE 'parent\(\)\?\.join\("[a-z-]+"' "$shell" "$queue" "$brain" \
           | grep -oE '"[a-z-]+"' | tr -d '"' | sort -u)
         [ -n "$beside" ] || {
-          echo "ERRO: ninguem procura binario ao lado — o grep casa o que?" >&2
+          echo "ERROR: nobody looks for a binary beside it — what does the grep match?" >&2
           exit 1
         }
 
         for b in $beside; do
           grep -q -- "--bin $b" ${../nix/dev.nix} || {
-            echo "ERRO: o rodape procura $b ao lado, e o laco de dev nao o constroi." >&2
-            echo "      Depois da PRIMEIRA edicao ele some, em silencio." >&2
+            echo "ERROR: the footer looks for $b beside it, and the dev loop does not build it." >&2
+            echo "      After the FIRST edit it goes away, in silence." >&2
             failed=1
           }
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$beside" | wc -l) binarios ao lado, e o laco constroi todos"
+        echo "OK: $(echo "$beside" | wc -l) binaries beside it, and the loop builds them all"
       '';
 
   # THE QUEUE'S UNIT IS A COPY, NOT A DESKTOP.
@@ -3014,13 +3672,126 @@ let
         failed=0
         for unwanted in -zig- -clang- -llvm- -mesa- -vulkan-loader- -noctua-iosevka- -icons-superpack-; do
           if found=$(grep -e "$unwanted" ${closure}/store-paths); then
-            echo "ERRO: a unidade da fila arrasta $unwanted:" >&2
+            echo "ERROR: the queue's unit drags $unwanted in:" >&2
             echo "$found" >&2
             failed=1
           fi
         done
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(wc -l < ${closure}/store-paths) caminhos, e nenhum deles desenha"
+        echo "OK: $(wc -l < ${closure}/store-paths) paths, and none of them draws"
+      '';
+
+  # A TEST MAY NOT REACH THE MACHINE, and this one was paid for out loud.
+  #
+  # `ronoctua-brain`'s `systemd` module had a unit test that called
+  # `start("ronoctua-does-not-exist.service")`. The reasoning was sound and
+  # wrong: a unit that is not there cannot do any harm. But `systemctl start`
+  # on a SYSTEM unit is authorised by polkit BEFORE systemd looks the unit up,
+  # so every `cargo test` opened a real authentication prompt on the owner's
+  # laptop — and, because there is no polkit agent in the session, sat there
+  # until it timed out. The suite took 25 s; without the call it takes 0,3.
+  #
+  # Nothing failed. Nothing was logged. It surfaced because the owner was asked
+  # for his fingerprint five times in a row and came to ask what was going on —
+  # which is the same failure this repository already reasons about from the
+  # other end: he is not always near the laptop, and a prompt nobody sees is a
+  # refusal nobody made.
+  #
+  # So: inside `#[cfg(test)]`, no program that authorises, spawns a unit, or
+  # asks for a password. What a test may check is the SHAPE of the invocation,
+  # which is a pure function.
+  tests-do-not-touch-the-machine = mkCheck "tests-do-not-touch-the-machine" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    root_dir = pathlib.Path("${self}")
+
+    # The programs a test must never start. `systemd-run` is on the list for a
+    # second reason on top of polkit: it is SYNCHRONOUS with `--scope`, and
+    # this project has already frozen its own footer on that once.
+    FORBIDDEN = re.compile(
+        r'Command::new\(\s*(?:&)?(?:"|SYSTEMCTL|path)\s*'
+        r'|Command::new\([^)]*\b(sudo|pkexec|systemd-run|systemctl|loginctl|udisksctl)\b'
+    )
+    # A spawn of ANY kind inside a test module is worth naming, so the two
+    # patterns above do not become a list somebody has to keep complete.
+    SPAWN = re.compile(r"Command::new\(")
+
+    gaps = []
+    for rs in sorted((root_dir / "crates").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        source = rs.read_text()
+        # Everything from `mod tests {` to the end of the file: a test module is
+        # conventionally last here, and taking the tail is what makes this
+        # robust against nesting rather than counting braces.
+        at = source.find("mod tests {")
+        if at < 0:
+            continue
+        tail = source[at:]
+        for n, line in enumerate(tail.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("///"):
+                continue
+            if SPAWN.search(line):
+                rel = rs.relative_to(root_dir)
+                gaps.append(f"{rel}: mod tests + {n}: {stripped[:70]}")
+
+    if gaps:
+        print("ERROR: a test starts a program on the machine.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print(f"       {g}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       `systemctl start` on a SYSTEM unit goes through polkit", file=sys.stderr)
+        print("       BEFORE systemd looks for the unit — so even asking for one", file=sys.stderr)
+        print("       that does not exist opens a real fingerprint request, and with no", file=sys.stderr)
+        print("       agent in the session it waits until it times out.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       What a test checks is the SHAPE of the call, and a shape is a", file=sys.stderr)
+        print("       pure function: see `systemd::argv`.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: no test starts a program on the machine")
+    END
+  '';
+
+  # THE BRAIN'S UNIT DECIDES, IT DOES NOT DRAW.
+  #
+  # The same argument `transfers-unit-is-narrow` makes about the queue, and a
+  # sharper version of it: this daemon runs for as long as the machine is on,
+  # its whole job is to watch a clock and a report file, and it has no screen at
+  # all. Handing it `rust.shell` instead of the extracted binary would hold wgpu,
+  # the wasm runtime, the renderer and three embedded fonts alive permanently,
+  # for a program that never opens a window.
+  #
+  # Nothing would fail — which is why this is a check and not a comment. And it
+  # is the same measurement `CLAUDE.md` demands in place of trusting a switch:
+  # a derivation references what its BYTES cite, so measure the closure rather
+  # than believing the `[[bin]]`.
+  brain-unit-is-narrow =
+    let
+      closure = pkgs.closureInfo { rootPaths = [ rust.brain ]; };
+    in
+    mkCheck "brain-unit-is-narrow"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        failed=0
+        # `-wasmtime-` on top of the queue's list: the brain loads no component,
+        # and the runtime arriving here would mean it had been handed the whole
+        # workspace again.
+        for unwanted in -zig- -clang- -llvm- -mesa- -vulkan-loader- \
+                        -noctua-iosevka- -icons-superpack- -wasmtime-; do
+          if found=$(grep -e "$unwanted" ${closure}/store-paths); then
+            echo "ERROR: the brain's unit drags $unwanted in:" >&2
+            echo "$found" >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: $(wc -l < ${closure}/store-paths) paths, and none of them draws"
       '';
 
   # THE QUEUE'S SOCKET IS THE PERSON'S, AND NOBODY ELSE'S.
@@ -3036,7 +3807,7 @@ let
   transfers-socket-is-private = mkCheck "transfers-socket-is-private" [ pkgs.gnugrep ] ''
     src=${../crates/ronoctua-transfers/src}
     grep -q 'XDG_RUNTIME_DIR' "$src/wire.rs" || {
-      echo "ERRO: o socket deixou de sair de XDG_RUNTIME_DIR." >&2; exit 1; }
+      echo "ERROR: the socket stopped coming out of XDG_RUNTIME_DIR." >&2; exit 1; }
 
     # NO FALLBACK. Not `unwrap_or`, not `/tmp`, not `std::env::temp_dir`.
     #
@@ -3054,11 +3825,11 @@ let
     bad=$(echo "$bad" | grep -vE 'std::env::temp_dir\(\)' || true)
     bad=$(echo "$bad" | grep -vE '^ *$' || true)
     [ -z "$bad" ] || {
-      echo "ERRO: a fila caiu para /tmp em algum lugar:" >&2
+      echo "ERROR: the queue fell back to /tmp somewhere:" >&2
       echo "$bad" >&2
       exit 1
     }
-    echo "OK: o socket da fila e do usuario, sem plano B"
+    echo "OK: the queue's socket belongs to the user, with no plan B"
   '';
 
   # EVERY ENGINE, EVERY STAGE AND EVERY KIND OF WORK HAS WORDS IN BOTH LANGUAGES.
@@ -3077,7 +3848,7 @@ let
     # builds the key from. Reading the enum's variants instead would be a
     # second spelling of the same list.
     words=$(grep -oE '=> "[a-z]+",' "$job" | grep -oE '"[a-z]+"' | tr -d '"' | sort -u)
-    [ -n "$words" ] || { echo "ERRO: nao achei nenhuma palavra em job.rs" >&2; exit 1; }
+    [ -n "$words" ] || { echo "ERROR: could not find a single word in job.rs" >&2; exit 1; }
 
     for w in $words; do
       for prefix in transfers-work transfers-stage transfers-engine; do
@@ -3087,7 +3858,7 @@ let
         pt=$(grep -c "^$prefix-$w = " ${../assets/i18n}/pt-BR.ftl || true)
         en=$(grep -c "^$prefix-$w = " ${../assets/i18n}/en-GB.ftl || true)
         if [ "$pt" != "$en" ]; then
-          echo "ERRO: $prefix-$w existe em uma lingua so (pt=$pt en=$en)" >&2
+          echo "ERROR: $prefix-$w exists in only one language (pt=$pt en=$en)" >&2
           failed=1
         fi
       done
@@ -3095,13 +3866,13 @@ let
       # nothing can draw.
       total=$(grep -c "^transfers-[a-z]*-$w = " ${../assets/i18n}/pt-BR.ftl || true)
       if [ "$total" = 0 ]; then
-        echo "ERRO: a palavra $w de job.rs nao tem texto nenhum" >&2
+        echo "ERROR: the word $w from job.rs has no text at all" >&2
         failed=1
       fi
     done
 
     [ "$failed" = 0 ] || exit 1
-    echo "OK: $(echo "$words" | wc -l) palavras da fila, nas duas linguas"
+    echo "OK: $(echo "$words" | wc -l) queue words, in both languages"
   '';
 
   # THE EDITOR WRITES WHERE THE UNIT READS.
@@ -3111,11 +3882,11 @@ let
   # nothing — the exact silence `CLAUDE.md` says needs a check.
   rescue-staging-agrees = mkCheck "rescue-staging-agrees" [ pkgs.gnugrep ] ''
     grep -q 'staged = "/run/ronoctua-rescue/staged"' ${../nix/modules}/rescue.nix || {
-      echo "ERRO: o modulo mudou o caminho onde le o arquivo editado." >&2; exit 1; }
+      echo "ERROR: the module changed the path where it reads the edited file." >&2; exit 1; }
     grep -q 'pub const STAGED: &str = "/run/ronoctua-rescue/staged"' \
       ${../crates/ronoctua-rescue/src}/edit.rs || {
-      echo "ERRO: o editor mudou o caminho onde grava; salvar nao instalaria nada." >&2; exit 1; }
-    echo "OK: o editor grava onde a unidade le"
+      echo "ERROR: the editor changed the path where it writes; saving would install nothing." >&2; exit 1; }
+    echo "OK: the editor writes where the unit reads"
   '';
 
   # HOT RELOAD RELOADS — behavior, not existence.
@@ -3138,14 +3909,14 @@ let
       ''
         export HOME=$TMPDIR
         mkdir -p obs
-        : > obs/inicial.rs
+        : > obs/initial.rs
 
         # The command records WHAT changed, and not just that it fired: the
         # nested loop branches on that path — a `.rs` under `buffers/` is a
         # component and is built by nix, everything else is the workspace and is
         # built by cargo. If the variable stopped arriving, the loop would go on
         # reloading and would silently take the wrong branch every time.
-        RONOCTUA_RELOAD_CMD="echo \"disparou \$RONOCTUA_RELOAD_FILE\" >> $PWD/marcador" \
+        RONOCTUA_RELOAD_CMD="echo \"fired \$RONOCTUA_RELOAD_FILE\" >> $PWD/marker" \
           ronoctua-reload "$PWD/obs" &
         watcher=$!
         trap 'kill $watcher 2>/dev/null || true' EXIT
@@ -3159,33 +3930,33 @@ let
         done
         sleep 3
 
-        echo 'fn main() {}' > obs/mudou.rs
+        echo 'fn main() {}' > obs/changed.rs
 
-        ok=nao
+        ok=no
         for _ in $(seq 50); do
-          [ -s marcador ] && { ok=sim; break; }
+          [ -s marker ] && { ok=yes; break; }
           sleep 0.2
         done
-        [ "$ok" = sim ] || {
-          echo "ERRO: mudar um .rs NAO disparou o comando." >&2
-          echo "O hot reload do marco 3 nao esta funcionando." >&2
+        [ "$ok" = yes ] || {
+          echo "ERROR: changing a .rs did NOT fire the command." >&2
+          echo "Milestone 3's hot reload is not working." >&2
           exit 1
         }
-        grep -q "disparou .*obs/mudou.rs" marcador || {
-          echo "ERRO: disparou sem dizer QUAL arquivo mudou." >&2
-          echo "      O laco aninhado escolhe entre nix e cargo por esse caminho;" >&2
-          echo "      sem ele, todo buffer editado cairia no ramo da workspace." >&2
-          cat marcador >&2
+        grep -q "fired .*obs/changed.rs" marker || {
+          echo "ERROR: it fired without saying WHICH file changed." >&2
+          echo "      The nested loop chooses between nix and cargo by that path;" >&2
+          echo "      without it, every edited buffer would fall into the workspace branch." >&2
+          cat marker >&2
           exit 1
         }
 
         # And the other way round: a change that is NOT code must not fire. Without
         # this the watcher would recompile on every `.swp` from the editor.
-        : > marcador
-        echo 'nao sou codigo' > obs/README.txt
+        : > marker
+        echo 'I am not code' > obs/README.txt
         sleep 2
-        [ ! -s marcador ] || {
-          echo "ERRO: um arquivo que nao e .rs/.wit disparou a recompilacao." >&2
+        [ ! -s marker ] || {
+          echo "ERROR: a file that is neither .rs nor .wit fired the rebuild." >&2
           exit 1
         }
 
@@ -3203,14 +3974,14 @@ let
         # because firing and dying are different things — and the second is only found
         # out hours later, when the machine is full of them.
         kill "$watcher" 2>/dev/null || true
-        died=nao
+        died=no
         for _ in $(seq 50); do
-          [ -e /proc/$watcher ] || { died=sim; break; }
+          [ -e /proc/$watcher ] || { died=yes; break; }
           sleep 0.2
         done
-        [ "$died" = sim ] || {
-          echo "ERRO: o watcher IGNOROU o SIGTERM e continua vivo." >&2
-          echo "      Ele sera adotado pelo init e vai recompilar sozinho para" >&2
+        [ "$died" = yes ] || {
+          echo "ERROR: the watcher IGNORED the SIGTERM and is still alive." >&2
+          echo "      It will be adopted by init and will recompile on its own for" >&2
           echo "      sempre. Ver o \`wait\` no fim de nix/reload.nix." >&2
           exit 1
         }
@@ -3220,11 +3991,11 @@ let
         # because its name does not bring this project to mind.
         leftover=$(pgrep -c inotifywait 2>/dev/null || true)
         [ "''${leftover:-0}" = 0 ] || {
-          echo "ERRO: sobraram $leftover inotifywait depois de matar o watcher." >&2
+          echo "ERROR: $leftover inotifywait processes were left after killing the watcher." >&2
           exit 1
         }
 
-        echo "OK: .rs dispara, o resto nao, e ele morre quando mandam"
+        echo "OK: .rs fires, the rest does not, and it dies when told"
       '';
 
   # ONE FOOTER PER SESSION — the second replaces the first, it does not add to it.
@@ -3253,7 +4024,7 @@ let
       ]
       ''
         export HOME=$TMPDIR
-        pidfile="$PWD/rodape.pid"
+        pidfile="$PWD/footer.pid"
 
         # A "footer" that only stands there. What is measured is the supervision, and a
         # real binary would bring a compositor, a GPU and fonts along with it.
@@ -3268,7 +4039,7 @@ let
         ronoctua-footer-single "$pidfile" "$PWD/falso"
         first=$(cat "$pidfile")
         kill -0 "$first" || {
-          echo "ERRO: o primeiro rodape nao subiu." >&2
+          echo "ERROR: the first footer did not come up." >&2
           exit 1
         }
 
@@ -3277,19 +4048,19 @@ let
         second=$(cat "$pidfile")
 
         [ "$first" != "$second" ] || {
-          echo "ERRO: o pidfile nao mudou; o segundo rodape nao subiu." >&2
+          echo "ERROR: the pidfile did not change; the second footer did not come up." >&2
           exit 1
         }
 
         if kill -0 "$first" 2>/dev/null; then
-          echo "ERRO: o rodape anterior ($first) continua alive_flag." >&2
-          echo "      Dois rodapes no mesmo display disputam o keyboard: a" >&2
-          echo "      lista de atalhos abre num e as teclas vao para o outro." >&2
+          echo "ERROR: the previous footer ($first) is still alive_flag." >&2
+          echo "      Two footers on the same display fight over the keyboard: the" >&2
+          echo "      shortcut list opens on one and the keys go to the other." >&2
           exit 1
         fi
 
         kill -0 "$second" || {
-          echo "ERRO: o rodape novo ($second) nao esta alive_flag." >&2
+          echo "ERROR: the new footer ($second) is not alive_flag." >&2
           exit 1
         }
 
@@ -3300,12 +4071,12 @@ let
         # and with `pipefail` that would bring the check down before counting.
         alive=$( { pgrep -f 'sleep 300' || true; } | wc -l)
         [ "$alive" = 1 ] || {
-          echo "ERRO: ha $alive rodapes vivos; deveria haver exatamente 1." >&2
+          echo "ERROR: there are $alive live footers; there should be exactly 1." >&2
           exit 1
         }
 
         kill "$second" 2>/dev/null || true
-        echo "OK: o segundo rodape substitui o primeiro, e sobra exatamente um"
+        echo "OK: the second footer replaces the first, and exactly one is left"
       '';
 
   # THE FOOTER'S LOG OUTLIVES THE TERMINAL.
@@ -3330,8 +4101,8 @@ let
       ]
       ''
         export HOME=$TMPDIR
-        pidfile="$PWD/rodape.pid"
-        export RONOCTUA_LOG="$PWD/rodape.log"
+        pidfile="$PWD/footer.pid"
+        export RONOCTUA_LOG="$PWD/footer.log"
 
         # THE FAKE ONE SAYS ITS OWN PID in the log. It is what makes it possible to
         # check that the pidfile keeps IT, and not a wrapper — after the `exec` the
@@ -3348,18 +4119,18 @@ let
         done
 
         grep -q "footer-mark" "$RONOCTUA_LOG" || {
-          echo "ERRO: o log do rodape nao foi para \$RONOCTUA_LOG." >&2
-          echo "      Sem arquivo, a proxima vez que os atalhos travarem vai" >&2
-          echo "      ser diagnosticada do mesmo jeito que as quatro anteriores:" >&2
-          echo "      sem nada." >&2
+          echo "ERROR: the footer's log did not go to \$RONOCTUA_LOG." >&2
+          echo "      With no file, the next time the shortcuts lock up there" >&2
+          echo "      is no way to diagnose it that the four before it did not have:" >&2
+          echo "      with nothing." >&2
           exit 1
         }
 
         # THE PIDFILE KEEPS THE FOOTER, and not a wrapper.
         reported=$(awk '/footer-mark/ {print $2; exit}' "$RONOCTUA_LOG")
         [ "$reported" = "$pid" ] || {
-          echo "ERRO: o rodape diz ser o pid $reported e o pidfile guarda $pid." >&2
-          echo "      Um 'tee' no meio faria o \$! ser o dele — e o encerrar" >&2
+          echo "ERROR: the footer says it is pid $reported and the pidfile holds $pid." >&2
+          echo "      A 'tee' in between would make \$! its own — and the shutdown" >&2
           echo "      do dev.nix mataria o processo errado." >&2
           exit 1
         }
@@ -3375,14 +4146,14 @@ let
         done
         n=$(grep -c "footer-mark" "$RONOCTUA_LOG")
         [ "$n" = 2 ] || {
-          echo "ERRO: o log tem $n marcas depois de dois rodapes; esperava 2." >&2
-          echo "      O reinicio esta TRUNCANDO o log." >&2
+          echo "ERROR: the log has $n marks after two footers; expected 2." >&2
+          echo "      The restart is TRUNCATING the log." >&2
           exit 1
         }
 
         kill "$second" 2>/dev/null || true
-        echo "OK: o log do rodape vai para arquivo, acumula entre reinicios,"
-        echo "    e o pidfile continua apontando para o rodape"
+        echo "OK: the footer's log goes to a file, builds up across restarts,"
+        echo "    and the pidfile still points at the footer"
       '';
 
   # ZERO grid diff on the VT corpus (milestone 7, section 7.10).
@@ -3403,8 +4174,8 @@ let
     # `frase-secret_one-de-teste` and searched for `frase-secreta-de-teste`. It
     # went on passing while unable to detect a leaked passphrase at all, which is
     # the leak it exists for and the more damaging of the two.
-    password=senha-de-teste
-    passphrase=frase-secreta-de-teste
+    password=test-password
+    passphrase=test-passphrase
 
     export RONOCTUA_INST_DISK=/dev/nvme0n1
     export RONOCTUA_INST_HOSTNAME=noctua-teste
@@ -3424,13 +4195,13 @@ let
 
     # The `host.nix` must NOT carry a secret (section 9): it goes to backup.
     if echo "$out_text" | grep -qF -e "$password" -e "$passphrase"; then
-      echo "ERRO: o host.nix gerado contem segredo" >&2
+      echo "ERROR: the generated host.nix contains a secret" >&2
       exit 1
     fi
 
     # NO label may come out as a raw key.
     #
-    # `Textos::t` gives back `[api_key]` for a key that does not exist — on purpose,
+    # `Texts::t` gives back `[api_key]` for a key that does not exist — on purpose,
     # so as not to bring the shell down over a missing text. The side effect is
     # that an unregistered key gets past ALL the other guards: `gen-i18n.py` only
     # compares `pt-BR` with `en-GB`, and the compiler only protects whoever uses
@@ -3439,7 +4210,7 @@ let
     #
     # This line is what closes the hole at the flake's level.
     if echo "$out_text" | grep -q '\[inst-'; then
-      echo "ERRO: rotulo saiu como chave crua — invariante 8" >&2
+      echo "ERROR: a label came out as a raw key — invariant 8" >&2
       echo "$out_text" | grep '\[inst-' >&2
       exit 1
     fi
@@ -3451,7 +4222,7 @@ let
     first_key=$(echo "$order" | head -1)
     disko_at=$(echo "$order" | tail -1)
     [ "$first_key" -lt "$disko_at" ] || {
-      echo "ERRO: a chave do LUKS e escrita depois de o disko rodar" >&2; exit 1; }
+      echo "ERROR: the LUKS key is written after disko has run" >&2; exit 1; }
 
     # THE PROFILE REACHES THE GENERATED `host.nix`.
     #
@@ -3460,19 +4231,19 @@ let
     # a file that only mentions the profile when it differs would be a file one
     # has to already know the default to read.
     echo "$out_text" | grep -q 'ronoctua.profile = "minimal"' || {
-      echo "ERRO: a resposta do perfil nao chega ao host.nix" >&2; exit 1; }
+      echo "ERROR: the profile's answer does not reach host.nix" >&2; exit 1; }
 
     # The password hash is written. Without it `base.nix` points
     # `hashedPasswordFile` at a file nobody creates, and the installed system comes
     # up with `mutableUsers = false` and no valid password — a machine nobody gets
     # into.
     echo "$out_text" | grep -q '/mnt/persist/etc/shadow/noctua' || {
-      echo "ERRO: o plano nao grava o hash da senha" >&2; exit 1; }
+      echo "ERROR: the plan does not write the password hash" >&2; exit 1; }
 
     # The four PCRs, including 15. Without it the sealing does not protect against
     # a disk swap — see nix/modules/boot.nix.
     echo "$out_text" | grep -q 'tpm2-pcrs=7+11+12+15' || {
-      echo "ERRO: o plano nao sela nos quatro PCRs" >&2; exit 1; }
+      echo "ERROR: the plan does not seal against all four PCRs" >&2; exit 1; }
 
     # And without `--execute` nothing runs. An installer that wipes a disk by
     # default is a dangerous command.
@@ -3482,13 +4253,13 @@ let
     # `en-GB`. What does not change with the language is the mention of
     # `--execute`, which is what the line actually promises.
     echo "$out_text" | grep -q -- '--execute' || {
-      echo "ERRO: o ensaio nao diz como executar de verdade" >&2; exit 1; }
+      echo "ERROR: the rehearsal does not say how to run it for real" >&2; exit 1; }
 
     # And it proves it was a dry run: no step may have run. `nixos-facter` does not
     # even exist in the sandbox — if the installer tried, it would exit non-zero
-    # and the check would already have died above at the `saida=$(...)`.
+    # and the check would already have died above at the `output=$(...)`.
     [ ! -e /tmp/disko-luks.key ] || {
-      echo "ERRO: o ensaio escreveu a chave do LUKS" >&2; exit 1; }
+      echo "ERROR: the rehearsal wrote the LUKS key" >&2; exit 1; }
 
     # The SAME plan in both languages: same number of steps, same commands. A
     # `.ftl` that lost a key would come out with `[inst-` and would already have
@@ -3497,9 +4268,9 @@ let
     pt=$(LANG=pt_BR.UTF-8 ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
     en=$(LANG=en_US.UTF-8 ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
     [ "$pt" = "$en" ] || {
-      echo "ERRO: o plano tem $pt passos em pt-BR e $en em en-GB" >&2; exit 1; }
+      echo "ERROR: the plan has $pt steps in pt-BR and $en in en-GB" >&2; exit 1; }
 
-    echo "OK: $pt passos nos dois idiomas, quatro PCRs, ensaio por padrao"
+    echo "OK: $pt steps in both languages, four PCRs, a rehearsal by default"
   '';
 
   # The whole chain: signed UKI, Secure Boot and the proof of PCR 15 (milestone 8).
@@ -3691,33 +4462,33 @@ let
       leaked = lib.filter (lib.hasPrefix "RONOCTUA_") (lib.attrNames rust.cargoArtifacts.drvAttrs);
     in
     mkCheck "deps-layer-is-lean" [ ] ''
-      vazaram="${lib.concatStringsSep " " leaked}"
-      if [ -n "$vazaram" ]; then
-        echo "ERRO: a camada de dependencias recebeu variaveis que nao usa:" >&2
-        for v in $vazaram; do echo "  $v" >&2; done
+      leaked="${lib.concatStringsSep " " leaked}"
+      if [ -n "$leaked" ]; then
+        echo "ERROR: the dependency layer was given variables it does not use:" >&2
+        for v in $leaked; do echo "  $v" >&2; done
         echo >&2
-        echo "      Elas entram por \`commonArgs\`; a camada tem de receber o" >&2
-        echo "      \`buildBase\`. Cada uma dessas custa 4m46 de recompilacao a" >&2
-        echo "      cada vez que o valor dela muda — e um .wasm muda toda vez" >&2
-        echo "      que alguem edita o buffer." >&2
+        echo "      They come in through \`commonArgs\`; the layer has to take the" >&2
+        echo "      \`buildBase\`. Each one of those costs 4m46 of recompilation" >&2
+        echo "      every time its value changes — and a .wasm changes every time" >&2
+        echo "      somebody edits the buffer." >&2
         exit 1
       fi
-      echo "OK: a camada de dependencias nao carrega nenhuma RONOCTUA_*"
+      echo "OK: the dependency layer carries no RONOCTUA_* at all"
     '';
 
   lean-tree = mkCheck "lean-tree" [ ] ''
     cap=20480  # KiB — the real tree is ~1.3 MB
     tree_size=$(du -s --exclude=.git ${self} | cut -f1)
-    echo "fonte do flake: $tree_size KiB (teto $cap KiB)"
+    echo "flake source: $tree_size KiB (ceiling $cap KiB)"
     if [ "$tree_size" -gt "$cap" ]; then
       echo >&2
-      echo "ERRO: a arvore copiada para o store tem $tree_size KiB." >&2
+      echo "ERROR: the tree copied into the store is $tree_size KiB." >&2
       echo >&2
-      echo "Cada edicao em QUALQUER arquivo cunha uma copia deste tamanho." >&2
-      echo "Procure diretorio de build dentro da arvore:" >&2
+      echo "Every edit to ANY file mints a copy of this size." >&2
+      echo "Look for a build directory inside the tree:" >&2
       du -sh ${self}/* 2>/dev/null | sort -rh | head -5 >&2
       echo >&2
-      echo "Build vai para \$CARGO_TARGET_DIR, fora da arvore." >&2
+      echo "Builds go to \$CARGO_TARGET_DIR, outside the tree." >&2
       exit 1
     fi
   '';
@@ -3762,19 +4533,19 @@ let
     failed=0
     while IFS= read -r f; do
       if git check-ignore -q "$f"; then
-        echo "ERRO: o .gitignore esta engolindo $f" >&2
+        echo "ERROR: .gitignore is swallowing $f" >&2
         failed=1
       fi
     done < <(find assets nix docs tests -type f 2>/dev/null; ls flake.nix CLAUDE.md README.md)
     [ $failed -eq 0 ] || exit 1
-    echo "OK: nenhuma fonte versionada e ignorada"
+    echo "OK: no versioned source is ignored"
 
     # And the other way round: what MUST be ignored.
     for f in .TEMP/x.ttf result nix/hosts/host.nix foo.qcow2 a.key some.age; do
       mkdir -p "$(dirname "$f")"; : > "$f"
-      git check-ignore -q "$f" || { echo "ERRO: $f nao esta sendo ignorado" >&2; exit 1; }
+      git check-ignore -q "$f" || { echo "ERROR: $f is not being ignored" >&2; exit 1; }
     done
-    echo "OK: segredos, artefatos e host.nix ignorados"
+    echo "OK: secrets, artefacts and host.nix are ignored"
   '';
 
   # Proof that the naming fix caught: ONE typographic family and 135 distinct
@@ -3785,7 +4556,7 @@ let
   # untouched on purpose (see the note in nix/fonts.nix), so on them we only
   # take inventory — demanding a unique family there would assert something false.
   fonts-single-family = mkCheck "fonts-single-family" [ py ] ''
-    echo "### corrigidos: familia unica e obrigatoria ###"
+    echo "### corrected: one family, and it is required ###"
     python3 ${../nix/scripts/fix-font-names.py} ${fonts.corrected}/TTF-nerdfonts \
       --family "NoctuaIosevka Nerd Font Mono" --expect-count 135 --dry-run
     python3 ${../nix/scripts/fix-font-names.py} ${fonts.corrected}/TTF \
@@ -3826,15 +4597,15 @@ let
         width = os2.usWidthClass
         adv = {f["hmtx"][g][0] for g in cmap.values()}
         if len(adv) != 1:
-            print(f"ERRO {p}: {len(adv)} avancos distintos; nao e monoespacada"); failed = True
+            print(f"ERROR {p}: {len(adv)} distinct advances; it is not monospaced"); failed = True
         elif adv.pop() != advances[width]:
-            print(f"ERRO {p}: avanco errado para usWidthClass {width}"); failed = True
+            print(f"ERROR {p}: the wrong advance for usWidthClass {width}"); failed = True
         f.close()
 
     if failed:
         sys.exit(1)
     print("OK: 135 faces, 18.053 codepoints cada, monoespacadas, upem 1000")
-    print("OK: celula = 0,600 em na largura normal — a aritmetica do rodape vale")
+    print("OK: cell = 0.600 em at the normal width — the footer's arithmetic holds")
     PY
   '';
 
@@ -3883,6 +4654,14 @@ let
           "transfer",
           "countdown-one", "countdown-two", "countdown-three", "countdown-four",
           "countdown-five", "countdown-six", "countdown-seven", "countdown-eight",
+          # AND THE TWO FRAMES OF "AN UPDATE IS RUNNING", which sit in the
+          # modeline beside the buffer's name and the bell's digit. They are
+          # measured for the same reason the pie is: an animation whose frames
+          # are 20% shorter than the text next to them does not read as one
+          # drawing moving, it reads as the line twitching. Here the two frames
+          # are the same circle filled and hollow, so the measurement is also
+          # what keeps them the same drawing.
+          "working-one", "working-two",
       ]
 
       face = "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"
@@ -3912,7 +4691,7 @@ let
       failed = False
       for token in INLINE:
           if token not in icons:
-              print(f"ERRO: `{token}` nao e token de icone (renomeado?)")
+              print(f"ERROR: `{token}` is not an icon token (renamed?)")
               failed = True
               continue
           gx0, gy0, gx1, gy1 = ink(icons[token]["codepoint"])
@@ -3925,7 +4704,7 @@ let
           over = max(-(gx0 * ICON / 1000.0 + shift), gx1 * ICON / 1000.0 + shift - cell)
           tall = 85.0 <= pct <= 115.0
           wide = over < bearing
-          mark = "ok " if tall and wide else "NAO"
+          mark = "ok " if tall and wide else "NO "
           print(
               f"{mark} {token:24s} {icons[token]['glyph']:28s} "
               f"{h:5.2f} px {pct:5.1f}%  transborda {over:5.2f} px"
@@ -3933,18 +4712,18 @@ let
           if not tall:
               failed = True
           if not wide:
-              print(f"       `{token}` invade a tinta do caractere ao lado")
+              print(f"       `{token}` invades the ink of the character beside it")
               failed = True
 
       if failed:
           print("")
-          print("ERRO: um icone da chrome esta fora de escala com o texto ao lado.")
-          print("      Ou o `font.size.icon` mudou, ou o glifo novo tem desenho")
-          print("      de outra proporcao — troque o glifo, nao o tamanho: o")
-          print("      tamanho vale para todos os outros.")
+          print("ERROR: a chrome icon is out of scale with the text beside it.")
+          print("      Either `font.size.icon` changed, or the new glyph has a drawing")
+          print("      of another proportion — change the glyph, not the size: the")
+          print("      size holds for all the others.")
           sys.exit(1)
       print("")
-      print(f"OK: {len(INLINE)} icones da chrome na altura do digito, e nenhum encosta nele")
+      print(f"OK: {len(INLINE)} chrome icons at the digit's height, and none touches it")
       PY
 
       # AND NOBODY introduces a second inline size without passing through here.
@@ -3958,12 +4737,12 @@ let
       # every chrome glyph in the system is drawn from here.
       loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -v "SIZE_ICON" || true)
       if [ -n "$loose" ]; then
-        echo "ERRO: glifo centrado na celula com tamanho fora do token:" >&2
+        echo "ERROR: a glyph centred in the cell with a size outside the token:" >&2
         echo "$loose" >&2
-        echo "      O tamanho de icone da chrome tem UM lugar: font.size.icon." >&2
+        echo "      The chrome's icon size has ONE home: font.size.icon." >&2
         exit 1
       fi
-      echo "OK: todo glifo centrado na celula usa o mesmo token de tamanho"
+      echo "OK: every glyph centred in a cell uses the same size token"
     '';
 
   # The guard of section 6.3: the Nerd Fonts version comes from the FILE ITSELF
@@ -3978,15 +4757,15 @@ let
     v = TTFont(p, lazy=True)["name"].getDebugName(5)
     m = re.search(r"Nerd Fonts (\d+\.\d+\.\d+)", v or "")
     if not m:
-        print(f"ERRO: nameID 5 nao declara versao do Nerd Fonts: {v!r}"); sys.exit(1)
+        print(f"ERROR: nameID 5 does not declare a Nerd Fonts version: {v!r}"); sys.exit(1)
 
     expected = "3.4.0"   # has to match the flake's `nerd-fonts` input
     if m.group(1) != expected:
-        print(f"ERRO: fonte tem Nerd Fonts {m.group(1)}, o flake pina {expected}.")
-        print("      Atualize o input nerd-fonts junto com a fonte, ou os")
-        print("      codepoints da PUA andam sem ninguem notar.")
+        print(f"ERROR: the font has Nerd Fonts {m.group(1)}, the flake pins {expected}.")
+        print("      Update the nerd-fonts input along with the font, or the")
+        print("      PUA codepoints move with nobody noticing.")
         sys.exit(1)
-    print(f"OK: Nerd Fonts {m.group(1)} casa com o input do flake")
+    print(f"OK: Nerd Fonts {m.group(1)} matches the flake's input")
     PY
   '';
 
@@ -3997,34 +4776,34 @@ let
     db=${glyphdb.db}
 
     for f in icons.json glyphs.json coverage.md; do
-      test -s "$db/$f" || { echo "ERRO: $f nao foi gerado" >&2; exit 1; }
+      test -s "$db/$f" || { echo "ERROR: $f was not generated" >&2; exit 1; }
     done
 
     n=$(jq 'length' "$db/icons.json")
-    echo "tokens de icone: $n"
-    [ "$n" -ge 40 ] || { echo "ERRO: tabela de icones suspeitamente pequena" >&2; exit 1; }
+    echo "icon tokens: $n"
+    [ "$n" -ge 40 ] || { echo "ERROR: the icon table is suspiciously small" >&2; exit 1; }
 
     # Every token has a glyph, a codepoint and a char — and the codepoint is in the PUA.
     jq -e 'to_entries | all(.value | has("glyph") and has("codepoint") and has("char"))' \
       "$db/icons.json" >/dev/null \
-      || { echo "ERRO: entrada de icone incompleta" >&2; exit 1; }
+      || { echo "ERROR: an incomplete icon entry" >&2; exit 1; }
 
     g=$(jq 'length' "$db/glyphs.json")
-    echo "glifos indexados: $g"
+    echo "glyphs indexed: $g"
     [ "$g" -eq 10473 ] || {
-      echo "ERRO: esperava 10473 glifos Nerd Fonts, achei $g." >&2
-      echo "      Se a fonte mudou, o inventario em docs/ARCHITECTURE.md" >&2
-      echo "      precisa ser refeito antes de seguir." >&2
+      echo "ERROR: expected 10473 Nerd Fonts glyphs, found $g." >&2
+      echo "      If the font changed, the inventory in docs/ARCHITECTURE.md" >&2
+      echo "      has to be redone before carrying on." >&2
       exit 1
     }
 
     # The 126 without a name have to stay in the index: dropping them would be
     # lying about what the font has (section 6.5).
     unnamed=$(jq '[.[] | select(.name == null)] | length' "$db/glyphs.json")
-    echo "glifos sem nome no glyphnames.json: $unnamed"
-    [ "$unnamed" -eq 126 ] || { echo "ERRO: esperava 126 sem nome" >&2; exit 1; }
+    echo "glyphs with no name in glyphnames.json: $unnamed"
+    [ "$unnamed" -eq 126 ] || { echo "ERROR: expected 126 with no name" >&2; exit 1; }
 
-    echo "OK: tabela de icones e base de glifos geradas do arquivo real"
+    echo "OK: the icon table and the glyph database are generated from the real file"
   '';
 
   # THE NOTIFICATION CATALOGUE COMES OUT OF NIX, and the two vocabularies agree.
@@ -4051,13 +4830,13 @@ let
     # (a) the table was generated, and it is not empty.
     for wanted in ("fn generated_entries()", "fn generated_rules()"):
         if wanted not in table:
-            print(f"ERRO: a tabela nao tem `{wanted}`")
+            print(f"ERROR: the table has no `{wanted}`")
             failed = True
     entries = table.count("Entry {")
     rules = table.count("Rule {")
-    print(f"catalogo: {entries} entradas, {rules} filtros, {len(keys)} chaves exigidas")
+    print(f"catalogue: {entries} entries, {rules} filters, {len(keys)} keys required")
     if entries < 1 or rules < 1 or not keys:
-        print("ERRO: geracao veio vazia ou truncada")
+        print("ERROR: the generation came out empty or truncated")
         failed = True
 
     # (b) the vocabularies. The generator names them as sets of strings; the
@@ -4078,11 +4857,11 @@ let
         src = pathlib.Path(path).read_text()
         impl = re.search(rf"\nimpl {enum} \{{(.*?)\n\}}\n", src, re.S)
         if not impl:
-            print(f"ERRO: nao achei `impl {enum}` em {path}")
+            print(f"ERROR: could not find `impl {enum}` in {path}")
             return set()
         fn = re.search(r"fn id\(&?self\)[^{]*\{(.*?)\n    \}", impl.group(1), re.S)
         if not fn:
-            print(f"ERRO: `{enum}` nao tem `id()` — o nome nao teria como ir e voltar")
+            print(f"ERROR: `{enum}` has no `id()` — the name would have no way of going and coming back")
             return set()
         return set(re.findall(r'=> "([^"]+)"', fn.group(1)))
 
@@ -4101,12 +4880,12 @@ let
             print(f"       so no Rust:    {sorted(b - a)}")
             failed = True
         else:
-            print(f"ok  {name:10s} {len(a)} nomes iguais dos dois lados")
+            print(f"ok  {name:10s} {len(a)} identical names on both sides")
 
     # (c) every text key it demands has the shape the manager derives.
     for k in keys:
         if not re.fullmatch(r"notif-[a-z0-9-]+", k):
-            print(f"ERRO: chave `{k}` fora do formato `notif-<...>`")
+            print(f"ERROR: the key `{k}` is outside the `notif-<...>` shape")
             failed = True
 
     # (d) AND THE TAG THE SHELL STAMPS IS A TAG THE TABLE RECOGNISES.
@@ -4121,14 +4900,14 @@ let
     known = set(re.findall(r'Test::Is\("([a-z-]+)"\.to_owned\(\)\)', table))
     for tag in stamped:
         if tag not in known:
-            print(f"ERRO: o shell carimba `{tag}` e nenhuma entrada o reconhece")
+            print(f"ERROR: the shell stamps `{tag}` and no entry recognises it")
             failed = True
     if stamped:
-        print(f"ok  tags carimbadas pelo shell e reconhecidas: {sorted(stamped)}")
+        print(f"ok  tags stamped by the shell and recognised: {sorted(stamped)}")
 
     if failed:
         sys.exit(1)
-    print("OK: catalogo gerado do Nix, e os dois vocabularios batem")
+    print("OK: the catalogue is generated from the Nix, and the two vocabularies match")
     PY
   '';
 
@@ -4157,22 +4936,22 @@ let
     # (a) the notification exists at all, and goes to the session bus.
     for wanted in ("fn show_screenshot_notification", "org.freedesktop.Notifications"):
         if wanted not in source:
-            print(f"ERRO: o niri fixado nao tem `{wanted}`")
+            print(f"ERROR: the pinned niri does not have `{wanted}`")
             failed = True
 
     # (b) the two strings the entry matches on.
     for wanted in ('"niri"', '"Screenshot captured"'):
         if wanted not in source:
-            print(f"ERRO: o niri fixado nao manda mais {wanted}")
+            print(f"ERROR: the pinned niri no longer sends {wanted}")
             failed = True
         elif wanted.strip('"') not in catalogue:
-            print(f"ERRO: assets/notifications.nix nao casa com {wanted}")
+            print(f"ERROR: assets/notifications.nix does not match {wanted}")
             failed = True
 
     # (c) AND THE PATH TRAVELS IN THE ICON FIELD. Without this the `edit`
     #     action has no file, and it would have to guess a directory.
     if "image_url" not in source or "filename_to_uri" not in source:
-        print("ERRO: o niri nao poe mais o caminho como file:// no campo do icone")
+        print("ERROR: niri no longer puts the path as file:// in the icon field")
         failed = True
 
     # (d) AND THE EDITOR IS NOT BAKED INTO THE BINARY.
@@ -4185,9 +4964,9 @@ let
     # removes it and the action simply is not offered.
     rust_nix = pathlib.Path("${../nix/rust.nix}").read_text()
     if "RONOCTUA_SWAPPY" in rust_nix:
-        print("ERRO: `RONOCTUA_SWAPPY` esta em nix/rust.nix — assado no binario.")
-        print("       Isso poe o swappy em todo closure, e o interruptor do")
-        print("       perfil para de interromper. Ele vem do AMBIENTE.")
+        print("ERROR: `RONOCTUA_SWAPPY` is in nix/rust.nix — baked into the binary.")
+        print("       That puts swappy in every closure, and the profile's")
+        print("       profile stops interrupting. It comes from the ENVIRONMENT.")
         failed = True
 
     # (e) AND EACH PROGRAM IS READ FROM THE RIGHT PLACE.
@@ -4203,29 +4982,29 @@ let
         re.S,
     )
     if not resolver:
-        print("ERRO: `notification_program` sumiu ou mudou de forma")
+        print("ERROR: `notification_program` went away or changed shape")
         failed = True
     else:
         body = resolver.group(0)
         if "XDG_OPEN" not in body:
-            print("ERRO: o `open` da acao nao vem do caminho assado no build")
+            print("ERROR: the action's `open` does not come from the path baked in at build time")
             failed = True
         if 'std::env::var("RONOCTUA_SWAPPY")' not in body:
-            print("ERRO: o `edit` da acao nao vem do AMBIENTE")
+            print("ERROR: the action's `edit` does not come from the ENVIRONMENT")
             failed = True
         if 'std::env::var("RONOCTUA_XDG_OPEN")' in body:
-            print("ERRO: o `open` esta sendo lido do ambiente, onde nao existe")
+            print("ERROR: `open` is being read from the environment, where it does not exist")
             failed = True
 
     if failed:
         print("")
-        print("       O filtro `screenshot` reconhece a notificacao do")
-        print("       compositor pelo par (app, summary) e tira o arquivo do")
-        print("       campo do icone. Mudou la, para de casar aqui — em")
-        print("       silencio, que e por isto que este check existe.")
+        print("       The `screenshot` filter recognises the compositor's")
+        print("       notification by the (app, summary) pair and takes the file out of")
+        print("       the icon field. Change that upstream, and it stops matching here — in")
+        print("       silence, which is why this check exists.")
         sys.exit(1)
-    print("OK: o niri fixado ainda manda a captura como o filtro espera")
-    print("OK: o editor da captura vem do ambiente, nao do binario")
+    print("OK: the pinned niri still sends the screenshot the way the filter expects")
+    print("OK: the screenshot's editor comes from the environment, not from the binary")
     PY
   '';
 
@@ -4262,7 +5041,7 @@ let
         presentation,
     )
     if not inert:
-        print("ERRO: `INERT` esta vazia ou mudou de forma")
+        print("ERROR: `INERT` is empty or changed shape")
         sys.exit(1)
     print(f"interruptores declarados inertes: {[f for f, _ in inert]}")
 
@@ -4270,12 +5049,12 @@ let
     fields = set(re.findall(r"^    pub ([a-z_]+):", presentation, re.M))
     for field, why in inert:
         if field.replace("-", "_") not in fields:
-            print(f"ERRO: `{field}` nao e campo de Presentation")
+            print(f"ERROR: `{field}` is not a field of Presentation")
             failed = True
         for language in ("pt-BR", "en-GB"):
             ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
             if not re.search(rf"^{why} *=", ftl, re.M):
-                print(f"ERRO: {language} nao explica `{field}` (falta `{why}`)")
+                print(f"ERROR: {language} does not explain `{field}` (`{why}` is missing)")
                 failed = True
 
     # (b) AND THE MANAGER READS THAT LIST, rather than keeping a second one.
@@ -4291,7 +5070,7 @@ let
         for line in manager.splitlines()
     )
     if not reads_it:
-        print("ERRO: o gerenciador nao le `INERT`; a razao nao chegaria a tela")
+        print("ERROR: the manager does not read `INERT`; the reason would not reach the screen")
         failed = True
     # (b2) AND IT REACHES THE SCREEN. The reason used to be a third column on
     #      the row; the owner asked for it gone, so it moved to the message
@@ -4299,12 +5078,12 @@ let
     #      Without this, "removed from the row" and "removed from the system"
     #      look the same to a check.
     if "pub fn hint(" not in manager:
-        print("ERRO: o gerenciador nao tem por onde dizer a razao")
+        print("ERROR: the manager has no way of saying the reason")
         failed = True
-    for door, name in (("rodape", "surface.rs"), ("janela", "notifications_window.rs")):
+    for door, name in (("footer", "surface.rs"), ("window", "notifications_window.rs")):
         drawn = (shell / name).read_text()
         if "manager.hint(" not in drawn and "view.hint(" not in drawn:
-            print(f"ERRO: a {door} nao desenha a razao na linha de mensagem")
+            print(f"ERROR: the {door} does not draw the reason on the message line")
             failed = True
 
     # (c) and every knob it draws is either inert-with-a-reason or does
@@ -4312,16 +5091,16 @@ let
     knobs = set(re.findall(r'Self::(\w+) => "([a-z-]+)",', manager))
     names = {name for _, name in knobs}
     if not names:
-        print("ERRO: nao achei os nomes dos knobs do gerenciador")
+        print("ERROR: could not find the names of the manager's knobs")
         failed = True
     for field, _ in inert:
         if field not in names:
-            print(f"ERRO: `{field}` e inerte e o gerenciador nem o desenha")
+            print(f"ERROR: `{field}` is inert and the manager does not even draw it")
             failed = True
 
     if failed:
         sys.exit(1)
-    print("OK: todo interruptor sem efeito diz na tela por que nao tem")
+    print("OK: every switch with no effect says on screen why it has none")
     PY
   '';
 
@@ -4342,18 +5121,18 @@ let
         have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
         missing = [k for k in keys if k not in have]
         if missing:
-            print(f"ERRO: {language} nao tem: {', '.join(missing)}")
+            print(f"ERROR: {language} does not have: {', '.join(missing)}")
             failed = True
         else:
-            print(f"ok  {language}: as {len(keys)} chaves do catalogo estao la")
+            print(f"ok  {language}: the catalogue's {len(keys)} keys are there")
 
     if failed:
         print("")
-        print("       Toda notificacao e todo filtro da distro tem de existir")
-        print("       nos dois idiomas (invariante 8). A lista sai do proprio")
-        print("       assets/notifications.nix — nao ha como esquecer sem falhar.")
+        print("       Every notification and every filter of the distro has to exist")
+        print("       in both languages (invariant 8). The list comes out of")
+        print("       assets/notifications.nix itself — there is no forgetting without failing.")
         sys.exit(1)
-    print("OK: o catalogo de notificacoes fala os dois idiomas")
+    print("OK: the notification catalogue speaks both languages")
     PY
   '';
 
@@ -4362,10 +5141,10 @@ let
   # token that does not exist.
   icons-unknown-token-fails = mkCheck "icons-unknown-token-fails" [ ] ''
     test -f ${glyphdb.negativeFixture}/out_text.txt \
-      || { echo "ERRO: fixture negativo nao produziu saida" >&2; exit 1; }
-    grep -q "tokens de icone que nao resolvem" ${glyphdb.negativeFixture}/out_text.txt \
-      || { echo "ERRO: fixture negativo nao falhou pela razao certa" >&2; exit 1; }
-    echo "OK: token de icone inexistente derruba o build (secao 6.3)"
+      || { echo "ERROR: the negative fixture produced no output" >&2; exit 1; }
+    grep -q "icon tokens that do not resolve" ${glyphdb.negativeFixture}/out_text.txt \
+      || { echo "ERROR: the negative fixture did not fail for the right reason" >&2; exit 1; }
+    echo "OK: an icon token that does not exist takes the build down (section 6.3)"
   '';
 
   # fontconfig <-> renderer parity — section 6.4.
@@ -4426,14 +5205,14 @@ let
         mkdir -p /tmp/fc-cache
         fc-cache -f >/dev/null 2>&1 || true
 
-        echo "### fc-match nos tres genericos ###"
+        echo "### fc-match on the three generics ###"
         failed=0
         for g in monospace sans-serif serif; do
           m=$(fc-match -f '%{family}' "$g")
           echo "  $g -> $m"
           case "$m" in
             *"NoctuaIosevka Nerd Font Mono"*) ;;
-            *) echo "ERRO: '$g' nao resolve para a nossa fonte (secao 6.4)" >&2; failed=1 ;;
+            *) echo "ERROR: '$g' does not resolve to our font (section 6.4)" >&2; failed=1 ;;
           esac
         done
         [ $failed -eq 0 ] || exit 1
@@ -4456,35 +5235,35 @@ let
 
     test -f $themeName/index.theme || { echo "ERRO: index.theme ausente" >&2; exit 1; }
     test -f $doc/manifest.json || { echo "ERRO: manifesto ausente" >&2; exit 1; }
-    test -f $doc/coverage.md || { echo "ERRO: relatorio de cobertura ausente" >&2; exit 1; }
+    test -f $doc/coverage.md || { echo "ERROR: the coverage report is missing" >&2; exit 1; }
 
     # Inheritance: hicolor last, as the freedesktop spec requires.
     grep -q '^Inherits=hicolor$' $themeName/index.theme \
-      || { echo "ERRO: index.theme nao herda hicolor por ultimo" >&2; exit 1; }
+      || { echo "ERROR: index.theme does not inherit hicolor last" >&2; exit 1; }
 
     # Every entry declares a winner and a license — without that the manifest
     # does not answer the question it exists for.
     n=$(jq '.entry_count' $doc/manifest.json)
     complete_ones=$(jq '[.entries[] | select(.winner != null and .license != null)] | length' $doc/manifest.json)
-    echo "entradas no manifesto: $n"
+    echo "entries in the manifest: $n"
     [ "$n" -eq "$complete_ones" ] || {
-      echo "ERRO: $((n - completas)) entradas sem vencedor ou sem licenca" >&2; exit 1; }
+      echo "ERROR: $((n - complete_ones)) entries with no winner or no licence" >&2; exit 1; }
 
     # Every directory cited in index.theme really exists.
     absent=0
     for d in $(grep '^Directories=' $themeName/index.theme | cut -d= -f2 | tr ',' ' '); do
-      [ -d "$themeName/$d" ] || { echo "ERRO: diretorio declarado mas ausente: $d" >&2; absent=1; }
+      [ -d "$themeName/$d" ] || { echo "ERROR: a directory declared but missing: $d" >&2; absent=1; }
     done
     [ $absent -eq 0 ] || exit 1
 
     # Origin licenses recorded, one per theme that went into the merge.
     for t in $(jq -r '.sources[].name' $doc/manifest.json); do
       test -s "$doc/LICENSES/$t.txt" \
-        || { echo "ERRO: licenca de origem ausente para $t" >&2; exit 1; }
+        || { echo "ERROR: the source licence is missing for $t" >&2; exit 1; }
     done
 
-    echo "OK: manifesto cobre 100% das entradas, com vencedor e licenca"
-    echo "OK: licencas de origem gravadas para todos os temas fundidos"
+    echo "OK: the manifest covers 100% of the entries, with a winner and a licence"
+    echo "OK: source licences recorded for every merged theme"
   '';
 
   # THE CHAIN'S PIXMAP STEP, against the REAL superpack.
@@ -4540,9 +5319,9 @@ let
   network-tuned = mkCheck "network-tuned" [ ] ''
     expected() {
       if [ "$2" != "$3" ]; then
-        echo "FALHOU: $1 = $2, esperado $3" >&2
+        echo "FAILED: $1 = $2, expected $3" >&2
         echo "" >&2
-        echo "Este valor NAO e decorativo: ele saiu de medir uma" >&2
+        echo "This value is NOT decorative: it came out of measuring a" >&2
         echo "transferencia de 592 GB entre duas maquinas deste projeto." >&2
         exit 1
       fi
@@ -4567,7 +5346,7 @@ let
     # shows up in the journal, not on the screen.
     case " ${lib.concatStringsSep " " networkEval.boot.kernelModules} " in
       *" tcp_bbr "*) ;;
-      *) echo "FALHOU: tcp_bbr nao esta em boot.kernelModules" >&2; exit 1 ;;
+      *) echo "FAILED: tcp_bbr is not in boot.kernelModules" >&2; exit 1 ;;
     esac
     echo "OK: powersave desligado, BBR+fq, partida lenta desarmada"
   '';
@@ -4586,30 +5365,30 @@ let
     # There is no symptom before the damage. Hence the check.
     # ================================================================
     if [ "${lib.boolToString syncthingEval.services.syncthing.overrideFolders}" != "false" ]; then
-      echo "FALHOU: overrideFolders ligado APAGA as pastas do usuario" >&2
+      echo "FAILED: overrideFolders switched on ERASES the user's folders" >&2
       exit 1
     fi
     if [ "${lib.boolToString syncthingEval.services.syncthing.overrideDevices}" != "false" ]; then
-      echo "FALHOU: overrideDevices ligado APAGA os dispositivos pareados" >&2
+      echo "FAILED: overrideDevices switched on ERASES the paired devices" >&2
       exit 1
     fi
     # UPnP failed every 30 minutes on the measured machine, forever.
     if [ "${lib.boolToString syncthingEval.services.syncthing.settings.options.natEnabled}" != "false" ]; then
-      echo "FALHOU: natEnabled ligado numa sincronizacao de LAN" >&2
+      echo "FAILED: natEnabled switched on in a LAN synchronisation" >&2
       exit 1
     fi
     # The relay is a very slow fallback route: with it, a momentary discovery
     # failure drops the transfer to ~1 MB/s with nothing saying so.
     if [ "${lib.boolToString syncthingEval.services.syncthing.settings.options.relaysEnabled}" != "false" ]; then
-      echo "FALHOU: relaysEnabled deixa a transferencia cair para o relay" >&2
+      echo "FAILED: relaysEnabled lets the transfer fall back to the relay" >&2
       exit 1
     fi
     # The package comes from Nix; self-updating would try to write to /nix/store.
     if [ "${builtins.toString syncthingEval.services.syncthing.settings.options.autoUpgradeIntervalH}" != "0" ]; then
-      echo "FALHOU: auto-atualizacao ligada num pacote do store" >&2
+      echo "FAILED: auto-update switched on for a package in the store" >&2
       exit 1
     fi
-    echo "OK: override desligado, sem NAT, sem relay, sem auto-upgrade"
+    echo "OK: override off, no NAT, no relay, no auto-upgrade"
   '';
 
   # The token generator REFUSES a name that does not become a WIT identifier.
@@ -4620,23 +5399,23 @@ let
   # not say where the name came from. The check tests BOTH sides: the good
   # name passes, the bad one is refused.
   tokens-wit-name = mkCheck "tokens-wit-name" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import importlib.util
     spec = importlib.util.spec_from_file_location("gt", "${../nix/scripts/gen-tokens.py}")
     gt = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gt)
 
-    for bom in ["wifi-fraco", "rede-protegida", "surface.base", "app-firefox"]:
-        gt.wit_ident(bom)
+    for good in ["wifi-weak", "network-secured", "surface.base", "app-firefox"]:
+        gt.wit_ident(good)
 
-    for bad in ["wifi-0", "sinal-4", "cor-2x"]:
+    for bad in ["wifi-0", "signal-4", "colour-2x"]:
         try:
             gt.wit_ident(bad)
         except SystemExit:
             continue
-        raise SystemExit(f"FALHOU: `{bad}` passou, e o WIT o recusaria")
-    print("OK: o gerador recusa nome que o WIT nao aceita")
-    FIM
+        raise SystemExit(f"FAILED: `{bad}` passed, and the WIT would refuse it")
+    print("OK: the generator refuses a name the WIT does not accept")
+    END
   '';
 
   # ===================================================================
@@ -4671,13 +5450,37 @@ let
   # check that goes wrong on its own. What it does catch is what OTHER code
   # sees — and that is where a Portuguese name spreads from.
   english-names = mkCheck "english-names" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     # The stems this refactor removed. Adding here is cheap; taking one out
     # requires explaining why the word became acceptable again.
     FORBIDDEN = [
          "aberto", "abrir", "acao", "achada", "achados", "achou", "acoes",
+         "carga", "criar", "globais", "leitura", "ordens",
+         "abaixo", "acha", "achado", "acorde", "acordes", "alca", "alta", "alternar",
+         "andando", "apagar", "arredondar", "atencao", "ativar", "atuais", "atual",
+         "atualizando", "aviso", "barra", "branco", "bruta", "cabem", "caixa",
+         "caixas", "candidatas", "caractere", "carinhas", "casa", "casal", "cerebro",
+         "completos", "componente", "conexao", "conexoes", "conj",
+         "contando", "copia", "copias", "custo", "dedo", "degrau", "desde", "desenhado",
+         "dicas", "diferentes", "digita", "direto", "diretorio", "documento",
+         "eixo", "embutido", "empurrar", "enormes", "envio", "erros", "escalada",
+         "escopo", "escravo", "esq", "estende", "estilo", "estranho", "exclusiva",
+         "exigida", "existente", "faltam", "fator", "fileira", "focado", "gatilho",
+         "gerenciador", "grande", "grego", "identificador", "imagem", "indicador",
+         "inexistente", "inicial", "instala", "instalar", "interno", "iteracao",
+         "ligacoes", "ligado", "linguagem", "lupa", "marcador", "mau", "melhor",
+         "mentes", "metodo", "metrica", "meu", "migalha", "minusculo", "moldagem",
+         "montar", "mudou", "nascimento", "nivel", "nulo", "ocupados", "oferta",
+         "onde", "ordenados", "orfaos", "ouvinte", "palavra", "parado", "pedido",
+         "pendente", "pequeno", "pintou", "piscando", "piso", "pode", "postos",
+         "postura", "preciso", "preparo", "preparos", "preto", "primeira", "procurando",
+         "producao", "pronta", "realcadas", "recebimento", "recurso", "resolvido",
+         "secao", "segunda", "selagem", "setas", "sistema", "sobreviventes",
+         "subfiltros", "sujo", "tecla", "tentar", "termo", "trabalho", "tres",
+         "treze", "trocada", "unicos", "usadas", "valores", "velho", "venceu",
+         "vivas", "vizinha",
          "afinar", "agente", "agulha", "ajuda", "altura", "alvo", "anotacao",
          "anunciar", "aplicar",
          "anterior", "antes", "antigo", "argumento", "arquivo", "arquivos",
@@ -4742,14 +5545,14 @@ let
         if any(x in p.parts for x in (".git", "result", "target", ".direnv")):
             continue
         if RX.search(p.name.lower().replace("_", "-")):
-            gaps.append(f"arquivo: {p.relative_to(root_dir)}")
+            gaps.append(f"file: {p.relative_to(root_dir)}")
 
     # 2) THE .ftl KEY COLUMN — the value stays in pt-BR, only the name changes
     for ftl in (root_dir / "assets/i18n").glob("*.ftl"):
         for n, line in enumerate(ftl.read_text().splitlines(), 1):
             m = re.match(r"^([a-z][a-z0-9-]*) *=", line)
             if m and RX.search(m.group(1)):
-                gaps.append(f"chave: {ftl.name}:{n}: {m.group(1)}")
+                gaps.append(f"key: {ftl.name}:{n}: {m.group(1)}")
 
     # 3) RUST DECLARATIONS — the half of the invariant the identifier pass closed
     #
@@ -4762,6 +5565,56 @@ let
     # it carries no keyword, only an indented lowercase word and a colon. That is
     # how `Minibuffer.segredo` came through the whole identifier refactor.
     FIELD = re.compile(r"^\s+(?:pub(?:\([^)]*\))?\s+)?([a-z_][a-z0-9_]*)\s*:")
+    # A `let` IS A NAME, and this check never read one.
+    #
+    # It read declarations, fields and variants — everything with a keyword in
+    # front of it — so sixteen Portuguese bindings lived in `surface.rs` and
+    # `browser.rs` through the whole identifier refactor and through every green
+    # battery since: `barra_visivel`, `total_expansao`, `fracao`, `fundos`,
+    # `proporcao`, `quantos`, `clicou`, `menor`, `margem`, `realce_do_ponteiro`.
+    # The owner found them by reading a plan, not the code, and he was right
+    # that a rule nothing enforces is not a rule.
+    #
+    # A `let` is scoped and short-lived, which is exactly why it is where a
+    # language slips back in.
+    # A BINDING IS A PATTERN, not a word. `let (tx_nome, rx_nome) = channel()`
+    # names two things and matches no regex that expects an identifier right
+    # after the keyword, which is why a simpler version of this check read the
+    # line and saw nothing. Walk the pattern instead, and take every lowercase
+    # name in it: `for` binds the same way and gets the same walk.
+    OPENS = re.compile(r"\b(?:let|for)\b")
+    WORD = re.compile(r"[a-z_][a-z0-9_]*")
+    PATTERN_NOISE = {"mut", "ref", "in", "let", "for", "if", "else"}
+
+    def bound_names(code):
+        """Every name a `let` or a `for` on this line binds."""
+        for kw in OPENS.finditer(code):
+            i, depth = kw.end(), 0
+            start = i
+            while i < len(code):
+                c = code[i]
+                if c in "([{<":
+                    depth += 1
+                elif c in ")]}>":
+                    depth -= 1
+                # A TYPE IS NOT A BINDING, and neither is the value: the
+                # pattern ends at the first `=` or `:` outside any bracket.
+                elif depth == 0 and (c == "=" or c == ":"):
+                    break
+                elif depth == 0 and code[i : i + 4] == " in ":
+                    break
+                i += 1
+            for w in WORD.finditer(code[start:i]):
+                if w.group(0) not in PATTERN_NOISE:
+                    yield w.group(0)
+
+    # AND A `fn` AND ITS ARGUMENTS. `DECL` below already reads the free
+    # functions, but not a method inside an `impl` and not one parameter of
+    # either — which is how `colunas_da_tela` and `altura_da_tela` sat in the
+    # signature of a function whose own name was English.
+    FN_NAME = re.compile(r"\bfn\s+([a-z_][a-z0-9_]*)")
+    FN_ARGS = re.compile(r"\bfn\s+[a-z_0-9]*\s*(?:<[^>]*>)?\s*\((.*)")
+    ARG = re.compile(r"^\s*(?:mut\s+)?([a-z_][a-z0-9_]*)\s*:")
     for base in ("crates", "buffers"):
         for rs in (root_dir / base).rglob("*.rs"):
             if "target" in rs.parts:
@@ -4769,6 +5622,34 @@ let
             in_enum = 0
             in_struct = 0
             for n, line in enumerate(rs.read_text().splitlines(), 1):
+                # WHAT IS INSIDE A STRING OR A COMMENT IS NOT A NAME. The six
+                # documents are pt-BR by decision, and so is the text of a test's
+                # assertion; only the identifier is bound by invariant 18.
+                code = line.split("//")[0]
+                if '"' in code:
+                    code = re.sub(r'"[^"]*"', '""', code)
+                for bound in bound_names(code):
+                    if RX.search(bound.lower().replace("_", "-")):
+                        rel = rs.relative_to(root_dir)
+                        gaps.append(f"let: {rel}:{n}: {bound}")
+                fname = FN_NAME.search(code)
+                if fname:
+                    word = fname.group(1).lower().replace("_", "-")
+                    if RX.search(word):
+                        rel = rs.relative_to(root_dir)
+                        gaps.append(f"fn: {rel}:{n}: {fname.group(1)}")
+                fargs = FN_ARGS.search(code)
+                if fargs:
+                    # One line, and the arguments that fit on it: a signature
+                    # broken over several lines still shows every name after a
+                    # comma, and each of those is read as its own field below.
+                    for piece in fargs.group(1).split(")")[0].split(","):
+                        a = ARG.match(piece)
+                        if a:
+                            word = a.group(1).lower().replace("_", "-")
+                            if RX.search(word):
+                                rel = rs.relative_to(root_dir)
+                                gaps.append(f"arg: {rel}:{n}: {a.group(1)}")
                 m = DECL.match(line)
                 if m:
                     # CamelCase and SNAKE_CASE become the same ruler as the file name.
@@ -4788,7 +5669,7 @@ let
                     if f:
                         item_name = f.group(1).replace("_", "-")
                         if RX.search(item_name):
-                            gaps.append(f"campo: {rs.relative_to(root_dir)}:{n}: {f.group(1)}")
+                            gaps.append(f"field: {rs.relative_to(root_dir)}:{n}: {f.group(1)}")
                     continue
                 if not in_enum:
                     continue
@@ -4801,7 +5682,7 @@ let
                     continue
                 item_name = re.sub(r"(?<!^)(?=[A-Z])", "-", v.group(1)).lower().replace("_", "-")
                 if RX.search(item_name):
-                    gaps.append(f"variante: {rs.relative_to(root_dir)}:{n}: {v.group(1)}")
+                    gaps.append(f"variant: {rs.relative_to(root_dir)}:{n}: {v.group(1)}")
 
     # 4) NIX AND PYTHON DEFINITIONS
     #
@@ -4839,7 +5720,7 @@ let
         for n, line in enumerate(rs.read_text().splitlines(), 1):
             for m in re.finditer(r'Some\("([a-z][a-z0-9-]*)"\)', line):
                 if RX.search(m.group(1)):
-                    gaps.append(f"subcomando: {rs.relative_to(root_dir)}:{n}: {m.group(1)}")
+                    gaps.append(f"subcommand: {rs.relative_to(root_dir)}:{n}: {m.group(1)}")
 
     # 6) THE CLI'S FLAGS
     #
@@ -4903,14 +5784,14 @@ let
                     hit = RX.search(prose.lower())
                     if hit:
                         rel = f.relative_to(root_dir)
-                        gaps.append(f"comentario: {rel}:{first}: {hit.group(0)}")
+                        gaps.append(f"comment: {rel}:{first}: {hit.group(0)}")
                 run, first = [], None
             if run:
                 prose = re.sub(r"`[^`]*`", " ", " ".join(run))
                 prose = re.sub(r'"[^"]*"', " ", prose)
                 hit = RX.search(prose.lower())
                 if hit:
-                    gaps.append(f"comentario: {f.relative_to(root_dir)}:{first}: {hit.group(0)}")
+                    gaps.append(f"comment: {f.relative_to(root_dir)}:{first}: {hit.group(0)}")
 
     # 8) THE DESCRIPTOR'S ids — the last Portuguese name that reached a screen
     #
@@ -4939,21 +5820,23 @@ let
             m = DESCRIPTOR_ID.match(line)
             if m and RX.search(m.group(2)):
                 rel = rs.relative_to(root_dir)
-                gaps.append(f"descritor: {rel}:{n}: {m.group(1)} = {m.group(2)}")
+                gaps.append(f"descriptor: {rel}:{n}: {m.group(1)} = {m.group(2)}")
 
     if gaps:
-        print("ERRO: nome em portugues (invariante 18).", file=sys.stderr)
+        print("ERROR: a Portuguese name (invariant 18).", file=sys.stderr)
         print("", file=sys.stderr)
-        for f in gaps[:40]:
+        # EVERY ONE OF THEM. A cap here hid 88 of 128 findings and cost a
+        # whole round trip to discover; a check that knows the answer and
+        # prints part of it is worse than one that prints nothing, because
+        # the part reads like the whole.
+        for f in gaps:
             print(f"       {f}", file=sys.stderr)
-        if len(gaps) > 40:
-            print(f"       … e mais {len(gaps) - 40}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Todo NOME e todo COMENTARIO sao ingles.", file=sys.stderr)
-        print("       Em pt-BR so os 4 docs, o VALOR de chave e a tag de busca.", file=sys.stderr)
+        print("       Every NAME and every COMMENT is English.", file=sys.stderr)
+        print("       In pt-BR, only the 4 docs, the VALUE of a key and the search tag.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: nada em portugues — nome de arquivo, chave, Rust, Nix, Python, subcomando, flag e COMENTARIO")
-    FIM
+    print("OK: nothing in Portuguese — file name, key, Rust, Nix, Python, subcommand, flag and COMMENT")
+    END
   '';
 
   # The flag a `.nix` PASSES has to be one the generator DECLARES.
@@ -4965,7 +5848,7 @@ let
   # happened twice in the same pass (`--teto-sem-pt`, `--categorias`), which is
   # what earned it a check.
   generator-flags-agree = mkCheck "generator-flags-agree" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import collections, pathlib, re, sys
 
     root_dir = pathlib.Path("${self}")
@@ -4991,15 +5874,15 @@ let
                     gaps.append(f"{p.relative_to(root_dir)}:{n}: {script} recebe {f}")
 
     if gaps:
-        print("ERRO: flag passada que o gerador nao declara.", file=sys.stderr)
-        for g in sorted(set(gaps))[:20]:
+        print("ERROR: a flag passed that the generator does not declare.", file=sys.stderr)
+        for g in sorted(set(gaps)):
             print(f"       {g}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       O nome da flag atravessa a fronteira como STRING: os dois", file=sys.stderr)
-        print("       lados mudam na mesma passada, ou nada acusa ate o build.", file=sys.stderr)
+        print("       A flag's name crosses the boundary as a STRING: both", file=sys.stderr)
+        print("       sides change in the same pass, or nothing reports it until the build.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: toda flag passada e declarada pelo gerador que a recebe")
-    FIM
+    print("OK: every flag passed is declared by the generator that receives it")
+    END
   '';
 
   # A `{name}` inside an f-string with no `name` in scope.
@@ -5014,7 +5897,7 @@ let
   # hides exactly the orphan being hunted. And the fence does not end at the
   # first `''`: `'''`, `''$` and `''\` are escapes.
   format-captures-resolve = mkCheck "format-captures-resolve" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import builtins, pathlib, re, sys
 
     CAP = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)")
@@ -5114,15 +5997,15 @@ let
                     orphans.append(f"{p.relative_to(root_dir)}:{n}: {m.group(1)}")
 
     if orphans:
-        print("ERRO: captura de format sem o nome em escopo.", file=sys.stderr)
-        for o in orphans[:30]:
+        print("ERROR: a format capture with no name in scope.", file=sys.stderr)
+        for o in orphans:
             print(f"       {o}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Python so acusa na linha que EXECUTA: um destes vive no", file=sys.stderr)
-        print("       caminho de erro e so aparece quando ja ha outro problema.", file=sys.stderr)
+        print("       Python only reports it on the line that RUNS: one of these lives on", file=sys.stderr)
+        print("       the error path and only shows up when there is already another problem.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: toda captura de format tem o nome em escopo")
-    FIM
+    print("OK: every format capture has its name in scope")
+    END
   '';
 
   # The crates: tests, clippy and formatting, each in its own derivation so it
@@ -5136,16 +6019,16 @@ let
   # runs and loads the embedded face.
   shell-binary = mkCheck "shell-binary" [ ] ''
     bin=${rust.workspace}/bin/ronoctua-shell
-    test -x "$bin" || { echo "ERRO: binario ausente" >&2; exit 1; }
+    test -x "$bin" || { echo "ERROR: the binary is missing" >&2; exit 1; }
 
     # With no WAYLAND_DISPLAY it must fail with a CLEAR message, not with a
     # panic. The message is the first thing anyone sees when the nested loop
     # does not come up.
     out_text=$("$bin" 2>&1 || true)
     echo "$out_text"
-    echo "$out_text" | grep -q "compositor Wayland"       || { echo "ERRO: sem compositor, a mensagem de erro nao explica o porque" >&2; exit 1; }
+    echo "$out_text" | grep -q "Wayland compositor"       || { echo "ERROR: with no compositor, the error message does not explain why" >&2; exit 1; }
 
-    echo "OK: o rodape existe e falha de forma legivel sem compositor"
+    echo "OK: the footer exists and fails legibly with no compositor"
   '';
 
   # THE FIVE COMPONENTS REACH THE SHELL THAT RUNS — the two sides, compared.
@@ -5182,7 +6065,7 @@ let
         lidas=$(grep -oh 'RONOCTUA_BUFFER_[A-Z_]*' \
           ${../crates/ronoctua-shell/src}/*.rs | sort -u)
         [ -n "$lidas" ] || {
-          echo "ERRO: nenhum RONOCTUA_BUFFER_* no codigo do shell — o grep casa o que?" >&2
+          echo "ERROR: no RONOCTUA_BUFFER_* in the shell's code — what does the grep match?" >&2
           exit 1
         }
         echo "o shell le: $(echo "$lidas" | tr '\n' ' ')"
@@ -5192,7 +6075,7 @@ let
         # are string literals inside it.
         for v in $lidas; do
           grep -qa "$v" ${rust.shell}/bin/ronoctua-shell || {
-            echo "ERRO: o shell le $v e o embrulho nao a define — a tecla nao abriria nada" >&2
+            echo "ERROR: the shell reads $v and the wrapper does not set it — the key would open nothing" >&2
             failed=1
           }
         done
@@ -5204,11 +6087,11 @@ let
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (name: path: ''
             grep -qa "${path}" ${rust.shell}/bin/ronoctua-shell || {
-              echo "ERRO: ${name} nao aponta para ${path} no embrulho" >&2; failed=1; }
+              echo "ERROR: ${name} does not point at ${path} in the wrapper" >&2; failed=1; }
             case "${path}" in
               *.wasm) [ -s "${path}" ] || {
-                echo "ERRO: ${path} nao existe ou esta vazio" >&2; failed=1; } ;;
-              *) echo "ERRO: ${name} nao termina em .wasm" >&2; failed=1 ;;
+                echo "ERROR: ${path} does not exist or is empty" >&2; failed=1; } ;;
+              *) echo "ERROR: ${name} does not end in .wasm" >&2; failed=1 ;;
             esac
             echo "$lidas" | grep -qx "${name}" || {
               echo "ERRO: o embrulho define ${name} e nenhum .rs do shell a le" >&2; failed=1; }
@@ -5216,7 +6099,7 @@ let
         )}
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: os dois lados batem, e os seis componentes estao la"
+        echo "OK: both sides match, and the components are there"
       '';
 
   # Section 9 requires the repository to be publishable AS IT IS. A local-path
@@ -5251,10 +6134,10 @@ let
     nodes = json.load(open("${self}/flake.lock"))["nodes"]
     found = {n for n in nodes if n.startswith("fonts-")}
     if found != expected:
-        print("ERRO: os inputs de fonte do flake.lock nao sao os esperados.",
+        print("ERROR: the flake.lock's font inputs are not the expected ones.",
               file=sys.stderr)
-        print("      esperados: " + ", ".join(sorted(expected)), file=sys.stderr)
-        print("      achados:   " + ", ".join(sorted(found)), file=sys.stderr)
+        print("      expected: " + ", ".join(sorted(expected)), file=sys.stderr)
+        print("      found:    " + ", ".join(sorted(found)), file=sys.stderr)
         sys.exit(1)
 
     failed = False
@@ -5271,25 +6154,25 @@ let
 
         if url.startswith("https://") or url.startswith("http://"):
             if not pinned:
-                print("ERRO: input '" + name + "' e remoto mas NAO esta travado "
-                      "por narHash no flake.lock.", file=sys.stderr)
+                print("ERROR: the input '" + name + "' is remote but is NOT locked "
+                      "by narHash in flake.lock.", file=sys.stderr)
                 failed = True
             else:
-                print("OK: input '" + name + "' e um asset remoto e fixado por "
+                print("OK: input '" + name + "' is a remote asset and pinned by "
                       "hash — " + url)
         elif url.startswith("path:") or url.startswith("/"):
-            print("ERRO: o input '" + name + "' aponta para um caminho local:",
+            print("ERROR: the input '" + name + "' points at a local path:",
                   file=sys.stderr)
             print("        " + url, file=sys.stderr)
-            print("      Isso funciona no seu disco, mas NAO para quem clonar.",
+            print("      That works on your disk, but NOT for whoever clones it.",
                   file=sys.stderr)
-            print("      Os arquivos de fonte sao 4,1 GB e NAO entram em git (nem",
+            print("      The font files are 4.1 GB and do NOT go into git (nor",
                   file=sys.stderr)
-            print("      LFS): sao asset de um Release deste mesmo repositorio. Rode",
+            print("      LFS): they are an asset of a Release of this very repository. Run",
                   file=sys.stderr)
-            print("      nix run .#fonts-release -- /caminho/com/noctua-iosevka,",
+            print("      nix run .#fonts-release -- /path/with/noctua-iosevka,",
                   file=sys.stderr)
-            print("      suba os quatro na tag fonts-v1 e aponte o input para la.",
+            print("      upload the four on the fonts-v1 tag and point the input at it.",
                   file=sys.stderr)
             failed = True
         else:
@@ -5304,11 +6187,11 @@ let
   # The OFL requires redistributing the license text along with the files.
   fonts-license = mkCheck "fonts-license" [ ] ''
     test -f ${fonts.noctua-iosevka-ttf-nerdfonts}/share/doc/noctua-iosevka/LICENSE-OFL.txt \
-      || { echo "ERRO: LICENSE-OFL.txt ausente no pacote" >&2; exit 1; }
+      || { echo "ERROR: LICENSE-OFL.txt is missing from the package" >&2; exit 1; }
     grep -q "SIL OPEN FONT LICENSE" \
       ${fonts.noctua-iosevka-ttf-nerdfonts}/share/doc/noctua-iosevka/LICENSE-OFL.txt \
-      || { echo "ERRO: LICENSE-OFL.txt nao contem o texto da OFL" >&2; exit 1; }
-    echo "OK: texto da OFL redistribuido junto dos arquivos"
+      || { echo "ERROR: LICENSE-OFL.txt does not contain the OFL text" >&2; exit 1; }
+    echo "OK: the OFL text is redistributed alongside the files"
   '';
 
   # EVERY COMMAND A BUFFER PUBLISHES HAS A LABEL THE HOST CAN DRAW.
@@ -5335,22 +6218,49 @@ let
   # The shape read here is the `mod key` every buffer keeps: one `pub const` per
   # key, the value a literal. A key assembled with `format!` is invisible to
   # this check — which is why the panels keep their keys as whole literals.
-  buffer-keys-have-text = mkCheck "buffer-keys-have-text" [ pkgs.gnugrep ] ''
-    keys=$(grep -rhoE 'pub const [A-Z_0-9]+: &str = "[a-z0-9-]+";' ${../buffers} \
-      | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
-    [ -n "$keys" ] || { echo "ERRO: nenhuma chave de buffer encontrada — o grep mudou?" >&2; exit 1; }
+  buffer-keys-have-text = mkCheck "buffer-keys-have-text" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
 
-    failed=0
-    for k in $keys; do
-      for language in ${../assets/i18n/pt-BR.ftl} ${../assets/i18n/en-GB.ftl}; do
-        grep -q "^$k = " "$language" || {
-          echo "ERRO: falta $k em $(basename "$language") — a tela mostraria [$k]" >&2
-          failed=1
-        }
-      done
-    done
-    [ "$failed" = 0 ] || exit 1
-    echo "OK: $(echo "$keys" | wc -l) chaves de buffer, todas traduzidas nos dois idiomas"
+    root_dir = pathlib.Path("${self}")
+    owed = {}
+
+    # INSIDE `mod key`, AND NOWHERE ELSE.
+    #
+    # This used to grep every `pub const NAME: &str = "…";` in a buffer, which
+    # was true while the only such constants WERE text keys. The design crate
+    # ended that: a `Table`'s columns are named, and a buffer now declares
+    # `mod field { pub const COUNTER: &str = "counter"; }` — which is better
+    # than a bare literal at the call site, and is not a sentence anybody
+    # translates. The broad grep read four of those as missing translations.
+    #
+    # The module is the scope, so a constant is a promise about a bundle only
+    # where the buffer says it is one.
+    for rs in sorted((root_dir / "buffers").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        source = rs.read_text()
+        for block in re.findall(r"\nmod key \{(.*?)\n\}", source, re.S):
+            for k in re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z0-9-]+)";', block):
+                owed.setdefault(k, rs.relative_to(root_dir))
+
+    if not owed:
+        print("ERROR: no buffer key found — did the pattern change?", file=sys.stderr)
+        raise SystemExit(1)
+
+    failed = 0
+    for language in ("pt-BR", "en-GB"):
+        text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
+        for k, where in sorted(owed.items()):
+            if k not in have:
+                print(f"ERROR: {k} is missing from {language}.ftl ({where}) — the screen would show [{k}]", file=sys.stderr)
+                failed = 1
+
+    if failed:
+        raise SystemExit(1)
+    print(f"OK: {len(owed)} buffer keys, all translated in both languages")
+    END
   '';
 
   # EVERY BUFFER ID HAS A LABEL, IN BOTH LANGUAGES.
@@ -5366,7 +6276,7 @@ let
   # and puts a literal bracketed key on the modeline — which is the failure the
   # i18n was built to make impossible everywhere else.
   buffer-modes-have-text = mkCheck "buffer-modes-have-text" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     root_dir = pathlib.Path("${self}")
@@ -5394,7 +6304,7 @@ let
                 wanted.add(("buffer" if m.group(1) == "name" else "mode", m.group(2)))
 
     if not wanted:
-        sys.exit("ERRO: nenhum descritor encontrado — o formato do bloco mudou?")
+        sys.exit("ERROR: no descriptor found — did the block's shape change?")
 
     # AND THE NATIVE WINDOWS, which are not buffers and reach the same place.
     #
@@ -5421,32 +6331,59 @@ let
                 missing.append(language + ": " + key)
 
     if missing:
-        print("ERRO: id de buffer sem texto — a tela mostraria a chave entre colchetes.", file=sys.stderr)
+        print("ERROR: a buffer id with no text — the screen would show the key in square brackets.", file=sys.stderr)
         for m in missing:
             print("       " + m, file=sys.stderr)
         raise SystemExit(1)
-    print("OK: " + str(len(wanted)) + " ids de buffer e de janela, com texto nos dois idiomas")
-    FIM
+    print("OK: " + str(len(wanted)) + " buffer and window ids, with text in both languages")
+    END
   '';
 
-  buffer-commands-have-labels = mkCheck "buffer-commands-have-labels" [ pkgs.gnugrep ] ''
-    ids=$(grep -rhoE 'command: "[a-z0-9-]+"' ${../buffers} | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
-    [ -n "$ids" ] || { echo "ERRO: nenhum comando de buffer encontrado — o grep mudou?" >&2; exit 1; }
+  buffer-commands-have-labels = mkCheck "buffer-commands-have-labels" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
 
-    failed=0
-    for id in $ids; do
-      for language in ${../assets/i18n/pt-BR.ftl} ${../assets/i18n/en-GB.ftl}; do
-        grep -q "^cmd-$id = " "$language" || {
-          # NO BACKTICKS. Inside a Nix indented string they are still the
-          # shell's command substitution: the first version of this line ran
-          # cmd-<id> as a program and printed "falta  em", naming nothing.
-          echo "ERRO: falta cmd-$id em $(basename "$language") — o SPC m mostraria [cmd-$id]" >&2
-          failed=1
-        }
-      done
-    done
-    [ "$failed" = 0 ] || exit 1
-    echo "OK: $(echo "$ids" | wc -l) comandos de buffer, todos com rotulo nos dois idiomas"
+    root_dir = pathlib.Path("${self}")
+    ids = set()
+
+    # TWO SHAPES, because a buffer may BUILD its bindings instead of writing
+    # them out.
+    #
+    # Seven components spell `command: "memory-full"` into a `Binding`. The
+    # brain's builds them from a `KEYMAP` table of pairs, so `command:` there
+    # reads `(*command).into()` — and a grep for the first shape saw nothing of
+    # it. Its nine labels were unguarded, and a rename would have drawn
+    # `[cmd-brain-run]` under `SPC m` with every check green.
+    #
+    # The second shape is read INSIDE the `KEYMAP` declaration and nowhere
+    # else. A bare "pair of short strings" pattern matches half the tables in
+    # these files — measured: it produced `cmd-t`, `cmd-u` and `cmd-v` out of
+    # things that are not commands at all.
+    for rs in sorted((root_dir / "buffers").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        source = rs.read_text()
+        ids.update(re.findall(r'command:\s*"([a-z0-9-]+)"', source))
+        for table in re.findall(r"KEYMAP:\s*&\[\(&str, &str\)\]\s*=\s*&\[(.*?)\n\];", source, re.S):
+            ids.update(re.findall(r'\(\s*"[^"]+"\s*,\s*"([a-z0-9-]+)"\s*\)', table))
+
+    if not ids:
+        print("ERROR: no buffer command found — did the pattern change?", file=sys.stderr)
+        raise SystemExit(1)
+
+    failed = 0
+    for language in ("pt-BR", "en-GB"):
+        text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
+        for i in sorted(ids):
+            if f"cmd-{i}" not in have:
+                print(f"ERROR: cmd-{i} is missing from {language}.ftl — SPC m would show [cmd-{i}]", file=sys.stderr)
+                failed = 1
+
+    if failed:
+        raise SystemExit(1)
+    print(f"OK: {len(ids)} buffer commands, all with a label in both languages")
+    END
   '';
 
   # THE MEMORY POLICY HAS THE SHAPE IT CLAIMS, on the GENERATED units.
@@ -5484,37 +6421,37 @@ let
       for level in system/user.slice.d system/user-.slice.d \
                    system/user@.service.d user/session.slice.d; do
         grep -qR "MemoryMin=" "$etc/systemd/$level" 2>/dev/null || {
-          echo "ERRO: sem MemoryMin em $level — a corrente quebra e o valor efetivo e zero" >&2
+          echo "ERROR: no MemoryMin at $level — the chain breaks and the effective value is zero" >&2
           failed=1
         }
       done
 
       # The daemon is armed, and against the applications.
       grep -qR "ManagedOOMMemoryPressure=kill" "$etc/systemd/user/app.slice.d" 2>/dev/null || {
-        echo "ERRO: a app.slice nao esta armada — o oomd roda vigiando nada" >&2; failed=1; }
+        echo "ERROR: app.slice is not armed — oomd runs watching nothing" >&2; failed=1; }
 
       # And NOT against the desktop. Both of these would put the compositor and
       # the footer in the candidate set.
       [ ! -d "$etc/systemd/user/slice.d" ] || {
-        echo "ERRO: drop-in por TIPO de slice — arma a session.slice junto" >&2; failed=1; }
+        echo "ERROR: a drop-in by slice TYPE — it arms session.slice too" >&2; failed=1; }
       [ ! -e "$etc/systemd/system/-.slice.d/overrides.conf" ] || {
-        echo "ERRO: a -.slice esta armada; os candidatos dela incluem o desktop" >&2; failed=1; }
+        echo "ERROR: -.slice is armed; its candidates include the desktop" >&2; failed=1; }
 
       # The upstream `session.slice` survived: a full-file override would have
       # discarded its CPUWeight without a word.
       grep -q "CPUWeight=100" "$etc/systemd/user/session.slice" 2>/dev/null || {
-        echo "ERRO: a session.slice virou arquivo inteiro e perdeu o de upstream" >&2; failed=1; }
+        echo "ERROR: session.slice became a whole file and lost upstream's" >&2; failed=1; }
 
       # The setting that would be a no-op is absent.
       if grep -qR "OOMScoreAdjust=" "$etc/systemd/user/" 2>/dev/null; then
-        echo "ERRO: OOMScoreAdjust numa unidade de usuario e ignorado em silencio" >&2
+        echo "ERROR: OOMScoreAdjust in a user unit is ignored in silence" >&2
         failed=1
       fi
 
       # The two units that must never give up.
       for unit in niri.service ronoctua-footer.service; do
         grep -q "StartLimitIntervalSec=0" "$etc/systemd/user/$unit" || {
-          echo "ERRO: $unit desiste depois de 5 mortes, e ai a tela fica vazia" >&2
+          echo "ERROR: $unit gives up after 5 deaths, and then the screen stays empty" >&2
           failed=1
         }
       done
@@ -5527,19 +6464,19 @@ let
       # the ones a reboot brings back — and nothing else would say so.
       table="$etc/ronoctua/memory-profiles.conf"
       [ -e "$table" ] || {
-        echo "ERRO: sem a tabela de perfis; o painel nao teria como afrouxar" >&2; failed=1; }
+        echo "ERROR: no profile table; the panel would have no way of loosening it" >&2; failed=1; }
       for profile in strict tolerant; do
         grep -q "^$profile ceiling=.* pressure=.* duration=" "$table" 2>/dev/null || {
-          echo "ERRO: a tabela nao traz o perfil $profile inteiro" >&2; failed=1; }
+          echo "ERROR: the table does not carry the $profile profile whole" >&2; failed=1; }
       done
       grep -q "^declared " "$table" 2>/dev/null || {
-        echo "ERRO: a tabela nao diz qual perfil volta ao reiniciar" >&2; failed=1; }
+        echo "ERROR: the table does not say which profile comes back on restart" >&2; failed=1; }
       # And the strict profile's numbers ARE the ones in force on the slice —
       # the drop-in and the table come from the same options, and this is what
       # proves they were not wired to different ones.
       ceiling=$(grep '^strict ' "$table" | tr ' ' '\n' | grep '^ceiling=' | cut -d= -f2)
       grep -qR "MemoryHigh=$ceiling" "$etc/systemd/user/app.slice.d" 2>/dev/null || {
-        echo "ERRO: o teto da tabela ($ceiling) nao e o da app.slice" >&2; failed=1; }
+        echo "ERROR: the table's ceiling ($ceiling) is not app.slice's" >&2; failed=1; }
 
       # THE FIVE UNITS THE PANEL MAY START, and the rule that lets it.
       #
@@ -5547,11 +6484,11 @@ let
       # policy above closes.
       for what in profile@ sweep@; do
         [ -e "$etc/systemd/system/ronoctua-memory-$what.service" ] || {
-          echo "ERRO: falta a unidade ronoctua-memory-$what" >&2; failed=1; }
+          echo "ERROR: the unit ronoctua-memory-$what is missing" >&2; failed=1; }
       done
 
       [ "$failed" = 0 ] || exit 1
-      echo "OK: corrente de quatro niveis, app.slice armada, desktop fora do alcance, tabela dos dois perfis"
+      echo "OK: a chain of four levels, app.slice armed, the desktop out of reach, a table for both profiles"
     '';
 
   # THE ISO CARRIES WHAT THE TARGET MACHINE WOULD OTHERWISE COMPILE.
@@ -5562,9 +6499,10 @@ let
   # input, `libghostty-vt` and its Zig toolchain, the five wasm buffers, the
   # font family from a GitHub Release. That is where an install's afternoon went.
   #
-  # This check is the LIST's half of the promise, and `iso-fits-usb-stick` is the
-  # artefact's: what goes on the medium has to be enough, and it has to fit.
-  # Measured on 2026-08-15: 3702 MiB against a ceiling of 4096.
+  # This check is the LIST's half of the promise, and `iso-is-measured` is the
+  # artefact's: what goes on the medium has to be enough, and it has to have
+  # come out whole. Measured on 2026-08-15: 3702 MiB — and since the owner
+  # removed the ceiling there is no number it has to stay under.
   #
   # The names are grepped in the seed's CLOSURE and not in the list, because
   # most of them arrive through `ronoctua-shell`'s baked store paths rather than
@@ -5582,10 +6520,11 @@ let
                   -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
                   -ronoctua-buffer-transfers- \
                   -ronoctua-buffer-format- \
+                  -ronoctua-buffer-brain- \
                   -noctua-icon-theme- \
                   -noctua-iosevka-ttf-nerdfonts-; do
         grep -q -e "$ours" ${seed}/store-paths || {
-          echo "ERRO: $ours nao vai no ISO — a maquina alvo vai compila-lo" >&2
+          echo "ERROR: $ours does not go into the ISO — the target machine will compile it" >&2
           failed=1
         }
       done
@@ -5594,10 +6533,10 @@ let
       # built pieces and still has to reach the network to evaluate the flake
       # that names them — which is the same install, waiting on the same wire.
       grep -q -e "-source" ${seed}/store-paths || {
-        echo "ERRO: as fontes dos inputs do flake nao vao no ISO" >&2; failed=1; }
+        echo "ERROR: the fonts from the flake's inputs do not go into the ISO" >&2; failed=1; }
 
       [ "$failed" = 0 ] || exit 1
-      echo "OK: $(wc -l < ${seed}/store-paths) caminhos na semente"
+      echo "OK: $(wc -l < ${seed}/store-paths) paths in the seed"
     '';
 
   # THE REDUCED PROFILE IS REDUCED, AND STILL IS THE DISTRO.
@@ -5632,16 +6571,23 @@ let
       failed=0
 
       # Applications: in the full one, out of the reduced one.
-      for app in -android-studio- -google-chrome- -emacs-30 -ffmpeg-full- -vlc- \
+      #
+      # `-ffmpeg-full-` USED TO BE ON THIS LIST and is now on the other one.
+      # That is the owner's decision, and the line between the two lists is
+      # what it changed: ffmpeg is not an application one installs to USE, it
+      # is format SUPPORT, and a machine that cannot preview a video or read a
+      # photograph is not a reduced distro. What stayed here is `-vlc-`, which
+      # is a player — which is exactly the line.
+      for app in -android-studio- -google-chrome- -emacs-30 -vlc- \
                  -flutter- -dart- -rustc-1 -go-1 -noctua-iosevka-ttf-3 \
                  -noctua-icon-theme-; do
         grep -q -e "$app" ${full}/store-paths || {
-          echo "ERRO: $app nao esta no perfil completo — o nome mudou?" >&2
+          echo "ERROR: $app is not in the full profile — did the name change?" >&2
           failed=1
           continue
         }
         if grep -q -e "$app" ${minimal}/store-paths; then
-          echo "ERRO: $app continua no perfil reduzido" >&2
+          echo "ERROR: $app is still in the minimal profile" >&2
           failed=1
         fi
       done
@@ -5661,14 +6607,20 @@ let
       # wrapper. If the module ever points at the unwrapped workspace again, the
       # system installs a shell whose every buffer key opens nothing — and it
       # installs FASTER, with nothing else giving it away.
+      # THE DECODERS ARE ON THIS LIST, and they are the reason it grew. The
+      # file manager's preview and info panels reach for `ffmpeg` and
+      # `exiftool` by a path taken from the ENVIRONMENT, so nothing in the
+      # binary would fail if they left — the panels would simply say the
+      # program is missing, on every reduced machine, for ever. This line is
+      # what turns that into a build failure instead.
       for kept in -niri- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
-                  -networkmanager- -systemd- \
+                  -networkmanager- -systemd- -ffmpeg-full- -exiftool- \
                   -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
                   -ronoctua-buffer-memory- -ronoctua-buffer-transfers- \
-                  -ronoctua-buffer-format-; do
+                  -ronoctua-buffer-format- -ronoctua-buffer-brain-; do
         grep -q -i -e "$kept" ${minimal}/store-paths || {
-          echo "ERRO: o perfil reduzido perdeu $kept, que faz parte da distro" >&2
+          echo "ERROR: the minimal profile lost $kept, which is part of the distro" >&2
           failed=1
         }
       done
@@ -5678,8 +6630,8 @@ let
       m=$(wc -l < ${minimal}/store-paths)
       f=$(wc -l < ${full}/store-paths)
       [ "$m" -lt "$f" ] || {
-        echo "ERRO: o reduzido tem $m caminhos e o completo $f" >&2; exit 1; }
-      echo "OK: reduzido $m caminhos, completo $f"
+        echo "ERROR: the minimal one has $m paths and the full one $f" >&2; exit 1; }
+      echo "OK: minimal $m paths, full $f"
     '';
 
   # THE ISO CARRIES NOTHING THAT ONLY A DESKTOP OR A COMPILER COULD USE.
@@ -5711,7 +6663,7 @@ let
       failed=0
       for unwanted in -zig- -clang- -llvm- -noctua-icon-theme- -mesa-; do
         if found=$(grep -e "$unwanted" ${closure}/store-paths); then
-          echo "ERRO: o ISO carrega $unwanted, que so um desktop ou um compilador usa" >&2
+          echo "ERROR: the ISO carries $unwanted, which only a desktop or a compiler uses" >&2
           echo "$found" >&2
           failed=1
         fi
@@ -5721,23 +6673,41 @@ let
       # And the installer binary IS there — a check that only forbids would go
       # green on an ISO that lost the installer altogether.
       grep -q -e "-ronoctua-installer" ${closure}/store-paths || {
-        echo "ERRO: o proprio instalador nao esta no ISO" >&2; exit 1; }
+        echo "ERROR: the installer itself is not in the ISO" >&2; exit 1; }
 
-      echo "OK: $(wc -l < ${closure}/store-paths) caminhos, nenhum de desktop ou de compilador"
+      echo "OK: $(wc -l < ${closure}/store-paths) paths, none of them desktop or compiler"
     '';
 
-  # The ISO has to fit on a USB stick. The core subset exists for that.
-  iso-fits-usb-stick = mkCheck "iso-fits-usb-stick" [ pkgs.coreutils ] ''
+  # THE ISO IS MEASURED, AND THERE IS NO LONGER A CEILING.
+  #
+  # There was one of 4 GiB, and the number was never arbitrary: it is the
+  # maximum FILE SIZE of FAT32. It only ever bit when the `.iso` was COPIED
+  # onto a stick — Ventoy, or an ESP the firmware boots the file from. Written
+  # with `dd`, which writes raw sectors and which is what `docs/INSTALL.md`
+  # already tells a person to do, there is no limit at all.
+  #
+  # The owner removed the ceiling and chose `dd`. What the ceiling was
+  # defending is gone with it: the image may now carry whatever the target
+  # would otherwise have to compile, and the seed is the whole point of it.
+  #
+  # WHAT IS LEFT IS STILL AN ASSERTION, and not a number printed into a log.
+  # An ISO that comes out tiny is a build that silently lost its contents —
+  # the `storeContents` list evaluating to nothing produces a perfectly valid,
+  # perfectly useless image, and that failure looks exactly like success.
+  # A hundred mebibytes is far below anything this ISO has ever measured and
+  # far above an empty one, which is what makes it a floor and not a target.
+  iso-is-measured = mkCheck "iso-is-measured" [ pkgs.coreutils ] ''
     iso=$(find ${self.packages.${system}.iso}/iso -name '*.iso' | head -1)
+    [ -n "$iso" ] || { echo "ERRO: nenhum .iso saiu da derivacao" >&2; exit 1; }
     bytes=$(stat -c %s "$iso")
-    limit=$((4 * 1024 * 1024 * 1024))
+    floor=$((100 * 1024 * 1024))
     echo "ISO: $((bytes / 1024 / 1024)) MiB"
-    if [ "$bytes" -gt "$limit" ]; then
-      echo "ERRO: ISO passou de 4 GiB. O subconjunto core existe justamente" >&2
-      echo "      para isso — conferir nix/installer/iso.nix." >&2
+    if [ "$bytes" -lt "$floor" ]; then
+      echo "ERROR: an ISO under 100 MiB — it lost the content, and an" >&2
+      echo "      an empty image is valid: check the storeContents." >&2
       exit 1
     fi
-    echo "OK: ISO cabe em pendrive"
+    echo "OK: the ISO came out whole (no ceiling: it is written with dd)"
   '';
 
   # THE SIX DOCUMENTS EXIST.
@@ -5761,10 +6731,10 @@ let
     for f in ${../CLAUDE.md} ${../README.md} \
              ${../docs/ARCHITECTURE.md} ${../docs/PENDING.md} \
              ${../docs/INSTALL.md} ${../docs/DEVELOPMENT.md}; do
-      test -s "$f" || { echo "ERRO: $f ausente ou vazio" >&2; exit 1; }
+      test -s "$f" || { echo "ERROR: $f is missing or empty" >&2; exit 1; }
     done
 
-    echo "CLAUDE.md: $(wc -l < ${../CLAUDE.md}) linhas"
+    echo "CLAUDE.md: $(wc -l < ${../CLAUDE.md}) lines"
 
     # The PENDING.md must not become a changelog. Its rule is "on finishing,
     # remove it"; a struck-through or done-marked item is the start of the rot.
@@ -5772,11 +6742,11 @@ let
     # order to forbid them, and a loose grep would report the text that forbids them.
     if grep -qE '^ *[-*|] *(\[x\]|~~|✅)' ${../docs/PENDING.md}; then
       echo "ERRO: PENDING.md tem item marcado como feito." >&2
-      echo "      A regra e remover, nao riscar — ele nao guarda historico." >&2
+      echo "      The rule is to remove, not to strike through — it keeps no history." >&2
       exit 1
     fi
 
-    echo "OK: os seis documentos existem, e o PENDING nao virou changelog"
+    echo "OK: the six documents exist, and PENDING did not become a changelog"
   '';
 
   architecture-sections = mkCheck "architecture-sections" [ pkgs.python3 ] ''
@@ -5810,14 +6780,14 @@ let
             seen += 1
             target = m.group(1)
             if target not in titles:
-                broken.append(f"{f}: secao \"{target}\" nao existe no ARCHITECTURE.md")
+                broken.append(f"{f}: section \"{target}\" does not exist in ARCHITECTURE.md")
 
     if broken:
-        print("ERRO: remissao a secao inexistente:", file=sys.stderr)
+        print("ERROR: a cross-reference to a section that does not exist:", file=sys.stderr)
         for b in broken:
             print("  " + b, file=sys.stderr)
         sys.exit(1)
-    print(f"OK: {seen} remissoes por nome de secao, todas resolvem")
+    print(f"OK: {seen} cross-references by section name, all of which resolve")
     PY
   '';
   # WHAT THE FOOTER READS AT RUNTIME IS EXPORTED BEFORE THE FOOTER STARTS.
@@ -5836,7 +6806,7 @@ let
   # The rule is about ORDER, so the check reads line numbers: the export has to
   # come before the line that launches the footer.
   dev-exports-before-it-starts = mkCheck "dev-exports-before-it-starts" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     # What the SHELL reads at runtime and no build bakes. A variable that
@@ -5852,7 +6822,7 @@ let
             launch = n
             break
     if launch is None:
-        print("ERRO: nao achei onde o rodape sobe em nix/dev.nix.", file=sys.stderr)
+        print("ERROR: could not find where the footer comes up in nix/dev.nix.", file=sys.stderr)
         raise SystemExit(1)
 
     gaps = []
@@ -5863,28 +6833,28 @@ let
             if re.match(r"\s*export " + name + r"=", line)
         ]
         if not where:
-            gaps.append(f"{name}: nao e exportada em nix/dev.nix")
+                gaps.append(f"{name}: is not exported in nix/dev.nix")
         elif min(where) > launch:
             gaps.append(
-                f"{name}: exportada na linha {min(where)}, e o rodape sobe na {launch}"
+                f"{name}: exported on line {min(where)}, and the footer comes up on {launch}"
             )
 
     if gaps:
-        print("ERRO: variavel de runtime chega DEPOIS do rodape.", file=sys.stderr)
+        print("ERROR: a runtime variable arrives AFTER the footer.", file=sys.stderr)
         print("", file=sys.stderr)
         for g in gaps:
             print("       " + g, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       O primeiro rodape da sessao nao a tem, e so um restart a", file=sys.stderr)
-        print("       ganha. Falha calada: variavel ausente e fallback, nao erro.", file=sys.stderr)
+        print("       The session's first footer does not have it, and only a restart", file=sys.stderr)
+        print("       gains it. A silent failure: a missing variable is a fallback, not an error.", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: as {len(AT_RUNTIME)} variaveis de runtime saem antes da linha {launch}")
-    FIM
+    print(f"OK: the {len(AT_RUNTIME)} runtime variables come out before line {launch}")
+    END
   '';
 
   # A `trap` THAT CALLS A FUNCTION THAT DOES NOT EXIST CLEANS NOTHING UP.
   #
-  # `nix/bench-frames.nix` had `trap 'limpar; rm -rf "$dir"' EXIT` next to a
+  # `nix/bench-frames.nix` had `trap 'clean_up; rm -rf "$dir"' EXIT` next to a
   # function named `cleanup`: the rename to English reached the definition and
   # not the string. Nothing said so — a shell string is not code to shellcheck,
   # and the trap only runs at exit, when nobody is reading. The bench came back
@@ -5900,7 +6870,7 @@ let
   # something, or calls a function of the script's own; anything else earns a
   # line here and the thought that goes with it.
   trap-calls-something-that-exists = mkCheck "trap-calls-something-that-exists" [ pkgs.python3 ] ''
-    python3 - <<'FIM'
+    python3 - <<'END'
     import pathlib, re, sys
 
     KNOWN = {
@@ -5932,16 +6902,16 @@ let
                 gaps.append(f"{rel}:{line}: o trap chama `{word}`")
 
     if gaps:
-        print("ERRO: trap chamando o que nao existe.", file=sys.stderr)
+        print("ERROR: a trap calling what does not exist.", file=sys.stderr)
         print("", file=sys.stderr)
         for g in gaps:
             print("       " + g, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       Nao e funcao definida no arquivo nem comando da lista.", file=sys.stderr)
-        print("       O trap falha na saida, calado, e o que ele limparia fica.", file=sys.stderr)
+        print("       It is neither a function defined in the file nor a command from the list.", file=sys.stderr)
+        print("       The trap fails on exit, silently, and what it would clean up stays.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: todo trap chama funcao que existe ou comando conhecido")
-    FIM
+    print("OK: every trap calls a function that exists or a known command")
+    END
   '';
 
   # THE GATE HAS TO FETCH WHAT NO CACHE HAS — and the wiring is the risk.
@@ -5964,26 +6934,26 @@ let
     tool=${prefetchApp}/bin/ronoctua-prefetch
 
     if ! grep -qF "$tool" "$script"; then
-      echo "ERRO: o gate nao chama o prefetch." >&2
-      echo "      Sem ele, o gate morre depois de minutos com" >&2
+      echo "ERROR: the gate does not call the prefetch." >&2
+      echo "      Without it, the gate dies after minutes with" >&2
       echo "      'cannot download ... from any mirror', que parece" >&2
-      echo "      arquivo removido e nao e — ver nix/prefetch.nix." >&2
+      echo "      a file removed, and it is not — see nix/prefetch.nix." >&2
       exit 1
     fi
 
     called_at=$(grep -nF "$tool" "$script" | head -1 | cut -d: -f1)
     heavy_at=$(grep -n '^heavy=(' "$script" | head -1 | cut -d: -f1)
     if [ -z "$heavy_at" ]; then
-      echo "ERRO: nao achei o bloco das tres pesadas no gate." >&2
+      echo "ERROR: could not find the block with the three heavy ones in the gate." >&2
       exit 1
     fi
     if [ "$called_at" -ge "$heavy_at" ]; then
-      echo "ERRO: o prefetch vem DEPOIS das tres pesadas (linha $called_at, contra $heavy_at)." >&2
-      echo "      Assim o compilador roda inteiro antes de descobrir que o" >&2
-      echo "      problema e a rede." >&2
+      echo "ERROR: the prefetch comes AFTER the three heavy ones (line $called_at, against $heavy_at)." >&2
+      echo "      That way the compiler runs whole before finding out that the" >&2
+      echo "      problem is the network." >&2
       exit 1
     fi
-    echo "OK: o gate baixa o que nenhum cache tem, antes de compilar"
+    echo "OK: the gate downloads what no cache has, before compiling"
   '';
 
   # -------------------------------------------------------------------
@@ -6013,10 +6983,10 @@ let
           ""
         else
           ''
-            echo "ERRO: tests/slow.nix nomeia check que nao existe mais:" >&2
+            echo "ERROR: tests/slow.nix names a check that no longer exists:" >&2
             ${lib.concatMapStringsSep "\n" (n: ''echo "       ${n}" >&2'') ghosts}
-            echo "      Uma linha morta ali nao exclui nada — ela so parece que exclui," >&2
-            echo "      e o check que ela deveria segurar volta para a bateria de todo" >&2
+            echo "      A dead line there excludes nothing — it only looks as if it does," >&2
+            echo "      and the check it was meant to hold back comes back into the everyday" >&2
             echo "      dia sem ninguem perceber." >&2
             exit 1
           ''
@@ -6026,8 +6996,8 @@ let
           ""
         else
           ''
-            echo "ERRO: nenhum check sobrou para a bateria do dia a dia." >&2
-            echo "      Ou tests/slow.nix engoliu tudo, ou os checks sumiram." >&2
+            echo "ERROR: no check was left for the everyday battery." >&2
+            echo "      Either tests/slow.nix swallowed everything, or the checks are gone." >&2
             exit 1
           ''
       }
@@ -6049,13 +7019,13 @@ let
           ""
         else
           ''
-            echo "ERRO: tests/quick.nix nomeia check que nao existe:" >&2
+            echo "ERROR: tests/quick.nix names a check that does not exist:" >&2
             ${lib.concatMapStringsSep "\n" (n: ''echo "       ${n}" >&2'') ghosts}
-            echo "      O laco curto rodaria com menos do que a lista diz." >&2
+            echo "      The short loop would run with less than the list says." >&2
             exit 1
           ''
       }
-      echo "OK: os ${toString (builtins.length quick)} do laco curto existem"
+      echo "OK: the ${toString (builtins.length quick)} of the short loop exist"
     '';
 
   raw = {
@@ -6120,7 +7090,7 @@ let
       browser-has-no-keyring
       format-captures-resolve
       generator-flags-agree
-      iso-fits-usb-stick
+      iso-is-measured
       iso-has-no-toolchain
       iso-carries-the-seed
       profile-minimal-closes
@@ -6129,6 +7099,18 @@ let
       buffer-keys-have-text
       buffer-modes-have-text
       buffer-states-have-text
+      design-constants-match-tokens
+      buffers-use-the-design-crate
+      separators-come-from-chrome
+      sections-do-not-share-a-line
+      inspect-keys-exist
+      update-has-one-list
+      update-names-agree
+      updates-have-text
+      updates-refusal-refuses
+      updates-never-ask
+      brain-unit-is-narrow
+      tests-do-not-touch-the-machine
       states-driven
       footer-mouse-reaches-nothing-new
       oomVm
@@ -6560,7 +7542,7 @@ let
       wifiTpmVm
       # The TUI. The milestone's criterion speaks of it — "the TUI collects ONLY
       # disk, hostname, password, passphrase, language and resume_offset" — and its
-      # `Estado` is a function from (state, key) to state, with no terminal at all.
+      # `State` is a function from (state, key) to state, with no terminal at all.
       # The tests walk through the questions, check that the `resume_offset` is NOT
       # shown, that an invalid answer does not advance, and that the confirmation
       # requires the disk's path typed out in full.
@@ -6595,7 +7577,7 @@ let
       rust-clippy
       rust-fmt
       shell-binary
-      iso-fits-usb-stick
+      iso-is-measured
       iso-has-no-toolchain
       iso-carries-the-seed
       profile-minimal-closes
@@ -6604,6 +7586,18 @@ let
       buffer-keys-have-text
       buffer-modes-have-text
       buffer-states-have-text
+      design-constants-match-tokens
+      buffers-use-the-design-crate
+      separators-come-from-chrome
+      sections-do-not-share-a-line
+      inspect-keys-exist
+      update-has-one-list
+      update-names-agree
+      updates-have-text
+      updates-refusal-refuses
+      updates-never-ask
+      brain-unit-is-narrow
+      tests-do-not-touch-the-machine
       states-driven
       footer-mouse-reaches-nothing-new
       docs-exist
@@ -6652,12 +7646,12 @@ let
         };
       in
       pkgs.runCommand "check-fmt" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
-        cd ${nixOnly}
-        if ! nixfmt --check $(find . -name '*.nix'); then
-          echo "ERRO: rode 'nix fmt' antes de commitar" >&2
-          exit 1
-        fi
-        touch $out
+          cd ${nixOnly}
+          if ! nixfmt --check $(find . -name '*.nix'); then
+        echo "ERROR: run 'nix fmt' before committing" >&2
+            exit 1
+          fi
+          touch $out
       '';
 
     # THE BUFFERS' FORMATTING, WHICH NOTHING CHECKED.
@@ -6670,24 +7664,40 @@ let
     # The pinned toolchain, never `pkgs.rustfmt`: two versions of a formatter are
     # two opinions about the same file, and the disagreement would show up as a
     # check that fails on a tree `nix fmt` just formatted.
+    # THE BUFFERS ARE FORMATTED, and this is checked with `rustfmt` and not with
+    # `cargo fmt`.
+    #
+    # It WAS `cargo fmt --manifest-path`, and that stopped working the moment a
+    # buffer gained a path dependency on `ronoctua-design`: `cargo fmt` runs
+    # `cargo metadata` first, `${../buffers}` is a store copy that contains only
+    # `buffers/`, and the dependency two directories up is not in it. Every
+    # buffer failed with `failed to load manifest for dependency`, and the
+    # message on screen said "out of format" — which was false, and pointed at
+    # the wrong thing entirely.
+    #
+    # Mirroring the crates here, the way `nix/buffers.nix` does, would work and
+    # would be a second copy of that arrangement to keep in step. `rustfmt`
+    # needs no manifest: it reads a file. The edition has to be passed because
+    # that is the one thing the manifest was telling it.
     buffers-fmt =
       pkgs.runCommand "check-buffers-fmt"
         {
           nativeBuildInputs = [ rustToolchain ];
         }
         ''
-          # `cargo` wants a writable home even when it only formats.
-          export CARGO_HOME=$TMPDIR/cargo
           failed=0
-          for manifest in ${../buffers}/*/Cargo.toml; do
-            name=$(basename "$(dirname "$manifest")")
-            if ! cargo fmt --manifest-path "$manifest" -- --check; then
-              echo "ERRO: buffers/$name esta fora de formato. Rode: nix fmt" >&2
+          seen=0
+          for source in ${../buffers}/*/src/*.rs; do
+            name=$(basename "$(dirname "$(dirname "$source")")")
+            seen=$((seen + 1))
+            if ! rustfmt --edition 2024 --check "$source" > /dev/null; then
+              echo "ERROR: buffers/$name is out of format. Run: nix fmt" >&2
               failed=1
             fi
           done
+          [ "$seen" -gt 0 ] || { echo "ERROR: no buffer source at all — did the glob change?" >&2; exit 1; }
           [ "$failed" = 0 ] || exit 1
-          echo "OK: os buffers estao formatados"
+          echo "OK: the $seen buffer sources are formatted"
           touch $out
         '';
   };

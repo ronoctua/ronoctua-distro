@@ -98,16 +98,16 @@ in
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Instala e afina o Syncthing. Ligado por padrão.";
+      description = "Installs and tunes Syncthing. On by default.";
     };
 
     guiAddr = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1:8384";
       description = ''
-        Onde a interface web escuta. Fica no localhost de propósito: quem
-        abre é o command `syncthing-open` do `LEADER r`, na própria
-        máquina. Expor na LAN seria uma porta administrativa sem senha.
+        Where the web interface listens. It stays on localhost on purpose: whoever
+        opens it is the `syncthing-open` command of `LEADER r`, on the very same
+        machine. Exposing it on the LAN would be an administrative port with no password.
       '';
     };
 
@@ -115,9 +115,9 @@ in
       type = lib.types.ints.between 1 8;
       default = 3;
       description = ''
-        Conexões TCP paralelas por dispositivo. Três porque num enlace sem
-        fio um fluxo só não enche a janela; acima disso o ganho some e o
-        custo de handshake aparece.
+        Parallel TCP connections per device. Three because on a wireless
+        link a single stream does not fill the window; above that the gain goes away and the
+        handshake cost shows up.
       '';
     };
   };
@@ -200,7 +200,7 @@ in
     # network module. Each service opens the port it uses.
 
     systemd.services.ronoctua-syncthing-tune = {
-      description = "Afina os padrões de pasta e dispositivo do Syncthing";
+      description = "Tunes Syncthing's folder and device defaults";
       # After the nixpkgs init, which is what creates the config.xml the API key
       # is read from.
       after = [

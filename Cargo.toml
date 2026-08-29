@@ -15,6 +15,7 @@ exclude = [ "buffers" ]
 members = [
   "crates/ronoctua-tokens",
   "crates/ronoctua-protocol",
+  "crates/ronoctua-design",
   "crates/ronoctua-runtime",
   "crates/ronoctua-cmd",
   "crates/ronoctua-i18n",
@@ -29,7 +30,9 @@ members = [
   "crates/ronoctua-network",
   "crates/ronoctua-disks",
   "crates/ronoctua-memory",
+  "crates/ronoctua-brain",
   "crates/ronoctua-files",
+  "crates/ronoctua-inspect",
   "crates/ronoctua-torrent",
   "crates/ronoctua-transfers",
   "crates/ronoctua-rescue",
@@ -75,10 +78,22 @@ cosmic-text = "0.19"
 # new pipeline.
 qrcode = { version = "0.14", default-features = false }
 
-# The preview of the copied image. ONLY png and jpeg: they are what comes out of a
-# screenshot and out of a browser, and the whole crate brings a dozen decoders
-# that nobody pastes onto the clipboard.
-image = { version = "0.25", default-features = false, features = [ "png", "jpeg" ] }
+# THE RASTER DECODERS. `png` and `jpeg` are what comes out of a screenshot and
+# out of a browser, and for a long time they were the whole list: the clipboard
+# is the only thing that decoded, and nobody pastes a TIFF.
+#
+# `gif`, `webp`, `bmp` and `tiff` joined when the file manager grew a preview,
+# and the argument that kept them out no longer holds. They are a few hundred
+# kilobytes of BINARY and **zero** store paths — nothing here shells out, and
+# nothing here is a new closure — while the formats are what a person actually
+# has on disk: the web saves webp, a phone saves gif, a scanner saves tiff.
+#
+# What is deliberately NOT here is `avif-native`, which is dav1d — a C library,
+# and therefore a store path. AVIF, HEIC, RAW and video go to ffmpeg, which is
+# installed anyway and reads all four; see `ronoctua_inspect::pixels`.
+image = { version = "0.25", default-features = false, features = [
+  "png", "jpeg", "gif", "webp", "bmp", "tiff",
+] }
 
 # THE SVG RASTERISER for the pixmap step of section 4.2's icon chain.
 #

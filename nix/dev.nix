@@ -23,6 +23,9 @@
   fonts,
   fontconfigConf,
   iconSuperpack,
+  ffmpeg-full,
+  exiftool,
+  poppler-utils,
   graphicsHost,
   reloadApp,
   singleFooter,
@@ -193,10 +196,10 @@ let
     chmod +w $out
     ${gnused}/bin/sed -i -e "/@CHORDS@/r ${binds.forPrefix "Alt"}" -e "/@CHORDS@/d" $out
     grep -q "focus-column-left" $out || {
-      echo "ERRO: os acordes nao entraram no config aninhado." >&2; exit 1; }
+      echo "ERROR: the chords did not get into the nested config." >&2; exit 1; }
     cat ${windowRules} >> $out
     grep -q "open-floating" $out || {
-      echo "ERRO: as regras de janela nao entraram no config aninhado." >&2; exit 1; }
+      echo "ERROR: the window rules did not get into the nested config." >&2; exit 1; }
   '';
   app = writeShellApplication {
     name = "ronoctua-dev";
@@ -218,7 +221,7 @@ let
     ];
 
     text = ''
-      echo "ronoctua-dev — niri aninhado + rodape"
+      echo "ronoctua-dev — nested niri + footer"
       echo
 
       ${graphicsHost.prelude}
@@ -262,11 +265,11 @@ let
       export RUST_LOG=niri=info
 
       echo "  Ctrl+Alt+Space      leader (toque: abre a lista)"
-      echo "  Alt+<tecla>         acorde (SEGURADO: o Alt sozinho, sem o Espaco)"
-      echo "  Ctrl+Alt+L          leader alternativa, se a de cima falhar"
-      echo "  Ctrl+Shift+L        restaura o teclado"
+      echo "  Alt+<key>           a chord (HELD: the Alt alone, without the Space)"
+      echo "  Ctrl+Alt+L          an alternative leader, if the one above fails"
+      echo "  Ctrl+Shift+L        restores the keyboard"
       echo "  Ctrl+Alt+Esc        monitor de processos (flutuante)"
-      echo "  Ctrl+Alt+Space q q  sair"
+      echo "  Ctrl+Alt+Space q q  quit"
       echo
       echo "config: $cfg"
       echo
@@ -322,12 +325,12 @@ let
         # THE LOGS STAY. Deleting them in the `trap` was deleting the evidence
         # exactly when it starts to matter — whoever ends the session after
         # something went wrong is the one who needs them most.
-        echo "logs desta sessao:"
+        echo "logs of this session:"
         echo "  niri:   $niri_log"
-        echo "  rodape: $RONOCTUA_LOG"
+        echo "  footer: $RONOCTUA_LOG"
       }
-      # ONCE ONLY. With `trap encerrar EXIT INT TERM`, a Ctrl+C runs
-      # `encerrar` through INT and the shell exits right after, running it again
+      # ONCE ONLY. With `trap shutdown EXIT INT TERM`, a Ctrl+C runs
+      # `shutdown` through INT and the shell exits right after, running it again
       # through EXIT — that is why every shutdown message came out twice.
       #
       # EXIT is the only one that cleans up; INT and TERM only ask for the exit,
@@ -366,7 +369,7 @@ let
         sleep 0.5
       done
       if [ -z "$display" ]; then
-        echo "ERRO: o niri aninhado nao subiu." >&2
+        echo "ERROR: the nested niri did not come up." >&2
         tail -20 "$niri_log" >&2
         exit 1
       fi
@@ -411,6 +414,21 @@ let
       # Without this the action simply is not offered in the nested loop — see
       # `usable_actions` in the shell.
       export RONOCTUA_SWAPPY="${swappy}/bin/swappy"
+      # AND THE FILE MANAGER'S DECODERS, fourth of the same family — with one
+      # difference worth writing down: these are NOT out of the compilation
+      # because a switch might remove them. They are unconditional on an
+      # installed system (`nix/modules/media.nix`), and they still come through
+      # the environment because `ronoctua-files` also builds the binary that
+      # runs as ROOT, whose closure must not learn about video.
+      #
+      # Without these five lines the preview and the info panel would work on
+      # an installed machine and silently do nothing in the nested loop — which
+      # is the first place anybody looks.
+      export RONOCTUA_FFMPEG="${ffmpeg-full}/bin/ffmpeg"
+      export RONOCTUA_FFPROBE="${ffmpeg-full}/bin/ffprobe"
+      export RONOCTUA_EXIFTOOL="${exiftool}/bin/exiftool"
+      export RONOCTUA_PDFTOPPM="${poppler-utils}/bin/pdftoppm"
+      export RONOCTUA_PDFINFO="${poppler-utils}/bin/pdfinfo"
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
       # AND WHAT THE SIDEBAR STARTS WITH — the same two files the installed
       # system resolves, for the same reason: there is no NixOS here to read an
@@ -466,7 +484,7 @@ let
         restart_footer() {
           ${singleFooter}/bin/ronoctua-footer-single \
             "$RONOCTUA_FOOTER_PID" "$RONOCTUA_FOOTER_BIN"
-          echo "  rodape reiniciado (o compositor continua de pe)"
+          echo "  footer restarted (the compositor is still standing)"
         }
 
         rebuild() {
@@ -500,13 +518,13 @@ let
                 # edit is simply not in it. Without this line the symptom is a
                 # reload that reports success and changes nothing on screen.
                 if [ "$wasm" = "''${!var:-}" ]; then
-                  echo "  o componente saiu identico: arquivo novo precisa de 'git add -N'"
+                  echo "  the component came out identical: a new file needs 'git add -N'"
                 else
                   export "$var=$wasm"
                   restart_footer
                 fi
               else
-                echo "  o buffer nao compilou; o rodape anterior continua rodando"
+                echo "  the buffer did not compile; the previous footer is still running"
               fi
               ;;
             *)
@@ -536,11 +554,12 @@ let
               # links wgpu or the wasm runtime.
               if cargo build --release -p ronoctua-shell --bin ronoctua-shell \
                    --bin ronoctua-rescue \
-                   -p ronoctua-transfers --bin ronoctua-transfers 2>&1 | tail -20; then
+                   -p ronoctua-transfers --bin ronoctua-transfers \
+                   -p ronoctua-brain --bin ronoctua-brain 2>&1 | tail -20; then
                 export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/release/ronoctua-shell"
                 restart_footer
               else
-                echo "  compilacao falhou; o rodape anterior continua rodando"
+                echo "  the compilation failed; the previous footer is still running"
               fi
               ;;
           esac
@@ -549,7 +568,7 @@ let
 
         # THE NAME HAS TO BE THE FUNCTION'S, and for eight months it was not.
         #
-        # It read `reconstruir`, and no such command ever existed: the watcher
+        # It read `rebuild`, and no such command ever existed: the watcher
         # `eval`s the string, gets "command not found", and `ronoctua-reload`
         # swallows it with `|| true` — which is right, because a compile error is
         # the normal case in a loop. So hot reload never once fired, and what
@@ -557,9 +576,9 @@ let
         # `reload-command-is-defined` is what fails now if the two drift again.
         RONOCTUA_RELOAD_CMD='rebuild' ${reloadApp}/bin/ronoctua-reload "$root_dir/crates" "$root_dir/buffers" &
         watcher_pid=$!
-        echo "hot reload ligado: .rs em crates/ recompila o rodape; em buffers/ reconstroi o componente"
+        echo "hot reload on: a .rs in crates/ recompiles the footer; in buffers/ it rebuilds the component"
       else
-        echo "sem hot reload: rode de dentro da arvore do projeto para liga-lo"
+        echo "no hot reload: run it from inside the project's tree to switch it on"
       fi
       echo
 
@@ -567,7 +586,7 @@ let
     '';
 
     meta = {
-      description = "Niri aninhado + rodape, para o loop de trabalho de UI";
+      description = "Nested niri + footer, for the UI working loop";
       platforms = lib.platforms.linux;
     };
   };

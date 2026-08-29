@@ -67,20 +67,20 @@ pub enum Failure {
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IdDuplicado(id) => write!(f, "comando `{id}` registrado duas vezes"),
+            Self::IdDuplicado(id) => write!(f, "the command `{id}` is registered twice"),
             Self::IdMalFormado(id) => write!(
                 f,
-                "id de comando `{id}` fora do formato `kebab-case` \
-                 (minusculas, digitos e hifen, sem ponto e sem espaco)"
+                "command id `{id}` is outside the `kebab-case` shape \
+                 (lower case, digits and hyphen, no dot and no space)"
             ),
             Self::LabelDoesNotMatchId { id, label } => write!(
                 f,
-                "o comando `{id}` aponta para a chave `{label}`, e nao para \
+                "the command `{id}` points at the key `{label}`, and not at \
                  `{KEY_PREFIX_OF}{id}`.\n\
                  \n\
-                 Isso compila porque a chave existe — so que e a de OUTRO \
-                 comando, e o which-key mostraria o rotulo errado sem erro \
-                 nenhum."
+                 That compiles because the key exists — only it is ANOTHER \
+                 command's, and which-key would show the wrong label with no error \
+                 none."
             ),
         }
     }

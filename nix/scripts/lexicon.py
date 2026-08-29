@@ -50,7 +50,7 @@ def normalize_entry(v) -> tuple[list[str], list[str]]:
     return [], list(v)
 
 
-def palavras(name: str) -> list[str]:
+def words_of(name: str) -> list[str]:
     """A name becomes its list of words, in lower case.
 
     It serves both vocabularies: `md-arrow_up_bold` (once the prefix is
@@ -68,7 +68,7 @@ def translate(tokens, lexicon, no_translation=None) -> tuple[set[str], set[str],
     untranslated — the list never comes out empty, it comes out full of English pretending to be
     Portuguese. Only by marking when a translation actually came from the lexicon.
 
-    `sem_traducao` is an optional `Counter`, so the coverage report can
+    `no_translation` is an optional `Counter`, so the coverage report can
     say what to translate next.
     """
     tags_en: set[str] = set()

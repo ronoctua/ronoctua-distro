@@ -46,8 +46,8 @@ pub struct Texts {
 
 impl std::fmt::Debug for Texts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Textos")
-            .field("idioma", &self.language)
+        f.debug_struct("Texts")
+            .field("language", &self.language)
             .finish()
     }
 }
@@ -91,7 +91,7 @@ impl Texts {
     pub fn fresh(language: &str) -> Option<Self> {
         let ftl = face(language)?;
         let id: LanguageIdentifier = language.parse().ok()?;
-        let recurso = FluentResource::try_new(ftl.to_owned()).ok()?;
+        let resource = FluentResource::try_new(ftl.to_owned()).ok()?;
         let mut bundle = FluentBundle::new(vec![id]);
         // Fluent puts bidirectional isolation marks (U+2068/U+2069) around
         // an interpolated argument. They are CORRECT in a renderer that
@@ -99,7 +99,7 @@ impl Texts {
         // they would show up as an error glyph. Switched off on purpose, with
         // the note that they come back once there is RTL support.
         bundle.set_use_isolating(false);
-        bundle.add_resource(recurso).ok()?;
+        bundle.add_resource(resource).ok()?;
         Some(Self {
             bundle,
             language: language.to_owned(),
@@ -119,7 +119,7 @@ impl Texts {
                 return t;
             }
         }
-        Self::fresh(DEFAULT).expect("o idioma padrao tem de existir")
+        Self::fresh(DEFAULT).expect("the default language has to exist")
     }
 
     /// The loaded language.
@@ -192,10 +192,10 @@ impl Texts {
             return format!("[{key}]");
         };
         let args = (!bare).then_some(&fluent);
-        let mut erros = Vec::new();
-        let s = self.bundle.format_pattern(default_of, args, &mut erros);
-        if !erros.is_empty() {
-            tracing::warn!(key, ?erros, "texto com erro de formatacao");
+        let mut errors = Vec::new();
+        let s = self.bundle.format_pattern(default_of, args, &mut errors);
+        if !errors.is_empty() {
+            tracing::warn!(key, ?errors, "text with a formatting error");
         }
         // Fluent wraps an argument in a bidirectional ISOLATION MARK
         // (U+2068/U+2069) for mixed RTL/LTR text. Invisible in a terminal,
@@ -216,14 +216,14 @@ mod tests {
         // was GENERATED and what is EMBEDDED are the same set — they are two
         // different paths (keys.rs and include_str!) and nothing else ties them together.
         for language in LANGUAGES {
-            let t = Texts::fresh(language).unwrap_or_else(|| panic!("{language} nao carregou"));
+            let t = Texts::fresh(language).unwrap_or_else(|| panic!("{language} did not load"));
             for key in ALL_KEYS {
                 let s = t.t(key);
                 assert!(
                     !s.starts_with('['),
-                    "{language}: chave `{key}` esta no registro e falta no .ftl"
+                    "{language}: the key `{key}` is in the registry and missing from the .ftl"
                 );
-                assert!(!s.is_empty(), "{language}: `{key}` resolveu para vazio");
+                assert!(!s.is_empty(), "{language}: `{key}` resolved to empty");
             }
         }
     }
@@ -234,10 +234,10 @@ mod tests {
         // which passes every set check.
         let en = Texts::fresh("en-GB").unwrap();
         let pt = Texts::fresh("pt-BR").unwrap();
-        let diferentes = ALL_KEYS.iter().filter(|c| en.t(c) != pt.t(c)).count();
+        let different = ALL_KEYS.iter().filter(|c| en.t(c) != pt.t(c)).count();
         assert!(
-            diferentes >= ALL_KEYS.len() / 2,
-            "so {diferentes} de {} chaves diferem entre os idiomas",
+            different >= ALL_KEYS.len() / 2,
+            "only {different} of {} keys differ between the languages",
             ALL_KEYS.len()
         );
     }
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn an_unknown_key_does_not_bring_it_down() {
         let t = Texts::fresh("en-GB").unwrap();
-        assert_eq!(t.t("nao-existe"), "[nao-existe]");
+        assert_eq!(t.t("does-not-exist"), "[does-not-exist]");
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
             let s = t.t(key);
             assert!(
                 !s.contains('\u{2068}') && !s.contains('\u{2069}'),
-                "`{key}` veio com marca de isolamento"
+                "`{key}` came with an isolation mark"
             );
         }
     }

@@ -22,7 +22,7 @@ pub struct Item {
     /// The `IconName` requested by the app. It enters the icon chain.
     pub icon: Option<String>,
     /// Whether the app declares itself in a state of attention.
-    pub atencao: bool,
+    pub attention: bool,
 }
 
 /// The policy for which items show.
@@ -63,7 +63,7 @@ impl FilterOf {
     /// Does this item show?
     #[must_use]
     pub fn passes_through(&self, item: &Item) -> bool {
-        if self.always_attention && item.atencao {
+        if self.always_attention && item.attention {
             return true;
         }
         self.allowed.contains(&item.id)
@@ -85,12 +85,12 @@ impl FilterOf {
 mod tests {
     use super::*;
 
-    fn item(id: &str, atencao: bool) -> Item {
+    fn item(id: &str, attention: bool) -> Item {
         Item {
             id: id.into(),
             title: id.into(),
             icon: None,
-            atencao,
+            attention,
         }
     }
 

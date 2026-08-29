@@ -36,15 +36,15 @@ use crate::wire::{Ask, Say, read_line, write_line};
 /// When the socket cannot be bound.
 pub fn listen_on(path: &std::path::Path, shared: &Arc<Shared>) -> Result<()> {
     if UnixStream::connect(path).is_ok() {
-        tracing::info!(path = %path.display(), "ja ha uma fila escutando; saindo");
+        tracing::info!(path = %path.display(), "there is already a queue listening; leaving");
         return Ok(());
     }
     // An orphan socket of a dead process prevents the bind, and after the test
     // above what is left here belongs to a process that no longer answers.
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)
-        .with_context(|| format!("abrir o socket em {}", path.display()))?;
-    tracing::info!(path = %path.display(), "fila de transferencias aberta");
+        .with_context(|| format!("open the socket at {}", path.display()))?;
+    tracing::info!(path = %path.display(), "transfer queue opened");
 
     for connection in listener.incoming() {
         let Ok(stream) = connection else { continue };
@@ -53,10 +53,10 @@ pub fn listen_on(path: &std::path::Path, shared: &Arc<Shared>) -> Result<()> {
         // nothing about what it is doing, which is the question one opens `top`
         // to answer.
         if let Err(e) = std::thread::Builder::new()
-            .name("cliente".into())
+            .name("client".into())
             .spawn(move || serve(&mine, stream))
         {
-            tracing::error!(error = %e, "nao consegui atender o cliente");
+            tracing::error!(error = %e, "could not serve the client");
         }
     }
 
@@ -89,7 +89,7 @@ fn serve(shared: &Arc<Shared>, stream: UnixStream) {
             // queue's. Saying so and dropping the connection beats taking the
             // daemon down over somebody's typo in `socat`.
             Err(e) => {
-                tracing::warn!(error = %e, "pedido que nao entendi");
+                tracing::warn!(error = %e, "a request I did not understand");
                 let _ = write_line(
                     &mut out,
                     &Say::Refused {
@@ -122,7 +122,7 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
             // ONE THREAD PER JOB, and named after the work so `top` answers
             // "what is my machine copying" without a debugger.
             if let Err(e) = std::thread::Builder::new()
-                .name(format!("trabalho-{}", work.word()))
+                .name(format!("job-{}", work.word()))
                 .spawn(move || match engine {
                     Engine::Local => local::run(&mine, id, &switch, work),
                     Engine::Fetch => crate::aria2::run(&mine, id, &switch, work),
@@ -130,7 +130,7 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                     Engine::Torrent => crate::torrent::run(&mine, id, &switch, work),
                 })
             {
-                tracing::error!(error = %e, "nao consegui subir a thread do trabalho");
+                tracing::error!(error = %e, "could not start the job's thread");
                 shared.touch(id, |j| {
                     j.stage = Stage::Failed;
                     j.trouble = Some(e.to_string());
@@ -162,7 +162,7 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
         }
         Ask::Sweep => {
             let gone = shared.sweep();
-            tracing::debug!(gone, "varri a lista");
+            tracing::debug!(gone, "swept the list");
             Ok(())
         }
     }
@@ -209,14 +209,14 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("ronoctua-serve-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("criar diretorio de teste");
+        std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
     }
 
     /// A daemon on a socket of its own, and the path to reach it.
     fn a_daemon(root: &Path) -> (Arc<Shared>, PathBuf) {
         let shared = Arc::new(Shared::fresh_one());
-        let socket = root.join("fila.sock");
+        let socket = root.join("queue.sock");
         let mine = Arc::clone(&shared);
         let its = socket.clone();
         std::thread::spawn(move || {
@@ -226,7 +226,7 @@ mod tests {
         // sleep is either slow or flaky, and on a loaded machine it is both.
         let until = Instant::now() + Duration::from_secs(5);
         while UnixStream::connect(&socket).is_err() {
-            assert!(Instant::now() < until, "a fila nao subiu");
+            assert!(Instant::now() < until, "the queue did not come up");
             std::thread::sleep(Duration::from_millis(5));
         }
         (shared, socket)
@@ -273,7 +273,7 @@ mod tests {
         let (_shared, socket) = a_daemon(&root);
 
         // `0xFF` is not valid UTF-8 anywhere, in any encoding.
-        let odd = root.join(std::ffi::OsString::from_vec(b"nome-\xFF-torto".to_vec()));
+        let odd = root.join(std::ffi::OsString::from_vec(b"name-\xFF-crooked".to_vec()));
         std::fs::write(&odd, b"x").unwrap();
 
         let Say::Took { id } = crate::client::ask_at(
@@ -285,7 +285,7 @@ mod tests {
             },
         )
         .unwrap() else {
-            panic!("a fila nao aceitou o trabalho");
+            panic!("the queue did not take the job");
         };
 
         let job = until(&socket, id, Stage::Done);
@@ -295,7 +295,7 @@ mod tests {
             Paths::Some(p) => assert_eq!(p[0].as_os_str().as_bytes(), odd.as_os_str().as_bytes()),
             other => panic!("{other:?}"),
         }
-        assert!(!odd.exists(), "o arquivo de nome torto ficou");
+        assert!(!odd.exists(), "the crooked-named file stayed");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -312,21 +312,21 @@ mod tests {
         // Big enough that the copy is still going when the asks arrive: three
         // bites, and the queue reports between each.
         let size = ronoctua_files::watch::CHUNK * 3;
-        std::fs::write(root.join("grande.bin"), vec![7u8; size]).unwrap();
+        std::fs::write(root.join("large.bin"), vec![7u8; size]).unwrap();
         std::fs::create_dir(root.join("destino")).unwrap();
 
         let Say::Took { id } = crate::client::ask_at(
             &socket,
             &Ask::Add {
                 work: Work::Paste {
-                    paths: vec![root.join("grande.bin")],
+                    paths: vec![root.join("large.bin")],
                     into: root.join("destino"),
                     moves: false,
                 },
             },
         )
         .unwrap() else {
-            panic!("a fila nao aceitou o trabalho");
+            panic!("the queue did not take the job");
         };
 
         crate::client::tell_at(&socket, &Ask::Pause { id }).unwrap();
@@ -341,9 +341,9 @@ mod tests {
         assert_eq!(
             std::fs::read_dir(root.join("destino")).unwrap().count(),
             0,
-            "sobrou pedaco no destino depois do cancelamento"
+            "a piece was left at the destination after the cancellation"
         );
-        assert!(root.join("grande.bin").exists(), "o original foi mexido");
+        assert!(root.join("large.bin").exists(), "o original foi mexido");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -354,24 +354,24 @@ mod tests {
         // walked.
         let root = scratch("measure");
         let (_shared, socket) = a_daemon(&root);
-        std::fs::create_dir(root.join("pasta")).unwrap();
-        std::fs::write(root.join("pasta/a"), vec![0u8; 1000]).unwrap();
-        std::fs::write(root.join("pasta/b"), vec![0u8; 24]).unwrap();
+        std::fs::create_dir(root.join("folder")).unwrap();
+        std::fs::write(root.join("folder/a"), vec![0u8; 1000]).unwrap();
+        std::fs::write(root.join("folder/b"), vec![0u8; 24]).unwrap();
 
         let Say::Took { id } = crate::client::ask_at(
             &socket,
             &Ask::Add {
                 work: Work::Measure {
-                    path: root.join("pasta"),
+                    path: root.join("folder"),
                 },
             },
         )
         .unwrap() else {
-            panic!("a fila nao aceitou o trabalho");
+            panic!("the queue did not take the job");
         };
 
         let job = until(&socket, id, Stage::Done);
-        assert_eq!(job.answer, Some(1024), "a resposta nao e o tamanho");
+        assert_eq!(job.answer, Some(1024), "the answer is not the size");
         assert_eq!(job.measure, crate::job::Measure::Items);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -392,7 +392,7 @@ mod tests {
         let mut input = BufReader::new(stream);
         let first: Say = read_line(&mut input)
             .unwrap()
-            .expect("nada no primeiro quadro");
+            .expect("nothing in the first frame");
         match first {
             Say::Ledger { jobs } => assert_eq!(jobs.len(), 1, "{jobs:?}"),
             other => panic!("{other:?}"),

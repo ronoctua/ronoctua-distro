@@ -47,8 +47,9 @@ const PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The file the unit wrote the secret into.
 fn conf_path() -> Result<PathBuf> {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR nao esta definida; sem ela nao ha onde ler o segredo do aria2")?;
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").context(
+        "XDG_RUNTIME_DIR is not set; without it there is nowhere to read aria2's secret from",
+    )?;
     Ok(PathBuf::from(dir).join("ronoctua-aria2.conf"))
 }
 
@@ -60,10 +61,10 @@ fn conf_path() -> Result<PathBuf> {
 fn secret() -> Result<String> {
     let path = conf_path()?;
     let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("nao consegui ler {}", path.display()))?;
+        .with_context(|| format!("could not read {}", path.display()))?;
     secret_in(&text)
         .map(ToOwned::to_owned)
-        .with_context(|| format!("{} nao tem `rpc-secret=`", path.display()))
+        .with_context(|| format!("{} has no `rpc-secret=`", path.display()))
 }
 
 /// The token inside an aria2 configuration file.
@@ -93,7 +94,7 @@ fn call(method: &str, mut params: Vec<Value>) -> Result<Value> {
     }))?;
 
     let mut socket = TcpStream::connect(ENDPOINT)
-        .with_context(|| format!("o aria2 nao esta atendendo em {ENDPOINT}"))?;
+        .with_context(|| format!("aria2 is not answering at {ENDPOINT}"))?;
     socket.set_read_timeout(Some(PATIENCE))?;
     socket.set_write_timeout(Some(PATIENCE))?;
     write!(
@@ -117,20 +118,20 @@ fn call(method: &str, mut params: Vec<Value>) -> Result<Value> {
     let payload = answer
         .split_once("\r\n\r\n")
         .map(|(_, b)| b)
-        .context("a resposta do aria2 nao tem corpo")?;
+        .context("aria2's answer has no body")?;
     let parsed: Value = serde_json::from_str(payload)
-        .with_context(|| format!("a resposta do aria2 nao e JSON: {payload}"))?;
+        .with_context(|| format!("aria2's answer is not JSON: {payload}"))?;
     if let Some(e) = parsed.get("error") {
         let message = e
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("sem mensagem");
+            .unwrap_or("no message");
         bail!("o aria2 recusou `{method}`: {message}");
     }
     parsed
         .get("result")
         .cloned()
-        .with_context(|| format!("a resposta de `{method}` nao tem `result`"))
+        .with_context(|| format!("`{method}`'s answer has no `result`"))
 }
 
 /// Whether the RPC is answering at all.
@@ -211,7 +212,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
         identity,
     } = &work
     else {
-        tracing::error!("o motor do aria2 recebeu trabalho que nao e um link");
+        tracing::error!("the aria2 engine got a job that is not a link");
         shared.touch(id, |j| j.stage = Stage::Failed);
         return;
     };
@@ -223,8 +224,8 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
         shared.touch(id, |j| {
             j.stage = Stage::Failed;
             j.trouble = Some(
-                "um link identificado precisa de um ARQUIVO de cookies; \
-                 o aria2 nao abre a base do navegador"
+                "an identified link needs a cookies FILE; \
+             aria2 does not open the browser's database"
                     .to_owned(),
             );
         });
@@ -273,7 +274,7 @@ fn carry(
     let gid = call("aria2.addUri", vec![json!([url]), options])?;
     let gid = gid
         .as_str()
-        .context("o aria2 nao devolveu um gid")?
+        .context("aria2 did not give back a gid")?
         .to_owned();
     shared.touch(id, |j| j.stage = Stage::Running);
 
@@ -322,9 +323,7 @@ fn carry(
                 progress.flush();
                 bail!(
                     "{}",
-                    status
-                        .trouble
-                        .unwrap_or_else(|| "o aria2 falhou".to_owned())
+                    status.trouble.unwrap_or_else(|| "aria2 failed".to_owned())
                 );
             }
             "removed" => {

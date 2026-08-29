@@ -4,7 +4,7 @@
 //!
 //! Because there are two questions here and only one of them is about copying.
 //! [`crate::act`] answers *what does this operation mean*: a link is copied as a
-//! link, a taken name gets `(copia 1)`, a move across filesystems copies and
+//! link, a taken name gets `(copy 1)`, a move across filesystems copies and
 //! only then removes. This module answers *how do I watch it and how do I stop
 //! it*, and that answer is the same for a copy, a delete and an overwrite.
 //! Written into `act` it would have been the same three lines of bookkeeping in
@@ -283,7 +283,7 @@ impl<'a> Watch<'a> {
 pub fn copy_into(source: &Path, directory: &Path, watch: &mut Watch<'_>) -> Result<PathBuf> {
     let name = source
         .file_name()
-        .context("um caminho sem nome nao pode ser copiado")?;
+        .context("a path with no name cannot be copied")?;
     let landing = crate::act::free_name(&directory.join(name));
     match copy_tree(source, &landing, watch) {
         Ok(()) => Ok(landing),
@@ -310,7 +310,7 @@ pub fn copy_into(source: &Path, directory: &Path, watch: &mut Watch<'_>) -> Resu
 pub fn move_into(source: &Path, directory: &Path, watch: &mut Watch<'_>) -> Result<PathBuf> {
     let name = source
         .file_name()
-        .context("um caminho sem nome nao pode ser movido")?;
+        .context("a path with no name cannot be moved")?;
     let landing = crate::act::free_name(&directory.join(name));
     watch.on(source);
     match std::fs::rename(source, &landing) {
@@ -330,7 +330,7 @@ pub fn move_into(source: &Path, directory: &Path, watch: &mut Watch<'_>) -> Resu
                 }
             }
         }
-        Err(e) => Err(e).with_context(|| format!("mover {}", source.display())),
+        Err(e) => Err(e).with_context(|| format!("move {}", source.display())),
     }
 }
 
@@ -353,7 +353,7 @@ pub fn move_into(source: &Path, directory: &Path, watch: &mut Watch<'_>) -> Resu
 pub fn remove(path: &Path, watch: &mut Watch<'_>) -> Result<()> {
     watch.allowed()?;
     let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("{} nao existe", path.display()))?;
+        .with_context(|| format!("{} does not exist", path.display()))?;
     if meta.is_dir() && !meta.is_symlink() {
         for child in std::fs::read_dir(path)
             .with_context(|| format!("ler {}", path.display()))?
@@ -361,9 +361,9 @@ pub fn remove(path: &Path, watch: &mut Watch<'_>) -> Result<()> {
         {
             remove(&child.path(), watch)?;
         }
-        std::fs::remove_dir(path).with_context(|| format!("apagar {}", path.display()))?;
+        std::fs::remove_dir(path).with_context(|| format!("delete {}", path.display()))?;
     } else {
-        std::fs::remove_file(path).with_context(|| format!("apagar {}", path.display()))?;
+        std::fs::remove_file(path).with_context(|| format!("delete {}", path.display()))?;
     }
     watch.on(path);
     watch.did(1);
@@ -387,10 +387,10 @@ pub fn shred(path: &Path, passes: u32, watch: &mut Watch<'_>) -> Result<()> {
     use std::io::{Seek as _, SeekFrom, Write as _};
 
     let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("{} nao existe", path.display()))?;
+        .with_context(|| format!("{} does not exist", path.display()))?;
     if meta.is_dir() {
         anyhow::bail!(
-            "{} e uma pasta; sobrescrever uma arvore e outra operacao",
+            "{} is a folder; overwriting a tree is a different operation",
             path.display()
         );
     }
@@ -404,7 +404,7 @@ pub fn shred(path: &Path, passes: u32, watch: &mut Watch<'_>) -> Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .open(path)
-        .with_context(|| format!("abrir {} para sobrescrever", path.display()))?;
+        .with_context(|| format!("open {} to overwrite", path.display()))?;
 
     // A block at a time, so a large file does not become a large allocation.
     const BLOCK: usize = 64 * 1024;
@@ -423,7 +423,7 @@ pub fn shred(path: &Path, passes: u32, watch: &mut Watch<'_>) -> Result<()> {
         while left > 0 {
             watch.allowed()?;
             let now = usize::try_from(left).unwrap_or(BLOCK).min(BLOCK);
-            file.write_all(&block[..now]).context("sobrescrever")?;
+            file.write_all(&block[..now]).context("overwrite")?;
             left -= now as u64;
             watch.did(now as u64);
         }
@@ -437,7 +437,7 @@ pub fn shred(path: &Path, passes: u32, watch: &mut Watch<'_>) -> Result<()> {
 
     // The NAME is metadata too, and it survives the content. Renaming to
     // something meaningless before unlinking is what keeps a directory entry
-    // from saying `senhas-do-banco.txt` to whoever reads the raw device.
+    // from saying `bank-passwords.txt` to whoever reads the raw device.
     let blind = path.with_file_name(format!("{:016x}", crate::act::fnv(path)));
     let gone = if std::fs::rename(path, &blind).is_ok() {
         blind
@@ -517,7 +517,7 @@ pub fn count(path: &Path, watch: &mut Watch<'_>) -> Result<u64> {
 fn copy_tree(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()> {
     watch.allowed()?;
     let meta = std::fs::symlink_metadata(source)
-        .with_context(|| format!("{} nao existe", source.display()))?;
+        .with_context(|| format!("{} does not exist", source.display()))?;
     if meta.is_symlink() {
         // The LINK is copied, not what it points at. Copying the target would
         // turn a twelve-byte shortcut into a gigabyte, which is the kind of
@@ -533,7 +533,7 @@ fn copy_tree(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
         watch.on(source);
         return copy_file(source, landing, watch);
     }
-    std::fs::create_dir_all(landing).with_context(|| format!("criar {}", landing.display()))?;
+    std::fs::create_dir_all(landing).with_context(|| format!("create {}", landing.display()))?;
     for child in std::fs::read_dir(source)?.flatten() {
         copy_tree(&child.path(), &landing.join(child.file_name()), watch)?;
     }
@@ -542,13 +542,12 @@ fn copy_tree(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
 
 /// One regular file, in bites, with the kernel doing the moving while it will.
 fn copy_file(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()> {
-    let from =
-        std::fs::File::open(source).with_context(|| format!("abrir {}", source.display()))?;
+    let from = std::fs::File::open(source).with_context(|| format!("open {}", source.display()))?;
     let meta = from
         .metadata()
         .with_context(|| format!("ler {}", source.display()))?;
     let to =
-        std::fs::File::create(landing).with_context(|| format!("criar {}", landing.display()))?;
+        std::fs::File::create(landing).with_context(|| format!("create {}", landing.display()))?;
 
     let mut left = meta.len();
     let mut server_side = true;
@@ -573,12 +572,12 @@ fn copy_file(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
                 }
                 Err(e) => {
                     return Err(std::io::Error::from_raw_os_error(e.raw_os_error()))
-                        .with_context(|| format!("copiar {}", source.display()));
+                        .with_context(|| format!("copy {}", source.display()));
                 }
             }
         } else {
             by_hand(&from, &to, bite, &mut buffer)
-                .with_context(|| format!("copiar {}", source.display()))?
+                .with_context(|| format!("copy {}", source.display()))?
         };
         // The file shrank underneath us. Stopping is right: what is on the
         // other side is what the source now holds, and looping on a zero would
@@ -643,14 +642,14 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("ronoctua-watch-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("criar diretorio de teste");
+        std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
     }
 
     /// A file of `size` bytes with a pattern that shows a mangled copy.
     fn fill(path: &Path, size: usize) {
         let block: Vec<u8> = (0..=255u8).cycle().take(size).collect();
-        std::fs::write(path, &block).expect("escrever o arquivo de teste");
+        std::fs::write(path, &block).expect("write the test file");
     }
 
     #[test]
@@ -663,7 +662,7 @@ mod tests {
         // BIGGER THAN ONE BITE, so the loop runs more than once. A test whose
         // file fits in a single call proves nothing about the loop.
         let size = CHUNK + 4096;
-        fill(&root.join("grande.bin"), size);
+        fill(&root.join("large.bin"), size);
         std::fs::create_dir(root.join("destino")).unwrap();
 
         let control = Control::new();
@@ -676,21 +675,24 @@ mod tests {
             }
         };
         let landed = copy_into(
-            &root.join("grande.bin"),
+            &root.join("large.bin"),
             &root.join("destino"),
             &mut Watch::new(&control, &mut sink),
         )
         .unwrap();
 
-        assert_eq!(moved, size as u64, "a soma dos avancos nao e o tamanho");
+        assert_eq!(
+            moved, size as u64,
+            "the sum of the advances is not the size"
+        );
         assert!(
             beats >= 2,
-            "um arquivo maior que a mordida veio numa so: {beats}"
+            "a file larger than the bite came in one go: {beats}"
         );
         assert_eq!(
             std::fs::read(&landed).unwrap(),
-            std::fs::read(root.join("grande.bin")).unwrap(),
-            "a copia nao e igual ao original"
+            std::fs::read(root.join("large.bin")).unwrap(),
+            "the copy is not equal to the original"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -703,7 +705,7 @@ mod tests {
         // same problem with a worse name.
         let root = scratch("cancel");
         let size = CHUNK * 3;
-        fill(&root.join("grande.bin"), size);
+        fill(&root.join("large.bin"), size);
         std::fs::create_dir(root.join("destino")).unwrap();
 
         let control = Control::new();
@@ -716,20 +718,23 @@ mod tests {
             }
         };
         let e = copy_into(
-            &root.join("grande.bin"),
+            &root.join("large.bin"),
             &root.join("destino"),
             &mut Watch::new(&control, &mut sink),
         )
         .unwrap_err();
 
-        assert!(was_cancelled(&e), "um cancelamento veio como falha: {e:?}");
+        assert!(
+            was_cancelled(&e),
+            "a cancellation came through as a failure: {e:?}"
+        );
         assert_eq!(
             std::fs::read_dir(root.join("destino")).unwrap().count(),
             0,
-            "sobrou pedaco no destino"
+            "a piece was left at the destination"
         );
         assert_eq!(
-            std::fs::metadata(root.join("grande.bin")).unwrap().len(),
+            std::fs::metadata(root.join("large.bin")).unwrap().len(),
             size as u64,
             "o original foi mexido"
         );
@@ -743,14 +748,14 @@ mod tests {
         // "the person stopped it".
         let root = scratch("failure");
         let e = copy_into(
-            &root.join("nao-existe"),
-            &root.join("tambem-nao"),
+            &root.join("does-not-exist"),
+            &root.join("also-missing"),
             &mut Watch::none(),
         )
         .unwrap_err();
         assert!(
             !was_cancelled(&e),
-            "uma falha passou por cancelamento: {e:?}"
+            "a failure passed as a cancellation: {e:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -762,7 +767,7 @@ mod tests {
         // written with one `if`.
         let root = scratch("pause");
         let size = CHUNK * 2;
-        fill(&root.join("grande.bin"), size);
+        fill(&root.join("large.bin"), size);
         std::fs::create_dir(root.join("destino")).unwrap();
 
         let control = Arc::new(Control::new());
@@ -779,7 +784,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let landed = copy_into(
-            &root.join("grande.bin"),
+            &root.join("large.bin"),
             &root.join("destino"),
             &mut Watch::new(&control, &mut |_| {}),
         )
@@ -788,13 +793,13 @@ mod tests {
 
         assert!(
             started.elapsed() >= NAP * 2,
-            "a pausa nao segurou nada: {:?}",
+            "the pause held nothing: {:?}",
             started.elapsed()
         );
         assert_eq!(
             std::fs::metadata(&landed).unwrap().len(),
             size as u64,
-            "a copia nao terminou depois de retomar"
+            "the copy did not finish after resuming"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -806,10 +811,10 @@ mod tests {
         // here is ENTRIES, and the count has to include the directories
         // themselves or the bar arrives at the end short.
         let root = scratch("delete");
-        std::fs::create_dir_all(root.join("arvore/dentro")).unwrap();
-        std::fs::write(root.join("arvore/a"), b"a").unwrap();
-        std::fs::write(root.join("arvore/dentro/b"), b"b").unwrap();
-        std::os::unix::fs::symlink("a", root.join("arvore/atalho")).unwrap();
+        std::fs::create_dir_all(root.join("tree/inside")).unwrap();
+        std::fs::write(root.join("tree/a"), b"a").unwrap();
+        std::fs::write(root.join("tree/inside/b"), b"b").unwrap();
+        std::os::unix::fs::symlink("a", root.join("tree/shortcut")).unwrap();
 
         let control = Control::new();
         let mut units = 0u64;
@@ -818,11 +823,11 @@ mod tests {
                 units += n;
             }
         };
-        remove(&root.join("arvore"), &mut Watch::new(&control, &mut sink)).unwrap();
+        remove(&root.join("tree"), &mut Watch::new(&control, &mut sink)).unwrap();
 
-        // `a`, `b`, `atalho`, `dentro` and `arvore` — five.
-        assert_eq!(units, 5, "a conta das entradas nao bate");
-        assert!(!root.join("arvore").exists(), "a arvore ficou");
+        // `a`, `b`, `shortcut`, `inside` and `tree` — five.
+        assert_eq!(units, 5, "the count of entries does not add up");
+        assert!(!root.join("tree").exists(), "the tree stayed");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -832,16 +837,16 @@ mod tests {
         // the link would delete somebody's home directory behind a gesture
         // that said "delete this shortcut".
         let root = scratch("delete-link");
-        std::fs::create_dir(root.join("alvo")).unwrap();
-        std::fs::write(root.join("alvo/dentro"), b"x").unwrap();
-        std::os::unix::fs::symlink(root.join("alvo"), root.join("atalho")).unwrap();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("target/inside"), b"x").unwrap();
+        std::os::unix::fs::symlink(root.join("target"), root.join("atalho")).unwrap();
 
         remove(&root.join("atalho"), &mut Watch::none()).unwrap();
 
         assert!(!root.join("atalho").exists(), "o link ficou");
         assert!(
-            root.join("alvo/dentro").exists(),
-            "seguiu o link e apagou o alvo"
+            root.join("target/inside").exists(),
+            "it followed the link and deleted the target"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -852,7 +857,7 @@ mod tests {
         // that lies about the wait: three passes write three times the file.
         let root = scratch("shred");
         let size = 4096usize;
-        fill(&root.join("segredo"), size);
+        fill(&root.join("secret"), size);
 
         let control = Control::new();
         let mut units = 0u64;
@@ -862,14 +867,14 @@ mod tests {
             }
         };
         shred(
-            &root.join("segredo"),
+            &root.join("secret"),
             crate::act::PASSES,
             &mut Watch::new(&control, &mut sink),
         )
         .unwrap();
 
         assert_eq!(units, size as u64 * u64::from(crate::act::PASSES));
-        assert!(!root.join("segredo").exists(), "o arquivo ficou");
+        assert!(!root.join("secret").exists(), "the file stayed");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -895,7 +900,7 @@ mod tests {
         let e = weigh(&root.join("muitos"), &mut Watch::new(&control, &mut sink)).unwrap_err();
 
         assert!(was_cancelled(&e), "{e:?}");
-        assert_eq!(seen, 1, "continuou andando depois do cancelamento");
+        assert_eq!(seen, 1, "it kept going after the cancellation");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -921,7 +926,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(units, 5, "o peso nao foi batido de uma vez");
+        assert_eq!(units, 5, "the weight was not taken in one go");
         assert!(landed.exists() && !root.join("arq").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -969,7 +974,7 @@ mod measured {
     }
 
     #[test]
-    #[ignore = "escreve um gibibyte; roda a mao"]
+    #[ignore = "writes a gibibyte; run it by hand"]
     fn chunking_costs_nothing_against_the_one_shot_copy() {
         // THE CLAIM THIS DEFENDS. `std::fs::copy` is one `copy_file_range` for
         // the whole file, and on btrfs that is a server-side copy — the
@@ -977,14 +982,14 @@ mod measured {
         // process. Chunking it to win a progress number could have paid seconds
         // for a percentage, and the only thing that says otherwise is a number.
         let Some(root) = on_a_disk() else {
-            eprintln!("sem CARGO_TARGET_DIR: nao ha onde medir sem escrever na RAM");
+            eprintln!("no CARGO_TARGET_DIR: there is nowhere to measure without writing into RAM");
             return;
         };
         std::fs::create_dir(root.join("um")).unwrap();
         std::fs::create_dir(root.join("outro")).unwrap();
 
         let size = 1024 * 1024 * 1024usize;
-        let source = root.join("grande.bin");
+        let source = root.join("large.bin");
         {
             use std::io::Write as _;
             let mut f = std::io::BufWriter::new(std::fs::File::create(&source).unwrap());
@@ -1001,14 +1006,14 @@ mod measured {
         }
 
         let started = std::time::Instant::now();
-        std::fs::copy(&source, root.join("um/copia.bin")).unwrap();
+        std::fs::copy(&source, root.join("one/copy.bin")).unwrap();
         let one_shot = started.elapsed();
 
         let started = std::time::Instant::now();
         copy_into(&source, &root.join("outro"), &mut Watch::none()).unwrap();
         let chunked = started.elapsed();
 
-        eprintln!("um GiB — uma chamada so: {one_shot:?}   em mordidas: {chunked:?}");
+        eprintln!("one GiB — a single call: {one_shot:?}   in bites: {chunked:?}");
         let _ = std::fs::remove_dir_all(&root);
 
         // MEASURED, 2026-08-21, one gibibyte on this machine's btrfs:

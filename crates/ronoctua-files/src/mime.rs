@@ -28,11 +28,11 @@ include!(concat!(env!("OUT_DIR"), "/mimedb.rs"));
 // The tables came out of the generator whole or the build failed. These make
 // a truncated one a COMPILE error rather than a file manager that recognises
 // eleven formats.
-const _: () = assert!(counts::GLOBS >= 900, "a tabela de globs veio truncada");
-const _: () = assert!(counts::MAGIC >= 300, "a tabela de magic veio truncada");
+const _: () = assert!(counts::GLOBS >= 900, "the glob table came out truncated");
+const _: () = assert!(counts::MAGIC >= 300, "the magic table came out truncated");
 const _: () = assert!(
     counts::SUBCLASSES >= 400,
-    "a tabela de subclasses veio truncada"
+    "the subclass table came out truncated"
 );
 
 /// What is read from a file before asking [`by_content`].
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(by_name("foto.PNG"), Some("image/png"));
         assert_eq!(by_name("flake.nix"), Some("text/x-nix"));
         assert_eq!(by_name("lib.rs"), Some("text/rust"));
-        assert_eq!(by_name("nada-com-nome-assim"), None);
+        assert_eq!(by_name("nothing-named-like-this"), None);
     }
 
     #[test]
@@ -471,7 +471,7 @@ mod tests {
     fn an_old_name_resolves_to_the_current_one() {
         assert_eq!(canonical("application/acrobat"), "application/pdf");
         assert_eq!(canonical("application/pdf"), "application/pdf");
-        assert_eq!(canonical("nao/existe"), "nao/existe");
+        assert_eq!(canonical("does/not-exist"), "does/not-exist");
     }
 
     #[test]
@@ -492,7 +492,7 @@ mod tests {
         let per_cent = resolved * 100 / total;
         assert!(
             per_cent >= 99,
-            "so {per_cent}% dos tipos tem glifo proprio ({resolved} de {total})"
+            "only {per_cent}% of the types have a glyph of their own ({resolved} of {total})"
         );
     }
 

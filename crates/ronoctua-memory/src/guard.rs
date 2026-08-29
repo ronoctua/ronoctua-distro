@@ -371,7 +371,7 @@ fn acted() -> u32 {
 pub fn apply(p: &Profile) -> anyhow::Result<()> {
     anyhow::ensure!(
         !p.ceiling.is_empty() && !p.pressure.is_empty() && !p.duration.is_empty(),
-        "a tabela de perfis em {PROFILES_PATH} nao tem os tres numeros"
+        "the profile table at {PROFILES_PATH} does not have the three numbers"
     );
     let out = Command::new(SYSTEMCTL)
         .args([
@@ -411,14 +411,14 @@ pub fn persist(mode: GuardMode) -> anyhow::Result<()> {
     let name = match mode {
         GuardMode::Tolerant => "tolerant",
         GuardMode::Strict => "strict",
-        other => anyhow::bail!("nao ha perfil permanente para {other:?}"),
+        other => anyhow::bail!("there is no permanent profile for {other:?}"),
     };
     let out = Command::new(SYSTEMCTL)
         .args(["start", &format!("ronoctua-memory-profile@{name}.service")])
         .output()?;
     anyhow::ensure!(
         out.status.success(),
-        "nao consegui gravar o perfil: {}",
+        "could not write the profile: {}",
         String::from_utf8_lossy(&out.stderr).trim()
     );
     Ok(())
@@ -493,7 +493,7 @@ MemoryHigh=10478301184
         let g = from_show(SHOW, 14_969_096 * 1024);
         assert!(
             (680..=690).contains(&g.ceiling),
-            "o teto saiu {} por mil",
+            "the ceiling came out {} per mille",
             g.ceiling
         );
     }

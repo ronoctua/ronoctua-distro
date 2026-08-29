@@ -196,7 +196,7 @@ impl Ghostty {
         let result =
             unsafe { ghostty_terminal_new(std::ptr::null(), &raw mut terminal, columns, lines) };
         if result != 0 || terminal.is_null() {
-            return Err("libghostty-vt recusou criar o terminal");
+            return Err("libghostty-vt refused to create the terminal");
         }
         Ok(Self {
             terminal,
@@ -309,10 +309,10 @@ mod tests {
         // wrong tag, the wrong enum value, a struct of the wrong shape — it
         // shows here, on two characters, instead of showing up as two engines
         // mysteriously disagreeing over a whole screen.
-        let mut engine = Ghostty::fresh(10, 2).expect("o terminal tem de subir");
+        let mut engine = Ghostty::fresh(10, 2).expect("the terminal has to come up");
         engine.feed(b"hi");
         let grid = engine.grid();
-        assert_eq!(grid.cell(0, 0).c, 'h', "grade: {grid:?}");
-        assert_eq!(grid.cell(0, 1).c, 'i', "grade: {grid:?}");
+        assert_eq!(grid.cell(0, 0).c, 'h', "grid: {grid:?}");
+        assert_eq!(grid.cell(0, 1).c, 'i', "grid: {grid:?}");
     }
 }

@@ -153,9 +153,9 @@ def process(path: pathlib.Path, family_base: str, write: bool = True) -> dict:
     width = os2.usWidthClass
 
     if weight not in WEIGHTS:
-        raise SystemExit(f"{path.name}: usWeightClass {weight} fora da tabela canonica")
+        raise SystemExit(f"{path.name}: usWeightClass {weight} is outside the canonical table")
     if width not in WIDTHS:
-        raise SystemExit(f"{path.name}: usWidthClass {width} fora da tabela canonica")
+        raise SystemExit(f"{path.name}: usWidthClass {width} is outside the canonical table")
 
     slant = slant_of(os2.fsSelection)
     names = canonical_names(family_base, weight, width, slant)
@@ -210,15 +210,15 @@ def main() -> int:
     ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="calcula e roda as assertivas estritas sem escrever nos arquivos",
+        help="works out and runs the strict assertions without writing to the files",
     )
     ap.add_argument(
         "--inventory",
         action="store_true",
         help=(
-            "so inventaria: nao escreve e NAO exige familia unica. "
-            "E o modo dos WOFF2 — ver a nota em nix/fonts.nix sobre por que "
-            "eles nao sao corrigidos."
+            "only inventories: it does not write and does NOT require a single family. "
+            "It is the WOFF2 mode — see the note in nix/fonts.nix on why "
+            "they are not corrected."
         ),
     )
     args = ap.parse_args()
@@ -228,7 +228,7 @@ def main() -> int:
     )
     if len(files) != args.expect_count:
         print(
-            f"ERRO: esperava {args.expect_count} arquivos em {args.directory}, achei {len(files)}",
+            f"ERROR: expected {args.expect_count} files in {args.directory}, found {len(files)}",
             file=sys.stderr,
         )
         return 1
@@ -242,14 +242,14 @@ def main() -> int:
     if not args.inventory:
         families = {r["typo_family"] for r in rows}
         if families != {args.family}:
-            print(f"ERRO: esperava 1 familia tipografica ({args.family!r}),", file=sys.stderr)
+            print(f"ERROR: expected 1 typographic family ({args.family!r}),", file=sys.stderr)
             print(f"      achei {len(families)}: {sorted(families)}", file=sys.stderr)
             return 1
 
     pairs = Counter((r["typo_family"], r["typo_subfamily"]) for r in rows)
     dups = {k: v for k, v in pairs.items() if v > 1}
     if dups:
-        print("ERRO: pares (familia, subfamilia) duplicados — colisao:", file=sys.stderr)
+        print("ERROR: duplicated (family, subfamily) pairs — a collision:", file=sys.stderr)
         for (fam, sub), n in sorted(dups.items()):
             print(f"      {n}x  {fam!r} / {sub!r}", file=sys.stderr)
             for r in rows:
@@ -263,7 +263,7 @@ def main() -> int:
     ps_names = Counter(r["postscript"] for r in rows)
     ps_dups = {k: v for k, v in ps_names.items() if v > 1}
     if ps_dups:
-        print(f"ERRO: nomes PostScript duplicados: {ps_dups}", file=sys.stderr)
+        print(f"ERROR: duplicated PostScript names: {ps_dups}", file=sys.stderr)
         return 1
 
     changed = sum(1 for r in rows if r["changed"])
@@ -273,19 +273,19 @@ def main() -> int:
         by_family[r["was_typo_family"]] += 1
 
     if args.inventory:
-        print(f"{args.directory.name}: {len(rows)} faces inventariadas [sem correcao, por desenho]")
-        print(f"  familias tipograficas presentes: {len(by_family)}")
+        print(f"{args.directory.name}: {len(rows)} faces inventoried [no correction, by design]")
+        print(f"  typographic families present:    {len(by_family)}")
         for fam, n in sorted(by_family.items()):
             print(f"      {n:3d}x  {fam}")
-        print(f"  nomes PostScript:                {len(ps_names)} distintos  [OK]")
+        print(f"  PostScript names:                {len(ps_names)} distinct  [OK]")
     else:
         dry_note = " [dry-run: nada escrito]" if args.dry_run else ""
         print(f"{args.directory.name}: {len(rows)} faces normalizadas em {args.family!r}{dry_note}")
-        print(f"  familias tipograficas de origem: {len(by_family)}")
-        print(f"  faces que divergiam do canonico: {changed}")
+        print(f"  source typographic families:     {len(by_family)}")
+        print(f"  faces that diverged from the canonical one: {changed}")
         print(f"  faces efetivamente reescritas:   {written}")
-        print(f"  pares (familia, subfamilia):     {len(pairs)} distintos  [OK]")
-        print(f"  nomes PostScript:                {len(ps_names)} distintos  [OK]")
+        print(f"  (family, subfamily) pairs:       {len(pairs)} distinct  [OK]")
+        print(f"  PostScript names:                {len(ps_names)} distinct  [OK]")
 
     if args.report:
         args.report.write_text(

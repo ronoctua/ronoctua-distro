@@ -62,7 +62,7 @@ use wayland_client::{
 // terminal already drew display lists through it, and the offscreen tool
 // that writes a buffer to a PNG needs the same conversion — a second one
 // would prove things about itself.
-use crate::paint::{cell, selections_of, spans_of, token_color};
+use crate::paint::{cell, quads_of, spans_of, token_color};
 
 /// A vector drawing request, with the area already in pixels.
 struct VectorDrawing {
@@ -95,9 +95,9 @@ fn rasterize_preview(
     color: tokens::Color,
     side: u32,
 ) -> Option<ronoctua_render::image::Rgba> {
-    let documento = resolver_current_color(svg, color);
+    let document = resolver_current_color(svg, color);
     let r = ronoctua_notify::icon::from_svg(
-        documento.as_bytes(),
+        document.as_bytes(),
         side,
         ronoctua_notify::icon::Fit::Natural,
     )?;
@@ -211,6 +211,9 @@ struct Host {
     /// The same, for [`ronoctua_protocol::Capability::Disks`]: a subscription
     /// to udisks, and the devices it may write over.
     disks: Option<Disks>,
+    /// The same, for [`ronoctua_protocol::Capability::Brain`]: a subscription
+    /// to the daemon, the tasks it may name and the preferences it may change.
+    brain: Option<Brain>,
     /// The states the descriptor declared, in order. The first is the base.
     ///
     /// Never empty: [`ronoctua_protocol::Descriptor::validate`] refuses an empty
@@ -404,6 +407,66 @@ impl Disks {
     }
 }
 
+/// What a buffer with [`ronoctua_protocol::Capability::Brain`] may act on.
+///
+/// It owns no schedule. The unit `ronoctua-brain` owns it, this process is
+/// merely subscribed, and a rebuild in flight carries on whether this window is
+/// open or not — the same relation [`Queue`] has to the transfer unit.
+struct Brain {
+    /// The ids of the last rows delivered, in the order they were sent.
+    ///
+    /// THE GATE, and it is the same discipline `stop_consumer` and `job_demand`
+    /// use: the component names a 1-BASED INDEX and the host resolves it
+    /// against the list it actually sent. `Demand::target`'s own doc says so —
+    /// an index, never a name the buffer built — and an index checked against a
+    /// stale list is the wrong task.
+    tasks: Vec<String>,
+    /// The preferences as the daemon last reported them.
+    ///
+    /// Kept because `Ask::Tune` carries the WHOLE record and the component
+    /// sends ONE knob: the change is applied on top of what the brain last
+    /// said, so two screens changing two different fields do not undo each
+    /// other. It is also why the file the daemon writes never grows a field
+    /// this side invented.
+    prefs: ronoctua_brain::Prefs,
+    /// The machine's zone, read once.
+    ///
+    /// The component has none (invariant 11), so the dates are formatted here.
+    /// Once and not per push: reading `/etc/localtime` on every change would be
+    /// a file opened for every beat of a countdown.
+    zone: ronoctua_files::when::Zone,
+    /// The last mind delivered, so an unchanged one costs a comparison.
+    ///
+    /// # Why the host defends itself here
+    ///
+    /// Because the window has to answer the compositor whatever the thing on
+    /// the other end of the socket is doing, and it did not. A defect in the
+    /// daemon's own loop made it publish hundreds of thousands of times a
+    /// second, and each one was taken at face value: the record converted for
+    /// the WIT, the component called, the screen redrawn. The window stopped
+    /// resizing when the minibuffer opened and took seconds to close — which
+    /// is not a slow buffer, it is an event loop with no time left for
+    /// Wayland.
+    ///
+    /// That loop is fixed. This is the half that means it cannot happen again
+    /// from ANY producer: an unchanged mind ends here, at one comparison, and
+    /// never reaches the conversion, the component or a frame. It is the rule
+    /// `buffers/memory` already states about its survey — the numbers arrive on
+    /// a clock, and the screen moves when they CHANGED.
+    last: Option<ronoctua_brain::Mind>,
+}
+
+impl Brain {
+    fn fresh() -> Self {
+        Self {
+            tasks: Vec::new(),
+            prefs: ronoctua_brain::Prefs::default(),
+            zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
+            last: None,
+        }
+    }
+}
+
 /// The system half of the host: sampling, scanning and the policy.
 ///
 /// It only exists for a buffer that declared the capability. Everything in it
@@ -502,8 +565,8 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
     // A STORE PATH, never a name: the `PATH` of a systemd scope is
     // minimal, and the failure would show up far from the cause.
     let path = option_env!("RONOCTUA_WL_COPY").context(
-        "RONOCTUA_WL_COPY nao foi definida no build.\n\
-         Ela vem de `nix/rust.nix`; sem ela nao ha como copiar.",
+        "RONOCTUA_WL_COPY was not set at build time.\n\
+             It comes from `nix/rust.nix`; without it there is no way to copy.",
     )?;
 
     let mut cmd = std::process::Command::new(path);
@@ -529,14 +592,14 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         // journal, which is where it is any use.
         .stderr(std::process::Stdio::inherit())
         .spawn()
-        .with_context(|| format!("nao consegui executar {path}"))?;
+        .with_context(|| format!("could not run {path}"))?;
 
     child
         .stdin
         .take()
-        .context("o wl-copy nao abriu stdin")?
+        .context("wl-copy did not open stdin")?
         .write_all(text.as_bytes())
-        .context("nao consegui escrever no wl-copy")?;
+        .context("could not write to wl-copy")?;
 
     // WAIT FOR THE PARENT, and only it. `wl-copy` forks: the parent exits as soon as the
     // selection is set, and the child stays serving. Without waiting, an error
@@ -544,9 +607,9 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
     // we would be back to the defect this fixes.
     //
     // `wait()`, and NOT `wait_with_output()`: see the `stderr` comment.
-    let status = child.wait().context("o wl-copy nao terminou")?;
+    let status = child.wait().context("wl-copy did not finish")?;
     if !status.success() {
-        anyhow::bail!("o wl-copy saiu com {status}; o motivo esta no log acima");
+        anyhow::bail!("wl-copy exited with {status}; the reason is in the log above");
     }
     Ok(())
 }
@@ -561,8 +624,8 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
 /// The binary was not put in the build, did not run, or exited with an error.
 fn paste_text() -> Result<String> {
     let path = option_env!("RONOCTUA_WL_PASTE").context(
-        "RONOCTUA_WL_PASTE nao foi definida no build.\n\
-         Ela vem de `nix/rust.nix`; sem ela nao ha como colar.",
+        "RONOCTUA_WL_PASTE was not set at build time.\n\
+         It comes from `nix/rust.nix`; without it there is no como colar.",
     )?;
 
     let mut cmd = std::process::Command::new(path);
@@ -576,7 +639,7 @@ fn paste_text() -> Result<String> {
         // what was copied, and it would become one more character in the search.
         .arg("--no-newline")
         .output()
-        .with_context(|| format!("nao consegui executar {path}"))?;
+        .with_context(|| format!("could not run {path}"))?;
 
     // AN EMPTY CLIPBOARD IS NOT AN ERROR. `wl-paste` exits 1 when there is no selection, and
     // treating that as a failure would fill the log with errors every time someone
@@ -588,13 +651,13 @@ fn paste_text() -> Result<String> {
         tracing::debug!(
             status = %output.status,
             error = %String::from_utf8_lossy(&output.stderr).trim(),
-            "o wl-paste nao devolveu texto"
+            "wl-paste gave back no text"
         );
         return Ok(String::new());
     }
     // HERE THE OUTPUT IS READ TO THE END, and it can be: `wl-paste` does NOT leave a child
     // serving anything — unlike `wl-copy`, where that froze the loop.
-    String::from_utf8(output.stdout).context("o que estava copiado nao e texto UTF-8")
+    String::from_utf8(output.stdout).context("what was on the clipboard is not UTF-8 text")
 }
 
 /// Opens an `xdg_toplevel` and draws a component in it — section 7.5.
@@ -604,17 +667,16 @@ fn paste_text() -> Result<String> {
 /// There is no compositor, the component does not load, or the `render` fails.
 pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result<()> {
     let conn = Connection::connect_to_env()
-        .context("nao ha compositor Wayland acessivel (WAYLAND_DISPLAY esta definida?)")?;
-    let (globals, fila) = registry_queue_init(&conn).context("registry do Wayland")?;
-    let qh: QueueHandle<Host> = fila.handle();
+        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
+    let (globals, events) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let qh: QueueHandle<Host> = events.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
-    let xdg = XdgShell::bind(&globals, &qh).context("o compositor nao expoe xdg_shell")?;
+    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
 
     // THE INSTANCE LIVES. Loaded once, it keeps the component's
     // state between keys — search, cursor, scroll.
-    let wasm =
-        std::fs::read(path).with_context(|| format!("nao consegui ler {}", path.display()))?;
+    let wasm = std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     let runtime = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = runtime.precompile(&wasm)?;
     let component = runtime.load(&cwasm)?;
@@ -624,9 +686,9 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     // the capabilities, and §7.9 wants the refusal at load, not afterwards.
     let d = instance.init()?;
     if let Err(e) = d.validate() {
-        anyhow::bail!("o descritor do buffer nao passa na guarda da secao 7.9: {e}");
+        anyhow::bail!("the buffer's descriptor does not pass the section 7.9 guard: {e}");
     }
-    tracing::info!(name = d.name, mode = d.mode, "componente carregado");
+    tracing::info!(name = d.name, mode = d.mode, "component loaded");
 
     // THE TITLE AND THE `app_id` COME FROM THE DESCRIPTOR.
     //
@@ -666,7 +728,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     tracing::info!(
         commands = list.commands.len(),
         height = list.height(),
-        "componente renderizou"
+        "component rendered"
     );
 
     // THE CAPABILITY GATE, enforced HERE.
@@ -677,7 +739,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     // a buffer that draws a gated primitive without having asked for it dies at
     // startup — which is where §7.9 wants the refusal.
     if let Err(e) = list.validate(&d.capabilities) {
-        anyhow::bail!("o buffer `{}` usa primitiva sem capacidade: {e}", d.name);
+        anyhow::bail!(
+            "the buffer `{}` uses a primitive with no capability: {e}",
+            d.name
+        );
     }
 
     // THE SYSTEM HALF EXISTS ONLY FOR WHOEVER ASKED FOR IT.
@@ -702,12 +767,22 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .capabilities
         .contains(&ronoctua_protocol::Capability::Disks)
         .then(Disks::fresh);
+    // And the same for the brain: no capability, no thread, no socket and no
+    // `systemctl`. The one that reaches furthest of the four — it ends with the
+    // machine rebuilding its own operating system — and the buffer that never
+    // asked has no way to reach it at all, rather than a check it might get
+    // past.
+    let brain = d
+        .capabilities
+        .contains(&ronoctua_protocol::Capability::Brain)
+        .then(Brain::fresh);
 
     let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut state = Host {
         system,
         queue,
         disks,
+        brain,
         states: d.states.clone(),
         current: std::sync::Arc::clone(&current),
         escape: Escape::default(),
@@ -739,9 +814,9 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     };
 
     let mut cycle: EventLoop<Host> = EventLoop::try_new().context("calloop")?;
-    WaylandSource::new(conn, fila)
+    WaylandSource::new(conn, events)
         .insert(cycle.handle())
-        .map_err(|e| anyhow::anyhow!("nao consegui pendurar o Wayland: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
 
     // THE KEYMAP AND THE STATES GO OUT, AND ORDERS COME BACK IN.
     //
@@ -765,7 +840,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                         // told, so this is a bug on the other side rather than
                         // a person's mistake — and guessing at the nearest
                         // state would hide it.
-                        None => tracing::warn!(state = %id, "estado que este buffer nao declara"),
+                        None => tracing::warn!(state = %id, "a state this buffer does not declare"),
                     },
                     FromSocket::Next => state.rotate_state(true),
                     FromSocket::Previous => state.rotate_state(false),
@@ -774,7 +849,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         })
         .is_err()
     {
-        tracing::warn!("nao consegui pendurar o canal do keymap");
+        tracing::warn!("could not hang the keymap's channel");
     }
 
     // AND THE FOOTER IS TOLD WHERE THIS BUFFER STARTS.
@@ -803,7 +878,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                 s.reports = Some(reports);
             }
         } else {
-            tracing::warn!("nao consegui pendurar o canal da varredura");
+            tracing::warn!("could not hang the scan's channel");
         }
 
         // ONE SECOND, and the survey it carries is only pseudo-file reads —
@@ -819,7 +894,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             })
             .is_err()
         {
-            tracing::warn!("nao consegui pendurar o relogio da amostragem");
+            tracing::warn!("could not hang the sampling clock");
         }
         // The first survey does not wait a second: the screen opens with
         // numbers, and not with a blank that fills in later.
@@ -855,10 +930,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             // `listen` starts the unit if it is not up, so an empty screen here
             // means an empty queue and never a queue nobody asked.
             if !crate::transfers::listen(send) {
-                tracing::warn!("sem fila de transferencias; o buffer abre vazio");
+                tracing::warn!("no transfer queue; the buffer opens empty");
             }
         } else {
-            tracing::warn!("nao consegui pendurar o canal da fila");
+            tracing::warn!("could not hang the queue's channel");
         }
     }
 
@@ -885,10 +960,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                 // NOT FATAL, and said out loud. The screen opens empty and
                 // stays empty, which is wrong — but a buffer that refused to
                 // start would say even less about why.
-                tracing::error!(error = %e, "sem udisks2; o buffer abre sem discos");
+                tracing::error!(error = %e, "no udisks2; the buffer opens with no disks");
             }
         } else {
-            tracing::warn!("nao consegui pendurar o canal dos discos");
+            tracing::warn!("could not hang the disks' channel");
         }
 
         // AND THE WAY BACK, which is a second channel and not the same one.
@@ -911,7 +986,36 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                 d.said = Some(said);
             }
         } else {
-            tracing::warn!("nao consegui pendurar o canal do veredito de formatar");
+            tracing::warn!("could not hang the format verdict's channel");
+        }
+    }
+
+    // THE BRAIN'S SUBSCRIPTION, and it is not a clock either.
+    //
+    // The daemon knows when something changed — a moment came, a run ended, a
+    // countdown started — and `client::watch` blocks on the socket until it
+    // does. A one-second timer asking for the schedule would be a socket round
+    // trip inside the loop that draws, for an answer that changes twice a week.
+    //
+    // It is the SLOW half of that crate's two connects on purpose: it starts
+    // the daemon when nobody is home and reconnects when it goes away, which is
+    // a sleep and a retry — and a sleep in this loop is a frozen window.
+    if state.brain.is_some() {
+        let (send, minds) = calloop_channel::channel::<ronoctua_brain::Mind>();
+        if cycle
+            .handle()
+            .insert_source(minds, |event, (), state: &mut Host| {
+                if let calloop_channel::Event::Msg(mind) = event {
+                    state.mind_arrived(&mind);
+                }
+            })
+            .is_ok()
+        {
+            if !crate::brain::listen(send) {
+                tracing::warn!("no brain; the buffer opens empty");
+            }
+        } else {
+            tracing::warn!("could not hang the brain's channel");
         }
     }
 
@@ -922,7 +1026,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
                 signal.stop();
             }
         })
-        .context("loop de eventos")?;
+        .context("event loop")?;
     // The socket outlives nothing: a stale one in `XDG_RUNTIME_DIR` would make
     // the footer connect to a buffer that is not there and wait.
     if let Some(path) = published {
@@ -971,7 +1075,7 @@ fn run_format(
             Verdict::Done
         }
         Err(e) => {
-            tracing::error!(device, error = %e, "formatar FALHOU");
+            tracing::error!(device, error = %e, "formatting FAILED");
             refused(ronoctua_disks::refusal(&e), e.to_string())
         }
     }
@@ -1034,7 +1138,7 @@ fn publish_keymap(
     let path = match crate::leader::buffer_socket_path(std::process::id()) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(error = %e, "sem socket do buffer; o SPC m nao vai lista-lo");
+            tracing::warn!(error = %e, "no buffer socket; SPC m will not list it");
             return None;
         }
     };
@@ -1043,7 +1147,7 @@ fn publish_keymap(
     let listener = match std::os::unix::net::UnixListener::bind(&path) {
         Ok(l) => l,
         Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "nao consegui abrir o socket do buffer");
+            tracing::warn!(error = %e, path = %path.display(), "could not open the buffer's socket");
             return None;
         }
     };
@@ -1134,7 +1238,7 @@ fn publish_keymap(
                     _ => {
                         tracing::warn!(
                             order = line.trim(),
-                            "ordem desconhecida no socket do buffer"
+                            "an unknown order on the buffer's socket"
                         );
                         "?".into()
                     }
@@ -1143,7 +1247,7 @@ fn publish_keymap(
             }
         });
     if let Err(e) = built {
-        tracing::warn!(error = %e, "nao consegui subir a thread do keymap");
+        tracing::warn!(error = %e, "could not start the keymap thread");
         let _ = std::fs::remove_file(&path);
         return None;
     }
@@ -1204,7 +1308,7 @@ impl Host {
                 continue;
             };
             let Some(token) = token_color(color.as_str()) else {
-                tracing::error!(token = color.as_str(), "cor invalida num svg");
+                tracing::error!(token = color.as_str(), "an invalid colour in an svg");
                 continue;
             };
             let key = svg.clone();
@@ -1219,7 +1323,7 @@ impl Host {
                         self.rasterized.insert(key.clone(), r);
                     }
                     None => {
-                        tracing::debug!(bytes = svg.len(), "o svg do buffer nao rasterizou");
+                        tracing::debug!(bytes = svg.len(), "the buffer's svg did not rasterise");
                         continue;
                     }
                 }
@@ -1231,8 +1335,8 @@ impl Host {
             // component counts from zero and does not know where its window
             // is (invariant 11). Without it the drawing would come out shifted from the
             // text beside it, and only diagonally — the hardest kind to detect.
-            let x = f32::from(column.saturating_add(tokens::space::BUFFER_MARGINX)) * cell_px;
-            let y = f32::from(line.saturating_add(tokens::space::BUFFER_MARGINY)) * line_height;
+            let x = f32::from(column.saturating_add(tokens::space::CONTENT_INSET)) * cell_px;
+            let y = f32::from(line.saturating_add(tokens::space::CONTENT_INSETY)) * line_height;
             out.push(VectorDrawing {
                 area: ronoctua_render::image::Area {
                     x,
@@ -1272,7 +1376,7 @@ impl Host {
             ronoctua_render::Atlas::Pinned,
             &spans,
         ) {
-            tracing::error!(error = %e, "preparar texto falhou");
+            tracing::error!(error = %e, "preparing the text failed");
             return;
         }
         if let Some(im) = self.images.as_mut() {
@@ -1314,12 +1418,12 @@ impl Host {
             }
             text.draw(ronoctua_render::Atlas::Pinned, pass)
         }) {
-            tracing::error!(error = %e, "desenhar o frame falhou");
+            tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
-        tracing::info!(spans = spans.len(), "buffer desenhado no xdg_toplevel");
+        tracing::info!(spans = spans.len(), "buffer drawn on the xdg_toplevel");
         if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "flush falhou");
+            tracing::warn!(error = %e, "the flush failed");
         }
     }
 
@@ -1337,7 +1441,7 @@ impl Host {
                     .cast::<std::ffi::c_void>(),
             ),
         ) else {
-            tracing::error!("ponteiros do Wayland nulos");
+            tracing::error!("null Wayland pointers");
             return;
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
@@ -1367,22 +1471,22 @@ impl Host {
                     // is the vector preview, and the text goes on drawing.
                     match ronoctua_render::image::Images::new(&g.device, g.config.format) {
                         Ok(im) => self.images = Some(im),
-                        Err(e) => tracing::error!(error = %e, "pipeline de imagem falhou"),
+                        Err(e) => tracing::error!(error = %e, "the image pipeline failed"),
                     }
                     // THE QUAD PIPELINE, for `Command::Selection`. Same rule as
                     // the image one: its failure costs the highlight, not the
                     // buffer.
                     match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
                         Ok(q) => self.quads = Some(q),
-                        Err(e) => tracing::error!(error = %e, "pipeline de quad falhou"),
+                        Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
                     }
                     self.text = Some(t);
                     self.gpu = Some(g);
-                    tracing::info!("contexto grafico do buffer pronto");
+                    tracing::info!("the buffer's graphics context is ready");
                 }
-                Err(e) => tracing::error!(error = %e, "desenhador falhou"),
+                Err(e) => tracing::error!(error = %e, "the renderer failed"),
             },
-            Err(e) => tracing::error!(error = %e, "sem contexto grafico"),
+            Err(e) => tracing::error!(error = %e, "no graphics context"),
         }
     }
 }
@@ -1405,7 +1509,7 @@ impl Host {
     /// The window is what knows how wide it is; everything else about the band
     /// is in `paint`, next to the conversion that draws the text over it.
     fn selections(&self) -> Vec<ronoctua_render::quad::Quad> {
-        selections_of(&self.list, self.width as f32)
+        quads_of(&self.list, self.width as f32)
     }
 
     /// Which cell OF THE BUFFER a point in the window landed in.
@@ -1423,8 +1527,8 @@ impl Host {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let line = (y / f64::from(height)) as u32;
         Some((
-            u16::try_from(column.checked_sub(u32::from(tokens::space::BUFFER_MARGINX))?).ok()?,
-            u16::try_from(line.checked_sub(u32::from(tokens::space::BUFFER_MARGINY))?).ok()?,
+            u16::try_from(column.checked_sub(u32::from(tokens::space::CONTENT_INSET))?).ok()?,
+            u16::try_from(line.checked_sub(u32::from(tokens::space::CONTENT_INSETY))?).ok()?,
         ))
     }
 
@@ -1436,16 +1540,16 @@ impl Host {
         // THE GRID IS ALWAYS THE NORMAL SIZE'S. A `large` run occupies
         // more than one cell, and what spaces it is whatever draws — that is how
         // the browser's grid came to move two rows at a time.
-        let (cell_width_px, altura_celula) = cell();
+        let (cell_width_px, cell_height_px) = cell();
         // It subtracts the margins on BOTH sides: the content fits in what is left,
         // and not in what the window measures.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let columns = ((self.width as f32 / cell_width_px) as u32)
-            .saturating_sub(u32::from(tokens::space::BUFFER_MARGINX) * 2)
+            .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
             .clamp(1, u32::from(u16::MAX)) as u16;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let lines = ((self.height as f32 / altura_celula) as u32)
-            .saturating_sub(u32::from(tokens::space::BUFFER_MARGINY) * 2)
+        let lines = ((self.height as f32 / cell_height_px) as u32)
+            .saturating_sub(u32::from(tokens::space::CONTENT_INSETY) * 2)
             .clamp(1, u32::from(u16::MAX)) as u16;
         (columns, lines)
     }
@@ -1481,12 +1585,12 @@ impl Host {
             Ok(l) => match l.validate(&self.capabilities) {
                 Ok(()) => self.list = l,
                 Err(e) => {
-                    tracing::error!(error = %e, "quadro recusado: primitiva sem capacidade");
+                    tracing::error!(error = %e, "frame refused: a primitive with no capability");
                     return;
                 }
             },
             Err(e) => {
-                tracing::error!(error = %e, "o render do componente falhou");
+                tracing::error!(error = %e, "the component's render failed");
                 return;
             }
         }
@@ -1571,7 +1675,7 @@ impl Host {
         };
         let order = format!("state {} {id}", std::process::id());
         if let Err(e) = crate::leader::send_it(&order) {
-            tracing::debug!(error = %e, "sem rodape para contar o estado");
+            tracing::debug!(error = %e, "no footer to tell the state to");
         }
     }
 
@@ -1579,7 +1683,7 @@ impl Host {
         let effects = match self.instance.event(input_of) {
             Ok(e) => e,
             Err(e) => {
-                tracing::error!(error = %e, "o evento do componente falhou");
+                tracing::error!(error = %e, "the component's event failed");
                 return;
             }
         };
@@ -1589,7 +1693,7 @@ impl Host {
         // "it arrived and the component returned an empty list" — and the two are
         // fixed in opposite places. It was that doubt that cost a whole
         // round of VM testing.
-        tracing::debug!(input = ?input_of, effects = effects.len(), "entrada entregue");
+        tracing::debug!(input = ?input_of, effects = effects.len(), "input delivered");
         let mut verdict = None;
         for effect in effects {
             match effect {
@@ -1607,7 +1711,7 @@ impl Host {
                         // noticed because copying silently and not copying
                         // silently are indistinguishable.
                         Err(e) => {
-                            tracing::error!(error = %e, "copiar FALHOU");
+                            tracing::error!(error = %e, "copying FAILED");
                             false
                         }
                     };
@@ -1620,7 +1724,7 @@ impl Host {
                     verdict = Some(ok);
                 }
                 ronoctua_protocol::Effect::Command(id) => {
-                    tracing::info!(command = %id, "comando pedido pelo buffer");
+                    tracing::info!(command = %id, "command asked for by the buffer");
                 }
                 // WHAT ACTS ON THE MACHINE, and the gate in front of it.
                 //
@@ -1635,7 +1739,7 @@ impl Host {
                         tracing::error!(
                             request = ?demand.what,
                             capability = ?needed,
-                            "pedido recusado: o buffer nao declarou a capacidade"
+                            "request refused: the buffer did not declare the capability"
                         );
                         continue;
                     }
@@ -1653,11 +1757,34 @@ impl Host {
                     {
                         tracing::error!(
                             capability = ?ronoctua_protocol::Capability::Disks,
-                            "formatar recusado: o buffer nao declarou a capacidade"
+                            "format refused: the buffer did not declare the capability"
                         );
                         continue;
                     }
                     self.format(&plan);
+                }
+                // A PREFERENCE, and the gate in front of it reads like the two
+                // above for the same reason: what is being remembered here is
+                // when the machine rebuilds its own operating system, so the
+                // capability is checked once, here, and the refusal says WHICH
+                // one was missing.
+                //
+                // The buffer touches no disk (invariant 11): it says what it
+                // wants remembered, the host turns it into an `Ask::Tune`, and
+                // the DAEMON writes the file — the same arrangement `Save` and
+                // `Copy` already have.
+                ronoctua_protocol::Effect::Tune(setting) => {
+                    if !self
+                        .capabilities
+                        .contains(&ronoctua_protocol::Capability::Brain)
+                    {
+                        tracing::error!(
+                            capability = ?ronoctua_protocol::Capability::Brain,
+                            "preference refused: the buffer did not declare the capability"
+                        );
+                        continue;
+                    }
+                    self.tune(&setting);
                 }
                 ronoctua_protocol::Effect::Close => self.quit = true,
                 // THE COMPONENT SAYS WHERE IT IS, and this is the ONLY place the
@@ -1680,7 +1807,7 @@ impl Host {
                     Some(n) => {
                         if n != self.now() {
                             self.current.store(n, std::sync::atomic::Ordering::Relaxed);
-                            tracing::info!(state = %id, "estado do buffer");
+                            tracing::info!(state = %id, "the buffer's state");
                             self.tell_the_footer();
                         }
                     }
@@ -1689,7 +1816,7 @@ impl Host {
                     // out loud, because it is a defect in the component.
                     None => tracing::error!(
                         state = %id,
-                        "o componente relatou um estado que nao declarou"
+                        "the component reported a state it did not declare"
                     ),
                 },
                 // THE BUFFER DOES NOT TOUCH THE DISK: it asks, and the host
@@ -1705,13 +1832,13 @@ impl Host {
                             // silence and failing in silence look identical, and
                             // the one that loses work is the second.
                             Err(e) => {
-                                tracing::error!(error = %e, path = %path.display(), "salvar FALHOU");
+                                tracing::error!(error = %e, path = %path.display(), "saving FAILED");
                                 false
                             }
                         },
                         None => {
                             tracing::error!(
-                                "o buffer pediu para salvar e nao foi aberto com arquivo"
+                                "the buffer asked to save and was not opened with a file"
                             );
                             false
                         }
@@ -1826,8 +1953,8 @@ impl Host {
                     .as_ref()
                     .map_or(ronoctua_protocol::GuardMode::Unknown, |s| s.guard.mode);
                 match ronoctua_memory::guard::persist(mode) {
-                    Ok(()) => tracing::info!(?mode, "perfil gravado no host.nix"),
-                    Err(e) => tracing::error!(error = %e, "gravar o perfil FALHOU"),
+                    Ok(()) => tracing::info!(?mode, "profile written into host.nix"),
+                    Err(e) => tracing::error!(error = %e, "saving the profile FAILED"),
                 }
                 self.refresh_guard();
                 self.sample();
@@ -1840,13 +1967,158 @@ impl Host {
             R::SweepStore | R::SweepGenerations | R::SweepJournal => {
                 match ronoctua_memory::scan::sweep(demand.what) {
                     Ok(()) => tracing::info!(what = ?demand.what, "faxina concluida"),
-                    Err(e) => tracing::error!(error = %e, what = ?demand.what, "faxina FALHOU"),
+                    Err(e) => tracing::error!(error = %e, what = ?demand.what, "the sweep FAILED"),
                 }
                 // The freed space only shows up on the next scan; the readings
                 // that come from `statvfs` update on their own.
                 self.sample();
             }
+            // THE BRAIN'S FIVE. Three name a task and two do not, and the
+            // difference is in the target: `Proceed` and `Postpone` act on
+            // whatever the daemon has ANNOUNCED, which the daemon knows and the
+            // screen does not have to name.
+            R::RunTask | R::RehearseTask | R::AbortTask => {
+                self.task_demand(demand.what, demand.target);
+            }
+            R::Proceed => Self::tell_brain(&ronoctua_brain::Ask::Proceed),
+            R::Postpone => Self::tell_brain(&ronoctua_brain::Ask::Postpone),
         }
+    }
+
+    /// Passes one of the buffer's task demands on to the brain, once the index
+    /// checks out.
+    ///
+    /// # Why the index is resolved against the LAST list sent
+    ///
+    /// Because that is the only list the component could have been pointing at.
+    /// `Demand::target` is a 1-based index and never a name — the same
+    /// discipline `stop_consumer` and `job_demand` follow — and an index
+    /// checked against a fresh reading would act on whatever moved into that
+    /// row between the drawing and the key.
+    fn task_demand(&mut self, what: ronoctua_protocol::Request, target: u64) {
+        use ronoctua_protocol::Request as R;
+        let Some(b) = self.brain.as_ref() else {
+            return;
+        };
+        // 1-BASED, and `0` is "none" — the same convention the survey's
+        // consumers use. `checked_sub` and not `- 1`, because a zero here is an
+        // ordinary thing for a buffer to send and must not be an underflow.
+        let Some(task) = target
+            .checked_sub(1)
+            .and_then(|n| usize::try_from(n).ok())
+            .and_then(|n| b.tasks.get(n))
+            .cloned()
+        else {
+            // NOT an error the person can act on: the list changed between the
+            // draw and the key, which is ordinary. The next mind already shows
+            // it.
+            tracing::warn!(target, "a request for a task that is not in the list");
+            return;
+        };
+        let ask = match what {
+            R::RunTask => ronoctua_brain::Ask::Run {
+                task,
+                rehearsal: false,
+            },
+            R::RehearseTask => ronoctua_brain::Ask::Run {
+                task,
+                rehearsal: true,
+            },
+            R::AbortTask => ronoctua_brain::Ask::Abort { task },
+            // Unreachable by construction: `ask` only routes those three here.
+            _ => return,
+        };
+        Self::tell_brain(&ask);
+    }
+
+    /// One preference the person changed, applied on top of what the daemon
+    /// last said and sent back whole.
+    ///
+    /// # Why the whole record goes back
+    ///
+    /// Because that is what `Ask::Tune` carries, and the reason it does is on
+    /// the other side: one shape to validate instead of one message per
+    /// preference. What this function must not do is BUILD one — the base is
+    /// the brain's own last answer, so a field this screen never touched comes
+    /// back exactly as it was.
+    fn tune(&mut self, setting: &ronoctua_protocol::Setting) {
+        use ronoctua_protocol::Knob;
+        let Some(b) = self.brain.as_mut() else {
+            return;
+        };
+        // THE TASK IS CHECKED against the list actually sent, exactly as an
+        // index is: a preference written for an id nothing answers to would sit
+        // in the person's file for ever, switching nothing off.
+        if !b.tasks.contains(&setting.task) {
+            tracing::warn!(task = %setting.task, "a preference for a task that is not in the list");
+            return;
+        }
+        let mut prefs = b.prefs.clone();
+        {
+            let mine = prefs.mine(&setting.task);
+            match &setting.knob {
+                Knob::IntervalDays(days) => mine.interval_days = *days,
+                Knob::PartOfDay(part) => mine.part_of_day = crate::brain::part_back(*part),
+                Knob::Enabled(on) => mine.enabled = *on,
+                // A SET OF EXCEPTIONS, and not a list of what runs: the order
+                // and the contents belong to the task, so a step added by a
+                // later version is on by default instead of missing from
+                // everybody's file. `on` is the state the screen wants, and not
+                // a toggle — a toggle sent twice by a key that repeated would
+                // land back where it started with nobody the wiser.
+                Knob::Step(switch) => {
+                    if switch.on {
+                        mine.steps_off.remove(&switch.id);
+                    } else {
+                        mine.steps_off.insert(switch.id.clone());
+                    }
+                }
+                Knob::ResetSteps => mine.steps_off.clear(),
+            }
+        }
+        Self::tell_brain(&ronoctua_brain::Ask::Tune {
+            prefs: Box::new(prefs),
+        });
+    }
+
+    /// Says it to the daemon, and says so in the log when it cannot.
+    ///
+    /// `tell` and not `ask`, for the reason [`Self::tell_queue`] gives: none of
+    /// these needs an answer, and waiting for one that never comes would freeze
+    /// this window's loop. What comes back arrives on the watch stream, which
+    /// is where the screen reads it anyway.
+    fn tell_brain(what: &ronoctua_brain::Ask) {
+        if let Err(e) = crate::brain::tell(what) {
+            tracing::error!(error = %e, ?what, "the brain did not take the request");
+        }
+    }
+
+    /// A fresh mind arrived from the daemon.
+    ///
+    /// The whole thing, every time, and never a delta — the reason is the
+    /// daemon's own: a delta needs both sides to agree on what they last saw,
+    /// and what is being agreed about here is when the machine will rebuild
+    /// itself.
+    fn mind_arrived(&mut self, mind: &ronoctua_brain::Mind) {
+        let over = {
+            let Some(b) = self.brain.as_mut() else {
+                return;
+            };
+            // NOTHING CHANGED, NOTHING HAPPENS — see `Brain::last`. Everything
+            // below this line costs: the conversion formats two dates, the
+            // delivery calls into the component, and the component's answer is
+            // a frame. A producer that repeats itself must not be able to spend
+            // any of that.
+            if b.last.as_ref() == Some(mind) {
+                return;
+            }
+            b.last = Some(mind.clone());
+            b.tasks.clear();
+            b.tasks.extend(mind.tasks.iter().map(|t| t.id.clone()));
+            b.prefs.clone_from(&mind.prefs);
+            crate::brain::mind_of(mind, &b.zone)
+        };
+        self.deliver(&ronoctua_protocol::Input::Mind(over));
     }
 
     /// A fresh queue arrived from the unit.
@@ -1922,14 +2194,14 @@ impl Host {
             None => {
                 tracing::error!(
                     device = %plan.device,
-                    "formatar recusado: dispositivo que nao foi enviado"
+                    "format refused: a device that was not sent"
                 );
                 return;
             }
             Some((_, false)) => {
                 tracing::error!(
                     device = %plan.device,
-                    "formatar recusado: o sistema em execucao precisa deste"
+                "format refused: the running system needs this one"
                 );
                 return;
             }
@@ -1944,14 +2216,14 @@ impl Host {
         let rack = d.rack.as_ref();
         let target = rack.and_then(|r| r.volumes.iter().find(|v| v.at == plan.device));
         let Some(target) = target else {
-            tracing::error!(device = %plan.device, "formatar recusado: sumiu da leitura");
+            tracing::error!(device = %plan.device, "format refused: it went away between readings");
             return;
         };
         if let Some(why) = ronoctua_disks::needed(target) {
             tracing::error!(
                 device = %plan.device,
                 why = ?why,
-                "formatar recusado: o sistema em execucao passou a precisar deste"
+                "format refused: the running system started needing this one"
             );
             return;
         }
@@ -1986,7 +2258,7 @@ impl Host {
         }
 
         let Some(said) = d.said.clone() else {
-            tracing::error!("sem canal de veredito; formatar nao foi pedido");
+            tracing::error!("no verdict channel; formatting was not asked for");
             return;
         };
         let device = plan.device.clone();
@@ -2010,7 +2282,7 @@ impl Host {
                 ));
             })
         {
-            tracing::error!(error = %e, "nao consegui subir a thread de formatar");
+            tracing::error!(error = %e, "could not start the format thread");
         }
     }
 
@@ -2047,7 +2319,7 @@ impl Host {
             // NOT an error the buffer can act on, and not a panic either: the
             // job finished between the draw and the key, which is ordinary. The
             // next ledger will already show it gone.
-            tracing::warn!(id = target, "pedido para um trabalho que nao esta na lista");
+            tracing::warn!(id = target, "a request for a job that is not in the list");
             return;
         }
         let ask = match what {
@@ -2068,7 +2340,7 @@ impl Host {
     /// bug the footer's own split exists to avoid.
     fn tell_queue(what: &ronoctua_transfers::Ask) {
         if let Err(e) = ronoctua_transfers::client::tell(what) {
-            tracing::error!(error = %e, ?what, "a fila nao aceitou o pedido");
+            tracing::error!(error = %e, ?what, "the queue did not take the request");
         }
     }
 
@@ -2077,13 +2349,13 @@ impl Host {
         let table = ronoctua_memory::guard::profiles();
         match table.of(mode) {
             Some(p) => match ronoctua_memory::guard::apply(p) {
-                Ok(()) => tracing::info!(?mode, "perfil aplicado para esta sessao"),
+                Ok(()) => tracing::info!(?mode, "profile applied for this session"),
                 // THE MANUAL WARNS that not every property may be changed at
                 // runtime. If this one may not, the screen has to say so — which
                 // it does by the next survey carrying the UNCHANGED state.
                 Err(e) => tracing::error!(error = %e, ?mode, "o systemd recusou a troca"),
             },
-            None => tracing::error!(?mode, "a tabela de perfis nao tem esse perfil"),
+            None => tracing::error!(?mode, "the profile table does not have that profile"),
         }
         self.refresh_guard();
         self.sample();
@@ -2100,7 +2372,7 @@ impl Host {
             .and_then(|n| s.consumers.get(n))
             .cloned()
         else {
-            tracing::error!(target, "indice fora da lista da ultima amostra");
+            tracing::error!(target, "an index outside the last sample's list");
             return;
         };
         let places = s.places.clone();
@@ -2109,7 +2381,7 @@ impl Host {
             // The refusal is the point of the message: the panel does not touch
             // what is outside `app.slice`, and saying so is how the person
             // learns the boundary instead of thinking the key is broken.
-            Err(e) => tracing::error!(error = %e, name = %who.name, "encerrar FALHOU"),
+            Err(e) => tracing::error!(error = %e, name = %who.name, "shutting down FAILED"),
         }
         // The list is stale the moment something leaves it: scan again, so the
         // screen does not offer to close what is already gone — and the SAME
@@ -2130,7 +2402,7 @@ impl Host {
             return;
         };
         let Some(reports) = s.reports.clone() else {
-            tracing::error!("sem canal de varredura; nada a fazer");
+            tracing::error!("no scan channel; nothing to do");
             return;
         };
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2165,7 +2437,7 @@ impl Host {
                 let _ = reports.send(Scanned::Done(found));
             });
         if let Err(e) = built {
-            tracing::error!(error = %e, "nao consegui subir a thread de varredura");
+            tracing::error!(error = %e, "could not start the scan thread");
             s.scanning = false;
         }
         self.sample();
@@ -2210,7 +2482,7 @@ impl SeatHandler for Host {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
             match self.seats.get_keyboard(qh, &seat, None) {
                 Ok(k) => self.keyboard = Some(k),
-                Err(e) => tracing::warn!(error = %e, "sem teclado; o buffer nao recebe entrada"),
+                Err(e) => tracing::warn!(error = %e, "no keyboard; the buffer takes no input"),
             }
         }
         if cap == Capability::Pointer && self.pointer.is_none() {
@@ -2218,7 +2490,7 @@ impl SeatHandler for Host {
                 Ok(p) => self.pointer = Some(p),
                 // With no pointer the buffer works entirely through the keyboard: the
                 // click is a shortcut, not the only path.
-                Err(e) => tracing::warn!(error = %e, "sem ponteiro; o clique nao vai funcionar"),
+                Err(e) => tracing::warn!(error = %e, "no pointer; the click will not work"),
             }
         }
     }
@@ -2315,8 +2587,8 @@ impl KeyboardHandler for Host {
         if self.mods.ctrl && event.keysym == Keysym::v {
             match paste_text() {
                 Ok(t) if !t.is_empty() => self.deliver(&ronoctua_protocol::Input::Paste(t)),
-                Ok(_) => tracing::debug!("area de transferencia vazia"),
-                Err(e) => tracing::error!(error = %e, "colar FALHOU"),
+                Ok(_) => tracing::debug!("the clipboard is empty"),
+                Err(e) => tracing::error!(error = %e, "pasting FAILED"),
             }
             return;
         }
@@ -2536,7 +2808,7 @@ impl PointerHandler for Host {
                 // would make clicking the border select the first item.
                 continue;
             };
-            tracing::debug!(column, line, "clique entregue ao componente");
+            tracing::debug!(column, line, "click delivered to the component");
             self.deliver(&ronoctua_protocol::Input::Click { column, line });
         }
     }
@@ -2716,14 +2988,14 @@ mod tests {
         assert_eq!(
             advance_sequence(&km, &mut pending, 'm'),
             None,
-            "`m` sozinho nao dispara"
+            "`m` on its own does not fire"
         );
-        assert_eq!(pending, vec!['m'], "o prefixo tem de ficar pendente");
+        assert_eq!(pending, vec!['m'], "the prefix has to stay pending");
         assert_eq!(
             advance_sequence(&km, &mut pending, 's').as_deref(),
             Some("memory-refresh")
         );
-        assert!(pending.is_empty(), "o disparo tem de limpar a sequencia");
+        assert!(pending.is_empty(), "firing has to clear the sequence");
     }
 
     #[test]
@@ -2735,7 +3007,7 @@ mod tests {
         let mut pending = Vec::new();
         advance_sequence(&km, &mut pending, 'm');
         assert_eq!(advance_sequence(&km, &mut pending, 'x'), None);
-        assert!(pending.is_empty(), "sequencia morta tem de limpar");
+        assert!(pending.is_empty(), "a dead sequence has to clear");
     }
 
     #[test]
@@ -2763,31 +3035,31 @@ mod tests {
     /// result: it looks as if nothing was done.
     #[test]
     fn the_current_color_becomes_the_token_and_the_drawing_shows_up() {
-        let resolvido = resolver_current_color(LUCIDE, tokens::color::TEXT_PRIMARY);
+        let resolved = resolver_current_color(LUCIDE, tokens::color::TEXT_PRIMARY);
         assert!(
-            !resolvido.contains("currentColor"),
-            "o `currentColor` sobreviveu: {resolvido}"
+            !resolved.contains("currentColor"),
+            "o `currentColor` sobreviveu: {resolved}"
         );
         let [r, g, b, _] = tokens::color::TEXT_PRIMARY.to_rgba8();
         assert!(
-            resolvido.contains(&format!("#{r:02X}{g:02X}{b:02X}")),
-            "a cor do token nao entrou: {resolvido}"
+            resolved.contains(&format!("#{r:02X}{g:02X}{b:02X}")),
+            "the token's colour did not come through: {resolved}"
         );
 
         // AND IT DRAWS. Finding the string is not drawing: a document `usvg`
         // refuses returns `None` in the same place, and the area stays empty.
         let side = 48;
         let rgba = ronoctua_notify::icon::from_svg(
-            resolvido.as_bytes(),
+            resolved.as_bytes(),
             side,
             ronoctua_notify::icon::Fit::Fill,
         )
-        .expect("o SVG da Lucide nao rasterizou");
+        .expect("Lucide's SVG did not rasterise");
         assert_eq!((rgba.width, rgba.height), (side, side));
         let opaque = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
         assert!(
             opaque > 100,
-            "a cruz de duas linhas rasterizou com {opaque} pixels visiveis"
+            "the two-line cross rasterised with {opaque} visible pixels"
         );
     }
 
@@ -2816,14 +3088,14 @@ mod tests {
         let ceiling = 200;
         let preview = |px: u32| {
             rasterize_preview(&at(px), tokens::color::TEXT_PRIMARY, ceiling)
-                .unwrap_or_else(|| panic!("o SVG de {px}px nao rasterizou"))
+                .unwrap_or_else(|| panic!("the {px}px SVG did not rasterise"))
         };
         for px in [16u32, 24, 48, 128] {
             let r = preview(px);
             assert_eq!(
                 (r.width, r.height),
                 (px, px),
-                "o documento pediu {px}px e saiu {}x{}",
+                "the document asked for {px}px and came out {}x{}",
                 r.width,
                 r.height
             );
@@ -2841,7 +3113,7 @@ mod tests {
                 18,
                 ronoctua_notify::icon::Fit::Fill,
             )
-            .expect("nao rasterizou");
+            .expect("it did not rasterise");
             assert_eq!((r.width, r.height), (18, 18));
         }
     }
@@ -2854,30 +3126,30 @@ mod tests {
     #[test]
     fn the_preview_area_centres_without_scaling_up() {
         use ronoctua_render::image::Area;
-        let caixa = Area {
+        let bounds = Area {
             x: 100.0,
             y: 10.0,
             width: 200.0,
             height: 200.0,
         };
-        let small = caixa.centre(24, 24);
+        let small = bounds.centre(24, 24);
         assert_eq!((small.width, small.height), (24.0, 24.0));
         assert!(
             (small.x - 188.0).abs() < 0.01 && (small.y - 98.0).abs() < 0.01,
-            "nao centrou: {small:?}"
+            "it did not centre: {small:?}"
         );
         // What does NOT fit shrinks, and then `centre` and `fit_into` agree.
-        assert_eq!(caixa.centre(400, 400), caixa.fit_into(400, 400));
+        assert_eq!(bounds.centre(400, 400), bounds.fit_into(400, 400));
     }
 
     /// And the person's colour passes through intact: there it is **content**, not chrome.
     #[test]
     fn a_typed_colour_is_not_replaced() {
-        let meu = LUCIDE.replace("currentColor", "#8AB4F8");
+        let mine = LUCIDE.replace("currentColor", "#8AB4F8");
         assert_eq!(
-            resolver_current_color(&meu, tokens::color::TEXT_PRIMARY),
-            meu,
-            "a cor escolhida foi trocada pela do token"
+            resolver_current_color(&mine, tokens::color::TEXT_PRIMARY),
+            mine,
+            "the chosen colour was swapped for the token's"
         );
     }
 
@@ -2886,7 +3158,7 @@ mod tests {
     #[test]
     fn an_invalid_svg_does_not_draw_and_does_not_panic() {
         assert!(
-            ronoctua_notify::icon::from_svg(b"nao sou svg", 48, ronoctua_notify::icon::Fit::Fill)
+            ronoctua_notify::icon::from_svg(b"i am not svg", 48, ronoctua_notify::icon::Fit::Fill)
                 .is_none()
         );
         assert!(

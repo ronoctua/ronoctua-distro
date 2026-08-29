@@ -223,7 +223,7 @@ pub enum Say {
 /// is attack surface.
 pub fn socket_path() -> Result<PathBuf> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR nao esta definida; sem ela nao ha onde por o socket")?;
+        .context("XDG_RUNTIME_DIR is not set; without it there is nowhere to put the socket")?;
     Ok(PathBuf::from(dir).join("ronoctua-transfers.sock"))
 }
 
@@ -233,10 +233,10 @@ pub fn socket_path() -> Result<PathBuf> {
 ///
 /// When the value cannot be encoded, or the other side has gone.
 pub fn write_line<T: Serialize>(to: &mut impl Write, value: &T) -> Result<()> {
-    let mut line = serde_json::to_string(value).context("codificar a linha")?;
+    let mut line = serde_json::to_string(value).context("encode the line")?;
     line.push('\n');
     to.write_all(line.as_bytes())
-        .context("escrever no socket das transferencias")?;
+        .context("write to the transfers socket")?;
     to.flush().context("esvaziar o socket das transferencias")
 }
 
@@ -249,7 +249,7 @@ pub fn read_line<T: DeserializeOwned>(from: &mut impl BufRead) -> Result<Option<
     let mut line = String::new();
     if from
         .read_line(&mut line)
-        .context("ler do socket das transferencias")?
+        .context("read from the transfers socket")?
         == 0
     {
         return Ok(None);
@@ -259,7 +259,7 @@ pub fn read_line<T: DeserializeOwned>(from: &mut impl BufRead) -> Result<Option<
         return Ok(None);
     }
     serde_json::from_str(trimmed)
-        .with_context(|| format!("linha que nao entendi: {trimmed}"))
+        .with_context(|| format!("a line I did not understand: {trimmed}"))
         .map(Some)
 }
 

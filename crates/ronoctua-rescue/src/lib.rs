@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn the_table_holds_together() {
-        check_of(all_of()).expect("a tabela do resgate");
+        check_of(all_of()).expect("the rescue's table");
     }
 
     #[test]
@@ -574,13 +574,13 @@ mod tests {
                 assert_eq!(
                     units,
                     ["keyd.service"],
-                    "`{}` alcanca unidade de sistema sem pedir nada",
+                    "`{}` reaches a system unit without asking anything",
                     a.id
                 );
             }
             assert!(
                 !matches!(a.run, Run::Power(_)),
-                "`{}` desliga a maquina sem pedir nada",
+                "`{}` shuts the machine down without asking for anything",
                 a.id
             );
         }
@@ -592,10 +592,13 @@ mod tests {
         let mut sorted = units.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(units, sorted, "a lista tem de vir ordenada e sem repeticao");
+        assert_eq!(
+            units, sorted,
+            "the list has to come sorted and with no repeats"
+        );
         assert!(
             units.contains(&"ronoctua-rescue-rollback@switch.service"),
-            "o rollback saiu da lista que a regra de polkit espelha: {units:?}"
+            "the rollback left the list the polkit rule mirrors: {units:?}"
         );
     }
 }

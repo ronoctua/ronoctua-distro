@@ -28,7 +28,7 @@ fn main() -> Result<()> {
         // A new connection per action: the daemon's `Niri` is blocked reading the
         // event stream, and it is how `run_command` does it too.
         let mut niri = ronoctua_niri::Niri::connect_at(std::path::Path::new(&path))
-            .with_context(|| format!("conectar para testar `{id}`"))?;
+            .with_context(|| format!("connect in order to test `{id}`"))?;
         match niri.action(action.clone()) {
             Ok(()) => println!("  ok   {id:24} -> {action}"),
             Err(e) => {
@@ -39,19 +39,19 @@ fn main() -> Result<()> {
     }
 
     if !failures.is_empty() {
-        eprintln!("\nERRO: acoes que o niri nao aceitou:\n");
+        eprintln!("\nERROR: actions niri did not accept:\n");
         for f in &failures {
             eprintln!("  {f}");
         }
         eprintln!(
-            "\nUm nome de acao errado nao quebra o build: ele vira um `warn`\n\
-             no log e NADA na tela. Corrija em `crates/ronoctua-shell/src/actions.rs`."
+            "\nA wrong action name does not break the build: it becomes a `warn`\n\
+             in the log and NOTHING on screen. Fix it in `crates/ronoctua-shell/src/actions.rs`."
         );
-        bail!("{} de {} acoes recusadas", failures.len(), table.len());
+        bail!("{} of {} actions refused", failures.len(), table.len());
     }
 
     println!(
-        "\nOK: as {} acoes do keymap existem neste niri",
+        "\nOK: the keymap's {} actions exist in this niri",
         table.len()
     );
     Ok(())

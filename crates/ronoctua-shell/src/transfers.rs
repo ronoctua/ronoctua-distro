@@ -519,7 +519,7 @@ pub fn listen(
     channel: smithay_client_toolkit::reexports::calloop::channel::Sender<Vec<Job>>,
 ) -> bool {
     if let Err(e) = ronoctua_transfers::wire::socket_path() {
-        tracing::warn!(error = %e, "sem fila de transferencias; o segmento nao aparece");
+        tracing::warn!(error = %e, "no transfer queue; the segment does not appear");
         return false;
     }
     let built = std::thread::Builder::new()
@@ -533,7 +533,7 @@ pub fn listen(
     match built {
         Ok(_) => true,
         Err(e) => {
-            tracing::error!(error = %e, "nao consegui subir a thread das transferencias");
+            tracing::error!(error = %e, "could not start the transfers thread");
             false
         }
     }
@@ -786,7 +786,7 @@ mod tests {
             id,
             Engine::Local,
             Work::Paste {
-                paths: vec![PathBuf::from("/casa/filme.mkv")],
+                paths: vec![PathBuf::from("/home/film.mkv")],
                 into: PathBuf::from("/backup"),
                 moves: false,
             },
@@ -814,7 +814,7 @@ mod tests {
         assert_eq!(
             view.focused().map(|j| j.id),
             Some(2),
-            "o cursor seguiu a LINHA em vez do trabalho"
+            "the cursor followed the ROW instead of the job"
         );
     }
 
@@ -844,7 +844,7 @@ mod tests {
             assert_ne!(
                 view.key(key),
                 Step::Nothing,
-                "a tecla `{notation}` (`{id}`) nao faz nada"
+                "the key `{notation}` (`{id}`) does nothing"
             );
         }
     }
@@ -877,7 +877,7 @@ mod tests {
             let mut long = a_job(1, Stage::Running);
             long.now = "n".repeat(300);
             long.work = Work::Paste {
-                paths: vec![PathBuf::from("/casa/".to_owned() + &"a".repeat(300))],
+                paths: vec![PathBuf::from("/home/".to_owned() + &"a".repeat(300))],
                 into: PathBuf::from("/".to_owned() + &"b".repeat(300)),
                 moves: false,
             };
@@ -890,7 +890,7 @@ mod tests {
                 for f in &row.fields {
                     assert!(
                         f.at + ronoctua_render::layout::width(&f.text) <= columns,
-                        "um campo vaza com {columns} colunas: {f:?}"
+                        "a field leaks at {columns} columns: {f:?}"
                     );
                 }
             }
@@ -918,7 +918,7 @@ mod tests {
                 },
             ),
         ];
-        let said = segment(&weighing).expect("duas correndo e nao ha segmento");
+        let said = segment(&weighing).expect("two running and there is no segment");
         assert!(said.ends_with('2'), "{said}");
         assert!(!said.contains('%'), "inventou porcentagem: {said}");
 
@@ -936,8 +936,11 @@ mod tests {
         // BUT A FAILURE STAYS. Nothing is running, and taking the segment away
         // would take the only sign off the screen before anybody saw it.
         let mut broke = a_job(1, Stage::Failed);
-        broke.trouble = Some("sem espaco".to_owned());
-        assert!(segment(&[broke]).is_some(), "a falha sumiu da modeline");
+        broke.trouble = Some("no space".to_owned());
+        assert!(
+            segment(&[broke]).is_some(),
+            "the failure went away from the modeline"
+        );
     }
 
     #[test]
@@ -954,13 +957,13 @@ mod tests {
 
     #[test]
     fn a_failure_carries_its_own_words_across() {
-        // `copiar /x/y` alone does not say `No space left on device`, and the
+        // `copy /x/y` alone does not say `No space left on device`, and the
         // second half is the whole diagnosis.
         let before = vec![a_job(1, Stage::Running)];
         let mut broke = a_job(1, Stage::Failed);
-        broke.trouble = Some("sem espaco em disco".to_owned());
+        broke.trouble = Some("no space left on the disk".to_owned());
         match what_ended(&before, &[broke]).first() {
-            Some(crate::files::Report::Failed(why)) => assert_eq!(why, "sem espaco em disco"),
+            Some(crate::files::Report::Failed(why)) => assert_eq!(why, "no space left on the disk"),
             other => panic!("{other:?}"),
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-keymap"
-description = "Arvore de teclas, merge, resolucao e which-key (secao 7.4)."
+description = "Key tree, merge, resolution and which-key (section 7.4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -68,9 +68,9 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
-    with subtest("o painel sobe, e o host comeca a amostrar"):
+    with subtest("the panel comes up, and the host starts sampling"):
         machine.succeed(
-            "systemd-run --unit=painel ${xvfb.env} "
+            "systemd-run --unit=panel ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             # pt-BR: the keys the component sends have to come out translated.
             "--setenv=LANG=pt_BR.UTF-8 "
@@ -80,52 +80,52 @@ pkgs.testers.runNixOSTest {
         )
         try:
             machine.wait_until_succeeds(
-                "journalctl -u painel --no-pager | grep -q 'componente renderizou'",
+                "journalctl -u panel --no-pager | grep -q 'component rendered'",
                 timeout=60,
             )
         except Exception:
-            print(machine.execute("journalctl -u painel --no-pager")[1])
+            print(machine.execute("journalctl -u panel --no-pager")[1])
             raise
 
-        journal = machine.succeed("journalctl -u painel --no-pager")
-        for bad in ["panicked", "recusado: o buffer nao declarou a capacidade"]:
-            assert bad not in journal, f"o painel reportou: {bad}"
+        journal = machine.succeed("journalctl -u panel --no-pager")
+        for bad in ["panicked", "refused: the buffer did not declare the capability"]:
+            assert bad not in journal, f"o panel reportou: {bad}"
 
-    with subtest("o COMPOSITOR ve uma janela, nao uma regiao nossa"):
+    with subtest("the COMPOSITOR sees a window, not a region of ours"):
         machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'janelas: 1'",
+            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
             timeout=30,
         )
 
-    with subtest("a maquina falou, e o que ela disse esta na tela"):
+    with subtest("the machine spoke, and what it said is on screen"):
         # The clock ticks once a second; the first survey does not wait for it.
         machine.wait_until_succeeds(
-            "journalctl -u painel --no-pager | grep -q 'buffer desenhado no xdg_toplevel'",
+            "journalctl -u panel --no-pager | grep -q 'buffer drawn on the xdg_toplevel'",
             timeout=60,
         )
 
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         # THE WHOLE WINDOW, by the geometry niri reports — cropping by an
         # assumed position would be assuming layout, which invariant 4 forbids.
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
-            "-colorspace gray -negate -resize 200% /tmp/painel.png"
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+            "-colorspace gray -negate -resize 200% /tmp/panel.png"
         )
         read_back = machine.succeed(
-            "${pkgs.tesseract}/bin/tesseract /tmp/painel.png stdout --psm 6 2>/dev/null"
+            "${pkgs.tesseract}/bin/tesseract /tmp/panel.png stdout --psm 6 2>/dev/null"
         ).strip()
         print(f"OCR: {read_back!r}")
 
         # The key that came out translated…
         assert "ram" in read_back.lower(), (
-            f"a chave `memory-ram` nao chegou a tela; OCR leu {read_back!r}"
+            f"the key `memory-ram` did not reach the screen; OCR read {read_back!r}"
         )
         # …and a number that can only exist if the host read the machine. A
         # panel that drew its labels and no numbers is a panel whose clock never
         # ticked — and it looks fine until one tries to read it.
         assert "gib" in read_back.lower() or "mib" in read_back.lower(), (
-            f"nenhum tamanho na tela: a amostra do host nao chegou; OCR leu {read_back!r}"
+            f"nothing sized on screen: the host's sample did not arrive; OCR read {read_back!r}"
         )
   '';
 }

@@ -110,7 +110,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
             match started {
                 Ok(messages) => {
                     let _ = ready_tx.send(true);
-                    tracing::info!(sender = SENDER, "escutando mortes por falta de memoria");
+                    tracing::info!(sender = SENDER, "listening for deaths from lack of memory");
                     for message in messages {
                         let Ok(message) = message else { continue };
                         // The signal carries `(s cgroup, s reason)`. A body of
@@ -121,7 +121,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
                         let body = message.body();
                         let parsed: zbus::Result<(String, String)> = body.deserialize();
                         let Ok((cgroup, reason)) = parsed else {
-                            tracing::warn!("sinal de morte com corpo inesperado; ignorado");
+                            tracing::warn!("a death signal with an unexpected body; ignored");
                             continue;
                         };
                         let reason = Reason::from_wire(&reason);
@@ -133,14 +133,14 @@ pub fn listen(channel: Sender<Event>) -> bool {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "sem aviso de falta de memoria");
+                    tracing::warn!(error = %e, "no warning about running out of memory");
                     let _ = ready_tx.send(false);
                 }
             }
         });
 
     if born.is_err() {
-        tracing::warn!("nao consegui subir a thread de falta de memoria");
+        tracing::warn!("could not start the out-of-memory thread");
         return false;
     }
     ready_rx
@@ -159,9 +159,9 @@ mod tests {
         assert_eq!(Reason::from_wire("memory-pressure"), Reason::MemoryPressure);
         assert_eq!(Reason::from_wire("memory-used"), Reason::MemoryUsed);
         assert_eq!(
-            Reason::from_wire("algo-novo"),
-            Reason::Other("algo-novo".to_owned()),
-            "uma razao desconhecida continua sendo uma morte, e tem de chegar"
+            Reason::from_wire("something-new"),
+            Reason::Other("something-new".to_owned()),
+            "an unknown reason is still a death, and has to arrive"
         );
     }
 }

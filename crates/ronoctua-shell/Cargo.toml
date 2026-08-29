@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-shell"
-description = "O binario: superficie layer-shell do rodape, toplevels, daemon."
+description = "The binary: the footer's layer-shell surface, toplevels, daemon."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -44,6 +44,12 @@ ronoctua-term = { path = "../ronoctua-term" }
 # The ONLY border with /proc, the cgroups and systemd's memory policy — the
 # same arrangement as `ronoctua-network`: the shell asks, it reads.
 ronoctua-files = { path = "../ronoctua-files" }
+# THE BORDER WITH WHAT IS INSIDE A FILE — the preview's pixels and the info
+# panel's facts. It enters HERE and not in `ronoctua-files`, which builds the
+# root-privileged helper: image decoders and an SVG rasteriser inside a binary
+# that runs as root is exactly what that split exists to prevent, and
+# `files-vm` asserts the closure.
+ronoctua-inspect = { path = "../ronoctua-inspect" }
 # THE DISK BORDER. It enters HERE and not in `ronoctua-files`, which builds the
 # root-privileged helper: pulling zbus in there would put a D-Bus client inside
 # a binary that runs as root, and would give that crate a second border. The
@@ -53,6 +59,10 @@ ronoctua-disks = { path = "../ronoctua-disks" }
 # copies anything itself.
 ronoctua-transfers = { path = "../ronoctua-transfers" }
 ronoctua-memory = { path = "../ronoctua-memory" }
+# WHEN the machine does something to itself. The shell holds no schedule of its
+# own: it watches the daemon's socket, draws the countdown and sends back the
+# two answers to it — the same arrangement as the transfer queue one line up.
+ronoctua-brain = { path = "../ronoctua-brain" }
 
 # Integration with the compositor ONLY through wlr-layer-shell and IPC (invariant 3).
 smithay-client-toolkit.workspace = true

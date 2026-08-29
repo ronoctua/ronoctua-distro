@@ -345,7 +345,7 @@ mod tests {
         for a in crate::all_of() {
             assert!(
                 Section::all_of().contains(&a.section),
-                "`{}` esta numa secao que a barra lateral nao mostra",
+                "`{}` is in a section the sidebar does not show",
                 a.id
             );
         }
@@ -356,7 +356,7 @@ mod tests {
         for s in Section::all_of() {
             let has_rows = !of_section(s).is_empty();
             let has_own = matches!(s, Section::State | Section::Config | Section::Log);
-            assert!(has_rows || has_own, "a secao {s:?} abre vazia");
+            assert!(has_rows || has_own, "the section {s:?} opens empty");
         }
     }
 
@@ -372,7 +372,7 @@ mod tests {
         v.row = of_section(Section::System)
             .iter()
             .position(|a| a.id == "reboot")
-            .expect("a posicao");
+            .expect("the position");
 
         // First press arms, and runs NOTHING.
         assert_eq!(v.key(Key::Enter), Step::Draw);
@@ -391,11 +391,11 @@ mod tests {
         v.row = of_section(Section::System)
             .iter()
             .position(|a| a.id == "poweroff")
-            .expect("a posicao");
+            .expect("the position");
         assert_eq!(v.key(Key::Enter), Step::Draw);
         assert_eq!(v.pending, Some("poweroff"));
         let _ = v.key(Key::Down);
-        assert_eq!(v.pending, None, "a seta deixou a maquina armada");
+        assert_eq!(v.pending, None, "the arrow left the machine armed");
     }
 
     #[test]
@@ -408,7 +408,7 @@ mod tests {
             .position(|p| p.origin.is_some())
             .expect("um gerado");
         let Step::Hand(Hand::Read(_)) = v.key(Key::Enter) else {
-            panic!("um arquivo gerado abriu para edicao — some no proximo rebuild");
+            panic!("a generated file opened for editing — it goes away on the next rebuild");
         };
     }
 
@@ -420,7 +420,7 @@ mod tests {
         v.row = 0;
         assert_eq!(papers()[0].path, "/etc/nixos/host.nix");
         let Step::Hand(Hand::Edit(_)) = v.key(Key::Enter) else {
-            panic!("o host.nix abriu em leitura");
+            panic!("host.nix opened for reading");
         };
     }
 
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(
             v.section,
             Section::System,
-            "subir na primeira devia dar a ultima"
+            "going up from the first one should give the last"
         );
     }
 
@@ -441,7 +441,10 @@ mod tests {
         let mut v = View::fresh();
         let _ = v.key(Key::Pick(Section::Windows));
         assert_eq!(v.section, Section::Windows);
-        assert!(!v.on_sidebar, "o clique parou na barra em vez de entrar");
+        assert!(
+            !v.on_sidebar,
+            "the click stopped on the bar instead of going in"
+        );
     }
 
     #[test]
@@ -457,11 +460,11 @@ mod tests {
     fn the_generations_come_newest_first() {
         let dir = std::env::temp_dir().join(format!("rescue-generations-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("o diretorio");
+        std::fs::create_dir_all(&dir).expect("the directory");
         for n in [7_u32, 9, 8] {
             std::fs::write(dir.join(format!("system-{n}-link")), b"").expect("a geracao");
         }
-        std::fs::write(dir.join("system-profile"), b"").expect("o que nao e geracao");
+        std::fs::write(dir.join("system-profile"), b"").expect("what is not a generation");
         let got: Vec<u32> = generations(&dir).into_iter().map(|(n, _)| n).collect();
         assert_eq!(got, vec![9, 8, 7]);
         let _ = std::fs::remove_dir_all(&dir);

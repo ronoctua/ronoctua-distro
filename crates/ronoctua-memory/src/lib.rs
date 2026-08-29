@@ -319,7 +319,7 @@ HugePages_Total:       0
     fn zram_reports_what_was_written_and_what_it_occupies() {
         let (original, compressed) =
             parse_zram("7116926976 3882367435 3995357184 0 6591455232 86289 34328319 742957")
-                .expect("mm_stat tem duas primeiras colunas");
+                .expect("mm_stat has two first columns");
         assert_eq!(original, 7_116_926_976);
         assert_eq!(compressed, 3_882_367_435);
         // The ratio is what the screen shows, and it comes from the pair — never

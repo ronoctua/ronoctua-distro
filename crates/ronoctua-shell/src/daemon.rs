@@ -38,7 +38,7 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "sem IPC do niri; a modeline fica com o estado de partida"
+                "no niri IPC; the modeline keeps its start-up state"
             );
             return false;
         }
@@ -47,13 +47,13 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
     let events = match niri.event_stream() {
         Ok(e) => e,
         Err(e) => {
-            tracing::warn!(error = %e, "o niri recusou o fluxo de eventos");
+            tracing::warn!(error = %e, "niri refused the event stream");
             return false;
         }
     };
 
     thread::Builder::new()
-        .name("niri-eventos".into())
+        .name("niri-events".into())
         .spawn(move || {
             let mut events = events;
             loop {
@@ -72,7 +72,7 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
                         }
                     }
                     Ok(None) => {
-                        tracing::info!("o niri encerrou o fluxo de eventos");
+                        tracing::info!("niri ended the event stream");
                         return;
                     }
                     Err(e) => {
@@ -83,7 +83,7 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
                 }
             }
         })
-        .expect("a thread do niri nao pode falhar em nascer");
+        .expect("niri's thread cannot fail to be born");
 
     true
 }
@@ -113,7 +113,7 @@ pub fn buffer_name(state: &State, texts: &Texts) -> String {
     // of being confused with its sibling.
     if let Some(pid) = j.pid {
         let origin = crate::foreign::origin_of_pid(pid);
-        tracing::trace!(pid, ?origin, "origem da janela em foco");
+        tracing::trace!(pid, ?origin, "the focused window's source");
     }
     match j
         .title
@@ -205,14 +205,14 @@ mod tests {
         let (e, t) = (State::default(), texts());
         assert!(
             buffer_name(&e, &t).is_empty(),
-            "sem janela nao ha buffer para nomear"
+            "with no window there is no buffer to name"
         );
         // The MODE disappears. With no window there is no mode, and writing
         // `fundamental` took up a column asserting something false: the reader
         // went looking for a buffer that does not exist.
         assert!(
             buffer_mode(&e, &t).is_empty(),
-            "sem janela o modo tem de ser vazio, para o segmento sumir"
+            "with no window the mode has to be empty, so the segment goes away"
         );
     }
 

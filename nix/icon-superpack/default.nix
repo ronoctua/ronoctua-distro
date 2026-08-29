@@ -115,11 +115,11 @@ stdenvNoCC.mkDerivation {
       done
       if [ ! -f "$lic/${s.name}.txt" ]; then
         printf '%s\n' \
-          "Tema: ${s.name}" \
-          "Licenca declarada: ${s.license}" \
+          "Theme: ${s.name}" \
+          "Declared licence: ${s.license}" \
           "" \
-          "O pacote de origem nao redistribui o texto da licenca. O" \
-          "identificador SPDX acima e o que consta em nixpkgs e no upstream." \
+          "The source package does not redistribute the licence text. The" \
+          "SPDX identifier above is what nixpkgs and upstream state." \
           > "$lic/${s.name}.txt"
       fi
     '') sources}
@@ -128,14 +128,14 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = {
-    description = "Superpacote de icones da ronoctua-distro — fallback de pixmap para apps estrangeiros";
+    description = "ronoctua-distro icon superpack — pixmap fallback for foreign apps";
     longDescription = ''
-      Funde Zafiro, Adwaita, MoreWaita, Papirus e breeze num tema unico,
-      casando por nome + tamanho + contexto + escala. Emite manifesto
-      dizendo qual pacote venceu cada nome, e um relatorio de cobertura.
+      Merges Zafiro, Adwaita, MoreWaita, Papirus and breeze into a single theme,
+      matching by name + size + context + scale. Emits a manifest
+      saying which package won each name, and a coverage report.
 
-      Existe SO como fallback de pixmap para apps estrangeiros (secao 4.2,
-      passo 2). Nenhum componente do design system o consulta.
+      It exists ONLY as a pixmap fallback for foreign apps (section 4.2,
+      step 2). No component of the design system consults it.
     '';
     # Do NOT collapse to a single licence: the merged theme carries all the source ones.
     license = with lib.licenses; [

@@ -277,7 +277,7 @@ mod tests {
 
     fn some_work() -> Work {
         Work::Measure {
-            path: PathBuf::from("/nao-existe"),
+            path: PathBuf::from("/does-not-exist"),
         }
     }
 
@@ -303,9 +303,9 @@ mod tests {
         // disk with nothing on screen saying so.
         let shared = Shared::fresh_one();
         let (id, _) = shared.take(Engine::Local, some_work());
-        assert!(!shared.forget(id), "esqueceu uma que ainda corre");
+        assert!(!shared.forget(id), "it forgot one that is still running");
         ended(&shared, id, Stage::Cancelled);
-        assert!(shared.forget(id), "nao esqueceu uma que acabou");
+        assert!(shared.forget(id), "it did not forget one that ended");
     }
 
     #[test]
@@ -331,7 +331,7 @@ mod tests {
         // first frame of every client would be empty.
         let shared = Arc::new(Shared::fresh_one());
         let (_, version) = shared.snapshot();
-        assert_eq!(version, 0, "uma fila vazia ja nasceu mudada");
+        assert_eq!(version, 0, "an empty queue was born already changed");
 
         let waiter = Arc::clone(&shared);
         let hand = std::thread::spawn(move || waiter.wait_past(0));
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(
             along(&jobs),
             Some(900),
-            "a que nao sabe o total entrou na conta"
+            "the one that does not know its total went into the sum"
         );
         assert_eq!(afoot(&jobs), 2);
     }
@@ -373,7 +373,7 @@ mod tests {
         let (jobs, _) = shared.snapshot();
         assert!(
             jobs.iter().any(|j| j.id == running),
-            "o teto derrubou uma que estava correndo"
+            "the ceiling dropped one that was running"
         );
         assert_eq!(jobs.iter().filter(|j| !j.afoot()).count(), HISTORY);
     }

@@ -85,10 +85,10 @@ impl Niri {
             .map(PathBuf::from)
             .with_context(|| {
                 format!(
-                    "{SOCKET_ENV} nao esta definida.\n\
+                    "{SOCKET_ENV} is not set.\n\
                      \n\
-                     O niri define essa variavel para os processos que ELE inicia.\n\
-                     Fora de uma sessao do niri, aponte-a para o socket a mao."
+                     niri sets that variable for the processes IT starts.\n\
+                     Outside a niri session, point it at the socket by hand."
                 )
             })?;
         Self::connect_at(&path)
@@ -98,7 +98,7 @@ impl Niri {
     /// has to talk to two different niris on the same machine.
     pub fn connect_at(path: &std::path::Path) -> Result<Self> {
         let stream = UnixStream::connect(path)
-            .with_context(|| format!("nao consegui conectar em {}", path.display()))?;
+            .with_context(|| format!("could not connect to {}", path.display()))?;
         Ok(Self {
             stream: BufReader::new(stream),
         })
@@ -109,34 +109,34 @@ impl Niri {
     /// The protocol is one JSON line per message: request, `\n`, and the reply
     /// comes on ONE line. niri's `Reply` is a serialised `Result`, so
     /// on the wire it appears as `{"Ok": …}` or `{"Err": "…"}`.
-    fn request(&mut self, pedido: &serde_json::Value) -> Result<serde_json::Value> {
-        let mut text = serde_json::to_string(pedido)?;
+    fn request(&mut self, request: &serde_json::Value) -> Result<serde_json::Value> {
+        let mut text = serde_json::to_string(request)?;
         text.push('\n');
         self.stream
             .get_mut()
             .write_all(text.as_bytes())
-            .context("nao consegui escrever no socket do niri")?;
+            .context("could not write to niri's socket")?;
         self.stream.get_mut().flush()?;
 
         let mut line = String::new();
         let n = self
             .stream
             .read_line(&mut line)
-            .context("nao consegui ler a resposta do niri")?;
+            .context("could not read niri's answer")?;
         if n == 0 {
-            bail!("o niri fechou a conexao sem responder a {pedido}");
+            bail!("niri closed the connection without answering {request}");
         }
 
         let answer: serde_json::Value = serde_json::from_str(&line)
-            .with_context(|| format!("resposta do niri nao e JSON: {line:?}"))?;
+            .with_context(|| format!("niri's answer is not JSON: {line:?}"))?;
 
         if let Some(error) = answer.get("Err") {
-            bail!("o niri recusou {pedido}: {error}");
+            bail!("o niri recusou {request}: {error}");
         }
         answer
             .get("Ok")
             .cloned()
-            .with_context(|| format!("resposta do niri sem `Ok` nem `Err`: {line:?}"))
+            .with_context(|| format!("niri's answer has neither `Ok` nor `Err`: {line:?}"))
     }
 
     /// The running compositor's version.
@@ -145,7 +145,7 @@ impl Niri {
         ok.get("Version")
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
-            .with_context(|| format!("resposta de Version com forma inesperada: {ok}"))
+            .with_context(|| format!("Version's answer has an unexpected shape: {ok}"))
     }
 
     /// Every open window.
@@ -153,8 +153,8 @@ impl Niri {
         let ok = self.request(&serde_json::json!("Windows"))?;
         let raw = ok
             .get("Windows")
-            .with_context(|| format!("resposta de Windows com forma inesperada: {ok}"))?;
-        serde_json::from_value(raw.clone()).context("uma janela do niri nao casa com `Janela`")
+            .with_context(|| format!("Windows's answer has an unexpected shape: {ok}"))?;
+        serde_json::from_value(raw.clone()).context("a niri window does not match `Window`")
     }
 
     /// The focused window, if there is one.
@@ -162,8 +162,8 @@ impl Niri {
         let ok = self.request(&serde_json::json!("FocusedWindow"))?;
         let raw = ok
             .get("FocusedWindow")
-            .with_context(|| format!("resposta de FocusedWindow com forma inesperada: {ok}"))?;
-        serde_json::from_value(raw.clone()).context("a janela focada nao casa com `Janela`")
+            .with_context(|| format!("FocusedWindow's answer has an unexpected shape: {ok}"))?;
+        serde_json::from_value(raw.clone()).context("the focused window does not match `Window`")
     }
 
     /// Sends an ACTION to the compositor.
@@ -244,7 +244,7 @@ impl Niri {
         let raw = ok
             .get("Layers")
             .and_then(serde_json::Value::as_array)
-            .with_context(|| format!("resposta de Layers com forma inesperada: {ok}"))?;
+            .with_context(|| format!("Layers's answer has an unexpected shape: {ok}"))?;
         Ok(raw
             .iter()
             .map(|c| {
@@ -278,7 +278,7 @@ impl Niri {
         // would say "niri did not confirm" when it did.
         anyhow::ensure!(
             ok.as_str() == Some("Handled"),
-            "o niri nao confirmou o EventStream: {ok}"
+            "niri did not confirm the EventStream: {ok}"
         );
         Ok(Events {
             stream: self.stream,
@@ -302,7 +302,7 @@ impl Events {
             return Ok(None);
         }
         let raw: serde_json::Value = serde_json::from_str(&line)
-            .with_context(|| format!("evento do niri nao e JSON: {line:?}"))?;
+            .with_context(|| format!("niri's event is not JSON: {line:?}"))?;
         Ok(Some(interpret(&raw)?))
     }
 }
@@ -313,7 +313,7 @@ impl Events {
 /// literal JSON, which is how a actual event arrives on the wire.
 fn interpret(raw: &serde_json::Value) -> Result<Event> {
     let Some((name, body)) = raw.as_object().and_then(|o| o.iter().next()) else {
-        bail!("evento sem variante: {raw}");
+        bail!("an event with no variant: {raw}");
     };
 
     let event = match name.as_str() {
@@ -323,7 +323,7 @@ fn interpret(raw: &serde_json::Value) -> Result<Event> {
                 .context("WindowsChanged sem `windows`")?;
             Event::WindowsChanged(
                 serde_json::from_value(windows.clone())
-                    .context("uma janela de WindowsChanged nao casa com `Janela`")?,
+                    .context("a WindowsChanged window does not match `Window`")?,
             )
         }
         "WindowOpenedOrChanged" => {
@@ -332,7 +332,7 @@ fn interpret(raw: &serde_json::Value) -> Result<Event> {
                 .context("WindowOpenedOrChanged sem `window`")?;
             Event::WindowOpenedOrChanged(
                 serde_json::from_value(window.clone())
-                    .context("a janela de WindowOpenedOrChanged nao casa com `Janela`")?,
+                    .context("WindowOpenedOrChanged's window does not match `Window`")?,
             )
         }
         "WindowClosed" => Event::WindowClosed(
@@ -369,8 +369,8 @@ impl State {
                 self.windows = js.clone();
             }
             Event::WindowOpenedOrChanged(j) => {
-                if let Some(existente) = self.windows.iter_mut().find(|x| x.id == j.id) {
-                    *existente = j.clone();
+                if let Some(existing) = self.windows.iter_mut().find(|x| x.id == j.id) {
+                    *existing = j.clone();
                 } else {
                     self.windows.push(j.clone());
                 }
@@ -479,7 +479,7 @@ pub fn run_through_client(name: &str, argument: Option<&str>) -> Result<()> {
     }
     let output = cmd
         .output()
-        .with_context(|| format!("nao consegui rodar `{NIRI} msg action {name}`"))?;
+        .with_context(|| format!("could not run `{NIRI} msg action {name}`"))?;
     if output.status.success() {
         return Ok(());
     }
@@ -488,7 +488,7 @@ pub fn run_through_client(name: &str, argument: Option<&str>) -> Result<()> {
     bail!(
         "{}",
         if reason.is_empty() {
-            format!("`{name}` falhou com {}", output.status)
+            format!("`{name}` failed with {}", output.status)
         } else {
             reason.to_owned()
         }
@@ -533,7 +533,7 @@ mod tests {
         // Same reason, one level down: `Window` ignores fields it does not
         // declare. Without that, a new field in `Window` would break everything.
         let mut j = window_json(1, true);
-        j["campo_do_futuro"] = serde_json::json!("valor");
+        j["campo_do_futuro"] = serde_json::json!("value");
         let event = interpret(&serde_json::json!({ "WindowOpenedOrChanged": { "window": j } }));
         assert!(matches!(event.unwrap(), Event::WindowOpenedOrChanged(_)));
     }

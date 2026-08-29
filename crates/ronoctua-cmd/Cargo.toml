@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-cmd"
-description = "Registro de comandos nomeados e enderecaveis (secao 13)."
+description = "The registry of named, addressable commands (section 13)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

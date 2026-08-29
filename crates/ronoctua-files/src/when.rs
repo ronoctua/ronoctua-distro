@@ -343,7 +343,7 @@ mod tests {
             return;
         }
         let z = Zone::read_from(path);
-        assert!(!z.is_utc(), "/etc/localtime existe e nao foi lido");
+        assert!(!z.is_utc(), "/etc/localtime exists and was not read");
         // Sane offset: no zone is more than 14 h from UTC.
         let off = z.offset_at(1_755_000_000);
         assert!(

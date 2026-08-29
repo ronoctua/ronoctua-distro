@@ -41,7 +41,7 @@ pkgs.testers.runNixOSTest {
       ];
       _module.args.ronoctua = ronoctua;
       virtualisation.memorySize = 2048;
-      networking.hostName = lib.mkForce "noctua-arquivos";
+      networking.hostName = lib.mkForce "noctua-files";
       # No /persist in this VM — the same reason as the keyboard's and the
       # rescue's: `base.nix` points the password hash there and the test never
       # logs in.
@@ -64,16 +64,16 @@ pkgs.testers.runNixOSTest {
       machine.start()
       machine.wait_for_unit("multi-user.target")
 
-      with subtest("a unidade privilegiada existe e roda o binario extraido"):
+      with subtest("the privileged unit exists and runs the extracted binary"):
           machine.succeed("systemctl cat ronoctua-files-root.service > /dev/null")
           started = machine.succeed(
               "systemctl show ronoctua-files-root.service -p ExecStart --value"
           )
           assert helper in started, (
-              f"a unidade nao roda o binario extraido:\n{started}"
+              f"the unit does not run the extracted binary:\n{started}"
           )
 
-      with subtest("e o binario NAO carrega o desktop junto"):
+      with subtest("and the binary does NOT carry the desktop along"):
           # It runs as root. Handing it the whole workspace would put wgpu, the
           # wasm runtime, the renderer and its three embedded fonts inside a
           # unit that runs as root — a hundred megabytes to perform four
@@ -84,29 +84,29 @@ pkgs.testers.runNixOSTest {
               assert found.strip() == "0", (
                   f"o ajudante privilegiado carrega {unwanted}"
               )
-          print(f"{closure} caminhos no ajudante, e nenhum e do desktop")
+          print(f"{closure} paths in the helper, and none of them is the desktop's")
 
-      with subtest("o diretorio onde o pedido e escrito e da pessoa"):
+      with subtest("the directory the request is written into belongs to the person"):
           # AND THE BOOT DID NOT COMPLAIN. `systemd-tmpfiles` writes one line
           # and carries on: a rule naming a group that does not exist leaves the
           # directory uncreated, and the failure shows up much later as an
           # operation that says nothing and does nothing.
           boot = machine.succeed("journalctl -b -u systemd-tmpfiles-setup --no-pager")
           assert "ronoctua-files" not in boot, (
-              "o tmpfiles reclamou da nossa regra:\n" + boot
+              "tmpfiles complained about our rule:\n" + boot
           )
           owner = machine.succeed("stat -c %U /run/ronoctua-files/staged").strip()
           assert owner == user_name, (
-              f"/run/ronoctua-files/staged e de `{owner}`; o gerenciador roda "
-              "como a pessoa e nao conseguiria escrever"
+              f"/run/ronoctua-files/staged belongs to `{owner}`; the manager runs "
+              "as the person and would not manage to write"
           )
           mode = machine.succeed("stat -c %a /run/ronoctua-files/staged").strip()
           assert mode == "700", (
-              f"o diretorio esta {mode}: outra pessoa da maquina poderia deixar "
-              "um pedido para uma unidade que roda como root"
+              f"the directory is {mode}: another person on the machine could leave "
+              "a request for a unit that runs as root"
           )
 
-      with subtest("a regra polkit nomeia a unidade, o verbo e o usuario"):
+      with subtest("the polkit rule names the unit, the verb and the user"):
           # polkit rules are JavaScript parsed at RUNTIME: a syntax error is
           # silent, and the symptom is every privileged action being refused
           # with nothing saying why. Reading it back from the machine is what
@@ -121,43 +121,43 @@ pkgs.testers.runNixOSTest {
           machine.succeed("systemctl status polkit.service > /dev/null")
 
       with subtest("o ajudante APLICA o que lhe pedem"):
-          machine.succeed("mkdir -p /var/teste && install -m 0644 /dev/null /var/teste/um.txt")
+          machine.succeed("mkdir -p /var/test && install -m 0644 /dev/null /var/test/one.txt")
           machine.succeed("printf chown > /run/ronoctua-files/staged/verb")
-          machine.succeed("printf /var/teste/um.txt > /run/ronoctua-files/staged/path")
+          machine.succeed("printf /var/test/one.txt > /run/ronoctua-files/staged/path")
           machine.succeed(f"id -u {user_name} > /run/ronoctua-files/staged/value")
           machine.succeed("systemctl start ronoctua-files-root.service")
-          became = machine.succeed("stat -c %U /var/teste/um.txt").strip()
-          assert became == user_name, f"o dono ficou `{became}`"
+          became = machine.succeed("stat -c %U /var/test/one.txt").strip()
+          assert became == user_name, f"the owner became `{became}`"
 
-      with subtest("e consome o pedido, para que nao seja repetido"):
+      with subtest("and it consumes the request, so it is not repeated"):
           # A request left behind would be replayed by the next
           # `systemctl start` — from anywhere — which turns one authorisation
           # into a standing one.
           left = machine.succeed("ls /run/ronoctua-files/staged | wc -l").strip()
-          assert left == "0", f"sobraram {left} arquivos do pedido"
+          assert left == "0", f"{left} files of the request were left over"
 
-      with subtest("um link simbolico e RECUSADO, e nao seguido"):
+      with subtest("a symbolic link is REFUSED, and not followed"):
           # The sharp one: the person is shown a link, and a swap between the
           # click and the unit makes root act on whatever it points at.
-          machine.succeed("install -m 0600 /dev/null /var/teste/alvo")
-          machine.succeed("ln -s /var/teste/alvo /var/teste/atalho")
+          machine.succeed("install -m 0600 /dev/null /var/test/target")
+          machine.succeed("ln -s /var/test/target /var/test/shortcut")
           machine.succeed("printf chmod > /run/ronoctua-files/staged/verb")
-          machine.succeed("printf /var/teste/atalho > /run/ronoctua-files/staged/path")
+          machine.succeed("printf /var/test/shortcut > /run/ronoctua-files/staged/path")
           machine.succeed("printf 777 > /run/ronoctua-files/staged/value")
           machine.fail("systemctl start ronoctua-files-root.service")
-          mode = machine.succeed("stat -c %a /var/teste/alvo").strip()
+          mode = machine.succeed("stat -c %a /var/test/target").strip()
           assert mode == "600", (
-              f"o alvo do link virou {mode}: a unidade seguiu o link"
+              f"the link's target became {mode}: the unit followed the link"
           )
 
-      with subtest("e o store e os pseudo-sistemas tambem"):
+      with subtest("and so are the store and the pseudo-filesystems"):
           for path in ["/proc/sys/kernel/hostname", "/sys/kernel/vmcoreinfo"]:
               machine.succeed("printf chmod > /run/ronoctua-files/staged/verb")
               machine.succeed(f"printf {path} > /run/ronoctua-files/staged/path")
               machine.succeed("printf 777 > /run/ronoctua-files/staged/value")
               machine.fail("systemctl start ronoctua-files-root.service")
 
-      with subtest("onde o gerenciador abre vem da opcao, e nao de um literal"):
+      with subtest("where the manager opens comes from the option, and not from a literal"):
           # A directory somebody keeps their work in is a preference of the
           # MACHINE (invariant 13). Baked into the Rust it would be personal
           # data in a public repository.

@@ -58,7 +58,7 @@ pkgs.testers.runNixOSTest {
     ${xvfb.prelude}
 
 
-    def open_x11(unit, rotulo):
+    def open_x11(unit, label):
         """Bring an X11 buffer up through the same path the footer uses.
 
         `ronoctua-shell satellite <display> <program>` IS the scope's process:
@@ -71,7 +71,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
             f"${ronoctua-shell}/bin/ronoctua-shell satellite {unit[-1]} "
-            f"${pkgs.xterm}/bin/xterm -T {rotulo} -e sleep 600"
+            f"${pkgs.xterm}/bin/xterm -T {label} -e sleep 600"
         )
 
 
@@ -81,8 +81,8 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
-    with subtest("o satellite sobe e cria o socket do X"):
-        open_x11("bufx1", "primeiro")
+    with subtest("the satellite comes up and creates the X socket"):
+        open_x11("bufx1", "first")
         try:
             machine.wait_until_succeeds(
                 "journalctl -u bufx1 --no-pager | grep -q 'satellite pronto'",
@@ -98,17 +98,17 @@ pkgs.testers.runNixOSTest {
         # works with no satellite) and would mask precisely what this test exists
         # to prove.
         journal = machine.succeed("journalctl -u bufx1 --no-pager")
-        assert "sem satellite" not in journal, journal
+        assert "no satellite" not in journal, journal
 
-    with subtest("o app X11 vira janela no compositor"):
+    with subtest("the X11 app becomes a window in the compositor"):
         machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'janelas: 1'",
+            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 1'",
             timeout=90,
         )
 
     with subtest("DOIS buffers X11 ficam em cgroups DISTINTOS"):
         # This is the test a shared satellite does not pass.
-        open_x11("bufx2", "segundo")
+        open_x11("bufx2", "second")
         machine.wait_until_succeeds(
             "journalctl -u bufx2 --no-pager | grep -q 'satellite pronto'",
             timeout=90,
@@ -131,9 +131,9 @@ pkgs.testers.runNixOSTest {
             print(f"{unit}: {commands}")
 
             sat = [p for p, c in commands.items() if "xwayland-satellite" in c]
-            assert sat, f"{unit} nao tem satellite proprio: {commands}"
+            assert sat, f"{unit} has no satellite of its own: {commands}"
             assert any("xterm" in c for c in commands.values()), (
-                f"{unit} nao tem o app: {commands}"
+                f"{unit} does not have the app: {commands}"
             )
             # THE SATELLITE'S CGROUP is what matters: it is its pid that niri reports
             # for every X11 window (the Wayland client is the satellite, not the
@@ -141,19 +141,19 @@ pkgs.testers.runNixOSTest {
             cgroups[unit] = machine.succeed(f"cat /proc/{sat[0]}/cgroup").strip()
 
         assert cgroups["bufx1"] != cgroups["bufx2"], (
-            "os dois satellites estao no MESMO cgroup: a correlacao PID -> "
-            f"cgroup apontaria as duas janelas para o mesmo buffer\n{cgroups}"
+            "both satellites are in the SAME cgroup: the PID -> "
+            f"the cgroup would point both windows at the same buffer\n{cgroups}"
         )
         for unit, cg in cgroups.items():
             assert f"{unit}.service" in cg, (
-                f"o satellite de {unit} esta no cgroup errado: {cg}"
+                f"{unit}'s satellite is in the wrong cgroup: {cg}"
             )
 
-    with subtest("as duas janelas X11 chegaram ao compositor"):
+    with subtest("both X11 windows reached the compositor"):
         # With a single satellite, the second window would show up with the first
         # one's pid — and the modeline would show the same buffer twice.
         machine.wait_until_succeeds(
-            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'janelas: 2'",
+            f"${ronoctua-shell}/bin/niri-contract {sock} | grep -q 'windows: 2'",
             timeout=90,
         )
   '';

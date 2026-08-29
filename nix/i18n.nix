@@ -31,5 +31,5 @@ stdenvNoCC.mkDerivation {
 
   installPhase = "true";
 
-  meta.description = "Chaves de texto geradas dos .ftl";
+  meta.description = "Text keys generated from the .ftl files";
 }

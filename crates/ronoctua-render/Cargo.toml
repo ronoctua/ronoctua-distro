@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-render"
-description = "Renderer: wgpu + cosmic-text + glyphon. Glifos, quads e reguas de uma linha."
+description = "Renderer: wgpu + cosmic-text + glyphon. Glyphs, quads and one-line rules."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ path = "src/bin/bench-layout.rs"
 [[bin]]
 # It isolates the cost of the FIRST shaping — 4.4 s measured in the actual footer.
 name = "ronoctua-bench-shaping"
-path = "src/bin/bench-moldagem.rs"
+path = "src/bin/bench-shaping.rs"
 
 [[bin]]
 # `downlevel_defaults`'s 2048 ceiling closed the window and forbade a large

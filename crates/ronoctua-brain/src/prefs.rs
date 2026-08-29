@@ -1,0 +1,467 @@
+//! What the person chose — and the two directories that keep the choice apart
+//! from what happened.
+//!
+//! # Two lifetimes, two files, two directories
+//!
+//! The PREFERENCES are configuration: how often the machine may update itself,
+//! which part of the day it should prefer, how busy is too busy. They are
+//! hand-editable, they are small, and they are the person's. They live under
+//! `$XDG_CONFIG_HOME/ronoctua`, next to the notification filters that already
+//! live there — and that directory is already in `nix/modules/persist.nix`, so
+//! an impermanent root does not take them.
+//!
+//! What HAPPENED — the last run, what it did, what it refused — is state:
+//! machine-written, growing, and worthless to hand-edit. It lives under
+//! `$XDG_STATE_HOME/ronoctua`, in [`crate::journal`].
+//!
+//! It is the same split `ronoctua-notify`'s store makes, with the same
+//! reasoning, and it is worth repeating because the alternative is seductive:
+//! one file with everything in it, which is a configuration file the machine
+//! rewrites — so the person's comments and formatting are lost the first time
+//! a task runs.
+//!
+//! # Why a failure here is not fatal
+//!
+//! A read-only home, a full disk, a file somebody hand-edited into invalid
+//! JSON: none of those is a reason for the machine to stop deciding. Everything
+//! here degrades to the distro's defaults and says so in the log — loudly, at
+//! `error`, because a file that stopped parsing means every choice the person
+//! made is silently back to the default, and the symptom would be an update
+//! running on a day they had turned it off.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+/// The file the preferences are read from, under `$XDG_CONFIG_HOME/ronoctua`.
+pub const PREFERENCES_FILE: &str = "brain.json";
+
+/// Where the brain reads and writes — and `None` means it does not.
+///
+/// The roots are PARAMETERS and not something found in here, which is the rule
+/// the rest of this project already states (`trash::Bin`, `who::Roster`,
+/// `when::Zone`, `sidebar::Sidebar`, `notify::store::Where`). The reason is
+/// written in that last one: functions that found `$XDG_CONFIG_HOME` for
+/// themselves are what let a test write into the real configuration of whoever
+/// ran `cargo test`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Where {
+    /// `$XDG_CONFIG_HOME/ronoctua`, for the preferences.
+    pub config: Option<PathBuf>,
+    /// `$XDG_STATE_HOME/ronoctua`, for the journal.
+    pub state: Option<PathBuf>,
+}
+
+impl Where {
+    /// The pair the DAEMON uses, found once from the environment.
+    #[must_use]
+    pub fn of_env() -> Self {
+        Self {
+            config: config_dir(),
+            state: state_dir(),
+        }
+    }
+
+    /// The person's preferences, or the distro's when there is nowhere to read.
+    #[must_use]
+    pub fn prefs(&self) -> Prefs {
+        self.config
+            .as_deref()
+            .map_or_else(Prefs::default, read_from)
+    }
+
+    /// Writes the preferences. Writing nowhere is not a failure.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be created, or the file cannot be written.
+    pub fn save(&self, p: &Prefs) -> std::io::Result<()> {
+        self.config.as_deref().map_or(Ok(()), |d| write_to(d, p))
+    }
+}
+
+/// `$XDG_CONFIG_HOME/ronoctua`, or `~/.config/ronoctua`.
+///
+/// # Why this is written twice in this repository
+///
+/// Because the twin — `ronoctua_notify::store::config_dir` — lives in a crate
+/// that carries zbus and an SVG rasteriser, and depending on it would put a
+/// D-Bus stack and `resvg` inside a daemon whose whole job is to decide what
+/// time it is. Sixteen lines against a closure that size is the trade this
+/// repository already makes elsewhere, and it is written down here so the next
+/// reader does not "fix" it. If a third caller appears, the answer is a crate
+/// of its own for the XDG roots — not a dependency on whichever one happened to
+/// have them first.
+#[must_use]
+pub fn config_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("ronoctua"))
+}
+
+/// `$XDG_STATE_HOME/ronoctua`, or `~/.local/state/ronoctua`. See [`config_dir`].
+#[must_use]
+pub fn state_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
+        })?;
+    Some(base.join("ronoctua"))
+}
+
+/// Everything the person chose.
+///
+/// # Why the tasks are a MAP and not one field per task
+///
+/// Because the door has to stay one line wide. A record with a field per task
+/// means adding a feature edits this struct, the serde default, the wire, and
+/// every test that builds one — and a file written by an older version stops
+/// round-tripping. A map keyed by the task's id means a new task needs nothing
+/// here at all: an id that is absent gets [`TaskPrefs::default`], and an id
+/// that is present and no longer exists is ignored with a line in the log
+/// rather than a refusal to start.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Prefs {
+    /// The general gate. Every task passes it, and the RUNNER asks — not the
+    /// task, so a feature added tomorrow inherits it without writing a line.
+    pub gate: Gate,
+    /// One entry per task that has preferences, by its id.
+    pub tasks: BTreeMap<String, TaskPrefs>,
+}
+
+impl Prefs {
+    /// One task's preferences, or the distro's.
+    #[must_use]
+    pub fn of(&self, task: &str) -> TaskPrefs {
+        self.tasks.get(task).cloned().unwrap_or_default()
+    }
+
+    /// The entry to change, created from the default if it is not there yet.
+    pub fn mine(&mut self, task: &str) -> &mut TaskPrefs {
+        self.tasks.entry(task.to_owned()).or_default()
+    }
+}
+
+/// How busy is too busy — the general precondition, in one place.
+///
+/// Every number here is a POLICY and not a measurement, which is why they are
+/// in a file the person owns rather than in the code. The defaults err towards
+/// NOT running: a skipped week costs a week, and a machine that starts
+/// compiling while somebody is typing costs the session they were in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Gate {
+    /// Refuse above this much RAM in use, in per cent.
+    ///
+    /// Seventy: above it the applications' slice on this machine is already
+    /// near the ceiling `nix/modules/memory.nix` sets for it, and adding a
+    /// build there is asking `systemd-oomd` to choose between the update and
+    /// the browser. It is not a measurement of what a build needs — it is the
+    /// line past which the machine belongs to whoever is at the keyboard.
+    pub ram_ceiling_pct: u16,
+    /// Refuse above this much processor stall, in per mille of a ten-second
+    /// window.
+    ///
+    /// Two hundred is a fifth of ten seconds — two whole seconds, in the last
+    /// ten, in which something runnable was waiting for a core. It is the same
+    /// quantity and the same unit `ManagedOOMMemoryPressureLimit` already
+    /// compares against, read from `/proc/pressure/cpu`: a fraction of TIME,
+    /// never of hardware.
+    pub cpu_stall_per_mille: u16,
+    /// Refuse the same way when the machine is running off its battery.
+    ///
+    /// `true`, because the one task that exists COMPILES: a rebuild on this
+    /// distro builds the Rust workspace, and a laptop that goes flat halfway
+    /// through has spent its charge on work it threw away. A machine with no
+    /// battery is not held — see [`crate::pulse::Pulse::on_battery`], where
+    /// "there is no battery" and "it is plugged in" are different answers.
+    pub abort_on_battery: bool,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            ram_ceiling_pct: 70,
+            cpu_stall_per_mille: 200,
+            abort_on_battery: true,
+        }
+    }
+}
+
+/// What one task's schedule looks like to the person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct TaskPrefs {
+    /// Whether it may run at all. Turning it off leaves the row on screen,
+    /// saying so: a feature that disappears when it is switched off is a
+    /// feature nobody switches back on.
+    pub enabled: bool,
+    /// Days between runs.
+    ///
+    /// Seven. It is the cadence the machine already keeps for the two other
+    /// things it does to itself — `nix.gc` and the `tealdeer` cache — and one
+    /// generation a week is a rollback list a person can still read. Daily is
+    /// available and is one key away; it is not the default because nothing
+    /// here is urgent.
+    pub interval_days: u16,
+    /// Which part of the day it should prefer.
+    pub part_of_day: PartOfDay,
+    /// How long the screen warns before it starts, in seconds.
+    ///
+    /// Sixty. Long enough to read a line on the footer, walk back to the
+    /// keyboard and press one key; short enough that it is not a dialogue
+    /// somebody has to dismiss. Zero means it just runs, which is what a task
+    /// with nothing to interrupt should ask for.
+    pub countdown_seconds: u16,
+    /// After how many minutes with nothing new in the report the run is called
+    /// runaway.
+    ///
+    /// A hundred and twenty. A full rebuild of this machine downloads and
+    /// compiles, and the honest worst case is well inside two hours — but the
+    /// ceiling is not a measurement of a build, it is a ceiling on the QUEUE: a
+    /// run that never ends would hold every other task for the rest of the
+    /// session. Past it the run is recorded as `unknown` AND SAYS SO, because
+    /// the unit is systemd's and may perfectly well still be going.
+    pub runaway_minutes: u16,
+    /// The steps the person switched OFF, by id.
+    ///
+    /// A set of exceptions and not a list of what to run: the order and the
+    /// contents belong to the task, so a step added by a later version is on by
+    /// default instead of missing from everybody's file.
+    pub steps_off: BTreeSet<String>,
+}
+
+impl Default for TaskPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_days: 7,
+            part_of_day: PartOfDay::Afternoon,
+            countdown_seconds: 60,
+            runaway_minutes: 120,
+            steps_off: BTreeSet::new(),
+        }
+    }
+}
+
+/// Which stretch of the person's day a task should prefer.
+///
+/// # Why a name and not two numbers
+///
+/// Because "03:00" is a decision about a machine and "at night" is a decision
+/// about a life. The person chooses the second; the first is arithmetic, and it
+/// is here — in one place, readable, with the reason for each edge written
+/// beside it — rather than in a pair of fields somebody has to reason about
+/// twice a year.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PartOfDay {
+    /// Whenever, as soon as the gate lets it.
+    Any,
+    /// 02:00 to 05:00. Nobody is at the keyboard and the network is quiet — and
+    /// the machine is awake, because this distro does not suspend on its own.
+    Night,
+    /// 08:00 to 12:00.
+    Morning,
+    /// 13:00 to 18:00. The default: the machine is on, somebody is nearby to
+    /// see the countdown, and a rebuild that goes wrong is found in daylight
+    /// rather than at the next boot.
+    Afternoon,
+    /// 19:00 to 23:00.
+    Evening,
+}
+
+impl PartOfDay {
+    /// The local hours it covers: from, and up to but not including.
+    ///
+    /// `Any` is the whole day, which makes the window arithmetic in
+    /// [`crate::schedule`] one case instead of two.
+    #[must_use]
+    pub const fn hours(self) -> (u32, u32) {
+        match self {
+            Self::Any => (0, 24),
+            Self::Night => (2, 5),
+            Self::Morning => (8, 12),
+            Self::Afternoon => (13, 18),
+            Self::Evening => (19, 23),
+        }
+    }
+
+    /// The word the screen looks up, as `brain-part-<word>`.
+    ///
+    /// A word and not a sentence: this crate does not translate (invariant 8),
+    /// and whoever has the bundle turns it into one.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Night => "night",
+            Self::Morning => "morning",
+            Self::Afternoon => "afternoon",
+            Self::Evening => "evening",
+        }
+    }
+
+    /// The next one, cycling — what one key press does.
+    ///
+    /// The order is the day's own, with `any` at the end: stepping through
+    /// night, morning, afternoon and evening is a person walking forward
+    /// through their day, and "whenever" is not a time of day at all.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Night => Self::Morning,
+            Self::Morning => Self::Afternoon,
+            Self::Afternoon => Self::Evening,
+            Self::Evening => Self::Any,
+            Self::Any => Self::Night,
+        }
+    }
+}
+
+/// The cadences one key steps through, in days.
+///
+/// A LADDER and not `+1`, because the difference that matters is daily against
+/// weekly against monthly: stepping from thirty to twenty-nine costs a key
+/// press and changes nothing anybody can feel, and getting from thirty to seven
+/// would cost twenty-three of them.
+pub const CADENCE: &[u16] = &[1, 2, 3, 7, 14, 30];
+
+/// The next cadence up the ladder, or the same one at the top.
+///
+/// A value that is not ON the ladder — somebody typed `9` into the file — moves
+/// to the first rung above it, which is what makes hand-editing safe rather
+/// than something the screen fights.
+#[must_use]
+pub fn less_often(days: u16) -> u16 {
+    CADENCE
+        .iter()
+        .copied()
+        .find(|c| *c > days)
+        .unwrap_or_else(|| CADENCE.last().copied().unwrap_or(days))
+}
+
+/// The next cadence down the ladder, or the same one at the bottom.
+#[must_use]
+pub fn more_often(days: u16) -> u16 {
+    CADENCE
+        .iter()
+        .copied()
+        .rev()
+        .find(|c| *c < days)
+        .unwrap_or_else(|| CADENCE.first().copied().unwrap_or(days))
+}
+
+/// Reads the preferences from an explicit directory.
+#[must_use]
+pub fn read_from(dir: &Path) -> Prefs {
+    let path = dir.join(PREFERENCES_FILE);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Prefs::default();
+    };
+    match serde_json::from_str::<Prefs>(&raw) {
+        Ok(p) => {
+            tracing::info!(path = %path.display(), tarefas = p.tasks.len(), "the brain's preferences were read");
+            p
+        }
+        Err(e) => {
+            // LOUD, and not silent. A hand-edited file that stopped parsing
+            // means every choice the person made is back to the distro's, and
+            // the symptom would be a rebuild starting on a day they had
+            // switched it off.
+            tracing::error!(
+                path = %path.display(),
+                error = %e,
+                "the brain's preferences are unreadable; carrying on with the distro's"
+            );
+            Prefs::default()
+        }
+    }
+}
+
+/// Writes the preferences into an explicit directory.
+///
+/// # Errors
+///
+/// The directory cannot be created, or the file cannot be written.
+pub fn write_to(dir: &Path, p: &Prefs) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(PREFERENCES_FILE);
+    // PRETTY, and the only file in this crate that is: a person opens this one
+    // by hand. The journal is machine-written and stays compact.
+    let text = serde_json::to_string_pretty(p).map_err(std::io::Error::other)?;
+    std::fs::write(&path, text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_task_with_no_entry_gets_the_distros_answer() {
+        // THE DOOR: a task added tomorrow writes nothing here, and the file
+        // written by today's version still round-trips.
+        let p = Prefs::default();
+        assert_eq!(p.of("something-that-does-not-exist"), TaskPrefs::default());
+        assert_eq!(p.of("system-update").interval_days, 7);
+    }
+
+    #[test]
+    fn the_ladder_moves_by_rungs_and_stops_at_the_ends() {
+        assert_eq!(less_often(7), 14);
+        assert_eq!(more_often(7), 3);
+        assert_eq!(less_often(30), 30, "it went past the top");
+        assert_eq!(more_often(1), 1, "it went past the bottom");
+        // A number somebody typed into the file, off the ladder: it climbs to
+        // the next rung instead of standing still.
+        assert_eq!(less_often(9), 14);
+        assert_eq!(more_often(9), 7);
+    }
+
+    #[test]
+    fn the_parts_of_the_day_do_not_overlap_and_the_cycle_closes() {
+        let all = [
+            PartOfDay::Night,
+            PartOfDay::Morning,
+            PartOfDay::Afternoon,
+            PartOfDay::Evening,
+        ];
+        for (i, one) in all.iter().enumerate() {
+            let (from, to) = one.hours();
+            assert!(from < to, "{one:?} starts after it ends");
+            for other in &all[i + 1..] {
+                let (a, b) = other.hours();
+                assert!(to <= a || b <= from, "{one:?} e {other:?} se sobrepoem");
+            }
+        }
+        // Five steps come back to where they started, which is what makes one
+        // key enough to reach every one of them.
+        let mut at = PartOfDay::Afternoon;
+        for _ in 0..5 {
+            at = at.next();
+        }
+        assert_eq!(at, PartOfDay::Afternoon);
+    }
+
+    #[test]
+    fn a_file_that_stopped_parsing_is_the_distros_answer_and_not_a_panic() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-brain-prefs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join(PREFERENCES_FILE), "{ this is not json").expect("write");
+        assert_eq!(read_from(&dir), Prefs::default());
+
+        // And what is written comes back the same, which is the property the
+        // screen depends on when it changes one field.
+        let mut mine = Prefs::default();
+        mine.mine("system-update").interval_days = 1;
+        mine.mine("system-update").steps_off.insert("build".into());
+        write_to(&dir, &mine).expect("write");
+        assert_eq!(read_from(&dir), mine);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

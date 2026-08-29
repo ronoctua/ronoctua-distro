@@ -21,8 +21,8 @@
 
 let
   xvfb = import ./niri-xvfb.nix { inherit pkgs lib; };
-  first = "ronoctua-primeiro-copiado";
-  second = "ronoctua-segundo-copiado";
+  first = "ronoctua-first-copied";
+  second = "ronoctua-second-copied";
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-clipboard";
@@ -52,7 +52,7 @@ pkgs.testers.runNixOSTest {
 
 
     def copy_text(body):
-        """Copia de FORA, como qualquer programa faria."""
+        """Copies from OUTSIDE, as any program would."""
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             f"${pkgs.wl-clipboard}/bin/wl-copy {body}"
@@ -71,7 +71,7 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
-    with subtest("o rodape sobe"):
+    with subtest("the footer comes up"):
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -82,12 +82,12 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'socket de controle aberto'",
+            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
             timeout=90,
         )
         focus_niri()
 
-    with subtest("o daemon VE o que foi copiado de fora"):
+    with subtest("the daemon SEES what was copied from outside"):
         # The capture is native (`wl_data_device`), and not a `wl-paste --watch`:
         # no process per copy, and the MIME types arrive along with it — which is
         # what the secret filter needs.
@@ -96,7 +96,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager "
-                "| grep -c 'entrada nova no historico de clipboard' "
+                "| grep -c 'new entry in the clipboard history' "
                 "| grep -qE '^[2-9]'",
                 timeout=30,
             )
@@ -104,7 +104,7 @@ pkgs.testers.runNixOSTest {
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
             raise
 
-    with subtest("`LEADER c c` abre a vista com as duas entradas"):
+    with subtest("`LEADER c c` opens the view with both entries"):
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
@@ -118,31 +118,31 @@ pkgs.testers.runNixOSTest {
         press_key("c")
         press_key("c")
         journal = machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'clipboard aberto'", timeout=30
+            "journalctl -u footer --no-pager | grep 'clipboard opened'", timeout=30
         )
         print(journal.strip())
         assert "inputs=2" in journal, (
-            f"o historico devia ter as duas entradas; log:\n{journal}"
+            f"the history should have both entries; log:\n{journal}"
         )
 
-    with subtest("o texto copiado esta NA TELA"):
+    with subtest("the copied text is ON SCREEN"):
         # The queue keeping is not the same thing as the region showing. The OCR
         # closes the chain: capture -> queue -> expansion -> span -> pixel.
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
             "-colorspace gray -negate -resize 200% /tmp/clip.png"
         )
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/clip.png stdout --psm 6 2>/dev/null"
         ).strip()
         print(f"OCR: {read_back!r}")
-        assert "copiado" in read_back.lower(), (
-            f"o conteudo copiado nao esta na tela; OCR leu {read_back!r}"
+        assert "copied" in read_back.lower(), (
+            f"the copied content is not on screen; OCR read {read_back!r}"
         )
 
-    with subtest("andar ate a mais antiga e recopia-la devolve ELA"):
+    with subtest("walking to the oldest and recopying it gives THAT one back"):
         # The route that matters: choosing in the history and putting it back on
         # the clipboard. Re-copying the TOP would prove nothing — it is already
         # there.
@@ -158,17 +158,17 @@ pkgs.testers.runNixOSTest {
         ).strip()
         print(f"area de transferencia: {pasted!r}")
         assert pasted == "${first}", (
-            f"esperava a entrada mais antiga (${first}), veio {pasted!r}"
+            f"expected the oldest entry (${first}), got {pasted!r}"
         )
 
-    with subtest("imagem copiada entra no historico e VIRA PREVIA"):
+    with subtest("a copied image enters the history and BECOMES A PREVIEW"):
         # What only the VM proves: that the binary offer is read (and not
         # discarded as "it is not UTF-8"), that the image is decoded, and that it
         # reaches the texture pipeline. The decoding itself has a unit test; what
         # is missing is the path — capture -> queue -> preview.
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'socket de controle aberto'",
+            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
             timeout=60,
         )
         focus_niri()
@@ -198,7 +198,7 @@ pkgs.testers.runNixOSTest {
 
         try:
             journal = machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep 'previa decodificada'", timeout=30
+                "journalctl -u footer --no-pager | grep 'preview decoded'", timeout=30
             )
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
@@ -207,7 +207,7 @@ pkgs.testers.runNixOSTest {
         # THE REAL DIMENSIONS: a decoder that gave back 0x0 or the wrong size
         # would pass a test that only looked at "it decoded".
         assert "width=64" in journal and "height=32" in journal, (
-            f"a previa saiu com o tamanho errado; log:\n{journal}"
+            f"the preview came out at the wrong size; log:\n{journal}"
         )
   '';
 }

@@ -252,6 +252,13 @@ struct Footer {
     /// One bool for the whole footer and not one per notification: only one is
     /// on the band at a time, which is the whole shape of section 4.2.
     blink_on: bool,
+    /// Which frame of the update's mark is on the modeline.
+    ///
+    /// It rides the SAME one-second clock as `blink_on`, for the reason that
+    /// clock's own comment gives: a second timer for the same second would
+    /// wake the loop twice for one effect. The hand goes round once a minute —
+    /// see [`crate::update_window::frame_of`].
+    update_tick: u64,
     /// The band, as the LAST FRAME laid it out — for the pointer.
     ///
     /// Remembered and not recomputed for the same reason the modeline's
@@ -259,6 +266,20 @@ struct Footer {
     /// has to be what was DRAWN rather than what a second calculation says
     /// would be drawn.
     band_placed: Vec<crate::band::Line>,
+    /// The last mind the brain pushed, KEPT with nothing on screen.
+    ///
+    /// `None` until the daemon answers for the first time — which is a
+    /// different thing from "there is nothing to do", and the line draws only
+    /// on the second.
+    brain: Option<ronoctua_brain::Mind>,
+    /// The brain's line, as the LAST FRAME laid it out — for the pointer.
+    ///
+    /// Remembered and not recomputed, for the reason `band_placed` is: what the
+    /// pointer is over has to be what was DRAWN.
+    brain_placed: Option<crate::brain::Line>,
+    /// What the brain line's control under the pointer says, for the message
+    /// line.
+    brain_hint: Option<String>,
     /// How the leader shows up on screen — see [`crate::leader`].
     leader_label: String,
     /// The echo area: the shell's last message and when it expires.
@@ -368,6 +389,13 @@ struct Footer {
     /// it, which is the worst kind of surprise — the person wanted to look and the
     /// system acted.
     dragging: bool,
+    /// Which of the manager's sections has the thumb, when one does.
+    ///
+    /// The listing's bar is this door's own (`dragging`); the sidebar's and the
+    /// facts' belong to the view, and until this existed they were drawn and
+    /// nothing listened — the owner tried the facts' with the mouse in both
+    /// doors and neither moved.
+    dragging_section: Option<crate::files::Pane>,
     /// Which line of the visible PAGE is under the pointer.
     ///
     /// An index into the page, and not into the whole list: it is what the drawing
@@ -385,7 +413,7 @@ struct Footer {
     /// It is the fourth use of the expanded region, and the second MODAL one:
     /// while it is open the keyboard is its, because the arrows scroll. Keeping a
     /// boolean and not the finished lines is deliberate — the lines are assembled
-    /// from `actions::acordes()` on every draw, and a stored copy would be the
+    /// from `actions::chords()` on every draw, and a stored copy would be the
     /// second truth the manual exists in order not to be.
     manual: bool,
     /// The first visible line of the expanded region.
@@ -469,6 +497,14 @@ struct Footer {
     files: Option<crate::files::View>,
     /// Where the manager's threads hand their result back.
     files_sender: Option<calloop::channel::Sender<crate::files::Report>>,
+    /// Where an ask for a preview and its facts is posted.
+    ///
+    /// Raised with the channel and not per open: the thread sleeps on a
+    /// blocking `recv` while nobody asks, which costs nothing, and raising it
+    /// per open would leave one running per open. `None` when it could not be
+    /// raised — the panels then draw the type's glyph, which is what they draw
+    /// for a file that has no picture anyway.
+    files_looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
     /// Who the numeric ids belong to, read ONCE.
     ///
     /// `/etc/passwd` and `/etc/group` do not change while a listing is on
@@ -715,6 +751,18 @@ enum Click {
     /// `Footer::cell_under_pointer`, recorded by the same press — see
     /// `pointer_frame`.
     Files(usize),
+    /// A cell of the manager's bottom STRIP — the two panels, side by side.
+    ///
+    /// No index, for the reason `FilesPath` has none: the strip is not part of
+    /// the list, does not scroll with it and has a line numbering of its own,
+    /// so an index here would be an index into something else. WHICH line and
+    /// WHICH cell come from `row_under_pointer` and `cell_under_pointer`,
+    /// recorded by the same press.
+    ///
+    /// It carries no new `Hit`: clicking a picture of a file opens it, exactly
+    /// as clicking its name does, and a fact answers with a sentence and
+    /// nothing more.
+    FilesStrip,
     /// Put the focus on line `n` of the transfer panel.
     ///
     /// Focus and nothing else. Every action in that panel is destructive in the
@@ -831,15 +879,15 @@ fn runs_of(text: &str, highlights: &[usize]) -> Vec<(String, u16, bool)> {
     }
     let mut out: Vec<(String, u16, bool)> = Vec::new();
     for (i, c) in text.chars().enumerate() {
-        let casou = highlights.contains(&i);
+        let matched = highlights.contains(&i);
         match out.last_mut() {
             // Joins the previous run when the color does not change.
-            Some((s, _, anterior)) if *anterior == casou => s.push(c),
+            Some((s, _, previous)) if *previous == matched => s.push(c),
             // ONE CELL PER CHARACTER, the way `layout::width` counts — and not
             // by the Unicode width. The two rulers have to be the SAME: with one
             // counting two for an ideograph and the other one, the highlight
             // would come out offset from the text it was supposed to light.
-            _ => out.push((c.to_string(), u16::try_from(i).unwrap_or(u16::MAX), casou)),
+            _ => out.push((c.to_string(), u16::try_from(i).unwrap_or(u16::MAX), matched)),
         }
     }
     out
@@ -883,29 +931,29 @@ enum Navigation {
 fn wrap_text(text: &str, width: u16, ceiling: usize) -> Vec<String> {
     let width = usize::from(width.max(1));
     let mut out = Vec::new();
-    for bruta in text.lines() {
+    for raw in text.lines() {
         let mut line = String::new();
-        for palavra in bruta.split_whitespace() {
-            if line.is_empty() && palavra.chars().count() > width {
+        for word in raw.split_whitespace() {
+            if line.is_empty() && word.chars().count() > width {
                 // WORD LONGER THAN THE LINE: split it into pieces the size of the
                 // line. `chars`, and not bytes: cutting a UTF-8 sequence in half
                 // would produce garbage on screen.
-                let mut rest: Vec<char> = palavra.chars().collect();
+                let mut rest: Vec<char> = word.chars().collect();
                 while rest.len() > width && out.len() < ceiling {
                     out.push(rest.drain(..width).collect());
                 }
                 line = rest.into_iter().collect();
                 continue;
             }
-            let fits = line.chars().count() + 1 + palavra.chars().count() <= width;
+            let fits = line.chars().count() + 1 + word.chars().count() <= width;
             if line.is_empty() {
-                line.push_str(palavra);
+                line.push_str(word);
             } else if fits {
                 line.push(' ');
-                line.push_str(palavra);
+                line.push_str(word);
             } else {
                 out.push(std::mem::take(&mut line));
-                line.push_str(palavra);
+                line.push_str(word);
             }
             if out.len() >= ceiling {
                 return out;
@@ -942,6 +990,7 @@ fn highlight_line(
         line: y,
         column,
         color: tokens::color::TEXT_PRIMARY,
+        edge: false,
     };
     let Some(l) = tongue else {
         return vec![simple(line)];
@@ -953,7 +1002,7 @@ fn highlight_line(
 
     let mut out = Vec::new();
     let mut cursor = 0usize;
-    let mut empurrar = |text: &str, kdl_of: usize, color| {
+    let mut push = |text: &str, kdl_of: usize, color| {
         if text.is_empty() {
             return;
         }
@@ -967,11 +1016,12 @@ fn highlight_line(
             // from the first one on.
             column: column + u16::try_from(line[..kdl_of].chars().count()).unwrap_or(0),
             color,
+            edge: false,
         });
     };
 
     for f in ranges {
-        empurrar(&line[cursor..f.start], cursor, tokens::color::TEXT_PRIMARY);
+        push(&line[cursor..f.start], cursor, tokens::color::TEXT_PRIMARY);
         let color = match f.role {
             Role::Comment => tokens::color::TEXT_DIM,
             Role::Text => tokens::color::STATE_SUCCESS,
@@ -979,10 +1029,10 @@ fn highlight_line(
             Role::Word => tokens::color::TEXT_GROUP,
             Role::Normal => tokens::color::TEXT_PRIMARY,
         };
-        empurrar(&line[f.start..f.end], f.start, color);
+        push(&line[f.start..f.end], f.start, color);
         cursor = f.end;
     }
-    empurrar(&line[cursor..], cursor, tokens::color::TEXT_PRIMARY);
+    push(&line[cursor..], cursor, tokens::color::TEXT_PRIMARY);
     out
 }
 
@@ -1069,8 +1119,18 @@ impl Grid {
     }
 
     /// Where the left column starts, inside the grid's column.
+    ///
+    /// It was `modeline.edgeLeft`, and that was the expanded region borrowing
+    /// the STATUS LINE's number. The two are different things: the modeline and
+    /// the minibuffer are peripheral reference one glances at, and their own
+    /// token argues that two cells there "would start to look like a margin";
+    /// the expanded region is a list one READS, which is content.
+    ///
+    /// Left alone it would have become a fresh inconsistency rather than an
+    /// inherited one — the file manager's rows moved to `chrome::INSET` in the
+    /// same pass, so which-key would have begun one cell in and a file row two.
     const fn start(self) -> u16 {
-        tokens::space::MODELINE_EDGELEFT + self.icon
+        crate::chrome::INSET + self.icon
     }
 
     /// Where the RIGHT column starts, inside the grid's column.
@@ -1099,16 +1159,16 @@ impl Grid {
     /// Two limits, and the smaller one holds: what is left of the COLUMN (so as
     /// not to invade the next column) and what is left of the SCREEN (so as not
     /// to go out past the edge).
-    const fn fits_in_text(self, with_key: bool, base: u16, colunas_da_tela: u16) -> u16 {
+    const fn fits_in_text(self, with_key: bool, base: u16, screen_columns: u16) -> u16 {
         let start = self.text_start(with_key);
-        let na_coluna = self
+        let in_column = self
             .width
             .saturating_sub(start.saturating_add(GAP_BETWEEN_COLUMNS));
-        let na_tela = colunas_da_tela.saturating_sub(base.saturating_add(start));
-        if na_coluna < na_tela {
-            na_coluna
+        let on_screen = screen_columns.saturating_sub(base.saturating_add(start));
+        if in_column < on_screen {
+            in_column
         } else {
-            na_tela
+            on_screen
         }
     }
 
@@ -1124,13 +1184,13 @@ impl Grid {
     }
 }
 
-/// Builds the grid for a list, on a screen of `colunas_da_tela` cells.
+/// Builds the grid for a list, on a screen of `screen_columns` cells.
 ///
 /// A pure function for the usual reason: it is arithmetic, and what wraps it
 /// does not exist outside a compositor.
-fn grid_for(widths: &[Measure], colunas_da_tela: u16, ceiling: usize, em_colunas: bool) -> Grid {
-    let maior_tecla = widths.iter().map(|m| m.key).max().unwrap_or(0);
-    let maior_texto = widths.iter().map(|m| m.text).max().unwrap_or(0);
+fn grid_for(widths: &[Measure], screen_columns: u16, ceiling: usize, in_columns: bool) -> Grid {
+    let widest_key = widths.iter().map(|m| m.key).max().unwrap_or(0);
+    let widest_text = widths.iter().map(|m| m.text).max().unwrap_or(0);
     // THE ICON BELONGS TO THE LIST, and not to the line: ONE line with an icon
     // reserves the column for ALL of them, otherwise the ones with no icon would
     // pull the text left and the margin would become a zigzag.
@@ -1142,17 +1202,22 @@ fn grid_for(widths: &[Measure], colunas_da_tela: u16, ceiling: usize, em_colunas
     // HALF THE SCREEN IS THE LEFT COLUMN'S CEILING. Without it, an id like
     // `niri-switch-focus-between-floating-and-tiling` pushes the text past
     // the edge — and the compositor does not clip, it just does not draw.
-    let colon = maior_tecla
-        .saturating_add(tokens::space::MODELINE_EDGELEFT + icon + 1)
-        .min(colunas_da_tela / 2);
+    // THE SAME INSET `Grid::start` uses, and it has to be the same expression:
+    // the colon's column is measured from where the key begins, so a mismatch
+    // here does not shift the list — it puts the colons out of line with the
+    // text under them, which is the one thing this arrangement exists to keep
+    // straight.
+    let colon = widest_key
+        .saturating_add(crate::chrome::INSET + icon + 1)
+        .min(screen_columns / 2);
     let width = colon
         .saturating_add(2)
-        .saturating_add(maior_texto)
+        .saturating_add(widest_text)
         .saturating_add(GAP_BETWEEN_COLUMNS)
         // AND NOTHING GOES PAST THE SCREEN. On a single-column list, the width
         // feeds `item_at`: a column wider than the screen would make the
         // pointer find an item where there is no pixel at all.
-        .min(colunas_da_tela.max(1));
+        .min(screen_columns.max(1));
 
     let n = widths.len();
     // AN EMPTY LIST IS ONE COLUMN, and not thirteen of minimum width. The number
@@ -1172,8 +1237,8 @@ fn grid_for(widths: &[Measure], colunas_da_tela: u16, ceiling: usize, em_colunas
     // A list of ten shortcuts in a region of twelve lines would fit in a single
     // column — and it would be a narrow strip with the whole screen empty beside
     // it. Using the columns that fit, the same ten become three lines.
-    let columns = if em_colunas && width > 0 {
-        (usize::from(colunas_da_tela) / usize::from(width)).max(1)
+    let columns = if in_columns && width > 0 {
+        (usize::from(screen_columns) / usize::from(width)).max(1)
     } else {
         1
     };
@@ -1224,7 +1289,7 @@ const RIGHT_BUTTON: u32 = 0x111;
 /// turn reading a manual into a wrist exercise; one page per detent is the
 /// other mode's behavior, and mixing the two would make the same wheel mean
 /// different things with nothing on screen saying which.
-const LINES_PER_DETENT: f64 = 3.0;
+pub const LINES_PER_DETENT: f64 = 3.0;
 
 /// How many "detents" an axis event is worth.
 ///
@@ -1245,17 +1310,17 @@ const LINES_PER_DETENT: f64 = 3.0;
 /// proportion as it moves on screen, and the arithmetic recalibrates itself
 /// if the font changes. Without that it would be one more visual value
 /// outside the tokens (invariant 9).
-fn axis_detents(v: &smithay_client_toolkit::seat::pointer::AxisScroll, linha_px: f64) -> f64 {
+pub fn axis_detents(v: &smithay_client_toolkit::seat::pointer::AxisScroll, line_px: f64) -> f64 {
     if v.value120 != 0 {
         return f64::from(v.value120) / 120.0;
     }
     if v.discrete != 0 {
         return f64::from(v.discrete);
     }
-    if linha_px <= 0.0 {
+    if line_px <= 0.0 {
         return 0.0;
     }
-    v.absolute / (linha_px * LINES_PER_DETENT)
+    v.absolute / (line_px * LINES_PER_DETENT)
 }
 
 /// What separates the key from what it does.
@@ -1357,21 +1422,6 @@ impl Inheritance {
     }
 }
 
-/// Which field of a loose row a cell lands on.
-///
-/// `Row::field_at` answers this for a listing row; the path is a `Vec<Field>`
-/// and not a `Row`, because it has no mark, no focus and no columns. The rule
-/// is the same one, and it is `rev()` for the same reason: fields are laid out
-/// left to right and the LAST one that starts at or before the cell is the one
-/// under it.
-fn field_at(fields: &[crate::files::Field], cell: u16) -> Option<crate::files::Hit> {
-    fields
-        .iter()
-        .rev()
-        .find(|f| f.covers(cell))
-        .map(|f| f.hit.clone())
-}
-
 /// The mark of a PINNED entry in the clipboard history.
 ///
 /// One character, in the column the list already reserves for the key. It is
@@ -1382,35 +1432,35 @@ pub const PINNED_MARK: &str = "*";
 /// Brings the surface up and runs the event loop.
 pub fn run() -> Result<()> {
     let conn = Connection::connect_to_env()
-        .context("nao ha compositor Wayland acessivel (WAYLAND_DISPLAY esta definida?)")?;
-    let (globals, mut fila) = registry_queue_init(&conn).context("registry do Wayland")?;
-    let qh: QueueHandle<Footer> = fila.handle();
+        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
+    let (globals, mut queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let qh: QueueHandle<Footer> = queue.handle();
 
-    let compositor =
-        CompositorState::bind(&globals, &qh).context("o compositor nao expoe wl_compositor")?;
+    let compositor = CompositorState::bind(&globals, &qh)
+        .context("the compositor does not expose wl_compositor")?;
     let layer_shell = LayerShell::bind(&globals, &qh).context(
-        "o compositor nao expoe zwlr_layer_shell_v1.\n\
+        "the compositor does not expose zwlr_layer_shell_v1.\n\
          \n\
-         A integracao da ronoctua-distro com o compositor e EXCLUSIVAMENTE por\n\
-         wlr-layer-shell e IPC (invariante 3). Sem layer-shell nao ha rodape,\n\
-         e contornar isso violaria o invariante.",
+         ronoctua-distro's integration with the compositor is EXCLUSIVELY through\n\
+             wlr-layer-shell and IPC (invariant 3). With no layer-shell there is no footer,\n\
+         and working around that would violate the invariant.",
     )?;
 
-    let altura_rodape = tokens::metrics::footer_height(tokens::font::SIZE_BASE).ceil() as u32;
+    let footer_height = tokens::metrics::footer_height(tokens::font::SIZE_BASE).ceil() as u32;
 
     // The keymap is assembled BEFORE the surface comes up. A collision here is a
     // program error, and failing at startup is better than failing on the first leader.
-    let (tree, registry) = crate::leader::default_of().context("keymap padrao")?;
+    let (tree, registry) = crate::leader::default_of().context("default keymap")?;
 
     // THE COPY CHANNEL IS BORN BEFORE the state, because the `Sender` lives
     // inside it — and the reading thread needs a copy of it.
-    let (envio_copias, copias) = channel::channel::<ronoctua_clipboard::Entry>();
+    let (copies_sender, copies) = channel::channel::<ronoctua_clipboard::Entry>();
     // THE WATCHER COMES UP WITH ITS OWN CONNECTION, in a thread. See
     // `crate::clipboard`: the SCTK `wl_data_device` only hands the selection to
     // whoever has FOCUS, and the footer at rest never has it — that is why the
     // protocol is `zwlr_data_control`, which exists precisely for a clipboard
     // manager.
-    crate::clipboard::watch(envio_copias);
+    crate::clipboard::watch(copies_sender);
 
     // THE TWO DIRECTORIES, found once and handed to everything that persists.
     let notes = ronoctua_notify::store::Where::of_env();
@@ -1420,7 +1470,7 @@ pub fn run() -> Result<()> {
         outputs: OutputState::new(&globals, &qh),
         _compositor: compositor,
         layer_shell,
-        requested_height: altura_rodape,
+        requested_height: footer_height,
         screens: Vec::new(),
         quit: false,
         owes_paint: false,
@@ -1450,7 +1500,11 @@ pub fn run() -> Result<()> {
         notifications_open: false,
         manager: crate::notifications::View::fresh(),
         blink_on: true,
+        update_tick: 0,
         band_placed: Vec::new(),
+        brain: None,
+        brain_placed: None,
+        brain_hint: None,
         band_hint: None,
         leader_label: crate::leader(),
         echo: None,
@@ -1472,6 +1526,7 @@ pub fn run() -> Result<()> {
         detents: 0.0,
         under_pointer: false,
         dragging: false,
+        dragging_section: None,
         row_under_pointer: None,
         cell_under_pointer: None,
         manual: false,
@@ -1485,6 +1540,7 @@ pub fn run() -> Result<()> {
         network: None,
         files: None,
         files_sender: None,
+        files_looking: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
         // screen, and asking per row would put two hundred opens inside the
         // frame that draws it.
@@ -1517,7 +1573,7 @@ pub fn run() -> Result<()> {
     //
     // Creating the surface in response to the OUTPUT solves both cases at once:
     // the cold start and the hotplug section 9.2 of the plan requires.
-    fila.roundtrip(&mut state).context("roundtrip inicial")?;
+    queue.roundtrip(&mut state).context("initial roundtrip")?;
     state.ensure_screens(&qh);
 
     // TWO event sources: Wayland and niri's IPC. Hence the `calloop` instead of
@@ -1525,19 +1581,20 @@ pub fn run() -> Result<()> {
     // socket, a niri event would only be seen on the next mouse movement.
     // Milestone 5 adds keyboard and timers on the same rails.
     let mut cycle: EventLoop<Footer> = EventLoop::try_new().context("calloop")?;
-    let alca = cycle.handle();
+    let handle = cycle.handle();
 
     // THE LAUNCH VERDICT. The thread that waits for `systemd-run --scope` —
     // which is SYNCHRONOUS, see `foreign::launch` — hands it back through here,
     // and this is where the echo area can be written: it needs `&mut Footer`.
-    let (launch_sender, lancamentos) = channel::channel::<crate::foreign::Launch>();
+    let (launch_sender, launches) = channel::channel::<crate::foreign::Launch>();
     state.launch_sender = Some(launch_sender);
-    alca.insert_source(lancamentos, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(v) = event {
-            state.launched(v);
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal de lancamento: {e}"))?;
+    handle
+        .insert_source(launches, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(v) = event {
+                state.launched(v);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the launch channel: {e}"))?;
 
     // WHAT THE FILE MANAGER'S THREADS COME BACK WITH.
     //
@@ -1545,14 +1602,19 @@ pub fn run() -> Result<()> {
     // all unbounded, and the loop that draws cannot wait for any of them —
     // `systemd-run --scope` already taught this project what that costs. The
     // channel is built here and always; the threads are raised per operation.
-    let (files_sender, arquivos) = channel::channel::<crate::files::Report>();
+    let (files_sender, files) = channel::channel::<crate::files::Report>();
+    // AND THE ONE THAT LOOKS INSIDE A FILE, on the same channel back. Decoding
+    // a photograph or seeking a video frame is a child process, and waiting for
+    // one inside the loop that draws is the trap this project already paid for.
+    state.files_looking = crate::files::inspector(files_sender.clone());
     state.files_sender = Some(files_sender);
-    alca.insert_source(arquivos, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(r) = event {
-            state.files_reported(r);
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal de arquivos: {e}"))?;
+    handle
+        .insert_source(files, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(r) = event {
+                state.files_reported(r);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
 
     // THE END OF A RADIO SCAN.
     //
@@ -1562,12 +1624,13 @@ pub fn run() -> Result<()> {
     // have the handle.
     let (scan_sender, scans) = channel::channel::<()>();
     state.scan_sender = Some(scan_sender);
-    alca.insert_source(scans, |event, (), state: &mut Footer| {
-        if matches!(event, channel::Event::Msg(())) {
-            state.rescanned();
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal de varredura: {e}"))?;
+    handle
+        .insert_source(scans, |event, (), state: &mut Footer| {
+            if matches!(event, channel::Event::Msg(())) {
+                state.rescanned();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the scan channel: {e}"))?;
 
     // THE APPLICATION CATALOGUE, SWEPT AT STARTUP.
     //
@@ -1576,110 +1639,115 @@ pub fn run() -> Result<()> {
     // list opened, and the gesture of opening it is precisely the one that has
     // to be instant. Here it happens once, in a thread, while the footer is
     // already standing.
-    let (catalogue_sender, catalogos) = channel::channel::<crate::apps::Catalogue>();
+    let (catalogue_sender, catalogues) = channel::channel::<crate::apps::Catalogue>();
     state.catalogue_sender = Some(catalogue_sender.clone());
     state.apps_stamp = crate::apps::stamp();
     crate::apps::scan(state.texts.language(), catalogue_sender);
-    alca.insert_source(catalogos, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(c) = event {
-            state.catalogued(c);
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal do catalogo: {e}"))?;
+    handle
+        .insert_source(catalogues, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(c) = event {
+                state.catalogued(c);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the catalogue channel: {e}"))?;
 
     // THE ICON PIXMAPS, at the second speed.
     //
     // The list draws with the glyphs and does NOT wait for this: each icon that
     // arrives swaps one line. A long-lived thread, because the expensive part is
     // the same for all of them — `look_up` sweeps a superpack of 335,031 files.
-    let (envio_pintura, pinturas) = channel::channel::<crate::apps::Painting>();
-    state.icon_queue = crate::apps::painter(envio_pintura);
-    alca.insert_source(pinturas, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(p) = event {
-            state.painted(p);
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal de icones: {e}"))?;
+    let (painting_sender, paintings) = channel::channel::<crate::apps::Painting>();
+    state.icon_queue = crate::apps::painter(painting_sender);
+    handle
+        .insert_source(paintings, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(p) = event {
+                state.painted(p);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the icons channel: {e}"))?;
 
-    let (envio, recebimento) = channel::channel::<ronoctua_niri::Event>();
-    crate::daemon::listen_to_niri(envio);
-    alca.insert_source(recebimento, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(e) = event {
-            state.niri.apply_to(&e);
-            state.states_arrived();
-            // Redrawing on every event is cheap because the layout is integer
-            // arithmetic (section 4.1) and the text only changes when focus changes.
-            state.draw_and_paint();
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal do niri: {e}"))?;
+    let (sender, receiving) = channel::channel::<ronoctua_niri::Event>();
+    crate::daemon::listen_to_niri(sender);
+    handle
+        .insert_source(receiving, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.niri.apply_to(&e);
+                state.states_arrived();
+                // Redrawing on every event is cheap because the layout is integer
+                // arithmetic (section 4.1) and the text only changes when focus changes.
+                state.draw_and_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang niri's channel: {e}"))?;
 
     // Third event source: the control socket, where the leader arrives. See
     // `leader.rs` for why the leader comes from OUTSIDE.
-    let (envio_ordem, ordens) = channel::channel::<Order>();
-    crate::leader::listen(envio_ordem);
-    alca.insert_source(ordens, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(o) = event {
-            match o {
-                Order::Leader => state.ativar_leader(),
-                // THE SAME `run_command` as the key. A command coming from outside and a
-                // command coming from the keymap have to do the SAME thing — two
-                // paths for the same id are what made the terminal's chord open
-                // without a scope while the sequence opened with one.
-                Order::Command(id, argument) => {
-                    tracing::info!(command = %id, "comando pelo socket de controle");
-                    state.run_with(&id, argument.as_deref());
-                    state.draw_and_paint();
+    let (order_sender, orders) = channel::channel::<Order>();
+    crate::leader::listen(order_sender);
+    handle
+        .insert_source(orders, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(o) = event {
+                match o {
+                    Order::Leader => state.activate_leader(),
+                    // THE SAME `run_command` as the key. A command coming from outside and a
+                    // command coming from the keymap have to do the SAME thing — two
+                    // paths for the same id are what made the terminal's chord open
+                    // without a scope while the sequence opened with one.
+                    Order::Command(id, argument) => {
+                        tracing::info!(command = %id, "command through the control socket");
+                        state.run_with(&id, argument.as_deref());
+                        state.draw_and_paint();
+                    }
+                    // ANOTHER FOOTER TOOK OVER THIS DISPLAY. Leaving is the only right
+                    // answer: staying up would leave two surfaces anchored at the
+                    // bottom and — if this one had the leader open — this one holding
+                    // the keyboard the other needs. See `leader::yield_the_place`.
+                    Order::Quit => {
+                        tracing::info!("another footer took this display; leaving");
+                        state.quit = true;
+                    }
+                    // A BUFFER SAYS WHICH STATE IT IS IN. It only draws when the
+                    // window that reported is the one in FOCUS: a buffer changing
+                    // state behind another window changes no pixel, and repainting
+                    // for it would put a frame on the screen per key pressed in a
+                    // window nobody is looking at.
+                    Order::State { pid, id } => {
+                        let showing = state.states.get(&pid) != Some(&id);
+                        state.states.insert(pid, id);
+                        if showing
+                            && state.niri.focused().and_then(|w| w.pid) == i32::try_from(pid).ok()
+                        {
+                            state.draw_and_paint();
+                        }
+                    }
                 }
-                // ANOTHER FOOTER TOOK OVER THIS DISPLAY. Leaving is the only right
-                // answer: staying up would leave two surfaces anchored at the
-                // bottom and — if this one had the leader open — this one holding
-                // the keyboard the other needs. See `leader::yield_the_place`.
-                Order::Quit => {
-                    tracing::info!("outro rodape assumiu este display; saindo");
-                    state.quit = true;
-                }
-                // A BUFFER SAYS WHICH STATE IT IS IN. It only draws when the
-                // window that reported is the one in FOCUS: a buffer changing
-                // state behind another window changes no pixel, and repainting
-                // for it would put a frame on the screen per key pressed in a
-                // window nobody is looking at.
-                Order::State { pid, id } => {
-                    let showing = state.states.get(&pid) != Some(&id);
-                    state.states.insert(pid, id);
-                    if showing
-                        && state.niri.focused().and_then(|w| w.pid) == i32::try_from(pid).ok()
-                    {
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the control socket: {e}"))?;
+
+    // FIFTH SOURCE: what was copied. The reading thread sends it through here;
+    // see `crate::clipboard::watch`.
+    handle
+        .insert_source(copies, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                let bytes = e.content.bytes().len();
+                if state.clipboard.register(e) {
+                    tracing::debug!(bytes, "new entry in the clipboard history");
+                    // It only redraws if the view is OPEN. Copying with the clipboard
+                    // closed must not cost a frame.
+                    if state.clipboard_open {
+                        state.apply_geometry(state.interactivity());
                         state.draw_and_paint();
                     }
                 }
             }
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o socket de controle: {e}"))?;
-
-    // FIFTH SOURCE: what was copied. The reading thread sends it through here;
-    // see `crate::clipboard::watch`.
-    alca.insert_source(copias, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(e) = event {
-            let bytes = e.content.bytes().len();
-            if state.clipboard.register(e) {
-                tracing::debug!(bytes, "entrada nova no historico de clipboard");
-                // It only redraws if the view is OPEN. Copying with the clipboard
-                // closed must not cost a frame.
-                if state.clipboard_open {
-                    state.apply_geometry(state.interactivity());
-                    state.draw_and_paint();
-                }
-            }
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o canal do clipboard: {e}"))?;
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the clipboard's channel: {e}"))?;
 
     // Fourth source: the session bus. The notification daemon runs in a thread
     // and sends through the same kind of channel as niri and the control socket.
-    let (envio_notif, notifications) = channel::channel::<ronoctua_notify::Event>();
-    let (bruto_tx, bruto_rx) = std::sync::mpsc::channel::<ronoctua_notify::Event>();
+    let (notify_sender, notifications) = channel::channel::<ronoctua_notify::Event>();
+    let (raw_tx, raw_rx) = std::sync::mpsc::channel::<ronoctua_notify::Event>();
     // FIFTH SOURCE, THE SAME CHANNEL: what `systemd-oomd` closed to keep the
     // machine alive. It is the SYSTEM bus and not the session one, and it shares
     // the bridge below on purpose — one destination, one path to keep in step.
@@ -1687,120 +1755,154 @@ pub fn run() -> Result<()> {
     // It is started BEFORE the session daemon so that a boot in which the footer
     // comes up first still registers the match: the rule is filed with the bus,
     // and the signal arrives whenever `systemd-oomd` takes the name.
-    ronoctua_notify::oom::listen(bruto_tx.clone());
-    if ronoctua_notify::dbus::listen(bruto_tx) {
+    ronoctua_notify::oom::listen(raw_tx.clone());
+    if ronoctua_notify::dbus::listen(raw_tx) {
         // A bridge between zbus's `mpsc` and calloop's channel. They are two kinds
         // of channel because zbus does not know calloop and vice versa; the bridge
         // is a thread that only forwards.
         std::thread::Builder::new()
             .name("ponte-notif".into())
             .spawn(move || {
-                while let Ok(e) = bruto_rx.recv() {
-                    if envio_notif.send(e).is_err() {
+                while let Ok(e) = raw_rx.recv() {
+                    if notify_sender.send(e).is_err() {
                         return;
                     }
                 }
             })
-            .expect("a ponte de notificacoes nao pode falhar em nascer");
+            .expect("the notification bridge cannot fail to be born");
     }
-    alca.insert_source(notifications, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(e) = event {
-            state.notification_of(e);
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar as notificacoes: {e}"))?;
+    handle
+        .insert_source(notifications, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.notification_of(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the notifications: {e}"))?;
 
     // SIXTH SOURCE: the transfer queue. The watching thread sends the whole
     // list every time it changes; see `crate::transfers::listen`.
-    let (envio_fila, fila_transferencias) = channel::channel::<Vec<ronoctua_transfers::Job>>();
-    crate::transfers::listen(envio_fila);
-    alca.insert_source(fila_transferencias, |event, (), state: &mut Footer| {
-        if let channel::Event::Msg(jobs) = event {
-            state.ledger_arrived(jobs);
-        }
-    })
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar a fila de transferencias: {e}"))?;
+    let (queue_sender, transfers_queue) = channel::channel::<Vec<ronoctua_transfers::Job>>();
+    crate::transfers::listen(queue_sender);
+    handle
+        .insert_source(transfers_queue, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(jobs) = event {
+                state.ledger_arrived(jobs);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the transfer queue: {e}"))?;
+
+    // SEVENTH SOURCE: the brain. The watching thread sends the whole mind every
+    // time it changes; see `crate::brain::listen`.
+    //
+    // A thread and a channel, and not a socket in the loop, for the two reasons
+    // the transfer queue's already gives — plus the one that belongs to this
+    // one: `client::watch` starts the daemon when nobody is home and retries
+    // when it goes away, which is a sleep, and a sleep here is a frozen footer.
+    let (brain_sender, minds) = channel::channel::<ronoctua_brain::Mind>();
+    crate::brain::listen(brain_sender);
+    handle
+        .insert_source(minds, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(mind) = event {
+                state.mind_arrived(mind);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the brain: {e}"))?;
 
     // A timer to expire the notification on screen.
     //
     // One second is coarse on purpose: the resolution that matters is "it went
     // away after a few seconds", and waking the loop 60 times a second for that
     // would spend battery (section 2 aims at laptops).
-    alca.insert_source(
-        calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
-        |_, (), state: &mut Footer| {
-            let now = std::time::Instant::now();
-            // Both on the SAME tick: a second clock just for the echo area would
-            // wake the loop twice a second for nothing.
-            let venceu = state.expire_echo(now);
-            // AND THE DIRECTORY, when the manager is open. One `stat` a second
-            // against the directory's mtime: something else moved a file into
-            // it, an operation of ours finished, an archive was unpacked. A
-            // listing that only refreshes when a key is pressed is a listing
-            // that lies quietly.
-            let mudou = state.files.as_ref().is_some_and(crate::files::View::stale);
-            // AND THE SIDEBAR'S FILE, on the same tick and for the same reason:
-            // `LEADER a` pins an application without this view being open, and
-            // the window door is a separate process with its own copy. A row
-            // that only appears after a restart is a row somebody thinks did
-            // not get pinned.
-            let barra = state
-                .files
-                .as_ref()
-                .is_some_and(crate::files::View::sidebar_stale);
-            if mudou || barra {
-                if let Some(v) = state.files.as_mut() {
-                    if mudou {
-                        v.reread();
+    handle
+        .insert_source(
+            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+            |_, (), state: &mut Footer| {
+                let now = std::time::Instant::now();
+                // Both on the SAME tick: a second clock just for the echo area would
+                // wake the loop twice a second for nothing.
+                let won = state.expire_echo(now);
+                // AND THE DIRECTORY, when the manager is open. One `stat` a second
+                // against the directory's mtime: something else moved a file into
+                // it, an operation of ours finished, an archive was unpacked. A
+                // listing that only refreshes when a key is pressed is a listing
+                // that lies quietly.
+                let changed = state.files.as_ref().is_some_and(crate::files::View::stale);
+                // AND THE SIDEBAR'S FILE, on the same tick and for the same reason:
+                // `LEADER a` pins an application without this view being open, and
+                // the window door is a separate process with its own copy. A row
+                // that only appears after a restart is a row somebody thinks did
+                // not get pinned.
+                let bar = state
+                    .files
+                    .as_ref()
+                    .is_some_and(crate::files::View::sidebar_stale);
+                if changed || bar {
+                    if let Some(v) = state.files.as_mut() {
+                        if changed {
+                            v.reread();
+                        }
+                        if bar {
+                            v.reread_sidebar();
+                        }
                     }
-                    if barra {
-                        v.reread_sidebar();
-                    }
+                    state.apply_geometry(state.interactivity());
                 }
-                state.apply_geometry(state.interactivity());
-            }
-            // THE BLINK RIDES THIS CLOCK. It is why a notification that asks to
-            // blink costs nothing: the loop was already waking once a second to
-            // expire things, and a second timer for the same second would wake
-            // it twice for one effect.
-            state.blink_on = !state.blink_on;
-            let piscando = state
-                .notifications
-                .showing()
-                .is_some_and(|s| s.presentation.blink);
-            // THE PIE MOVES EVERY SECOND TOO, so a notification on screen
-            // redraws whether or not it expired: eight steps over six seconds
-            // means the drawing changes on most ticks, and a band whose
-            // countdown only moves when something else happens is a countdown
-            // that lies.
-            let na_faixa = state.notifications.showing().is_some();
-            let beat = state.notifications.tick(now);
-            // WHOEVER SENT IT IS WAITING TO BE TOLD. A client that offered a
-            // button, or that meant to replace this notification with the next
-            // one, is blocked on `NotificationClosed` — and `Expired` is a
-            // different answer from `ByHand`, which is why the reason travels.
-            if let Some(id) = beat.expired {
-                ronoctua_notify::dbus::notification_was_closed(
-                    id,
-                    ronoctua_notify::dbus::Closed::Expired,
-                );
-            }
-            if beat.changed {
-                // The queue MOVED: something left the band and something else
-                // may have taken it. The height changes with it, and so does
-                // the record on disk.
-                state.after_the_queue_moved();
-            } else if venceu || mudou || barra || piscando || na_faixa {
-                state.draw_and_paint();
-            }
-            calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("nao consegui pendurar o timer: {e}"))?;
+                // THE BLINK RIDES THIS CLOCK. It is why a notification that asks to
+                // blink costs nothing: the loop was already waking once a second to
+                // expire things, and a second timer for the same second would wake
+                // it twice for one effect.
+                state.blink_on = !state.blink_on;
+                let blinking = state
+                    .notifications
+                    .showing()
+                    .is_some_and(|s| s.presentation.blink);
+                // THE PIE MOVES EVERY SECOND TOO, so a notification on screen
+                // redraws whether or not it expired: eight steps over six seconds
+                // means the drawing changes on most ticks, and a band whose
+                // countdown only moves when something else happens is a countdown
+                // that lies.
+                let na_faixa = state.notifications.showing().is_some();
+                // AND THE BRAIN'S COUNTDOWN RIDES THE SAME CLOCK, for the reason
+                // written just above about the pie: the brain sends the warning
+                // ONCE and the number on screen is `deadline - now`, so a line
+                // whose seconds only moved when something else happened would be a
+                // countdown that lies. A timer of its own would wake the loop twice
+                // in the same second for one effect.
+                let counting = state.brain_rows() > 0;
+                // AND THE UPDATE'S MARK RIDES IT TOO, one frame per tick. The
+                // counter always advances — it is a `u64` add — but the REDRAW is
+                // asked for only while something is actually running, so a machine
+                // with nothing in flight does not paint once a second for a glyph
+                // that is not on screen.
+                state.update_tick = state.update_tick.wrapping_add(1);
+                let updating = crate::update_window::running(state.brain.as_ref());
+                let beat = state.notifications.tick(now);
+                // WHOEVER SENT IT IS WAITING TO BE TOLD. A client that offered a
+                // button, or that meant to replace this notification with the next
+                // one, is blocked on `NotificationClosed` — and `Expired` is a
+                // different answer from `ByHand`, which is why the reason travels.
+                if let Some(id) = beat.expired {
+                    ronoctua_notify::dbus::notification_was_closed(
+                        id,
+                        ronoctua_notify::dbus::Closed::Expired,
+                    );
+                }
+                if beat.changed {
+                    // The queue MOVED: something left the band and something else
+                    // may have taken it. The height changes with it, and so does
+                    // the record on disk.
+                    state.after_the_queue_moved();
+                } else if won || changed || bar || blinking || na_faixa || counting || updating {
+                    state.draw_and_paint();
+                }
+                calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("could not hang the timer: {e}"))?;
 
-    WaylandSource::new(conn, fila)
-        .insert(alca)
-        .map_err(|e| anyhow::anyhow!("nao consegui pendurar o Wayland no calloop: {e}"))?;
+    WaylandSource::new(conn, queue)
+        .insert(handle)
+        .map_err(|e| anyhow::anyhow!("could not hang Wayland on calloop: {e}"))?;
 
     let signal = cycle.get_signal();
     cycle
@@ -1814,7 +1916,7 @@ pub fn run() -> Result<()> {
                 signal.stop();
             }
         })
-        .context("loop de eventos")?;
+        .context("event loop")?;
     Ok(())
 }
 
@@ -1856,6 +1958,11 @@ impl Footer {
             // zero. See `Record::counts`.
             self.notifications.unread(),
             crate::transfers::segment(&self.jobs).as_deref(),
+            // THE UPDATE'S MARK, out of the mind the footer already watches —
+            // never a second subscription and never a schedule of its own. It
+            // is `None` with nothing in flight, and the segment then does not
+            // exist at all.
+            crate::update_window::mark(self.brain.as_ref(), self.update_tick).as_deref(),
         )
     }
 
@@ -1992,6 +2099,41 @@ impl Footer {
         }
     }
 
+    /// Which piece of the brain's line is at `(x, y)`.
+    ///
+    /// From what was DRAWN (`brain_placed`), and not from a second layout — the
+    /// same rule the modeline's segments and the band already follow.
+    fn brain_at(&self, x: f64, y: f64) -> Option<&crate::brain::Piece> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        if line_height <= 0.0 || cell <= 0.0 || x < 0.0 || y < 0.0 || self.brain_rows() == 0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let row = (y / line_height) as u16;
+        if row != self.brain_line_at() {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let column = (x / cell) as u16;
+        crate::brain::at(self.brain_placed.as_ref(), column)
+    }
+
+    /// A click on the brain's line: the two controls, and nothing else.
+    ///
+    /// # The mouse reaches nothing the keyboard does not
+    ///
+    /// Each one IS a registered command — `brain-abort` and `brain-proceed` —
+    /// and the sequence that runs it is drawn on the line beside the label. The
+    /// click does not do a second thing: it runs the same command the key runs,
+    /// through the same door.
+    fn brain_clicked(&mut self, hit: crate::brain::Hit) {
+        match hit {
+            crate::brain::Hit::Abort => self.run_command("brain-abort"),
+            crate::brain::Hit::Proceed => self.run_command("brain-proceed"),
+        }
+    }
+
     /// A click on a modeline segment does what its key does.
     ///
     /// # The mouse reaches nothing the keyboard does not
@@ -2016,6 +2158,21 @@ impl Footer {
             self.run_command("notif-history");
             return;
         }
+        // THE UPDATE'S MARK OPENS THE WINDOW THAT WATCHES IT.
+        //
+        // It is the one thing on this line that appears without anybody having
+        // asked for it and says only "something is happening" — the question
+        // it raises is "what?", and until now the mark could not answer it.
+        //
+        // Both buttons, for the reason the bell's note gives: there is one
+        // thing to do here, and a second meaning for the right button would be
+        // a menu nobody asked for. And it is the SAME command `LEADER s w`
+        // runs, which is what keeps the mouse from reaching a door the
+        // keyboard cannot.
+        if id == "update" {
+            self.run_command("update-watch");
+            return;
+        }
         if id != "state" {
             return;
         }
@@ -2029,8 +2186,8 @@ impl Footer {
         };
         let order = if forward { "state-next" } else { "state-prev" };
         match crate::leader::buffer_state(pid, order) {
-            Ok(()) => tracing::info!(order, "estado girado pelo ponteiro"),
-            Err(e) => tracing::debug!(error = %e, "sem buffer para girar o estado"),
+            Ok(()) => tracing::info!(order, "state cycled by the pointer"),
+            Err(e) => tracing::debug!(error = %e, "no buffer to cycle the state"),
         }
     }
 
@@ -2042,11 +2199,15 @@ impl Footer {
     fn segment_hint(&self) -> Option<String> {
         match self.segment_under_pointer? {
             "notif" => Some(self.texts.t(ronoctua_i18n::key::HINT_NOTIF_BELL)),
+            // The third clickable thing on this line, and it explains itself
+            // on the message line like the other two — never in a tooltip,
+            // which would be a surface of its own (invariant 14).
+            "update" => Some(self.texts.t(ronoctua_i18n::key::HINT_UPDATE_MARK)),
             "state" => {
                 let now = self.state_now()?;
                 Some(self.texts.t_with(
                     ronoctua_i18n::key::HINT_STATE,
-                    &[("estado", &self.texts.t(&format!("state-{now}")))],
+                    &[("state", &self.texts.t(&format!("state-{now}")))],
                 ))
             }
             _ => None,
@@ -2102,6 +2263,122 @@ impl Footer {
         }
     }
 
+    /// A fresh mind arrived from the brain.
+    ///
+    /// # Why it compares the ANNOUNCEMENT and not the mind
+    ///
+    /// The same reason `ledger_arrived` compares the modeline's sentence rather
+    /// than the job list: the daemon republishes on every beat of its own tick
+    /// — a new pulse, a moment considered — and almost none of that reaches
+    /// this surface. What the footer draws out of the whole mind is ONE line,
+    /// and that line is the announcement.
+    ///
+    /// So the mind is kept whatever happens (the two commands read `running`
+    /// out of it), and the screen only moves when the thing on it changed.
+    fn mind_arrived(&mut self, mind: ronoctua_brain::Mind) {
+        let before = self.announced().cloned();
+        let height = self.brain_rows();
+        self.brain = Some(mind);
+        if before == self.announced().cloned() {
+            return;
+        }
+        tracing::info!(
+            announced = self.announced().map(|a| a.task.as_str()),
+            running = self.brain.as_ref().map(|m| m.running.as_str()),
+            // THE ROW COUNT, in the shape `band=` already has on the
+            // notification queue's line. It is what a VM waits on: "the line is
+            // on screen" is a height, and a test that slept instead would be
+            // either slow or flaky, and on a loaded machine both.
+            brain = self.brain_rows(),
+            "the brain spoke"
+        );
+        // A LINE APPEARING OR GOING is a change of HEIGHT, and the surface has
+        // to ask for it before it draws: painting first would put the line
+        // outside the surface it was measured for.
+        if height != self.brain_rows() {
+            self.apply_geometry(self.interactivity());
+        }
+        self.draw_and_paint();
+    }
+
+    /// `LEADER s u`: the whole update, asked for by hand.
+    ///
+    /// # It names no step, and it cannot
+    ///
+    /// What an update IS lives in `assets/updates.nix` and nowhere else
+    /// (invariant 5): this triggers the same unit the brain triggers, by the
+    /// brain's own constant. The footer holds no list of steps, and
+    /// `update-has-one-list` is the check that keeps it from growing one.
+    ///
+    /// # And it says which door it went through
+    ///
+    /// Because the two are different promises. Through the brain the run is
+    /// QUEUED — it waits for a machine that is not busy, it gets a countdown
+    /// that can be stopped, and it is written down. Straight to systemd it
+    /// starts now. A single sentence for both would be right about one of them.
+    fn start_the_update(&mut self) {
+        let said = match crate::update_window::begin() {
+            crate::update_window::Started::Brain => ronoctua_i18n::key::ECHO_UPDATE_QUEUED,
+            crate::update_window::Started::Systemd => ronoctua_i18n::key::ECHO_UPDATE_STARTED,
+            // LOUD, and on screen. A key that appears in which-key and does
+            // nothing is indistinguishable from a key that did not register —
+            // which is how five mute commands went unnoticed once already.
+            crate::update_window::Started::Nowhere => ronoctua_i18n::key::ECHO_UPDATE_NOWHERE,
+        };
+        let m = self.texts.t(said);
+        self.echo_message(m);
+    }
+
+    /// The countdown's two answers, from the keyboard or from the line itself.
+    ///
+    /// # Why the refusal is spoken and not swallowed
+    ///
+    /// Because `LEADER s a` with nothing about to happen is a key that appears
+    /// in which-key and does nothing — indistinguishable from a key that did
+    /// not register, which is how five mute commands went unnoticed once
+    /// already.
+    fn brain_answer(&mut self, proceeding: bool) {
+        let ask = self.brain.as_ref().and_then(|m| {
+            if proceeding {
+                // PROCEED IS THE DEADLINE MOVED and not a second way to start
+                // something: with nothing announced there is no deadline to
+                // move, and starting one here would be a path into a run that
+                // the brain's own queue never saw.
+                m.announcement
+                    .as_ref()
+                    .map(|_| ronoctua_brain::Ask::Proceed)
+            } else if m.announcement.is_some() || !m.running.is_empty() {
+                Some(crate::brain::abort(m))
+            } else {
+                None
+            }
+        });
+        let Some(ask) = ask else {
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_BRAIN_IDLE);
+            self.echo_message(m);
+            return;
+        };
+        let said = match crate::brain::tell(&ask) {
+            Ok(()) => {
+                tracing::info!(?ask, "answer to the brain");
+                if proceeding {
+                    ronoctua_i18n::key::ECHO_BRAIN_PROCEEDING
+                } else {
+                    ronoctua_i18n::key::ECHO_BRAIN_POSTPONED
+                }
+            }
+            // LOUD, and said on screen. A countdown that goes on running after
+            // somebody pressed "not now" is the one failure here that must
+            // never be silent.
+            Err(e) => {
+                tracing::error!(error = %e, ?ask, "the brain did not get the answer");
+                ronoctua_i18n::key::ECHO_BRAIN_UNREACHABLE
+            }
+        };
+        let m = self.texts.t(said);
+        self.echo_message(m);
+    }
+
     /// Recomputes and logs the layout. The actual drawing comes in when the wgpu
     /// path is wired to this surface.
     fn draw(&mut self) {
@@ -2126,17 +2403,17 @@ impl Footer {
             // scroll" does not tell "the event did not arrive" from "it arrived
             // and changed nothing".
             offset = self.current_offset(),
-            "layout do rodape resolvido"
+            "footer layout resolved"
         );
         for c in &placed {
-            tracing::debug!(id = c.id, column = c.column, text = %c.text, "segmento");
+            tracing::debug!(id = c.id, column = c.column, text = %c.text, "segment");
         }
     }
 }
 
 impl LayerShellHandler for Footer {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        tracing::info!("o compositor fechou a superficie do rodape");
+        tracing::info!("the compositor closed the footer's surface");
         self.quit = true;
     }
 
@@ -2185,7 +2462,7 @@ impl CompositorHandler for Footer {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_surface::WlSurface,
-        _fator: i32,
+        _factor: i32,
     ) {
     }
 
@@ -2277,7 +2554,7 @@ impl OutputHandler for Footer {
         if self.screens.len() != before {
             tracing::info!(
                 screens = self.screens.len(),
-                "output removido; superficie fechada"
+                "output removed; surface closed"
             );
         }
     }
@@ -2304,10 +2581,10 @@ impl SeatHandler for Footer {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
             match self.seats.get_keyboard(qh, &seat, None) {
                 Ok(k) => {
-                    tracing::debug!("teclado do seat pronto");
+                    tracing::debug!("the seat's keyboard is ready");
                     self.keyboard = Some(k);
                 }
-                Err(e) => tracing::warn!(error = %e, "sem teclado; a leader nao vai funcionar"),
+                Err(e) => tracing::warn!(error = %e, "no keyboard; the leader will not work"),
             }
         }
         if cap == Capability::Pointer && self.pointer.is_none() {
@@ -2316,7 +2593,7 @@ impl SeatHandler for Footer {
                 // With no pointer the footer works whole: what is lost is the
                 // scrollbar, which is a visual hint, not a path.
                 Err(e) => {
-                    tracing::warn!(error = %e, "sem ponteiro; a barra de rolagem nao aparece")
+                    tracing::warn!(error = %e, "no pointer; the scrollbar does not show")
                 }
             }
         }
@@ -2356,7 +2633,7 @@ impl KeyboardHandler for Footer {
         _: &[u32],
         _: &[Keysym],
     ) {
-        tracing::debug!("o rodape ganhou o foco de teclado");
+        tracing::debug!("the footer gained keyboard focus");
         // IT ZEROES THE INHERITANCE. Whatever is held now arrives on the next
         // modifier event — the protocol requires the compositor to send one right
         // after the `enter` —, and it is THAT one that becomes this keyboard
@@ -2389,7 +2666,7 @@ impl KeyboardHandler for Footer {
         self.mods = Modifiers::default();
         self.inheritance.on_focus();
         if self.grabbing() {
-            tracing::debug!("foco de teclado perdido; fechando o que estava aberto");
+            tracing::debug!("keyboard focus lost; closing what was open");
             self.mx.close_it();
             self.manual = false;
             self.apps = None;
@@ -2616,7 +2893,7 @@ impl KeyboardHandler for Footer {
                     self.draw_and_paint();
                 }
                 Action::Run(id) => {
-                    tracing::info!(command = id, "comando executado pelo localizador");
+                    tracing::info!(command = id, "command run by the finder");
                     self.run_command(&id);
                     self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
@@ -2627,7 +2904,7 @@ impl KeyboardHandler for Footer {
                     self.draw_and_paint();
                 }
                 Action::RunWith(id, arg) => {
-                    tracing::info!(command = id, argument = %arg, "comando com argumento");
+                    tracing::info!(command = id, argument = %arg, "a command with an argument");
                     self.run_with(&id, Some(&arg));
                     self.apply_geometry(self.interactivity());
                     self.draw_and_paint();
@@ -2721,7 +2998,7 @@ impl KeyboardHandler for Footer {
             alt = mods.alt,
             logo = mods.logo,
             caps = mods.caps_lock,
-            "modificadores anunciados pelo compositor"
+            "modifiers announced by the compositor"
         );
         self.inheritance.on_announcement(mods);
     }
@@ -2793,19 +3070,19 @@ impl Footer {
                         let otherwise_one = other_case.map(|t| t.notation()).unwrap_or_default();
                         self.texts.t_with(
                             ronoctua_i18n::key::ECHO_NO_ON_BOX,
-                            &[("sequencia", seq), ("outra", &otherwise_one)],
+                            &[("sequence", seq), ("other", &otherwise_one)],
                         )
                     }
                     Some(seq) if sym != ronoctua_keymap::Sym::Esc => self
                         .texts
-                        .t_with(ronoctua_i18n::key::ECHO_NO_ON, &[("sequencia", seq)]),
+                        .t_with(ronoctua_i18n::key::ECHO_NO_ON, &[("sequence", seq)]),
                     _ => self.texts.t(ronoctua_i18n::key::ECHO_CANCELLED),
                 };
                 self.close_leader();
                 self.echo_message(msg);
             }
             Effect::Run(id, argument) => {
-                tracing::info!(command = id, argument, "comando disparado pela leader");
+                tracing::info!(command = id, argument, "command fired by the leader");
                 self.run_with(id, argument);
                 self.close_leader();
             }
@@ -2831,12 +3108,16 @@ impl PointerHandler for Footer {
             self.under_pointer,
             self.row_under_pointer,
             self.cell_under_pointer,
-            self.offset,
+            // THROUGH `current_offset`, because with the manager open the
+            // number is the view's — see `Footer::scroll_offset_to`. Reading
+            // the field directly here would say "nothing changed" for every
+            // scroll of the file manager.
+            self.current_offset(),
         );
         let segment_before = self.segment_under_pointer;
-        let mut clicou = None;
+        let mut clicked = None;
         let mut menu_at = None;
-        // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicou` and `menu_at`
+        // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicked` and `menu_at`
         // above: those two are about a ROW of the expanded region, and the
         // modeline has no rows. Folding them together is how the right button
         // came to act one line off once already.
@@ -2845,6 +3126,10 @@ impl PointerHandler for Footer {
         // AND THE BAND'S, kept apart for the same reason: its lines are not
         // rows of the expanded region either.
         let mut band_hit = None;
+        // AND THE BRAIN'S, which is a third region and not a row: it sits
+        // between the minibuffer and the list, and everything below asks the
+        // row what it is.
+        let mut brain_hit = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -2859,8 +3144,16 @@ impl PointerHandler for Footer {
                     self.band_hint = self
                         .band_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
+                    // AND THE BRAIN'S LINE, the same way and on the same line:
+                    // whatever explains itself does it on the message line and
+                    // never in a tooltip (invariant 14).
+                    self.brain_hint = self
+                        .brain_at(e.position.0, e.position.1)
+                        .and_then(|p| p.explain.clone());
                     // DRAGGING: the pointer's position BECOMES the offset.
-                    if self.dragging {
+                    if let Some(pane) = self.dragging_section {
+                        self.drag_section_to(pane, e.position.1);
+                    } else if self.dragging {
                         self.drag_to(e.position.1);
                     }
                 }
@@ -2870,6 +3163,7 @@ impl PointerHandler for Footer {
                     self.cell_under_pointer = None;
                     self.segment_under_pointer = None;
                     self.band_hint = None;
+                    self.brain_hint = None;
                     self.dragging = false;
                 }
                 // THE RIGHT BUTTON OPENS THE FILE MANAGER'S MENU, and nothing
@@ -2946,6 +3240,18 @@ impl PointerHandler for Footer {
                         band_hit = Some(hit);
                         continue;
                     }
+                    // AND THE BRAIN'S LINE, for the same reason and with the
+                    // same restriction: only the LEFT button, because both
+                    // controls up there are single obvious gestures and a
+                    // second meaning for the same target would be a menu
+                    // nobody asked for.
+                    if let Some(hit) = self
+                        .brain_at(e.position.0, e.position.1)
+                        .and_then(|p| p.hit)
+                    {
+                        brain_hit = Some(hit);
+                        continue;
+                    }
                     if let Some(id) = self.segment_at(e.position.0, e.position.1) {
                         segment_next = Some(id);
                         continue;
@@ -2956,15 +3262,23 @@ impl PointerHandler for Footer {
                     // RAN the command of the line behind it. Whoever wants to
                     // drag does not want to run anything, and the bar sits
                     // precisely over the right end of the items.
-                    if self.on_thumb(e.position.0) {
+                    // A SECTION'S OWN BAR FIRST — the sidebar's and the facts'
+                    // sit in their own columns, and the pointer test for the
+                    // listing's does not know about them.
+                    let section = self.files_bar_at_point(e.position.0, e.position.1);
+                    if let Some(pane) = section {
+                        self.dragging_section = Some(pane);
+                        self.drag_section_to(pane, e.position.1);
+                    } else if self.on_thumb(e.position.0) {
                         self.dragging = true;
                         self.drag_to(e.position.1);
                     } else {
-                        clicou = self.row_under_pointer;
+                        clicked = self.row_under_pointer;
                     }
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = false;
+                    self.dragging_section = None;
                 }
                 // THE WHEEL AND THE TOUCHPAD GESTURE.
                 //
@@ -2985,13 +3299,13 @@ impl PointerHandler for Footer {
                     if vertical.stop || horizontal.stop {
                         self.detents = 0.0;
                     }
-                    let linha_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+                    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
                     // THE HORIZONTAL AXIS COUNTS TOO. On a touchpad, turning
                     // a page sideways is the natural gesture; and the region
                     // has nowhere to scroll horizontally, so it competes with
                     // nothing.
                     self.detents +=
-                        axis_detents(&vertical, linha_px) + axis_detents(&horizontal, linha_px);
+                        axis_detents(&vertical, line_px) + axis_detents(&horizontal, line_px);
                 }
                 _ => {}
             }
@@ -3002,6 +3316,13 @@ impl PointerHandler for Footer {
         // be true for one press.
         if let Some(hit) = band_hit {
             self.band_clicked(hit);
+            return;
+        }
+
+        // AND THE BRAIN'S, on the same footing: it is decided by the `y` too,
+        // so no two of these can be true for one press.
+        if let Some(hit) = brain_hit {
+            self.brain_clicked(hit);
             return;
         }
 
@@ -3024,7 +3345,7 @@ impl PointerHandler for Footer {
             self.open_files_menu(row);
             return;
         }
-        if let Some(i) = clicou {
+        if let Some(i) = clicked {
             self.click_at(i);
             return;
         }
@@ -3033,9 +3354,9 @@ impl PointerHandler for Footer {
         // touchpad sends fractions, and spending only the whole part is what lets
         // the continuous gesture add up until it becomes a line.
         #[allow(clippy::cast_possible_truncation)]
-        let inteiros = self.detents.trunc() as i32;
-        if inteiros != 0 {
-            self.detents -= f64::from(inteiros);
+        let whole = self.detents.trunc() as i32;
+        if whole != 0 {
+            self.detents -= f64::from(whole);
             // ONE detent = one page where it paginates, three lines where it
             // scrolls. The `page_by` already multiplies by the mode's step (which
             // is 1 on scrolling), so the difference fits in the factor.
@@ -3044,7 +3365,33 @@ impl PointerHandler for Footer {
                 Navigation::Page => 1,
                 Navigation::Scroll => LINES_PER_DETENT as i32,
             };
-            if self.page_by(inteiros.saturating_mul(step)) {
+            // THE SECTION UNDER THE POINTER TAKES IT FIRST.
+            //
+            // Only the listing's offset is the footer's — it is the one the
+            // page keys and the scrollbar's drag move. A gesture over the
+            // sidebar or over the facts belongs to that section, and until it
+            // did the owner got all three moving at once: *"using the
+            // touchpad's scroll gestures over the info region, EVERYTHING ends
+            // up scrolling"*.
+            let columns = self.screen_columns();
+            let cell = self.cell_under_pointer.unwrap_or(0);
+            let room = self.expansion_ceiling();
+            // BELOW THE LISTING IS THE STRIP, and down there the same cell
+            // belongs to a panel rather than to the listing — see
+            // `Panes::section_at`. `row_at` counts from the top of the region,
+            // so a row past the grid's lines is one of the strip's.
+            let in_strip = self.files_strip() > 0
+                && self
+                    .row_under_pointer
+                    .is_some_and(|r| r >= self.grid().lines);
+            if let Some(v) = self.files.as_mut() {
+                let which = v.panes(columns).section_at(cell, columns, in_strip);
+                if v.wheel(which, i64::from(whole.saturating_mul(step)), columns, room) {
+                    self.owes_paint = true;
+                    return;
+                }
+            }
+            if self.page_by(whole.saturating_mul(step)) {
                 self.apply_geometry(self.interactivity());
                 self.ask_paint();
                 return;
@@ -3059,7 +3406,7 @@ impl PointerHandler for Footer {
                     self.under_pointer,
                     self.row_under_pointer,
                     self.cell_under_pointer,
-                    self.offset,
+                    self.current_offset(),
                 )
         {
             // THE MEASUREMENT, when it is asked for.
@@ -3112,15 +3459,15 @@ impl Footer {
     fn ensure_screens(&mut self, qh: &QueueHandle<Self>) {
         // ONE per output, and not a single one on the first. Each output gets the
         // two lines; what changes between them is only the minibuffer being active.
-        let saidas: Vec<_> = self.outputs.outputs().collect();
-        if saidas.is_empty() {
-            tracing::debug!("ainda sem output; as superficies esperam");
+        let outputs: Vec<_> = self.outputs.outputs().collect();
+        if outputs.is_empty() {
+            tracing::debug!("no output yet; the surfaces wait");
             return;
         }
-        let atuais: Vec<_> = self.screens.iter().map(|t| t.output.clone()).collect();
-        let (criar, _) = screen_difference(&atuais, &saidas);
-        for i in criar {
-            self.create_screen(qh, saidas[i].clone());
+        let current_ones: Vec<_> = self.screens.iter().map(|t| t.output.clone()).collect();
+        let (to_create, _) = screen_difference(&current_ones, &outputs);
+        for i in to_create {
+            self.create_screen(qh, outputs[i].clone());
         }
     }
 
@@ -3180,7 +3527,7 @@ impl Footer {
             height = self.requested_height,
             screens = self.screens.len(),
             namespace = crate::NAMESPACE,
-            "superficie layer-shell criada, aguardando configure"
+            "layer-shell surface created, awaiting configure"
         );
     }
 
@@ -3200,10 +3547,10 @@ impl Footer {
     /// running it as one would silently do nothing.
     fn select_item(&mut self, id: &str) {
         let Ok(window) = id.parse::<u64>() else {
-            tracing::warn!(item = id, "item do localizador nao e id de janela");
+            tracing::warn!(item = id, "the finder's item is not a window id");
             return;
         };
-        tracing::info!(window, "buffer escolhido pelo localizador");
+        tracing::info!(window, "buffer chosen by the finder");
         // The SAME action the chord uses. Focus belongs to the compositor
         // (invariant 4), so the shell asks and does not move anything itself.
         self.niri_action(|n| n.action(serde_json::json!({ "FocusWindow": { "id": window } })));
@@ -3264,14 +3611,14 @@ impl Footer {
                     .title
                     .clone()
                     .or_else(|| w.app_id.clone())
-                    .unwrap_or_else(|| format!("janela {}", w.id)),
+                    .unwrap_or_else(|| format!("window {}", w.id)),
             })
             .collect()
     }
 
     /// The same, with the argument some compositor actions require.
     ///
-    /// It arrives from outside — `ronoctua-shell command espaco-ir 3` — because
+    /// It arrives from outside — `ronoctua-shell command workspace-go 3` — because
     /// the keymap has no way of carrying a number: a sequence is a path to an
     /// id, not a call with a parameter.
     fn run_with(&mut self, id: &str, argument: Option<&str>) {
@@ -3280,7 +3627,9 @@ impl Footer {
         // it by hand would bring back the error the `Screenshot` cost.
         if let (Some(name), Some(arg)) = (crate::actions::with_argument(id), argument) {
             match ronoctua_niri::run_through_client(name, Some(arg)) {
-                Ok(()) => tracing::info!(command = id, argument = arg, "acao com argumento"),
+                Ok(()) => {
+                    tracing::info!(command = id, argument = arg, "an action with an argument")
+                }
                 Err(e) => {
                     let m = e.to_string();
                     tracing::warn!(command = id, error = %m, "o compositor recusou");
@@ -3296,7 +3645,7 @@ impl Footer {
         // exist — see `ronoctua_niri::run_through_client`.
         if let Some(name) = id.strip_prefix("niri-") {
             match ronoctua_niri::run_through_client(name, argument) {
-                Ok(()) => tracing::info!(action = name, "acao do compositor"),
+                Ok(()) => tracing::info!(action = name, "a compositor action"),
                 Err(e) => {
                     // NIRI'S TEXT, and not one of ours: it is the only clue to
                     // why the action was refused, and swapping it for "it failed"
@@ -3314,10 +3663,10 @@ impl Footer {
                 let m = match crate::keyboard::restore_it() {
                     Ok(()) => self.texts.t(ronoctua_i18n::key::ECHO_KEYBOARD_RESTORED),
                     Err(reason) => {
-                        tracing::error!(error = %reason, "restaurar o teclado falhou");
+                        tracing::error!(error = %reason, "restoring the keyboard failed");
                         self.texts.t_with(
                             ronoctua_i18n::key::ECHO_KEYBOARD_FAILED,
-                            &[("motivo", &reason)],
+                            &[("reason", &reason)],
                         )
                     }
                 };
@@ -3353,7 +3702,7 @@ impl Footer {
                 });
                 self.quit = true;
             }
-            "notif-history" => self.alternar_gerenciador(),
+            "notif-history" => self.toggle_manager(),
             // THE SECOND DOOR, in a window of its own — the same `View`, and
             // the same reason the file manager has two: the footer's region has
             // a twelve-line ceiling (invariant 14), which is right for a footer
@@ -3384,7 +3733,7 @@ impl Footer {
             // THE CLIPBOARD. Like the manual, it keeps the keyboard while it is
             // open: without that the arrows would go to the buffers.
             "clipboard-open" => {
-                tracing::info!(inputs = self.clipboard.how_many(), "clipboard aberto");
+                tracing::info!(inputs = self.clipboard.how_many(), "clipboard opened");
                 self.clipboard_open = true;
                 self.clip_cursor = 0;
                 self.clip_qr = None;
@@ -3415,7 +3764,7 @@ impl Footer {
                         self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPIED));
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "copiar do historico FALHOU");
+                        tracing::error!(error = %err, "copying from the history FAILED");
                         self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
                     }
                 }
@@ -3509,7 +3858,7 @@ impl Footer {
                     self.echo_message(m);
                     return;
                 }
-                tracing::info!(buffers = items.len(), "seletor de buffer aberto");
+                tracing::info!(buffers = items.len(), "buffer chooser opened");
                 self.mx.open_over(items);
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -3544,7 +3893,7 @@ impl Footer {
                 // fills in a moment later reads as "nothing is running" at the
                 // exact instant somebody opened it to check.
                 view.refresh(self.jobs.clone());
-                tracing::info!(jobs = self.jobs.len(), "painel de transferencias aberto");
+                tracing::info!(jobs = self.jobs.len(), "transfers panel opened");
                 self.transfers = Some(view);
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -3552,7 +3901,7 @@ impl Footer {
             }
             "apps-open" => {
                 self.rescan_if_changed();
-                tracing::info!(apps = self.catalogue.len(), "localizador aberto");
+                tracing::info!(apps = self.catalogue.len(), "finder opened");
                 self.apps = Some(crate::apps::Finder::fresh(self.catalogue.clone()));
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -3632,15 +3981,15 @@ impl Footer {
                 let m = match v.active() {
                     Some(e) if e.medium == ronoctua_network::Medium::Wired => self.texts.t_with(
                         ronoctua_i18n::key::ECHO_NETWORK_LINK_WIRED,
-                        &[("rede", &e.interface), ("taxa", &e.rate())],
+                        &[("network", &e.interface), ("rate", &e.rate())],
                     ),
                     Some(e) => self.texts.t_with(
                         ronoctua_i18n::key::ECHO_NETWORK_LINK,
                         &[
-                            ("rede", e.network.as_deref().unwrap_or(&e.interface)),
-                            ("banda", e.band.label()),
-                            ("taxa", &e.rate()),
-                            ("sinal", &format!("{}%", e.signal)),
+                            ("network", e.network.as_deref().unwrap_or(&e.interface)),
+                            ("band", e.band.label()),
+                            ("rate", &e.rate()),
+                            ("signal", &format!("{}%", e.signal)),
                         ],
                     ),
                     None => self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_NO_LINK),
@@ -3688,11 +4037,11 @@ impl Footer {
                 let m = match result {
                     Some(Ok(())) => self.texts.t_with(
                         ronoctua_i18n::key::ECHO_NETWORK_CONNECTED,
-                        &[("rede", &target.ssid)],
+                        &[("network", &target.ssid)],
                     ),
                     Some(Err(e)) => self.texts.t_with(
                         ronoctua_i18n::key::ECHO_NETWORK_FAILED,
-                        &[("rede", &target.ssid), ("motivo", &e.to_string())],
+                        &[("network", &target.ssid), ("reason", &e.to_string())],
                     ),
                     None => self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE),
                 };
@@ -3713,7 +4062,7 @@ impl Footer {
                 let m = if ok {
                     self.texts.t_with(
                         ronoctua_i18n::key::ECHO_NETWORK_FORGOTTEN,
-                        &[("rede", &target.ssid)],
+                        &[("network", &target.ssid)],
                     )
                 } else {
                     self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE)
@@ -3729,10 +4078,10 @@ impl Footer {
                     Some(e) => self.texts.t_with(
                         ronoctua_i18n::key::ECHO_SYNCTHING_STATE,
                         &[
-                            ("conectados", &e.connected.to_string()),
-                            ("porcento", &e.percent.to_string()),
-                            ("envio", &crate::network::readable_bytes(e.sent)),
-                            ("recepcao", &crate::network::readable_bytes(e.received)),
+                            ("connected", &e.connected.to_string()),
+                            ("percent", &e.percent.to_string()),
+                            ("up", &crate::network::readable_bytes(e.sent)),
+                            ("down", &crate::network::readable_bytes(e.received)),
                         ],
                     ),
                     None => self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED),
@@ -3768,7 +4117,7 @@ impl Footer {
                     None,
                 ),
                 None => {
-                    tracing::error!("RONOCTUA_XDG_OPEN nao foi definida no build");
+                    tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
                     let m = self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED);
                     self.echo_message(m);
                 }
@@ -3785,7 +4134,7 @@ impl Footer {
             // would make the terminal open a DIFFERENT VERSION from the running one.
             "buffer-terminal" => match std::env::current_exe() {
                 Ok(me) => self.open_foreign(&me.to_string_lossy(), &["terminal".to_owned()], None),
-                Err(e) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),
+                Err(e) => tracing::error!(error = %e, "I do not know my own binary"),
             },
             // The system's terminal, for whoever wants the whole Ghostty. It is
             // a foreign buffer like any other.
@@ -3817,6 +4166,24 @@ impl Footer {
             "unicode-symbols" => self.open_buffer("RONOCTUA_BUFFER_UNICODE"),
             "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
+            "brain-open" => self.open_buffer("RONOCTUA_BUFFER_BRAIN"),
+            // THE COUNTDOWN'S TWO ANSWERS. They are the band's two controls and
+            // they are reachable with no window open, which is the whole point:
+            // the line appears on its own, and what answers it must not require
+            // opening a screen first.
+            "brain-abort" => self.brain_answer(false),
+            "brain-proceed" => self.brain_answer(true),
+            // `LEADER s u` — the whole sequence, now, outside any schedule.
+            "system-update" => self.start_the_update(),
+            // `LEADER s w` — the window that watches it, and the door the
+            // modeline's mark opens. It re-execs this binary with `update`,
+            // exactly as the file manager's second door does: what draws over
+            // there is a window and a GPU, and what it decides is nothing.
+            "update-watch" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["update".to_owned()], None);
+                }
+            }
             "transfers-window" => self.open_buffer("RONOCTUA_BUFFER_TRANSFERS"),
             "format-open" => self.open_buffer("RONOCTUA_BUFFER_FORMAT"),
             "transfers-add" => self.queue_the_clipboard(Wish::plain()),
@@ -3849,10 +4216,10 @@ impl Footer {
                 // which-key and does nothing is indistinguishable from an
                 // unregistered key — that is how the five mute commands went
                 // unnoticed.
-                tracing::warn!(command = otherwise, "comando sem acao registrada");
+                tracing::warn!(command = otherwise, "a command with no registered action");
                 let m = self.texts.t_with(
                     ronoctua_i18n::key::ECHO_NO_ACTION,
-                    &[("comando", otherwise)],
+                    &[("command", otherwise)],
                 );
                 self.echo_message(m);
             }
@@ -3868,7 +4235,7 @@ impl Footer {
     fn niri_action(&mut self, f: impl FnOnce(&mut ronoctua_niri::Niri) -> anyhow::Result<()>) {
         let r = ronoctua_niri::Niri::connect().and_then(|mut n| f(&mut n));
         if let Err(e) = r {
-            tracing::warn!(error = %e, "a acao no niri falhou");
+            tracing::warn!(error = %e, "the action on niri failed");
             let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_WINDOW);
             self.echo_message(m);
         }
@@ -3892,19 +4259,19 @@ impl Footer {
         let scope = match crate::foreign::scope_name() {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!(error = %e, "sem nome de scope; buffer nao aberto");
+                tracing::error!(error = %e, "no scope name; buffer not opened");
                 return;
             }
         };
         let me = match std::env::current_exe() {
             Ok(e) => e,
             Err(e) => {
-                tracing::error!(error = %e, "nao sei qual e o meu proprio binario");
+                tracing::error!(error = %e, "I do not know my own binary");
                 return;
             }
         };
-        let ocupados = crate::foreign::taken_displays();
-        let cmd = match crate::foreign::first_free_display(&ocupados) {
+        let taken = crate::foreign::taken_displays();
+        let cmd = match crate::foreign::first_free_display(&taken) {
             Some(display) => crate::foreign::command_with_satellite(
                 &scope,
                 &me.to_string_lossy(),
@@ -3916,7 +4283,7 @@ impl Footer {
             // A hundred displays in use. Opening without X is better than not
             // opening: a Wayland app works the same, and an X11 one will say why it failed.
             None => {
-                tracing::warn!("sem numero de display livre; buffer sobe sem satellite");
+                tracing::warn!("no free display number; the buffer comes up with no satellite");
                 crate::foreign::scope_command(&scope, working_directory, program, args)
             }
         };
@@ -3924,9 +4291,9 @@ impl Footer {
         // cannot be created. Rebuilding it in there would require taking the
         // `systemd-run` apart, and a new option would break the disassembly
         // silently.
-        let mut direto = vec![program.to_owned()];
-        direto.extend_from_slice(args);
-        self.spawn_it(&scope, &direto, &cmd);
+        let mut direct = vec![program.to_owned()];
+        direct.extend_from_slice(args);
+        self.spawn_it(&scope, &direct, &cmd);
     }
 
     /// Orders a re-sweep if some `applications` directory changed.
@@ -3945,12 +4312,12 @@ impl Footer {
         if now == self.apps_stamp {
             return;
         }
-        let Some(envio) = self.catalogue_sender.clone() else {
+        let Some(sender) = self.catalogue_sender.clone() else {
             return;
         };
-        tracing::info!("os diretorios de aplicativos mudaram; revarrendo");
+        tracing::info!("the application directories changed; rescanning");
         self.apps_stamp = now;
-        crate::apps::scan(self.texts.language(), envio);
+        crate::apps::scan(self.texts.language(), sender);
     }
 
     /// Is this `Icon=`'s pixmap already decoded?
@@ -3974,7 +4341,7 @@ impl Footer {
     /// the region's ceiling —, and scrolling asks for the next twelve. The cache
     /// keeps what has already arrived, so scrolling back repeats nothing.
     fn request_visible_icons(&mut self) {
-        let Some(fila) = self.icon_queue.clone() else {
+        let Some(queue) = self.icon_queue.clone() else {
             return;
         };
         if self.apps.is_none() {
@@ -3984,7 +4351,7 @@ impl Footer {
         let Some(l) = self.apps.as_ref() else {
             return;
         };
-        let faltam: Vec<String> = (offset..offset + per_page)
+        let missing_ones: Vec<String> = (offset..offset + per_page)
             .filter_map(|i| l.at(i))
             .map(|e| e.icon.clone())
             .filter(|n| {
@@ -3992,11 +4359,11 @@ impl Footer {
             })
             .collect();
         let side = crate::apps::pixmap_side().ceil() as u32;
-        for icon in faltam {
+        for icon in missing_ones {
             // A closed queue means the thread died. Registering the request
             // anyway would leave the name stuck in "requested" forever, and
             // the line would never try again.
-            if fila
+            if queue
                 .send(crate::apps::Request {
                     icon: icon.clone(),
                     side,
@@ -4013,14 +4380,14 @@ impl Footer {
     /// A decoded pixmap, coming from the thread.
     fn painted(&mut self, p: crate::apps::Painting) {
         self.icons_requested.remove(&p.icon);
-        let achou = p.rgba.is_some();
+        let found = p.rgba.is_some();
         // The `None` GOES INTO THE MAP. It is the answer "it does not exist", and
         // it is what stops the request from coming back on every frame.
         self.icons.insert(p.icon, p.rgba);
         // It only redraws when there is something new to show, and only with the
         // list open: an icon that arrives after the view closes must not cost a
         // frame.
-        if achou && self.apps.is_some() {
+        if found && self.apps.is_some() {
             self.draw_and_paint();
         }
     }
@@ -4087,7 +4454,7 @@ impl Footer {
     /// thing that has to be right.
     fn tell_the_queue(&mut self, ask: &ronoctua_transfers::Ask) {
         if let Err(e) = ronoctua_transfers::client::tell(ask) {
-            tracing::warn!(error = %e, ?ask, "a fila de transferencias nao respondeu");
+            tracing::warn!(error = %e, ?ask, "the transfer queue did not answer");
             let said = self.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE);
             self.echo_message(said);
         }
@@ -4188,17 +4555,17 @@ impl Footer {
     fn open_application(&mut self, e: &ronoctua_apps::DesktopEntry) {
         let (program, args) = &e.command;
         if !e.terminal {
-            tracing::info!(app = %e.id, program, "abrindo aplicativo");
+            tracing::info!(app = %e.id, program, "opening the application");
             self.open_foreign(program, args, e.working_directory.as_deref());
             return;
         }
         let Ok(me) = std::env::current_exe() else {
-            tracing::error!("nao sei qual e o meu proprio binario");
+            tracing::error!("I do not know my own binary");
             return;
         };
         let mut inside = vec!["terminal".to_owned(), program.clone()];
         inside.extend_from_slice(args);
-        tracing::info!(app = %e.id, program, "abrindo aplicativo NO terminal");
+        tracing::info!(app = %e.id, program, "opening the application IN the terminal");
         self.open_foreign(&me.to_string_lossy(), &inside, None);
     }
 
@@ -4213,25 +4580,25 @@ impl Footer {
     ///
     /// The verdict comes back through the channel, and that is where the echo
     /// area is written — it needs `&mut self`, which the thread does not have.
-    fn spawn_it(&mut self, scope: &str, direto: &[String], cmd: &[String]) {
-        let Some(envio) = self.launch_sender.clone() else {
+    fn spawn_it(&mut self, scope: &str, direct: &[String], cmd: &[String]) {
+        let Some(sender) = self.launch_sender.clone() else {
             // With no channel there is no way of reporting, and launching blind would
             // hide the error. It only happens outside the event loop (tests).
-            tracing::error!("sem canal de lancamento; buffer nao aberto");
+            tracing::error!("no launch channel; buffer not opened");
             return;
         };
-        let (scope, direto, cmd) = (scope.to_owned(), direto.to_vec(), cmd.to_vec());
+        let (scope, direct, cmd) = (scope.to_owned(), direct.to_vec(), cmd.to_vec());
         // THE THREAD'S NAME shows up in `perf` and in `gdb`. An anonymous thread
         // stuck in `wait4` for hours is exactly what nobody identifies.
         let born = std::thread::Builder::new()
             .name("ronoctua-lancar".to_owned())
             .spawn(move || {
-                let verdict = crate::foreign::launch(&scope, &direto, &cmd);
+                let verdict = crate::foreign::launch(&scope, &direct, &cmd);
                 // A closed channel = the footer left. Nothing to report.
-                let _ = envio.send(verdict);
+                let _ = sender.send(verdict);
             });
         if let Err(e) = born {
-            tracing::error!(error = %e, "nao consegui criar a thread de lancamento");
+            tracing::error!(error = %e, "could not create the launch thread");
         }
     }
 
@@ -4266,7 +4633,7 @@ impl Footer {
             // footer is shutting down. There is nothing to report to.
             let _ = echo.send(());
         }) {
-            tracing::debug!(error = %e, "sem vigia de varredura; a lista so rele a pedido");
+            tracing::debug!(error = %e, "no scan watcher; the list only rereads on request");
         }
     }
 
@@ -4286,16 +4653,16 @@ impl Footer {
         use crate::foreign::Launch;
         match v {
             Launch::WithScope { scope, program } => {
-                tracing::info!(scope, program, "buffer estrangeiro aberto");
+                tracing::info!(scope, program, "foreign buffer opened");
             }
             Launch::Orphan { program, reason } => {
-                tracing::warn!(program, reason, "aberto SEM cgroup proprio");
+                tracing::warn!(program, reason, "opened WITHOUT a cgroup of its own");
             }
             Launch::Failed { program, error } => {
-                tracing::error!(error, program, "nao consegui abrir");
+                tracing::error!(error, program, "could not open");
                 let m = self.texts.t_with(
                     ronoctua_i18n::key::ECHO_NO_OPENED,
-                    &[("programa", program.as_str())],
+                    &[("program", program.as_str())],
                 );
                 self.echo_message(m);
                 self.draw_and_paint();
@@ -4326,12 +4693,16 @@ impl Footer {
         let Ok(pid) = u32::try_from(pid) else { return };
         match crate::leader::buffer_keymap(pid) {
             Ok(bindings) if !bindings.is_empty() => {
-                tracing::debug!(pid, bindings = bindings.len(), "keymap do buffer em foco");
+                tracing::debug!(
+                    pid,
+                    bindings = bindings.len(),
+                    "the focused buffer's keymap"
+                );
                 self.buffer_pid = Some(pid);
                 self.buffer_bindings = bindings;
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "nao consegui ler o keymap do buffer"),
+            Err(e) => tracing::warn!(error = %e, "could not read the buffer's keymap"),
         }
 
         // THE STATES, from the same socket and in the same breath.
@@ -4410,13 +4781,15 @@ impl Footer {
         match (picked, self.buffer_pid) {
             (Some(id), Some(pid)) => {
                 match crate::leader::buffer_state(pid, &format!("state {id}")) {
-                    Ok(()) => tracing::info!(state = %id, "estado escolhido pela leader"),
-                    Err(e) => tracing::warn!(error = %e, state = %id, "o buffer recusou o estado"),
+                    Ok(()) => tracing::info!(state = %id, "state chosen by the leader"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, state = %id, "the buffer refused the state")
+                    }
                 }
             }
             // A key that is not one of the letters ends the sequence, like any
             // other key that leads nowhere.
-            _ => tracing::debug!(key = %typed, "tecla fora dos estados do buffer"),
+            _ => tracing::debug!(key = %typed, "a key outside the buffer's states"),
         }
         true
     }
@@ -4464,9 +4837,9 @@ impl Footer {
             self.buffer_pending.clear();
             self.close_leader();
             match pid.map(|p| crate::leader::buffer_command(p, &id)) {
-                Some(Ok(())) => tracing::info!(command = %id, "comando do buffer em foco"),
+                Some(Ok(())) => tracing::info!(command = %id, "command of the focused buffer"),
                 Some(Err(e)) => tracing::warn!(error = %e, command = %id, "o buffer recusou"),
-                None => tracing::warn!(command = %id, "sem buffer para receber o comando"),
+                None => tracing::warn!(command = %id, "no buffer to take the command"),
             }
             return true;
         }
@@ -4605,7 +4978,7 @@ impl Footer {
             show = p.show.id(),
             life = p.life.id(),
             level = p.level,
-            "notificacao decidida"
+            "notification decided"
         );
         self.notifications.enqueue(n, p, now);
     }
@@ -4621,7 +4994,7 @@ impl Footer {
             unread = self.notifications.unread(),
             band = self.band_rows(),
             loud = self.notifications.has_loud(),
-            "fila de notificacoes"
+            "notification queue"
         );
         self.save_history();
         self.apply_geometry(self.interactivity());
@@ -4636,14 +5009,39 @@ impl Footer {
     /// the record.
     fn save_history(&mut self) {
         if let Err(e) = self.notes.save_history(self.notifications.history_mut()) {
-            tracing::warn!(error = %e, "nao consegui gravar o historico de notificacoes");
+            tracing::warn!(error = %e, "could not write the notification history");
         }
     }
 
     /// Recomputes the layout and paints. The pair shows up in every event source.
     fn draw_and_paint(&mut self) {
+        // WHAT THE PANELS NEED, asked ONCE PER FRAME and in one place.
+        //
+        // Every other arrangement was a list of the ways the cursor can move —
+        // a key, a click, a re-read, a directory entered — and the one that got
+        // forgotten would be a panel showing the previous file with nothing
+        // saying why. `wants_look` answers `None` when the answer is already in
+        // hand, so this costs a comparison of two strings.
+        self.look_again();
         self.draw();
         self.paint();
+    }
+
+    /// Asks the inspector about the file under the manager's cursor.
+    ///
+    /// A no-op when there is no manager, when neither panel is on, or when the
+    /// same file has already been asked about — all three decided by
+    /// `files::View::wants_look`, which is the one place that knows.
+    fn look_again(&mut self) {
+        let Some(queue) = self.files_looking.as_ref() else {
+            return;
+        };
+        let Some(view) = self.files.as_mut() else {
+            return;
+        };
+        if let Some(ask) = view.wants_look(u32::from(tokens::space::FILES_PANELPIXELS)) {
+            let _ = queue.send(ask);
+        }
     }
 
     /// Owes a paint, to happen once the event queue is empty.
@@ -4658,7 +5056,7 @@ impl Footer {
     ///
     /// The keyboard request is `Exclusive` on purpose. `OnDemand` would give
     /// focus only on a click, and the footer has nothing clickable.
-    fn ativar_leader(&mut self) {
+    fn activate_leader(&mut self) {
         // "which-key in one frame" (5.2), counted from here.
         //
         // What stays OUT: niri receives the key and runs `ronoctua-shell
@@ -4672,7 +5070,7 @@ impl Footer {
         if let Some(g) = self.screens.first_mut().and_then(|t| t.gpu.as_mut()) {
             g.mark_as("which-key", std::time::Instant::now());
         }
-        self.leader.ativar();
+        self.leader.activate();
         self.first_page();
         // WHAT THE FOCUSED BUFFER ANSWERS TO, asked once, here.
         //
@@ -4745,14 +5143,14 @@ impl Footer {
         let Some(r) = ronoctua_clipboard::image::decode(bytes) else {
             // A format we cannot read, or too big. The entry stays in the
             // history — what is lost is the preview.
-            tracing::debug!(bytes = bytes.len(), "a imagem copiada nao decodificou");
+            tracing::debug!(bytes = bytes.len(), "the copied image did not decode");
             return;
         };
         tracing::debug!(
             width = r.width,
             height = r.height,
             ms = start.elapsed().as_secs_f64() * 1000.0,
-            "previa decodificada"
+            "preview decoded"
         );
         self.clip_version = self.clip_version.wrapping_add(1);
         self.clip_image = Some((
@@ -4841,12 +5239,13 @@ impl Footer {
                 .as_mut()
                 .map(|v| v.connect(&ssid, Some(&password), true))
             {
-                Some(Ok(())) => self
-                    .texts
-                    .t_with(ronoctua_i18n::key::ECHO_NETWORK_STORED, &[("rede", &ssid)]),
+                Some(Ok(())) => self.texts.t_with(
+                    ronoctua_i18n::key::ECHO_NETWORK_STORED,
+                    &[("network", &ssid)],
+                ),
                 Some(Err(e)) => self.texts.t_with(
                     ronoctua_i18n::key::ECHO_NETWORK_STORE_FAILED,
-                    &[("motivo", &e.to_string())],
+                    &[("reason", &e.to_string())],
                 ),
                 None => self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE),
             }
@@ -4871,7 +5270,7 @@ impl Footer {
     /// move a cursor, `TAB` changes pane, letters run actions — and a view with
     /// a cursor nobody can move is a view that only the mouse reaches, which is
     /// the one thing this footer refuses.
-    fn alternar_gerenciador(&mut self) {
+    fn toggle_manager(&mut self) {
         self.notifications_open = !self.notifications_open;
         if self.notifications_open {
             self.manager = crate::notifications::View::fresh();
@@ -4882,7 +5281,7 @@ impl Footer {
             unread = self.notifications.unread(),
             lines = self.expansion_len(),
             pages = self.pages(),
-            "gerenciador de notificacoes"
+            "notification manager"
         );
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
@@ -4967,7 +5366,7 @@ impl Footer {
             }
             Errand::Forget(id) => {
                 if self.notifications.forget(id) {
-                    tracing::info!(id, "notificacao esquecida");
+                    tracing::info!(id, "notification forgotten");
                 }
                 self.after_the_queue_moved();
             }
@@ -4982,13 +5381,13 @@ impl Footer {
                     adjustments: self.book.adjustments.clone(),
                 };
                 if let Err(e) = self.notes.save_preferences(&prefs) {
-                    tracing::warn!(error = %e, "nao consegui gravar as preferencias");
+                    tracing::warn!(error = %e, "could not write the preferences");
                     self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
                 }
-                tracing::info!(id = %id, "ajuste de notificacao gravado");
+                tracing::info!(id = %id, "notification preference saved");
                 self.draw_and_paint();
             }
-            Errand::Close => self.alternar_gerenciador(),
+            Errand::Close => self.toggle_manager(),
         }
     }
 
@@ -5026,7 +5425,7 @@ impl Footer {
                 match crate::buffer::copy_to_clipboard(&text) {
                     Ok(()) => self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPIED)),
                     Err(e) => {
-                        tracing::error!(error = %e, "copiar o caminho FALHOU");
+                        tracing::error!(error = %e, "copying the path FAILED");
                         self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
                     }
                 }
@@ -5036,7 +5435,10 @@ impl Footer {
                     // It should not get here: an action whose program is
                     // missing is not offered — see `usable_actions`. The guard
                     // is for the day the profile changes under a running shell.
-                    tracing::warn!(program = program.id(), "programa da acao nao instalado");
+                    tracing::warn!(
+                        program = program.id(),
+                        "the action's program is not installed"
+                    );
                     return;
                 };
                 let mut argv: Vec<String> = Vec::new();
@@ -5055,7 +5457,7 @@ impl Footer {
                         }
                     }
                 }
-                tracing::info!(program = %path, ?argv, "acao de notificacao");
+                tracing::info!(program = %path, ?argv, "a notification action");
                 self.open_foreign(&path, &argv, None);
             }
         }
@@ -5124,7 +5526,7 @@ impl Footer {
                 self.echo_message(message);
             }
             Err(e) => {
-                tracing::error!(error = %e, "a fila recusou o endereco");
+                tracing::error!(error = %e, "the queue refused the address");
                 let message = self.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE);
                 self.echo_message(message);
             }
@@ -5132,7 +5534,7 @@ impl Footer {
     }
 
     fn echo_message(&mut self, text: String) {
-        tracing::info!(echo = %text, "area de eco");
+        tracing::info!(echo = %text, "echo area");
         self.echo = Some((
             text,
             std::time::Instant::now() + std::time::Duration::from_secs(Self::ECHO_SECONDS),
@@ -5163,7 +5565,13 @@ impl Footer {
         self.apply_geometry(self.interactivity());
     }
 
-    /// Which of the EIGHT views is in the expanded region right now.
+    /// Which view is in the expanded region right now.
+    ///
+    /// The count used to be written into this sentence, and it rotted: this
+    /// line said EIGHT, the network's comment below said seven, and
+    /// [`ViewState`] has nine of them plus `NoneOf`. A number in prose is a
+    /// second copy of something the enum already says exactly, so there is no
+    /// number here any more.
     ///
     /// **The precedence order is written HERE, and only here.** Whoever is in
     /// the middle of something wins: the four modals captured the whole
@@ -5230,6 +5638,35 @@ impl Footer {
         crate::band::rows(self.notifications.showing()).min(BAND_CEILING)
     }
 
+    /// A sequence as the person would type it, leader included.
+    ///
+    /// The trigger's own notation comes from the ENVIRONMENT (`crate::leader`):
+    /// in the nested loop it is not `SPC`, and a line that said `SPC` there
+    /// would be teaching a key that does not exist.
+    fn brain_keys(&self, sequence: &str) -> String {
+        format!("{} {sequence}", self.leader_label)
+    }
+
+    /// What the brain has announced, when it has announced anything.
+    fn announced(&self) -> Option<&ronoctua_brain::Announcement> {
+        self.brain.as_ref()?.announcement.as_ref()
+    }
+
+    /// How many lines the brain's line takes right now.
+    ///
+    /// One while a countdown is running, zero otherwise — and never a function
+    /// of the width, for the reason [`crate::brain::rows`] gives.
+    /// How many lines the brain's line takes: one, or none.
+    ///
+    /// `brain_rows` AND NOT `brain_line`, which is what it was called. Its
+    /// twin `brain_line_at` returns the row the line sits ON, and a pair where
+    /// one name reads as an index and returns a count is the exact confusion
+    /// `first_of_expansion` already carries a paragraph about. `band_rows` next
+    /// door answers the same question about the band, and now they read alike.
+    fn brain_rows(&self) -> u16 {
+        crate::brain::rows(self.announced())
+    }
+
     /// Which line of the surface the modeline is on.
     ///
     /// It used to be zero, and a constant. The band grows ABOVE it, so it moves
@@ -5245,6 +5682,19 @@ impl Footer {
         self.band_rows() + 1
     }
 
+    /// Which line of the surface the brain's is on, when it is on one.
+    ///
+    /// GLUED UNDER THE MINIBUFFER, and not the last line of the surface. Three
+    /// reasons, and `crate::brain`'s header argues all three — the one that
+    /// decides it is that a truly-last line would live at
+    /// `first_of_expansion() + expansion_rows()` and would have to be worked
+    /// out again in the painter, in the hit test and in the background quad,
+    /// which is exactly the defect [`Self::first_of_expansion`] exists to
+    /// remove.
+    fn brain_line_at(&self) -> u16 {
+        self.band_rows() + FOOTER_LINES
+    }
+
     /// The first line of the expanded region.
     ///
     /// The number used to be a constant and appeared in the drawing and again
@@ -5252,7 +5702,7 @@ impl Footer {
     /// the same thing, and the one that gets it wrong is the one nobody looks
     /// at: the cursor describes the line above.
     fn first_of_expansion(&self) -> u16 {
-        self.band_rows() + FOOTER_LINES
+        self.band_rows() + FOOTER_LINES + self.brain_rows()
     }
 
     /// The height wanted right now, in px.
@@ -5272,7 +5722,7 @@ impl Footer {
         //
         // The band is added and not ordered against them: it is not a use of
         // the expanded region, it is a region of its own, above the pair.
-        let lines = u32::from(FOOTER_LINES + self.band_rows())
+        let lines = u32::from(FOOTER_LINES + self.band_rows() + self.brain_rows())
             + u32::try_from(self.expansion_rows()).unwrap_or(0);
         (tokens::metrics::line_height(tokens::font::SIZE_BASE) * lines as f32).ceil() as u32
     }
@@ -5296,13 +5746,25 @@ impl Footer {
         // The SMALLEST screen is in charge: the footer's height is the same on
         // all of them (see `apply_geometry`), so a ceiling that only fitted
         // on the big monitor would leak on the small one.
-        let menor = self
+        let smaller = self
             .screens
             .iter()
             .map(|t| t.output_height)
             .filter(|h| *h > 0)
             .min();
-        expansion_ceiling(menor)
+        // WHAT IS ACTUALLY FIXED, and it used to be a literal `2`.
+        //
+        // The percentage belongs to the WHOLE footer, so whatever is not the
+        // expansion has to come off it — and until the brain's line arrived the
+        // fixed part was exactly the modeline and the minibuffer. It is not any
+        // more: a countdown on screen is a third line the footer is spending.
+        //
+        // THE NOTIFICATION BAND IS STILL NOT IN THIS TERM, and that is a
+        // pre-existing looseness rather than a decision made here: up to three
+        // lines of band are not counted against the ceiling. Whether it should
+        // join is a separate question — the band is transient in a way these
+        // are not — and it is flagged rather than folded in silently.
+        expansion_ceiling(smaller, usize::from(FOOTER_LINES + self.brain_rows()))
     }
 
     /// How the expanded region is navigated right now.
@@ -5324,12 +5786,23 @@ impl Footer {
     /// unconfigured one is at zero width, and everything would then fit in one
     /// column — the same reason `grid()` picks it that way.
     fn screen_columns(&self) -> u16 {
-        let px = self
-            .screens
-            .iter()
-            .find(|t| t.configured && t.width > 0)
-            .map_or(0, |t| t.width);
-        tokens::metrics::columns(px as f32, tokens::font::SIZE_BASE)
+        self.metric().map_or(0, crate::chrome::Frame::columns)
+    }
+
+    /// This door's measurements — see `chrome::Frame`, the one place a token
+    /// becomes a pixel. `None` before a screen has been configured.
+    ///
+    /// Built rather than stored: the surface's width and height are the only
+    /// facts, and a kept copy of what they imply is a second home for them.
+    #[allow(clippy::cast_precision_loss)]
+    fn metric(&self) -> Option<crate::chrome::Frame> {
+        let screen = self.screens.iter().find(|t| t.configured && t.width > 0)?;
+        Some(crate::chrome::Frame::of(
+            crate::chrome::Door::Footer,
+            screen.width as f32,
+            screen.height as f32,
+            self.first_of_expansion(),
+        ))
     }
 
     /// The expanded region's grid right now.
@@ -5347,12 +5820,12 @@ impl Footer {
         // The width comes from the first CONFIGURED screen, and not from the
         // first of the list: `first()` could be at zero width, and then
         // everything would fit in one column.
-        let largura_px = self
+        let width_px = self
             .screens
             .iter()
             .find(|t| t.configured && t.width > 0)
             .map_or(0, |t| t.width);
-        let columns = tokens::metrics::columns(largura_px as f32, tokens::font::SIZE_BASE);
+        let columns = tokens::metrics::columns(width_px as f32, tokens::font::SIZE_BASE);
         // THE CLIPBOARD USES ONLY THE LEFT COLUMN.
         //
         // Its list is the left panel; on the right sits the content, which is
@@ -5388,9 +5861,18 @@ impl Footer {
         // would lay the same row out twice, with two different answers, and
         // draw one over the other.
         if self.files.is_some() {
+            // AND THE STRIP COMES OFF THE CEILING, not off the list's own
+            // count: the four lines it takes are four the listing does not get,
+            // and `per_page` is what pages and scrolls. At least one line left
+            // for the list — a region that was all strip would be a preview of
+            // a file nothing on screen names.
+            let room = self
+                .expansion_ceiling()
+                .saturating_sub(self.files_strip())
+                .max(1);
             return Grid {
                 columns: 1,
-                lines: self.expansion_ceiling().min(total.max(1)),
+                lines: room.min(total.max(1)),
                 width: columns,
                 colon: 0,
                 icon: 0,
@@ -5422,7 +5904,11 @@ impl Footer {
         if self.expansion_len() == 0 {
             return 0;
         }
-        self.grid().lines
+        // THE HEIGHT, and this is the one caller that wants it: what the region
+        // OCCUPIES is the list plus the strip pinned under it. See
+        // `expansion_len` for the audit that puts every other caller on the
+        // other side of the line.
+        self.grid().lines + self.files_strip()
     }
 
     /// How many pages the current content has.
@@ -5437,6 +5923,18 @@ impl Footer {
     /// a stored value would be left pointing past the end with nothing warning
     /// it. The symptom would be a blank region.
     fn current_offset(&self) -> usize {
+        // THE MANAGER'S OFFSET IS THE MANAGER'S. This door keeps one number
+        // for the eight views that have no state of their own; the file
+        // manager has three sections that scroll and keeps all three, so
+        // asking it is the only way the two cannot disagree.
+        //
+        // They did disagree. The footer moved its copy on a wheel event and
+        // pushed it into the view before the next draw, so a gesture with no
+        // frame between the two arrived late — and a drag on the listing's bar
+        // moved a number the view never read.
+        if let Some(v) = self.files.as_ref() {
+            return v.list_offset();
+        }
         // The LAST offset goes by PAGE when it paginates: with a grid of three
         // columns, stopping at `per_page` from the end would leave two empty
         // columns on the last turn.
@@ -5444,6 +5942,20 @@ impl Footer {
         let last = last_offset(self.expansion_len(), per_page);
         let step = self.scroll_step().max(1);
         (self.offset - self.offset % step).min(last)
+    }
+
+    /// Moves the region's first visible row, wherever that number lives.
+    ///
+    /// The counterpart of [`Self::current_offset`], and the only writer: with
+    /// the manager open it is the view's, otherwise this door's. Every place
+    /// that scrolls goes through here, which is what makes "one offset per
+    /// list" a property of the code rather than a habit.
+    fn scroll_offset_to(&mut self, to: usize) {
+        if let Some(v) = self.files.as_mut() {
+            v.scroll_listing_to(to);
+            return;
+        }
+        self.offset = to;
     }
 
     /// EVERY line of the expanded region, with no cut and no page.
@@ -5470,6 +5982,24 @@ impl Footer {
     /// Only the file manager can answer cheaply, and only it needs to: every
     /// other expansion is a keymap page, a clipboard history or a command list
     /// — dozens of rows, built in microseconds.
+    ///
+    /// # This number is the SCROLL, and never the HEIGHT
+    ///
+    /// The manager's bottom strip is pinned under the list and does not move
+    /// with it, so it is not in here — a strip that scrolled would appear only
+    /// on the last page. Every caller was read and classified, and the split is
+    /// written out rather than left to be inferred:
+    ///
+    /// | caller | wants | reads |
+    /// |---|---|---|
+    /// | `grid()` | height | this, minus the strip, for `lines` |
+    /// | `expansion_rows()` | height | `grid().lines` PLUS the strip |
+    /// | `pages()`, `current_offset()`, `last_offset` | scroll | this |
+    /// | `drag_to()` | scroll | this |
+    /// | `row_at()`, `visible_row()` | both | this, and the strip separately |
+    /// | the scrollbar (`bar_showing`, its height) | scroll | this |
+    ///
+    /// The strip's own count is [`Footer::files_strip`].
     fn expansion_len(&self) -> usize {
         if let Some(files) = &self.files
             && let Some(n) = files.row_count(self.screen_columns())
@@ -5482,7 +6012,12 @@ impl Footer {
             // TWO chrome lines when it is a plain listing: the path and the
             // header. See `expansion_window`.
             let plain = files.plain();
-            return n + if plain { 2 } else { 0 };
+            let _ = n;
+            // THROUGH `region_len`, which adds the chrome to the LISTING and
+            // not to whichever column is tallest — see the note there.
+            return files
+                .region_len(if plain { 2 } else { 0 }, self.screen_columns())
+                .unwrap_or(n);
         }
         // The panel counts without building: `expansion()` would clone every
         // job to answer "how many", and this runs on every pointer motion —
@@ -5520,6 +6055,36 @@ impl Footer {
     /// ONE function, because `expansion` and `expansion_window` both need it and
     /// two copies would drift — which is the same reason `expansion` itself
     /// exists as a single list feeding both the height and the drawing.
+    /// How many lines the manager's bottom strip takes — and zero when there
+    /// is none.
+    ///
+    /// It is a HEIGHT and never a scroll: the strip is pinned under the last
+    /// line of the list, so it costs the listing rows rather than following it.
+    /// See `expansion_len` for the audit of who reads which.
+    fn files_strip(&self) -> usize {
+        self.files
+            .as_ref()
+            .map_or(0, |v| usize::from(v.panes(self.screen_columns()).strip))
+    }
+
+    /// The strip's own rows, built by the same view that builds the listing.
+    fn files_strip_rows(&self) -> Vec<ExpansionRow> {
+        let Some(view) = self.files.as_ref() else {
+            return Vec::new();
+        };
+        view.strip_rows(self.screen_columns(), &self.texts)
+            .into_iter()
+            .map(|r| ExpansionRow {
+                // THE SAME RULE AS A LINE OF THE LISTING: a row with nothing in
+                // it is not a target. The strip is four lines and the info
+                // panel may have two facts.
+                click: (!r.fields.is_empty()).then_some(Click::FilesStrip),
+                fields: r.fields,
+                ..ExpansionRow::empty_one()
+            })
+            .collect()
+    }
+
     fn files_chrome(
         &self,
         files: &crate::files::View,
@@ -5532,7 +6097,7 @@ impl Footer {
         vec![
             ExpansionRow {
                 click: Some(Click::FilesPath),
-                fields: files.crumbs(),
+                fields: files.crumbs(width),
                 ..ExpansionRow::empty_one()
             },
             ExpansionRow {
@@ -5577,24 +6142,69 @@ impl Footer {
         // Neither is drawn while the menu, the picker or the detail sheet is on
         // screen: none of those has columns, and a header over them would name
         // nothing.
+        // SECTION BY SECTION, and never a line composed of four columns.
+        //
+        // This door draws through `ExpansionRow`, which is one row per line —
+        // so the sections are laid onto those lines here, each at its own
+        // `top`, each from its own content. What does NOT happen is a section
+        // deciding another's line: a column's length, its offset and its top
+        // stay inside it, and the only thing they share is the `y` they are
+        // drawn at.
+        // A MODAL VIEW IS ONE LIST, and not four columns: the menu, the picker
+        // and the detail sheet cover the listing. See `View::modal_rows`.
+        if !plain {
+            return files
+                .modal_rows(skip, take, width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.fields.is_empty()).then_some(Click::Files(skip + n)),
+                    fields: r.fields,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
         let chrome = self.files_chrome(files, width, plain);
         let chrome_count = chrome.len();
-        let here: Vec<ExpansionRow> = chrome.into_iter().skip(skip).take(take).collect();
-        let first = skip.saturating_sub(chrome_count);
-        let rows = files.rows_from(first, take.saturating_sub(here.len()), width, &self.texts);
-        here.into_iter()
-            .chain(rows.into_iter().enumerate().map(|(n, r)| ExpansionRow {
-                // A ROW WITH NOTHING IN IT IS NOT A TARGET.
-                //
-                // The blank line that separates the sidebar's blocks, and any
-                // line past the end of a short listing, used to carry a click —
-                // so the pointer lit a band over empty space and a press there
-                // resolved to a field that was not there. A line that does
-                // nothing should not look like a line that does something.
-                click: (!r.fields.is_empty()).then_some(Click::Files(first + n)),
-                fields: r.fields,
-                ..ExpansionRow::empty_one()
-            }))
+        let bare: Vec<crate::files::Row> = chrome
+            .iter()
+            .map(|r| crate::files::Row {
+                fields: r.fields.clone(),
+                marked: false,
+                focused: false,
+            })
+            .collect();
+        let clicks: Vec<Option<Click>> = chrome.iter().map(|r| r.click).collect();
+        let sections = files.sections(&bare, take, width, &self.texts);
+        // THE REGION IS WHAT SITS ABOVE THE STRIP — the strip has lines of its
+        // own and both doors draw it through `View::strip_rows`.
+        let region: Vec<&crate::files::Section> = sections.iter().filter(|s| s.top == 0).collect();
+        let lines = region.iter().map(|s| s.content.len()).max().unwrap_or(0);
+        (0..take.min(lines))
+            .map(|n| {
+                let mut fields = Vec::new();
+                let mut listing_has_something = false;
+                for sec in &region {
+                    let Some(line) = sec.content.get(n) else {
+                        continue;
+                    };
+                    if matches!(sec.pane, crate::files::Pane::Listing) {
+                        listing_has_something = !line.fields.is_empty();
+                    }
+                    fields.extend(line.fields.iter().cloned());
+                }
+                ExpansionRow {
+                    // THE CHROME'S OWN CLICK on its own lines — the path opens
+                    // the parent and the header sorts — and the listing's
+                    // below them.
+                    click: clicks.get(n).copied().flatten().or_else(|| {
+                        listing_has_something
+                            .then_some(Click::Files(skip + n.saturating_sub(chrome_count)))
+                    }),
+                    fields,
+                    ..ExpansionRow::empty_one()
+                }
+            })
             .collect()
     }
 
@@ -5603,31 +6213,18 @@ impl Footer {
         // the precedence is written. A branch here that disagreed with that
         // function is exactly the divergence `ViewState` exists to prevent.
         if let Some(files) = &self.files {
-            let width = self.screen_columns();
-            // NO EMPTY-DIRECTORY BRANCH HERE ANY MORE. "Nothing here" is a
-            // field of the listing now (`View::rows_from`), which is what gives
-            // the window door the same sentence — it drew nothing at all for an
-            // empty directory before — and what lets it sit BESIDE a sidebar
-            // instead of replacing it.
-            let rows = files.rows(width, &self.texts);
-            // THE PATH AND THE HEADER FIRST — see `files_chrome`, which is the
-            // ONE place they are built. They scroll with the list, and that is
-            // deliberate: pinning them would mean drawing them outside
-            // `expansion()`, and `expansion()` being the single list that feeds
-            // both the height and the drawing is what keeps the two from
-            // diverging (see `ViewState`). The window door, which has its own
-            // painter and room to spare, keeps them pinned.
+            // THROUGH THE SAME BUILDER THE DRAWING USES.
+            //
+            // This branch had a second copy of it — chrome chained in front of
+            // a flat list of rows — and a second copy is a second answer the
+            // day one of them is edited. `expansion_window` lays the SECTIONS
+            // onto the lines, and asking it for the whole region is the same
+            // question with no ceiling.
             let plain = files.plain();
-            return self
-                .files_chrome(files, width, plain)
-                .into_iter()
-                .chain(rows.into_iter().enumerate().map(|(n, r)| ExpansionRow {
-                    // See `expansion_window`: an empty line is not a target.
-                    click: (!r.fields.is_empty()).then_some(Click::Files(n)),
-                    fields: r.fields,
-                    ..ExpansionRow::empty_one()
-                }))
-                .collect();
+            let all = files
+                .region_len(if plain { 2 } else { 0 }, self.screen_columns())
+                .unwrap_or(0);
+            return self.expansion_window(0, all);
         }
         // THE TRANSFER PANEL. One row per job, drawn by `transfers::View` with
         // the file manager's own `Row` and `Field` — see that module for why it
@@ -5804,8 +6401,8 @@ impl Footer {
                 .collect();
         }
         // THE NETWORK. It comes after the finder and before the `M-x` — the
-        // precedence of the seven views lives only in `Footer::view()`, and
-        // this order here only follows it.
+        // precedence of the views lives only in `Footer::view()`, and this
+        // order here only follows it.
         if let Some(v) = &self.network {
             // THE QUESTION COMES AT THE TOP, with the list below it.
             //
@@ -5818,7 +6415,7 @@ impl Footer {
                     icon: Some(tokens::icon::KEY),
                     text: self
                         .texts
-                        .t_with(ronoctua_i18n::key::NETWORK_REMEMBER, &[("rede", ssid)]),
+                        .t_with(ronoctua_i18n::key::NETWORK_REMEMBER, &[("network", ssid)]),
                     text_color: tokens::color::STATE_ACCENT,
                     ..ExpansionRow::empty_one()
                 });
@@ -6066,7 +6663,33 @@ impl Footer {
             return false;
         };
         let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
-        x >= width - cell
+        let at = self.bar_x(width);
+        x >= at && x < at + cell
+    }
+
+    /// WHICH COLUMN THE EXPANSION'S SCROLLBAR SITS IN, in pixels.
+    ///
+    /// The surface's last cell for eight of the nine views, and it was written
+    /// out as `width - cell` at both of the two sites that need it — the one
+    /// that PAINTS the thumb and the one that decides whether the pointer is on
+    /// it. Two copies of one number is how a bar comes to be drawn where it
+    /// cannot be grabbed, so they are one call now.
+    ///
+    /// The ninth view is the file manager, which has FOUR sections. The bar
+    /// belongs to the LISTING, and with the panels on the right the surface's
+    /// last cell is inside the info panel: a thumb there says "the listing is
+    /// cut" from a column that is not the listing, and drags a list it is not
+    /// on top of. `Panes::listing_bar` is where that cell is decided, once, for
+    /// both doors.
+    #[allow(clippy::cast_possible_truncation)]
+    fn bar_x(&self, width: f64) -> f64 {
+        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        let last = width - cell;
+        let columns = tokens::metrics::columns(width as f32, tokens::font::SIZE_BASE);
+        self.files
+            .as_ref()
+            .and_then(|v| v.panes(columns).listing_bar(columns))
+            .map_or(last, |at| f64::from(crate::chrome::FIELDS_LEAD + at) * cell)
     }
 
     /// Puts the top of what is seen where the pointer is, dragging the bar.
@@ -6084,8 +6707,10 @@ impl Footer {
         if gap <= 0.0 {
             return;
         }
-        let fracao = ((y - start) / gap).clamp(0.0, 1.0);
-        self.offset = ((total as f64 * fracao) as usize).min(last_offset(total, ceiling));
+        let fraction = ((y - start) / gap).clamp(0.0, 1.0);
+        self.scroll_offset_to(
+            ((total as f64 * fraction) as usize).min(last_offset(total, ceiling)),
+        );
     }
 
     /// Which line of the page is at height `y` of the surface.
@@ -6094,8 +6719,126 @@ impl Footer {
     /// past the last line — there is no item to point at there, and inventing
     /// one would make the message area describe something that is not under
     /// the cursor.
+    /// The two rooms this door gives the manager's sections.
+    fn files_rooms(&self) -> crate::files::Room {
+        let lines = self.grid().lines;
+        crate::files::Room {
+            list: lines,
+            panel: if self.files_strip() > 0 {
+                self.files_strip()
+            } else {
+                lines
+            },
+        }
+    }
+
+    /// Drags one section's bar to where the pointer is.
+    fn drag_section_to(&mut self, pane: crate::files::Pane, y: f64) {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let top = f64::from(self.first_of_expansion()) * line_height;
+        let tall = (line_height * self.grid().lines as f64).max(1.0);
+        let rooms = self.files_rooms();
+        let columns = self.screen_columns();
+        if let Some(v) = self.files.as_mut()
+            && v.drag_to(pane, (y - top) / tall, columns, rooms)
+        {
+            // OWED, not drawn: see `Footer::owes_paint`. A drag sends a
+            // `Motion` per pixel of pointer travel, and presenting waits for
+            // the vblank — a hundred of them is a hundred frames, and the
+            // listing is SEEN walking to where the thumb already is.
+            self.owes_paint = true;
+        }
+    }
+
+    /// EVERY SECTION'S SCROLLBAR, as rectangles — drawn here and tested for
+    /// there. See `files::Section::bar_box`.
+    fn files_bars(
+        &self,
+        columns: u16,
+        cell: f32,
+        line_height: f32,
+        edge: f32,
+    ) -> Vec<(crate::files::Pane, (f32, f32, f32, f32))> {
+        let Some(v) = self.files.as_ref() else {
+            return Vec::new();
+        };
+        let panes = v.panes(columns);
+        let top = f32::from(self.first_of_expansion()) * line_height;
+        // THE SURFACE'S OWN BOTTOM, for the same reason as the window's — see
+        // `files::Section::bar_box`.
+        let bottom = self.metric().map_or(top, crate::chrome::Frame::bottom);
+        let chrome = v.chrome_rows(columns, &self.texts);
+        v.sections(&chrome, self.grid().lines, columns, &self.texts)
+            .iter()
+            .filter_map(|sec| {
+                let (x, wide) = crate::files::section_px(
+                    panes,
+                    sec.pane,
+                    crate::chrome::FIELDS_LEAD,
+                    columns,
+                    cell,
+                    edge,
+                )?;
+                sec.bar_box(x + wide, top, bottom, cell, line_height)
+                    .map(|r| (sec.pane, r))
+            })
+            .collect()
+    }
+
+    /// Which section's bar a POINT is on — the same rectangles that were drawn.
+    fn files_bar_at_point(&self, x: f64, y: f64) -> Option<crate::files::Pane> {
+        let width = self
+            .screens
+            .iter()
+            .find(|t| t.configured && t.width > 0)
+            .map(|t| f32::from(u16::try_from(t.width).unwrap_or(u16::MAX)))?;
+        let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+        let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+        self.files_bars(self.screen_columns(), cell, line_height, width)
+            .into_iter()
+            .find(|(_, r)| {
+                let (bx, by, bw, bh) = *r;
+                x >= f64::from(bx)
+                    && x < f64::from(bx + bw)
+                    && y >= f64::from(by)
+                    && y < f64::from(by + bh)
+            })
+            .map(|(p, _)| p)
+    }
+
+    /// WHAT IS UNDER THE POINTER in the manager, asked of the view.
+    ///
+    /// The same one question the window door asks — see `files::View::hit`.
+    /// This door used to answer it in four places (the path's crumbs, the
+    /// header, the listing's row and the strip's), each with its own idea of
+    /// which list a `y` belonged to, and the owner found every one of them.
+    fn files_target(&self) -> Option<crate::files::Target> {
+        let view = self.files.as_ref()?;
+        let line = self.row_under_pointer?;
+        let cell = self.cell_under_pointer.unwrap_or(0);
+        view.hit(
+            self.screen_columns(),
+            self.grid().lines,
+            line,
+            cell,
+            &self.texts,
+        )
+    }
+
     fn row_at(&self, x: f64, y: f64) -> Option<usize> {
-        let grid = self.grid();
+        let mut grid = self.grid();
+        // THE STRIP IS UNDER THE POINTER TOO. It is not in `expansion_len` —
+        // it does not scroll — so both the grid's height and the count have to
+        // learn about it here, in the one place that asks "what is under the
+        // cursor". Extending the grid is right because the manager's grid is a
+        // SINGLE column: `item_at` then walks straight down.
+        let strip = self.files_strip();
+        let how_many = self
+            .expansion_len()
+            .saturating_sub(self.current_offset())
+            .min(grid.lines)
+            + strip;
+        grid.lines += strip;
         item_at(
             x,
             y,
@@ -6107,7 +6850,7 @@ impl Footer {
             // motion — this line alone was rebuilding a row for every entry in
             // the directory, per pixel of movement, which is the half of the
             // hover lag that survived `rows_from`. See `expansion_len`.
-            self.expansion_len().saturating_sub(self.current_offset()),
+            how_many,
         )
     }
 
@@ -6121,7 +6864,7 @@ impl Footer {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let preferred = std::env::var("RONOCTUA_FILES_START").ok();
         let start = ronoctua_files::listing::start_at(home.as_deref(), preferred.as_deref());
-        tracing::info!(dir = %start.display(), "gerenciador de arquivos aberto");
+        tracing::info!(dir = %start.display(), "file manager opened");
         // The trash's root, resolved ONCE and handed over — the same rule as
         // the roster and the zone. `$XDG_DATA_HOME` does not move while a
         // listing is up, and reading it per menu would be an env lookup inside
@@ -6158,7 +6901,7 @@ impl Footer {
                 // it opens and simply does not refresh by itself. A stick
                 // plugged in that never appears, with nothing said, is the
                 // silent fallback this project refuses.
-                tracing::warn!(error = %e, "sem vigia de discos");
+                tracing::warn!(error = %e, "no disk watcher");
                 let m = self.texts.t_with(
                     ronoctua_i18n::key::FILES_DISKS_NOT_WATCHING,
                     &[("why", e.to_string().as_str())],
@@ -6183,10 +6926,14 @@ impl Footer {
         // decides, so both doors ask the same question.
         let width = self.screen_columns();
         let cell = self.cell_under_pointer.unwrap_or(0);
+        // THE REGION'S HEIGHT, because a section's extent depends on it.
+        let room = self.grid().lines;
         let step = self
             .files
             .as_mut()
-            .map_or(crate::files::Step::Nothing, |v| v.menu_at(row, cell, width));
+            .map_or(crate::files::Step::Nothing, |v| {
+                v.menu_at(row, cell, width, room)
+            });
         self.apply_files_step(step);
     }
 
@@ -6418,6 +7165,15 @@ impl Footer {
                     v.mounted(&at);
                 }
             }
+            // WHAT IS INSIDE THE FILE. A stale answer is dropped inside
+            // `View::looked` and not here: the cursor moves while a child
+            // process runs, and which answer is still the right one is the
+            // view's question, not this door's.
+            crate::files::Report::Inspected(looked) => {
+                if let Some(v) = self.files.as_mut() {
+                    v.looked(*looked);
+                }
+            }
             crate::files::Report::Racked(rack) => {
                 // ONLY WHEN THERE IS A VIEW TO PUT IT IN. The thread goes on
                 // reading whatever is on screen — that is the point, a stick
@@ -6442,15 +7198,40 @@ impl Footer {
     /// view needs both: the row says which entry, the cell says which of its
     /// columns — and for the permission block, which of the ten bits.
     fn cell_at(&self, x: f64) -> Option<u16> {
-        let cell_px = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        // THROUGH THE DOOR, and not through the token directly: `chrome::Door`
+        // is what says a footer's grid is drawn at the system's size and a
+        // window's at the buffer's, and it is what the two-door test compares.
+        // Reaching past it here would leave that enum describing something
+        // nothing does.
+        let cell_px = f64::from(crate::chrome::Door::Footer.cell_width());
         if cell_px <= 0.0 || x < 0.0 {
             return None;
         }
-        u16::try_from((x / cell_px) as u64).ok()
+        // THE LEAD COMES OFF, because the drawing put it on.
+        //
+        // The answer is a cell of the ROW, and the row is drawn shifted by
+        // `chrome::FIELDS_LEAD`. Reading the screen's cell straight would
+        // describe the field to the left of the one under the finger, all the
+        // way across — the shape of defect this file has already paid for
+        // twice, where the drawing and the hit test each computed the same
+        // number their own way.
+        u16::try_from((x / cell_px) as u64)
+            .ok()
+            .map(|c| c.saturating_sub(crate::chrome::FIELDS_LEAD))
     }
 
     /// The visible line at index `i` on the current page.
+    ///
+    /// PAST THE LIST IS THE STRIP, when the manager has one. The two are
+    /// numbered as one column of lines because that is what the pointer sees —
+    /// `row_at` counts from the top of the region and does not know where the
+    /// list stops — and a strip that answered `None` here would be a preview
+    /// one cannot click, which is the mouse reaching less than the keyboard.
     fn visible_row(&self, i: usize) -> Option<ExpansionRow> {
+        let lines = self.grid().lines;
+        if self.files_strip() > 0 && i >= lines {
+            return self.files_strip_rows().into_iter().nth(i - lines);
+        }
         self.expansion_window(self.current_offset() + i, 1)
             .into_iter()
             .next()
@@ -6510,54 +7291,22 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
-            // A CRUMB OF THE PATH — which one comes from the cell, exactly as
-            // the header's columns do.
-            Some(Click::FilesPath) => {
-                let cell = self.cell_under_pointer.unwrap_or(0);
-                let Some(hit) = self
-                    .files
-                    .as_ref()
-                    .and_then(|v| field_at(&v.crumbs(), cell))
-                else {
-                    return;
-                };
-                let step = self
-                    .files
-                    .as_mut()
-                    .map_or(crate::files::Step::Nothing, |v| v.click(0, &hit));
-                self.apply_files_step(step);
-            }
-            Some(Click::Files(n)) => {
-                // WHICH CELL, and not just which row. A listing row carries
-                // seven columns and ten separate permission bits, so the row
-                // on its own would answer the wrong question — and the answer
-                // would look right, because the row is correct.
-                let cell = self.cell_under_pointer.unwrap_or(0);
-                let width = self.screen_columns();
-                // `usize::MAX` is the HEADER, which is not a row of the
-                // listing: it has its own fields and its own hits.
-                let header = n == usize::MAX;
-                let Some(hit) = self.files.as_ref().and_then(|v| {
-                    if header {
-                        return v
-                            .header(width, &self.texts)
-                            .field_at(cell)
-                            .map(|f| f.hit.clone());
-                    }
-                    v.rows(width, &self.texts)
-                        .get(n)
-                        .and_then(|r| r.field_at(cell))
-                        .map(|f| f.hit.clone())
-                }) else {
+            // EVERYTHING THE MANAGER OWNS, through ONE resolution.
+            //
+            // The path's crumbs, the header, a listing row, a sidebar place, a
+            // fact in the panels and a cell of the bottom strip were six
+            // branches with six ideas of which list a point belonged to. They
+            // are one now: `files::View::hit` says the section, the row inside
+            // it and the field, and this door presses the key that goes with
+            // it. Nothing here decides anything the keyboard cannot reach.
+            Some(Click::FilesPath | Click::Files(_) | Click::FilesStrip) => {
+                let Some(target) = self.files_target() else {
                     return;
                 };
                 let Some(view) = self.files.as_mut() else {
                     return;
                 };
-                // THROUGH THE SAME CODE THE KEY GOES THROUGH. Nothing here
-                // decides anything the keyboard cannot reach, which is what
-                // keeps the two from drifting apart.
-                let step = view.click(n, &hit);
+                let step = view.click(target.row, &target.hit);
                 self.apply_files_step(step);
             }
             Some(Click::Candidate(n)) => {
@@ -6597,15 +7346,24 @@ impl Footer {
     /// nothing, and one that shows up without there being scrolling lies about
     /// there being more.
     fn has_bar(&self) -> bool {
+        // NOT WHERE THE MANAGER IS, and this is the whole of it: the manager
+        // draws a bar PER SECTION (`files_bars`), and this one draws one for
+        // the region as if the region were a single list.
+        //
+        // Both were drawn. The owner photographed the result twice — two bars
+        // in the same column, the outer one moving with a total that is not
+        // the listing's, so it stood still while the listing scrolled and
+        // jumped while it did not. It was never a bar with a bug: it was a
+        // second bar, and this is the line that says there is only one.
+        //
+        // It goes for a menu and a sheet too, which do not scroll at all: the
+        // condition is the door, not the state.
+        if self.files.is_some() {
+            return false;
+        }
         // ONLY WHAT SCROLLS HAS A BAR. On a paginated list it would be a
         // continuous control for content that moves in jumps — and what says
         // where you are there is the counter.
-        // NOT WHILE A MENU, A QUESTION OR A SHEET IS UP. The bar is about a
-        // list one scrolls; over a menu it painted a marker on the right edge
-        // of rows that do not scroll, which is chrome about nothing.
-        if self.files.as_ref().is_some_and(|v| !v.plain()) {
-            return false;
-        }
         self.navigation() == Navigation::Scroll && self.expansion_len() > self.grid().per_page()
     }
 
@@ -6639,19 +7397,19 @@ impl Footer {
         };
         let ceiling = self.expansion_ceiling();
         let total = self.expansion_len();
-        let margem = SCROLL_MARGIN.min(ceiling.saturating_sub(1) / 2);
+        let margin = SCROLL_MARGIN.min(ceiling.saturating_sub(1) / 2);
 
         let offset = self.current_offset();
-        let fresh = if cursor < offset + margem {
+        let fresh = if cursor < offset + margin {
             // Going up: the cursor does not touch the top of the region.
-            cursor.saturating_sub(margem)
-        } else if cursor + margem >= offset + ceiling {
-            // Going down: it stops `margem` lines from the end.
-            (cursor + margem + 1).saturating_sub(ceiling)
+            cursor.saturating_sub(margin)
+        } else if cursor + margin >= offset + ceiling {
+            // Going down: it stops `margin` lines from the end.
+            (cursor + margin + 1).saturating_sub(ceiling)
         } else {
             offset
         };
-        self.offset = fresh.min(last_offset(total, ceiling));
+        self.scroll_offset_to(fresh.min(last_offset(total, ceiling)));
     }
 
     /// Which item of the expanded region is focused, when there is one.
@@ -6717,7 +7475,7 @@ impl Footer {
     /// Without this, narrowing the list while scrolled down would show an
     /// empty region, and the key would look as if it had not worked.
     fn first_page(&mut self) {
-        self.offset = 0;
+        self.scroll_offset_to(0);
     }
 
     /// Scrolls the region by LINES, without leaving the extremes.
@@ -6729,7 +7487,7 @@ impl Footer {
         let last = last_offset(self.expansion_len(), self.grid().per_page());
         let current = self.current_offset();
         let fresh = scrolling(current, last, lines);
-        self.offset = fresh;
+        self.scroll_offset_to(fresh);
         fresh != current
     }
 
@@ -6756,15 +7514,15 @@ impl Footer {
         let height = self.wanted_height();
         // THE ZONE FOLLOWS THE HEIGHT. See the top of the module: the expansion
         // pushes the buffers, it does not cover them.
-        let exclusiva = height as i32;
+        let exclusive = height as i32;
         for t in &self.screens {
             t.layer.set_size(0, height);
-            t.layer.set_exclusive_zone(exclusiva);
+            t.layer.set_exclusive_zone(exclusive);
             t.layer.set_keyboard_interactivity(keyboard);
             t.layer.commit();
         }
         if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "flush da conexao falhou");
+            tracing::warn!(error = %e, "flushing the connection failed");
         }
     }
 
@@ -6816,7 +7574,11 @@ impl Footer {
         let sym = match event.keysym {
             Keysym::Escape => Sym::Esc,
             Keysym::Return | Keysym::KP_Enter => Sym::Enter,
-            Keysym::Tab => Sym::Tab,
+            // AND `ISO_Left_Tab` IS THE SAME KEY. It is what xkb produces for
+            // Shift+Tab, and without this case it fell through to `key_char()`,
+            // came back `None`, and the key was swallowed in silence — which is
+            // the first of the three causes that show the same screen.
+            Keysym::Tab | Keysym::ISO_Left_Tab => Sym::Tab,
             Keysym::BackSpace => Sym::Backspace,
             Keysym::space => Sym::Space,
             // The arrows go into the keymap: `LEADER <left>` focuses the column on
@@ -6832,17 +7594,27 @@ impl Footer {
             )),
         };
 
-        let key = Key {
-            mods: self.inheritance.discount(self.mods),
-            sym,
-        };
+        let mut mods = self.inheritance.discount(self.mods);
+        // SHIFT ENTERS FROM THE KEYSYM AND FROM NOWHERE ELSE.
+        //
+        // `discount` refuses the modifier itself, and its own note says why:
+        // xkb has already applied Shift when it produced the character, so
+        // counting both would turn `F` into `S-F` and never match. This is that
+        // same rule and not an exception to it — `ISO_Left_Tab` IS the applied
+        // form of Shift+Tab, exactly as `F` is of Shift+f — so reading it here
+        // is reading what xkb decided rather than guessing at a modifier.
+        //
+        // `S-TAB` is the only binding in the shell that needs it, and it is the
+        // file manager's "go back one section".
+        mods.shift = event.keysym == Keysym::ISO_Left_Tab;
+        let key = Key { mods, sym };
         // THE KEY AS IT ENDED UP, in the log.
         //
         // Without this, "I pressed it and nothing happened" does not tell "the
         // key did not arrive" from "it arrived with a stuck modifier and did not
         // match" — and the two are fixed in opposite places. It took four
         // occurrences for this line to exist.
-        tracing::debug!(?key, inherited = ?self.inheritance, "tecla depois do desconto");
+        tracing::debug!(?key, inherited = ?self.inheritance, "the key after the discount");
         Some(key)
     }
 
@@ -6873,11 +7645,14 @@ impl Footer {
                 self.open_foreign(&me.to_string_lossy(), &args, None)
             }
             (_, None) => {
-                tracing::error!(variable, "a variavel do componente nao esta no ambiente");
+                tracing::error!(
+                    variable,
+                    "the component's variable is not in the environment"
+                );
                 let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
                 self.echo_message(m);
             }
-            (Err(e), _) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),
+            (Err(e), _) => tracing::error!(error = %e, "I do not know my own binary"),
         }
     }
 
@@ -6902,11 +7677,11 @@ impl Footer {
                 None,
             ),
             (_, None) => {
-                tracing::error!("o binario do resgate nao esta ao lado deste");
+                tracing::error!("the rescue binary is not beside this one");
                 let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
                 self.echo_message(m);
             }
-            (Err(e), _) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),
+            (Err(e), _) => tracing::error!(error = %e, "I do not know my own binary"),
         }
     }
 
@@ -6926,14 +7701,13 @@ impl Footer {
                 None,
             ),
             (_, None) => {
-                tracing::error!(variable, "a variavel do monitor nao foi definida no build");
-                let m = self.texts.t_with(
-                    ronoctua_i18n::key::ECHO_NO_OPENED,
-                    &[("programa", variable)],
-                );
+                tracing::error!(variable, "the watcher's variable was not set at build time");
+                let m = self
+                    .texts
+                    .t_with(ronoctua_i18n::key::ECHO_NO_OPENED, &[("program", variable)]);
                 self.echo_message(m);
             }
-            (Err(e), _) => tracing::error!(error = %e, "nao sei qual e o meu proprio binario"),
+            (Err(e), _) => tracing::error!(error = %e, "I do not know my own binary"),
         }
     }
 
@@ -6961,7 +7735,7 @@ impl Footer {
             std::ptr::NonNull::new(self.conn.backend().display_ptr().cast::<std::ffi::c_void>()),
             std::ptr::NonNull::new(layer.wl_surface().id().as_ptr().cast::<std::ffi::c_void>()),
         ) else {
-            tracing::error!("ponteiros do Wayland nulos; sem contexto grafico");
+            tracing::error!("null Wayland pointers; no graphics context");
             return;
         };
 
@@ -6996,7 +7770,7 @@ impl Footer {
                             // Losing the modeline's background is ugly; losing the
                             // whole modeline would be worse.
                             Err(e) => {
-                                tracing::error!(error = %e, "desenhador de retangulos falhou")
+                                tracing::error!(error = %e, "the rectangle renderer failed")
                             }
                         }
                         match ronoctua_render::image::Images::new(&g.device, g.config.format) {
@@ -7004,7 +7778,7 @@ impl Footer {
                             // Without it the whole footer carries on: what is lost is
                             // the preview of the copied image, and the history's text
                             // stays on screen.
-                            Err(e) => tracing::error!(error = %e, "desenhador de imagem falhou"),
+                            Err(e) => tracing::error!(error = %e, "the image renderer failed"),
                         }
                         self.screens[i].text = Some(t);
                         // "first frame in 200 ms" (5.2), counted from the start of
@@ -7013,18 +7787,18 @@ impl Footer {
                         // that is not the first.
                         let mut g = g;
                         if i == 0 {
-                            g.mark_as("primeiro-frame", ronoctua_render::start());
+                            g.mark_as("first-frame", ronoctua_render::start());
                         }
                         self.screens[i].gpu = Some(g);
-                        tracing::info!(screen = i, "contexto grafico e desenhador prontos");
+                        tracing::info!(screen = i, "graphics context and renderer ready");
                     }
-                    Err(e) => tracing::error!(error = %e, "desenhador de texto falhou"),
+                    Err(e) => tracing::error!(error = %e, "the text renderer failed"),
                 }
             }
             // NOT fatal: with no GPU the footer still resolves the layout and logs.
             // Failing here would bring the whole session down because of a driver.
             Err(e) => {
-                tracing::error!(error = %e, "sem contexto grafico; o rodape nao vai pintar")
+                tracing::error!(error = %e, "no graphics context; the footer will not paint")
             }
         }
     }
@@ -7062,7 +7836,7 @@ impl Footer {
         // It already showed up in the modeline's mode indicator. That is not
         // enough: the indicator is a narrow segment that ELIDES, and the place
         // one looks at while typing a chord is the line below — the echo area.
-        let pendente = self
+        let pending = self
             .leader
             .active_one()
             .then(|| self.leader.prefix(&self.leader_label));
@@ -7071,12 +7845,19 @@ impl Footer {
         // THE PREVIEW COMES OUT HERE, before the loop's mutable borrows. It is a
         // REFERENCE: cloning 33 MB of RGBA per frame would be worse than having
         // no preview.
-        let imagem_pronta = self.clip_image.as_ref().map(|(_, r)| r);
+        let image_ready = self.clip_image.as_ref().map(|(_, r)| r);
         let version = self.clip_version;
         // THE ALREADY DECODED PIXMAPS, by reference and for the SAME reason: each
         // one is small, but cloning twelve per frame would be paying for the
         // decoding again in memory.
-        let icones_prontos = &self.icons;
+        let ready_icons = &self.icons;
+        // AND THE MANAGER'S PREVIEW, by reference and for the same reason: it
+        // is up to a mebibyte, and the upload happens inside the loop where
+        // `self` is already borrowed mutably by `screens.get_mut`.
+        let files_pixels = self
+            .files
+            .as_ref()
+            .and_then(crate::files::View::preview_pixels);
 
         let segments = self.segments_now();
         let mini_repouso = crate::minibuffer_at_rest();
@@ -7135,7 +7916,40 @@ impl Footer {
         let offset = self.current_offset();
         // ONLY THE PAGE THAT IS DRAWN gets built. See `expansion_window`.
         let all_of = self.expansion_window(offset, grid.per_page());
-        let visible: Vec<&ExpansionRow> = all_of.iter().collect();
+        // AND THE MANAGER'S STRIP UNDER IT.
+        //
+        // It is NOT part of the list: it does not scroll, it is pinned below
+        // the last line, and it has a line numbering of its own. What follows
+        // makes the INDEX of `visible` the SCREEN LINE, padding a short listing
+        // with a blank — because the pointer counts lines from the top of the
+        // region and does not know where the listing stopped. Without the
+        // padding a two-file directory would put the strip's first row where
+        // the pointer thinks the third file is.
+        let strip_of = self.files_strip_rows();
+        let blank = ExpansionRow::empty_one();
+        let visible: Vec<&ExpansionRow> = if strip_of.is_empty() {
+            all_of.iter().collect()
+        } else {
+            let mut v: Vec<&ExpansionRow> = Vec::with_capacity(grid.lines + strip_of.len());
+            v.extend(all_of.iter());
+            while v.len() < grid.lines {
+                v.push(&blank);
+            }
+            v.extend(strip_of.iter());
+            v
+        };
+        // WHERE LINE `i` LANDS. The grid answers for the list; past it lies the
+        // strip, which is not in the grid at all — one column, pinned, and the
+        // index IS the line.
+        let strip_from = grid.lines;
+        let has_strip = !strip_of.is_empty();
+        let place_of = move |i: usize| -> (u16, u16) {
+            if has_strip && i >= strip_from {
+                (0, u16::try_from(i).unwrap_or(0))
+            } else {
+                grid.position(i)
+            }
+        };
         // `2/4` to the RIGHT of the minibuffer's line: it is already the line
         // that says what is under way, and the indicator only exists when there
         // is more than one page — a permanent `1/1` would be noise.
@@ -7153,14 +7967,14 @@ impl Footer {
         //
         // Whoever SCROLLS has no counter: the bar already says the position, and
         // "page 2 of 5" in running text does not answer where you are.
-        let indicador = (navigation == Navigation::Page && pages > 1).then(|| {
+        let indicator = (navigation == Navigation::Page && pages > 1).then(|| {
             format!(
                 "{}  {}/{pages}",
                 self.texts.t(ronoctua_i18n::key::EXPANSION_PAGE),
                 offset / grid.per_page().max(1) + 1
             )
         });
-        let total_expansao = self.expansion_len();
+        let expansion_total = self.expansion_len();
         // THE DESCRIPTION OF THE ITEM UNDER THE CURSOR.
         //
         // The list shows the COMMAND; the whole sentence shows up here, on the
@@ -7175,6 +7989,10 @@ impl Footer {
             .band_hint
             .clone()
             .or_else(|| self.segment_hint())
+            // AND THE BRAIN'S LINE, next down the screen: it sits under the
+            // minibuffer and above the region, and this chain is the screen's
+            // own order from the top.
+            .or_else(|| self.brain_hint.clone())
             // AND WHAT THE MANAGER'S FOCUSED ROW HAS TO ADD — today, the reason
             // a switch does nothing. It used to be drawn as a third column on
             // the row and the owner asked for it gone; the honesty had to stay,
@@ -7217,15 +8035,11 @@ impl Footer {
             // Nothing floats. It is the same place which-key already puts a
             // description, which is what keeps invariant 14 intact.
             .or_else(|| {
-                let cell = self.cell_under_pointer?;
-                let row = self.row_under_pointer?;
-                let e = visible
-                    .get(row)?
-                    .fields
-                    .iter()
-                    .rev()
-                    .find(|f| f.covers(cell))?;
-                let e = e.explain.clone()?;
+                // THROUGH `files::View::hit`, which resolves the SECTION first.
+                // Read off the flattened line, as it was, a pointer resting in
+                // an empty part of the facts described a file far down the
+                // listing — the owner photographed exactly that.
+                let e = self.files_target()?.explain?;
                 Some(self.texts.t_with(e.key, &e.borrowed()))
             })
             // AND A TRANSFER'S ROW SAYS WHAT WENT WRONG.
@@ -7270,23 +8084,35 @@ impl Footer {
         //
         // The background says "this responds to the click". In the manual, which
         // is only read, a lit line would promise an action that does not exist.
-        let realce_do_ponteiro = self
+        let under_the_pointer = self
             .row_under_pointer
             .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
-            .map(|i| grid.position(i));
+            .map(place_of);
         // Does the footer have the keyboard? It is what decides whether the
         // accent stays on the window (the compositor's border) or comes to the
         // buffer's name.
-        let com_teclado = self.grabbing();
-        let barra_visivel = self.under_pointer && self.has_bar();
-        let primeira_pintura = self.frames_painted < 3;
-        let mut pintou = false;
+        let with_keyboard = self.grabbing();
+        // ALWAYS, WHEN THE LIST WAS CUT — and not only once the pointer has
+        // found it. It used to read `self.under_pointer && self.has_bar()`,
+        // which made the one thing on screen that says "there is more below"
+        // depend on already suspecting there was. The manager's per-section
+        // bars have never hidden; this is the same rule for the other eight
+        // views of the footer.
+        let bar_showing = self.has_bar();
+        let first_paint = self.frames_painted < 3;
+        let mut painted = false;
 
         for index in 0..self.screens.len() {
             let width = self.screens[index].width;
             if width == 0 {
                 continue;
             }
+            // THE SURFACE'S BOTTOM, in pixels. A divider that stops at
+            // `lines * line_height` stops short — the line height is
+            // fractional — and that is the gap the owner photographed under
+            // the panels' rule.
+            #[allow(clippy::cast_precision_loss)]
+            let bottom = self.screens[index].height as f32;
             // PER SCREEN: a narrow monitor elides what the wide one shows.
             let columns = tokens::metrics::columns(width as f32, tokens::font::SIZE_BASE);
             let placed = layout::resolve(columns, &segments);
@@ -7296,7 +8122,8 @@ impl Footer {
             //   lines 0..b     band       — the notification, 0 to 3 lines
             //   line  b        modeline   — the buffer's name
             //   line  b+1      minibuffer — GLUED to it
-            //   lines b+2..n   expansion  — which-key, `M-x`, the manager
+            //   line  b+2      brain      — the countdown, 0 or 1 line
+            //   lines b+3..n   expansion  — which-key, `M-x`, the manager
             //
             // The footer's two lines stay TOGETHER; the list grows BELOW them
             // and the notification appears ABOVE. The owner's decision, and the
@@ -7312,8 +8139,9 @@ impl Footer {
             // screen, it eats into the content. Which is also why the expansion
             // has a CEILING (`expansion_ceiling`) and the band has one of three.
             let first_of_expansion = self.first_of_expansion();
-            let linha_modeline = self.modeline_line();
-            let linha_mini = self.minibuffer_line();
+            let modeline_line = self.modeline_line();
+            let mini_line = self.minibuffer_line();
+            let brain_line = self.brain_line_at();
 
             // WHETHER THE STATE IS THE BASE ONE decides its colour, and it is
             // asked ONCE per frame rather than per segment: the answer is the
@@ -7333,8 +8161,9 @@ impl Footer {
                     glyph_and_text(
                         &c.text,
                         c.column,
-                        linha_modeline,
-                        segment_color(c.id, com_teclado, state_is_base),
+                        modeline_line,
+                        segment_color(c.id, with_keyboard, state_is_base),
+                        c.edge,
                     )
                 })
                 .collect();
@@ -7364,10 +8193,44 @@ impl Footer {
                         piece.at,
                         u16::try_from(row).unwrap_or(0),
                         piece.color,
+                        // The band's pieces are laid out from the LEFT.
+                        false,
                     ));
                 }
             }
             self.band_placed = band;
+
+            // THE BRAIN'S LINE, under the minibuffer.
+            //
+            // It appears without anybody having asked for it, so it says whose
+            // it is before it says anything else — and it says it in a colour
+            // of its own, which is the only thing separating it from the pair
+            // above (no rule, no box, no card: invariants 14 and 15).
+            //
+            // Remembered in `brain_placed` for the pointer, for the reason the
+            // band's is: what the cursor is over has to be what was DRAWN.
+            let brain = crate::brain::lines(
+                self.announced(),
+                columns,
+                ronoctua_brain::Clock::now(&ronoctua_brain::moment::Wall),
+                &crate::brain::Words {
+                    texts: &self.texts,
+                    abort_keys: &self.brain_keys(crate::leader::BRAIN_ABORT_KEYS),
+                    proceed_keys: &self.brain_keys(crate::leader::BRAIN_PROCEED_KEYS),
+                },
+            );
+            if let Some(l) = &brain {
+                for piece in &l.pieces {
+                    spans.extend(glyph_and_text(
+                        &piece.text,
+                        piece.at,
+                        brain_line,
+                        piece.color,
+                        false,
+                    ));
+                }
+            }
+            self.brain_placed = brain;
 
             // THE PRECEDENCE of the minibuffer's line, from top to bottom:
             //
@@ -7394,17 +8257,17 @@ impl Footer {
             // that was just clicked, and the tooltip owns the line for as long
             // as it stays there. The message came and went underneath it.
             //
-            // That is how "trocar o dono não fez nada" gets reported about an
+            // That is how "changing the owner did nothing" gets reported about an
             // action that answered perfectly well — on a line something else
             // was covering. A description of what is under the pointer can wait
             // three seconds; a refusal cannot, because by then it is gone.
-            let (mini, cor_mini) = if let Some(e) = &echo {
+            let (mini, mini_color) = if let Some(e) = &echo {
                 (e.clone(), tokens::color::TEXT_SECONDARY)
             } else if let Some(d) = &sob_o_cursor {
                 (d.clone(), tokens::color::TEXT_SECONDARY)
             } else if let Some(p) = &prompt_mx {
                 (p.clone(), tokens::color::TEXT_PRIMARY)
-            } else if let Some(p) = &pendente {
+            } else if let Some(p) = &pending {
                 (p.clone(), tokens::color::STATE_ACCENT)
             } else {
                 (mini_repouso.clone(), tokens::color::TEXT_PRIMARY)
@@ -7414,23 +8277,25 @@ impl Footer {
                     size: ronoctua_render::Size::Grid,
                     text: mini,
                     column: tokens::space::MODELINE_EDGELEFT,
-                    line: linha_mini,
-                    color: cor_mini,
+                    line: mini_line,
+                    color: mini_color,
+                    edge: false,
                 });
             }
 
             // THE PAGE INDICATOR, flush against the right edge of the minibuffer's
             // line. There is no bar and no box: it is text on the line that already
             // exists (invariants 14 and 15).
-            if let Some(ind) = &indicador {
-                let largura_ind = layout::width(ind);
-                if largura_ind < columns {
+            if let Some(ind) = &indicator {
+                let indicator_width = layout::width(ind);
+                if indicator_width < columns {
                     spans.push(ronoctua_render::Span {
                         size: ronoctua_render::Size::Grid,
                         text: ind.clone(),
-                        column: columns - largura_ind,
-                        line: linha_mini,
+                        column: columns - indicator_width,
+                        line: mini_line,
                         color: tokens::color::TEXT_DIM,
+                        edge: false,
                     });
                 }
             }
@@ -7445,8 +8310,8 @@ impl Footer {
                 // THE GRID decides where: column and row come out of it, and not from
                 // arithmetic here. On scrolling it has a single column, and this becomes
                 // the usual list.
-                let (base, y_grade) = grid.position(i);
-                let y = first_of_expansion + y_grade;
+                let (base, grid_y) = place_of(i);
+                let y = first_of_expansion + grid_y;
                 // A FILE MANAGER ROW DRAWS ITSELF, field by field.
                 //
                 // It resolved its own columns against the screen's width before
@@ -7472,13 +8337,22 @@ impl Footer {
                         spans.push(ronoctua_render::Span {
                             size: ronoctua_render::Size::Grid,
                             text: f.text.clone(),
-                            column: base + f.at,
+                            // AND THE CONTENT'S LEAD, which this path did not
+                            // pay and every other one did. It is the whole of
+                            // "the same view is glued to the edge here and not
+                            // there": a field row begins at its own gutter —
+                            // the mark's cell — and a surface owes the
+                            // difference up to `chrome::INSET`. Both windows
+                            // already worked that out for themselves; this was
+                            // the third site, and it had no such line at all.
+                            column: base + crate::chrome::FIELDS_LEAD + f.at,
                             line: y,
                             color: if under {
                                 tokens::color::STATE_ACCENT
                             } else {
                                 f.color
                             },
+                            edge: false,
                         });
                     }
                     continue;
@@ -7492,9 +8366,10 @@ impl Footer {
                     spans.push(ronoctua_render::Span {
                         size: ronoctua_render::Size::Grid,
                         text: g.to_string(),
-                        column: base + tokens::space::MODELINE_EDGELEFT,
+                        column: base + crate::chrome::INSET,
                         line: y,
                         color: line.key_color,
+                        edge: false,
                     });
                 }
                 if with_key {
@@ -7521,17 +8396,18 @@ impl Footer {
                     // character: the cell is exact, so each run's column is
                     // arithmetic — and one `Span` per letter would multiply the
                     // shaping work by twenty.
-                    for (text, coluna_relativa, casou) in runs_of(&key, &line.highlights) {
+                    for (text, relative_column, matched) in runs_of(&key, &line.highlights) {
                         spans.push(ronoctua_render::Span {
                             size: ronoctua_render::Size::Grid,
                             text,
-                            column: column + coluna_relativa,
+                            column: column + relative_column,
                             line: y,
-                            color: if casou {
+                            color: if matched {
                                 tokens::color::STATE_ACCENT
                             } else {
                                 line.key_color
                             },
+                            edge: false,
                         });
                     }
                     if line.separator {
@@ -7543,6 +8419,7 @@ impl Footer {
                             // DISCREET: it separates, it does not inform. In the tone
                             // the modeline gives to what dies first in the elision.
                             color: tokens::color::TEXT_DIM,
+                            edge: false,
                         });
                     }
                 }
@@ -7559,6 +8436,7 @@ impl Footer {
                     column: base + start,
                     line: y,
                     color: line.text_color,
+                    edge: false,
                 });
             }
 
@@ -7575,6 +8453,79 @@ impl Footer {
             let mut preview: Option<ronoctua_render::image::Area> = None;
             let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
 
+            // THE FILE MANAGER'S PICTURE, fitted into the preview panel's box.
+            //
+            // A textured quad on the SAME surface — no window and no popup
+            // (invariant 14), no border, radius or shadow (invariant 15) — and
+            // never stretched: a deformed photograph is worse than a small one,
+            // because whoever looks does not know whether what is skewed is the
+            // image or the panel.
+            let mut file_preview: Option<(String, ronoctua_render::image::Area)> = None;
+            if let Some(v) = self.files.as_ref() {
+                let panes = v.panes(columns);
+                // WHERE THE PANELS' OWN ROWS BEGIN, and it is NOT the top of
+                // the region.
+                //
+                // # The defect this line exists for
+                //
+                // The picture was fitted into a box that started at the first
+                // line of the EXPANSION and ran the region's whole height. The
+                // panels' fields do not: they ride the listing's rows, and this
+                // door puts two lines of its own above those — the path and the
+                // header. So the box was two lines taller than the panel at the
+                // top and centred inside it, which put the picture a line above
+                // where the panel begins and left the difference underneath.
+                // Photographed and reported exactly that way: *"the preview's
+                // picture is touching the top line and has a lot of extra space
+                // underneath"*.
+                //
+                if let (Some((at, room)), Some(key)) = (panes.preview_box(columns), v.preview_key())
+                    && let Some(rgba) = v.preview_pixels()
+                {
+                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let (top, tall) = crate::files::panel_band(
+                        first_of_expansion,
+                        grid.lines as u16,
+                        panes.strip,
+                    );
+                    // AND THE AIR ON ALL FOUR SIDES IS THE VIEW'S, not this
+                    // door's. `fit_into` centres and that was never the whole
+                    // promise: whichever dimension is the tight one comes out
+                    // exactly as long as the box, so the picture was centred
+                    // AND touching the rule on its right. See
+                    // `files::picture_in`.
+                    // THE REGION'S RAILS, not the text's — see
+                    // `files::panel_px`.
+                    #[allow(clippy::cast_precision_loss)]
+                    let (box_x, box_wide) = crate::files::panel_px(
+                        panes,
+                        crate::files::Panel::Preview,
+                        crate::chrome::FIELDS_LEAD,
+                        columns,
+                        cell,
+                        width as f32,
+                    )
+                    .unwrap_or((
+                        f32::from(crate::chrome::FIELDS_LEAD + at) * cell,
+                        f32::from(room) * cell,
+                    ));
+                    file_preview = Some((
+                        key.to_owned(),
+                        crate::files::picture_in(
+                            ronoctua_render::image::Area {
+                                x: box_x,
+                                y: f32::from(top) * line_height,
+                                width: box_wide,
+                                height: f32::from(tall) * line_height,
+                            },
+                            rgba.width,
+                            rgba.height,
+                        ),
+                    ));
+                }
+            }
+
             // THE APPLICATIONS' PIXMAPS, one per visible line that already has
             // its own. The ones that do not have it drew the glyph in the loop
             // above, and that is what makes the list wait for nobody.
@@ -7585,15 +8536,15 @@ impl Footer {
                 let Some(key) = &line.pixmap else {
                     continue;
                 };
-                let (base, y_grade) = grid.position(i);
+                let (base, grid_y) = grid.position(i);
                 pixmaps.push((
                     key.clone(),
                     ronoctua_render::image::Area {
-                        x: f32::from(base + tokens::space::MODELINE_EDGELEFT) * cell,
+                        x: f32::from(base + crate::chrome::INSET) * cell,
                         // CENTERED ON THE LINE, and not flush with the top: the
                         // font's box is `1.45 at` and the drawing is `1.00`, so
                         // without centering the icon would touch the line above.
-                        y: f32::from(first_of_expansion + y_grade) * line_height
+                        y: f32::from(first_of_expansion + grid_y) * line_height
                             + (line_height - side) / 2.0,
                         width: side,
                         height: side,
@@ -7602,17 +8553,17 @@ impl Footer {
             }
             if self.clipboard_open {
                 let start = list_columns(columns).saturating_add(2);
-                let painel = columns.saturating_sub(start);
+                let panel = columns.saturating_sub(start);
                 let end = first_of_expansion + u16::try_from(grid.lines).unwrap_or(0);
                 let chosen = self.clipboard.at(self.clip_cursor);
 
                 // THE LAST THREE LINES are fixed: what the item is, ClipCascade's
                 // state, and the keys. They stay at the bottom because they are
                 // reference — what is read is the content, and it stays at the top.
-                let rodape_do_painel = 3u16;
+                let panel_footer = 3u16;
                 let alto = end
                     .saturating_sub(first_of_expansion)
-                    .saturating_sub(rodape_do_painel);
+                    .saturating_sub(panel_footer);
 
                 if let Some(m) = &self.clip_qr {
                     // THE QR IN QUADS, one per module. The module's size comes from
@@ -7660,7 +8611,7 @@ impl Footer {
                         ronoctua_render::image::Area {
                             x: f32::from(start) * cell,
                             y: f32::from(first_of_expansion) * line_height,
-                            width: f32::from(painel) * cell,
+                            width: f32::from(panel) * cell,
                             height: f32::from(alto) * line_height,
                         }
                         .fit_into(rgba.width, rgba.height),
@@ -7675,7 +8626,7 @@ impl Footer {
                     // responsibility. Highlighting each already broken line gives the
                     // same result on screen and keeps the two things apart.
                     let tongue = ronoctua_clipboard::highlight::guess(t);
-                    for (n, l) in wrap_text(t, painel, usize::from(alto))
+                    for (n, l) in wrap_text(t, panel, usize::from(alto))
                         .into_iter()
                         .enumerate()
                     {
@@ -7695,10 +8646,11 @@ impl Footer {
                     );
                     spans.push(ronoctua_render::Span {
                         size: ronoctua_render::Size::Grid,
-                        text: layout::elide_end(&sheet, painel),
+                        text: layout::elide_end(&sheet, panel),
                         line: end.saturating_sub(3),
                         column: start,
                         color: tokens::color::TEXT_DIM,
+                        edge: false,
                     });
                 }
 
@@ -7713,17 +8665,18 @@ impl Footer {
                             self.texts.t("clipboard-clipcascade"),
                             self.texts.t("clipboard-clipcascade-missing")
                         ),
-                        painel,
+                        panel,
                     ),
                     line: end.saturating_sub(2),
                     column: start,
                     color: tokens::color::STATE_WARNING,
+                    edge: false,
                 });
 
                 // THE ACTIONS, with each one's key. They come out of the SAME
                 // table the orphan check reads — a legend written by hand would be
                 // the second copy that lies the day a key changes.
-                let acoes = crate::leader::OF_CLIPBOARD_VIEW
+                let actions = crate::leader::OF_CLIPBOARD_VIEW
                     .iter()
                     .map(|(t, id)| {
                         format!(
@@ -7737,10 +8690,11 @@ impl Footer {
                     .join("  ·  ");
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Grid,
-                    text: layout::elide_end(&acoes, painel),
+                    text: layout::elide_end(&actions, panel),
                     line: end.saturating_sub(1),
                     column: start,
                     color: tokens::color::TEXT_DIM,
+                    edge: false,
                 });
             }
 
@@ -7754,9 +8708,9 @@ impl Footer {
             //
             // The rest of the surface is already `surface.chrome`, the color the
             // `frame` clears with.
-            let mut fundos = vec![ronoctua_render::quad::Quad {
+            let mut backgrounds = vec![ronoctua_render::quad::Quad {
                 x: 0.0,
-                y: f32::from(linha_modeline) * line_height,
+                y: f32::from(modeline_line) * line_height,
                 width: width as f32,
                 height: line_height,
                 color: tokens::color::MODELINE_BACKGROUND,
@@ -7768,13 +8722,29 @@ impl Footer {
             // eye reads from bottom to top as "what you are working on, the
             // footer, and the thing that just arrived". It is a change of
             // colour and not a box: no border, no radius, no shadow.
-            if linha_modeline > 0 {
-                fundos.push(ronoctua_render::quad::Quad {
+            if modeline_line > 0 {
+                backgrounds.push(ronoctua_render::quad::Quad {
                     x: 0.0,
                     y: 0.0,
                     width: width as f32,
-                    height: f32::from(linha_modeline) * line_height,
+                    height: f32::from(modeline_line) * line_height,
                     color: tokens::color::NOTIFICATION_BACKGROUND,
+                });
+            }
+
+            // AND THE BRAIN'S, which is a step SIDEWAYS on that ramp and not
+            // another rung up it: the same luminance neighbourhood as the
+            // modeline, with a blue cast, because it is not one more layer of
+            // chrome — it is a different KIND of line. `colors.nix` argues the
+            // hue where the token lives, and it is the only background in that
+            // file that carries one.
+            if self.brain_rows() > 0 {
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: f32::from(brain_line) * line_height,
+                    width: width as f32,
+                    height: line_height,
+                    color: tokens::color::BRAIN_BACKGROUND,
                 });
             }
 
@@ -7789,7 +8759,7 @@ impl Footer {
             // It is a change of background color, and not a box: no border, no
             // radius, no shadow (invariant 15). It goes BEFORE the scrollbar in
             // the list of quads, so the bar stays on top of it.
-            if let Some((base, y_grade)) = realce_do_ponteiro {
+            if let Some((base, grid_y)) = under_the_pointer {
                 let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
                 // AND IT STOPS AT THE SIDEBAR'S EDGE.
                 //
@@ -7798,24 +8768,40 @@ impl Footer {
                 // beside whatever the pointer is actually on — two rows lit,
                 // neither of them the answer to "what am I about to click".
                 // Which side is decided by where the pointer IS.
-                let (band_at, band_wide) = self.files.as_ref().map_or((base, grid.width), |v| {
-                    let split = v.split(columns);
-                    match self.cell_under_pointer {
-                        Some(c) if split > 0 && c < split => (base, split),
-                        _ if split > 0 => (
-                            base.saturating_add(split + 1),
-                            grid.width.saturating_sub(split + 1),
-                        ),
-                        _ => (base, grid.width),
-                    }
-                });
-                fundos.push(ronoctua_render::quad::Quad {
-                    x: f32::from(band_at) * cell,
-                    y: f32::from(first_of_expansion + y_grade) * line_height,
+                //
+                // AND IT STOPS AT THE PANELS' EDGE TOO, on the other side: a
+                // band running under the preview would light the picture, and
+                // the pointer is not on the picture — it is on a row of the
+                // listing beside it.
+                //
+                // BOTH EDGES ARE THE RULES' OWN PIXELS NOW, and that is the
+                // defect the owner photographed: this door started the
+                // listing's band one CELL past the rule — `lead + split + 1` —
+                // so a lit row had a strip of dark background between it and
+                // the line beside it. `files::band_of` is the one place that
+                // arithmetic lives, because the two doors had written it out
+                // separately and had three different answers between them.
+                #[allow(clippy::cast_precision_loss)]
+                let (band_at, band_wide) = self.files.as_ref().map_or_else(
+                    || (f32::from(base) * cell, f32::from(grid.width) * cell),
+                    |v| {
+                        crate::files::band_of(
+                            v.panes(columns),
+                            crate::chrome::FIELDS_LEAD,
+                            grid.width,
+                            self.cell_under_pointer,
+                            cell,
+                            width as f32,
+                        )
+                    },
+                );
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: band_at,
+                    y: f32::from(first_of_expansion + grid_y) * line_height,
                     // THE WIDTH OF THE GRID'S COLUMN, and not that of the screen:
                     // with the shortcut list in three columns, a full-screen band
                     // would light the three neighboring lines together.
-                    width: f32::from(band_wide) * cell,
+                    width: band_wide,
                     height: line_height,
                     color: tokens::color::SURFACE_SELECTION,
                 });
@@ -7827,14 +8813,12 @@ impl Footer {
             if self.clipboard_open {
                 let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
                 let x = f32::from(list_columns(columns).saturating_add(1)) * cell;
-                fundos.push(ronoctua_render::quad::Quad {
+                backgrounds.push(crate::chrome::divider(
                     x,
-                    y: f32::from(first_of_expansion) * line_height,
-                    width: 1.0,
-                    height: grid.lines as f32 * line_height,
-                    color: tokens::color::RULE_DEFAULT,
-                });
-                fundos.extend(qr_quads);
+                    f32::from(first_of_expansion) * line_height,
+                    bottom,
+                ));
+                backgrounds.extend(qr_quads);
             }
 
             // AND THE ONE BETWEEN THE SIDEBAR AND THE LISTING, which is the
@@ -7842,15 +8826,91 @@ impl Footer {
             // Separation by whitespace and a rule, never by a container
             // (invariant 15) — there is no panel here, only a line.
             if let Some(v) = self.files.as_ref() {
-                let split = v.split(columns);
-                if split > 0 {
-                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
-                    fundos.push(ronoctua_render::quad::Quad {
-                        x: f32::from(split) * cell,
-                        y: f32::from(first_of_expansion) * line_height,
-                        width: 1.0,
-                        height: grid.lines as f32 * line_height,
-                        color: tokens::color::RULE_DEFAULT,
+                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                let panes = v.panes(columns);
+                // AND IT PAYS THE FIELDS' LEAD, which it did not.
+                //
+                // A row is drawn at `base + chrome::FIELDS_LEAD + f.at` and
+                // this rule was drawn at `split * cell`: one cell to the LEFT
+                // of the boundary it marks, so the sidebar's last letter sat on
+                // top of it. The two numbers have to be the same number, and
+                // the panels' rules just below pay it too.
+                //
+                // AND THE LINE SITS IN THE MIDDLE OF THE CELL RESERVED FOR IT.
+                // `files::rule_x` argues it: drawn at the cell's left edge, the
+                // whole cell became air on the listing's side and none at all
+                // on the sidebar's.
+                let lead = crate::chrome::FIELDS_LEAD;
+                // WHERE THE LISTING'S REGION ENDS: the strip's rule when the
+                // panels are down there, and the SURFACE'S bottom when they
+                // are not. Never a line count times a fractional line height.
+                #[allow(clippy::cast_precision_loss)]
+                let strip_top =
+                    f32::from(first_of_expansion) * line_height + grid.lines as f32 * line_height;
+                let list_bottom = if panes.strip > 0 { strip_top } else { bottom };
+                if panes.sidebar > 0 {
+                    backgrounds.push(crate::chrome::divider(
+                        crate::files::rule_x(panes.sidebar, lead, cell),
+                        f32::from(first_of_expansion) * line_height,
+                        list_bottom,
+                    ));
+                }
+                // THE PANELS' RULES: one before the first when they are on the
+                // right, one between them wherever they are. Same kind of
+                // thing, same surface, no container (invariant 15).
+                let (rule_from, rule_to) = if panes.right > 0 {
+                    (f32::from(first_of_expansion) * line_height, list_bottom)
+                } else {
+                    (strip_top, bottom)
+                };
+                for at in panes.rules(columns) {
+                    backgrounds.push(crate::chrome::divider(
+                        crate::files::rule_x(at, lead, cell),
+                        rule_from,
+                        rule_to,
+                    ));
+                }
+                // AND THE LINE THAT SAYS WHERE THE LISTING ENDS, when the
+                // panels are down at the bottom. Without it the strip's first
+                // row reads as one more entry that happens to say something
+                // else.
+                if panes.strip > 0 {
+                    #[allow(clippy::cast_precision_loss)]
+                    backgrounds.push(crate::chrome::rule(width as f32, strip_top));
+                }
+                // AND THE INFO COLUMN'S OWN BAR.
+                //
+                // The panel no longer stretches the region to fit its facts —
+                // see `files::View::panel_lines` — so on a photograph it has
+                // more to say than it has lines, and the owner asked for a bar
+                // of its own to say where one is in them.
+                //
+                // It is the LISTING's bar at another edge, and deliberately the
+                // same rectangle: one cell wide, `rule.strong`, a thumb
+                // proportional to what is shown and floored at one line. The
+                // arithmetic is the view's, in cells and lines, because the two
+                // doors draw at different font sizes.
+                //
+                // **It is NOT hidden behind the pointer**, and that is the one
+                // place it departs from the listing's. Down there the bar is
+                // second-order — the keyboard scrolls and the region is
+                // obviously a list — and here it is the only thing on screen
+                // that says the panel has been cut. A list cut with nothing
+                // saying so is this file's oldest complaint.
+                // EVERY SECTION'S BAR, from the section itself — see
+                // `files::Section::bar_box`. They were three rectangles worked
+                // out separately here, and the pointer test was a fourth
+                // opinion; the owner found each place they disagreed, and one
+                // of them put the facts' thumb off the side of the screen
+                // whenever the window was not full width.
+                #[allow(clippy::cast_precision_loss)]
+                for (_, rect) in self.files_bars(columns, cell, line_height, width as f32) {
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: rect.0,
+                        y: rect.1,
+                        width: rect.2,
+                        height: rect.3,
+                        color: tokens::color::RULE_STRONG,
                     });
                 }
             }
@@ -7866,19 +8926,19 @@ impl Footer {
             // Hidden by default because, with the keyboard scrolling, it is
             // second-order information: it shows up for whoever went looking
             // for it with the mouse, and does not take screen from whoever did not.
-            if barra_visivel {
+            if bar_showing {
                 let start = f32::from(first_of_expansion) * line_height;
                 let gap = grid.lines as f32 * line_height;
-                let proporcao = grid.lines as f32 / total_expansao as f32;
-                let position = offset as f32 / total_expansao as f32;
+                let proportion = grid.lines as f32 / expansion_total as f32;
+                let position = offset as f32 / expansion_total as f32;
                 let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
-                fundos.push(ronoctua_render::quad::Quad {
-                    x: width as f32 - cell,
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: self.bar_x(f64::from(width)) as f32,
                     y: start + gap * position,
                     width: cell,
                     // A floor of one line: with two hundred lines of content the
                     // thumb would have less than a pixel and would vanish.
-                    height: (gap * proporcao).max(line_height),
+                    height: (gap * proportion).max(line_height),
                     color: tokens::color::RULE_STRONG,
                 });
             }
@@ -7899,16 +8959,30 @@ impl Footer {
                 // 16 bytes per instance. The preview's key carries the VERSION, and
                 // not the dimensions: two captures of the same monitor have the same
                 // size and are different images.
-                if let (Some(area), Some(rgba)) = (preview, imagem_pronta) {
+                if let (Some(area), Some(rgba)) = (preview, image_ready) {
                     let key = format!("clip:{version}");
                     if im.missing(&key) {
                         im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
                     }
                     batch.push((key, area));
                 }
+                // AND THE MANAGER'S, in the same batch and by the same rule.
+                //
+                // The key is `Stamp::key()` — path, mtime, size and the step it
+                // was decoded at — which is what keeps it out of the way of the
+                // clipboard's `clip:<version>` and the icons' bare `Icon=` name
+                // in this one map.
+                if let Some((key, area)) = file_preview {
+                    if im.missing(&key)
+                        && let Some(rgba) = files_pixels
+                    {
+                        im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
+                    }
+                    batch.push((key, area));
+                }
                 for (key, _) in &pixmaps {
                     if im.missing(key)
-                        && let Some(Some(rgba)) = icones_prontos.get(key)
+                        && let Some(Some(rgba)) = ready_icons.get(key)
                     {
                         im.upload_it(&gpu.device, &gpu.queue, key, rgba);
                     }
@@ -7921,7 +8995,7 @@ impl Footer {
                     &gpu.queue,
                     gpu.config.width,
                     gpu.config.height,
-                    &fundos,
+                    &backgrounds,
                 );
             }
 
@@ -7938,10 +9012,10 @@ impl Footer {
                 ronoctua_render::Atlas::Pinned,
                 &spans,
             ) {
-                tracing::error!(error = %e, screen = index, "preparar texto falhou");
+                tracing::error!(error = %e, screen = index, "preparing the text failed");
                 continue;
             }
-            let preparo = t.elapsed();
+            let shaping_of = t.elapsed();
 
             let t = std::time::Instant::now();
             // THE RECTANGLE BEFORE THE TEXT: with no depth test, whoever draws
@@ -7962,22 +9036,22 @@ impl Footer {
                 }
                 text.draw(ronoctua_render::Atlas::Pinned, pass)
             }) {
-                tracing::error!(error = %e, screen = index, "desenhar o frame falhou");
+                tracing::error!(error = %e, screen = index, "drawing the frame failed");
                 continue;
             }
-            pintou = true;
+            painted = true;
             // Only the first frames, and only of the first screen: after that they
             // become noise on every 1 s tick.
-            if primeira_pintura && index == 0 {
+            if first_paint && index == 0 {
                 tracing::info!(
-                    preparo_ms = preparo.as_secs_f64() * 1000.0,
+                    shaping_ms = shaping_of.as_secs_f64() * 1000.0,
                     desenho_ms = t.elapsed().as_secs_f64() * 1000.0,
-                    "partida: pintura"
+                    "start-up: painting"
                 );
             }
         }
 
-        if pintou && self.frames_painted < 3 {
+        if painted && self.frames_painted < 3 {
             self.frames_painted += 1;
         }
 
@@ -7990,14 +9064,14 @@ impl Footer {
         // frame stays stuck in the output buffer until the compositor's next
         // event, and the modeline looks as if it does not update.
         if let Err(e) = self.conn.flush() {
-            tracing::warn!(error = %e, "flush da conexao falhou");
+            tracing::warn!(error = %e, "flushing the connection failed");
         }
     }
 }
 
 /// How far the expansion may grow, in lines.
 ///
-/// `altura_da_tela` is `None` when no output has announced a size yet; then
+/// `screen_height` is `None` when no output has announced a size yet; then
 /// only the absolute ceiling holds, which is the more conservative of the two.
 ///
 /// # Why a pure function
@@ -8005,18 +9079,24 @@ impl Footer {
 /// For the same reason as `screen_difference`: the rule is arithmetic, and
 /// what wraps it — `wl_output`, `LayerSurface` — does not exist outside a
 /// compositor. Separated, it is testable on screens this computer does not have.
-fn expansion_ceiling(altura_da_tela: Option<u32>) -> usize {
+fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
     let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
-    let por_tela = altura_da_tela.map_or(usize::MAX, |h| {
+    let per_screen = screen_height.map_or(usize::MAX, |h| {
         let px = f64::from(h) * f64::from(tokens::space::EXPANSION_MAXFOOTERPCT) / 100.0;
-        // MINUS THE TWO FIXED LINES: the percentage belongs to the whole footer,
-        // and the modeline and the minibuffer are in it. Counting only the
-        // expansion, the footer went past the limit the token itself names.
-        ((px / f64::from(line_height)) as usize).saturating_sub(2)
+        // MINUS WHAT IS FIXED: the percentage belongs to the whole footer, and
+        // the modeline, the minibuffer and — while a countdown runs — the
+        // brain's line are in it. Counting only the expansion, the footer went
+        // past the limit the token itself names.
+        //
+        // It was the literal `2` for as long as two lines were the whole of the
+        // fixed part. A number that has to be right in two places is a number
+        // that will be wrong in one of them, which is why it is a PARAMETER
+        // now: the caller counts what it is actually drawing.
+        ((px / f64::from(line_height)) as usize).saturating_sub(fixed)
     });
     // Never zero: an expansion of zero lines is the list not opening, and the
     // user would have no way of telling that from the key not having caught.
-    por_tela
+    per_screen
         .min(usize::from(tokens::space::EXPANSION_MAXLINES))
         .max(1)
 }
@@ -8091,7 +9171,7 @@ fn item_at(
     cell_width_px: f64,
     first: u16,
     grid: Grid,
-    quantos: usize,
+    how_many: usize,
 ) -> Option<usize> {
     let line = row_at_height(y, line_height, first, grid.lines)?;
     if cell_width_px <= 0.0 || x < 0.0 {
@@ -8103,7 +9183,7 @@ fn item_at(
         return None;
     }
     let i = column * grid.lines + line;
-    (i < quantos).then_some(i)
+    (i < how_many).then_some(i)
 }
 
 /// Which outputs still have no screen, and which screens lost their output.
@@ -8116,8 +9196,8 @@ fn item_at(
 /// monitors would reach it, and the nested backend gives a single output.
 ///
 /// Gives back `(to create, to remove)`, by index into `saidas` and `screens`.
-fn screen_difference<T: PartialEq>(screens: &[T], saidas: &[T]) -> (Vec<usize>, Vec<usize>) {
-    let criar = saidas
+fn screen_difference<T: PartialEq>(screens: &[T], outputs: &[T]) -> (Vec<usize>, Vec<usize>) {
+    let to_create = outputs
         .iter()
         .enumerate()
         .filter(|(_, s)| !screens.contains(s))
@@ -8126,10 +9206,10 @@ fn screen_difference<T: PartialEq>(screens: &[T], saidas: &[T]) -> (Vec<usize>, 
     let remove = screens
         .iter()
         .enumerate()
-        .filter(|(_, t)| !saidas.contains(t))
+        .filter(|(_, t)| !outputs.contains(t))
         .map(|(i, _)| i)
         .collect();
-    (criar, remove)
+    (to_create, remove)
 }
 
 /// The actions of an entry, minus the ones this machine cannot carry out.
@@ -8194,6 +9274,7 @@ fn glyph_and_text(
     column: u16,
     line: u16,
     color: tokens::Color,
+    edge: bool,
 ) -> Vec<ronoctua_render::Span> {
     let Some((glyph, rest)) = ronoctua_render::layout::leading_glyph(text) else {
         return vec![ronoctua_render::Span {
@@ -8202,6 +9283,7 @@ fn glyph_and_text(
             column,
             line,
             color,
+            edge,
         }];
     };
     let mut out = vec![ronoctua_render::Span {
@@ -8210,6 +9292,7 @@ fn glyph_and_text(
         column,
         line,
         color,
+        edge,
     }];
     // An empty rest is the elided case — one cell left, and it went to the
     // glyph. An empty run would cost a `glyphon::Buffer` to draw nothing.
@@ -8220,6 +9303,7 @@ fn glyph_and_text(
             column: column + 1,
             line,
             color,
+            edge,
         });
     }
     out
@@ -8227,7 +9311,7 @@ fn glyph_and_text(
 
 /// Each segment's color — emphasis by COLOR AND WEIGHT, never by a container
 /// (section 5.1).
-fn segment_color(id: &str, rodape_com_teclado: bool, state_is_base: bool) -> tokens::Color {
+fn segment_color(id: &str, footer_with_keyboard: bool, state_is_base: bool) -> tokens::Color {
     match id {
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
         // only thing next to the name; now the state sits beside it saying what
@@ -8255,7 +9339,7 @@ fn segment_color(id: &str, rodape_com_teclado: bool, state_is_base: bool) -> tok
         // So the signal MOVES instead of vanishing: the blue leaves the window and
         // enters the line that names it. There is still exactly one blue thing on
         // screen, and it still says which buffer receives whatever comes next.
-        "buffer" if rodape_com_teclado => tokens::color::STATE_ACCENT,
+        "buffer" if footer_with_keyboard => tokens::color::STATE_ACCENT,
         "buffer" => tokens::color::TEXT_PRIMARY,
         _ => tokens::color::TEXT_SECONDARY,
     }
@@ -8290,7 +9374,7 @@ fn narrow_buffer_keymap(
         // be the SAME one the rest of the keymap uses, or two spellings of one
         // key would drift apart.
         let Ok(sym) = ronoctua_keymap::Key::parse(next) else {
-            tracing::warn!(key = next, "o buffer publicou uma tecla que nao existe");
+            tracing::warn!(key = next, "the buffer published a key that does not exist");
             continue;
         };
         let complete = keys.len() == depth + 1;
@@ -8325,20 +9409,16 @@ mod tests {
         ];
 
         let root = super::narrow_buffer_keymap(&bindings, &["m"]);
-        assert_eq!(
-            root.len(),
-            2,
-            "duas teclas distintas depois de `m`: {root:?}"
-        );
+        assert_eq!(root.len(), 2, "two distinct keys after `m`: {root:?}");
         let f = root.iter().find(|e| e.key == "f").expect("sem `f`");
-        assert!(f.is_group, "`m f` continua, entao e grupo");
-        assert!(f.command.is_none(), "grupo nao roda nada");
+        assert!(f.is_group, "`m f` carries on, so it is a group");
+        assert!(f.command.is_none(), "a group runs nothing");
         let q = root.iter().find(|e| e.key == "q").expect("sem `q`");
         assert!(!q.is_group);
         assert_eq!(q.command.as_deref(), Some("memory-close"));
         assert_eq!(
             q.label, "cmd-memory-close",
-            "o rotulo e `cmd-<id>` (secao 7.9)"
+            "the label is `cmd-<id>` (section 7.9)"
         );
 
         let under_f = super::narrow_buffer_keymap(&bindings, &["m", "f"]);
@@ -8350,7 +9430,7 @@ mod tests {
 
         assert!(
             super::narrow_buffer_keymap(&bindings, &["m", "z"]).is_empty(),
-            "uma tecla que o buffer nao responde nao pode abrir tela nenhuma"
+            "a key the buffer does not answer must open no screen at all"
         );
     }
 
@@ -8359,7 +9439,7 @@ mod tests {
     #[test]
     fn an_unspellable_key_does_not_lose_the_others() {
         let bindings = vec![
-            ("m nao-existe-essa-tecla".to_owned(), "x".to_owned()),
+            ("m no-such-key".to_owned(), "x".to_owned()),
             ("m s".to_owned(), "memory-refresh".to_owned()),
         ];
         let rows = super::narrow_buffer_keymap(&bindings, &["m"]);
@@ -8410,38 +9490,38 @@ mod tests {
 
         // TODAY'S: 120ths of a detent. Half a turn is half a detent, and not
         // zero — it is what makes a high-resolution wheel not lose the step.
-        let alta = AxisScroll {
+        let tall = AxisScroll {
             value120: 60,
             ..AxisScroll::default()
         };
-        assert!((axis_detents(&alta, line) - 0.5).abs() < 1e-9);
+        assert!((axis_detents(&tall, line) - 0.5).abs() < 1e-9);
 
         // THE OLD ONE, from an older compositor: an integer per detent.
-        let velho = AxisScroll {
+        let old = AxisScroll {
             discrete: -2,
             ..AxisScroll::default()
         };
-        assert!((axis_detents(&velho, line) + 2.0).abs() < 1e-9);
+        assert!((axis_detents(&old, line) + 2.0).abs() < 1e-9);
 
         // THE CONTINUOUS one from the touchpad: finger pixels, converted by the
         // LINE HEIGHT. Three lines of finger = one detent.
-        let dedo = AxisScroll {
+        let finger = AxisScroll {
             absolute: line * 3.0,
             ..AxisScroll::default()
         };
-        assert!((axis_detents(&dedo, line) - 1.0).abs() < 1e-9);
+        assert!((axis_detents(&finger, line) - 1.0).abs() < 1e-9);
 
         // AND A SMALL EVENT IS NOT ZERO. Truncating here would make the touchpad
         // never scroll: each of its events is worth a fraction, and what adds
         // them up is the accumulator.
-        let migalha = AxisScroll {
+        let crumb = AxisScroll {
             absolute: 2.0,
             ..AxisScroll::default()
         };
-        assert!(axis_detents(&migalha, line) > 0.0);
+        assert!(axis_detents(&crumb, line) > 0.0);
 
         // With no line height there is no converting: zero, and not infinity.
-        assert_eq!(axis_detents(&dedo, 0.0), 0.0);
+        assert_eq!(axis_detents(&finger, 0.0), 0.0);
     }
 
     #[test]
@@ -8460,7 +9540,7 @@ mod tests {
         h.on_announcement(alt);
         assert!(
             !h.discount(alt).alt,
-            "o Alt que abriu a leader nao pode entrar na sequencia"
+            "the Alt that opened the leader must not enter the sequence"
         );
 
         // AND WHEN THE ALT IS RELEASED, THE DISCOUNT GOES WITH IT.
@@ -8474,7 +9554,7 @@ mod tests {
         h.on_announcement(Modifiers::default());
         assert!(
             h.discount(alt).alt,
-            "o Alt solto e apertado de novo TEM de contar"
+            "an Alt released and pressed again HAS to count"
         );
 
         // With no inheritance recorded, whatever is held HOLDS — that is the case
@@ -8496,7 +9576,7 @@ mod tests {
         h.on_announcement(ctrl);
         let m = h.discount(both);
         assert!(!m.ctrl, "o Ctrl herdado sai");
-        assert!(m.alt, "o Alt apertado depois FICA");
+        assert!(m.alt, "an Alt pressed afterwards STAYS");
     }
 
     #[test]
@@ -8522,14 +9602,14 @@ mod tests {
         h.on_announcement(alt); // changes nothing: the inheritance has already been taken
         assert!(
             h.discount(alt).alt,
-            "sem recaptura, o Alt preso entra em toda tecla — e nada casa"
+            "without recapture, a stuck Alt joins every key — and nothing matches"
         );
 
         // WITH THE RECAPTURE ON STARTING THE SEQUENCE, it goes away.
         h.on_sequence_start(alt);
         assert!(
             !h.discount(alt).alt,
-            "o que ja estava segurado quando a sequencia comecou nao e dela"
+            "what was already held when the sequence began is not part of it"
         );
 
         // And a Ctrl pressed AFTER the recapture still counts.
@@ -8548,14 +9628,14 @@ mod tests {
         // `I`, `LEADER I` is bound to nothing, and EVERY lowercase binding of
         // the keymap dies with it.
         use ronoctua_keymap::{Key, Resolution, Sym};
-        let (tree, _) = crate::leader::default_of().expect("o keymap padrao tem de fechar");
+        let (tree, _) = crate::leader::default_of().expect("the default keymap has to close");
 
         assert!(
             matches!(
                 tree.resolve(&[Key::simple(Sym::Char('I'))]),
                 Resolution::Nothing
             ),
-            "se `I` passar a ser um atalho, este teste perdeu o sentido"
+            "if `I` becomes a shortcut, this test has lost its point"
         );
 
         let c = Footer::without_caps_lock('I', true);
@@ -8564,7 +9644,7 @@ mod tests {
                 tree.resolve(&[Key::simple(Sym::Char(c))]),
                 Resolution::Prefix(_)
             ),
-            "com Caps Lock ligado, `LEADER i` tem de abrir o grupo de icones"
+            "with Caps Lock on, `LEADER i` has to open the icon group"
         );
     }
 
@@ -8572,8 +9652,8 @@ mod tests {
     fn each_output_gets_a_screen() {
         // The case the nested backend cannot reach: two monitors. The decision
         // of section 9.2 is one surface PER OUTPUT.
-        let (criar, remove) = screen_difference::<u32>(&[], &[1, 2]);
-        assert_eq!(criar, vec![0, 1], "os dois outputs precisam de tela");
+        let (to_create, remove) = screen_difference::<u32>(&[], &[1, 2]);
+        assert_eq!(to_create, vec![0, 1], "both outputs need a screen");
         assert!(remove.is_empty());
     }
 
@@ -8582,24 +9662,24 @@ mod tests {
         // `new_output` and `update_output` call the same routine, and SCTK fires
         // both. Without this guard the same monitor would get two stacked
         // surfaces, and the exclusive zone would double.
-        let (criar, remove) = screen_difference(&[1, 2], &[1, 2]);
-        assert!(criar.is_empty());
+        let (to_create, remove) = screen_difference(&[1, 2], &[1, 2]);
+        assert!(to_create.is_empty());
         assert!(remove.is_empty());
     }
 
     #[test]
     fn hotplug_removes_the_screen_of_the_monitor_that_left() {
-        let (criar, remove) = screen_difference(&[1, 2], &[1]);
-        assert!(criar.is_empty());
-        assert_eq!(remove, vec![1], "a tela do output 2 tem de sair");
+        let (to_create, remove) = screen_difference(&[1, 2], &[1]);
+        assert!(to_create.is_empty());
+        assert_eq!(remove, vec![1], "the screen of output 2 has to go");
     }
 
     #[test]
     fn swapping_monitors_creates_and_removes_in_the_same_pass() {
         // Unplugging one and plugging another between two events is common on a
         // dock. Both things have to happen, not only the first.
-        let (criar, remove) = screen_difference(&[1], &[2]);
-        assert_eq!(criar, vec![0]);
+        let (to_create, remove) = screen_difference(&[1], &[2]);
+        assert_eq!(to_create, vec![0]);
         assert_eq!(remove, vec![0]);
     }
 
@@ -8610,17 +9690,17 @@ mod tests {
         // half of it — and the list would stop having content behind it.
         let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
         for height in [600_u32, 720, 800, 900, 1080, 1440, 2160] {
-            let lines = expansion_ceiling(Some(height));
+            let lines = expansion_ceiling(Some(height), usize::from(FOOTER_LINES));
             // THE WHOLE FOOTER: the two fixed lines count for whoever is looking.
-            let px = (lines + 2) as f64 * line_height;
+            let px = (lines + usize::from(FOOTER_LINES)) as f64 * line_height;
             let limit =
                 f64::from(height) * f64::from(tokens::space::EXPANSION_MAXFOOTERPCT) / 100.0;
             assert!(
                 px <= limit,
-                "com {height} px de tela o rodape pega {px} px, mais que os \
+                "at {height} px of screen the footer takes {px} px, more than the \
                  {limit} px que o token permite"
             );
-            assert!(lines >= 1, "expansao de zero linhas com {height} px");
+            assert!(lines >= 1, "an expansion of zero lines at {height} px");
         }
     }
 
@@ -8629,19 +9709,28 @@ mod tests {
         // Both limits exist because each one fails on its own: on a 2160 px
         // screen, 40% would give 33 lines (the footer would become the screen);
         // on a 600 px one, 12 lines would give more than half.
+        let fixed = usize::from(FOOTER_LINES);
         assert_eq!(
-            expansion_ceiling(Some(2160)),
+            expansion_ceiling(Some(2160), fixed),
             usize::from(tokens::space::EXPANSION_MAXLINES),
-            "na tela grande quem limita e o teto absoluto"
+            "on a big screen the absolute ceiling is what limits"
         );
         assert!(
-            expansion_ceiling(Some(600)) < usize::from(tokens::space::EXPANSION_MAXLINES),
-            "na tela pequena quem limita e o percentual"
+            expansion_ceiling(Some(600), fixed) < usize::from(tokens::space::EXPANSION_MAXLINES),
+            "on a small screen the percentage is what limits"
         );
         // Node output yet: the absolute one holds, which is the more conservative.
         assert_eq!(
-            expansion_ceiling(None),
+            expansion_ceiling(None, fixed),
             usize::from(tokens::space::EXPANSION_MAXLINES)
+        );
+        // AND A THIRD FIXED LINE TAKES ONE OFF THE LIST, where the screen is
+        // what limits. With the brain's line on, the footer is spending one
+        // more row and the expansion is what gives it back — the literal `2`
+        // could not say that.
+        assert!(
+            expansion_ceiling(Some(600), fixed + 1) < expansion_ceiling(Some(600), fixed),
+            "the brain's line did not come out of the expansion's ceiling"
         );
     }
 
@@ -8651,10 +9740,14 @@ mod tests {
         // back to the top is indistinguishable from the list having changed.
         let last = last_offset(30, 12); // 18
         assert_eq!(last, 18);
-        assert_eq!(scrolling(0, last, -1), 0, "subiu do topo");
+        assert_eq!(scrolling(0, last, -1), 0, "it came up from the top");
         assert_eq!(scrolling(last, last, 1), last, "passou do fim");
         assert_eq!(scrolling(0, last, 12), 12);
-        assert_eq!(scrolling(12, last, 12), 18, "a ultima pagina para no fim");
+        assert_eq!(
+            scrolling(12, last, 12),
+            18,
+            "the last page stops at the end"
+        );
     }
 
     #[test]
@@ -8676,13 +9769,13 @@ mod tests {
             12,
             true,
         );
-        assert_eq!(g.colon, 5 + tokens::space::MODELINE_EDGELEFT + 1);
+        assert_eq!(g.colon, 5 + crate::chrome::INSET + 1);
         for width in [1_u16, 3, 5] {
             let start = g.colon - (width + 1);
             assert_eq!(start + width + 1, g.colon);
         }
         // And the widest one starts exactly at the margin — with no dead gap.
-        assert_eq!(g.colon - (5 + 1), tokens::space::MODELINE_EDGELEFT);
+        assert_eq!(g.colon - (5 + 1), crate::chrome::INSET);
     }
 
     #[test]
@@ -8693,10 +9786,13 @@ mod tests {
         // that fit, the same ten become a few lines.
         let items: Vec<Measure> = std::iter::repeat_n(measurement(3, 8), 10).collect();
         let g = grid_for(&items, 200, 12, true);
-        assert!(g.columns > 1, "ficou em coluna unica numa tela larga");
+        assert!(
+            g.columns > 1,
+            "it stayed in a single column on a wide screen"
+        );
         assert!(
             g.lines < 10,
-            "usou {} linhas para 10 itens: nao aproveitou a largura",
+            "it used {} lines for 10 items: it did not use the width",
             g.lines
         );
         assert!(g.per_page() >= 10, "dez itens deviam caber numa pagina");
@@ -8710,7 +9806,7 @@ mod tests {
         let items: Vec<Measure> = std::iter::repeat_n(measurement(3, 8), 30).collect();
         let g = grid_for(&items, 200, 12, false);
         assert_eq!(g.columns, 1);
-        assert_eq!(g.lines, 12, "a lista devia encher o teto");
+        assert_eq!(g.lines, 12, "the list should fill the ceiling");
     }
 
     #[test]
@@ -8720,7 +9816,7 @@ mod tests {
         let items: Vec<Measure> = std::iter::repeat_n(measurement(3, 8), 500).collect();
         for width in [40_u16, 80, 200, 400] {
             let g = grid_for(&items, width, 12, true);
-            assert!(g.lines <= 12, "{width} colunas deram {} linhas", g.lines);
+            assert!(g.lines <= 12, "{width} columns gave {} lines", g.lines);
             assert!(g.columns >= 1);
         }
     }
@@ -8740,17 +9836,17 @@ mod tests {
         // are a common desktop-entry sentence; with a text that already fits,
         // this test would pass without the limits even existing.
         let items: Vec<Measure> = std::iter::repeat_n(measurement(6, 200), 40).collect();
-        for colunas_da_tela in [40_u16, 80, 120, 176, 300] {
-            let g = grid_for(&items, colunas_da_tela, 12, true);
+        for screen_columns in [40_u16, 80, 120, 176, 300] {
+            let g = grid_for(&items, screen_columns, 12, true);
             for i in 0..g.per_page() {
                 let (base, _) = g.position(i);
                 for with_key in [true, false] {
                     let end = base
                         + g.text_start(with_key)
-                        + g.fits_in_text(with_key, base, colunas_da_tela);
+                        + g.fits_in_text(with_key, base, screen_columns);
                     assert!(
-                        end <= colunas_da_tela,
-                        "com {colunas_da_tela} colunas, o item {i} termina em {end}"
+                        end <= screen_columns,
+                        "at {screen_columns} columns, item {i} ends at {end}"
                     );
                 }
             }
@@ -8766,12 +9862,15 @@ mod tests {
     fn the_right_column_does_not_invade_the_next_one() {
         let items: Vec<Measure> = std::iter::repeat_n(measurement(6, 30), 40).collect();
         let g = grid_for(&items, 300, 12, true);
-        assert!(g.columns > 1, "a tela larga devia dar mais de uma coluna");
+        assert!(
+            g.columns > 1,
+            "a wide screen should give more than one column"
+        );
         for with_key in [true, false] {
             let used = g.text_start(with_key) + g.fits_in_text(with_key, 0, 300);
             assert!(
                 used <= g.width,
-                "o texto usa {used} de uma coluna de {}",
+                "the text uses {used} of a column of {}",
                 g.width
             );
         }
@@ -8784,7 +9883,7 @@ mod tests {
         let g = grid_for(&[], 80, 12, true);
         assert_eq!(g.columns, 1);
         assert_eq!(g.lines, 1);
-        assert!(g.width > 0, "largura zero divide por zero adiante");
+        assert!(g.width > 0, "a width of zero divides by zero further on");
     }
 
     #[test]
@@ -8906,11 +10005,11 @@ mod tests {
         // do not depend on a program have to be there in both.
         assert!(
             kept.iter().any(|k| k == "copy-path"),
-            "sem o copiar caminho: {kept:?}"
+            "copy-path is missing: {kept:?}"
         );
         assert!(
             kept.iter().any(|k| k == "panel"),
-            "sem o comando nosso: {kept:?}"
+            "our own command is missing: {kept:?}"
         );
 
         // WITHOUT A FILE, the two that need one go and the command stays.
@@ -8944,7 +10043,7 @@ mod tests {
                 assert_eq!(
                     row_at_height(f64::from(line) * h + 1.0, h, first, n),
                     None,
-                    "com faixa de {band} linhas, a linha {line} virou item"
+                    "with a band of {band} lines, line {line} became an item"
                 );
             }
             assert_eq!(row_at_height(f64::from(first) * h, h, first, n), Some(0));
@@ -8960,10 +10059,10 @@ mod tests {
         // One run per CHANGE of color, and not one per character: on a list of 170
         // items, shaping letter by letter would multiply the renderer's work by
         // twenty.
-        let c = runs_of("janela", &[0, 1]);
+        let c = runs_of("window", &[0, 1]);
         assert_eq!(
             c,
-            vec![("ja".to_owned(), 0, true), ("nela".to_owned(), 2, false)]
+            vec![("wi".to_owned(), 0, true), ("ndow".to_owned(), 2, false)]
         );
 
         // The columns are the character's INDEX: one cell each, the same ruler as
@@ -9015,7 +10114,7 @@ mod tests {
             assert_eq!(
                 navigation_step(sym),
                 None,
-                "{sym:?} nao devia fazer nada com o CtrlRight segurado"
+                "{sym:?} should do nothing with CtrlRight held"
             );
         }
     }

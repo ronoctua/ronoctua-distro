@@ -117,7 +117,7 @@ buildNpmPackage (finalAttrs: {
       sed -i "1s|^#!.*${nodejs}/bin/node|#!/usr/bin/env node|" "$f"
     done
     if grep -rqF "${nodejs}" $out 2>/dev/null; then
-      echo "ERRO: o node ainda e citado no resultado; ele voltaria ao fecho" >&2
+      echo "ERROR: node is still named in the result; it would come back into the closure" >&2
       exit 1
     fi
   '';
@@ -127,7 +127,7 @@ buildNpmPackage (finalAttrs: {
   # produced a plugin nothing loads.
   postInstall = ''
     if [ -e $out/plugin/yt_dlp_plugins/__init__.py ]; then
-      echo "ERRO: yt_dlp_plugins ganhou __init__.py e deixaria de ser namespace" >&2
+      echo "ERROR: yt_dlp_plugins gained an __init__.py and would stop being a namespace" >&2
       exit 1
     fi
     test -f $out/server/src/generate_once.ts
@@ -137,7 +137,7 @@ buildNpmPackage (finalAttrs: {
   '';
 
   meta = {
-    description = "O gerador de PO token, em modo script: roda por pedido e sai";
+    description = "The PO token generator, in script mode: runs on request and exits";
     homepage = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider";
     license = lib.licenses.gpl3Only;
     platforms = lib.platforms.linux;

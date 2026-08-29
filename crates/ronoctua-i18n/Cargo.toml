@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-i18n"
-description = "Texto de interface por chave, em Fluent (invariante 8)."
+description = "Interface text by key, in Fluent (invariant 8)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

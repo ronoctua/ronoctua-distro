@@ -60,7 +60,7 @@ stdenvNoCC.mkDerivation {
   dontInstall = true;
 
   meta = {
-    description = "Tokens em Rust e em WIT, gerados de assets/tokens/*.nix";
+    description = "Tokens in Rust and in WIT, generated from assets/tokens/*.nix";
     platforms = lib.platforms.all;
   };
 }

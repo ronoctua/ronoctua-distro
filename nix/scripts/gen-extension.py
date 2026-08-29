@@ -95,7 +95,7 @@ def texts(i18n: pathlib.Path) -> dict:
     for language in LANGUAGES:
         path = i18n / f"{language}.ftl"
         if not path.is_file():
-            sys.exit(f"ERRO: falta {path}")
+            sys.exit(f"ERROR: {path} is missing")
         table = {}
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -114,8 +114,8 @@ def texts(i18n: pathlib.Path) -> dict:
         out[language] = picked
     if missing:
         sys.exit(
-            "ERRO: chaves de texto faltando na extensao — o botao mostraria o "
-            "nome da chave:\n  " + "\n  ".join(missing)
+            "ERROR: text keys missing from the extension — the button would show the "
+            "key's name:\n  " + "\n  ".join(missing)
         )
     return out
 
@@ -129,7 +129,7 @@ def colour_of(raw: str) -> str:
     """
     text = raw.lower().removeprefix("0x")
     if len(text) != 8 or any(c not in "0123456789abcdef" for c in text):
-        sys.exit(f"ERRO: `{raw}` nao e uma cor 0xRRGGBBAA")
+        sys.exit(f"ERROR: `{raw}` is not a 0xRRGGBBAA colour")
     r, g, b, a = (int(text[i : i + 2], 16) for i in (0, 2, 4, 6))
     if a == 255:
         return f"#{text[:6]}"
@@ -141,7 +141,7 @@ def colours(path: pathlib.Path) -> dict:
     out = {}
     for group, name in COLOURS:
         if group not in table or name not in table[group]:
-            sys.exit(f"ERRO: o token de cor `{group}.{name}` nao existe")
+            sys.exit(f"ERROR: the colour token `{group}.{name}` does not exist")
         out[camel(f"{group}.{name}")] = colour_of(table[group][name])
     return out
 
@@ -150,7 +150,7 @@ def spacing(path: pathlib.Path) -> dict:
     table = json.loads(path.read_text(encoding="utf-8"))
     block = table.get("extension")
     if not isinstance(block, dict):
-        sys.exit("ERRO: `space.extension` nao existe em assets/tokens/space.nix")
+        sys.exit("ERROR: `space.extension` does not exist in assets/tokens/space.nix")
     return {key: value for key, value in block.items()}
 
 
@@ -161,7 +161,7 @@ def manifest(version: str) -> dict:
         # nothing about it reaches a website.
         "name": "ronoctua",
         "version": version,
-        "description": "Manda os downloads para a fila da ronoctua.",
+        "description": "Sends downloads to ronoctua's queue.",
         # THE WHOLE PERMISSION LIST, and why each one is here:
         #
         #   downloads      the interception: see it start, and stop it
@@ -196,10 +196,10 @@ def manifest(version: str) -> dict:
 def used(source: pathlib.Path, table: str) -> set:
     """Every `TABLE.name` the extension's own sources actually name."""
     found = set()
-    for arquivo in sorted(source.iterdir()):
-        if arquivo.suffix not in {".js", ".html", ".css"} or arquivo.name == "generated.js":
+    for entry in sorted(source.iterdir()):
+        if entry.suffix not in {".js", ".html", ".css"} or entry.name == "generated.js":
             continue
-        found |= set(re.findall(rf"\b{table}\.([A-Za-z_][A-Za-z0-9_]*)", arquivo.read_text(encoding="utf-8")))
+        found |= set(re.findall(rf"\b{table}\.([A-Za-z_][A-Za-z0-9_]*)", entry.read_text(encoding="utf-8")))
     return found
 
 
@@ -218,8 +218,8 @@ def cross_check(source: pathlib.Path, tables: dict) -> None:
                 missing.append(f"{name}.{wanted}")
     if missing:
         sys.exit(
-            "ERRO: a extensao usa nome que esta tabela nao produz — em JavaScript "
-            "isso vira `undefined` na tela, sem erro nenhum:\n  " + "\n  ".join(missing)
+            "ERROR: the extension uses a name this table does not produce — in JavaScript "
+            "that becomes `undefined` on screen, with no error at all:\n  " + "\n  ".join(missing)
         )
 
 
@@ -237,16 +237,16 @@ def main() -> None:
     for forbidden in FORBIDDEN:
         if forbidden in table:
             sys.exit(
-                f"ERRO: o manifesto ganhou `{forbidden}` — e uma via de deteccao "
-                "por qualquer site; veja o comentario no topo deste arquivo"
+                f"ERROR: the manifest gained `{forbidden}` — it is a detection channel "
+                "by any site; see the comment at the top of this file"
             )
 
-    todos = texts(args.i18n)
-    cores = colours(args.colors)
-    medidas = spacing(args.space)
+    all_texts = texts(args.i18n)
+    colours_of = colours(args.colors)
+    measures = spacing(args.space)
     # The sources live next to this output, because the derivation copies them
     # into the build directory first.
-    cross_check(args.out, {"TEXT": todos[LANGUAGES[0]], "COLOUR": cores, "SPACE": medidas})
+    cross_check(args.out, {"TEXT": all_texts[LANGUAGES[0]], "COLOUR": colours_of, "SPACE": measures})
 
     body = "\n".join(
         [
@@ -258,7 +258,7 @@ def main() -> None:
             "",
             f"export const HOST = {json.dumps(args.host)};",
             "",
-            "const ALL = " + json.dumps(todos, ensure_ascii=False, indent=2) + ";",
+            "const ALL = " + json.dumps(all_texts, ensure_ascii=False, indent=2) + ";",
             "",
             "// The browser's own language decides, and pt-BR is the fallback:",
             "// this is one person's distro and that is the language they read.",
@@ -266,9 +266,9 @@ def main() -> None:
             "  ? chrome.i18n.getUILanguage() : 'pt-BR').toLowerCase();",
             "export const TEXT = WHICH.startsWith('pt') ? ALL['pt-BR'] : ALL['en-GB'];",
             "",
-            "export const COLOUR = " + json.dumps(cores, ensure_ascii=False, indent=2) + ";",
+            "export const COLOUR = " + json.dumps(colours_of, ensure_ascii=False, indent=2) + ";",
             "",
-            "export const SPACE = " + json.dumps(medidas, ensure_ascii=False, indent=2) + ";",
+            "export const SPACE = " + json.dumps(measures, ensure_ascii=False, indent=2) + ";",
             "",
         ]
     )
@@ -278,7 +278,7 @@ def main() -> None:
         json.dumps(table, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (args.out / "generated.js").write_text(body, encoding="utf-8")
-    print(f"OK: manifesto e tabela geradas ({len(KEYS)} chaves x {len(LANGUAGES)} idiomas)")
+    print(f"OK: manifest and table generated ({len(KEYS)} keys x {len(LANGUAGES)} languages)")
 
 
 if __name__ == "__main__":

@@ -43,8 +43,8 @@ in
       description = ''
         Assina a UKI com lanzaboote e exige Secure Boot.
 
-        As chaves ficam em `/etc/secureboot`, que a secao 7.2 roteia para
-        `/persist` — senao o wipe do root as apagaria e a maquina nao daria
+        The keys live in `/etc/secureboot`, which section 7.2 routes to
+        `/persist` — otherwise the root's wipe would erase them and the machine would not
         mais boot.
       '';
     };
@@ -52,17 +52,17 @@ in
     tpm2 = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Destrava o LUKS pelo TPM2, selado nos PCRs 7+11+12+15.";
+      description = "Unlocks LUKS through the TPM2, sealed against PCRs 7+11+12+15.";
     };
 
     pcrs = lib.mkOption {
       type = lib.types.str;
       default = "7+11+12+15";
       description = ''
-        Os PCRs do selamento. **Mexer aqui e decisao de seguranca.**
+        The sealing's PCRs. **Touching this is a security decision.**
 
-        Tirar o 15 faz um disco forjado destravar: os outros tres nao mudam
-        quando so o volume muda.
+        Dropping 15 makes a forged disk unlock: the other three do not change
+        when only the volume changes.
       '';
     };
   };
@@ -125,11 +125,11 @@ in
         # fail the BUILD, not show up as a surprise later.
         assertion = !cfg.tpm2 || lib.hasInfix "15" cfg.pcrs;
         message = ''
-          ronoctua.boot.pcrs sem o PCR 15.
+          ronoctua.boot.pcrs with no PCR 15.
 
-          Sem ele, um volume LUKS forjado DESTRAVA: firmware, UKI e cmdline
-          continuam os mesmos, e sao eles que os PCRs 7, 11 e 12 medem. O 15
-          e o unico que muda quando o disco muda.
+          Without it, a forged LUKS volume UNLOCKS: firmware, UKI and cmdline
+          stay the same, and they are what PCRs 7, 11 and 12 measure. 15
+          is the only one that changes when the disk changes.
         '';
       }
     ];

@@ -71,7 +71,7 @@ writeShellApplication {
     if [ -n "$target_pids" ]; then
       ps -o pid,etime,rss,args -p "$target_pids" || true
     else
-      echo "  nada de ronoctua ou niri rodando"
+      echo "  nothing of ronoctua or niri running"
     fi
     echo
 
@@ -88,9 +88,9 @@ writeShellApplication {
       fi
     done
     if [ -z "$niri_pid" ]; then
-      echo "nenhum niri aninhado de pe — nada mais a medir."
+      echo "no nested niri standing — nothing more to measure."
       echo
-      echo "o instantaneo esta em $out_text"
+      echo "the snapshot is at $out_text"
       exit 0
     fi
     echo "niri aninhado: pid $niri_pid, display $display"
@@ -109,29 +109,29 @@ writeShellApplication {
     try:
         s.connect(path)
     except OSError as e:
-        print(f"  wl_display.sync: NAO CONECTA ({e}) — o compositor morreu")
+        print(f"  wl_display.sync: DOES NOT CONNECT ({e}) — the compositor died")
         sys.exit(0)
     # wl_display.sync(new_id=2): object 1, opcode 0, 12 bytes.
     s.sendall(struct.pack("=III", 1, (12 << 16) | 0, 2))
     try:
         s.recv(64)
-        print("  wl_display.sync: RESPONDEU — o laco de eventos esta vivo")
+        print("  wl_display.sync: ANSWERED — the event loop is alive")
     except socket.timeout:
-        print("  wl_display.sync: TIMEOUT em 3 s.")
-        print("    ISTO SOZINHO NAO QUER DIZER TRAVADO. O niri aninhado e")
-        print("    cliente do compositor do host: com a janela dele oculta, o")
-        print("    host para de alimenta-lo e ele dorme — sem servir os")
-        print("    proprios clientes nem o IPC. Traga a janela para a")
-        print("    workspace visivel e rode de novo antes de concluir.")
+        print("  wl_display.sync: TIMEOUT after 3 s.")
+        print("    THIS ALONE DOES NOT MEAN LOCKED UP. The nested niri is")
+        print("    a client of the host's compositor: with its window hidden, the")
+        print("    host stops feeding it and it sleeps — serving neither")
+        print("    its own clients nor the IPC. Bring the window to the")
+        print("    visible workspace and run again before concluding.")
     PY
     echo
 
     # ---------------------------------------------------------------
     # 2. The socket queues corroborate
     # ---------------------------------------------------------------
-    echo "## filas de socket"
-    echo "  (Recv-Q do LISTEN = conexoes sem accept; Send-Q = bytes que o"
-    echo "   outro lado nunca leu)"
+    echo "## socket queues"
+    echo "  (Recv-Q of LISTEN = connections with no accept; Send-Q = bytes the"
+    echo "   other side never read)"
     ss -x -a -p 2>/dev/null | grep -E "niri\.|ronoctua-" | grep -v "Recv-Q" || true
     echo
 
@@ -154,11 +154,11 @@ writeShellApplication {
     # ---------------------------------------------------------------
     # 4. Does the footer have the keyboard?
     # ---------------------------------------------------------------
-    echo "## layer surface do rodape"
+    echo "## the footer's layer surface"
     if NIRI_SOCKET="$niri_sock" timeout 5 niri msg layers 2>/dev/null | grep -A3 "ronoctua-footer"; then
       :
     else
-      echo "  o IPC do niri nao respondeu em 5 s (coerente com o sync acima)"
+      echo "  niri's IPC did not answer within 5 s (consistent with the sync above)"
     fi
     echo
 
@@ -180,16 +180,16 @@ writeShellApplication {
     # keyboard: that is why it comes out with the time. The footer only receives
     # modifier announcements while it has focus, and in the broken state it cannot
     # even open the leader.
-    echo "## modificadores anunciados pelo compositor"
+    echo "## modifiers announced by the compositor"
     last_line=""
     for f in /tmp/ronoctua-footer-*.log; do
       [ -e "$f" ] || continue
-      line=$(grep "modificadores anunciados" "$f" | tail -1 || true)
+      line=$(grep "modifiers announced" "$f" | tail -1 || true)
       [ -n "$line" ] && last_line="$line"
     done
     if [ -z "$last_line" ]; then
-      echo "  nenhum anuncio no log — a leader nunca chegou a abrir nesta sessao."
-      echo "  (sem \$RONOCTUA_LOG o rodape nao guarda log: rode pelo 'nix run .#dev')"
+      echo "  nothing announced in the log — the leader never opened in this session."
+      echo "  (with no \$RONOCTUA_LOG the footer keeps no log: run it through 'nix run .#dev')"
     else
       echo "  $last_line"
       # `ctrl=true` and `alt=true` together are NORMAL: in the nested loop the
@@ -198,22 +198,22 @@ writeShellApplication {
       if printf '%s' "$last_line" | grep -q "logo.*true"; then
         echo
         echo "  >>> SUPER PRESO. No aninhado nada segura Super legitimamente:"
-        echo "      ele ficou latched quando o compositor do HOST capturou um"
+        echo "      it got latched when the HOST's compositor captured a"
         echo "      atalho 'Super+…' e a soltura nunca chegou aqui."
-        echo "      Efeito: 'Ctrl+Alt+Espaco' nao casa mais (a mascara tem um bit a"
-        echo "      mais) e o teclado inteiro para."
+        echo "      Effect: 'Ctrl+Alt+Space' no longer matches (the mask has one bit"
+        echo "      too many) and the whole keyboard stops."
       fi
     fi
     echo
 
-    echo "## fim do log do rodape"
+    echo "## end of the footer's log"
     for f in /tmp/ronoctua-footer-*.log; do
       [ -e "$f" ] || continue
       echo "--- $f"
       tail -40 "$f"
     done
     echo
-    echo "## fim do log do niri"
+    echo "## end of niri's log"
     for f in /tmp/ronoctua-niri-*.log; do
       [ -e "$f" ] || continue
       echo "--- $f"
@@ -221,6 +221,6 @@ writeShellApplication {
     done
 
     echo
-    echo "o instantaneo esta em $out_text"
+    echo "the snapshot is at $out_text"
   '';
 }

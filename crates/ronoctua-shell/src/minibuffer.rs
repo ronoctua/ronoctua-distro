@@ -501,12 +501,12 @@ pub fn rank(query: &str, items: &[&[&str]]) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter_map(|(i, keys)| {
-            let melhor = keys
+            let best = keys
                 .iter()
                 .enumerate()
                 .filter_map(|(n, k)| {
-                    let degrau = u8::try_from(n).unwrap_or(u8::MAX);
-                    score_it(query, k).map(|p| p.saturating_add(degrau * STEP_PER_KEY))
+                    let step = u8::try_from(n).unwrap_or(u8::MAX);
+                    score_it(query, k).map(|p| p.saturating_add(step * STEP_PER_KEY))
                 })
                 .min()?;
             let principal = keys.first().copied().unwrap_or_default();
@@ -515,7 +515,7 @@ pub fn rank(query: &str, items: &[&[&str]]) -> Vec<usize> {
             // memory uses. Sorting by size would put `niri-quit` at the top and
             // would make the list look different on every opening.
             let size = if query.is_empty() { 0 } else { principal.len() };
-            Some((melhor, size, principal, i))
+            Some((best, size, principal, i))
         })
         .collect();
     found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
@@ -537,12 +537,12 @@ pub fn match_up(query: &str, id: &str) -> Option<(u8, Vec<usize>)> {
     if query.is_empty() {
         return Some((0, Vec::new()));
     }
-    let minusculo: Vec<char> = id.to_lowercase().chars().collect();
+    let lowercase: Vec<char> = id.to_lowercase().chars().collect();
     let target: Vec<char> = query.chars().collect();
 
     // CONTIGUOUS first: `buffer` inside `buffer-close` lights all six
     // together, and not six scattered letters that happen to be in order.
-    if let Some(start) = adjacent_window(&minusculo, &target) {
+    if let Some(start) = adjacent_window(&lowercase, &target) {
         let pos = (start..start + target.len()).collect();
         return Some((u8::from(start > 0), pos));
     }
@@ -551,12 +551,12 @@ pub fn match_up(query: &str, id: &str) -> Option<(u8, Vec<usize>)> {
     // `window-move-left` — and that is how one types when one remembers what
     // the command DOES, and not how it is spelt.
     let mut pos = Vec::with_capacity(target.len());
-    let mut procurando = target.iter();
-    let mut current = procurando.next();
-    for (i, c) in minusculo.iter().enumerate() {
+    let mut searching = target.iter();
+    let mut current = searching.next();
+    for (i, c) in lowercase.iter().enumerate() {
         if Some(c) == current {
             pos.push(i);
-            current = procurando.next();
+            current = searching.next();
             if current.is_none() {
                 return Some((2, pos));
             }
@@ -593,8 +593,11 @@ mod tests {
             m.key(Key::simple(Sym::Char(c)), &registry);
         }
         let line = m.prompt();
-        assert!(!line.contains("s3nh4-secreta"), "a senha vazou: {line}");
-        assert!(line.contains("•"), "nao mascarou nada: {line}");
+        assert!(
+            !line.contains("s3nh4-secreta"),
+            "the password leaked: {line}"
+        );
+        assert!(line.contains("•"), "it masked nothing: {line}");
         // The length appears: without that one cannot see that the key took.
         assert_eq!(line.matches('•').count(), "s3nh4-secreta".chars().count());
 
@@ -602,7 +605,7 @@ mod tests {
         m.close_it();
         m.request("workspace-go", false);
         m.key(Key::simple(Sym::Char('3')), &registry);
-        assert!(m.prompt().contains('3'), "mascarou o que nao e segredo");
+        assert!(m.prompt().contains('3'), "it masked what is not a secret");
     }
 
     use super::{Action, Minibuffer};
@@ -610,7 +613,7 @@ mod tests {
 
     fn registry() -> ronoctua_cmd::Registry {
         crate::leader::default_of()
-            .expect("o keymap padrao fecha")
+            .expect("the default keymap closes")
             .1
     }
 
@@ -655,10 +658,10 @@ mod tests {
         let mut m = Minibuffer::default();
         m.open(&r);
         type_in(&mut m, &r, "buffer");
-        assert!(!m.candidates().is_empty(), "nenhum comando de buffer?");
+        assert!(!m.candidates().is_empty(), "no buffer command at all?");
         assert!(
             m.candidates().iter().all(|i| i.id.contains("buffer")),
-            "entrou algo que nao casa: {:?}",
+            "something that does not match got in: {:?}",
             m.candidates()
         );
     }
@@ -670,7 +673,7 @@ mod tests {
         m.open(&r);
         let expected = m.chosen().expect("ha candidato").id.clone();
         assert_eq!(m.key(t(Sym::Enter), &r), Action::Run(expected));
-        assert!(!m.active(), "confirmar tem de fechar");
+        assert!(!m.active(), "confirming has to close");
     }
 
     #[test]
@@ -683,7 +686,7 @@ mod tests {
         type_in(&mut m, &r, "zzzznaoexiste");
         assert!(m.candidates().is_empty());
         assert_eq!(m.key(t(Sym::Enter), &r), Action::Nothing);
-        assert!(m.active(), "nao podia ter fechado");
+        assert!(m.active(), "it could not have closed");
     }
 
     #[test]
@@ -700,7 +703,11 @@ mod tests {
         let r = registry();
         let mut m = Minibuffer::default();
         m.open(&r);
-        assert_eq!(m.key(ctrl('p'), &r), Action::Nothing, "subiu do topo");
+        assert_eq!(
+            m.key(ctrl('p'), &r),
+            Action::Nothing,
+            "it came up from the top"
+        );
         // Moving down MORE than the list's size, and not a hard-coded number: it was
         // 100 steps in a list of 28 commands, and the compositor's 141 actions
         // pushed it past 100 — the test failed for landing in the middle, and not
@@ -723,7 +730,7 @@ mod tests {
         for _ in 0..5 {
             m.key(ctrl('n'), &r);
         }
-        type_in(&mut m, &r, "sair");
+        type_in(&mut m, &r, "quit");
         assert!(m.cursor() < m.candidates().len().max(1));
         assert!(m.chosen().is_some() || m.candidates().is_empty());
     }
@@ -739,7 +746,7 @@ mod tests {
         type_in(&mut m, &r, "wml");
         assert!(
             m.candidates().iter().any(|i| i.id == "window-move-left"),
-            "`wml` nao achou `window-move-left`: {:?}",
+            "`wml` did not find `window-move-left`: {:?}",
             m.candidates()
         );
     }
@@ -754,7 +761,7 @@ mod tests {
         type_in(&mut m, &r, "buffer");
         assert!(
             m.chosen().is_some_and(|i| i.id.starts_with("buffer")),
-            "o primeiro nao comeca com a consulta: {:?}",
+            "the first one does not start with the query: {:?}",
             m.chosen()
         );
     }
@@ -773,7 +780,11 @@ mod tests {
             Some("niri-focus-workspace")
         );
 
-        assert_eq!(m.key(t(Sym::Enter), &r), Action::Changed, "executou direto");
+        assert_eq!(
+            m.key(t(Sym::Enter), &r),
+            Action::Changed,
+            "it ran straight away"
+        );
         assert_eq!(m.asking_for(), Some("niri-focus-workspace"));
         assert!(m.active(), "fechou em vez de perguntar");
         // The prompt becomes the command's NAME: whoever got here has already chosen.
@@ -817,7 +828,7 @@ mod tests {
         assert_eq!(
             m.choose(0, &r),
             Action::Run("niri-focus-column-left".to_owned()),
-            "clicar no primeiro nao executou o primeiro"
+            "clicking the first one did not run the first one"
         );
 
         // And the one that requires an argument ASKS, through the mouse too.
@@ -839,7 +850,7 @@ mod tests {
         let n = m.candidates().len();
         assert_eq!(m.choose(n, &r), Action::Nothing);
         assert_eq!(m.choose(9999, &r), Action::Nothing);
-        assert!(m.active(), "fechou por um clique fora");
+        assert!(m.active(), "it closed on a click outside");
     }
 
     #[test]
@@ -854,7 +865,7 @@ mod tests {
         // matching — and then a valid candidate would disappear from the list. A highlight on a
         // neighbouring letter is cheap; an item that disappears from the search is not.
         let (_, pos) = super::match_up("wml", "window-move-left").unwrap();
-        assert_eq!(pos, vec![0, 7, 12], "as tres letras da subsequencia");
+        assert_eq!(pos, vec![0, 7, 12], "the three letters of the subsequence");
 
         // CONTIGUOUS lights the whole block, together — and not scattered letters
         // that happen to be in order.
@@ -883,7 +894,7 @@ mod tests {
         for id in m.candidates() {
             assert!(
                 super::match_up(&m.normalized_query(), &id.id).is_some(),
-                "`{}` esta na lista e o realce nao acha onde ele casou",
+                "`{}` is in the list and the highlight cannot find where it matched",
                 id.id
             );
         }

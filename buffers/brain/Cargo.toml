@@ -1,0 +1,41 @@
+# OWN workspace: this crate only exists for `wasm32-wasip2`. See the comment on
+# the `exclude` in the root Cargo.toml — as a member, `rust-lld` would refuse the
+# version script with an error that mentions wasm nowhere.
+[workspace]
+
+[package]
+name = "ronoctua-buffer-brain"
+description = "The brain's screen: what the machine will do on its own, when, and what happened."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[lib]
+# `cdylib` is what `wasm32-wasip2` needs in order to become a component.
+crate-type = [ "cdylib" ]
+
+[dependencies]
+# THE LAYOUT VOCABULARY, and the bindings with it.
+#
+# `wit-bindgen` is NOT a dependency here: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` macro, so there is ONE generated
+# binding set for all eight components instead of eight.
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
+] }
+
+[lints.rust]
+# The same ones as the host's workspace, repeated because this is another
+# workspace. The `allow` for the generated code is in `lib.rs` itself, with the
+# reason.
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[profile.release]
+# A small component instantiates fast: the size counts towards the
+# deserialisation time of the `.cwasm`.
+opt-level = "s"
+lto = true
+strip = true

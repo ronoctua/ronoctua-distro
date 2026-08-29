@@ -15,6 +15,7 @@
   lib,
   niri,
   ronoctua-shell,
+  ronoctua-brain,
   fonts,
 }:
 
@@ -34,6 +35,7 @@ pkgs.testers.runNixOSTest {
     environment.systemPackages = [
       niri
       ronoctua-shell
+      ronoctua-brain
       pkgs.imagemagick
       pkgs.libnotify
       pkgs.xdotool
@@ -61,12 +63,12 @@ pkgs.testers.runNixOSTest {
     LINE = ${toString linePx}
 
 
-    def notificar(resumo, corpo="", level="normal", app="testes"):
+    def notify(summary, body="", level="normal", app="tests"):
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 "
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
             f"${pkgs.libnotify}/bin/notify-send -u {level} "
-            f"-a {app} '{resumo}' '{corpo}'"
+            f"-a {app} '{summary}' '{body}'"
         )
         machine.sleep(1)
 
@@ -86,23 +88,24 @@ pkgs.testers.runNixOSTest {
         whole niri window, which is what the manager's screenshots want.
         """
         w, h, x, y = niri_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/tela.xwd")
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         if lines is None:
             crop = f"{w}x{h}+{x}+{y}"
         else:
             tall = LINE * lines
             crop = f"{w}x{tall}+{x}+{y + h - tall}"
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/tela.xwd -crop {crop} +repage "
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {crop} +repage "
             f"/tmp/{name}.png"
         )
         machine.copy_from_vm(f"/tmp/{name}.png", "")
-        print(f"tirou {name}")
+        print(f"took {name}")
 
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
-    start_xvfb()
+    # THE ONE TEST THAT NEEDS THE BRAIN TO SPEAK: it photographs its line.
+    start_xvfb(brain=True)
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
@@ -123,39 +126,39 @@ pkgs.testers.runNixOSTest {
         "${ronoctua-shell}/bin/ronoctua-shell"
     )
     machine.wait_until_succeeds(
-        "journalctl -u footer --no-pager | grep -q 'layout do rodape resolvido'",
+        "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
         timeout=90,
     )
 
-    with subtest("o rodape em repouso, com o sino"):
-        shot("1-rodape-em-repouso", lines=2)
+    with subtest("the footer at rest, with the bell"):
+        shot("1-footer-at-rest", lines=2)
 
-    with subtest("a faixa discreta, de uma linha"):
-        notificar("copiado para a area de transferencia")
+    with subtest("the discreet band, one line tall"):
+        notify("copied to the clipboard")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'band=1'", timeout=30
         )
-        shot("2-faixa-discreta", lines=3)
+        shot("2-discreet-band", lines=3)
 
-    with subtest("a fila, com o contador"):
+    with subtest("the queue, with the counter"):
         for i in (1, 2, 3, 4):
-            notificar(f"mensagem {i}")
-        shot("3-fila-com-contador", lines=3)
+            notify(f"message {i}")
+        shot("3-queue-with-counter", lines=3)
 
-    with subtest("a faixa chamativa, de tres linhas"):
+    with subtest("the loud band, three lines tall"):
         # A critical one is level 90, so the distro's `important-gets-room`
         # catches it: full, loud, and long enough to photograph.
-        notificar(
-            "bateria em 3%",
-            corpo="a maquina desliga em poucos minutos; ligue na tomada",
+        notify(
+            "battery at 3%",
+            body="the machine shuts down in a few minutes; plug it in",
             level="critical",
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'loud=true'", timeout=30
         )
-        shot("4-faixa-chamativa", lines=4)
+        shot("4-loud-band", lines=4)
 
-    with subtest("a captura de tela: glifo proprio da fonte, e as acoes"):
+    with subtest("the screenshot: the font's own glyph, and the actions"):
         # THE WHOLE SCREENSHOT PATH, as the compositor drives it.
         #
         # niri sends `app_name = "niri"`, the English summary, and the file's
@@ -166,10 +169,10 @@ pkgs.testers.runNixOSTest {
         # And the glyph is `md-monitor_screenshot`, named in
         # `assets/notifications.nix` as a NerdFonts glyph rather than a design
         # system token: nothing in the design system says "screen capture".
-        machine.succeed("mkdir -p /root/Imagens")
+        machine.succeed("mkdir -p /root/Pictures")
         machine.succeed(
             "${pkgs.imagemagick}/bin/magick -size 320x200 canvas:gray30 "
-            "'/root/Imagens/Captura 2026-08-22.png'"
+            "'/root/Pictures/Screenshot 2026-08-22.png'"
         )
         for _ in range(8):
             control("notif-dismiss")
@@ -194,23 +197,23 @@ pkgs.testers.runNixOSTest {
             # own is read by GOption as a FLAG, and `gdbus` answers with its
             # usage instead of sending anything. `int32 -1` is one GVariant
             # literal that does not begin with a dash.
-            "'niri' 'uint32 0' 'file:///root/Imagens/Captura%202026-08-22.png' "
+            "'niri' 'uint32 0' 'file:///root/Pictures/Screenshot%202026-08-22.png' "
             "'Screenshot captured' 'You can paste the image from the clipboard.' "
             "'@as []' \"{'urgency': <byte 1>}\" 'int32 -1'"
         )
         machine.sleep(1)
         decided = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'notificacao decidida' | tail -1"
+            "journalctl -u footer --no-pager | grep 'notification decided' | tail -1"
         ).strip()
         print(decided)
         assert 'catalogue="screenshot"' in decided, decided
-        shot("5-captura-com-acoes", lines=5)
+        shot("5-screenshot-with-actions", lines=5)
 
-    with subtest("o gerenciador, em duas colunas"):
+    with subtest("the manager, in two columns"):
         control("notif-history")
-        shot("6-gerenciador-duas-colunas")
+        shot("6-manager-two-columns")
 
-    with subtest("o catalogo da distro, na terceira coluna"):
+    with subtest("the distro's catalogue, in the third column"):
         # X INPUT FOCUS FIRST. With no window manager nobody calls
         # `XSetInputFocus`, so the focus stays on `PointerRoot` and every key
         # `xdotool` injects is lost — no error, no log, nowhere.
@@ -219,12 +222,275 @@ pkgs.testers.runNixOSTest {
         for _ in (1, 2):
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Tab")
             machine.sleep(1)
-        shot("7-catalogo-da-distro")
+        shot("7-distro-catalogue")
         # And one entry's sheet, which is where "use the distro's default or
         # customise" is actually done.
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
         machine.sleep(1)
-        shot("8-folha-de-ajuste")
+        shot("8-adjustment-sheet")
         control("notif-history")
+
+    with subtest("the file manager, with the preview and the facts"):
+        # A PICTURE MADE IN THE VM, and nothing brought in. The owner's own
+        # test files live outside this repository and stay there; what a shot
+        # has to prove is that a picture reaches the panel, and a picture made
+        # here proves it without carrying somebody's photographs into a store
+        # path that never forgets.
+        #
+        # A PNG on purpose: the raster path is the `image` crate, in process,
+        # so this shot needs none of the five external programs and works on a
+        # machine that has no media group at all.
+        machine.succeed("mkdir -p /root/shots")
+        machine.succeed(
+            "${pkgs.imagemagick}/bin/magick -size 480x320 "
+            # TWO LIGHT COLOURS on purpose: a gradient that fades into the
+            # background makes the picture's own edge unmeasurable, and the
+            # air below it then reads as forty pixels that are not there.
+            "gradient:'#7AA2F7'-'#E0AF68' /root/shots/test-picture.png"
+        )
+        focus_niri()
+        control("files-open")
+        # THE LETTER IS QUERY in this view, which is what makes this
+        # deterministic: typing narrows to the one file rather than depending on
+        # where the cursor happened to land.
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shot'"
+        )
+        machine.sleep(1)
+        # AND INTO THE DIRECTORY. Filtering alone leaves the cursor on
+        # `shots/` — which is a folder, and a folder has no picture inside
+        # it, so the panel correctly drew the type's glyph. The file is one
+        # level down.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(1)
+        # AND NOTHING IS PRESSED FOR THE PANELS. They used to need `C-v` and
+        # `C-i`; the owner asked for them to be on from the start, so pressing
+        # the two keys here is what would TURN THEM OFF — which is how this
+        # shot came back with no picture in it at all.
+        machine.sleep(1)
+        # THE POINTER ON A ROW, because the band only exists under it — and the
+        # band's left edge is the thing the owner keeps photographing. A shot
+        # with the pointer parked outside cannot show it at all.
+        w_g, h_g, x_g, y_g = niri_geometry()
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_g + 300} {y_g + h_g - 3 * LINE}"
+        )
+        machine.sleep(1)
+        shot("10-manager-with-preview")
+
+        # AND THE POINTER OVER THE FACTS, which is the defect the owner
+        # reported in words: hovering a fact lit the row of the LISTING beside
+        # it, because every section's fields ride one `Row`. What has to be on
+        # screen here is a band inside the facts' own column and NOTHING lit in
+        # the listing.
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_g + w_g - 120} {y_g + h_g - 4 * LINE}"
+        )
+        machine.sleep(1)
+        shot("14-hover-on-the-facts")
+
+        # AND A LISTING THAT IS ACTUALLY CUT, which no shot here had.
+        #
+        # Every manager shot above opens on a folder with one file, so no
+        # section scrolls and no bar is drawn — which is why the owner's
+        # photograph of TWO BARS in one column could not be reproduced from
+        # this file. The footer used to draw its own generic bar over the
+        # manager's per-section one: two rectangles in the same cell, moving
+        # against different totals. Forty files make the listing scroll, and
+        # the picture then has exactly one bar in it or the defect is back.
+        machine.succeed("mkdir -p /root/many && touch /root/many/f-{01..40}.txt")
+        for _ in range(8):
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.sleep(1)
+        control("files-open")
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(2)
+        shot("16-footer-listing-cut")
+        # `files-open` OPENS — it does not toggle, so asking twice reopened it.
+        # And what the manager leaves up is a PAGE, which the footer draws BELOW
+        # the band and below the modeline: cropping the last lines with it on
+        # screen photographs the listing. That is exactly how the brain's line
+        # came out as a file listing and no one noticed — green is not proof,
+        # and neither is a screenshot nobody opened.
+        for _ in range(8):
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        # TWO DIGITS IS THE ASSERTION, and not a number of my own: the footer
+        # sums a fractional line height and comes to 53 where `LINE` — which
+        # ceils, because a crop cannot take half a pixel — would say 54. What
+        # is being asserted is that the PAGE is gone, and chrome alone is tens
+        # of pixels tall where a page is hundreds.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | tail -6"
+            " | grep -qE 'height=[0-9]{1,2} '",
+            timeout=30,
+        )
+
+    with subtest("the manager at the WINDOW door, which the footer does not show"):
+        # THE DOOR NOBODY PHOTOGRAPHED. Every shot here is of the footer, and
+        # the manager has two doors — so the window's own spacing went three
+        # rounds unseen while the owner was looking straight at it. A door with
+        # no picture of it is a door whose defects are reported from his screen
+        # instead of caught here.
+        control("files-window")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | tail -40"
+            " | grep -q 'br.ronoctua.files'",
+            timeout=60,
+        )
+        machine.sleep(3)
+        # AND INTO THE PICTURE'S FOLDER, so this door is photographed with a
+        # picture in it: the window opens at HOME, where every entry is a
+        # directory and the preview correctly says there is none.
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(2)
+        # SAME REASON as the footer's: the band needs the pointer.
+        w_w, h_w, x_w, y_w = niri_geometry()
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_w + 300} {y_w + 4 * LINE}"
+        )
+        machine.sleep(1)
+        shot("13-manager-in-a-window")
+
+        # AND THE POINTER ON THE FACTS, in THIS door — the one the owner
+        # photographed. Down in the strip the facts have a `top` of their own,
+        # and a band that forgot it lit the listing's row of the same number.
+        #
+        # THE WINDOW'S OWN HALF, and not the output's: niri tiles this window
+        # into the left half of the screen, so `w_w` — which is the whole
+        # output — put the pointer on the desktop and nothing was hovered.
+        # The facts sit to the right of the strip's rule; the third of them is
+        # three lines below the strip's top.
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_w + 450} {y_w + h_w - 3 * LINE - 6}"
+        )
+        machine.sleep(1)
+        shot("15-hover-on-the-windows-facts")
+
+        # AND THE FACTS SCROLLED TO THE END, which is the photograph the owner
+        # sent twice.
+        #
+        # No shot here ever reached the last row of a panel, so the gap under
+        # the thumb could not be seen from this file: the track was
+        # `lines × line_px` and a surface is not a whole number of lines, so at
+        # the last offset the thumb stopped short by the residue and the
+        # background showed through below it. The wheel takes it to the end;
+        # what has to be true in the picture is that the thumb's bottom and the
+        # window's bottom are the same pixel.
+        for _ in range(12):
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
+        machine.sleep(2)
+        shot("17-facts-scrolled-to-the-end")
+
+        # AND THE LISTING SCROLLED TO ITS END, in the SAME door and with the
+        # strip below it — the other half of the same arithmetic.
+        #
+        # Giving the facts the surface's bottom was right: theirs is the last
+        # band in its column. Giving it to EVERY band was not, and the owner
+        # watched the listing's thumb run past the boundary and down into the
+        # facts' box. What has to be true in this picture is the opposite of
+        # the one above: the thumb's bottom is the strip's rule, not the
+        # window's bottom edge.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+        machine.sleep(1)
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'many'"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(2)
+        # THE POINTER OVER THE LISTING and not over a panel: the wheel moves
+        # the section it is on, which is the whole point of the four sections.
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_w + 200} {y_w + 6 * LINE}"
+        )
+        machine.sleep(1)
+        for _ in range(60):
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
+        machine.sleep(2)
+        shot("18-window-listing-scrolled-to-the-end")
+        # AND IT GOES, or it stands in front of every shot after it. The bracket
+        # keeps the pattern from matching the `pkill` that carries it —
+        # `CLAUDE.md` names that one.
+        machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
+        machine.wait_until_succeeds(
+            "! ${pkgs.xwininfo}/bin/xwininfo -display :99 -root -children"
+            " | grep -q ronoctua-files || true",
+            timeout=30,
+        )
+        machine.sleep(2)
+
+    with subtest("the brain's line, with the countdown and the two answers"):
+        # THE ONE REGION NO BUFFER DRAWS. `nix run .#png` renders a wasip2
+        # component's display list; this line is the footer's own surface,
+        # below the minibuffer, so a real compositor is the only vehicle.
+        machine.succeed(
+            "systemd-run --unit=brain "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
+            "--setenv=HOME=/root "
+            "--setenv=RUST_LOG=ronoctua_brain=debug "
+            "${ronoctua-brain}/bin/ronoctua-brain"
+        )
+        machine.wait_until_succeeds(
+            "test -S /run/user/0/ronoctua-brain.sock", timeout=30
+        )
+
+        # ASKING FOR THE REHEARSAL, and not for the real thing: the announcement
+        # and its countdown are the same either way, and a rehearsal changes
+        # nothing on a machine that has no update units at all.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 -c '"
+            "import socket, json, os;"
+            "s = socket.socket(socket.AF_UNIX);"
+            "s.connect(os.environ[\"XDG_RUNTIME_DIR\"] + \"/ronoctua-brain.sock\");"
+            "s.sendall(json.dumps({\"ask\": \"run\", \"task\": \"system-update\","
+            " \"rehearsal\": True}).encode() + b\"\\n\");"
+            "s.shutdown(socket.SHUT_WR);"
+            "print(s.recv(65536).decode()[:200])"
+            "'"
+        )
+        # `brain=1` is the HEIGHT, in the shape `band=1` already has: waiting on
+        # a sleep would be either slow or flaky, and on a loaded machine both.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | tail -12 | grep -q 'brain=1'",
+            timeout=60,
+        )
+        shot("9-brain-line", lines=3)
+
+    with subtest("the update's mark on the modeline, and the window it opens"):
+        # NOTHING IS ASKED FOR HERE, and that is the point: the shot above left
+        # a run in the queue, and the mark is on screen for exactly as long as
+        # something is queued or running. It is the sentence `update_window`
+        # already carries — "the queue counts, and not only what is running" —
+        # photographed. The sixty seconds of the countdown are the window this
+        # subtest works in, and it needs three of them.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | tail -12"
+            " | grep -q 'segment id=\"update\"'",
+            timeout=60,
+        )
+        # THREE LINES because the mark is in the MODELINE, which is the third
+        # from the bottom while the band has the line under the minibuffer.
+        shot("11-update-mark", lines=3)
+
+        # AND THE WINDOW, which is a command of its own — `LEADER s w` — for
+        # this reason: it opens whether or not anything is running, and what it
+        # says when nothing is is "nothing has been said yet".
+        control("update-watch")
+        machine.sleep(3)
+        shot("12-update-window")
+
   '';
 }

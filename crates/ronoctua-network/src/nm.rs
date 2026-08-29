@@ -94,7 +94,7 @@ pub trait Manager {
 
     /// Turns the radio on and off. It is `rfkill` in software.
     #[zbus(property)]
-    fn set_wireless_enabled(&self, ligado: bool) -> zbus::Result<()>;
+    fn set_wireless_enabled(&self, on: bool) -> zbus::Result<()>;
 }
 
 #[zbus::proxy(
@@ -201,7 +201,7 @@ pub trait AccessPoint {
 #[zbus::proxy(
     interface = "org.ronoctua.Network1",
     default_service = "org.ronoctua.agent",
-    default_path = "/org/ronoctua/Rede"
+    default_path = "/org/ronoctua/Network"
 )]
 pub trait Vault {
     /// Asks the daemon to seal this password into the TPM.
@@ -228,7 +228,7 @@ pub trait AgentManager {
     ///
     /// NetworkManager starts asking the password of whoever registered here,
     /// instead of demanding it in the profile file.
-    fn register(&self, identificador: &str) -> zbus::Result<()>;
+    fn register(&self, identifier: &str) -> zbus::Result<()>;
 
     /// Leaves the list. Calling it at shutdown keeps NM from waiting for an answer
     /// from a process that has already died.

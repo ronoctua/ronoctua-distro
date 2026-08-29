@@ -52,7 +52,7 @@ pkgs.testers.runNixOSTest {
       # calls it FIXED — which is the point here: it is the `HintSystem = true`
       # case, and the refusal is what is being measured.
       virtualisation.emptyDiskImages = [ 64 ];
-      networking.hostName = lib.mkForce "noctua-discos";
+      networking.hostName = lib.mkForce "noctua-disks";
       # No /persist in this VM — the same reason as the file manager's and the
       # rescue's: `base.nix` points the password hash there and nothing here
       # logs in.
@@ -78,10 +78,10 @@ pkgs.testers.runNixOSTest {
               "org.freedesktop.DBus.ObjectManager GetManagedObjects"
           )
           assert "block_devices" in objects, (
-              f"o udisks2 nao listou dispositivo nenhum:\n{objects[:400]}"
+              f"udisks2 listed no device at all:\n{objects[:400]}"
           )
 
-      with subtest("a politica do upstream esta instalada, com os padroes que o desenho assume"):
+      with subtest("upstream's policy is installed, with the defaults the design assumes"):
           # THE WHOLE DESIGN RESTS ON THESE TWO NUMBERS. `filesystem-mount` is
           # `yes` for an active local session, which is why the sidebar mounts a
           # stick with no password; `filesystem-mount-system` is
@@ -98,18 +98,18 @@ pkgs.testers.runNixOSTest {
                   r'<action id="org\.freedesktop\.udisks2\.' + action + r'">(.*?)</action>',
                   policy, re.S,
               )
-              assert block, f"a acao {action} sumiu da politica do udisks2"
+              assert block, f"the action {action} went away from udisks2's policy"
               found = re.search(r"<allow_active>([^<]+)</allow_active>", block.group(1))
-              assert found, f"a acao {action} nao declara allow_active"
+              assert found, f"the action {action} does not declare allow_active"
               return found.group(1).strip()
 
           assert allow_active("filesystem-mount") == "yes", (
-              "montar um dispositivo removivel deixou de ser livre para a sessao "
-              "ativa: a barra lateral passa a pedir senha para um pendrive"
+              "mounting a removable device stopped being free for the active "
+              "session: the sidebar starts asking for a password for a pen drive"
           )
           assert allow_active("filesystem-mount-system") == "auth_admin_keep", (
-              "montar um volume de sistema deixou de pedir o administrador: a "
-              "recusa que a barra lateral antecipa nao vale mais"
+              "mounting a system volume stopped asking for the administrator: the "
+              "refusal the sidebar anticipates no longer holds"
           )
           # AND FORMATTING SPLITS THE SAME WAY, which is what makes the format
           # buffer possible at all: writing a filesystem onto a stick is free
@@ -118,23 +118,23 @@ pkgs.testers.runNixOSTest {
           # buffer's own refusals sit IN FRONT of these two — they are the
           # design, not the enforcement.
           assert allow_active("modify-device") == "yes", (
-              "formatar um dispositivo removivel passou a pedir senha: o buffer "
-              "de formatar nao tem agente nenhum para responder"
+              "formatting a removable device started asking for a password: the format "
+              "buffer has no agent at all to answer"
           )
           assert allow_active("modify-device-system") == "auth_admin_keep", (
-              "formatar um disco de sistema deixou de pedir o administrador"
+              "formatting a system disk stopped asking for the administrator"
           )
 
-      with subtest("e nenhuma regra polkit nossa fala de udisks"):
+      with subtest("and no polkit rule of ours speaks of udisks"):
           # The inverse of `files-polkit-is-narrow`, and read from the BUILT
           # system rather than from the source: upstream's rule already splits
           # on `HintSystem`, and ours could only widen it.
           rules = machine.succeed(
               "grep -RIl udisks /etc/polkit-1/rules.d/ 2>/dev/null || true"
           ).strip()
-          assert not rules, f"alguem escreveu uma regra polkit para o udisks: {rules}"
+          assert not rules, f"somebody wrote a polkit rule for udisks: {rules}"
 
-      with subtest("as regras udev chegaram, e um disco anexado tem os hints"):
+      with subtest("the udev rules arrived, and an attached disk has the hints"):
           # THIS IS WHAT `services.udev.packages` BUYS, and it can silently not
           # happen. Without the hints every property the sidebar reads comes
           # back empty and every disk looks the same.
@@ -150,20 +150,20 @@ pkgs.testers.runNixOSTest {
           machine.succeed("udevadm settle")
           info = machine.succeed("udisksctl info -b /dev/vdb1")
           assert "IdLabel:" in info and "PROVA" in info, (
-              f"o udisks nao leu o rotulo de /dev/vdb1:\n{info}"
+              f"udisks did not read the label of /dev/vdb1:\n{info}"
           )
           # AND THE INTERFACE IS THERE, which is what makes the next subtest
           # measure polkit and not a race with udisks' re-probe.
           assert "MountPoints:" in info, (
-              f"o udisks nao deu a interface Filesystem a /dev/vdb1; o proximo "
-              f"subteste mediria a coisa errada:\n{info}"
+              f"udisks did not give the Filesystem interface to /dev/vdb1; the next "
+              f"subtest would measure the wrong thing:\n{info}"
           )
           assert "HintSystem:" in info, (
-              f"o udisks nao publicou HintSystem, que e a propriedade de que "
+              f"udisks did not publish HintSystem, which is the property "
               f"todo o desenho depende:\n{info}"
           )
 
-      with subtest("sem sessao ativa, montar e recusado com nome — e NAO trava"):
+      with subtest("with no active session, mounting is refused by name — and does NOT hang"):
           # WHAT THIS MEASURES, AND WHAT IT DOES NOT.
           #
           # It does not measure the `HintSystem` split: a blank secondary disk in
@@ -199,11 +199,11 @@ pkgs.testers.runNixOSTest {
           # reached polkit, and polkit answered instead of waiting for an
           # agent that never registers.
           assert "not authorized" in lowered or "notauthorized" in lowered, (
-              f"esperava a recusa NOMEADA do polkit — sem nome, ou a chamada "
-              f"travou e o timeout a matou, ou ela nem chegou la:\n{refusal}"
+              f"expected polkit's NAMED refusal — with no name, either the call "
+              f"it locked up and the timeout killed it, or it never got there:\n{refusal}"
           )
 
-      with subtest("formatar escreve mesmo, e o rotulo volta pela mesma porta"):
+      with subtest("formatting really writes, and the label comes back by the same door"):
           # WHAT THIS PROVES THAT NO UNIT TEST CAN. `ronoctua_disks::format`
           # is three D-Bus calls with a race between them: `Block.Format`
           # writes a partition table, and `PartitionTable` appears on the
@@ -219,7 +219,7 @@ pkgs.testers.runNixOSTest {
           machine.succeed("udevadm settle")
           info = machine.succeed("udisksctl info -b /dev/vdb1")
           assert "PROVAFMT" in info, (
-              f"formatar nao escreveu o rotulo pedido em /dev/vdb1:\n{info}"
+              f"formatting did not write the label asked for on /dev/vdb1:\n{info}"
           )
           # AND THE PARTITION TYPE FOLLOWED THE FILESYSTEM. Without
           # `update-partition-type` an MBR partition holding vfat is typed
@@ -228,12 +228,12 @@ pkgs.testers.runNixOSTest {
           # anywhere saying why.
           kind = machine.succeed("sfdisk --part-type /dev/vdb 1").strip().lower()
           assert kind in ("b", "c", "0b", "0c"), (
-              f"a particao ficou com o tipo {kind!r}, e nao um dos de FAT: "
-              "o `update-partition-type` nao chegou ao udisks"
+              f"the partition came out with type {kind!r}, and not one of the FAT ones: "
+              "`update-partition-type` did not reach udisks"
           )
 
-      print("OK: udisks responde, a politica e a do upstream, os hints chegam, "
-            "quem nao tem sessao ativa e recusado com nome sem travar, "
-            "e formatar escreve o rotulo e o tipo de particao")
+      print("OK: udisks answers, the policy is upstream's, the hints arrive, "
+            "whoever has no active session is refused by name without hanging, "
+            "and formatting writes the label and the partition type")
     '';
 }

@@ -189,7 +189,7 @@ else
     alias listar='ls -lah --color=auto --group-directories-first'
 fi
 
-command -v tree >/dev/null 2>&1 && alias arvore='tree -L 2 --dirsfirst'
+command -v tree >/dev/null 2>&1 && alias tree2='tree -L 2 --dirsfirst'
 
 # `cat` with syntax highlighting, without losing plain `cat`.
 if command -v bat >/dev/null 2>&1; then

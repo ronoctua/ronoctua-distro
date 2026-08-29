@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-tokens"
-description = "Tokens do design system, gerados do Nix. Zero dependencias."
+description = "The design system's tokens, generated from Nix. Zero dependencies."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

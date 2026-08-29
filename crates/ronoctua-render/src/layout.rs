@@ -76,6 +76,16 @@ pub struct Placed {
     pub column: u16,
     /// The **already elided** text, ready to draw.
     pub text: String,
+    /// Whether the segment was placed counting from the RIGHT edge.
+    ///
+    /// The layout resolves both sides in cells, and the cells do not reach the
+    /// border: `columns` is `floor(width / cell)` and the remainder sits past
+    /// the last one. A run placed from the left never notices; one that should
+    /// sit AGAINST the border inherits that remainder as a gap which changes
+    /// with the window's width — which is what the owner measured by taking a
+    /// window fullscreen. Carried here so the painter can place it in pixels
+    /// from the border instead. See `ronoctua_render::Span::edge`.
+    pub edge: bool,
 }
 
 /// The width floor the segment is entitled to in phase A.
@@ -171,8 +181,8 @@ pub fn elide_middle(s: &str, max: u16) -> String {
     // the path identifies better than the end.
     let left_over = (max - 1) as usize;
     let dir = left_over / 2;
-    let esq = left_over - dir;
-    let mut out: String = units[..esq].concat();
+    let left = left_over - dir;
+    let mut out: String = units[..left].concat();
     out.push('…');
     out.push_str(&units[units.len() - dir..].concat());
     out
@@ -211,7 +221,7 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     let mut alive: Vec<&Segment> = segments.iter().collect();
 
     // A set's cost: the sum of the natural widths plus the gaps.
-    let custo = |v: &[&Segment]| -> u32 {
+    let cost = |v: &[&Segment]| -> u32 {
         if v.is_empty() {
             return 0;
         }
@@ -221,7 +231,7 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
 
     // Step 2: it drops the lowest-priority one until it fits. Whoever has
     // `removable = false` never goes — it shrinks to `min_cols` in step 3.
-    while custo(&alive) > u32::from(columns) {
+    while cost(&alive) > u32::from(columns) {
         let Some((idx, _)) = alive
             .iter()
             .enumerate()
@@ -256,8 +266,8 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
             break;
         }
         let excess = current - u32::from(columns);
-        let pode = widths[i].saturating_sub(effective_floor(alive[i]));
-        widths[i] -= u16::try_from(excess).unwrap_or(u16::MAX).min(pode);
+        let can = widths[i].saturating_sub(effective_floor(alive[i]));
+        widths[i] -= u16::try_from(excess).unwrap_or(u16::MAX).min(can);
     }
 
     // Phase B: if it STILL overflows, the floor gives way — including the unremovable ones'.
@@ -285,9 +295,9 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
 
     // A segment that reached zero is not drawn: an empty column with a
     // gap beside it is noise, not information.
-    let sobreviventes: Vec<usize> = (0..alive.len()).filter(|&i| widths[i] > 0).collect();
-    let alive: Vec<&Segment> = sobreviventes.iter().map(|&i| alive[i]).collect();
-    let widths: Vec<u16> = sobreviventes.iter().map(|&i| widths[i]).collect();
+    let survivors: Vec<usize> = (0..alive.len()).filter(|&i| widths[i] > 0).collect();
+    let alive: Vec<&Segment> = survivors.iter().map(|&i| alive[i]).collect();
+    let widths: Vec<u16> = survivors.iter().map(|&i| widths[i]).collect();
 
     // Positioning: the left from the left edge, the right flush against the right.
     let mut out = Vec::with_capacity(alive.len());
@@ -305,6 +315,7 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
                 Shrink::InTheMiddle => elide_middle(&s.text, w),
                 _ => elide_end(&s.text, w),
             },
+            edge: false,
         });
         x += w + gap;
     }
@@ -317,13 +328,13 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     // left of that icon." Iterating the list backwards put the
     // tray at the edge when it was declared later — which went
     // unnoticed until a test measured the final column.
-    let mut direita: Vec<usize> = (0..alive.len())
+    let mut right: Vec<usize> = (0..alive.len())
         .filter(|&i| alive[i].side == Side::Right)
         .collect();
-    direita.sort_by_key(|&i| alive[i].priority);
+    right.sort_by_key(|&i| alive[i].priority);
 
     let mut dir = columns.saturating_sub(tokens::space::MODELINE_EDGERIGHT);
-    for i in direita {
+    for i in right {
         let s = alive[i];
         let w = widths[i];
         dir = dir.saturating_sub(w);
@@ -334,6 +345,11 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
                 Shrink::InTheMiddle => elide_middle(&s.text, w),
                 _ => elide_end(&s.text, w),
             },
+            // FROM THE BORDER, in pixels, and not from the last cell — see
+            // `Placed::edge`. This side was laid out from the edge inwards
+            // already; what was missing is that the edge of the GRID and the
+            // edge of the SURFACE are not the same place.
+            edge: true,
         });
         dir = dir.saturating_sub(gap);
     }
@@ -365,14 +381,14 @@ mod tests {
         // The bell and its count, which is what the modeline actually draws.
         let bell = ronoctua_tokens::icon::NOTIFICATION;
         let line = format!("{bell}12");
-        let (g, rest) = leading_glyph(&line).expect("o sino e glifo de chrome");
+        let (g, rest) = leading_glyph(&line).expect("the bell is a chrome glyph");
         assert_eq!(g, bell.to_string());
         assert_eq!(rest, "12");
         // Plane 15 counts too: the countdown pie lives there.
         assert!(is_chrome_glyph(ronoctua_tokens::icon::COUNTDOWN_EIGHT));
         // And ordinary text is left whole — otherwise a buffer's name would
         // have its first letter drawn at another size.
-        assert!(leading_glyph("arquivo.rs").is_none());
+        assert!(leading_glyph("file.rs").is_none());
         assert!(leading_glyph("").is_none());
         // An emoji is NOT chrome: its colour is inside the glyph and it is
         // content, not an icon of ours.
@@ -415,14 +431,14 @@ mod tests {
         // Drawing the presence BEFORE assembling: two closures borrowing `r`
         // at the same time does not pass the borrow checker, and the
         // compiler's message does not suggest this.
-        let presentes: Vec<bool> = IDS
+        let present: Vec<bool> = IDS
             .iter()
             .enumerate()
             .map(|(i, _)| i < 2 || r.up_to(4) > 0)
             .collect();
         IDS.iter()
             .enumerate()
-            .filter(|(i, _)| presentes[*i]) // the two fixed ones always go in
+            .filter(|(i, _)| present[*i]) // the two fixed ones always go in
             .map(|(i, id)| Segment {
                 id,
                 text: r.text(60),
@@ -447,30 +463,30 @@ mod tests {
     #[test]
     fn property_nothing_leaks_and_nothing_overlaps() {
         let mut r = Draw(0x2026_0801);
-        for iteracao in 0..5_000 {
+        for iteration in 0..5_000 {
             let columns = u16::try_from(r.up_to(200)).unwrap_or(0);
             let segs = draw_segments(&mut r);
-            let postos = resolve(columns, &segs);
+            let placed = resolve(columns, &segs);
 
             // 1. NOTHING spills off the screen. This is section 7's hard invariant: the
             //    `min_cols` floors give way before it does.
-            for c in &postos {
+            for c in &placed {
                 assert!(
                     c.column.saturating_add(width(&c.text)) <= columns,
-                    "iteracao {iteracao}: `{}` vaza com {columns} colunas",
+                    "iteration {iteration}: `{}` leaks at {columns} columns",
                     c.id
                 );
             }
 
             // 2. Nothing OVERLAPS. Two segments in the same cell draw one
             //    over the other, and the result is illegible without being an error.
-            let mut ordenados: Vec<_> = postos.iter().collect();
-            ordenados.sort_by_key(|c| c.column);
-            for pair in ordenados.windows(2) {
+            let mut sorted: Vec<_> = placed.iter().collect();
+            sorted.sort_by_key(|c| c.column);
+            for pair in sorted.windows(2) {
                 let end = pair[0].column.saturating_add(width(&pair[0].text));
                 assert!(
                     end <= pair[1].column,
-                    "iteracao {iteracao}: `{}` invade `{}`",
+                    "iteration {iteration}: `{}` invades `{}`",
                     pair[0].id,
                     pair[1].id
                 );
@@ -481,16 +497,16 @@ mod tests {
             //    with 1 column, and false for a legitimate reason.
             // The EFFECTIVE floor, not the raw `min_cols`: an unremovable one keeps at
             // least one cell (see `effective_floor`).
-            let piso: u16 = segs
+            let floor: u16 = segs
                 .iter()
                 .filter(|s| !s.removable)
                 .map(effective_floor)
                 .sum();
-            if columns >= piso.saturating_add(4) {
+            if columns >= floor.saturating_add(4) {
                 for id in ["mode", "notif"] {
                     assert!(
-                        postos.iter().any(|c| c.id == id),
-                        "iteracao {iteracao}: `{id}` sumiu com {columns} colunas"
+                        placed.iter().any(|c| c.id == id),
+                        "iteration {iteration}: `{id}` went away at {columns} columns"
                     );
                 }
             }
@@ -569,14 +585,14 @@ mod tests {
             seg("notif", "\u{EAA2}3", 2, 3, Side::Right, Shrink::Cut, false),
             seg(
                 "buffer",
-                "projeto/src/muito/fundo/arquivo.rs",
+                "project/src/very/deep/file.rs",
                 4,
                 8,
                 Side::Left,
                 Shrink::InTheMiddle,
                 false,
             ),
-            seg("estado", "*", 5, 1, Side::Left, Shrink::Cut, true),
+            seg("state", "*", 5, 1, Side::Left, Shrink::Cut, true),
             seg("kind", "rust", 6, 4, Side::Left, Shrink::Cut, true),
             seg(
                 "tray",
@@ -603,7 +619,7 @@ mod tests {
     #[test]
     fn with_room_to_spare_nothing_is_removed() {
         let r = resolve(200, &typical_modeline());
-        assert_eq!(r.len(), 8, "nada deveria sair com 200 colunas");
+        assert_eq!(r.len(), 8, "nothing should go away at 200 columns");
     }
 
     #[test]
@@ -614,10 +630,13 @@ mod tests {
         for columns in [8_u16, 12, 20, 40, 80] {
             let r = resolve(columns, &typical_modeline());
             let ids: Vec<_> = r.iter().map(|c| c.id).collect();
-            assert!(ids.contains(&"mode"), "'mode' sumiu com {columns} colunas");
+            assert!(
+                ids.contains(&"mode"),
+                "'mode' went away at {columns} columns"
+            );
             assert!(
                 ids.contains(&"notif"),
-                "'notif' sumiu com {columns} colunas"
+                "'notif' went away at {columns} columns"
             );
         }
     }
@@ -640,7 +659,7 @@ mod tests {
                 let end = c.column + width(&c.text);
                 assert!(
                     end <= columns,
-                    "'{}' termina na coluna {end} numa largura de {columns}",
+                    "'{}' ends at column {end} in a width of {columns}",
                     c.id
                 );
             }
@@ -649,11 +668,11 @@ mod tests {
 
     #[test]
     fn the_buffers_name_elides_in_the_middle_keeping_the_ends() {
-        let e = elide_middle("projeto/src/muito/fundo/arquivo.rs", 16);
+        let e = elide_middle("project/src/very/deep/file.rs", 16);
         assert_eq!(width(&e), 16);
         assert!(e.contains('…'));
-        assert!(e.starts_with("projeto"), "perdeu o comeco: {e}");
-        assert!(e.ends_with(".rs"), "perdeu a extensao: {e}");
+        assert!(e.starts_with("project"), "it lost the start: {e}");
+        assert!(e.ends_with(".rs"), "it lost the extension: {e}");
     }
 
     #[test]
@@ -683,7 +702,10 @@ mod tests {
         // Section 4.2: "flush against the right edge".
         let columns = 80;
         let r = resolve(columns, &typical_modeline());
-        let notif = r.iter().find(|c| c.id == "notif").expect("notif presente");
+        let notif = r
+            .iter()
+            .find(|c| c.id == "notif")
+            .expect("notif is present");
         assert_eq!(
             notif.column + width(&notif.text),
             columns - tokens::space::MODELINE_EDGERIGHT
@@ -704,15 +726,19 @@ mod tests {
     /// woman and a heart. It did not look like a cut: it looked like a wrong emoji.
     #[test]
     fn an_emoji_cluster_is_not_split() {
-        let casal = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}";
-        assert_eq!(width(casal), 1, "seis codepoints, um cluster");
-        assert_eq!(elide_end(casal, 4), casal, "coube: nao ha o que cortar");
+        let couple = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}";
+        assert_eq!(width(couple), 1, "seis codepoints, um cluster");
         assert_eq!(
-            elide_end(casal, 1),
-            casal,
-            "uma celula ainda cabe UM cluster"
+            elide_end(couple, 4),
+            couple,
+            "it fitted: there is nothing to cut"
         );
-        assert!(!elide_end(casal, 1).contains('…'));
+        assert_eq!(
+            elide_end(couple, 1),
+            couple,
+            "one cell still fits ONE cluster"
+        );
+        assert!(!elide_end(couple, 1).contains('…'));
     }
 
     /// The flag, the skin tone and the combining mark — the other three ways
@@ -722,8 +748,8 @@ mod tests {
         for (name, s) in [
             ("bandeira", "\u{1F1E7}\u{1F1F7}"),
             ("tom de pele", "\u{1F468}\u{1F3FF}"),
-            ("marca sobre o circulo", "\u{25CC}\u{0301}"),
-            ("teclado", "1\u{FE0F}\u{20E3}"),
+            ("a mark over the circle", "\u{25CC}\u{0301}"),
+            ("keyboard", "1\u{FE0F}\u{20E3}"),
         ] {
             assert_eq!(width(s), 1, "{name}");
             assert_eq!(elide_end(s, 2), s, "{name}");
@@ -733,9 +759,9 @@ mod tests {
     /// And the cut goes on cutting when there is something to cut.
     #[test]
     fn several_clusters_still_elide() {
-        let tres = "\u{1F600}\u{1F601}\u{1F602}";
-        assert_eq!(width(tres), 3);
-        assert_eq!(elide_end(tres, 2), "\u{1F600}…");
+        let three = "\u{1F600}\u{1F601}\u{1F602}";
+        assert_eq!(width(three), 3);
+        assert_eq!(elide_end(three, 2), "\u{1F600}…");
         assert_eq!(elide_end("abcdef", 4), "abc…");
     }
 }

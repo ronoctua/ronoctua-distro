@@ -136,7 +136,7 @@ mod tests {
             drives: Vec::new(),
         };
         let over = rack_of(&rack, 1000, &ronoctua_i18n::Texts::from_env());
-        assert_eq!(over.devices.len(), 1, "o LUKS nao devia atravessar");
+        assert_eq!(over.devices.len(), 1, "LUKS should not cross over");
         assert!(over.devices[0].whole);
     }
 
@@ -158,7 +158,7 @@ mod tests {
         // an assertion nobody can check; with it, a fact they already know.
         assert!(
             over.devices[0].needed.contains('/'),
-            "a recusa nao nomeou onde: {:?}",
+            "the refusal did not name where: {:?}",
             over.devices[0].needed
         );
     }

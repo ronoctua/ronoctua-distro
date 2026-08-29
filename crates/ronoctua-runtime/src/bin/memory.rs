@@ -155,10 +155,10 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
             inst.render(columns, ROWS, heights())?
         };
         if let Err(e) = at.nothing_overlaps(heights(), columns) {
-            bail!("em {columns} colunas, {e}");
+            bail!("at {columns} columns, {e}");
         }
         if let Err(e) = at.nothing_is_covered(heights(), columns) {
-            bail!("em {columns} colunas, {e}");
+            bail!("at {columns} columns, {e}");
         }
     }
     Ok(Screen::of(&list))
@@ -172,11 +172,11 @@ fn run(inst: &mut ronoctua_runtime::Instance, id: &str) -> Result<Vec<Effect>> {
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-test-memory <componente.wasm> <dir-i18n>")?;
+        .context("usage: ronoctua-test-memory <component.wasm> <i18n-dir>")?;
     let i18n = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-test-memory <componente.wasm> <dir-i18n>")?;
-    let wasm = std::fs::read(&path).with_context(|| format!("nao consegui ler {path}"))?;
+        .context("usage: ronoctua-test-memory <component.wasm> <i18n-dir>")?;
+    let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
 
     let rt = ronoctua_runtime::Runtime::fresh()?;
     let cwasm = rt.precompile(&wasm)?;
@@ -186,7 +186,7 @@ fn main() -> Result<()> {
     // ---- THE DESCRIPTOR ----
     let d = inst.init()?;
     if d.mode != "memory" {
-        bail!("o modo do buffer e `{}`; a modeline mostra isso", d.mode);
+        bail!("the buffer's mode is `{}`; the modeline shows that", d.mode);
     }
     // WITHOUT THE CAPABILITY THE SCREEN IS EMPTY, and the host would never
     // sample. It is the one line of the descriptor this buffer cannot lose.
@@ -194,27 +194,27 @@ fn main() -> Result<()> {
         .capabilities
         .contains(&ronoctua_protocol::Capability::System)
     {
-        bail!("o painel nao declara `system`: o host nunca amostraria");
+        bail!("the panel does not declare `system`: the host would never sample");
     }
     for id in &d.commands {
         if !d.keymap.iter().any(|l| l.command == *id) {
-            bail!("`{id}` nao tem tecla: ninguem o alcanca pelo which-key");
+            bail!("`{id}` has no key: nobody reaches it through which-key");
         }
     }
     if let Err(e) = d.validate() {
-        bail!("o descritor nao passa na guarda da secao 7.9: {e}");
+        bail!("the descriptor does not pass the section 7.9 guard: {e}");
     }
     for language in ["pt-BR", "en-GB"] {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for id in &d.commands {
             let key = format!("cmd-{id}");
             if !table.contains(&key) {
-                bail!("falta `{key}` em {language}.ftl — o SPC m mostraria [{key}]");
+                bail!("`{key}` is missing from {language}.ftl — SPC m would show [{key}]");
             }
         }
     }
     println!(
-        "descritor: modo `{}`, {} comandos com tecla",
+        "descriptor: mode `{}`, {} commands with a key",
         d.mode,
         d.commands.len()
     );
@@ -222,7 +222,7 @@ fn main() -> Result<()> {
     // ---- BEFORE THE SURVEY: no numbers ----
     let empty = look(&mut inst)?;
     if empty.shows("GiB") {
-        bail!("o painel desenhou tamanho antes de receber amostra alguma");
+        bail!("the panel drew a size before taking any sample at all");
     }
 
     // ---- THE SURVEY CROSSES ----
@@ -241,12 +241,12 @@ fn main() -> Result<()> {
     // three lines — so it left, and the reason it existed lives here.
     let effects = inst.event(&Input::Survey(survey()))?;
     if effects != vec![Effect::Redraw] {
-        bail!("a primeira amostra tinha de pedir um quadro; veio {effects:?}");
+        bail!("the first sample had to ask for a frame; got {effects:?}");
     }
     // The SAME survey again asks for nothing: a screen that repaints every
     // second to show identical numbers spends a frame per second for nothing.
     if !inst.event(&Input::Survey(survey()))?.is_empty() {
-        bail!("a mesma amostra pediu quadro de novo");
+        bail!("the same sample asked for a frame again");
     }
 
     let overview = look(&mut inst)?;
@@ -255,20 +255,20 @@ fn main() -> Result<()> {
     // `memory-guard-unknown` in front of the person. It happened, and the OCR of
     // `memory-vm` is what found it; this line is the cheap version of that
     // discovery, and it runs on every screen below.
-    let leaked = |s: &Screen, onde: &str| -> Result<()> {
+    let leaked = |s: &Screen, where_at: &str| -> Result<()> {
         if let Some(d) = s.data.iter().find(|d| d.starts_with("memory-")) {
             bail!(
-                "`{d}` foi desenhado como DADO em {onde}: e uma chave, e a tela mostra o nome dela"
+                "`{d}` was drawn as DATUM at {where_at}: it is a key, and the screen shows its name"
             );
         }
         Ok(())
     };
-    leaked(&overview, "a visao geral")?;
+    leaked(&overview, "the overview")?;
     // 8 GiB available of 16, and the free-form numbers the panel computes.
     for expected in ["8.0 GiB", "16.0 GiB", "1.5%"] {
         if !overview.shows(expected) {
             bail!(
-                "a visao geral nao mostra `{expected}`:\n{:?}",
+                "the overview does not show `{expected}`:\n{:?}",
                 overview.data
             );
         }
@@ -276,33 +276,39 @@ fn main() -> Result<()> {
     // THE COMPRESSION RATIO IS MEASURED, not the module's nominal 50%: 2 GiB
     // written into 1 GiB is 2.0x, and the pair is what says so.
     if !overview.shows("2.0x") {
-        bail!("a razao do zram nao saiu medida:\n{:?}", overview.data);
+        bail!(
+            "the zram's ratio did not come out measured:\n{:?}",
+            overview.data
+        );
     }
     // And the consumers are on the small screen.
     if !overview.shows("ronoctua-9f3a.scope") {
-        bail!("o maior consumidor nao aparece na visao geral");
+        bail!("the biggest consumer does not appear in the overview");
     }
-    println!("visao geral: RAM, zram medido, pressao e consumidores");
+    println!("overview: RAM, measured zram, pressure and consumers");
 
     // ---- THE FULL SCREEN, AND THE TABS ----
     run(&mut inst, "memory-full")?;
     let full = look(&mut inst)?;
     if !full.names("memory-anonymous") || !full.shows("4.0 GiB") {
-        bail!("a tela completa nao detalha a RAM:\n{:?}", full.keys);
+        bail!(
+            "the full screen does not break down the RAM:\n{:?}",
+            full.keys
+        );
     }
     // The graphics memory belongs on a screen about memory: on an APU it comes
     // out of the same RAM.
     if !full.names("memory-vram") {
-        bail!("a VRAM nao aparece no detalhe");
+        bail!("the VRAM does not appear in the detail");
     }
-    leaked(&full, "a tela completa")?;
+    leaked(&full, "the full screen")?;
     run(&mut inst, "memory-tab")?;
     let disk = look(&mut inst)?;
-    leaked(&disk, "a aba de disco")?;
+    leaked(&disk, "the disk tab")?;
     if !disk.shows("120.0 GiB") {
-        bail!("a aba de disco nao mostra o livre:\n{:?}", disk.data);
+        bail!("the disk tab does not show what is free:\n{:?}", disk.data);
     }
-    println!("tela completa: detalhe de RAM, VRAM e a aba de disco");
+    println!("full screen: RAM detail, VRAM and the disk tab");
 
     // ---- THE PROTECTION ----
     run(&mut inst, "memory-guard")?;
@@ -315,31 +321,34 @@ fn main() -> Result<()> {
         "memory-guard-cost",
     ] {
         if !guard.names(key) {
-            bail!("a tela da protecao nao traz `{key}`:\n{:?}", guard.keys);
+            bail!(
+                "the protection screen does not carry `{key}`:\n{:?}",
+                guard.keys
+            );
         }
     }
-    leaked(&guard, "a tela da protecao")?;
+    leaked(&guard, "the protection screen")?;
     // 500 per mille is 50,0% — the number the module configures.
     if !guard.shows("50.0%") {
-        bail!("o limite em vigor nao aparece:\n{:?}", guard.data);
+        bail!("the limit in force does not appear:\n{:?}", guard.data);
     }
-    println!("protecao: descricao, numeros em vigor e o preco do modo tolerante");
+    println!("protection: description, numbers in force and the price of the lenient mode");
 
     // ---- WHAT IS IRREVERSIBLE TAKES TWO PRESSES ----
     let first = run(&mut inst, "memory-sweep-store")?;
     if first.iter().any(|e| matches!(e, Effect::Ask(_))) {
-        bail!("uma tecla so ja pediu a faxina: a confirmacao nao existe");
+        bail!("a single key already asked for the sweep: the confirmation does not exist");
     }
     let armed = look(&mut inst)?;
     if !armed.names("memory-confirm-sweep") || armed.selections == 0 {
-        bail!("a confirmacao nao aparece na tela");
+        bail!("the confirmation does not appear on screen");
     }
     // A DIFFERENT KEY DISARMS IT — nothing irreversible stays armed while the
     // person is doing something else.
     run(&mut inst, "memory-refresh")?;
     let disarmed = look(&mut inst)?;
     if disarmed.names("memory-confirm-sweep") {
-        bail!("a confirmacao ficou armada depois de outra tecla");
+        bail!("the confirmation stayed armed after another key");
     }
     // The same key twice fires.
     run(&mut inst, "memory-sweep-store")?;
@@ -348,9 +357,9 @@ fn main() -> Result<()> {
         what: Request::SweepStore,
         target: 0,
     })) {
-        bail!("duas teclas iguais nao dispararam a faxina: {fired:?}");
+        bail!("two identical keys did not fire the sweep: {fired:?}");
     }
-    println!("faxina: uma tecla arma, outra tecla desarma, a mesma dispara");
+    println!("sweep: one key arms, another disarms, the same one fires");
 
     // ---- CLOSING NAMES THE ROW, NOT THE PID ----
     run(&mut inst, "memory-full")?;
@@ -363,15 +372,15 @@ fn main() -> Result<()> {
         what: Request::StopConsumer,
         target: 2,
     })) {
-        bail!("encerrar nao apontou a linha em foco: {stop:?}");
+        bail!("stopping did not point at the focused row: {stop:?}");
     }
-    println!("encerrar: aponta a LINHA da ultima amostra, e nao o pid");
+    println!("stop: points at the ROW of the last sample, and not at the pid");
 
-    println!("OK: o painel de memoria responde ao host, e o que e irreversivel pede duas vezes");
+    println!("OK: the memory panel answers the host, and what is irreversible asks twice");
     Ok(())
 }
 
 /// The keys of an `.ftl`, as one string.
 fn ftl(path: &str) -> Result<String> {
-    std::fs::read_to_string(path).with_context(|| format!("nao consegui ler {path}"))
+    std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))
 }

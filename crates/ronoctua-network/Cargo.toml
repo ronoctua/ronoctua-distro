@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-network"
-description = "A unica fronteira com o NetworkManager: Wi-Fi, Ethernet e o enlace."
+description = "The one boundary with NetworkManager: Wi-Fi, Ethernet and the link."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

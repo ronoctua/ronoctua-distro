@@ -254,7 +254,10 @@ mod tests {
             kinds: vec!["text/plain".into(), "x-kde-passwordManagerHint".into()],
             pinned: false,
         };
-        assert!(!f.register(password), "uma oferta de senha nao pode entrar");
+        assert!(
+            !f.register(password),
+            "an offer of a password must not get in"
+        );
         assert_eq!(f.how_many(), 0);
 
         // And the comparison is CASE-INSENSITIVE: the type appears written in more than one
@@ -272,7 +275,10 @@ mod tests {
     fn repeating_the_top_does_not_duplicate_but_recopying_the_old_one_brings_it_back() {
         let mut f = Queue::default();
         assert!(f.register(Entry::of_text("a")));
-        assert!(!f.register(Entry::of_text("a")), "repetir o topo e ruido");
+        assert!(
+            !f.register(Entry::of_text("a")),
+            "repeating the top is noise"
+        );
         assert!(f.register(Entry::of_text("b")));
         // Re-copying something old BRINGS IT BACK to the top, and does not duplicate.
         assert!(f.register(Entry::of_text("a")));
@@ -310,14 +316,14 @@ mod tests {
         // looks like it works, and the item disappears through normal use — a defect that only
         // shows up fifty copies later.
         let mut f = Queue::default();
-        assert!(f.register(Entry::of_text("guardar")));
+        assert!(f.register(Entry::of_text("store")));
         assert_eq!(f.toggle_pinned(0), Some(true));
         for n in 0..CEILING + 10 {
             f.register(Entry::of_text(format!("lixo {n}")));
         }
         assert!(
-            f.inputs().iter().any(|e| e.text() == Some("guardar")),
-            "o fixado foi descartado pelo teto"
+            f.inputs().iter().any(|e| e.text() == Some("store")),
+            "the pinned one was dropped by the ceiling"
         );
         assert_eq!(f.how_many(), CEILING);
     }

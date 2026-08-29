@@ -609,7 +609,7 @@ pub mod store {
                 tracing::error!(
                     path = %path.display(),
                     error = %e,
-                    "barra lateral ilegivel; seguindo com a da distro"
+                    "the sidebar is unreadable; carrying on with the distro's"
                 );
                 Preferences::fresh()
             }
@@ -754,11 +754,7 @@ mod tests {
         let lines = side.shown(false);
         let shape: Vec<bool> = lines.iter().map(Option::is_some).collect();
         assert_eq!(shape, [true, false, true, false, true]);
-        assert_eq!(
-            side.how_many(false),
-            3,
-            "os vaos nao sao linhas de conteudo"
-        );
+        assert_eq!(side.how_many(false), 3, "the gaps are not content lines");
 
         // ONE BLOCK, NO GAP. A leading or trailing blank would just be the
         // sidebar starting a line lower or ending a line later than the
@@ -964,10 +960,11 @@ mod tests {
             target: Target::File(PathBuf::from("/tmp/qualquer.zip")),
             label: None,
         });
-        side.save().expect("salvar sem destino nao e erro");
+        side.save()
+            .expect("saving with no destination is not an error");
         assert!(
             side.stamp().is_none(),
-            "uma barra sem destino nao tem arquivo"
+            "a bar with no destination has no file"
         );
 
         // Nothing appeared anywhere it could have appeared.

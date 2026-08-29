@@ -96,7 +96,7 @@ pkgs.testers.runNixOSTest {
 
 
     def ask(body):
-        """Um pedido que RESPONDE: `list` e `add`."""
+        """A request that ANSWERS: `list` and `add`."""
         machine.succeed(f"cat > /tmp/ask.py <<'EOF'\n{ASK}EOF")
         out = machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 "
@@ -106,7 +106,7 @@ pkgs.testers.runNixOSTest {
 
 
     def tell(body):
-        """Um pedido que NAO responde: pausar, retomar, desistir."""
+        """A request that does NOT answer: pause, resume, give up."""
         machine.succeed(f"cat > /tmp/ask.py <<'EOF'\n{ASK}EOF")
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 "
@@ -127,23 +127,23 @@ pkgs.testers.runNixOSTest {
     start_niri("niri", "${niri}")
     sock = socket_of("niri")
 
-    with subtest("a fila sobe como unidade, e nao dentro do rodape"):
+    with subtest("the queue comes up as a unit, and not inside the footer"):
         # `--user` and `/run/user/0` because this VM runs as root; on the real
         # machine it is `graphical-session.target` that pulls it in. What is
         # under test is that the unit EVALUATES and the binary runs — not
         # systemd's own ordering.
         machine.succeed(
-            "systemd-run --unit=fila "
+            "systemd-run --unit=queue "
             "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
             "--setenv=RUST_LOG=ronoctua_transfers=info "
             "${ronoctua-transfers}/bin/ronoctua-transfers"
         )
         machine.wait_until_succeeds(
-            "journalctl -u fila --no-pager | grep -q 'fila de transferencias aberta'",
+            "journalctl -u queue --no-pager | grep -q 'transfer queue opened'",
             timeout=60,
         )
 
-    with subtest("o rodape sobe e ENCONTRA a fila"):
+    with subtest("the footer comes up and FINDS the queue"):
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -154,23 +154,23 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'socket de controle aberto'",
+            "journalctl -u footer --no-pager | grep -q 'control socket opened'",
             timeout=90,
         )
         focus_niri()
 
-    with subtest("um trabalho entra na fila e chega ao SEGMENTO da modeline"):
+    with subtest("a job enters the queue and reaches the modeline's SEGMENT"):
         # Big enough that the copy is still going when the modeline is read.
         # `/dev/urandom` and not `/dev/zero`: a hole is not a copy, and btrfs
         # would share the extent of a sparse file without moving anything.
-        machine.succeed("mkdir -p /root/origem /root/destino")
+        machine.succeed("mkdir -p /root/source /root/destination")
         machine.succeed(
-            "head -c 400000000 /dev/urandom > /root/origem/grande.bin; sync"
+            "head -c 400000000 /dev/urandom > /root/source/large.bin; sync"
         )
         took = ask(
             '{"ask":"add","work":{"work":"paste",'
-            '"paths":["/root/origem/grande.bin"],'
-            '"into":"/root/destino","moves":false}}'
+            '"paths":["/root/source/large.bin"],'
+            '"into":"/root/destination","moves":false}}'
         )
         assert took["say"] == "took", took
         job = took["id"]
@@ -181,31 +181,60 @@ pkgs.testers.runNixOSTest {
         # nowhere on screen.
         try:
             machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep -q 'segmento id=\"transfer\"'",
+                "journalctl -u footer --no-pager | grep -q 'segment id=\"transfer\"'",
                 timeout=60,
             )
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
             raise
         said = machine.succeed(
-            "journalctl -u footer --no-pager | grep 'segmento id=\"transfer\"' | tail -1"
+            "journalctl -u footer --no-pager | grep 'segment id=\"transfer\"' | tail -1"
         )
         print(said.strip())
 
-    with subtest("segurar SEGURA, e a fila diz isso"):
-        tell('{"ask":"pause","id":%d}' % job)
+    with subtest("holding HOLDS, and the queue says so"):
+        # A JOB OF ITS OWN, ADDED AND PAUSED IN THE SAME BREATH.
+        #
+        # It used to reuse the job above, and that made the test a race it kept
+        # winning by luck: between the two subtests sits a
+        # `wait_until_succeeds` on the journal, which takes seconds, and four
+        # hundred megabytes onto a memory-backed root does not. The job reached
+        # `done` and the assertion read `stage == "paused"` against a copy that
+        # had finished — the failure said "the queue is wrong" about a queue
+        # that was right.
+        #
+        # There is no ask for "add it held", so what is left is to shrink the
+        # window to the two socket round-trips: add, then pause, with nothing
+        # between them.
+        machine.succeed("mkdir -p /root/destination-pause")
+        second = ask(
+            '{"ask":"add","work":{"work":"paste",'
+            '"paths":["/root/source/large.bin"],'
+            '"into":"/root/destination-pause","moves":false}}'
+        )
+        assert second["say"] == "took", second
+        holding = second["id"]
+        tell('{"ask":"pause","id":%d}' % holding)
         machine.sleep(1)
         first = ask('{"ask":"list"}')["jobs"]
-        held = next(j for j in first if j["id"] == job)
+        held = next(j for j in first if j["id"] == holding)
         assert held["stage"] == "paused", held
         machine.sleep(1)
-        again = next(j for j in ask('{"ask":"list"}')["jobs"] if j["id"] == job)
+        again = next(j for j in ask('{"ask":"list"}')["jobs"] if j["id"] == holding)
         assert again["done"] == held["done"], (
-            f"a pausa nao segurou: {held['done']} -> {again['done']}"
+            f"the pause did not hold: {held['done']} -> {again['done']}"
         )
 
-    with subtest("desistir APAGA o pedaco e deixa o original"):
-        tell('{"ask":"cancel","id":%d}' % job)
+    with subtest("giving up DELETES the piece and leaves the original"):
+        # THE PAUSED JOB, and not the first one — for the same reason the
+        # subtest above stopped reusing it. Giving up has to delete a PIECE,
+        # and the first job reaches `done`: cancelling something that finished
+        # leaves the whole file behind, correctly, and the assertion then reads
+        # "the piece was not deleted" about a copy that was never a piece.
+        #
+        # The held job is the honest subject: it is provably stopped part-way,
+        # so what is in its destination is exactly the piece this is about.
+        tell('{"ask":"cancel","id":%d}' % holding)
         machine.wait_until_succeeds(
             "XDG_RUNTIME_DIR=/run/user/0 "
             "${pkgs.python3}/bin/python3 /tmp/ask.py "
@@ -213,11 +242,11 @@ pkgs.testers.runNixOSTest {
             "| grep -q cancelled",
             timeout=60,
         )
-        left = machine.succeed("ls -A /root/destino").strip()
-        assert left == "", f"sobrou pedaco no destino: {left}"
-        machine.succeed("test -s /root/origem/grande.bin")
+        left = machine.succeed("ls -A /root/destination-pause").strip()
+        assert left == "", f"a piece was left at the destination: {left}"
+        machine.succeed("test -s /root/source/large.bin")
 
-    with subtest("`LEADER t t` abre o painel com a linha dentro"):
+    with subtest("`LEADER t t` opens the panel with the row inside"):
         # `t` became a GROUP: the screen capture moved to `c s` to make room.
         # A group that does not resolve is a key that does nothing, and nothing
         # on screen says which of the two it was.
@@ -232,7 +261,7 @@ pkgs.testers.runNixOSTest {
         press_key("t")
         try:
             journal = machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep 'painel de transferencias aberto'",
+                "journalctl -u footer --no-pager | grep 'transfers panel opened'",
                 timeout=30,
             )
         except Exception:
@@ -242,8 +271,17 @@ pkgs.testers.runNixOSTest {
         # The panel opens with the list the footer ALREADY has — a panel that
         # opened empty and filled in a moment later would read as "nothing is
         # running" at the instant somebody opened it to check.
-        assert "jobs=1" in journal, (
-            f"o painel abriu sem a lista que o rodape ja tinha:\n{journal}"
+        #
+        # AGAINST THE QUEUE'S OWN COUNT, and not against a number written here.
+        # It was `jobs=1`, which was true of however many jobs the subtests
+        # above happened to leave behind — so adding one anywhere earlier broke
+        # this, and the message blamed the panel. What is being asserted is
+        # that the panel and the queue agree, and the queue is who to ask.
+        listed = len(ask('{"ask":"list"}')["jobs"])
+        assert listed > 0, "the queue emptied before the panel opened"
+        assert f"jobs={listed}" in journal, (
+            f"the panel opened without the list the footer already had "
+            f"({listed} na queue):\n{journal}"
         )
   '';
 }

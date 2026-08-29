@@ -108,6 +108,15 @@ pub enum Effect {
     /// The id has to be one the descriptor declared; the host refuses any other
     /// rather than drawing a word no key can return from.
     StateChanged(String),
+    /// Remember this preference. Needs [`Capability::Brain`].
+    ///
+    /// NOT an [`Effect::Ask`]: that one is a verb plus an index and carries no
+    /// value, and "every seven days" is a value. See [`Setting`].
+    ///
+    /// The buffer still touches no disk (invariant 11): it says what it wants
+    /// remembered and the HOST writes the file, the same way [`Effect::Save`]
+    /// is how a file editor writes.
+    Tune(Setting),
 }
 
 impl Effect {
@@ -116,11 +125,44 @@ impl Effect {
     /// The twin of [`Command::requires`], and for the same reason: the host has
     /// to refuse BEFORE acting, and a second table of what costs what is a
     /// second table to keep in step.
+    ///
+    /// # Exhaustive, and it was not
+    ///
+    /// This ended in `_ => None` until the brain arrived, which is the same
+    /// defect [`Request::requires`] carried one shade louder — and quieter here
+    /// is worse. A request added without an arm was silently granted the system
+    /// capability; an EFFECT added without an arm was silently granted the
+    /// right to need NO capability at all, which is the widest answer there is.
+    ///
+    /// Every variant is named. Adding one is a compile error until somebody
+    /// decides whether it is gated, which is the decision this function exists
+    /// to force.
     #[must_use]
     pub const fn requires(&self) -> Option<Capability> {
         match self {
             Self::Ask(d) => Some(d.what.requires()),
-            _ => None,
+            // A PREFERENCE IS GATED LIKE A REQUEST, and behind the same
+            // capability the requests it belongs with are: what is being
+            // remembered here is when the machine rebuilds its own operating
+            // system, and a buffer that asked for nothing must not get to
+            // change that quietly.
+            Self::Tune(_) => Some(Capability::Brain),
+            // AND THESE COST NOTHING, each for a reason that is worth being
+            // able to check rather than assume: redrawing, closing and saying
+            // which state one is in are the buffer talking about ITSELF;
+            // copying and saving are the host's own doors, already gated where
+            // they act; and a command id is checked against the registry, which
+            // is a narrower gate than a capability.
+            Self::Redraw
+            | Self::Copy(_)
+            | Self::Command(_)
+            | Self::Close
+            | Self::Save(_)
+            | Self::StateChanged(_) => None,
+            // `Format` is gated by `Capability::Disks` at the point it acts —
+            // see `Host::format`. Named here so the list is complete, not to
+            // change where that gate lives.
+            Self::Format(_) => Some(Capability::Disks),
         }
     }
 }
@@ -162,6 +204,20 @@ pub enum Capability {
     /// which is recoverable. This one writes a filesystem over a disk. A buffer
     /// asks for exactly the power it uses.
     Disks,
+    /// Receiving [`Input::Mind`], and asking the brain to run something or to
+    /// remember a preference.
+    ///
+    /// A fourth one and not [`Capability::System`], because `System` means "how
+    /// much memory, who is eating it, do something about it" and this one ends
+    /// with the machine REBUILDING ITS OWN OPERATING SYSTEM. Folding it in
+    /// would hand that reach to the memory panel, which asked for neither — the
+    /// same argument [`Capability::Transfers`] and [`Capability::Disks`] make,
+    /// one step further along.
+    ///
+    /// It opens no filesystem, no socket, no clock and no parser: the whole
+    /// mind arrives already read, already decided and already formatted —
+    /// including the DATES, which the component cannot compute, having no zone.
+    Brain,
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +572,21 @@ pub enum Request {
     ForgetJob,
     /// Drop every finished job at once. The target is ignored.
     SweepJobs,
+
+    /// Run the task the target names, for real.
+    ///
+    /// The target is a 1-BASED index into the last [`Mind`]'s task list and
+    /// never a name the buffer built: the host checks it against the list it
+    /// just sent, exactly as it does with a consumer and with a job.
+    RunTask,
+    /// The same, changing nothing — the `nix run .#install` idiom.
+    RehearseTask,
+    /// Stop what is running, or take it out of the queue.
+    AbortTask,
+    /// Do not wait the announcement out; start now. The target is ignored.
+    Proceed,
+    /// Not now — it comes back at its next moment. The target is ignored.
+    Postpone,
 }
 
 impl Request {
@@ -526,6 +597,19 @@ impl Request {
     /// inside it. A `match` and not a table: a request added without an arm
     /// does not compile, where a table would let it through and the host would
     /// refuse it at runtime for the wrong reason.
+    ///
+    /// # And the arm that used to be here
+    ///
+    /// The paragraph above was written when this ended in `_ => System`, and
+    /// the two contradicted each other in the same doc comment: with a
+    /// catch-all, a request added without an arm compiles perfectly and is
+    /// GRANTED the system capability — the widest one there is, and the one
+    /// that reaches the machine's memory. The failure is silent, and it fails
+    /// OPEN.
+    ///
+    /// Every variant is named now. Adding one is a compile error until
+    /// somebody decides which capability it belongs behind, which is exactly
+    /// the decision this function exists to force.
     #[must_use]
     pub const fn requires(self) -> Capability {
         match self {
@@ -534,7 +618,22 @@ impl Request {
             | Self::CancelJob
             | Self::ForgetJob
             | Self::SweepJobs => Capability::Transfers,
-            _ => Capability::System,
+            Self::RunTask
+            | Self::RehearseTask
+            | Self::AbortTask
+            | Self::Proceed
+            | Self::Postpone => Capability::Brain,
+            Self::Refresh
+            | Self::ScanRam
+            | Self::ScanDisk
+            | Self::CancelScan
+            | Self::GuardTolerant
+            | Self::GuardDefault
+            | Self::GuardPersist
+            | Self::StopConsumer
+            | Self::SweepGenerations
+            | Self::SweepStore
+            | Self::SweepJournal => Capability::System,
         }
     }
 }
@@ -702,6 +801,348 @@ pub struct Queue {
     pub jobs: Vec<Job>,
 }
 
+// ---------------------------------------------------------------------------
+// THE BRAIN — what the machine does by itself, behind [`Capability::Brain`].
+//
+// THE FIELD ORDER OF EVERY STRUCT BELOW IS THE WIT'S ORDER, for the reason
+// written above the survey's structs and repeated in the `.wit` itself:
+// `wasmtime` zips a record POSITIONALLY against the WIT's fields and only then
+// compares the names. A field moved here without being moved there fails when
+// the function is CALLED, with a message about a name — never at compile time.
+// See `ronoctua-runtime`'s `val_of_mind`, which is where the two orders meet.
+// ---------------------------------------------------------------------------
+
+/// What a reading of the [`Pulse`] measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vital {
+    /// RAM in use, in PER CENT of the total.
+    RamUsed,
+    /// Stall waiting for memory, in per mille of a ten-second window.
+    MemoryStall,
+    /// Stall waiting for a processor, in the same unit.
+    CpuStall,
+    /// Running off the battery: `1` for yes, `0` for no.
+    OnBattery,
+}
+
+/// One reading of the pulse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VitalSign {
+    /// What it measures.
+    pub of: Vital,
+    /// How much, in the unit [`Vital`] names.
+    pub amount: u16,
+}
+
+/// How busy the machine is, as the gate last read it.
+///
+/// A list and not a record with a field per reading, for the reason
+/// [`Survey::readings`] is one: what the machine does not measure does not
+/// report, and zero is a real reading. A kernel with no `/proc/pressure/cpu`
+/// simply has no [`Vital::CpuStall`] here, and the screen draws a dash instead
+/// of a number nobody took.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Pulse {
+    /// When it was taken, in epoch seconds.
+    pub at: u64,
+    /// What was taken.
+    pub signs: Vec<VitalSign>,
+}
+
+/// Where a task is right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Standing {
+    /// Not running and not waiting to.
+    #[default]
+    Idle,
+    /// Waiting its turn.
+    Queued,
+    /// Running.
+    Running,
+}
+
+/// What is in the way.
+///
+/// [`HoldKind::None`] is not a failure being hidden: it is what a row says when
+/// nothing is holding it, the same shape [`GuardMode::Unknown`] has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HoldKind {
+    /// Nothing is holding it.
+    #[default]
+    None,
+    /// Not enough memory.
+    Ram,
+    /// The processor is too busy.
+    Cpu,
+    /// On the battery.
+    Battery,
+    /// Something else of ours is running.
+    Busy,
+    /// No network.
+    Network,
+    /// The machine is asleep.
+    Asleep,
+}
+
+/// How a run ended.
+///
+/// [`OutcomeKind::Skipped`] is FIRST, and deliberately the harmless one: a
+/// record built from a file that lost a field must not read as "it worked".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutcomeKind {
+    /// It did not run — and that is not a failure.
+    #[default]
+    Skipped,
+    /// It ran and it worked.
+    Done,
+    /// It ran and it did not.
+    Failed,
+}
+
+/// Which stretch of the person's day a task prefers.
+///
+/// The hours each one covers are the brain's, with the reason written beside
+/// them — the buffer has no clock and no zone (invariant 11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DayPart {
+    /// Whenever it comes due.
+    #[default]
+    Any,
+    /// The small hours.
+    Night,
+    /// The morning.
+    Morning,
+    /// The afternoon.
+    Afternoon,
+    /// The evening.
+    Evening,
+}
+
+impl DayPart {
+    /// From the WIT's name. `None` for one this build does not know.
+    ///
+    /// The twin of [`Recipe::of_wit_name`], and for the same reason: a case the
+    /// host has not learned to read is REFUSED rather than rounded to a
+    /// neighbour, because rounding here would move a rebuild from the small
+    /// hours into the middle of somebody's afternoon.
+    #[must_use]
+    pub fn of_wit_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "any" => Self::Any,
+            "night" => Self::Night,
+            "morning" => Self::Morning,
+            "afternoon" => Self::Afternoon,
+            "evening" => Self::Evening,
+            _ => return None,
+        })
+    }
+}
+
+/// What became of one step of a run.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StepOutcome {
+    /// Which step, by the id the task declared.
+    pub id: String,
+    /// Did it work?
+    pub ok: bool,
+    /// How long it took.
+    pub seconds: u32,
+    /// What the machine said. Empty when it said nothing.
+    pub trouble: String,
+}
+
+/// One run, as the journal keeps it.
+///
+/// `RunRecord` and NOT `Run`: the layout vocabulary every component now imports
+/// (`ronoctua-design`) already has a `Run` — one line of a screen — and a buffer
+/// that imported both would resolve one of them silently. The name is longer at
+/// the one place it is written and unambiguous everywhere it is read, which is
+/// the same argument [`BufferState`] makes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RunRecord {
+    /// When it started, in epoch seconds.
+    pub began: u64,
+    /// When it ended.
+    pub ended: u64,
+    /// When it ran, ALREADY FORMATTED by the host, in ISO.
+    ///
+    /// The component has no zone and no calendar (invariant 11), so the number
+    /// is for the arithmetic this side does and the text is for the date it
+    /// cannot compute.
+    pub when_text: String,
+    /// How it ended.
+    pub outcome: OutcomeKind,
+    /// The step it failed at, by id. Empty when there is none.
+    pub at: String,
+    /// A WORD of the brain's own — `runaway`, `aborted`, `off` — drawn through
+    /// `brain-why-<word>`. Empty when the reason came from the machine, in
+    /// which case [`RunRecord::trouble`] carries it.
+    ///
+    /// They are two fields because they are drawn differently: one through the
+    /// bundle, the other exactly as it arrived.
+    pub why: String,
+    /// What the machine said, verbatim. Empty when it said nothing.
+    pub trouble: String,
+    /// What became of each step.
+    pub steps: Vec<StepOutcome>,
+}
+
+/// One thing a task runs, as the screen draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskStep {
+    /// English, kebab-case, like every other name here (invariant 18).
+    pub id: String,
+    /// What it really runs. DATA — a command line is not translated.
+    pub command: String,
+    /// Whether it needs to be root.
+    pub needs_root: bool,
+    /// Whether it is on.
+    pub on: bool,
+    /// Whether that differs from what the distro ships.
+    pub changed: bool,
+}
+
+/// One task, as the screen draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskState {
+    /// English, kebab-case. `brain-task-<id>` names it on screen.
+    pub id: String,
+    /// Where it is right now.
+    pub standing: Standing,
+    /// Whether it runs on its own at all.
+    pub enabled: bool,
+    /// How often, in days.
+    pub interval_days: u16,
+    /// Which stretch of the day it prefers.
+    pub part_of_day: DayPart,
+    /// The next moment it will be considered, in epoch seconds. `0` when there
+    /// is none — it is switched off, or it only runs when asked.
+    pub next: u64,
+    /// The same moment, already formatted. Empty when there is none.
+    pub next_text: String,
+    /// What is in the way.
+    pub hold: HoldKind,
+    /// Why it is not due at all, as a word. Empty when it is.
+    pub why_not: String,
+    /// Whether [`TaskState::last`] means anything.
+    ///
+    /// A record cannot be absent across the boundary, and `began: 0` would be a
+    /// moment in 1970 — which is a date the screen would draw.
+    pub ran: bool,
+    /// The last run. Meaningless unless [`TaskState::ran`].
+    pub last: RunRecord,
+    /// What it runs.
+    pub steps: Vec<TaskStep>,
+}
+
+/// The warning that something is about to happen.
+///
+/// [`Announcement::task`] EMPTY means there is none — the same shape
+/// [`Mind::running`] uses. What crosses is the DEADLINE and never a ticking
+/// number: whoever draws already beats a one-second clock, and a daemon that
+/// pushed a digit every second would wake three processes to redraw one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Announcement {
+    /// Which task, by id. Empty when there is no announcement.
+    pub task: String,
+    /// How long the warning lasts in total, in seconds.
+    pub total_seconds: u16,
+    /// When it runs out, in epoch seconds.
+    pub deadline: u64,
+    /// Why it is happening, as a word.
+    pub why: String,
+}
+
+/// How busy is too busy — the general gate, as the person set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Gate {
+    /// The most RAM that may be in use, in per cent.
+    pub ram_ceiling_pct: u16,
+    /// The most processor stall that may be going on, in per mille.
+    pub cpu_stall_per_mille: u16,
+    /// Whether running off the battery stops it.
+    pub abort_on_battery: bool,
+}
+
+/// Everything the brain knows, all at once.
+///
+/// Whole and never a delta, for the reason [`Queue`] is whole: a delta needs
+/// both sides to agree on what they last saw, and what is being agreed about
+/// here is when the machine will rebuild itself.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Mind {
+    /// The daemon's clock, in epoch seconds.
+    ///
+    /// It crosses because the component has none (invariant 11): a countdown is
+    /// `deadline - now`, and without the second number the first is a moment
+    /// this side cannot place.
+    pub now: u64,
+    /// How busy the machine is.
+    pub pulse: Pulse,
+    /// Every task, in the order they are to be drawn.
+    pub tasks: Vec<TaskState>,
+    /// What is waiting its turn, by id.
+    pub queue: Vec<String>,
+    /// What is running, by id. Empty when nothing is.
+    pub running: String,
+    /// The task whose next run is a rehearsal. Empty when none is.
+    pub rehearsing: String,
+    /// The warning in flight.
+    pub announcement: Announcement,
+    /// The general gate.
+    pub gate: Gate,
+    /// The cadences one key steps through, in days.
+    ///
+    /// The LADDER crosses instead of living in the component, because which
+    /// steps are worth having is a policy with its reason written in
+    /// `ronoctua-brain` — and a screen that stepped by one would take
+    /// twenty-three presses to get from a month to a week.
+    pub cadence: Vec<u16>,
+}
+
+/// One step, switched on or off by the id the last [`Mind`] gave.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StepSwitch {
+    /// Which step.
+    pub id: String,
+    /// Whether it is to run.
+    pub on: bool,
+}
+
+/// WHICH preference, and its VALUE.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Knob {
+    /// How often, in days.
+    IntervalDays(u16),
+    /// Which stretch of the day.
+    PartOfDay(DayPart),
+    /// Whether it runs on its own at all.
+    Enabled(bool),
+    /// One step, on or off.
+    Step(StepSwitch),
+    /// Every step back to what the distro ships.
+    ///
+    /// It carries nothing: there is one default and it is the flake's.
+    ResetSteps,
+}
+
+/// A preference the person changed.
+///
+/// # Why it is not a [`Demand`]
+///
+/// Because a `Demand` is a verb plus an INDEX, and that shape fits every
+/// request there is: pause job seven, close consumer three. A preference is not
+/// that — it carries a VALUE the person chose. Bending `Demand` to hold one
+/// would put brain-shaped fields on the record every other buffer sends, which
+/// is the argument [`Plan`] already carries a few hundred lines above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Setting {
+    /// Which task it belongs to, by the id the last [`Mind`] gave.
+    pub task: String,
+    /// Which preference, and its value.
+    pub knob: Knob,
+}
+
 /// A key binding declared by the buffer, as DATA (section 7.9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
@@ -829,9 +1270,9 @@ impl Descriptor {
             let first = l.keys.split_whitespace().next().unwrap_or("");
             if first != LOCAL_PREFIX {
                 return Err(format!(
-                    "o buffer `{}` tenta bindar `{}`, fora de `{LOCAL_PREFIX}`.\n\
-                     Buffers so bindam sob a particao local (secao 7.9); um \
-                     prefixo global sequestraria a tecla para todo o sistema.",
+                    "the buffer `{}` tries to bind `{}`, outside `{LOCAL_PREFIX}`.\n\
+                     Buffers only bind under the local partition (section 7.9); a \
+                     global prefix would hijack the key for the whole system.",
                     self.name, l.keys
                 ));
             }
@@ -856,16 +1297,16 @@ impl Descriptor {
     fn states_are_sound(&self) -> Result<(), String> {
         let Some(base) = self.states.first() else {
             return Err(format!(
-                "o buffer `{}` nao declara estado nenhum.\n\
-                 Todo buffer tem pelo menos `{BASE_STATE}`: e para onde o `Esc` volta.",
+                "the buffer `{}` declares no state at all.\n\
+                 Every buffer has at least `{BASE_STATE}`: it is where `Esc` goes back to.",
                 self.name
             ));
         };
         if base.id != BASE_STATE {
             return Err(format!(
-                "o buffer `{}` comeca em `{}`, e o estado base tem de ser `{BASE_STATE}`.\n\
-                 E por esse id que a modeline decide entre o tom discreto e o \
-                 alternativo, e para onde o `Esc` volta.",
+                "the buffer `{}` starts in `{}`, and the base state has to be `{BASE_STATE}`.\n\
+                 And it is by that id that the modeline decides between the discreet tone and the \
+                 other one, and where `Esc` goes back to.",
                 self.name, base.id
             ));
         }
@@ -878,7 +1319,7 @@ impl Descriptor {
             }
             if self.states[..n].iter().any(|o| o.letter == s.letter) {
                 return Err(format!(
-                    "o buffer `{}` usa `{}` para dois estados; um deles seria \
+                    "the buffer `{}` uses `{}` for two states; one of them would be \
                      inalcancavel sob `SPC b s`.",
                     self.name, s.letter
                 ));
@@ -1043,7 +1484,20 @@ impl Command {
     pub const fn requires(&self) -> Option<Capability> {
         match self {
             Self::Svg { .. } => Some(Capability::Vector),
-            _ => None,
+            // THE OTHER FOUR COST NOTHING, and they are named rather than
+            // swept up by a `_` for the reason the other two gates in this
+            // file learned the hard way: `Request::requires` had a catch-all
+            // under a doc comment promising exhaustiveness, and it granted the
+            // SYSTEM capability to anything unlisted; `Effect::requires` had
+            // the same shape and granted the right to need none at all.
+            //
+            // A drawing primitive is the cheapest of the three to get wrong
+            // and the easiest to add — the pixel one this repository has
+            // deliberately not built yet would land right here — so this is
+            // where a new case has to stop and be decided.
+            Self::Text { .. } | Self::Rule { .. } | Self::Grid { .. } | Self::Selection { .. } => {
+                None
+            }
         }
     }
 }
@@ -1086,15 +1540,15 @@ impl DisplayList {
     /// Some command requires a capability the descriptor did not declare.
     pub fn validate(&self, capabilities: &[Capability]) -> Result<(), String> {
         for c in &self.commands {
-            let Some(exigida) = c.requires() else {
+            let Some(required) = c.requires() else {
                 continue;
             };
-            if !capabilities.contains(&exigida) {
+            if !capabilities.contains(&required) {
                 return Err(format!(
-                    "o buffer desenha {c:?} sem declarar `{exigida:?}`.\n\
-                     Cada primitiva com trava e superficie que todo buffer \
-                     futuro passa a poder usar (secao 7.6); quem a usa a pede \
-                     no descritor, e o host confere antes de desenhar."
+                    "o buffer desenha {c:?} sem declarar `{required:?}`.\n\
+                     Every primitive with a gate is a surface every future buffer \
+                     gains the right to use (section 7.6); whoever uses it asks for it \
+                     in the descriptor, and the host checks before drawing."
                 ));
             }
         }
@@ -1203,19 +1657,19 @@ impl DisplayList {
     fn sketch(c: &Command) -> String {
         match c {
             Command::Text { text, scale, .. } => match text {
-                Text::Key(k) => format!("chave `{k}` ({scale:?})"),
+                Text::Key(k) => format!("key `{k}` ({scale:?})"),
                 Text::Data(t) => {
                     let mut short: String = t.chars().take(24).collect();
                     if t.chars().count() > 24 {
                         short.push('…');
                     }
-                    format!("texto `{short}` ({scale:?})")
+                    format!("text `{short}` ({scale:?})")
                 }
-                Text::Icon(i) => format!("icone `{i}` ({scale:?})"),
+                Text::Icon(i) => format!("icon `{i}` ({scale:?})"),
             },
-            Command::Rule { .. } => "regua".into(),
-            Command::Selection { .. } => "selecao".into(),
-            Command::Grid { lines, .. } => format!("grade de {} linhas", lines.len()),
+            Command::Rule { .. } => "rule".into(),
+            Command::Selection { .. } => "selection".into(),
+            Command::Grid { lines, .. } => format!("a grid of {} lines", lines.len()),
             Command::Svg { .. } => "svg".into(),
         }
     }
@@ -1270,9 +1724,9 @@ impl DisplayList {
                     continue;
                 }
                 return Err(format!(
-                    "na linha {from}, {} ocupa {tall} celulas e vai ate a linha \
-                     {}, mas {} comeca na linha {at}: o segundo e desenhado \
-                     dentro da caixa do primeiro",
+                    "on line {from}, {} takes {tall} cells and runs down to line \
+                     {}, but {} starts on line {at}: the second one is drawn \
+                     inside the box of the first",
                     Self::sketch(&self.commands[i]),
                     from.saturating_add(tall).saturating_sub(1),
                     Self::sketch(&self.commands[j])
@@ -1309,7 +1763,7 @@ impl DisplayList {
                 let (next, _, after) = pair[1];
                 if at.saturating_add(wide) > next {
                     return Err(format!(
-                        "na linha {line}, {} comeca em {at} e pode chegar a {}, \
+                        "on line {line}, {} starts at {at} and can reach {}, \
                          mas {} comeca em {next}: os dois se sobrepoem",
                         Self::sketch(what),
                         at.saturating_add(wide),
@@ -1321,8 +1775,8 @@ impl DisplayList {
                 && at.saturating_add(wide) > columns
             {
                 return Err(format!(
-                    "na linha {line}, {} comeca em {at} e pede {wide} celulas \
-                     numa janela de {columns}",
+                    "on line {line}, {} starts at {at} and asks for {wide} cells \
+                     in a window of {columns}",
                     Self::sketch(what)
                 ));
             }
@@ -1416,12 +1870,12 @@ impl Heights {
     /// short is the glyph clipped at the bottom, which was the defect that gave rise to
     /// this field.
     #[must_use]
-    pub fn cells(size: f32, line_height: f32, altura_da_celula: f32) -> u16 {
-        if altura_da_celula <= 0.0 {
+    pub fn cells(size: f32, line_height: f32, cell_height: f32) -> u16 {
+        if cell_height <= 0.0 {
             return 1;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n = (size * line_height / altura_da_celula).ceil() as u32;
+        let n = (size * line_height / cell_height).ceil() as u32;
         u16::try_from(n.max(1)).unwrap_or(1)
     }
 
@@ -1538,12 +1992,21 @@ pub enum Input {
     Rack(Rack),
     /// What became of the format the buffer asked for.
     Formatted(Outcome),
+    /// What the machine is going to do by itself, ALREADY READ. Only for a
+    /// buffer that declared [`Capability::Brain`].
+    ///
+    /// Like [`Input::Queue`] nobody pressed it: the host is subscribed to the
+    /// brain's own socket on a thread, and what arrives is the WHOLE mind — a
+    /// delta needs both sides to agree on what they last saw, and what is being
+    /// agreed about here is when the machine will rebuild itself.
+    Mind(Mind),
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Binding, Capability, Color, Command, Demand, Descriptor, DisplayList, Effect, Request,
+        Binding, Capability, Color, Command, Demand, Descriptor, DisplayList, Effect, Knob,
+        Request, Setting,
     };
 
     /// The SAME gate, on the way out.
@@ -1558,6 +2021,21 @@ mod tests {
             target: 4321,
         });
         assert_eq!(ask.requires(), Some(Capability::System));
+        // THE WIDEST REACH THERE IS, gated by both of its doors. A brain
+        // request comes through `Ask` and a preference comes through `Tune`,
+        // and the two would be a pair of holes if only one of them were named
+        // here: either alone ends with the machine rebuilding its own operating
+        // system on somebody else's schedule.
+        let run = Effect::Ask(Demand {
+            what: Request::RunTask,
+            target: 1,
+        });
+        assert_eq!(run.requires(), Some(Capability::Brain));
+        let tune = Effect::Tune(Setting {
+            task: "update".into(),
+            knob: Knob::IntervalDays(7),
+        });
+        assert_eq!(tune.requires(), Some(Capability::Brain));
         // And everything that was already there keeps costing nothing: a buffer
         // does not declare a capability in order to redraw.
         assert_eq!(Effect::Redraw.requires(), None);
@@ -1593,11 +2071,11 @@ mod tests {
         );
         assert!(
             with_svg().validate(&[Capability::Terminal]).is_err(),
-            "a capacidade ERRADA nao pode abrir a porta"
+            "the WRONG capability must not open the door"
         );
         with_svg()
             .validate(&[Capability::Vector])
-            .expect("quem pediu tem de passar");
+            .expect("whoever asked has to come through");
     }
 
     /// And whatever has no gate passes without asking for anything — otherwise every existing
@@ -1610,7 +2088,7 @@ mod tests {
             color: Color("rule-default".into()),
         });
         assert_eq!(l.commands[0].requires(), None);
-        l.validate(&[]).expect("regua nao exige capacidade");
+        l.validate(&[]).expect("a rule requires no capability");
     }
 
     fn with_keys(t: &str) -> Descriptor {
@@ -1646,7 +2124,7 @@ mod tests {
 
         for global in ["f s", "b b", "g", "q q"] {
             let e = with_keys(global).validate().unwrap_err();
-            assert!(e.contains(global), "a mensagem nao diz qual: {e}");
+            assert!(e.contains(global), "the message does not say which: {e}");
         }
     }
 
@@ -1655,8 +2133,8 @@ mod tests {
         // Refusing without saying WHO forces a hunt among the loaded
         // components — and the load happens far from whoever wrote the buffer.
         let mut d = with_keys("f s");
-        d.name = "navegador".into();
-        assert!(d.validate().unwrap_err().contains("navegador"));
+        d.name = "browser".into();
+        assert!(d.validate().unwrap_err().contains("browser"));
     }
 
     #[test]

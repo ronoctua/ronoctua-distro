@@ -505,8 +505,8 @@ impl Manager {
     ///
     /// No system bus, or no udisks2 on it.
     pub fn fresh() -> Result<Self> {
-        let connection = zbus::blocking::Connection::system()
-            .context("sem barramento de sistema para falar com o udisks2")?;
+        let connection =
+            zbus::blocking::Connection::system().context("no system bus to talk to udisks2")?;
         Ok(Self { connection })
     }
 
@@ -517,10 +517,10 @@ impl Manager {
     /// udisks2 is not on the bus, or did not answer.
     pub fn read(&self) -> Result<Rack> {
         let objects = udisks::ObjectsProxyBlocking::new(&self.connection)
-            .context("udisks2 fora do barramento")?;
+            .context("udisks2 is off the bus")?;
         let managed = objects
             .get_managed_objects()
-            .context("udisks2 nao respondeu a GetManagedObjects")?;
+            .context("udisks2 did not answer GetManagedObjects")?;
 
         let mut rack = Rack::default();
         for (path, faces) in &managed {
@@ -699,7 +699,7 @@ impl Manager {
             }
         }
         anyhow::bail!(
-            "o udisks2 escreveu a tabela em {at} mas nao ofereceu a interface de particao: {last:?}"
+            "udisks2 wrote the table at {at} but did not offer the partition interface: {last:?}"
         )
     }
 
@@ -829,24 +829,24 @@ where
         .spawn(move || {
             match manager.read() {
                 Ok(rack) => on_change(rack),
-                Err(e) => tracing::warn!(error = %e, "primeira leitura dos discos falhou"),
+                Err(e) => tracing::warn!(error = %e, "the first reading of the disks failed"),
             }
             let Ok(messages) = manager.signals() else {
-                tracing::warn!("sem fluxo do udisks2; a lista nao vai reler sozinha");
+                tracing::warn!("no udisks2 stream; the list will not reread on its own");
                 return;
             };
             for _ in messages {
                 match manager.read() {
                     Ok(rack) => on_change(rack),
-                    Err(e) => tracing::warn!(error = %e, "releitura dos discos falhou"),
+                    Err(e) => tracing::warn!(error = %e, "rereading the disks failed"),
                 }
             }
             // The iterator ending means udisks2 went away. Saying so beats a
             // thread that quietly stops working — the lesson `watch_scan` in
             // `ronoctua-network` already records.
-            tracing::info!("o fluxo do udisks2 terminou; sem releitura automatica");
+            tracing::info!("the udisks2 stream ended; no automatic reread");
         })
-        .context("nao consegui subir a thread de discos")?;
+        .context("could not start the disks thread")?;
     Ok(())
 }
 
@@ -1038,7 +1038,7 @@ mod tests {
         // would have got backwards in both directions at once.
         assert!(
             !seen.iter().any(|n| n.starts_with("/dev/loop")),
-            "um loop virou linha: {seen:?}"
+            "a loop became a line: {seen:?}"
         );
         assert!(!seen.contains(&"/dev/zram0".to_owned()), "{seen:?}");
         assert!(!seen.contains(&"/dev/nvme0n1p2".to_owned()), "{seen:?}");

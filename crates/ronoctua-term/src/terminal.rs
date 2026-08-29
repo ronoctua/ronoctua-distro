@@ -62,18 +62,18 @@ impl Terminal {
     /// # Errors
     ///
     /// The system refuses to create the thread.
-    pub fn fresh(columns: u16, lines: u16, fabrica: Factory) -> std::io::Result<Self> {
+    pub fn fresh(columns: u16, lines: u16, factory: Factory) -> std::io::Result<Self> {
         let (tx, rx) = channel::<Request>();
         // The name travels through a channel of its own because only the engine knows it, and the
         // engine only exists after the thread has started.
-        let (tx_nome, rx_nome) = channel::<&'static str>();
+        let (tx_name, rx_name) = channel::<&'static str>();
 
         let thread = std::thread::Builder::new()
             .name("ronoctua-vt".into())
             .spawn(move || {
-                let mut engine = fabrica(columns, lines);
+                let mut engine = factory(columns, lines);
                 // If nobody is listening any more, the thread may as well exit.
-                if tx_nome.send(engine.name()).is_err() {
+                if tx_name.send(engine.name()).is_err() {
                     return;
                 }
                 // A `for` over the receiver: it ends on its own when the last
@@ -92,9 +92,9 @@ impl Terminal {
                 }
             })?;
 
-        let name = rx_nome
+        let name = rx_name
             .recv()
-            .map_err(|_| std::io::Error::other("a thread do motor morreu antes de construi-lo"))?;
+            .map_err(|_| std::io::Error::other("the engine's thread died before building it"))?;
 
         Ok(Self {
             requests: Some(tx),
@@ -170,7 +170,7 @@ pub struct Dead;
 
 impl std::fmt::Display for Dead {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a thread do motor de terminal nao esta mais rodando")
+        f.write_str("the terminal engine's thread is no longer running")
     }
 }
 
@@ -209,7 +209,7 @@ mod tests {
         let g = t.grid().unwrap();
         assert!(
             g.canonical_f().starts_with("oi"),
-            "a grade nao tem o que foi alimentado: {:?}",
+            "the grid does not have what it was fed: {:?}",
             g.canonical_f()
         );
     }

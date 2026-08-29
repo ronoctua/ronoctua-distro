@@ -100,8 +100,8 @@ in
   # Shell snippet that prepares the graphics environment. Use with `${...}`.
   prelude = ''
     if [ -z "''${WAYLAND_DISPLAY:-}" ] && [ -z "''${DISPLAY:-}" ]; then
-      echo "ERRO: nao ha sessao grafica." >&2
-      echo "      O compositor aninhado roda como JANELA dentro da sua" >&2
+      echo "ERROR: there is no graphical session." >&2
+      echo "      The nested compositor runs as a WINDOW inside your" >&2
       echo "      sessao. Sem sessao grafica, use 'nix run .#vm'." >&2
       exit 1
     fi
@@ -125,19 +125,19 @@ in
       # NVIDIA ALONE is the one case that needs the host's userspace: the blob
       # has to match the kernel module. Everything else uses Nix's mesa, which
       # is what removes the glibc mixing described at the top of this file.
-      only_nvidia=sim
+      only_nvidia=yes
       for v in $vendors; do
-        [ "$v" = "0x10de" ] || only_nvidia=nao
+        [ "$v" = "0x10de" ] || only_nvidia=no
       done
-      [ -n "$vendors" ] || only_nvidia=nao
+      [ -n "$vendors" ] || only_nvidia=no
 
-      if [ "$only_nvidia" = sim ]; then
+      if [ "$only_nvidia" = yes ]; then
         for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
           if [ -e "$d/libEGL.so.1" ]; then
             export LD_LIBRARY_PATH="$d''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            echo "GPU NVIDIA: driver do host, de $d"
-            echo "  (isso mistura a libc do host com o ld.so do Nix; se o niri" >&2
-            echo "   morrer com 'undefined symbol ... GLIBC_PRIVATE', e isto.)" >&2
+            echo "NVIDIA GPU: the host's driver, from $d"
+            echo "  (this mixes the host's libc with Nix's ld.so; if niri" >&2
+            echo "   dies with 'undefined symbol ... GLIBC_PRIVATE', this is it.)" >&2
             break
           fi
         done
@@ -146,7 +146,7 @@ in
         export LD_LIBRARY_PATH="${graphics}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         export LIBGL_DRIVERS_PATH="${graphics}/lib/dri"
         export __EGL_VENDOR_LIBRARY_DIRS="${graphics}/share/glvnd/egl_vendor.d"
-        echo "host nao-NixOS: driver grafico do Nix (mesa)"
+        echo "non-NixOS host: graphics driver from Nix (mesa)"
 
         icds=""
         for v in $vendors; do

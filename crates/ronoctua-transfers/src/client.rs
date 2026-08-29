@@ -65,12 +65,8 @@ const AGAIN: Duration = Duration::from_millis(50);
 /// `XDG_RUNTIME_DIR` absent, or nobody listening.
 pub fn connect_quick() -> Result<UnixStream> {
     let path = socket_path()?;
-    UnixStream::connect(&path).with_context(|| {
-        format!(
-            "nao ha fila de transferencias escutando em {}",
-            path.display()
-        )
-    })
+    UnixStream::connect(&path)
+        .with_context(|| format!("there is no transfer queue listening at {}", path.display()))
 }
 
 /// Sends one ask and reads the one answer.
@@ -93,14 +89,14 @@ pub fn ask(what: &Ask) -> Result<Say> {
 /// Nobody listening there, or the daemon refused.
 pub fn ask_at(path: &Path, what: &Ask) -> Result<Say> {
     let stream = UnixStream::connect(path)
-        .with_context(|| format!("nao ha fila escutando em {}", path.display()))?;
+        .with_context(|| format!("there is no queue listening at {}", path.display()))?;
     // A daemon that stopped answering must not take the frame with it. On the
     // other side every ask is a lock, a push and a `writeln!`.
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let mut out = BufWriter::new(stream.try_clone().context("duplicar o socket")?);
     write_line(&mut out, what)?;
     let mut input = BufReader::new(stream);
-    read_line(&mut input)?.context("a fila de transferencias nao respondeu")
+    read_line(&mut input)?.context("the transfer queue did not answer")
 }
 
 /// Sends one ask and does not wait to be told it worked.
@@ -121,7 +117,7 @@ pub fn tell(what: &Ask) -> Result<()> {
 pub fn tell_at(path: &Path, what: &Ask) -> Result<()> {
     let mut out = BufWriter::new(
         UnixStream::connect(path)
-            .with_context(|| format!("nao ha fila escutando em {}", path.display()))?,
+            .with_context(|| format!("there is no queue listening at {}", path.display()))?,
     );
     write_line(&mut out, what)
 }
@@ -142,7 +138,7 @@ pub fn watch(mut each: impl FnMut(Vec<Job>) -> bool) -> Result<()> {
             Ok(true) => return Ok(()),
             Ok(false) => {}
             Err(e) => {
-                tracing::debug!(error = %e, "a fila de transferencias caiu; tentando de novo")
+                tracing::debug!(error = %e, "the transfer queue went down; trying again")
             }
         }
         // A daemon that is down is not an emergency: the modeline simply has no
@@ -168,7 +164,7 @@ fn listen_once(path: &Path, each: &mut impl FnMut(Vec<Job>) -> bool) -> Result<b
             // Nothing else belongs on a watch stream. Saying so in the log is
             // what keeps a protocol drift from looking like "the panel stopped
             // updating".
-            other => tracing::warn!(?other, "resposta inesperada no fluxo de transferencias"),
+            other => tracing::warn!(?other, "an unexpected answer on the transfers stream"),
         }
     }
     Ok(false)
@@ -180,7 +176,7 @@ fn connect_or_start(path: &Path) -> Result<UnixStream> {
         return Ok(s);
     }
     let Some(daemon) = beside_me() else {
-        bail!("nao ha `ronoctua-transfers` ao lado deste binario");
+        bail!("there is no `ronoctua-transfers` beside this binary");
     };
     start(&daemon)?;
     let until = Instant::now() + PATIENCE;
@@ -189,7 +185,7 @@ fn connect_or_start(path: &Path) -> Result<UnixStream> {
             return Ok(s);
         }
         if Instant::now() >= until {
-            bail!("a fila de transferencias nao subiu em {PATIENCE:?}");
+            bail!("the transfer queue did not come up within {PATIENCE:?}");
         }
         std::thread::sleep(AGAIN);
     }
@@ -202,12 +198,12 @@ fn connect_or_start(path: &Path) -> Result<UnixStream> {
 /// it — which is the one thing the daemon exists to prevent.
 fn start(daemon: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt as _;
-    tracing::info!(daemon = %daemon.display(), "subindo a fila de transferencias");
+    tracing::info!(daemon = %daemon.display(), "bringing the transfer queue up");
     std::process::Command::new(daemon)
         .process_group(0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .spawn()
-        .with_context(|| format!("subir {}", daemon.display()))?;
+        .with_context(|| format!("start {}", daemon.display()))?;
     Ok(())
 }

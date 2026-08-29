@@ -85,10 +85,10 @@ pub struct DesktopEntry {
 #[must_use]
 pub fn directories() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let casa = std::env::var_os("XDG_DATA_HOME")
+    let home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
-    if let Some(c) = casa {
+    if let Some(c) = home {
         out.push(c.join("applications"));
     }
     // The spec's default when the variable does not exist. Without it, a session that
@@ -149,7 +149,7 @@ pub fn scan(language: &str) -> Vec<DesktopEntry> {
 }
 
 /// Gathers `dir`'s `.desktop` files, descending to [`DEPTH`].
-fn collect_from(dir: &Path, nivel: usize, out: &mut Vec<PathBuf>) {
+fn collect_from(dir: &Path, level: usize, out: &mut Vec<PathBuf>) {
     let Ok(items) = std::fs::read_dir(dir) else {
         // A directory that does not exist is the common case, not an error: `XDG_DATA_DIRS`
         // lists places not every system has.
@@ -158,8 +158,8 @@ fn collect_from(dir: &Path, nivel: usize, out: &mut Vec<PathBuf>) {
     for item in items.filter_map(Result::ok) {
         let p = item.path();
         if p.is_dir() {
-            if nivel + 1 < DEPTH {
-                collect_from(&p, nivel + 1, out);
+            if level + 1 < DEPTH {
+                collect_from(&p, level + 1, out);
             }
         } else if p.extension().is_some_and(|e| e == "desktop") {
             out.push(p);
@@ -302,14 +302,14 @@ mod tests {
     use std::path::PathBuf;
 
     /// Writes `.desktop` files into a temporary directory and scans.
-    fn with_it(arquivos: &[(&str, &str)]) -> Vec<DesktopEntry> {
+    fn with_it(files: &[(&str, &str)]) -> Vec<DesktopEntry> {
         let root = std::env::temp_dir().join(format!(
             "ronoctua-apps-teste-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
         ));
-        for (name, content) in arquivos {
+        for (name, content) in files {
             let target = root.join(name);
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent).expect("mkdir");
@@ -342,18 +342,18 @@ mod tests {
                 "[Desktop Entry]\nType=Link\nName=Z\nURL=http://x\n",
             ),
             (
-                "orfao.desktop",
-                "[Desktop Entry]\nType=Application\nName=W\nExec=w\nTryExec=/nao/existe/mesmo\n",
+                "orphan.desktop",
+                "[Desktop Entry]\nType=Application\nName=W\nExec=w\nTryExec=/does/not/exist/at-all\n",
             ),
             (
-                "sem-exec.desktop",
+                "no-exec.desktop",
                 "[Desktop Entry]\nType=Application\nName=V\n",
             ),
         ]);
         assert_eq!(
             r.len(),
             1,
-            "sobrou {:?}",
+            "{:?} was left over",
             r.iter().map(|e| &e.name).collect::<Vec<_>>()
         );
         assert_eq!(r[0].name, "Bom");
@@ -413,8 +413,8 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
         ));
-        let (meu, sistema) = (base.join("meu"), base.join("sistema"));
-        for (d, name) in [(&meu, "O Meu"), (&sistema, "O Do Sistema")] {
+        let (mine, system) = (base.join("mine"), base.join("system"));
+        for (d, name) in [(&mine, "O Meu"), (&system, "O Do Sistema")] {
             std::fs::create_dir_all(d).expect("mkdir");
             std::fs::write(
                 d.join("x.desktop"),
@@ -422,10 +422,10 @@ mod tests {
             )
             .expect("write");
         }
-        let dirs: Vec<PathBuf> = vec![meu, sistema];
+        let dirs: Vec<PathBuf> = vec![mine, system];
         let r = scan_in(&dirs, "pt_BR");
         std::fs::remove_dir_all(&base).ok();
-        assert_eq!(r.len(), 1, "o mesmo id nao pode aparecer duas vezes");
+        assert_eq!(r.len(), 1, "the same id cannot appear twice");
         assert_eq!(r[0].name, "O Meu");
     }
 
@@ -448,21 +448,21 @@ mod tests {
         let (program, args) = &r[0].command;
         assert!(
             std::path::Path::new(program).is_absolute(),
-            "`sh` ficou como nome cru: {program}"
+            "`sh` was left as a raw name: {program}"
         );
         assert!(
             program.ends_with("/sh"),
-            "resolveu para outra coisa: {program}"
+            "it resolved to something else: {program}"
         );
-        assert_eq!(args, &["-c", "oi"], "os argumentos nao podem mudar");
+        assert_eq!(args, &["-c", "oi"], "the arguments cannot change");
 
         // And what does NOT resolve stays as it is: making the application disappear would be
         // worse than letting it try and fail saying why.
         let r = with_it(&[(
             "b.desktop",
-            "[Desktop Entry]\nType=Application\nName=Fantasma\nExec=zzz-nao-existe-mesmo\n",
+            "[Desktop Entry]\nType=Application\nName=Ghost\nExec=zzz-really-does-not-exist\n",
         )]);
-        assert_eq!(r[0].command.0, "zzz-nao-existe-mesmo");
+        assert_eq!(r[0].command.0, "zzz-really-does-not-exist");
     }
 
     #[test]
