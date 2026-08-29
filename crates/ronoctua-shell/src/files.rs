@@ -1337,14 +1337,7 @@ impl Section {
         // takes what is left over; one ending a whole line or more above it
         // has something underneath.
         let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
-        #[allow(clippy::cast_precision_loss)]
-        let natural = band_top + self.lines as f32 * line_px;
-        let band_bottom = if bottom - natural < line_px {
-            bottom
-        } else {
-            natural
-        };
-        let band = (band_bottom - band_top).max(line_px);
+        let band = self.scroll().track(band_top, bottom, line_px);
         // AND THE THUMB ITSELF IS `ronoctua_design::Scroll`.
         //
         // Where it is drawn and where it is grabbed were two sums in this

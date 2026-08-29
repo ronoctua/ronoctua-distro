@@ -2233,8 +2233,13 @@ let
     # about which band may take the residue — with the reasoning beside it.
     allowed = {"chrome.rs"}
     wrong = []
+    # THE NAMES A TRACK OR AN EDGE GOES BY. `gap` and `track` are on the list
+    # because the footer's own bar used `let gap = grid.lines * line_height`
+    # and this check walked past it — the defect was in the shell for as long
+    # as the check that was meant to catch it.
     naming = re.compile(
-        r"\blet\s+(?:mut\s+)?(\w*(?:bottom|_px|edge|floor))\s*(?::[^=]*)?=\s*([^;]+);"
+        r"\blet\s+(?:mut\s+)?(\w*(?:bottom|_px|edge|floor|gap|track|band))\s*"
+        r"(?::[^=]*)?=\s*([^;]+);"
     )
     # TWO SEPARATE QUESTIONS, and not one regex spanning them. The first
     # draft tried to match the count and the multiplication in one pattern

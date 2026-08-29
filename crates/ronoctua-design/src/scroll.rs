@@ -49,6 +49,38 @@ impl Scroll {
         self.total > self.lines && self.lines > 0
     }
 
+    /// How long this band's track is.
+    ///
+    /// `band_top` is where the section starts and `surface_bottom` where the
+    /// SURFACE ends — the number the compositor gave, not a count of anything.
+    ///
+    /// # The residue, and who owns it
+    ///
+    /// A surface holds `floor(height / unit)` whole rows plus a leftover of
+    /// less than one. A track of `rows × unit` stops short by that leftover,
+    /// and so does the thumb at the last offset: the strip of background under
+    /// it is what the owner photographed twice.
+    ///
+    /// But only the LAST band in a column may take it. Handing every band the
+    /// surface's bottom was the first shape of that fix and it was too wide:
+    /// where a strip of panels sits below a listing, the listing's thumb ran
+    /// down into it.
+    ///
+    /// The leftover is under one unit by construction, so a band ending within
+    /// one unit of the surface is the last one and takes what is left; a band
+    /// ending a whole unit or more above it has something underneath.
+    #[must_use]
+    pub fn track(&self, band_top: f32, surface_bottom: f32, unit: f32) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let natural = band_top + self.lines as f32 * unit;
+        let bottom = if surface_bottom - natural < unit {
+            surface_bottom
+        } else {
+            natural
+        };
+        (bottom - band_top).max(unit)
+    }
+
     /// The thumb: how far down it starts and how long it is, in the track's
     /// own unit.
     ///
@@ -199,6 +231,32 @@ mod tests {
         let (from, tall) = s.thumb(track, unit).expect("the list is cut");
         assert!(tall >= unit - 0.001, "the thumb vanished: {tall}");
         assert!(from + tall <= track + 0.001, "the thumb left the track");
+    }
+
+    /// ONLY THE LAST BAND TAKES THE LEFTOVER.
+    #[test]
+    fn a_band_with_something_under_it_stops_where_its_rows_stop() {
+        let unit = 26.0f32;
+        let s = Scroll {
+            total: 80,
+            lines: 20,
+            offset: 0,
+            top: 0,
+        };
+        // A surface of 20 rows plus four tenths: this band is the last one, so
+        // the leftover is its.
+        let alone = s.track(0.0, 20.0 * unit + unit * 0.4, unit);
+        assert!(
+            (alone - (20.0 * unit + unit * 0.4)).abs() < 0.001,
+            "the last band did not take the leftover: {alone}"
+        );
+        // The same band with a strip of four rows under it: the track is its
+        // own rows and not one pixel more.
+        let above = s.track(0.0, 24.0 * unit + unit * 0.4, unit);
+        assert!(
+            (above - 20.0 * unit).abs() < 0.001,
+            "the band ran into what is under it: {above}"
+        );
     }
 
     /// AND A LIST THAT FITS HAS NO BAR AT ALL.

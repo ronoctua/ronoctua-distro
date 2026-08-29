@@ -6703,7 +6703,27 @@ impl Footer {
         let ceiling = self.expansion_ceiling();
         let total = self.expansion_len();
         let start = f64::from(self.first_of_expansion()) * line_height;
-        let gap = ceiling as f64 * line_height;
+        let bar = ronoctua_design::Scroll {
+            total,
+            lines: ceiling,
+            offset: 0,
+            top: 0,
+        };
+        // THE SAME TRACK THE THUMB WAS DRAWN IN, and by the same call.
+        //
+        // It was `ceiling * line_height` here and `grid.lines * line_height`
+        // where the thumb is painted — two answers to "how long is this
+        // track", which is how a bar comes to be grabbed where it is not
+        // drawn. `Scroll::track` is the one answer, and it is where the
+        // leftover under the last whole line gets an owner.
+        #[allow(clippy::cast_possible_truncation)]
+        let surface_bottom = self
+            .screens
+            .iter()
+            .find(|t| t.configured && t.height > 0)
+            .map_or(0.0, |t| t.height as f32);
+        #[allow(clippy::cast_possible_truncation)]
+        let gap = f64::from(bar.track(start as f32, surface_bottom, line_height as f32));
         if gap <= 0.0 {
             return;
         }
@@ -6713,12 +6733,6 @@ impl Footer {
         // the offsets are spread over `track - thumb`. Written this way the
         // bottom of the track was not the last page, and the pointer and the
         // thumb drifted apart as the list grew.
-        let bar = ronoctua_design::Scroll {
-            total,
-            lines: ceiling,
-            offset: 0,
-            top: 0,
-        };
         #[allow(clippy::cast_possible_truncation)]
         let at = (y - start) as f32;
         #[allow(clippy::cast_possible_truncation)]
@@ -6749,9 +6763,34 @@ impl Footer {
     fn drag_section_to(&mut self, pane: crate::files::Pane, y: f64) {
         let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
         let top = f64::from(self.first_of_expansion()) * line_height;
-        let tall = (line_height * self.grid().lines as f64).max(1.0);
         let rooms = self.files_rooms();
         let columns = self.screen_columns();
+        // THE SECTION'S OWN BAND, and not the region's height for all four.
+        //
+        // The window door had this defect and the owner watched it: given the
+        // whole surface, the listing's thumb ran down into the facts' box. The
+        // strip's rule is where the listing and the sidebar end; the panels
+        // down in the strip end at the surface. `Scroll::track` decides which,
+        // and it is the same call the thumb was drawn with.
+        #[allow(clippy::cast_precision_loss)]
+        let tall = {
+            let lines = match pane {
+                crate::files::Pane::Info => rooms.panel,
+                _ => rooms.list,
+            };
+            let bar = ronoctua_design::Scroll {
+                total: usize::MAX,
+                lines,
+                offset: 0,
+                top: 0,
+            };
+            let bottom = self
+                .screens
+                .iter()
+                .find(|t| t.configured && t.height > 0)
+                .map_or(0.0, |t| t.height as f32);
+            f64::from(bar.track(top as f32, bottom, line_height as f32)).max(1.0)
+        };
         if let Some(v) = self.files.as_mut()
             && v.drag_to(pane, (y - top) / tall, columns, rooms)
         {
@@ -8856,7 +8895,16 @@ impl Footer {
                 let lead = crate::chrome::FIELDS_LEAD;
                 // WHERE THE LISTING'S REGION ENDS: the strip's rule when the
                 // panels are down there, and the SURFACE'S bottom when they
-                // are not. Never a line count times a fractional line height.
+                // are not.
+                //
+                // A BOUNDARY AND AN EDGE ARE DIFFERENT QUESTIONS, and this is
+                // the boundary. The strip's rule sits ON a line, so the pixel
+                // it starts at is that line's — a count times a line height,
+                // and correct. What may never be written that way is an EDGE:
+                // the surface's bottom is `floor(height / line)` lines plus a
+                // leftover, and the product falls short of it. That is what
+                // `list_bottom` asks `bottom` for below, and what
+                // `ronoctua_design::Scroll::track` decides for every band.
                 #[allow(clippy::cast_precision_loss)]
                 let strip_top =
                     f32::from(first_of_expansion) * line_height + grid.lines as f32 * line_height;
@@ -8953,14 +9001,23 @@ impl Footer {
                 // `offset_at` is this call's inverse, and `drag_to` uses it —
                 // which is what makes where it is drawn where it is grabbed.
                 let start = f32::from(first_of_expansion) * line_height;
-                let gap = grid.lines as f32 * line_height;
                 let bar = ronoctua_design::Scroll {
                     total: expansion_total,
                     lines: grid.lines,
                     offset,
                     top: 0,
                 };
-                if let Some((from, tall)) = bar.thumb(gap, line_height) {
+                // AND THE TRACK ENDS AT THE SURFACE, by the same rule the
+                // manager's bands use.
+                //
+                // It was `grid.lines * line_height` — a count of rows times a
+                // fractional row height, which is the sentence every geometry
+                // defect in this project started as. The expansion is the LAST
+                // thing this surface draws, so the leftover under the last
+                // whole line is its, and the thumb reaches the bottom edge
+                // instead of stopping a fraction of a line above it.
+                let track = bar.track(start, bottom, line_height);
+                if let Some((from, tall)) = bar.thumb(track, line_height) {
                     let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
                     backgrounds.push(ronoctua_render::quad::Quad {
                         x: self.bar_x(f64::from(width)) as f32,
