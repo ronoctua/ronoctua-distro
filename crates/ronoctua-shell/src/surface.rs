@@ -6695,6 +6695,23 @@ impl Footer {
         ))
     }
 
+    /// The generic bar's THUMB, as a rectangle.
+    ///
+    /// The track says where the bar may be pressed; this says where the handle
+    /// is drawn. Both come out of the same [`ronoctua_design::Scroll`], which
+    /// is what stopped them being two arithmetics.
+    fn region_bar(&self, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
+        let (x, top, cell, _) = self.region_track(width, height)?;
+        let f = crate::chrome::Frame::of(
+            crate::chrome::Door::Footer,
+            width,
+            height,
+            self.first_of_expansion(),
+        );
+        self.region_scroll()
+            .bar(x + cell, top, f.bottom(), cell, f.line())
+    }
+
     /// The first configured screen's size, which is the one the pointer is on.
     fn pointer_screen(&self) -> Option<(f32, f32)> {
         #[allow(clippy::cast_precision_loss)]
@@ -9021,34 +9038,26 @@ impl Footer {
             // second-order information: it shows up for whoever went looking
             // for it with the mouse, and does not take screen from whoever did not.
             if bar_showing {
-                // THROUGH `ronoctua_design::Scroll`, which is the manager's own
-                // arithmetic and now this one's.
+                // ONE RECTANGLE, FROM `ronoctua_design::Scroll`.
                 //
-                // It used to be written out here, and wrongly in the same way
-                // the manager's was before it moved: the position was
-                // `offset / total` and the travel the WHOLE track, so the last
-                // page put the thumb's top at the bottom and, clamped, half way
-                // down. The owner reported that with the mouse in the manager;
-                // the other eight views had it too and nobody had dragged one.
+                // Everything about this bar used to be written out here, and
+                // wrongly in the same way the manager's was before it moved:
+                // the position was `offset / total` and the travel the WHOLE
+                // track, so the last page put the thumb's top at the bottom
+                // and, clamped, half way down. The owner reported that with
+                // the mouse in the manager; the other eight views had it too,
+                // and nobody had ever dragged one.
                 //
-                // `offset_at` is this call's inverse, and `drag_to` uses it —
-                // which is what makes where it is drawn where it is grabbed.
-                // THE SAME RECTANGLE THE POINTER IS TESTED AGAINST.
-                //
-                // `region_track` gives the column and the band; `Scroll` gives
-                // the thumb inside it. Painting from one arithmetic and
-                // grabbing by another is how this bar came to be draggable
-                // from the modeline's last cell, and how its thumb stopped a
-                // fraction of a line above the edge.
+                // The pointer test asks `region_track` and the drag asks
+                // `offset_at`, which is this call's inverse. Nine views, one
+                // rectangle; what still differs is how many bands a view has.
                 #[allow(clippy::cast_precision_loss)]
-                if let Some((bx, top, cell, track)) = self.region_track(width as f32, bottom)
-                    && let Some((from, tall)) = self.region_scroll().thumb(track, line_height)
-                {
+                if let Some((bx, by, bw, bh)) = self.region_bar(width as f32, bottom) {
                     backgrounds.push(ronoctua_render::quad::Quad {
                         x: bx,
-                        y: top + from,
-                        width: cell,
-                        height: tall,
+                        y: by,
+                        width: bw,
+                        height: bh,
                         color: tokens::color::RULE_STRONG,
                     });
                 }

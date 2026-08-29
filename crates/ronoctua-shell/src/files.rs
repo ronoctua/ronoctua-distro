@@ -1337,15 +1337,7 @@ impl Section {
         // takes what is left over; one ending a whole line or more above it
         // has something underneath.
         let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
-        let band = self.scroll().track(band_top, bottom, line_px);
-        // AND THE THUMB ITSELF IS `ronoctua_design::Scroll`.
-        //
-        // Where it is drawn and where it is grabbed were two sums in this
-        // shell, in three places, and the differences between them were the
-        // defects the owner reported with the mouse in his hand. There is one
-        // now, and it crosses to the buffers, which have lists too.
-        let (from, tall) = self.scroll().thumb(band, line_px)?;
-        Some((right - cell, band_top + from, cell, tall))
+        self.scroll().bar(right, band_top, bottom, cell, line_px)
     }
 
     /// This section as a list that may not fit.

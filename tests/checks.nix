@@ -2302,12 +2302,16 @@ let
   # with the mouse in each. `Section::bar_box` is the rectangle now: the painter
   # asks it and the pointer asks it.
   #
-  # AND THE OTHER EIGHT VIEWS TOO. The footer's generic bar is still a separate
-  # RECTANGLE — it belongs to the region, not to a section, and putting those
-  # eight views on sections is its own work — but it is no longer a separate
-  # ARITHMETIC: it asks `Scroll` for the thumb and `Scroll::offset_at` for the
-  # drag, which is where its own copy of the defect lived. It had the same one
-  # the manager was reported for, over eight views nobody had dragged.
+  # NINE VIEWS, ONE RECTANGLE. `ronoctua_design::Scroll::bar` is the only place
+  # a thumb's rectangle is worked out — `Section::bar_box` forwards to it and
+  # the footer calls it. What still differs between the views is how many BANDS
+  # each has, the manager four and everything else one, and that is a fact
+  # about the views rather than about the bar.
+  #
+  # The footer's own copy had the same defect the manager was reported for,
+  # over eight views nobody had ever dragged, plus one of its own: its column
+  # ran the whole height of the surface, so the modeline's last cell was a
+  # handle.
   one-scrollbar = mkCheck "one-scrollbar" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
@@ -2350,8 +2354,23 @@ let
         text = f.read_text()
         if "RULE_STRONG" not in text:
             continue
-        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbars\(", text):
+        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbars\(|\bregion_bar\b", text):
             wrong.append(f.name + " paints a thumb without asking `Scroll`")
+
+    # AND THE RECTANGLE ITSELF IS `Scroll::bar`'s.
+    #
+    # `thumb` gives a length and an offset INTO a track; turning those into a
+    # rectangle means deciding the column and the band again, and that decision
+    # is what differed between the copies. So outside the design crate nobody
+    # calls `thumb` — they call `bar`, which answers with the rectangle.
+    #
+    # The first draft looked for `right - cell` instead, and a plant that
+    # assembled the rectangle out of `thumb` by hand walked straight past it.
+    for f in sorted(home.glob("*.rs")):
+        text = f.read_text()
+        for m in re.finditer(r"\.thumb\(", text):
+            line = text.count("\n", 0, m.start()) + 1
+            wrong.append(f"{f.name}:{line} builds a bar out of `thumb` instead of asking `bar`")
 
     # AND THE TWO CANNOT DRAW AT ONCE: the footer's generic bar closes over
     # the manager being shut. Without this the manager gets two.
@@ -2372,7 +2391,7 @@ let
         print("       move in one door and refuse in the other. See", file=sys.stderr)
         print("       `files::Section::bar_box`.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: one rectangle for the manager's bar, and the generic one stands down")
+    print("OK: nine views, one rectangle, and the generic bar stands down for the manager")
     PY
   '';
 

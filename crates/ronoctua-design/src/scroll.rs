@@ -112,6 +112,37 @@ impl Scroll {
         Some((from, tall))
     }
 
+    /// The bar itself: where the thumb goes, as a rectangle.
+    ///
+    /// `right` is the pixel the band's LAST cell ends at — the bar is that
+    /// cell — and `surface_bottom` is where the surface ends, so [`Self::track`]
+    /// can decide whether this band owns the leftover.
+    ///
+    /// # Why the rectangle is here and not at the two callers
+    ///
+    /// Because there were two, and the difference between them was a defect
+    /// each time. The manager built one per section and the footer built one
+    /// for its region, and between them they managed: a thumb drawn where it
+    /// could not be grabbed, a thumb that ran into the box below its own
+    /// column, and a column so tall that pressing the modeline dragged a list.
+    ///
+    /// Nine views, one rectangle. What still differs between them is how many
+    /// bands they have — the manager four, everything else one — and that is a
+    /// fact about the views, not about the bar.
+    #[must_use]
+    pub fn bar(
+        &self,
+        right: f32,
+        band_top: f32,
+        surface_bottom: f32,
+        cell: f32,
+        unit: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let track = self.track(band_top, surface_bottom, unit);
+        let (from, tall) = self.thumb(track, unit)?;
+        Some((right - cell, band_top + from, cell, tall))
+    }
+
     /// Which offset a point in the track means.
     ///
     /// The inverse of [`Scroll::thumb`], and it has to be: where a bar is drawn
@@ -259,6 +290,32 @@ mod tests {
         );
     }
 
+    /// THE RECTANGLE IS THE THUMB, IN THE BAND'S LAST CELL.
+    #[test]
+    fn the_bar_is_one_cell_at_the_bands_right_edge() {
+        let (cell, unit) = (10.8f32, 26.1f32);
+        let s = Scroll {
+            total: 90,
+            lines: 10,
+            offset: 40,
+            top: 0,
+        };
+        let (x, y, w, h) = s
+            .bar(700.0, unit, 12.0 * unit + unit * 0.3, cell, unit)
+            .expect("ninety rows in ten do not fit");
+        assert!(
+            (x - (700.0 - cell)).abs() < 0.001,
+            "the bar is not the last cell"
+        );
+        assert!((w - cell).abs() < 0.001, "the bar is one cell wide");
+        assert!(y >= unit - 0.001, "the thumb rose out of its band");
+        let track = s.track(unit, 12.0 * unit + unit * 0.3, unit);
+        assert!(
+            y + h <= unit + track + 0.001,
+            "the thumb ran past its own track"
+        );
+    }
+
     /// AND A LIST THAT FITS HAS NO BAR AT ALL.
     #[test]
     fn a_whole_list_has_no_thumb() {
@@ -271,5 +328,6 @@ mod tests {
         assert!(!s.cut());
         assert_eq!(s.thumb(400.0, 26.0), None);
         assert!(!s.holds(10.0, 400.0, 26.0));
+        assert_eq!(s.bar(700.0, 0.0, 400.0, 10.8, 26.0), None);
     }
 }
