@@ -35,6 +35,19 @@ host = []
 # generated enum, and the conversion from the display list this crate builds to
 # the one the component returns.
 guest = [ "dep:wit-bindgen" ]
+# WHERE EACH COLOUR OF A LINE OF CODE BEGINS AND ENDS, for a buffer that shows
+# one.
+#
+# OFF BY DEFAULT, and the reason is measured rather than cautious. The buffers
+# are 79 to 100 KB of wasm — `ronoctua_buffer_format.wasm` is 100 627 bytes and
+# `ronoctua_buffer_memory.wasm` 93 570 — and the generated syntax table is some
+# 55 KB of Rust source: thirty-seven languages of sorted `&'static str`. A
+# buffer that does not colour code would grow by half its own size to carry a
+# table it never reads.
+#
+# What the feature buys, when a buffer does turn it on, is that the byte-to-cell
+# arithmetic lives HERE, once, instead of in each buffer that tried it.
+syntax = [ "dep:ronoctua-syntax" ]
 
 [dependencies]
 # THE SAME CRATE, COMPILED TWICE — not a host crate with a guest twin.
@@ -46,6 +59,10 @@ guest = [ "dep:wit-bindgen" ]
 # it here is what keeps the heading's arithmetic from having a second copy — and
 # a second copy is the whole defect this crate exists to close.
 ronoctua-protocol = { path = "../ronoctua-protocol" }
+
+# ONLY UNDER `syntax`. It is `no_std` with no dependencies of its own, so it
+# costs a buffer nothing but the table it asked for.
+ronoctua-syntax = { path = "../ronoctua-syntax", optional = true }
 
 # ONLY UNDER `guest`. See the `bindings` module in `lib.rs` for why the
 # generation lives in a library at all.

@@ -377,7 +377,7 @@ def main() -> int:
     args.out_wit.write_text("\n".join(W))
 
     print(
-        f"OK: {len(colors)} cores, {len(spaces)} espacamentos, "
+        f"OK: {len(colors)} colours, {len(spaces)} spacings, "
         f"{len(icons)} icons -> {args.out.name} and {args.out_wit.name}"
     )
     print("OK: no shadow/elevation token (invariant 15)")

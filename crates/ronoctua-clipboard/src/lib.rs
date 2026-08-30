@@ -18,7 +18,6 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod highlight;
 pub mod image;
 pub mod qr;
 pub mod queue;

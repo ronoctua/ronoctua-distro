@@ -44,6 +44,30 @@ impl Palette for Wit {
         }
     }
 
+    #[cfg(feature = "syntax")]
+    fn syntax(role: ronoctua_syntax::Role) -> Self::Color {
+        use ronoctua_syntax::Role as R;
+
+        // THE SAME TWELVE TOKENS AS `Tokens::syntax`, and the two tables are
+        // one file apart for exactly that reason: a role that named a
+        // different colour on the two sides would draw one thing in the
+        // renderer's own tests and another inside a component.
+        match role {
+            R::Comment => wit::Color::SyntaxComment,
+            R::String => wit::Color::SyntaxString,
+            R::Escape => wit::Color::SyntaxEscape,
+            R::Number | R::Constant => wit::Color::SyntaxNumber,
+            R::Keyword => wit::Color::SyntaxKeyword,
+            R::Type => wit::Color::SyntaxType,
+            R::Function => wit::Color::SyntaxFunction,
+            R::Attribute | R::Heading => wit::Color::SyntaxAttribute,
+            R::Property => wit::Color::SyntaxProperty,
+            R::Tag => wit::Color::SyntaxTag,
+            R::Added => wit::Color::SyntaxAdded,
+            R::Removed => wit::Color::SyntaxRemoved,
+        }
+    }
+
     fn glyph_name(icon: Self::Icon) -> String {
         // DIAGNOSTIC ONLY, and the doc on the trait says so: the enum has no
         // name at runtime, so this is the variant's `Debug` spelling. What
@@ -121,6 +145,15 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
                     color: P::color(run.role),
                     scale: scale(run.scale),
                     max_width: run.budget,
+                }),
+                #[cfg(feature = "syntax")]
+                Frame::Coded(line, column, text, role) => wit::Command::Text(wit::TextCommand {
+                    line,
+                    column,
+                    content: wit::Text::Data(text.into()),
+                    color: role.map_or_else(|| P::color(Role::Body), P::syntax),
+                    scale: wit::Scale::Normal,
+                    max_width: 0,
                 }),
                 Frame::Ruled(line) => wit::Command::Rule(wit::LineCommand {
                     line,

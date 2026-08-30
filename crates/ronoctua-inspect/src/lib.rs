@@ -35,6 +35,7 @@
 
 pub mod facts;
 pub mod pixels;
+pub mod text;
 pub mod tools;
 
 /// Pixels ready for the GPU, in **straight** (not premultiplied) RGBA8.
@@ -78,9 +79,30 @@ pub struct Rgba {
 /// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// Nothing in the table serves this type. A text file has no picture, and
-    /// saying so is a better answer than an empty rectangle.
-    NoPicture,
+    /// Nothing in the table serves this type AND there is no text in it
+    /// either — so there is nothing to show, and it says so.
+    ///
+    /// # It says exactly what a DIRECTORY says, and that is the point
+    ///
+    /// It used to say "there is no picture inside this kind of file", and the
+    /// owner reported it from the screen against a markdown file. The sentence
+    /// was wrong from inside: this panel is not an image panel, it is the
+    /// panel that shows what is in a file, and a preview that answers about
+    /// pictures is answering a question nobody asked. From where somebody is
+    /// looking, a folder and a `.zip` are the same fact — there is nothing to
+    /// show — and they now say the same thing.
+    Nothing,
+    /// It is typed as text and the bytes are not: a NUL byte, or a run that
+    /// is not UTF-8 and was not merely cut by the ceiling.
+    ///
+    /// The alternative was `from_utf8_lossy`, and it is worse: a panel of
+    /// replacement characters is a lie about the file, while this is the
+    /// truth about it.
+    NotText,
+    /// It is text and there is none of it.
+    Empty,
+    /// It could not be opened for reading — permission, most often.
+    Unreadable,
     /// The program this content needs is not named by the environment. Carries
     /// the VARIABLE, the way `ronoctua_files::act::Trouble::Missing` does —
     /// the name of the program comes out of it by [`tools::program_of`].
@@ -102,7 +124,10 @@ impl Refusal {
     #[must_use]
     pub const fn key(&self) -> &'static str {
         match self {
-            Self::NoPicture => key::PREVIEW_NONE,
+            Self::Nothing => key::NO_PREVIEW,
+            Self::NotText => key::PREVIEW_NOT_TEXT,
+            Self::Empty => key::PREVIEW_EMPTY,
+            Self::Unreadable => key::PREVIEW_UNREADABLE,
             Self::Missing(_) => key::PREVIEW_MISSING,
             Self::TooBig(_) => key::PREVIEW_TOO_BIG,
             Self::Failed => key::PREVIEW_FAILED,
@@ -114,7 +139,9 @@ impl Refusal {
     #[must_use]
     pub fn args(&self) -> Vec<(&'static str, String)> {
         match self {
-            Self::NoPicture | Self::Failed => Vec::new(),
+            Self::Nothing | Self::Failed | Self::NotText | Self::Empty | Self::Unreadable => {
+                Vec::new()
+            }
             Self::Missing(variable) => {
                 vec![("program", tools::program_of(variable))]
             }
@@ -293,8 +320,20 @@ impl Stamp {
 /// only already takes the build down; a key that is in NEITHER is what this
 /// module can currently produce, and it is the one hole worth naming out loud.
 pub mod key {
-    /// There is no picture in this kind of file.
-    pub const PREVIEW_NONE: &str = "files-preview-none";
+    /// There is nothing to show for this file.
+    ///
+    /// THE SAME KEY THE FILE MANAGER USES FOR A DIRECTORY, and that is
+    /// deliberate: a folder and a file with neither picture nor text are the
+    /// same fact from where somebody is looking. Two sentences for one fact is
+    /// what the old `files-preview-none` was, and it said "picture" in a panel
+    /// that shows content.
+    pub const NO_PREVIEW: &str = "files-no-preview";
+    /// It says it is text and the bytes are not.
+    pub const PREVIEW_NOT_TEXT: &str = "files-preview-not-text";
+    /// It is text and there is none of it.
+    pub const PREVIEW_EMPTY: &str = "files-preview-empty";
+    /// It could not be opened for reading.
+    pub const PREVIEW_UNREADABLE: &str = "files-preview-unreadable";
     /// `{ $program }` is not installed.
     pub const PREVIEW_MISSING: &str = "files-preview-missing";
     /// Past a ceiling; `{ $amount }` is what was measured.
@@ -371,8 +410,11 @@ pub mod key {
     pub const VALUE_PAGES: &str = "files-value-pages";
 
     /// Every key this crate can produce, for the check that keeps them honest.
-    pub const ALL: [&str; 36] = [
-        PREVIEW_NONE,
+    pub const ALL: [&str; 39] = [
+        NO_PREVIEW,
+        PREVIEW_NOT_TEXT,
+        PREVIEW_EMPTY,
+        PREVIEW_UNREADABLE,
         PREVIEW_MISSING,
         PREVIEW_TOO_BIG,
         PREVIEW_FAILED,
@@ -421,7 +463,10 @@ mod tests {
         // list is written out rather than derived so a NEW variant fails here
         // instead of silently arriving keyless.
         let all = [
-            Refusal::NoPicture,
+            Refusal::Nothing,
+            Refusal::NotText,
+            Refusal::Empty,
+            Refusal::Unreadable,
             Refusal::Missing("RONOCTUA_FFMPEG"),
             Refusal::TooBig(20_000_001),
             Refusal::Failed,
@@ -501,7 +546,7 @@ mod tests {
 
     #[test]
     fn a_refusal_is_not_a_blank() {
-        let m = Made::refused(Refusal::NoPicture);
+        let m = Made::refused(Refusal::Nothing);
         assert!(!m.drawable());
         assert!(m.why.is_some(), "a refusal with no reason is a blank panel");
     }

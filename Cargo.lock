@@ -2582,6 +2582,7 @@ name = "ronoctua-design"
 version = "0.1.0"
 dependencies = [
  "ronoctua-protocol",
+ "ronoctua-syntax",
  "wit-bindgen",
 ]
 
@@ -2624,6 +2625,7 @@ dependencies = [
  "image",
  "resvg",
  "ronoctua-files",
+ "ronoctua-syntax",
  "rustix 1.1.4",
  "serde_json",
  "tracing",
@@ -2758,6 +2760,7 @@ dependencies = [
  "ronoctua-protocol",
  "ronoctua-render",
  "ronoctua-runtime",
+ "ronoctua-syntax",
  "ronoctua-term",
  "ronoctua-tokens",
  "ronoctua-transfers",
@@ -2769,6 +2772,10 @@ dependencies = [
  "wayland-protocols-wlr",
  "wgpu",
 ]
+
+[[package]]
+name = "ronoctua-syntax"
+version = "0.1.0"
 
 [[package]]
 name = "ronoctua-term"

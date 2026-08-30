@@ -203,6 +203,28 @@ pub fn elide_end(s: &str, max: u16) -> String {
     out
 }
 
+/// The window of `max` cells starting at cell `from`.
+///
+/// # Why this is not `&s[from..from + max]`
+///
+/// Because those are BYTES, and this counts CLUSTERS — the same ruler
+/// [`width`] and [`elide_end`] use. Cutting by byte lands inside a character
+/// and invents a drawing; cutting by codepoint splits a cluster and invents a
+/// different one, which is the trap `CLAUDE.md` records about eliding.
+///
+/// What it is for: a preview panel is twenty-four cells at its floor and a
+/// line of code is not, so the panel shows a window onto the line and the
+/// owner moves it sideways. Everything from `from` on is taken, up to `max`
+/// cells; nothing is added and nothing is marked, because the bar and the hint
+/// line are what say there is more.
+#[must_use]
+pub fn window(s: &str, from: u16, max: u16) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    units(s).skip(from as usize).take(max as usize).collect()
+}
+
 /// Resolves the modeline's layout.
 ///
 /// # The rule (section 7.3 of the plan)

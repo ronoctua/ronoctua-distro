@@ -55,6 +55,7 @@
   # The notification catalogue, for the two checks that read it: the table's
   # own shape, and the text keys it demands of both languages.
   notificationsRs,
+  syntaxTable,
   mimeDb,
   niriActions,
   # The C border in front of libtorrent, which carries the `sizeof` table the
@@ -2393,6 +2394,283 @@ let
         raise SystemExit(1)
     print("OK: nine views, one rectangle, and the generic bar stands down for the manager")
     PY
+  '';
+
+  # THE SYNTAX TABLE CAME OUT WHOLE, and its two vocabularies agree.
+  #
+  # The generator carries its own copies of `kind`, `numbers` and `property`,
+  # and the Rust it emits carries the enums. A value renamed on one side and
+  # not the other is not a compile error — the generator would emit
+  # `Kind::Whatever` and the build would fail somewhere else entirely — so the
+  # two lists are compared here, which is the shape `notifications-table-generated`
+  # already uses for the same reason.
+  syntax-table-generated = mkCheck "syntax-table-generated" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    made = pathlib.Path("${syntaxTable.table}/syntax.rs").read_text()
+    gen = pathlib.Path("${self}/nix/scripts/gen-syntax.py").read_text()
+
+    failed = 0
+
+    def enum_of(name):
+        block = re.search(r"pub enum " + name + r" \{(.*?)\n\}", made, re.S)
+        if not block:
+            print(f"ERROR: the generated table has no `{name}` enum", file=sys.stderr)
+            raise SystemExit(1)
+        return {v for v in re.findall(r"^    ([A-Z][A-Za-z0-9]*),$", block.group(1), re.M)}
+
+    def tuple_of(name):
+        m = re.search(name + r" = \(([^)]*)\)", gen)
+        if not m:
+            print(f"ERROR: the generator has no `{name}` vocabulary", file=sys.stderr)
+            raise SystemExit(1)
+        return {w.strip().strip('"') for w in m.group(1).split(",") if w.strip()}
+
+    def variant(v):
+        return "".join(p.capitalize() for p in v.split("-"))
+
+    # THE TWO VOCABULARIES, compared. A value invented on one side only.
+    for rust, python in (("Kind", "KINDS"), ("Numbers", "NUMBERS"),
+                         ("Property", "PROPERTIES"), ("SniffShape", "SNIFF_SHAPES")):
+        theirs = {variant(v) for v in tuple_of(python)}
+        ours = enum_of(rust)
+        if theirs != ours:
+            print(
+                f"ERROR: `{python}` in the generator and `{rust}` in the table disagree.\n"
+                f"       only in the generator: {sorted(theirs - ours)}\n"
+                f"       only in the table:     {sorted(ours - theirs)}",
+                file=sys.stderr,
+            )
+            failed = 1
+
+    # AND THE INDEXES ARE SORTED, which is what `binary_search` needs and what
+    # a generator that stopped sorting would break in silence.
+    for name in ("OF_MIME", "OF_TAG", "OF_SHEBANG"):
+        rows = re.findall(r'^    \("([^"]+)", Language::', made, re.M)
+        block = re.search(r"pub static " + name + r": \[.*?\] = \[(.*?)\n\];", made, re.S)
+        if not block:
+            print(f"ERROR: the table has no `{name}`", file=sys.stderr)
+            failed = 1
+            continue
+        keys = re.findall(r'\("([^"]+)",', block.group(1))
+        if not keys:
+            print(f"ERROR: `{name}` is empty", file=sys.stderr)
+            failed = 1
+            continue
+        if keys != sorted(keys):
+            print(f"ERROR: `{name}` is not sorted; `binary_search` will miss", file=sys.stderr)
+            failed = 1
+        del rows
+
+    if failed:
+        raise SystemExit(1)
+    print("OK: the syntax table and its generator agree, and the indexes are sorted")
+    END
+  '';
+
+  # AND THE GENERATOR REFUSES, for the RIGHT reasons.
+  #
+  # It does not re-run anything: `nix/syntax.nix` builds a fixture in which one
+  # language steals another's MIME type and another claims prose, records what
+  # the generator said, and this reads it. Both sentences are demanded rather
+  # than a non-zero exit, because a refusal for the WRONG reason is a refusal
+  # that will not survive the next edit — the argument `updates-refusal-refuses`
+  # makes one screen up.
+  syntax-refusal-refuses = mkCheck "syntax-refusal-refuses" [ ] ''
+    said=${syntaxTable.negativeFixture}/out_text.txt
+    test -f "$said" || {
+      echo "ERROR: the negative fixture recorded nothing" >&2
+      exit 1
+    }
+    failed=0
+    for owed in "application/json" "fixture-steals-json" "text/plain" "fixture-claims-prose"; do
+      grep -q "$owed" "$said" || {
+        echo "ERROR: the refusal does not name \"$owed\"" >&2
+        failed=1
+      }
+    done
+    if [ "$failed" != 0 ]; then
+      echo "" >&2
+      echo "It refused, and not for the reasons the fixture planted. A guard that" >&2
+      echo "refuses for the wrong reason is a guard that will not survive an edit." >&2
+      exit 1
+    fi
+    echo "OK: the generator refused, and named both defects"
+  '';
+
+  # AND NO LANGUAGE CLAIMS PROSE.
+  #
+  # THE ONE VIOLATION THAT WOULD NOT FAIL LOUDLY. Everything else on this list
+  # breaks a build or draws the wrong colour; this one would quietly colour
+  # every essay, log and README on the machine — and that looks like a feature
+  # rather than a defect, which is why nobody would report it.
+  #
+  # The floor is the other half: without it the check passes on a file somebody
+  # emptied.
+  syntax-claims-no-prose = mkCheck "syntax-claims-no-prose" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${self}/assets/syntax.nix").read_text()
+    # The comments explain the rule and name the types; the DECLARATIONS are
+    # what may not carry them.
+    live = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+
+    failed = 0
+    for forbidden in ("text/plain", "application/octet-stream", "inode/"):
+        if forbidden in live:
+            print(
+                f"ERROR: assets/syntax.nix claims `{forbidden}`. That is prose or a\n"
+                "       container, and colouring prose is worse than not colouring it —\n"
+                "       whoever reads starts looking for meaning in a colour that means nothing.",
+                file=sys.stderr,
+            )
+            failed = 1
+
+    # AND IT STILL CLAIMS SOMETHING. Without this the check passes on a file
+    # that was emptied, which is the shape `gen-mimedb.py`'s floors refuse.
+    claims = len(re.findall(r"^\s*mime = \[", live, re.M))
+    if claims < 30:
+        print(
+            f"ERROR: only {claims} language(s) declare a `mime` list, below the floor of 30.\n"
+            "       A check that forbids and never confirms passes on an empty file.",
+            file=sys.stderr,
+        )
+        failed = 1
+
+    if failed:
+        raise SystemExit(1)
+    print(f"OK: {claims} languages claim a type, and none of them is prose")
+    END
+  '';
+
+  # AND A SYNTAX ROLE BECOMES A COLOUR IN EXACTLY ONE PLACE.
+  #
+  # Two copies would be the clipboard's preview and the file manager's preview
+  # colouring the same Rust differently — the two-answers defect `Section` and
+  # `Field::covers` were each written to end. And every arm has to name a
+  # TOKEN: a literal colour here would be invariant 9 broken in the one file
+  # allowed to make a visual decision.
+  syntax-colours-are-tokens = mkCheck "syntax-colours-are-tokens" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
+    mine = "chrome.rs"
+    failed = 0
+
+    src = (home / mine).read_text()
+    block = re.search(r"pub\(crate\) const fn syntax_color\(.*?\n\}", src, re.S)
+    if not block:
+        print(
+            "ERROR: `chrome::syntax_color` is gone. A check that only forbids passes\n"
+            "       on the day somebody deletes the function and goes back to hand.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    body = block.group(0)
+
+    # EVERY ARM NAMES A TOKEN, and none of them a value.
+    arms = re.findall(r"Role::(\w+)", body)
+    if not arms:
+        print("ERROR: no `Role::` arm in the map — did the shape change?", file=sys.stderr)
+        raise SystemExit(1)
+    for line in body.splitlines():
+        if "=>" not in line or "Role::" not in line:
+            continue
+        if "tokens::color::SYNTAX_" not in line:
+            print(f"ERROR: this arm does not name a syntax token: {line.strip()!r}", file=sys.stderr)
+            failed = 1
+
+    # AND IT IS THE ONLY MAP. Anywhere else that matches on a role is a second
+    # answer waiting to disagree.
+    for f in sorted(home.glob("*.rs")):
+        if f.name == mine:
+            continue
+        text = f.read_text()
+        text = re.sub(r"//[^\n]*", "", text)
+        if re.search(r"Role::\w+\s*=>", text):
+            print(
+                f"ERROR: {f.name} turns a syntax role into something itself.\n"
+                "       Call `chrome::syntax_color`; two maps is the two panels colouring\n"
+                "       the same code differently.",
+                file=sys.stderr,
+            )
+            failed = 1
+
+    # AND EVERY ROLE THE CRATE DECLARES HAS AN ARM.
+    crate = pathlib.Path("${self}/crates/ronoctua-syntax/src/lib.rs").read_text()
+    declared = re.search(r"pub enum Role \{(.*?)\n\}", crate, re.S)
+    if not declared:
+        print("ERROR: `ronoctua-syntax` has no `Role` enum", file=sys.stderr)
+        raise SystemExit(1)
+    owed = set(re.findall(r"^    ([A-Z]\w*),$", declared.group(1), re.M))
+    missing = owed - set(arms)
+    if missing:
+        print(f"ERROR: no colour for {sorted(missing)}", file=sys.stderr)
+        failed = 1
+
+    if failed:
+        raise SystemExit(1)
+    print(f"OK: {len(owed)} roles, one map, every arm a token")
+    END
+  '';
+
+  # AND THERE IS ONE HIGHLIGHTER.
+  #
+  # It used to be a module of `ronoctua-clipboard`, which never used it — only
+  # the shell did — so it was a highlighter belonging to one app, and a
+  # highlighter belonging to one app is a highlighter the next app copies.
+  # Without this, the day somebody writes a second tokeniser inside the file
+  # manager nothing says so.
+  #
+  # The positive half matters as much: forbidding without confirming passes on
+  # the day both are deleted.
+  syntax-has-one-owner = mkCheck "syntax-has-one-owner" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    root = pathlib.Path("${self}")
+    mine = root / "crates/ronoctua-syntax/src"
+    failed = 0
+
+    if not (mine / "lib.rs").exists():
+        print("ERROR: `crates/ronoctua-syntax` is gone", file=sys.stderr)
+        raise SystemExit(1)
+    owner = (mine / "lib.rs").read_text()
+    for owed in ("pub enum Role", "pub fn line_into(", "pub fn states(", "pub fn of_mime("):
+        if owed not in owner:
+            print(f"ERROR: the crate no longer offers `{owed}`", file=sys.stderr)
+            failed = 1
+
+    if (root / "crates/ronoctua-clipboard/src/highlight.rs").exists():
+        print(
+            "ERROR: the clipboard's own highlighter is back. It belongs to no app:\n"
+            "       `ronoctua-clipboard` never used it, and a highlighter inside one\n"
+            "       app is the one the next app copies.",
+            file=sys.stderr,
+        )
+        failed = 1
+
+    # A SECOND TOKENISER ANYWHERE, by the shape of its own vocabulary.
+    for f in sorted(root.glob("crates/*/src/**/*.rs")):
+        if mine in f.parents or f.parent == mine:
+            continue
+        text = f.read_text()
+        m = re.search(r"pub enum Role \{(.*?)\n\}", text, re.S)
+        if m and "Comment" in m.group(1) and "String" in m.group(1):
+            print(
+                f"ERROR: {f.relative_to(root)} declares a second syntax `Role`.\n"
+                "       There is one highlighter, and it is `ronoctua-syntax`.",
+                file=sys.stderr,
+            )
+            failed = 1
+
+    if failed:
+        raise SystemExit(1)
+    print("OK: one highlighter, and it is still a crate of its own")
+    END
   '';
 
   separators-come-from-chrome = mkCheck "separators-come-from-chrome" [ pkgs.python3 ] ''
@@ -7478,6 +7756,11 @@ let
       design-constants-match-tokens
       buffers-use-the-design-crate
       separators-come-from-chrome
+      syntax-table-generated
+      syntax-refusal-refuses
+      syntax-claims-no-prose
+      syntax-colours-are-tokens
+      syntax-has-one-owner
       sections-do-not-share-a-line
       one-offset-per-list
       every-list-can-be-dragged
@@ -7970,6 +8253,11 @@ let
       design-constants-match-tokens
       buffers-use-the-design-crate
       separators-come-from-chrome
+      syntax-table-generated
+      syntax-refusal-refuses
+      syntax-claims-no-prose
+      syntax-colours-are-tokens
+      syntax-has-one-owner
       sections-do-not-share-a-line
       one-offset-per-list
       every-list-can-be-dragged

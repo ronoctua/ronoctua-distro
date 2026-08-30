@@ -30,6 +30,13 @@ publish.workspace = true
 # `ronoctua-files-root` gains nothing from this line, which is the whole reason
 # the two crates are separate.
 ronoctua-files = { path = "../ronoctua-files" }
+
+# WHERE EACH COLOUR OF A LINE BEGINS AND ENDS.
+#
+# It is `no_std`, has no dependencies of its own, and is the same crate the
+# shell's clipboard preview reads — so a `.rs` is coloured the same way whether
+# it was copied or is being looked at in the file manager.
+ronoctua-syntax = { path = "../ronoctua-syntax" }
 tracing.workspace = true
 # ffprobe, exiftool and pdfinfo all answer in JSON. The parsers here take a
 # `&str` and give back facts, so a fixture in a test is worth more than an

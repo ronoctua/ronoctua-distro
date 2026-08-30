@@ -13,6 +13,15 @@
 # without that check the 75 MiB would come back the first time somebody reached
 # for the library instead of the table.
 #
+# AND IT PUBLISHES WHAT IT READ, in `types.json`
+# ----------------------------------------------
+# `assets/syntax.nix` claims MIME types, and its generator has to refuse one the
+# database does not have. Letting it read `share/mime` for itself would put the
+# pinned version in two files, and the second is the one that goes stale — the
+# very argument the paragraph below makes about the version. So this derivation
+# stays the only reader and writes down the type list, the aliases and the
+# subclass pairs beside the Rust.
+
 # THE VERSION IS WRITTEN BY HAND, on purpose
 # ------------------------------------------
 # Same argument as `nix/lucidegen.nix`: a version that FOLLOWS the package lets
@@ -54,6 +63,7 @@ let
         --glyphs ${tableJson} \
         --icons ${glyphdb.db}/icons.json \
         --out $out/mimedb.rs \
+        --out-types $out/types.json \
         --version ${version}
       runHook postBuild
     '';

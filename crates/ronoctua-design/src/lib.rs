@@ -284,6 +284,22 @@ pub trait Palette {
     /// The token that plays this part.
     fn color(role: Role) -> Self::Color;
 
+    /// The token that colours a piece of CODE.
+    ///
+    /// # Why this is a second method and not seven more roles
+    ///
+    /// Because [`Role`] is the vocabulary of LAYOUT — what part of the screen
+    /// a run plays — and its own documentation says an eighth part is a
+    /// decision rather than an argument. A comment and a keyword are not parts
+    /// of a screen; they are what a CHARACTER is, which is a second axis. One
+    /// enum for where a thing sits and one for what it is keeps both closed.
+    ///
+    /// Fourteen roles reach twelve tokens: `Constant` shares `number` and
+    /// `Heading` shares `attribute`, for the reason [`Tokens::color`] gives
+    /// about `Quiet` and `Dim` a few lines down.
+    #[cfg(feature = "syntax")]
+    fn syntax(role: ronoctua_syntax::Role) -> Self::Color;
+
     /// The glyph's name, **for a message somebody has to act on**.
     ///
     /// On the host it is the token's own name and
@@ -325,6 +341,31 @@ impl Palette for Tokens {
             Role::Accent => "state-accent",
             Role::Rule => "rule-default",
             Role::Band => "surface-selection",
+        })
+    }
+
+    #[cfg(feature = "syntax")]
+    fn syntax(role: ronoctua_syntax::Role) -> Self::Color {
+        use ronoctua_syntax::Role as R;
+
+        ronoctua_protocol::Color::name(match role {
+            R::Comment => "syntax-comment",
+            R::String => "syntax-string",
+            R::Escape => "syntax-escape",
+            // TWO ROLES ON ONE TOKEN, and they stay two: a literal `null` and
+            // a literal `42` are the same kind of thing today, and the day the
+            // theme parts them the change is this line and no other.
+            R::Number | R::Constant => "syntax-number",
+            R::Keyword => "syntax-keyword",
+            R::Type => "syntax-type",
+            R::Function => "syntax-function",
+            // The same again: both are a marker ABOUT a block rather than the
+            // block — an attribute over a struct, a heading over a paragraph.
+            R::Attribute | R::Heading => "syntax-attribute",
+            R::Property => "syntax-property",
+            R::Tag => "syntax-tag",
+            R::Added => "syntax-added",
+            R::Removed => "syntax-removed",
         })
     }
 

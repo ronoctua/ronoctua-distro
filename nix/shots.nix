@@ -24,6 +24,51 @@ let
   typography = import ../assets/tokens/typography.nix;
   linePx = builtins.ceil (typography.size.base * typography.lineHeight);
   footerPx = linePx * 2;
+
+  # A SYNTAX COLOUR, AS THE TOKEN FILE WRITES IT.
+  #
+  # Read here rather than typed into the test script, and that is what makes
+  # the measurement below worth taking: it ties the photograph to
+  # `assets/tokens/colors.nix`. A colour hard-coded in Rust, or a role-to-token
+  # map that lost an arm, fails in this build instead of on the owner's screen
+  # — and changing the theme moves the assertion with it rather than breaking
+  # it (invariant 9, reaching a screenshot).
+  #
+  # `0xRRGGBBAA` becomes `RRGGBB`: the alpha is always opaque here, and
+  # ImageMagick wants six digits.
+  colours = (import ../assets/tokens/colors.nix).syntax;
+  colourOf = name: builtins.substring 2 6 colours.${name};
+
+  # THE FILE THE PREVIEW IS PHOTOGRAPHED SHOWING.
+  #
+  # A `.nix` because it is what this repository is made of, because the type is
+  # one we invent ourselves in `mime-glyphs.nix` — so the shot proves that path
+  # too — and because a dozen lines of it reach five of the twelve syntax
+  # tokens: a comment, a string, a number, a keyword and a property.
+  #
+  # It is a store file rather than a heredoc in the test script for the reason
+  # written at the copy below.
+  sampleCode = pkgs.writeText "sample.nix" (
+    builtins.concatStringsSep "\n" [
+      "# a comment, which is the one colour that recedes"
+      "{ pkgs, lib, ... }:"
+      "let"
+      "  name = \"ronoctua\";"
+      "  size = 42;"
+      "  deep = { a = { b = [ 1 2 3 ]; }; };"
+      "in"
+      "{"
+      "  enable = true;"
+      "  packages = with pkgs; [ git ripgrep fd ];"
+      "  imports = [ ./base.nix ./desktop.nix ];"
+      "  settings = {"
+      "    theme = \"tokyo-night\";"
+      "    lines = 12;"
+      "  };"
+      "}"
+      ""
+    ]
+  );
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-shots";
@@ -100,6 +145,47 @@ pkgs.testers.runNixOSTest {
         )
         machine.copy_from_vm(f"/tmp/{name}.png", "")
         print(f"took {name}")
+
+
+    def crop(box):
+        """Cuts `box` out of the last screenshot, for measuring."""
+        machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} +repage "
+            "/tmp/measured.png"
+        )
+
+
+    def has_colour(hex_value, at_least=1):
+        """How many pixels of `/tmp/measured.png` are that colour.
+
+        A LOOSE MATCH on purpose: the surface is drawn through wgpu and the
+        text through a shaper, so a glyph's interior is the token's colour and
+        its edges are blends of it. Twelve per cent is wide enough to catch the
+        body of a letter and narrow enough that green does not answer for
+        purple — the two furthest apart in this palette are `syntax.string`
+        and `syntax.keyword`, and they differ by far more than that.
+        """
+        n = int(
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/measured.png -fuzz 12% "
+                f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
+                f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
+            ).strip()
+        )
+        assert n >= at_least, (
+            f"{hex_value} covers {n} pixel(s) of the panel, and {at_least} were owed"
+        )
+        return n
+
+
+    def rows_with_ink(box):
+        """How many rows of pixels in `box` have anything drawn on them."""
+        crop(box)
+        out = machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/measured.png -resize 1x! "
+            "-threshold 6% -format '%[fx:int(mean*h+0.5)]' info:"
+        )
+        return int(out.strip())
 
 
     machine.start()
@@ -421,6 +507,98 @@ pkgs.testers.runNixOSTest {
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
         machine.sleep(2)
         shot("18-window-listing-scrolled-to-the-end")
+
+        # AND A FILE OF LETTERS, WITH ITS OWN CONTENT IN THE PANEL.
+        #
+        # THE DEFECT THIS IS THE PICTURE OF: the owner selected a markdown
+        # file and the preview said "there is no picture inside this kind of
+        # file". The panel is not an image panel — it answers what is IN a
+        # file — and every one of the eighteen shots above photographed it
+        # with a picture or with nothing, so the sentence was on his screen and
+        # in none of ours.
+        #
+        # A `.nix` on purpose: it is the file this repository is made of, the
+        # type is one we invent ourselves in `mime-glyphs.nix`, and its
+        # highlight uses four of the twelve tokens in one screenful.
+        machine.succeed("mkdir -p /root/shots/code")
+        # FROM THE STORE, and not from a heredoc written here.
+        #
+        # A heredoc would be a shell string inside a Python string inside this
+        # Nix fence, and CLAUDE.md names that trap in as many words: inside the
+        # fence a Nix interpolation is live even in a comment, a backtick is
+        # command substitution, and the fence itself closes on two apostrophes
+        # wherever they appear. Writing this very comment closed it once. A
+        # file the store already holds has none of those levels.
+        machine.succeed("cp ${sampleCode} /root/shots/code/sample.nix")
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+        machine.sleep(1)
+        control("files-window")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | tail -40"
+            " | grep -q 'br.ronoctua.files'",
+            timeout=60,
+        )
+        machine.sleep(3)
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'shots'"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(1)
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'code'"
+        )
+        machine.sleep(1)
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        machine.sleep(2)
+        shot("19-preview-of-a-file-of-text")
+
+        # AND IT IS MEASURED, because a picture nobody reads is not proof.
+        #
+        # The panels sit in the right-hand half of the window from
+        # `space.files.panelsFrom` on, and the preview is the left of the two.
+        w_t, h_t, x_t, y_t = niri_geometry()
+        panel = f"{w_t // 4}x{h_t - 4 * LINE}+{w_t // 2}+{2 * LINE}"
+
+        # ONE: THERE IS CONTENT, and not a sentence. A refused panel draws one
+        # dim line; planting `Refusal::NoPicture` back brings this to 1.
+        drawn = rows_with_ink(panel)
+        assert drawn >= 3, (
+            f"the preview drew ink on {drawn} row(s) of pixels — a file of "
+            "letters came out as a sentence again"
+        )
+
+        # TWO: THE HIGHLIGHT IS REAL, AND IT IS THE TOKENS'.
+        #
+        # This is the sharpest measurement available here, because it ties the
+        # photograph to `assets/tokens/colors.nix`: a colour written into Rust
+        # by hand, or a role-to-token map that lost an arm, fails HERE and not
+        # on the owner's screen. The two asked for are the two furthest apart
+        # in the palette — a string's green and a keyword's purple.
+        crop(panel)
+        has_colour("#${colourOf "string"}", at_least=20)
+        has_colour("#${colourOf "keyword"}", at_least=20)
+
+        # AND IT SCROLLS. `C-,` pages the preview and the bar follows.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+comma")
+        machine.sleep(2)
+        shot("20-preview-of-text-paged")
+
+        # AND IT IS MEASURED TOO: the panel's own pixels changed. Restoring
+        # `total: 1` leaves the key with nothing to move and this fails.
+        machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+            f"{panel} +repage /tmp/after.png"
+        )
+        same = machine.succeed(
+            "${pkgs.imagemagick}/bin/magick compare -metric AE /tmp/measured.png "
+            "/tmp/after.png null: 2>&1 || true"
+        ).strip()
+        assert same not in ("0", "0 (0)"), (
+            "the preview drew exactly the same pixels after the page key — "
+            "it did not scroll"
+        )
+
         # AND IT GOES, or it stands in front of every shot after it. The bracket
         # keeps the pattern from matching the `pkill` that carries it —
         # `CLAUDE.md` names that one.

@@ -1077,6 +1077,7 @@ files-hint-more = · { $columns } mostra permissões, dono e grupo · { $facts }
 # things. BOTH keys are named, because somebody told only about the way forward
 # has to guess that there is a way back.
 files-hint-panes = · { $next } vai para a próxima seção, { $back } para a anterior
+files-hint-preview = · na prévia, { $page } vira a página e { $left } { $right } movem a linha para os lados
 # WHAT THE PREVIEW SAYS WHEN THERE IS NO PICTURE. Not a refusal — those come
 # from `ronoctua-inspect` and win when there is one — but the answer for a
 # directory, a broken link, and a file nothing has been asked about. It used to
@@ -1086,6 +1087,8 @@ files-no-preview = sem prévia
 # AND WHAT THE FACTS KEY SAYS WHEN THERE IS NOTHING TO SCROLL. From the
 # outside, a key that refuses and a key that is dead look the same.
 files-facts-all-shown = todos os fatos já estão à vista
+files-preview-all-shown = a prévia inteira já está à vista
+files-preview-cut = só as primeiras { $lines } linhas estão aqui — o arquivo continua
 files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
 files-yes = sim, aplicar
 files-no = não, deixar como está
@@ -1127,7 +1130,7 @@ files-nothing-here = esta pasta está vazia
 #
 # As cinco primeiras sao ids de `OF_THE_VIEW` e de `menu.rs`; o
 # `files-actions-have-text` as cobra a partir do id, sozinho.
-files-preview = mostrar ou esconder a previa
+files-preview = mostrar ou esconder a prévia
 files-facts = mostrar ou esconder os fatos
 files-facts-scroll = virar para a proxima pagina de fatos
 files-columns = mostrar ou esconder as permissoes, o dono e o grupo
@@ -1315,10 +1318,19 @@ files-no-trash = não sei onde fica a lixeira; nada foi movido
 # arrives as DATA — what is written here is only the words around it.
 # ===================================================================
 
-# WHY THERE IS NO PICTURE. Drawn where the picture would be, centred under the
-# type's glyph, so each one has to say whether there is anything to be done
-# about it: "it failed" is not an answer, it is the absence of one.
-files-preview-none = este tipo de arquivo não tem imagem dentro
+# WHY THERE IS NOTHING TO SHOW. Drawn where the content would be, centred, so
+# each one has to say whether there is anything to be done about it: "it
+# failed" is not an answer, it is the absence of one.
+#
+# THE PANEL IS NOT AN IMAGE PANEL, and the sentence that said so is gone. It
+# used to answer a markdown file with "there is no picture inside this kind of
+# file", which is a true statement about a question nobody asked — the panel
+# shows what is IN a file, and a file of letters is full of content. What is
+# left here is a file that has neither picture nor text, and it now says what a
+# folder says: `files-no-preview`, one sentence for one fact.
+files-preview-not-text = este arquivo não é texto, apesar do que o nome diz
+files-preview-empty = não há nada dentro deste arquivo
+files-preview-unreadable = não deu para abrir este arquivo para leitura
 files-preview-missing = { $program } não está instalado, e é ele que lê este formato
 files-preview-too-big = grande demais para uma prévia ({ $amount })
 files-preview-failed = o que voltou não era uma imagem — o arquivo pode estar quebrado

@@ -3865,9 +3865,96 @@ demuxer `gif` de verdade e mantém os seus 3,96 s e os seus 11 fps, que são del
 `Made` carrega `Option<Rgba>` **e** `Option<Refusal>`. Um painel em branco e um painel que recusou são
 idênticos na tela, e só um dos dois tem frase para dizer — sem o segundo campo, "este arquivo não
 tem figura", "falta o programa", "é grande demais" e "demorou" sairiam todos como o mesmo retângulo
-vazio. São cinco (`NoPicture`, `Missing`, `TooBig`, `Failed`, `TimedOut`), cada uma com a sua chave,
-e a `Missing` carrega o NOME do programa que falta — que é a diferença entre uma tela inerte e uma
-linha que diz o que fazer.
+vazio. São oito (`Nothing`, `NotText`, `Empty`, `Unreadable`, `Missing`, `TooBig`, `Failed`, `TimedOut`),
+cada uma com a sua chave, e a `Missing` carrega o NOME do programa que falta — que é a diferença
+entre uma tela inerte e uma linha que diz o que fazer.
+
+A primeira delas se chamava `NoPicture` e dizia *"este tipo de arquivo não tem imagem dentro"*. O
+dono a reportou da tela, contra um markdown, e a frase estava errada por dentro: **este painel não é
+um painel de imagem** — ele responde o que tem DENTRO de um arquivo, e um arquivo de letras está
+cheio de conteúdo. Hoje ela se chama `Nothing`, vale para o que não tem nem figura nem texto, e sua
+chave é a MESMA que uma pasta usa: de onde alguém olha, uma pasta e um `.zip` são o mesmo fato.
+
+#### A prévia mostra TEXTO, e é por isso que a frase sobre imagem morreu
+
+O dono selecionou um markdown e o painel disse *"there is no picture inside this kind of file"*.
+A frase era verdadeira e a pergunta era outra: **este painel não é um painel de imagem**. Ele
+responde o que tem dentro de um arquivo, e a maioria dos arquivos de uma máquina de desenvolvedor
+tem letras dentro. Consertar só a frase teria sido trocar uma mentira por um silêncio.
+
+##### "É texto?" é UMA pergunta, e quem responde é a base do freedesktop
+
+`is_a(mime, "text/plain")`, e nada mais. Sem cláusula `starts_with("text/")`: todo `text/*` já
+descende de `text/plain`, e uma segunda regra escrita à mão é uma segunda resposta a uma pergunta que
+a base resolve.
+
+Ela alcança mais do que parece — **277 tipos** chegam a `text/plain` pelo DAG, incluindo
+`application/json` (na profundidade três), `application/xml`, `application/x-shellscript`,
+`application/toml`, `application/yaml`, `application/x-desktop` e `application/sql`. Nenhum precisa
+ser nomeado.
+
+E os quatro descendentes que NÃO são texto — `image/svg+xml`, `image/x-eps`, `audio/x-mpegurl`,
+`video/vnd.mpegurl` — também não precisam de lista de exceção, porque **a figura é pedida primeiro**:
+as duas imagens ganham uma, e um `.m3u` genuinamente é texto.
+
+##### Três tetos, e cada um tem o argumento certo
+
+- **1 MiB de bytes.** É um trinta e dois avos do `STDOUT_CEILING`: um caminho que não gera processo
+  nenhum não pode ter mais folga do que um processo filho tem. E teto declarado é limite; leitura sem
+  teto é surpresa.
+- **2 000 linhas, e o argumento é a BARRA.** O `Scroll` põe piso de uma linha na alça: a 2 000 linhas
+  num painel de doze a alça é 8% da trilha, ainda agarrável; a 100 000 é um ponto, e um clique de
+  roda anda três linhas em cem mil. Barra que não dá para usar é barra que mente sobre onde se está.
+- **512 bytes por linha, e este é o que teria doído.** Um `.js` minificado é UMA linha de dois
+  megabytes, e o `elide_end` percorre o argumento inteiro por cluster antes de cortar — aquela
+  `String` seria percorrida **uma vez por frame**, dentro do frame que desenha.
+
+##### Tudo o que é caro acontece UMA vez
+
+Ler, quebrar, expandir tabulação e calcular um estado de realce por linha acontecem na thread do
+inspetor e ficam no cache junto com os pixels. Não é otimização: o estado do realce ATRAVESSA linhas,
+então colorir "só as visíveis" significaria rodar desde a linha zero de qualquer forma. O que sobra
+para o frame é indexar uma linha e andar por meia dúzia de faixas.
+
+A tabulação vira espaços **na leitura, antes do realce** — as faixas são deslocamentos em bytes no
+texto final, e expandir depois moveria todas. A largura é token (`space.files.tabWidth`) e chega por
+parâmetro, porque o `ronoctua-inspect` não recebe valor de token.
+
+##### A rolagem saiu de graça, e o que a liberou foram três remoções
+
+A seção da prévia nascia com `offset: 0` e `total: 1`, e três lugares recusavam o gesto por escrito.
+Trocado o `total` por `preview_total()`, **a barra e a roda apareceram sozinhas** — o
+`Section::bar_box` devolve o retângulo assim que há mais linhas do que cabem, e o `section_at` já
+sabia que célula é de que seção. É a primeira vez que o rearranjo em seções se paga.
+
+E **a figura continua não rolando sem um `if` em lugar nenhum**: `preview_total()` devolve 1, o
+`slide` calcula `last = 1 - room` como zero, e o gesto é engolido por aritmética em vez de por um
+caso especial.
+
+##### Um defeito que já estava lá, e que este trabalho abriria duas vezes
+
+`self.cursor` é escrito em **dezesseis** sítios do `files.rs`, e só um deles — o `move_by` — zerava o
+`info_offset`. Então **clicar** noutro arquivo mantinha a ficha rolada no fato oito do arquivo
+anterior. Com um `preview_offset` o mesmo buraco abriria de novo, e pior: na linha trezentos do
+arquivo anterior.
+
+O conserto é causal e fica num lugar só: no `View::looked`, quando o CAMINHO muda. Cobre os dezesseis
+sítios, toda troca de diretório e os dois painéis, em três linhas — e re-decodificar o MESMO arquivo
+(arrastar a borda da janela pede de novo num `target` novo) mantém o lugar, porque jogar alguém de
+volta à linha um enquanto lê é pior do que o arrasto.
+
+##### E duas contas que, sem conserto, deixariam a feature sem servir
+
+O `panel_lines` devolvia o teto entre a caixa da figura e as linhas da ficha. Para um arquivo de
+texto a ficha é curta, então o rodapé daria a um markdown **quatro linhas** — e o pedido era poder
+rolar "para ver boa parte do conteúdo". Agora a prévia pede o que tem a dizer, com teto de 64: um
+número que sai daquela função é um número que alguém multiplica, e o `usize::MAX` como sentinela já
+custou 14,6 GiB a este repositório uma vez.
+
+O `drawn_lines` estava escrito dentro do `if` dos fatos, e as duas portas discordavam sobre em que
+altura um gesto de roda rola. As duas eram defeitos antes desta feature — a segunda já era errada
+para os fatos na faixa, doze linhas onde o painel tem quatro — e as duas apareceram porque a prévia
+passou a fazer as mesmas perguntas.
 
 #### O GPS fica guardado, e a linha diz que ele está lá
 
@@ -4516,28 +4603,118 @@ E o filtro de tamanho é uma guarda, não zelo: o cabeçalho de um PNG *declara*
 arquivo malformado pode declarar 60000×60000 — 14 GB de RGBA alocados antes de qualquer verificação.
 As dimensões são lidas do cabeçalho **antes** dos pixels, exatamente para poder recusar.
 
-#### O realce de sintaxe é nosso, e reconhece quatro coisas
+#### O realce de sintaxe é nosso, é um CRATE, e não pertence a app nenhum
 
 `syntect` traria um motor de regex e ~1 MB de definições para o processo que precisa desenhar em um
-frame; `tree-sitter` pediria uma dependência Nix **por linguagem**. O que se cola é um punhado de
-coisas — um comando de shell, um trecho de `.nix`, um pedaço de JSON, uma linha de Rust —, e para
-isso um tokenizador de duzentas linhas acerta o suficiente por zero dependências.
+frame; `tree-sitter` pediria uma dependência Nix **por linguagem**. O argumento sobreviveu ao
+crescimento: hoje são 37 linguagens e **158 tipos MIME**, e o custo total é 55 KB de fonte Rust
+gerada e **zero dependências**.
 
-Ele reconhece **comentário, texto entre aspas, número e palavra reservada**, porque são as quatro que
-fazem um bloco deixar de ser um paredão cinza. Não é um parser: não conhece gramática e não valida
-nada. Errar ali é barato — o pior caso é uma palavra colorida como se fosse outra, numa prévia que
-existe para se reconhecer o que se copiou.
+Ele nasceu como módulo do `ronoctua-clipboard`, e a primeira coisa que se descobriu ao mexer nele é
+que **o clipboard nunca o usava**: o `lib.rs` só o declarava, e o único consumidor eram quatro linhas
+do `surface.rs`. Um realçador que mora dentro de um app é o realçador que o próximo app copia — e o
+próximo app chegou, que é a prévia do gerenciador. Ele é `crates/ronoctua-syntax`: `no_std` + `alloc`,
+zero dependências, e a mudança inteira foram cinco linhas de call site.
 
-Duas regras que os testes trancam: **o comentário vence as aspas** (sem essa ordem, `# "isto"` abriria
-um texto que nunca fecha e pintaria o resto do bloco de uma cor só), e **a palavra é comparada
-inteira** (por prefixo, `iffy` viraria `if` colorido pela metade). E quando nada aponta para uma
-linguagem, **não há realce**: colorir prosa é pior do que não colorir, porque quem lê passa a procurar
-sentido numa cor que não quer dizer nada.
+##### A tabela declara TIPOS MIME, e nunca extensões
 
-O realçador devolve **papel**, e não cor — quem traduz papel em token é o host, a mesma fronteira que
-a cor dos buffers já respeita. E o realce é aplicado **por linha já quebrada**: as faixas são
-deslocamentos em bytes do texto original, e o quebrador reescreve o texto; casar os dois exigiria ele
-devolver um mapeamento, o que atravessaria a responsabilidade dele.
+Porque `crates/ronoctua-files/src/mime.rs` já responde "o que é este arquivo", com a base do
+freedesktop inteira: 1 233 padrões de nome, 496 pares de subclasse, 323 aliases. Um `"*.rs"` escrito
+em `assets/syntax.nix` seria o SEGUNDO lugar decidindo o que um arquivo é, e o segundo lugar é o que
+erra.
+
+E a herança paga. Uma reivindicação em `application/xml` cobre **49** descendentes; uma em
+`application/json` cobre 8; uma em `text/x-python` traz `python3`, `sagemath` e `scons`; e a tabela
+de aliases entrega `text/x-diff`, `text/x-markdown` e `text/x-yaml` de graça. **Trinta e sete linhas
+resolvem cento e cinquenta e oito tipos.**
+
+##### E quando a base não tem o tipo, ele nasce em UM lugar
+
+Acontece, e o TypeScript é o exemplo trabalhado: `*.ts` é `video/mp2t` no freedesktop, e o
+freedesktop está **certo** — `.ts` significou fluxo de transporte MPEG anos antes de a linguagem
+existir. Zig, Swift, Vue e Dockerfile simplesmente não estão lá.
+
+A resposta **não** é uma lista de extensões no `assets/syntax.nix`. É uma linha no bloco `ours` de
+`assets/icons/mime-glyphs.nix`, que já existia, já carregava o `text/x-nix` e já trazia a régua
+escrita: o critério é o upstream não ter tipo nenhum. O gerador recusa um tipo que não esteja em
+lugar nenhum dos dois, **nomeando aquele arquivo** — de modo que a regra não pode ser esquecida, só
+discutida.
+
+Uma coisa esse bloco não tinha, e um teste a cobrou: **cada tipo inventado diz de que descende**
+(`under`). Sem isso o `is_a` responde `false` a toda pergunta sobre ele, e a primeira que se fez foi
+"isto é texto?" — que É um `is_a`. Um `.nix` seria o único arquivo numa máquina NixOS cujo conteúdo a
+prévia se recusaria a mostrar. Agora um tipo nasce INTEIRO ali: nome, glob, ícone e lugar na
+hierarquia.
+
+##### Quatorze papéis, doze cores, e dois que ficaram de fora
+
+Ele reconhece comentário, texto, escape, número, constante, palavra reservada, tipo, função,
+atributo, propriedade, etiqueta, título, e as duas linhas do diff. O critério de cada um: **existe
+arquivo em que, sem este papel, duas coisas diferentes saem desenhadas iguais?** Papel que só deixa
+mais bonito não entrou.
+
+Dois não entraram, e os motivos valem o registro. **`Normal` não é variante**: as faixas carregam só
+o que NÃO é comum, e o texto comum é comum por omissão — ele existia antes e nunca era construído,
+que é uma mentira que o compilador ajuda a contar. E **`Operator` ficou de fora por medida, não por
+gosto**: quem desenha aloca uma `String` por faixa dentro do frame que desenha, então uma faixa por
+chave e por ponto-e-vírgula é uma alocação por chave e por ponto-e-vírgula — e derrota o próprio
+propósito, porque o paredão cinza vira um paredão de confete.
+
+Quatorze papéis chegam a doze tokens: `Constant` divide com `number` e `Heading` divide com
+`attribute`. Continuam dois papéis cada, pelo mesmo motivo que o `Palette` do design escreve sobre
+`Quiet` e `Dim`: no dia em que o tema os separar, a mudança é uma linha numa tabela e não uma caçada
+por call site.
+
+##### O estado cabe em oito bytes, e é isso que faz a rolagem custar o visível
+
+Quem consome **rola**. Tem de ser possível começar a desenhar na linha quatro mil sem tokenizar as
+quatro mil de cima, então `line` recebe um `State` e devolve outro, e `states` calcula um por linha
+numa passada. Oito bytes por linha é o preço; a alternativa é uma passada pelo arquivo inteiro a cada
+frame — 2 000 × 12 × 60 por segundo, que não é um problema de afinação, é forma errada.
+
+Uma `const` assertion tranca o tamanho, e é o teste mais barato do crate: qualquer coisa que pusesse
+uma `String` ali tiraria o `Copy` e poria uma alocação no orçamento do frame. É também por isso que
+**heredoc ficou de fora** — seu terminador é texto arbitrário descoberto em tempo de execução, e
+texto não cabe em oito bytes. Título setext ficou de fora pelo mesmo tipo de razão: precisaria do
+conteúdo da linha ANTERIOR.
+
+##### Duas ordens que são armadilha, e uma que já era
+
+**O comentário é testado primeiro e RETORNA na hora** — é isso que faz "o comentário vence as aspas"
+ser uma propriedade e não uma ordem que alguém tem de lembrar; sem ela, `# "isto"` abriria um texto
+que nunca fecha. **A palavra é comparada inteira** — por prefixo, `iffy` viraria `if` colorido pela
+metade. As duas são de sempre e continuam trancadas.
+
+As duas novas: **no diff, os prefixos longos vêm antes dos curtos**, porque `--- a/x` e `+++ b/x`
+começam com os mesmos caracteres de uma linha removida e de uma acrescentada — testar `+`/`-`
+primeiro pinta o cabeçalho de cada trecho como se fosse conteúdo, num arquivo cuja função inteira é
+distinguir os dois. E **um delimitador com teto (`max`) RECUSA em vez de fechar cedo**: a primeira
+tentativa fechava, e o teste pegou — o `&'a str` do Rust saía como um texto que ia até a próxima
+aspa, engolindo o tipo depois dele.
+
+##### O que os testes cobram, e os três defeitos que eles acharam
+
+Trinta e três testes, e o que carrega a feature é um só: **realçar a linha 40 a partir de
+`states()[39]` tem de dar exatamente o que realçar desde a linha 1 dá**. Sem ele, rolar até uma linha
+mostraria cores diferentes das que ela tem quando se chega nela de cima.
+
+Três defeitos saíram deles na primeira execução: o `max` que fechava em vez de recusar; o raw string
+do Rust, cujos `#` ficam **entre** o marcador e a aspa (`r#"a"b"#` fechava na aspa de dentro); e a
+conta de deslocamento absoluto do texto inteiro. E dois testes nasceram sem morder — o de fronteira
+de caractere só passou a pegar quando ganhou uma semente com **barra invertida imediatamente antes de
+um caractere multibyte**, que é a única forma que faz o escape terminar dentro do `é`.
+
+O realçador devolve **papel**, e não cor. Quem traduz é `chrome::syntax_color`, num lugar só, porque
+os dois consumidores estão no mesmo crate e duas cópias seriam as duas prévias colorindo o mesmo Rust
+de formas diferentes. Do lado do buffer, `Palette::syntax` faz o mesmo com os casos do enum WIT — e a
+aritmética byte→célula mora no `Screen::code` do design, uma vez, em vez de em cada buffer que
+tentasse.
+
+##### Nos buffers é feature desligada, e o número é medido
+
+Os buffers têm de 79 a 100 KB (`ronoctua_buffer_format.wasm` são 100 627 bytes) e a tabela é 55 KB de
+fonte. Um buffer que não colore código cresceria metade do próprio tamanho para carregar uma tabela
+que nunca lê. Com a feature desligada e o crate na árvore, o `format` mediu **+366 bytes**.
 
 #### O ClipCascade diz a verdade
 

@@ -1079,6 +1079,7 @@ files-hint-more = · { $columns } shows permissions, owner and group · { $facts
 # things. BOTH keys are named, because somebody told only about the way forward
 # has to guess that there is a way back.
 files-hint-panes = · { $next } goes to the next section, { $back } to the one before
+files-hint-preview = · in the preview, { $page } turns the page and { $left } { $right } move the line sideways
 # WHAT THE PREVIEW SAYS WHEN THERE IS NO PICTURE. Not a refusal — those come
 # from `ronoctua-inspect` and win when there is one — but the answer for a
 # directory, a broken link, and a file nothing has been asked about. It used to
@@ -1088,6 +1089,8 @@ files-no-preview = no preview
 # AND WHAT THE FACTS KEY SAYS WHEN THERE IS NOTHING TO SCROLL. From the
 # outside, a key that refuses and a key that is dead look the same.
 files-facts-all-shown = every fact is already on screen
+files-preview-all-shown = the whole preview is already on screen
+files-preview-cut = only the first { $lines } lines are here — the file goes on
 files-no-root-helper = changing the owner needs the installed system — the ronoctua-files-root unit is not here
 files-yes = yes, apply it
 files-no = no, leave it as it is
@@ -1318,10 +1321,19 @@ files-no-trash = I do not know where the trash is; nothing was moved
 # arrives as DATA — what is written here is only the words around it.
 # ===================================================================
 
-# WHY THERE IS NO PICTURE. Drawn where the picture would be, centred under the
-# type's glyph, so each one has to say whether there is anything to be done
-# about it: "it failed" is not an answer, it is the absence of one.
-files-preview-none = there is no picture inside this kind of file
+# WHY THERE IS NOTHING TO SHOW. Drawn where the content would be, centred, so
+# each one has to say whether there is anything to be done about it: "it
+# failed" is not an answer, it is the absence of one.
+#
+# THE PANEL IS NOT AN IMAGE PANEL, and the sentence that said so is gone. It
+# used to answer a markdown file with "there is no picture inside this kind of
+# file", which is a true statement about a question nobody asked — the panel
+# shows what is IN a file, and a file of letters is full of content. What is
+# left here is a file that has neither picture nor text, and it now says what a
+# folder says: `files-no-preview`, one sentence for one fact.
+files-preview-not-text = this file is not text, whatever its name says
+files-preview-empty = there is nothing inside this file
+files-preview-unreadable = this file could not be opened for reading
 files-preview-missing = { $program } is not installed, and it is what reads this format
 files-preview-too-big = too big for a preview ({ $amount })
 files-preview-failed = what came back was not a picture — the file may be damaged

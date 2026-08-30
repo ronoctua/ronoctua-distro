@@ -253,6 +253,10 @@
         inherit unicodedb lucidedb;
         inherit wit;
         inherit rustToolchain glyphdb;
+        # `ronoctua-design` names the highlighter as an OPTIONAL path
+        # dependency, so cargo resolves it in every buffer's tree even where
+        # the feature is off — and its build script wants the finished table.
+        inherit syntaxRs;
       };
 
       # THE TERMINAL ENGINE, from a pinned Ghostty commit. In the `let` and not
@@ -293,6 +297,7 @@
           mimeDb
           notificationsRs
           updatesRs
+          syntaxRs
           niriActions
           ;
         inherit (pkgs) xkeyboard_config;
@@ -348,6 +353,17 @@
       # compilation's environment — the whole attrset also carries the negative
       # fixture and the runner factory, neither of which belongs in a build.
       updatesRs = updatesTable.table;
+
+      # THE SYNTAX TABLE, generated from `assets/syntax.nix` — the same shape
+      # again, and it takes `mimeDb` because a language claims MIME TYPES and
+      # the generator refuses one the database does not have. That list comes
+      # out of the derivation that already read freedesktop's files, so the
+      # pinned version stays in one place.
+      syntaxTable = pkgs.callPackage ./nix/syntax.nix {
+        inherit mimeDb;
+        syntaxFile = ./assets/syntax.nix;
+      };
+      syntaxRs = syntaxTable.table;
 
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
@@ -641,6 +657,11 @@
         # the icon table already use.
         updates-rs = updatesTable.table;
         updates-negative = updatesTable.negativeFixture;
+        # And the same pair for the highlighter: `syntax-negative` is a table
+        # in which one language steals another's type and another claims prose,
+        # and it must FAIL to build.
+        syntax-rs = syntaxTable.table;
+        syntax-negative = syntaxTable.negativeFixture;
         update-runners = self.nixosConfigurations.noctua.config.ronoctua.update.package;
 
         # The shell: the two-line footer.
@@ -823,6 +844,7 @@
           unicodedb
           lucidedb
           updatesTable
+          syntaxTable
           iconSuperpack
           rust
           buffers

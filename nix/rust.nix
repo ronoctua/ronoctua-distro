@@ -28,6 +28,7 @@
   notificationsRs,
   # The update sequence, generated from `assets/updates.nix`.
   updatesRs,
+  syntaxRs,
   mimeDb,
   i18nRs,
   niriActions,
@@ -172,6 +173,11 @@ let
     # declares, so a run that stopped at `flake-update` drew a bracketed key on
     # screen. Two files saying what the update does is one file too many.
     RONOCTUA_UPDATES_RS = "${updatesRs}/updates.rs";
+    # THE SYNTAX TABLE, and it is one file for the same reason the update
+    # sequence is: what crosses to Rust is the finished table, not the
+    # declaration. `crates/ronoctua-syntax`'s `build.rs` copies it into
+    # `OUT_DIR` and refuses to generate anything itself (invariant 5).
+    RONOCTUA_SYNTAX_RS = "${syntaxRs}/syntax.rs";
     # The directory, not a file: the crate embeds the generated `keys.rs` AND the
     # `.ftl` files it came from.
     RONOCTUA_I18N_DIR = "${i18nRs}";

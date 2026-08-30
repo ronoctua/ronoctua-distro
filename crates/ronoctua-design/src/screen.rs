@@ -178,6 +178,24 @@ impl<I> Run<I> {
 enum Part<I> {
     /// A run of text.
     Ran { line: u16, run: Run<I> },
+    /// A piece of CODE, coloured by what it is rather than by what part of
+    /// the screen it plays.
+    ///
+    /// A part of its own and not a `Run` with a second field, because the two
+    /// carry different vocabularies: a `Run` names a `Role`, which is a part
+    /// of a screen, and this names a syntax role, which is what a character
+    /// IS. One enum for each keeps both closed.
+    #[cfg(feature = "syntax")]
+    Coded {
+        line: u16,
+        column: u16,
+        text: alloc::string::String,
+        /// `None` is ORDINARY text, which is ordinary by omission: the
+        /// highlighter emits only what is not, so the pieces between two
+        /// ranges have no syntax role at all. They take the layout's own
+        /// `Role::Body`, which is what any other line of a buffer takes.
+        role: Option<ronoctua_syntax::Role>,
+    },
     /// A one-line rule.
     Ruled { line: u16 },
     /// The band under a focused row.
@@ -266,6 +284,98 @@ impl<P: Palette> Screen<P> {
         let cells = self.tall(run.scale);
         self.parts.push(Part::Ran { line, run });
         cells
+    }
+
+    /// Writes one line of code, already cut into the runs of its highlight.
+    ///
+    /// Returns what the NEXT line has to be given: a block comment, a raw
+    /// string or a markdown fence carries across lines, and a buffer that
+    /// dropped it would colour a docstring's second line as if it were code.
+    ///
+    /// # The byte-to-cell arithmetic is HERE, and nowhere else
+    ///
+    /// A highlight's ranges are byte offsets; a column is a cell. Every buffer
+    /// that wanted coloured code would otherwise write that conversion again,
+    /// and the wrong way of writing it — counting BYTES — puts a run one cell
+    /// off the moment an accent arrives. Counting characters is what matches
+    /// the two, and this crate is where the cell arithmetic already lives.
+    ///
+    /// `budget` is the whole line's; each piece is charged what it takes and
+    /// nothing past the budget is emitted, so `nothing_is_covered` holds
+    /// without the buffer checking.
+    #[cfg(feature = "syntax")]
+    pub fn code(
+        &mut self,
+        line: u16,
+        column: u16,
+        budget: u16,
+        text: &str,
+        language: ronoctua_syntax::Language,
+        state: ronoctua_syntax::State,
+    ) -> ronoctua_syntax::State {
+        let mut runs = alloc::vec::Vec::new();
+        let carried = ronoctua_syntax::line_into(text, language.grammar(), state, &mut runs);
+
+        let room = if budget == 0 {
+            self.columns.saturating_sub(column)
+        } else {
+            budget
+        };
+        let mut cut = 0usize;
+        let mut cell = 0u16;
+
+        // ORDINARY, COLOURED, ORDINARY: the ranges carry only what is not
+        // ordinary, so what falls between two of them is the rest of the line.
+        for range in &runs {
+            if range.start < cut || range.end > text.len() {
+                continue;
+            }
+            cell = self.coded(line, column, room, cell, &text[cut..range.start], None);
+            cell = self.coded(
+                line,
+                column,
+                room,
+                cell,
+                &text[range.start..range.end],
+                Some(range.role),
+            );
+            cut = range.end;
+        }
+        self.coded(line, column, room, cell, &text[cut.min(text.len())..], None);
+        carried
+    }
+
+    /// One piece of a coded line, placed at the cell it starts in.
+    ///
+    /// Returns the cell the next piece starts at, whether or not this one was
+    /// emitted: the arithmetic has to go on past the budget, or every piece
+    /// after a cut one would be placed at the wrong column.
+    #[cfg(feature = "syntax")]
+    fn coded(
+        &mut self,
+        line: u16,
+        column: u16,
+        room: u16,
+        cell: u16,
+        piece: &str,
+        role: Option<ronoctua_syntax::Role>,
+    ) -> u16 {
+        // CHARACTERS AND NOT BYTES. A cell holds one character, and an accent
+        // is two bytes: charging bytes would put every run after the first
+        // accented one to the right of where it is drawn.
+        let wide = u16::try_from(piece.chars().count()).unwrap_or(u16::MAX);
+        if wide == 0 || cell >= room {
+            return cell.saturating_add(wide);
+        }
+        let take = usize::from(room - cell);
+        let shown: alloc::string::String = piece.chars().take(take).collect();
+        self.parts.push(Part::Coded {
+            line,
+            column: column.saturating_add(cell),
+            role,
+            text: shown,
+        });
+        cell.saturating_add(wide)
     }
 
     /// Put a run on the current row and move past it.
@@ -423,6 +533,23 @@ impl<P: Palette> Screen<P> {
                     scale: run.scale,
                     max_width: run.budget,
                 },
+                #[cfg(feature = "syntax")]
+                Part::Coded {
+                    line,
+                    column,
+                    text,
+                    role,
+                } => Command::Text {
+                    line: *line,
+                    column: *column,
+                    text: Text::Data(text.clone()),
+                    // A PIECE WITH NO SYNTAX ROLE IS ORDINARY, and takes the
+                    // layout's own body colour — the same one every other line
+                    // of a buffer takes.
+                    color: role.map_or_else(|| Tokens::color(Role::Body), Tokens::syntax),
+                    scale: ronoctua_protocol::Scale::Normal,
+                    max_width: 0,
+                },
                 Part::Ruled { line } => Command::Rule {
                     line: *line,
                     color: Tokens::color(Role::Rule),
@@ -474,6 +601,13 @@ impl<P: Palette> Screen<P> {
     pub(crate) fn parts(&self) -> impl Iterator<Item = Frame<'_, P::Icon>> {
         self.parts.iter().map(|p| match p {
             Part::Ran { line, run } => Frame::Ran(*line, run),
+            #[cfg(feature = "syntax")]
+            Part::Coded {
+                line,
+                column,
+                text,
+                role,
+            } => Frame::Coded(*line, *column, text, *role),
             Part::Ruled { line } => Frame::Ruled(*line),
             Part::Banded { line } => Frame::Banded(*line),
         })
@@ -484,6 +618,8 @@ impl<P: Palette> Screen<P> {
 #[cfg(feature = "guest")]
 pub(crate) enum Frame<'a, I> {
     Ran(u16, &'a Run<I>),
+    #[cfg(feature = "syntax")]
+    Coded(u16, u16, &'a str, Option<ronoctua_syntax::Role>),
     Ruled(u16),
     Banded(u16),
 }
@@ -677,6 +813,97 @@ mod tests {
                 line: 3,
                 color: token_of(Role::Rule),
             }]
+        );
+    }
+    /// FAILS IF: the byte-to-cell arithmetic counts BYTES.
+    ///
+    /// An accent is two bytes and one cell, so a line with one in it puts
+    /// every run after it a column to the right of where it is drawn — the
+    /// defect this crate exists to have one copy of rather than seven.
+    #[cfg(feature = "syntax")]
+    #[test]
+    fn a_coded_line_places_its_runs_in_cells_and_not_in_bytes() {
+        use ronoctua_protocol::Command;
+
+        let mut screen: Screen<crate::Tokens> = Screen::new(&context(40, 12));
+        let text = "let ação = 1;";
+        screen.code(
+            0,
+            0,
+            40,
+            text,
+            ronoctua_syntax::Language::Nix,
+            ronoctua_syntax::State::fresh(),
+        );
+        let list = screen.as_protocol();
+
+        // The `1` is a number, and it is at the cell its CHARACTERS put it at.
+        let wanted = text.chars().position(|c| c == '1').expect("a numeral");
+        let found = list.commands.iter().find_map(|c| match c {
+            Command::Text {
+                column,
+                text: ronoctua_protocol::Text::Data(t),
+                ..
+            } if t == "1" => Some(*column),
+            _ => None,
+        });
+        assert_eq!(
+            found,
+            Some(u16::try_from(wanted).unwrap()),
+            "the numeral landed off its own column: {:?}",
+            list.commands
+        );
+        // AND NOTHING OVERLAPS, which is what the host refuses.
+        let heights = heights();
+        assert!(list.nothing_overlaps(heights, 40).is_ok());
+    }
+
+    /// FAILS IF: the carried state is dropped, and a docstring's second line
+    /// comes out as code.
+    #[cfg(feature = "syntax")]
+    #[test]
+    fn a_coded_line_hands_the_next_one_what_it_left_open() {
+        let mut screen: Screen<crate::Tokens> = Screen::new(&context(40, 12));
+        let after = screen.code(
+            0,
+            0,
+            40,
+            "/* opened here",
+            ronoctua_syntax::Language::Rust,
+            ronoctua_syntax::State::fresh(),
+        );
+        assert!(!after.is_fresh(), "the open comment was not handed on");
+        let done = screen.code(
+            1,
+            0,
+            40,
+            "*/ let x = 1;",
+            ronoctua_syntax::Language::Rust,
+            after,
+        );
+        assert!(done.is_fresh());
+    }
+
+    /// FAILS IF: a piece past the budget is emitted, and a buffer's own line
+    /// leaks off the surface.
+    #[cfg(feature = "syntax")]
+    #[test]
+    fn a_coded_line_stops_at_its_budget() {
+        let mut screen: Screen<crate::Tokens> = Screen::new(&context(40, 12));
+        screen.code(
+            0,
+            0,
+            8,
+            "let a = 1; let b = 2; let c = 3;",
+            ronoctua_syntax::Language::Rust,
+            ronoctua_syntax::State::fresh(),
+        );
+        let list = screen.as_protocol();
+        let heights = heights();
+        assert!(
+            list.nothing_is_covered(heights, 8).is_ok(),
+            "something ran past the budget: {:?}",
+            list.commands
         );
     }
 }

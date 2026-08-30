@@ -19,7 +19,7 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 10. **Ícones da UI são glifos da fonte.** O superpacote é só fallback de pixmap para apps
     estrangeiros; nenhum componente do design system o consulta.
 11. **Buffers WASM não tocam Wayland, não recebem valores de token, não traduzem.**
-12. **`ronoctua-design` e `ronoctua-glyphdb` compilam para `wasm32-wasip2`.**
+12. **`ronoctua-design`, `ronoctua-protocol` e `ronoctua-syntax` compilam para `wasm32-wasip2`.**
 13. **Nenhum dado pessoal** — nem `host.nix`, `facter.json`, `~/.shellrc.local`: nascem NA máquina.
 14. **Nenhuma chrome além do rodapé.** Sem barra, relógio, taskbar, menu iniciar, dock, ícone de
     desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo.
@@ -74,10 +74,16 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   com o gerenciador aberto — a ALTURA deixou de responder ao que foi digitado, e o `leader-vm` lê
   a TELA. Sem foco, painel não pede linha nenhuma. A ficha ROLA (`C-.`, e a barra diz que cortou);
   permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
-  os MESMOS da linha — mesma `Hit`, mesma máquina. **As seções são
+  os MESMOS da linha — mesma `Hit`, mesma máquina. **A prévia mostra TEXTO** quando o arquivo é
+  texto (`is_a(mime, "text/plain")`, 277 tipos pelo DAG do freedesktop), com realce e rolagem: setas
+  quando ela tem o foco, `C-,` pagina e dá a volta, `C-[`/`C-]` movem a linha para os lados, e a
+  barra aparece sozinha porque a seção passou a ter `total`. Tetos: 1 MiB, 2 000 linhas, 512 bytes
+  por linha — o último porque `.js` minificado é UMA linha de 2 MB e o `elide_end` a percorreria por
+  cluster a cada frame. **Arquivo sem imagem E sem texto diz o que a pasta diz** (`sem prévia`); a
+  frase sobre imagem morreu. **As seções são
   INDEPENDENTES**: `Panes::section_at` diz em que seção um cell está, e é quem a
   faixa, a roda e o foco perguntam — painel acende a si mesmo, e o gesto rola só
-  a seção sob o ponteiro (a listagem é da PORTA; figura não rola, e engole).
+  a seção sob o ponteiro (a listagem é da PORTA; **figura** não rola, e engole).
   Barra lateral tem `side_offset` PRÓPRIO: linha `n` deixou de ser a linha `n`
   dela. **Clique SELECIONA; o segundo é que abre** — na listagem e na lateral.
 - **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `screenshot-path` do niri, que sem isso escrevia em `~/Pictures`). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-o` atravessa, `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**.
@@ -110,6 +116,15 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ou de um jeito (`x: margin*cell` com `width: self.width`: buraco à esquerda, cortado à direita)
   ou do outro (`linhas × altura_de_linha`, que com 26,5 px sempre para antes da borda). Quem cobra
   é o `separators-come-from-chrome`.
+- **O realce de sintaxe é um crate, e não é de app nenhum** (`ronoctua-syntax`): `no_std` + `alloc`,
+  zero dependências, 37 linguagens declaradas em `assets/syntax.nix` que resolvem **158 tipos MIME**
+  — porque a reivindicação é por TIPO e o gerador a expande pelo DAG de subclasses do freedesktop
+  (`application/xml` traz 49 descendentes). Devolve PAPEL, nunca cor; quem traduz é
+  `chrome::syntax_color`, num lugar só, e o `Palette::syntax` do design faz o mesmo do lado do
+  buffer. Uma linha por vez, com um `State` de **8 bytes** que a seguinte recebe — é o que faz rolar
+  custar as linhas VISÍVEIS. Tipo que o freedesktop não tem nasce no `ours` do `mime-glyphs.nix`,
+  **com `under`**, e nunca aqui (o `*.ts` é `video/mp2t` lá, e está certo). Nos buffers é feature
+  DESLIGADA: a tabela é 55 KB de fonte contra 80-100 KB de `.wasm`.
 - **Buffers nativos são componentes wasip2.** Devolvem display list; rasteriza o `ronoctua-render`,
   posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
   `Instance`. Cinco primitivas: texto, régua, grade, seleção e **`svg`** (TRAVA `vector`), e **campo

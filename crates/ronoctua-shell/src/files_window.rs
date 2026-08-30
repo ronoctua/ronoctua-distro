@@ -1721,8 +1721,12 @@ impl PointerHandler for FilesWindow {
                 .under_pointer
                 .as_ref()
                 .map_or(crate::files::Pane::Listing, |t| t.pane);
+            // BOTH PANELS SCROLL INSIDE THE PANEL'S OWN HEIGHT. The preview
+            // joined that sentence the day it began to show a file's letters;
+            // without it, a preview in the bottom strip would page four lines
+            // at a time inside a room the code believed was the whole listing.
             let room = match which {
-                crate::files::Pane::Info => self.panel_room(),
+                crate::files::Pane::Info | crate::files::Pane::Preview => self.panel_room(),
                 _ => self.list_room(),
             };
             // EVERY SECTION ANSWERS, the listing included: there is no

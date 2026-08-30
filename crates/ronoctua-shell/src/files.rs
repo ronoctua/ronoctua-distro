@@ -310,12 +310,25 @@ const PANEL_NO_ROOM: &str = ronoctua_i18n::key::FILES_PANEL_NO_ROOM;
 /// icon that says what the listing's own icon column already said.
 const NO_PREVIEW: &str = ronoctua_i18n::key::FILES_NO_PREVIEW;
 
+/// The most lines a panel may ASK the region for.
+///
+/// Asking is not getting — the footer's ceiling is `expansion.maxLines` and a
+/// window has the height somebody dragged it to — but a number that leaves
+/// `View::panel_lines` is a number somebody multiplies, and a two-thousand-line
+/// file must not be able to ask for two thousand lines of anything.
+///
+/// Sixty-four: more than any door's height, less than anything worth
+/// multiplying.
+const PANEL_WANT: usize = 64;
+
 /// What the facts key says when there is nothing to scroll.
 ///
 /// A key that does nothing and says nothing is the one outcome this project
 /// treats as a defect: from the outside, a refusal and a dead key look the
 /// same. It is `files-sidebar-only`'s shape, once more.
 const FACTS_ALL_SHOWN: &str = ronoctua_i18n::key::FILES_FACTS_ALL_SHOWN;
+/// What the preview says when there is nothing more of it to reach.
+const PREVIEW_ALL_SHOWN: &str = ronoctua_i18n::key::FILES_PREVIEW_ALL_SHOWN;
 
 /// One fact, in full, on the message line.
 ///
@@ -1434,6 +1447,145 @@ fn width_of(s: &str) -> u16 {
 /// Integer arithmetic, and it rounds DOWN: half a cell does not exist on this
 /// grid, and a glyph one cell left of centre reads as centred while a glyph
 /// half a cell anywhere reads as blurred.
+/// One line of the text preview, cut into the coloured runs of its highlight.
+///
+/// # Bytes to CELLS, and the ruler is the clusters'
+///
+/// `Field::at` is in cells; a `Range` is in bytes. The conversion is
+/// `layout::width`, which counts grapheme CLUSTERS — the same ruler
+/// `Field::covers`, `elide_end` and both painters use. Counting `char`s would
+/// put a field one cell off the column it is drawn in the first time an
+/// accent arrives as a combining mark, and this file has already paid once for
+/// having three rulers.
+///
+/// # And the cut comes AFTER the mapping, never before
+///
+/// Eliding the line first and applying the ranges to what is left would move
+/// every run past the cut. So the line is walked whole, each piece is placed,
+/// and the piece that crosses the edge is the one that gets the ellipsis — in
+/// the colour of whatever it truncated, which is right: it belongs to that run.
+///
+/// # Every field carries the SAME target
+///
+/// Which is what makes `Field::covers`' one-cell overlap harmless: neighbouring
+/// runs answer the same `Hit`, so wherever the pointer lands on a line of code
+/// it means the same thing. A trailing field of blanks goes last so the panel
+/// is clickable across its whole width, including the ragged right end — the
+/// promise the picture path already makes.
+fn text_fields(
+    line: &ronoctua_inspect::text::Line,
+    at: u16,
+    room: u16,
+    column: usize,
+    target: Hit,
+) -> Vec<Field> {
+    let mut out = Vec::new();
+    let mut cut = 0usize;
+    let mut cell = 0usize;
+
+    for r in &line.runs {
+        // A RANGE OUT OF STEP WITH THE TEXT IS A PANIC ON SCREEN, so the
+        // boundary is checked here too. The crate promises it and the tests
+        // lock it; this is the belt beside the braces, because the cost of
+        // being wrong is a dead footer rather than a wrong colour.
+        if r.start < cut
+            || r.end > line.text.len()
+            || !line.text.is_char_boundary(r.start)
+            || !line.text.is_char_boundary(r.end)
+        {
+            continue;
+        }
+        let plain = &line.text[cut..r.start];
+        place(
+            &mut out,
+            plain,
+            at,
+            room,
+            column,
+            cell,
+            ronoctua_tokens::color::TEXT_PRIMARY,
+            &target,
+        );
+        cell += usize::from(ronoctua_render::layout::width(plain));
+        let run = &line.text[r.start..r.end];
+        let color = crate::chrome::syntax_color(r.role);
+        place(&mut out, run, at, room, column, cell, color, &target);
+        cell += usize::from(ronoctua_render::layout::width(run));
+        cut = r.end;
+    }
+    let rest = &line.text[cut.min(line.text.len())..];
+    place(
+        &mut out,
+        rest,
+        at,
+        room,
+        column,
+        cell,
+        ronoctua_tokens::color::TEXT_PRIMARY,
+        &target,
+    );
+
+    // AND THE WHOLE WIDTH IS CLICKABLE. Blanks draw no ink, and `field_at`
+    // walks from the right, so this is what the pointer finds where a short
+    // line leaves the panel ragged.
+    out.push(Field {
+        at,
+        text: " ".repeat(usize::from(room)),
+        color: ronoctua_tokens::color::TEXT_PRIMARY,
+        hit: target,
+        explain: None,
+    });
+    out
+}
+
+/// One piece of a preview line, placed at the cell it starts in — less
+/// whatever the sideways offset has taken off the left.
+///
+/// A free function and not a closure inside [`text_fields`], because the
+/// closure would have to own the `Hit` it clones into every field and there is
+/// one per run.
+#[allow(clippy::too_many_arguments)]
+fn place(
+    out: &mut Vec<Field>,
+    text: &str,
+    at: u16,
+    room: u16,
+    column: usize,
+    cell: usize,
+    color: Color,
+    target: &Hit,
+) {
+    let wide = usize::from(ronoctua_render::layout::width(text));
+    // ENTIRELY OFF THE LEFT EDGE: nothing of it is on screen.
+    if wide == 0 || cell + wide <= column {
+        return;
+    }
+    // OR IT STARTS OFF THE EDGE, and only its tail is. `window` cuts by
+    // cluster for the reason `elide_end` does: cutting by byte invents a
+    // drawing.
+    let skip = column.saturating_sub(cell);
+    let placed = cell + skip - column;
+    let left = usize::from(room).saturating_sub(placed);
+    if left == 0 {
+        return;
+    }
+    let piece = ronoctua_render::layout::window(
+        text,
+        u16::try_from(skip).unwrap_or(u16::MAX),
+        u16::try_from(left).unwrap_or(u16::MAX),
+    );
+    if piece.is_empty() {
+        return;
+    }
+    out.push(Field {
+        at: at + u16::try_from(placed).unwrap_or(0),
+        text: piece,
+        color,
+        hit: target.clone(),
+        explain: None,
+    });
+}
+
 const fn centred(at: u16, room: u16, what: u16) -> u16 {
     at.saturating_add(room.saturating_sub(what) / 2)
 }
@@ -1887,6 +2039,18 @@ pub struct View {
     /// memory, which is the argument `ronoctua_render::image` already makes
     /// about its thirty-nine textures.
     looked: Option<Looked>,
+    /// The first line of the text preview that is on screen.
+    ///
+    /// Its own, like `info_offset` and `side_offset`: a gesture over the
+    /// preview must move the preview and nothing else, which is the rule
+    /// [`View::wheel`] writes down.
+    preview_offset: usize,
+    /// The first COLUMN of it, for a line wider than the panel.
+    ///
+    /// The owner asked for sideways scrolling rather than a silent cut: a
+    /// twenty-four-cell panel would otherwise hide most of every line of code
+    /// with an ellipsis and no way to see past it.
+    preview_column: usize,
     /// The stamp of what was last ASKED for.
     ///
     /// It is what stops the host asking again, and it has to be separate from
@@ -1933,6 +2097,12 @@ pub struct Ask {
     pub target: u32,
     /// The cache key this answer will carry back.
     pub key: String,
+    /// How wide a tabulation is, in cells.
+    ///
+    /// It travels the way `target` does, and for the same reason: it is a
+    /// TOKEN (`space.files.tabWidth`), and `ronoctua-inspect` does not receive
+    /// token values. Whoever asks holds the tokens.
+    pub tab: usize,
 }
 
 /// What the inspector came back with.
@@ -1944,6 +2114,16 @@ pub struct Looked {
     pub path: PathBuf,
     /// The pixels, when there are any.
     pub rgba: Option<ronoctua_render::image::Rgba>,
+    /// The letters, when there are any and there is no picture.
+    ///
+    /// # Everything expensive is already done
+    ///
+    /// Read, split, de-tabbed and HIGHLIGHTED, once, on the inspector's own
+    /// thread. It has to be: a highlight state carries between lines, so
+    /// colouring "only the visible ones" would still mean running from line
+    /// zero — which is the whole file, per line, per frame. What is left for
+    /// `preview_fields` is indexing one line and walking its handful of runs.
+    pub text: Option<ronoctua_inspect::text::Read>,
     /// Why there are none, when there are none.
     pub why: Option<ronoctua_inspect::Refusal>,
     /// What the tools said the file is.
@@ -2058,6 +2238,8 @@ impl View {
             preview_on: true,
             info_on: true,
             info_offset: 0,
+            preview_offset: 0,
+            preview_column: 0,
             // AND THE THREE COLUMNS ONE LOOKS UP COME UP OFF, which is the
             // same decision seen from the other side: what the manager shows
             // without being asked is what one navigates by.
@@ -2632,7 +2814,21 @@ impl View {
         // text instead, which is what it was actually asking about.
         let mut lines = 0usize;
         if self.preview_on {
-            lines = lines.max(usize::from(preview_lines()));
+            // A PICTURE'S BOX, OR THE FILE'S OWN LINES.
+            //
+            // Without the second half a markdown file would be given four
+            // lines in the footer — the picture's box — because the sheet
+            // beside it is short. The owner asked to be able to scroll the
+            // preview "to see a good part of the content", and four lines is
+            // not a good part of anything.
+            //
+            // `PANEL_WANT` is a CEILING and it is not decoration: `take` in
+            // this file was once handed `usize::MAX` as a sentinel and
+            // twenty-seven tests grew a `Vec` of two-to-the-sixty-four rows
+            // until the machine's fourteen gibibytes were gone. A number that
+            // leaves this function is a number somebody multiplies.
+            lines =
+                lines.max(usize::from(preview_lines()).max(self.preview_total().min(PANEL_WANT)));
         }
         if self.info_on {
             lines = lines.max(self.sheet().len());
@@ -3028,6 +3224,34 @@ impl View {
                 hit: target,
                 explain: None,
             }];
+        }
+        // THE FILE'S OWN CONTENT, when there is any. It comes BEFORE the
+        // sentence for the same reason the picture comes before both: a panel
+        // that has something to show shows it.
+        if let Some(t) = self.showing_text() {
+            let row = n.saturating_add(self.preview_offset);
+            // THE LAST ROW SAYS THE FILE GOES ON, and it is only ever seen at
+            // the end of the scroll — which is exactly when it is the true
+            // thing to say. It is a row and not a refusal: a refusal means
+            // there is nothing on screen, and there are two thousand lines.
+            if t.cut && row == t.lines.len() {
+                let said = texts.t_with(
+                    ronoctua_i18n::key::FILES_PREVIEW_CUT,
+                    &[("lines", &t.lines.len().to_string())],
+                );
+                let said = ronoctua_render::layout::elide_end(&said, room);
+                return vec![Field {
+                    at: centred(at, room, width_of(&said)),
+                    text: said,
+                    color: ronoctua_tokens::color::TEXT_DIM,
+                    hit: target,
+                    explain: None,
+                }];
+            }
+            let Some(line) = t.lines.get(row) else {
+                return Vec::new();
+            };
+            return text_fields(line, at, room, self.preview_column, target);
         }
         // ONE LINE, AND NOTHING ON THE REST: a line that does nothing must not
         // look like a line that does something, which is the rule the blank
@@ -4117,6 +4341,14 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     ask = newer;
                 }
                 let made = ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target);
+                // THE TEXT, ONLY WHEN THERE IS NO PICTURE. A picture wins, and
+                // reading a mebibyte to throw it away is a mebibyte read for
+                // every video walked past. It is also why SVG and EPS need no
+                // exception: the database says both descend from `text/plain`,
+                // and both get a picture first.
+                let said = (!made.drawable())
+                    .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
+                    .flatten();
                 let facts = ronoctua_inspect::facts::facts(
                     &ask.path,
                     ask.mime,
@@ -4139,11 +4371,22 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                         "preview decoded"
                     );
                 }
+                // WHEN THE FILE IS TEXT, THE TEXT PATH'S ANSWER IS THE ONE
+                // THAT COUNTS. Said once, here, rather than at three sites:
+                // it is what stops a `.md` carrying `Refusal::Nothing`, and
+                // what makes a `chmod 000` `.rs` say it could not be opened
+                // instead of "what came back was not a picture".
+                let (rgba, why, text) = match said {
+                    None => (rgba, made.why, None),
+                    Some(Ok(read)) => (None, None, Some(read)),
+                    Some(Err(why)) => (None, Some(why), None),
+                };
                 let looked = Looked {
                     key: ask.key,
                     path: ask.path,
                     rgba,
-                    why: made.why,
+                    text,
+                    why,
                     facts,
                 };
                 if out.send(Report::Inspected(Box::new(looked))).is_err() {
@@ -4392,7 +4635,30 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     //
     // Punctuation and not a letter, and it is not an exception: `C-<` and
     // `C->` are already here, and every bare key is a letter of the query.
+    // AND THE PREVIEW PAGES TOO, with the key NEXT TO the facts' — comma
+    // before full stop, preview before facts, the two keys side by side on the
+    // keyboard in the order the two panels are side by side on screen.
+    //
+    // Punctuation and not a letter, for the reason `C-.` gives one line down:
+    // every bare key is a letter of the query. `C-,` is the keysym `comma` and
+    // `C-<` is `less`; xkb has already applied Shift, so both doors' `key_of`
+    // tell them apart.
+    ("C-,", "files-preview-scroll"),
     ("C-.", "files-facts-scroll"),
+    // AND THE LINE MOVES SIDEWAYS, because a panel is twenty-four cells at its
+    // floor and a line of code is not.
+    //
+    // `C-[` and `C-]` are a pair and are neighbours, and they are SAFE for the
+    // reason written above `C-i` in this same table: in a terminal `C-[` and
+    // `Esc` are the same byte, and on Wayland they are not the same key —
+    // `key_of` maps `bracketleft` and `Escape` separately.
+    //
+    // NOT `C-<arrow>`, and that is written out three times in this file
+    // already: `Footer::press_key` sends an arrow held with the RIGHT `Ctrl`
+    // to `navigate` before the view sees it, and the window door does not
+    // track that Ctrl at all — so the two doors would disagree.
+    ("C-[", "files-preview-left"),
+    ("C-]", "files-preview-right"),
     // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
     //
     // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
@@ -4487,6 +4753,25 @@ pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> String {
         texts.t_with(
             ronoctua_i18n::key::FILES_HINT_PANES,
             &[("next", next.as_str()), ("back", back.as_str())],
+        )
+    );
+    // AND THE PREVIEW'S THREE, in a fourth sentence, for the same reason as
+    // the third: none of them is a command of the registry, so none is in
+    // `M-x` or the manual, and this line is the only thing on screen that says
+    // they exist. `C-o` cost this file that lesson once — implemented,
+    // working, and mentioned nowhere, which is the same as not having it.
+    let page = key_that_runs("files-preview-scroll").map_or_else(String::new, |t| t.notation());
+    let left = key_that_runs("files-preview-left").map_or_else(String::new, |t| t.notation());
+    let right = key_that_runs("files-preview-right").map_or_else(String::new, |t| t.notation());
+    let more = format!(
+        "{more}{}",
+        texts.t_with(
+            ronoctua_i18n::key::FILES_HINT_PREVIEW,
+            &[
+                ("page", page.as_str()),
+                ("left", left.as_str()),
+                ("right", right.as_str()),
+            ],
         )
     );
     if !sidebar {
@@ -4716,6 +5001,9 @@ impl View {
             Some("files-preview") => self.toggle_panel(Panel::Preview),
             Some("files-facts") => self.toggle_panel(Panel::Info),
             Some("files-facts-scroll") => self.scroll_facts(),
+            Some("files-preview-scroll") => self.scroll_preview(),
+            Some("files-preview-left") => self.slide_preview(-1),
+            Some("files-preview-right") => self.slide_preview(1),
             Some("files-pane-next") => self.cycle_pane(true),
             Some("files-pane-previous") => self.cycle_pane(false),
             Some("files-columns") => {
@@ -5446,14 +5734,18 @@ impl View {
                     Panel::Preview => Pane::Preview,
                     Panel::Info => Pane::Info,
                 };
-                if matches!(pane, Pane::Info) {
-                    // HOW MANY LINES THE FACTS WERE GIVEN, remembered for the
-                    // key that pages them (`C-.`). It used to be `facts_bar`
-                    // that recorded it, and that function is gone: the bar is
-                    // the SECTION's rectangle now.
-                    self.drawn_lines
-                        .set(u16::try_from(lines).unwrap_or(u16::MAX));
-                }
+                // HOW MANY LINES A PANEL WAS GIVEN, remembered for the keys
+                // that page them (`C-.` and `C-,`). It used to be `facts_bar`
+                // that recorded it, and that function is gone: the bar is the
+                // SECTION's rectangle now.
+                //
+                // AND IT IS RECORDED FOR BOTH PANELS, not only the facts.
+                // `lines` is computed once above for the pair, so it was
+                // already the preview's height too — but inside the `Info`
+                // branch it never updated with `C-i` off, and the preview's
+                // page key would have worked against a stale number.
+                self.drawn_lines
+                    .set(u16::try_from(lines).unwrap_or(u16::MAX));
                 if !wanted(pane) {
                     continue;
                 }
@@ -5466,12 +5758,12 @@ impl View {
                     offset: if matches!(pane, Pane::Info) {
                         self.info_offset
                     } else {
-                        0
+                        self.preview_offset
                     },
                     total: if matches!(pane, Pane::Info) {
                         sheet.len()
                     } else {
-                        1
+                        self.preview_total()
                     },
                     above: 0,
                     content: (0..lines)
@@ -5615,16 +5907,20 @@ impl View {
     pub fn drag_to(&mut self, pane: Pane, fraction: f64, width: u16, room: Room) -> bool {
         // EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT — see [`Room`].
         let room = match pane {
-            Pane::Info => room.panel,
+            // BOTH PANELS SCROLL INSIDE THE PANEL'S OWN HEIGHT, not the
+            // listing's. The preview joined the first half of that sentence
+            // the day it began to show a file's letters.
+            Pane::Info | Pane::Preview => room.panel,
             _ => room.list,
         };
         let total = match pane {
             Pane::Sidebar => self.side.shown(self.hidden).len(),
             Pane::Info => self.sheet().len(),
             Pane::Listing => self.amount(),
-            // THE PREVIEW DOES NOT SCROLL: it is one picture, or one sentence
-            // saying there is none. There is nothing to put a bar on.
-            Pane::Preview => return false,
+            // A PICTURE STILL DOES NOT SCROLL, and there is no branch for it:
+            // `preview_total` is 1, so `last` is nought and the drag lands
+            // where it started. The rule survives as arithmetic.
+            Pane::Preview => self.preview_total(),
         };
         let _ = width;
         // THROUGH `Scroll::offset_at`, which is `thumb`'s own inverse.
@@ -5650,7 +5946,8 @@ impl View {
         match pane {
             Pane::Sidebar => self.side_offset = to,
             Pane::Listing => self.list_offset = to,
-            _ => self.info_offset = to,
+            Pane::Preview => self.preview_offset = to,
+            Pane::Info => self.info_offset = to,
         }
         true
     }
@@ -5815,12 +6112,21 @@ impl View {
         match self.pane {
             Pane::Listing => self.move_by(by),
             Pane::Sidebar => self.side_by(by),
-            // THE PREVIEW MOVES THE LISTING, because that is what moves the
-            // PICTURE. See `Pane::Preview`: the panel is about the focused
-            // entry, so the only thing an arrow can mean in it is "another
-            // entry", and a pane whose arrows did nothing would be a pane one
-            // learns to Tab straight past.
-            Pane::Preview => self.move_by(by),
+            // THE ARROWS WALK WHATEVER THERE IS TO WALK.
+            //
+            // With a picture or a sentence there is nothing, and the only
+            // thing an arrow can mean is "another entry" — which is the
+            // argument `Pane::Preview` has always made, and it still holds.
+            // With TEXT there is something being read, and a pane whose arrows
+            // do not move what one is reading is a pane one learns to Tab
+            // past. The condition is the same one the bar asks.
+            Pane::Preview => {
+                if self.preview_total() > usize::from(self.drawn_lines.get()) {
+                    self.step_preview(by)
+                } else {
+                    self.move_by(by)
+                }
+            }
             Pane::Info => self.step_facts(by),
         }
     }
@@ -5929,6 +6235,82 @@ impl View {
         Step::Changed
     }
 
+    /// Walks the text preview by a line, and stops at the ends.
+    ///
+    /// `step_facts`'s twin, one arm above in `step_by`, and deliberately the
+    /// same shape: it STOPS rather than wraps, because an arrow held down
+    /// should come to rest at the end of a file rather than start again at the
+    /// top. The key that wraps is `C-,`, which is the one pressed without
+    /// looking.
+    ///
+    /// It needs no "all shown" sentence: `step_by` only reaches it when there
+    /// is more than fits, and falls through to `move_by` otherwise — which
+    /// always does something.
+    fn step_preview(&mut self, by: i32) -> Step {
+        let room = usize::from(self.drawn_lines.get());
+        let total = self.preview_total();
+        if room == 0 || total <= room {
+            return Step::Nothing;
+        }
+        let last = total - room;
+        let to = if by < 0 {
+            self.preview_offset
+                .saturating_sub(by.unsigned_abs() as usize)
+        } else {
+            self.preview_offset
+                .saturating_add(by.unsigned_abs() as usize)
+                .min(last)
+        };
+        if to == self.preview_offset {
+            return Step::Nothing;
+        }
+        self.preview_offset = to;
+        Step::Changed
+    }
+
+    /// Moves the text preview sideways, and stops at the ends.
+    ///
+    /// # Why sideways at all
+    ///
+    /// Because a panel is twenty-four cells at its floor and a line of code is
+    /// not. Cutting at the edge and leaving it there would hide most of every
+    /// line with an ellipsis and no way to see past it; the owner asked for
+    /// the line to move instead.
+    ///
+    /// The stop is the widest line the file holds, less what is on screen: a
+    /// column past the end is a panel of blanks with a bar that says there is
+    /// more.
+    fn slide_preview(&mut self, by: i32) -> Step {
+        // THE PANEL'S OWN WIDTH, out of the one place that decides it.
+        //
+        // The first attempt was `panes.right.max(panes.strip)`, and it was
+        // nonsense the compiler could not catch: `right` is CELLS and `strip`
+        // is LINES, so the two are not comparable and the larger of them is
+        // not a width. `preview_box` is the function that already answers
+        // "where does the preview start and how wide is it", and asking it is
+        // the same rule the panels' geometry follows everywhere else.
+        let width = self.drawn_at.get();
+        let Some((_, room)) = self.panes(width).preview_box(width) else {
+            return Step::Say(does(PREVIEW_ALL_SHOWN));
+        };
+        let room = usize::from(room);
+        let widest = self.preview_widest();
+        let last = widest.saturating_sub(room.max(1));
+        let to = if by < 0 {
+            self.preview_column
+                .saturating_sub(by.unsigned_abs() as usize)
+        } else {
+            self.preview_column
+                .saturating_add(by.unsigned_abs() as usize)
+                .min(last)
+        };
+        if to == self.preview_column {
+            return Step::Say(does(PREVIEW_ALL_SHOWN));
+        }
+        self.preview_column = to;
+        Step::Changed
+    }
+
     /// Scrolls the section under the pointer, and only it.
     ///
     /// # Why the door does not do this itself
@@ -5961,7 +6343,17 @@ impl View {
                 self.list_offset = slide(self.list_offset, by, total, room);
                 true
             }
-            Pane::Preview => true,
+            // AND THE PREVIEW SCROLLS, now that there is something in it to
+            // scroll. A PICTURE STILL SWALLOWS THE GESTURE and there is no
+            // branch for that either: `preview_total` is 1, `slide` computes
+            // `last = 1 - room` as nought, the offset does not move, and it
+            // still answers `true` — so a hand resting over a photograph does
+            // not move a list somewhere else on the screen.
+            Pane::Preview => {
+                let total = self.preview_total();
+                self.preview_offset = slide(self.preview_offset, by, total, room);
+                true
+            }
             Pane::Sidebar => {
                 let total = self.side.shown(self.hidden).len();
                 self.side_offset = slide(self.side_offset, by, total, room);
@@ -6891,6 +7283,25 @@ impl View {
         Step::Changed
     }
 
+    /// Pages the text preview, and comes back round.
+    ///
+    /// `scroll_facts`'s twin, and the same shape for the same reason written
+    /// there: a list one can hold a key on without having to know where the
+    /// end is. The bar says where one got to.
+    fn scroll_preview(&mut self) -> Step {
+        let width = self.drawn_at.get();
+        let room = usize::from(self.drawn_lines.get());
+        let total = self.preview_total();
+        if !self.panes(width).preview || room == 0 || total <= room {
+            return Step::Say(does(PREVIEW_ALL_SHOWN));
+        }
+        self.preview_offset = self.preview_offset.saturating_add(room);
+        if self.preview_offset >= total {
+            self.preview_offset = 0;
+        }
+        Step::Changed
+    }
+
     /// What the inspector should be asked for, or `None` when nothing is due.
     ///
     /// # Why the ASK is remembered and not only the answer
@@ -6952,6 +7363,7 @@ impl View {
             mime,
             target,
             key,
+            tab: usize::from(ronoctua_tokens::space::FILES_TABWIDTH),
         })
     }
 
@@ -6963,6 +7375,22 @@ impl View {
     pub fn looked(&mut self, l: Looked) {
         if self.asked.as_deref() != Some(l.key.as_str()) {
             return;
+        }
+        // A NEW SUBJECT STARTS AT THE TOP, and a re-decode of the SAME file
+        // does not: dragging a window's edge asks again at a new `target`, and
+        // jumping back to line one while somebody is reading is worse than the
+        // drag.
+        //
+        // AND IT IS THE ONE PLACE. `self.cursor` is written at sixteen sites in
+        // this file and only `move_by` used to reset `info_offset`, so CLICKING
+        // another file kept the facts scrolled where the previous one left
+        // them. Resetting here instead is causal — the subject changed — and it
+        // covers all sixteen, every directory change, and the preview's two
+        // offsets, in three lines.
+        if self.looked.as_ref().is_none_or(|old| old.path != l.path) {
+            self.preview_offset = 0;
+            self.preview_column = 0;
+            self.info_offset = 0;
         }
         self.looked = Some(l);
     }
@@ -6984,6 +7412,48 @@ impl View {
     pub fn preview_pixels(&self) -> Option<&ronoctua_render::image::Rgba> {
         self.showing_now()?;
         self.looked.as_ref()?.rgba.as_ref()
+    }
+
+    /// The letters behind the cursor, when the file has any and no picture.
+    ///
+    /// It answers `None` the moment the cursor leaves the file, exactly as the
+    /// picture does — the panel is about the focused entry, and a panel still
+    /// showing the last one is the failure a preview must not have.
+    #[must_use]
+    pub fn showing_text(&self) -> Option<&ronoctua_inspect::text::Read> {
+        self.showing_now()?;
+        self.looked.as_ref()?.text.as_ref()
+    }
+
+    /// How many ROWS the preview has.
+    ///
+    /// A picture is one and a sentence is one; text is its lines, plus the row
+    /// that says the file goes on. That `1` is what keeps a picture from
+    /// scrolling with no branch anywhere: `slide` computes `last = 1 - room`,
+    /// which is zero, so the gesture is swallowed by arithmetic instead of by
+    /// a special case.
+    #[must_use]
+    pub fn preview_total(&self) -> usize {
+        match self.showing_text() {
+            Some(t) => t.lines.len() + usize::from(t.cut),
+            None => 1,
+        }
+    }
+
+    /// The widest line the preview holds, in cells.
+    ///
+    /// What sideways scrolling stops at. Measured in CLUSTERS, because that is
+    /// the ruler `Field::covers`, `elide_end` and both painters use — counting
+    /// bytes would let an accented line claim columns it does not fill.
+    #[must_use]
+    pub fn preview_widest(&self) -> usize {
+        self.showing_text().map_or(0, |t| {
+            t.lines
+                .iter()
+                .map(|l| usize::from(ronoctua_render::layout::width(&l.text)))
+                .max()
+                .unwrap_or(0)
+        })
     }
 
     /// `Some` when what was looked at is still what the cursor is on.
@@ -7039,6 +7509,401 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
+    }
+
+    /// A view already looking at one text file, with the answer installed.
+    ///
+    /// It goes through `wants_look` and `looked` rather than writing the field:
+    /// the key has to match or `looked` drops the answer, and a fixture that
+    /// bypassed that would pass while the real path was broken.
+    fn a_text_view(name: &str, body: &str) -> (View, PathBuf) {
+        let dir = scratch(name);
+        std::fs::write(dir.join("one.rs"), body).expect("write the file");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        let read = ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab)
+            .expect("a .rs is text")
+            .expect("and it reads");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            text: Some(read),
+            why: None,
+            facts: Vec::new(),
+        });
+        (v, dir)
+    }
+
+    /// The fields the preview's own section draws on line `n`.
+    fn preview_row(v: &View, width: u16, n: usize) -> Vec<Field> {
+        let texts = bundle();
+        let sections = v.sections(&[], 64, width, &texts);
+        let section = sections
+            .into_iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        section
+            .content
+            .get(n)
+            .map(|r| r.fields.clone())
+            .unwrap_or_default()
+    }
+
+    /// THE OWNER'S OWN REPORT, as an assertion.
+    ///
+    /// He selected a markdown file and the panel said "there is no picture
+    /// inside this kind of file". FAILS IF: the text arm goes, or the refusal
+    /// comes back — a file of letters has letters to show.
+    #[test]
+    fn a_text_file_shows_its_content_and_not_a_sentence() {
+        let (v, dir) = a_text_view("text-content", "pub fn main() {}\nlet x = 1;\n");
+        let texts = bundle();
+        let first = preview_row(&v, 200, 0);
+        assert!(!first.is_empty(), "the preview drew nothing");
+        let said: String = first.iter().map(|f| f.text.as_str()).collect();
+        assert!(
+            said.contains("pub fn main"),
+            "the file's own first line is not on screen: {said:?}"
+        );
+        for f in &first {
+            assert_ne!(
+                f.text.trim(),
+                texts.t(NO_PREVIEW).trim(),
+                "a file of letters said there was no preview"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: `Self::Nothing => key::NO_PREVIEW` is put back to a sentence
+    /// of its own. A folder and a file with neither picture nor text are the
+    /// same fact from where somebody is looking, and they say the same thing.
+    #[test]
+    fn a_folder_and_a_file_with_nothing_in_it_say_the_same_thing() {
+        let texts = bundle();
+        assert_eq!(
+            ronoctua_inspect::Refusal::Nothing.key(),
+            NO_PREVIEW,
+            "the two answers diverged again"
+        );
+        // AND THE SENTENCE IS NOT ABOUT PICTURES, which is what the owner
+        // reported. A key that talks about images in a panel that shows
+        // content is the defect, whatever its name.
+        let said = texts.t(NO_PREVIEW).to_lowercase();
+        for word in ["picture", "image", "imagem", "figura"] {
+            assert!(
+                !said.contains(word),
+                "the sentence still talks about pictures: {said:?}"
+            );
+        }
+    }
+
+    /// FAILS IF: `total: 1` comes back for the preview. With one row there is
+    /// no bar, and a file of two hundred lines has nothing saying so.
+    #[test]
+    fn the_preview_scrolls_and_the_bar_says_so() {
+        let body: String = (0..200).map(|n| format!("let x{n} = {n};\n")).collect();
+        let (mut v, dir) = a_text_view("text-scroll", &body);
+        assert_eq!(v.preview_total(), 200, "the rows are not the file's lines");
+
+        let texts = bundle();
+        let sections = v.sections(&[], 64, 200, &texts);
+        let section = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        assert!(
+            section.bar_box(1000.0, 0.0, 800.0, 10.0, 26.0).is_some(),
+            "a two-hundred-line file drew no bar"
+        );
+
+        // AND THE KEY MOVES IT. `C-,` pages and comes back round.
+        v.drawn_at.set(200);
+        v.drawn_lines.set(12);
+        assert!(matches!(v.key(of_view("C-,")), Step::Changed));
+        assert_eq!(v.preview_offset, 12, "the page did not move a page");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the wheel over the preview moves anything else. Every one of
+    /// the four offsets is its own, which is what `View::wheel` exists to say.
+    #[test]
+    fn the_wheel_over_the_preview_moves_only_the_preview() {
+        let body: String = (0..200).map(|n| format!("let x{n} = {n};\n")).collect();
+        let (mut v, dir) = a_text_view("text-wheel", &body);
+        let before = (v.list_offset, v.side_offset, v.info_offset);
+        assert!(
+            v.wheel(Pane::Preview, 3, 200, 12),
+            "it did not take the gesture"
+        );
+        assert_eq!(v.preview_offset, 3);
+        assert_eq!(
+            (v.list_offset, v.side_offset, v.info_offset),
+            before,
+            "it moved a list somewhere else on the screen"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: making the preview scroll made a PICTURE scroll too. There is
+    /// no branch for that anywhere — `preview_total` is one and `slide` clamps
+    /// to nought — and this is what keeps the arithmetic honest.
+    #[test]
+    fn a_picture_still_swallows_the_wheel_and_has_no_bar() {
+        let dir = scratch("picture-still");
+        std::fs::write(dir.join("one.png"), b"\x89PNG\r\n\x1a\n").expect("write");
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: Some(ronoctua_render::image::Rgba {
+                width: 4,
+                height: 4,
+                pixels: vec![0; 64],
+            }),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        assert_eq!(v.preview_total(), 1, "a picture claimed more than one row");
+        assert!(v.wheel(Pane::Preview, 5, 200, 12), "the gesture escaped");
+        assert_eq!(v.preview_offset, 0, "a picture scrolled");
+
+        let texts = bundle();
+        let sections = v.sections(&[], 64, 200, &texts);
+        let section = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        assert!(
+            section.bar_box(1000.0, 0.0, 800.0, 10.0, 26.0).is_none(),
+            "a picture grew a scrollbar"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the runs stop being separate fields, or stop agreeing about
+    /// the click.
+    ///
+    /// The agreement is what makes `Field::covers`' one-cell overlap harmless:
+    /// neighbouring runs answer the same `Hit`, so wherever the pointer lands
+    /// on a line of code it means the same thing.
+    #[test]
+    fn a_highlighted_line_is_several_fields_that_agree_about_the_click() {
+        let (v, dir) = a_text_view("text-runs", "pub fn f() { let s = \"a\"; }\n");
+        let row = preview_row(&v, 200, 0);
+        assert!(
+            row.len() >= 4,
+            "one line of Rust came out as {} field(s): {row:?}",
+            row.len()
+        );
+        let colours: std::collections::BTreeSet<_> =
+            row.iter().map(|f| format!("{:?}", f.color)).collect();
+        assert!(
+            colours.len() >= 3,
+            "the line came out in {} colour(s)",
+            colours.len()
+        );
+        let first = row[0].hit.clone();
+        for f in &row {
+            assert_eq!(
+                f.hit, first,
+                "two fields of one line disagree about the click"
+            );
+        }
+        // AND THEY ARE IN ORDER, left to right, which is what the pointer
+        // walks.
+        for pair in row.windows(2) {
+            if pair[1].text.trim().is_empty() {
+                continue;
+            }
+            assert!(
+                pair[0].at <= pair[1].at,
+                "the runs came out unsorted: {row:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the cut is applied BEFORE the byte-to-cell mapping, which
+    /// moves every run past it and pushes fields off the panel's own column.
+    #[test]
+    fn no_field_of_the_preview_leaves_its_column() {
+        let long = format!("let s = \"{}\";\n", "x".repeat(4000));
+        let (mut v, dir) = a_text_view("text-long", &long);
+        for width in [110u16, 200] {
+            for column in [0usize, 20, 400] {
+                v.preview_column = column;
+                let texts = bundle();
+                let sections = v.sections(&[], 64, width, &texts);
+                let Some(section) = sections.iter().find(|s| matches!(s.pane, Pane::Preview))
+                else {
+                    continue;
+                };
+                let (from, to) = (section.from, section.to);
+                for row in &section.content {
+                    for f in &row.fields {
+                        assert!(
+                            f.at >= from && f.at + width_of(&f.text) <= to,
+                            "a field ran from {} to {} outside {from}..{to} at width {width}",
+                            f.at,
+                            f.at + width_of(&f.text)
+                        );
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: `panel_lines` goes back to the picture's box alone. The
+    /// footer would then give a two-hundred-line file four lines, which is the
+    /// difference between a preview and a glance at one.
+    #[test]
+    fn the_panels_ask_for_the_texts_height() {
+        let body: String = (0..200).map(|n| format!("let x{n} = {n};\n")).collect();
+        let (mut v, dir) = a_text_view("text-height", &body);
+        // THE FACTS OFF, so what is measured is the PREVIEW's ask. With both
+        // on, the sheet's own half-dozen rows clear the picture's box on their
+        // own and the assertion passes with the preview asking for nothing —
+        // which is exactly how this test first came out green with the defect
+        // still in the code.
+        v.info_on = false;
+        let asked = v.panel_lines();
+        assert!(
+            asked > usize::from(preview_lines()),
+            "a two-hundred-line file asked for {asked} lines"
+        );
+        assert!(
+            asked <= PANEL_WANT,
+            "it asked for {asked}, past the ceiling"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the reset moves back to `move_by`, or reaches too far.
+    ///
+    /// It covers a defect that was already there before the preview existed:
+    /// `self.cursor` is written at sixteen sites and only one reset the facts,
+    /// so CLICKING another file kept them scrolled where the last one left
+    /// them.
+    #[test]
+    fn the_preview_goes_back_to_the_top_for_a_new_file_only() {
+        let body: String = (0..200).map(|n| format!("let x{n} = {n};\n")).collect();
+        let (mut v, dir) = a_text_view("text-reset", &body);
+        v.preview_offset = 50;
+        v.info_offset = 8;
+        v.preview_column = 12;
+
+        // THE SAME FILE, asked again at another size: the place is kept.
+        let same = v
+            .looked
+            .as_ref()
+            .expect("an answer is installed")
+            .path
+            .clone();
+        v.asked = Some("prev:again".to_owned());
+        v.looked(Looked {
+            key: "prev:again".to_owned(),
+            path: same,
+            rgba: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        assert_eq!(v.preview_offset, 50, "a re-decode threw the reader back");
+        assert_eq!(v.info_offset, 8);
+
+        // ANOTHER FILE: the top.
+        v.asked = Some("prev:other".to_owned());
+        v.looked(Looked {
+            key: "prev:other".to_owned(),
+            path: dir.join("other.rs"),
+            rgba: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        assert_eq!(v.preview_offset, 0, "a new file kept the old one's place");
+        assert_eq!(v.preview_column, 0);
+        assert_eq!(v.info_offset, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: sideways scrolling draws the same cluster twice, or draws
+    /// nothing at all past the first column.
+    #[test]
+    fn a_window_to_the_right_shows_what_is_to_the_right() {
+        let (mut v, dir) = a_text_view("text-sideways", "aaaabbbbccccddddeeeeffffgggg\n");
+        let at_start: String = preview_row(&v, 200, 0)
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect::<String>()
+            .trim_end()
+            .to_owned();
+        assert!(at_start.starts_with("aaaa"), "{at_start:?}");
+
+        v.preview_column = 8;
+        let moved: String = preview_row(&v, 200, 0)
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect::<String>()
+            .trim_end()
+            .to_owned();
+        assert!(
+            moved.starts_with("cccc"),
+            "the window did not move: {moved:?}"
+        );
+        assert!(
+            !moved.starts_with("aaaa"),
+            "the window drew the line's start again"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the sideways keys measure the panel in the wrong unit.
+    ///
+    /// The first version asked `panes.right.max(panes.strip)`, and the two are
+    /// not comparable: one is CELLS and the other LINES. Nothing in the type
+    /// system says so, and the symptom would be a line that stops moving long
+    /// before its end — or one that runs off into blank columns.
+    #[test]
+    fn the_sideways_keys_stop_at_the_widest_line() {
+        // ONE LONG LINE and one short one, so the stop is a number this test
+        // can compute: the widest line, less what the panel shows.
+        let (mut v, dir) = a_text_view("text-stop", &format!("{}\nshort\n", "w".repeat(300)));
+        let width = 200u16;
+        v.drawn_at.set(width);
+        let room = usize::from(
+            v.panes(width)
+                .preview_box(width)
+                .expect("the preview has a box")
+                .1,
+        );
+        assert!(room > 0 && room < 300, "the panel is {room} cells wide");
+
+        // ALL THE WAY RIGHT, one page at a time, and it stops.
+        for _ in 0..400 {
+            v.key(of_view("C-]"));
+        }
+        assert_eq!(
+            v.preview_column,
+            v.preview_widest() - room,
+            "it did not stop at the end of the widest line"
+        );
+        // AND ALL THE WAY BACK.
+        for _ in 0..400 {
+            v.key(of_view("C-["));
+        }
+        assert_eq!(v.preview_column, 0, "it did not come back to the left edge");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A view with NO sidebar, which is what almost every test wants: they are

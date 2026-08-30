@@ -45,6 +45,15 @@ ronoctua-protocol = { path = "../ronoctua-protocol" }
 # pixel side. A buffer takes this same crate with `default-features = false`
 # and gets the cell side only; see `ronoctua-design`'s own manifest.
 ronoctua-design = { path = "../ronoctua-design" }
+
+# WHERE EACH COLOUR OF A LINE OF CODE BEGINS AND ENDS.
+#
+# It used to be a module of `ronoctua-clipboard`, which never used it: only the
+# shell did. A highlighter that belongs to one app is a highlighter the next
+# app copies, so it is a crate of its own — the clipboard's preview and the
+# file manager's preview now colour the same Rust the same way because there is
+# one implementation and one role-to-token map.
+ronoctua-syntax = { path = "../ronoctua-syntax" }
 ronoctua-runtime = { path = "../ronoctua-runtime" }
 ronoctua-term = { path = "../ronoctua-term" }
 # The ONLY border with /proc, the cgroups and systemd's memory policy — the

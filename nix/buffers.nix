@@ -20,6 +20,8 @@
   wit ? ../crates/ronoctua-protocol/wit,
   protocolCrate ? ../crates/ronoctua-protocol,
   designCrate ? ../crates/ronoctua-design,
+  syntaxCrate ? ../crates/ronoctua-syntax,
+  syntaxRs,
 }:
 
 let
@@ -50,7 +52,7 @@ let
   workspaceRoot = builtins.toFile "Cargo.toml" ''
     [workspace]
     resolver = "2"
-    members = [ "crates/ronoctua-protocol", "crates/ronoctua-design" ]
+    members = [ "crates/ronoctua-protocol", "crates/ronoctua-design", "crates/ronoctua-syntax" ]
     exclude = [ "buffers" ]
 
     [workspace.package]
@@ -130,6 +132,12 @@ let
           # `wit_bindgen::generate!` reads by literal path.
           cp -r ${onlySources protocolCrate}/. crates/ronoctua-protocol/
           cp -r ${onlySources designCrate}/. crates/ronoctua-design/
+          # AND THE HIGHLIGHTER, which `ronoctua-design` names as an OPTIONAL
+          # path dependency. Cargo resolves a path dependency whether or not
+          # the feature that switches it on is enabled, so the directory has to
+          # be here for every buffer — the compiled table only reaches the
+          # `.wasm` of one that asks for `syntax`.
+          cp -r ${onlySources syntaxCrate}/. crates/ronoctua-syntax/
           cp ${workspaceRoot} Cargo.toml
           # WRITABLE BEFORE THE WIT GOES IN, and the order is not cosmetic: a
           # `cp -r` out of the store carries the store's read-only mode, so the
@@ -152,6 +160,14 @@ let
           rustToolchain
           rustPlatform.cargoSetupHook
         ];
+
+        # THE SYNTAX TABLE, for `ronoctua-syntax`'s build script.
+        #
+        # Its `build.rs` runs on the HOST even when the crate is compiled for
+        # wasm, and it refuses to generate anything itself (invariant 5) — so
+        # the finished table has to be named here, exactly as `nix/rust.nix`
+        # names it for the host's own build.
+        RONOCTUA_SYNTAX_RS = "${syntaxRs}/syntax.rs";
 
         buildPhase = ''
           runHook preBuild

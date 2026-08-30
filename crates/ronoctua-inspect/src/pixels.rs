@@ -5,8 +5,9 @@
 //! "A preview of every kind of content" is not a list of special cases; it is
 //! one table with one rule (first row that matches wins) and one thing to do to
 //! extend it, which is to add a row. Everything that is not in the table gets
-//! [`Refusal::NoPicture`], which is an answer — most files really have no
-//! picture in them, and saying so beats an empty rectangle.
+//! [`Refusal::Nothing`] — and then the TEXT path is asked, because most files
+//! that have no picture in them have letters in them, and letters are content
+//! too. Only when neither answers does the panel say there is nothing.
 //!
 //! # Every external path hands back a PNG on stdout
 //!
@@ -275,7 +276,7 @@ pub fn preview(path: &Path, mime: &str, target: u32) -> Made {
 pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
     let target = crate::step(target);
     let Some(row) = how(mime) else {
-        return Made::refused(Refusal::NoPicture);
+        return Made::refused(Refusal::Nothing);
     };
     let began = Instant::now();
     let outcome = match row.how {

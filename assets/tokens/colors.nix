@@ -102,6 +102,80 @@
   };
 
   # -------------------------------------------------------------------
+  # SYNTAX — the CONTENT's palette, and it is not the chrome's
+  # -------------------------------------------------------------------
+  #
+  # WHY THIS FAMILY MAY SPEND HUES THE CHROME RESERVES
+  #
+  # Because it is CONTENT. The precedent is written down and was paid for: the
+  # emoji face is the one thing on screen with colour outside the tokens, and
+  # the reason is that emoji are content — like the clipboard's image preview —
+  # and not chrome. A code preview is the same kind of thing as an image
+  # preview: it is what one came to look at, not the frame around it.
+  #
+  # And the blue's reservation survives whole. It is reserved so that exactly
+  # one thing on a screen says "the keyboard is here": the window's border, and
+  # the buffer's name when the footer takes it. A function's name in blue
+  # INSIDE a preview competes with neither — it is not on a border and it is
+  # not a buffer's name. What the rule forbids is a second blue piece of
+  # CHROME, and there is none here.
+  #
+  # THE VALUES ARE TOKYO NIGHT'S OWN, which is where this palette's greens,
+  # yellows and purples already came from. New hues would give a preview that
+  # does not look like the system around it.
+  #
+  # TWELVE TOKENS FOR FOURTEEN ROLES, and that is not thrift.
+  # `ronoctua_design::Palette` already maps seven roles onto six tokens, with
+  # the reason: two roles that share a token today stay two roles, so the day
+  # the theme parts them the change is one line in one table and not a hunt
+  # through every call site. `Constant` shares `number`; `Heading` shares
+  # `attribute`.
+  syntax = {
+    # THE ONE THAT RECEDES, and the only cool grey in this file outside
+    # `brain`. A comment has to be findable and ignorable at once; at
+    # `text.dim` it would sit in the same register as a disabled row.
+    comment = "0x565F89FF";
+
+    string = "0x9ECE6AFF";
+    # The one thing inside a string that is NOT string: `\n`, `&`, `${HOME}`.
+    # Bright, because it is the thing that stops being literal.
+    escape = "0x89DDFFFF";
+    # `Number` AND `Constant`. A literal `null` and a literal `42` are the same
+    # kind of thing today, and the two roles stay two.
+    number = "0xFF9E64FF";
+
+    keyword = "0xBB9AF7FF";
+    type = "0x2AC3DEFF";
+    # See the note above about the reservation: this one is content.
+    function = "0x7AA2F7FF";
+
+    # `Attribute` AND `Heading`. Both are a marker ABOUT a block rather than
+    # the block: `#[derive]` over a struct, `## Section` over a paragraph,
+    # `@@ -1,4 +1,6 @@` over a hunk. In a diff this is the line between the
+    # green and the red, which is how a patch is read.
+    attribute = "0xE0AF68FF";
+
+    # THE KEY SIDE of a key/value pair, and the highest-value colour in this
+    # family: a file manager previews config more often than code, and without
+    # it JSON is one colour of strings and a unit file is a grey wall.
+    property = "0x7DCFFFFF";
+
+    tag = "0xF7768EFF";
+
+    # THE TWO WHOSE COLOUR IS NOT A CHOICE. The same green as `string` and the
+    # same red as `tag`, and they are separate tokens for the reason
+    # `notification.read`, `.suppressed` and `.countdown` are three tokens on
+    # one value: a diff line is not a string, and the day the theme wants a
+    # diff green that is not the string green, these are the lines to change.
+    #
+    # They cannot be confused on screen either: a diff line takes its role from
+    # its first character and carries no highlighting inside it, so nothing
+    # else in this family ever appears in the same file as these two.
+    added = "0x9ECE6AFF";
+    removed = "0xF7768EFF";
+  };
+
+  # -------------------------------------------------------------------
   # THE NOTIFICATION BAND — the line (or three) ABOVE the modeline
   # -------------------------------------------------------------------
   #

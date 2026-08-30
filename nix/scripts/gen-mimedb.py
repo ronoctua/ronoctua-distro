@@ -180,6 +180,10 @@ def main() -> int:
     ap.add_argument("--glyphs", required=True, help="mime-glyphs.nix, as JSON")
     ap.add_argument("--icons", required=True, help="icons.json from glyphgen")
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--out-types",
+        help="where to write what types exist, for a generator that has to check one",
+    )
     ap.add_argument("--version", required=True, help="the pinned shared-mime-info version")
     args = ap.parse_args()
 
@@ -209,6 +213,11 @@ def main() -> int:
     }
 
     failed = False
+
+    def refuse(message: str) -> None:
+        nonlocal failed
+        print(f"ERROR: {message}", file=sys.stderr)
+        failed = True
 
     def token_char(token: str, why: str) -> str | None:
         entry = icons.get(token)
@@ -260,12 +269,13 @@ def main() -> int:
 
     # --- what upstream does not have --------------------------------------
     ours: list[tuple[str, str]] = []
+    ours_under: list[tuple[str, str]] = []
     for row in table["ours"]:
         mime = row["mime"]
         if mime in types:
             print(
                 f"ERROR: `ours` invents `{mime}`, which the database ALREADY HAS. "
-                "Ele pertence a `exact`.",
+                "It belongs in `exact`.",
                 file=sys.stderr,
             )
             failed = True
@@ -274,10 +284,33 @@ def main() -> int:
             print(f"ERROR: `{mime}` is not shaped like a MIME type", file=sys.stderr)
             failed = True
             continue
+        # WHAT IT DESCENDS FROM, and it is not optional.
+        #
+        # A type with no subclass entry answers `false` to every `is_a`, and
+        # the preview's "is this text?" IS an `is_a`. Without this the `.nix`
+        # files on a NixOS machine would be the ones whose content it refused
+        # to show — found by a test, not by the owner's screen.
+        under = row.get("under")
+        if not under:
+            refuse(
+                f"`ours` invents `{mime}` and does not say what it descends from. "
+                "A type with no parent answers `false` to every `is_a`, and the "
+                "preview's \"is this text?\" is one."
+            )
+            continue
+        if under not in types:
+            refuse(
+                f"`ours` says `{mime}` descends from `{under}`, which the database "
+                "does not have."
+            )
+            continue
         ch = token_char(row["token"], f"ours `{mime}`")
         if ch is not None:
             of_exact[mime] = ch
             ours.append((mime, row["glob"]))
+            # ONE PAIR PER TYPE, not per glob: TypeScript has two globs.
+            if (mime, under) not in ours_under:
+                ours_under.append((mime, under))
 
     floors = [
         ("globs", len(globs), FLOOR_GLOBS),
@@ -303,6 +336,11 @@ def main() -> int:
     # on the same terms as everything else rather than winning by construction.
     for mime, pattern in ours:
         globs.append((50, mime, pattern, False))
+    # OUR TYPES JOIN THE HIERARCHY, so `is_a` answers about them the way it
+    # answers about everything else. Appended rather than merged, because the
+    # counts above are UPSTREAM's and our own additions must not mask a reader
+    # that stopped understanding the file.
+    subclass.extend(ours_under)
 
     reach = 0
     for _, _, matches in magic:
@@ -424,6 +462,33 @@ def main() -> int:
     out.append("")
 
     Path(args.out).write_text("\n".join(out), encoding="utf-8")
+
+    # WHAT TYPES EXIST, FOR WHOEVER HAS TO CHECK ONE.
+    #
+    # `assets/syntax.nix` claims MIME types and must not be allowed to invent
+    # one, so `gen-syntax.py` has to cross-reference the same list this file
+    # reads. Reading `share/mime` a second time there would put the pinned
+    # version in two places, and the second one is the one that goes stale.
+    # So this derivation stays the only reader, and publishes what it read.
+    #
+    # `types` is the UNION with our own: `text/x-nix` is not upstream's, and a
+    # language that claims it must still pass. The `ours` block of
+    # `assets/icons/mime-glyphs.nix` is where a type is invented, and it is the
+    # only place.
+    if args.out_types:
+        Path(args.out_types).write_text(
+            json.dumps(
+                {
+                    "version": args.version,
+                    "types": sorted(types | {m for m, _ in ours}),
+                    "aliases": sorted([a, b] for a, b in aliases),
+                    "subclasses": sorted([a, b] for a, b in subclass),
+                },
+                indent=1,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
     print(
         f"OK: {len(globs)} globs, {len(magic)} magic rules, {len(subclass)} subclasses, "
         f"{len(generic)} generics -> {args.out}"

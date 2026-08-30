@@ -14,6 +14,7 @@ resolver = "3"
 exclude = [ "buffers" ]
 members = [
   "crates/ronoctua-tokens",
+  "crates/ronoctua-syntax",
   "crates/ronoctua-protocol",
   "crates/ronoctua-design",
   "crates/ronoctua-runtime",

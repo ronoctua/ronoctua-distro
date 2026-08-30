@@ -171,6 +171,25 @@
     # glance, not a second view, and a strip that grew with the window would
     # take the height the listing exists to use.
     stripLines = 4;
+
+    # HOW WIDE A TABULATION IS, in cells, when the preview shows a file's text.
+    #
+    # Four. It is not taste and it is not the editor's setting: it is what makes
+    # a nested block READ as nested in a column that may be twenty-four cells
+    # wide. Eight — the terminal's ancient default — spends a third of the
+    # narrowest panel on the second level of indentation alone, and code three
+    # levels deep would arrive with nothing but whitespace on screen. Two is
+    # below the eye's threshold for a step at this cell width; the two levels
+    # stop being tellable apart, which is the whole thing indentation is for.
+    #
+    # It is a TOKEN because it is spacing on a grid of text, which is exactly
+    # invariant 9's subject — the same reason `gutter` and `edgeRight` above are
+    # tokens rather than a `1` written twice in Rust.
+    #
+    # And it is applied WHERE THE FILE IS READ, before the highlighter runs, not
+    # where it is drawn: the highlighter's ranges are byte offsets into the
+    # text, and expanding tabs afterwards would move every one of them.
+    tabWidth = 4;
   };
 
   # The TRANSFER queue's row, in cells.

@@ -216,11 +216,53 @@
   #
   # The bar for adding one is that upstream has no type at all. A type that
   # exists and is merely inconvenient belongs in `exact`.
+  #
+  # AND EACH ONE SAYS WHAT IT DESCENDS FROM, in `under`.
+  #
+  # A type invented here has no subclass entry in freedesktop's table, so
+  # `mime::is_a` answers `false` for every question about it — and the first
+  # thing that asked was the preview, whose "is this text?" is exactly
+  # `is_a(mime, "text/plain")`. Without this field a `.nix` file would be the
+  # one file on a NixOS machine whose content the preview refused to show.
+  #
+  # So a type is invented WHOLE here — its name, its glob, its icon and its
+  # place in the hierarchy — rather than in four places that each know a
+  # quarter of it.
   ours = [
     {
       mime = "text/x-nix";
       glob = "*.nix";
+      under = "text/plain";
       token = "nix";
+    }
+    # TYPESCRIPT, and upstream's silence here is not an oversight.
+    #
+    # `*.ts` in shared-mime-info 2.4 is `video/mp2t` — an MPEG transport
+    # stream — and the database is RIGHT: `.ts` meant that years before the
+    # language existed. So there is no type to correct in `exact`; there is a
+    # type that does not exist, which is what this block is for.
+    #
+    # It matters beyond the icon: `assets/syntax.nix` claims MIME types and is
+    # refused if it invents one, so without this line a TypeScript file would
+    # be offered a video's preview and no highlighting at all.
+    {
+      mime = "text/x-typescript";
+      glob = "*.ts";
+      under = "text/plain";
+      token = "code";
+    }
+    {
+      mime = "text/x-typescript";
+      glob = "*.tsx";
+      under = "text/plain";
+      token = "code";
+    }
+    # ZIG, which upstream has no type for at all.
+    {
+      mime = "text/x-zig";
+      glob = "*.zig";
+      under = "text/plain";
+      token = "code";
     }
   ];
 }

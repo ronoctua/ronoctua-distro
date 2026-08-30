@@ -87,7 +87,7 @@ include!(concat!(env!("OUT_DIR"), "/tokens.rs"));
 // warns about exactly that. As a const assertion, the error shows up at build time, which
 // is where a broken generator ought to show up.
 const _: () = assert!(
-    counts::COLORS >= 15,
+    counts::COLORS >= 40,
     "the colour generation came out truncated"
 );
 const _: () = assert!(

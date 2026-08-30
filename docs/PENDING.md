@@ -19,6 +19,41 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.0001. O realce de sintaxe deixa quatro coisas de fora, de propósito · pequeno cada
+
+Não são esquecimentos; cada uma tem um motivo estrutural escrito no `ARCHITECTURE`, e estão aqui para
+que ninguém as descubra achando que achou um defeito.
+
+- **Heredoc** (`<<EOF`, `<<'PY'`). O terminador é texto arbitrário descoberto em tempo de execução, e
+  o `State` que atravessa linhas cabe em oito bytes de propósito — texto não cabe lá. Custaria o
+  `Copy` e poria uma alocação no orçamento do frame.
+- **Título setext** do markdown (o sublinhado de `===`). Precisaria do conteúdo da linha ANTERIOR, e
+  o desenho inteiro é "uma linha mais oito bytes".
+- **Linguagem dentro de `<script>` e `<style>`** no HTML. O `State::inner` já tem a vaga; o que falta
+  é o markup delegar, e isso não custa mudança de tipo nenhuma.
+- **A segunda leva de linguagens** — `erlang`, `elixir`, `lisp`, `ocaml`, `crystal`, `julia`,
+  `fortran`, `verilog`, `vhdl`, `tcl`, `groovy`, `d`, `vala`, `nim`, `qml`, `gherkin`, `rpm-spec`,
+  `gettext` e o resto. **É só dado**: um attrset cada em `assets/syntax.nix`, zero Rust, zero papel
+  novo, zero cor nova. É esse o ponto da forma.
+
+- acabou quando: o item que se resolveu sai desta lista; nenhum deles muda como o sistema funciona,
+  então nenhum precisa de linha no `CLAUDE.md`
+
+### 0.0002. Nenhum buffer wasm usa o realce ainda · pequeno
+
+O caminho está inteiro e provado por teste: `ronoctua-design` tem a feature `syntax`, o
+`Palette::syntax` está implementado dos DOIS lados, o `Screen::code` faz a aritmética byte→célula uma
+vez, e o `nix/buffers.nix` já copia o crate e passa a tabela. O que não existe é um buffer que peça a
+feature — nenhum dos oito mostra conteúdo de arquivo.
+
+Medido, para quando alguém for: com o crate na árvore e a feature DESLIGADA, o `format.wasm` cresceu
+366 bytes; a tabela são 55 KB de fonte, e é isso que um buffer paga ao ligá-la.
+
+- acabou quando: um buffer liga `features = [ "syntax" ]` e desenha uma linha colorida numa foto do
+  `nix run .#png`
+
+
+
 ### 0.0. As nove vistas do rodapé não têm estado · pequeno, e é uma decisão
 
 O estado é do BUFFER, e um buffer é uma janela do compositor (invariante 4): o `Esc` que volta ao

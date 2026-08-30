@@ -1,0 +1,27 @@
+[package]
+name = "ronoctua-syntax"
+description = "Where each colour of a line of code begins and ends. Zero dependencies, no_std."
+# EVERYTHING SPELLED OUT, and never `version.workspace = true`.
+#
+# The same reason `ronoctua-design`'s manifest gives: this crate is a member of
+# the root workspace AND a path dependency of eight buffers, each of which is a
+# workspace of its own. `nix/buffers.nix` mirrors the repository's layout inside
+# the derivation, and in that tree a manifest inheriting from a workspace root
+# it cannot see fails with `failed to load manifest ... workspace ... not
+# found` — an error naming neither the field nor the buffer.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+# ZERO DEPENDENCIES, and the crate is `no_std` besides.
+#
+# It is a pure function from `&str` to `Vec<Range>`: it has no business with a
+# filesystem, a clock, a thread or the environment, and `no_std` makes that
+# "the names do not exist" instead of "we agreed not to" — the argument
+# `ronoctua-design` already writes about itself.
+[dependencies]
+
+[lints]
+workspace = true

@@ -973,17 +973,17 @@ fn wrap_text(text: &str, width: u16, ceiling: usize) -> Vec<String> {
 /// the usual color: colored prose is worse than gray prose, because whoever
 /// reads it starts looking for meaning in a color that means nothing.
 ///
-/// The color of each role is chosen HERE, and not by the highlighter: it
-/// gives back a role, and a color token is the host's business — the same
-/// border the buffers' colors already respect.
+/// The color of each role is chosen by `chrome::syntax_color`, and not by the
+/// highlighter: it gives back a role, and a color token is the host's business
+/// — the same border the buffers' colors already respect. One map, because the
+/// file manager's preview reads it too, and two would be the two panels
+/// colouring the same Rust differently.
 fn highlight_line(
     line: &str,
-    tongue: Option<ronoctua_clipboard::highlight::Language>,
+    tongue: Option<ronoctua_syntax::Language>,
     y: u16,
     column: u16,
 ) -> Vec<ronoctua_render::Span> {
-    use ronoctua_clipboard::highlight::Role;
-
     let simple = |text: &str| ronoctua_render::Span {
         size: ronoctua_render::Size::Grid,
         text: text.to_owned(),
@@ -995,7 +995,7 @@ fn highlight_line(
     let Some(l) = tongue else {
         return vec![simple(line)];
     };
-    let ranges = ronoctua_clipboard::highlight::ranges(line, l);
+    let ranges = ronoctua_syntax::ranges(line, l);
     if ranges.is_empty() {
         return vec![simple(line)];
     }
@@ -1022,14 +1022,11 @@ fn highlight_line(
 
     for f in ranges {
         push(&line[cursor..f.start], cursor, tokens::color::TEXT_PRIMARY);
-        let color = match f.role {
-            Role::Comment => tokens::color::TEXT_DIM,
-            Role::Text => tokens::color::STATE_SUCCESS,
-            Role::Number => tokens::color::STATE_WARNING,
-            Role::Word => tokens::color::TEXT_GROUP,
-            Role::Normal => tokens::color::TEXT_PRIMARY,
-        };
-        push(&line[f.start..f.end], f.start, color);
+        push(
+            &line[f.start..f.end],
+            f.start,
+            crate::chrome::syntax_color(f.role),
+        );
         cursor = f.end;
     }
     push(&line[cursor..], cursor, tokens::color::TEXT_PRIMARY);
@@ -3375,17 +3372,28 @@ impl PointerHandler for Footer {
             // up scrolling"*.
             let columns = self.screen_columns();
             let cell = self.cell_under_pointer.unwrap_or(0);
-            let room = self.expansion_ceiling();
             // BELOW THE LISTING IS THE STRIP, and down there the same cell
             // belongs to a panel rather than to the listing — see
             // `Panes::section_at`. `row_at` counts from the top of the region,
             // so a row past the grid's lines is one of the strip's.
-            let in_strip = self.files_strip() > 0
+            let strip = self.files_strip();
+            let in_strip = strip > 0
                 && self
                     .row_under_pointer
                     .is_some_and(|r| r >= self.grid().lines);
+            // AND EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT, which is what
+            // the window door already did and this one did not. The ceiling
+            // was handed to EVERY pane, so a panel in the four-line strip was
+            // paged twelve lines at a time — already wrong for the facts, and
+            // it would have been wrong for the preview the same way.
+            let ceiling = self.expansion_ceiling();
+            let panel_room = if strip > 0 { strip } else { ceiling };
             if let Some(v) = self.files.as_mut() {
                 let which = v.panes(columns).section_at(cell, columns, in_strip);
+                let room = match which {
+                    crate::files::Pane::Info | crate::files::Pane::Preview => panel_room,
+                    _ => ceiling,
+                };
                 if v.wheel(which, i64::from(whole.saturating_mul(step)), columns, room) {
                     self.owes_paint = true;
                     return;
@@ -8727,7 +8735,7 @@ impl Footer {
                     // to give back the mapping, which would cut across its
                     // responsibility. Highlighting each already broken line gives the
                     // same result on screen and keeps the two things apart.
-                    let tongue = ronoctua_clipboard::highlight::guess(t);
+                    let tongue = ronoctua_syntax::guess(t);
                     for (n, l) in wrap_text(t, panel, usize::from(alto))
                         .into_iter()
                         .enumerate()

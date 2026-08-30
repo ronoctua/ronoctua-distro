@@ -311,6 +311,52 @@ pub fn divider(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::quad
     }
 }
 
+/// What colour a syntax role is drawn in.
+///
+/// # Why the map lives HERE, and why there is one of it
+///
+/// Because both of its callers are in this crate — the clipboard's preview in
+/// `surface.rs` and the file manager's preview in `files.rs` — and two copies
+/// would be the two panels colouring the same Rust differently. That is the
+/// defect `Section` and `Field::covers` were each written to end, and this
+/// file is already the one allowed to make a visual decision
+/// (`separators-come-from-chrome`).
+///
+/// And it does not live in `ronoctua-syntax`: that crate is `no_std` and
+/// receives no token VALUES, which is the same wall invariant 11 draws around
+/// a wasm buffer. It gives back a role; turning a role into a colour is the
+/// business of whoever draws.
+///
+/// # Fourteen roles, twelve tokens
+///
+/// `Constant` shares `number` and `Heading` shares `attribute`, and they stay
+/// two roles each for the reason `ronoctua_design::Palette` gives about
+/// `Quiet` and `Dim`: the day the theme parts them, the change is one line
+/// here rather than a hunt through every call site.
+///
+/// The `match` is exhaustive, so a role added to the crate is a compile error
+/// in exactly one file — which is the property that makes the wall worth
+/// having.
+#[must_use]
+pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
+    use ronoctua_syntax::Role;
+
+    match role {
+        Role::Comment => tokens::color::SYNTAX_COMMENT,
+        Role::String => tokens::color::SYNTAX_STRING,
+        Role::Escape => tokens::color::SYNTAX_ESCAPE,
+        Role::Number | Role::Constant => tokens::color::SYNTAX_NUMBER,
+        Role::Keyword => tokens::color::SYNTAX_KEYWORD,
+        Role::Type => tokens::color::SYNTAX_TYPE,
+        Role::Function => tokens::color::SYNTAX_FUNCTION,
+        Role::Attribute | Role::Heading => tokens::color::SYNTAX_ATTRIBUTE,
+        Role::Property => tokens::color::SYNTAX_PROPERTY,
+        Role::Tag => tokens::color::SYNTAX_TAG,
+        Role::Added => tokens::color::SYNTAX_ADDED,
+        Role::Removed => tokens::color::SYNTAX_REMOVED,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Door, FIELDS_LEAD, Frame, INSET};
