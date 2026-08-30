@@ -38,6 +38,9 @@ let
   # ImageMagick wants six digits.
   colours = (import ../assets/tokens/colors.nix).syntax;
   colourOf = name: builtins.substring 2 6 colours.${name};
+  # THE COLOUR A SCROLLBAR IS DRAWN IN, out of the same file, so a measurement
+  # of one is tied to the token rather than to a number typed here.
+  barColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).rule.strong;
 
   # THE FILE THE PREVIEW IS PHOTOGRAPHED SHOWING.
   #
@@ -50,21 +53,21 @@ let
   # written at the copy below.
   sampleCode = pkgs.writeText "sample.nix" (
     builtins.concatStringsSep "\n" [
+      # THE FIRST THREE LINES CARRY EVERY COLOUR THIS SHOT MEASURES, and that
+      # is not decoration: the panel shows as many lines as its band has, and
+      # the band gives one up to the sideways bar. A fixture that put the
+      # string on line four measured the layout as it was before that bar
+      # existed — and the build failed the day it appeared, which is the check
+      # doing its job.
       "# a comment, which is the one colour that recedes"
-      "{ pkgs, lib, ... }:"
-      "let"
-      "  name = \"ronoctua\";"
-      "  size = 42;"
-      "  deep = { a = { b = [ 1 2 3 ]; }; };"
-      "in"
-      "{"
+      "let name = \"ronoctua\"; size = 42; in"
+      # AND A LINE WIDER THAN ANY PANEL, because the bar along the bottom is
+      # the half the owner found missing and a shot without one cannot show it.
+      "{ description = \"a line long enough that no panel in this system can hold it, which is what the bar along the foot of the preview is for\";"
       "  enable = true;"
       "  packages = with pkgs; [ git ripgrep fd ];"
       "  imports = [ ./base.nix ./desktop.nix ];"
-      "  settings = {"
-      "    theme = \"tokyo-night\";"
-      "    lines = 12;"
-      "  };"
+      "  settings = { theme = \"tokyo-night\"; lines = 12; };"
       "}"
       ""
     ]
@@ -147,16 +150,23 @@ pkgs.testers.runNixOSTest {
         print(f"took {name}")
 
 
-    def crop(box):
-        """Cuts `box` out of the last screenshot, for measuring."""
+    def crop(box, into="/tmp/measured.png"):
+        """Cuts `box` out of the last screenshot, for measuring.
+
+        THE DESTINATION IS A PARAMETER, and it is not decoration: two
+        measurements sharing one file is one measurement quietly overwriting
+        the other's evidence. It happened here — the sideways bar's crop landed
+        on the panel's, and the comparison below then held two pictures of
+        different sizes, which `compare` refuses and `|| true` swallowed. The
+        assertion passed on an error message.
+        """
         machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} +repage "
-            "/tmp/measured.png"
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} +repage {into}"
         )
 
 
-    def has_colour(hex_value, at_least=1):
-        """How many pixels of `/tmp/measured.png` are that colour.
+    def has_colour(hex_value, at_least=1, of="/tmp/panel-before.png"):
+        """How many pixels of `of` are that colour.
 
         A LOOSE MATCH on purpose: the surface is drawn through wgpu and the
         text through a shaper, so a glyph's interior is the token's colour and
@@ -167,7 +177,7 @@ pkgs.testers.runNixOSTest {
         """
         n = int(
             machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick /tmp/measured.png -fuzz 12% "
+                f"${pkgs.imagemagick}/bin/magick {of} -fuzz 12% "
                 f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
                 f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
@@ -180,9 +190,9 @@ pkgs.testers.runNixOSTest {
 
     def rows_with_ink(box):
         """How many rows of pixels in `box` have anything drawn on them."""
-        crop(box)
+        crop(box, "/tmp/ink.png")
         out = machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/measured.png -resize 1x! "
+            "${pkgs.imagemagick}/bin/magick /tmp/ink.png -resize 1x! "
             "-threshold 6% -format '%[fx:int(mean*h+0.5)]' info:"
         )
         return int(out.strip())
@@ -558,7 +568,15 @@ pkgs.testers.runNixOSTest {
         # The panels sit in the right-hand half of the window from
         # `space.files.panelsFrom` on, and the preview is the left of the two.
         w_t, h_t, x_t, y_t = niri_geometry()
-        panel = f"{w_t // 4}x{h_t - 4 * LINE}+{w_t // 2}+{2 * LINE}"
+        # SAFELY INSIDE THE PREVIEW, and narrower than the panel it sits in.
+        #
+        # A quarter of the width was the first box, and the two panels are not
+        # exactly a quarter each: it reached past the rule and into the facts,
+        # so a measurement of "the preview" was reading its neighbour's text.
+        # The panels begin at the halfway mark; this stops well short of the
+        # rule between them, which costs a few columns of reach and buys an
+        # answer about the right panel.
+        panel = f"{w_t // 4 - 70}x{h_t - 4 * LINE}+{w_t // 2 + 10}+{2 * LINE}"
 
         # ONE: THERE IS CONTENT, and not a sentence. A refused panel draws one
         # dim line; planting `Refusal::NoPicture` back brings this to 1.
@@ -575,7 +593,7 @@ pkgs.testers.runNixOSTest {
         # by hand, or a role-to-token map that lost an arm, fails HERE and not
         # on the owner's screen. The two asked for are the two furthest apart
         # in the palette — a string's green and a keyword's purple.
-        crop(panel)
+        crop(panel, "/tmp/panel-before.png")
         has_colour("#${colourOf "string"}", at_least=20)
         has_colour("#${colourOf "keyword"}", at_least=20)
 
@@ -584,19 +602,104 @@ pkgs.testers.runNixOSTest {
         machine.sleep(2)
         shot("20-preview-of-text-paged")
 
+        # AND THE SIDEWAYS BAR IS THERE, which is the half the owner found
+        # missing: the keys moved the line and there was nothing to drag.
+        #
+        # WHERE IT IS, IS MEASURED AND NOT ASSUMED. The first version computed
+        # the foot from the WINDOW's height and cropped the modeline instead —
+        # which has ink of its own, so the assertion passed while pointing at
+        # the wrong thing entirely. The panel's last row of ink is a fact on
+        # the screen; ask for it.
+        def ink_bottom(box, at_y):
+            """The absolute y where the ink inside `box` ends."""
+            crop(box, "/tmp/col.png")
+            got = machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/col.png -threshold 20% -trim "
+                "-format '%[fx:page.y+h]' info: 2>/dev/null || echo 0"
+            ).strip()
+            return at_y + int(got)
+
+        bottom = ink_bottom(panel, 2 * LINE)
+        foot = f"{w_t // 4 - 70}x{LINE}+{w_t // 2 + 10}+{bottom - LINE}"
+        assert rows_with_ink(foot) >= 1, (
+            "there is nothing along the foot of the preview — a line one can "
+            "only reach with the keyboard is half a view"
+        )
+
+        # AND THE SIDEWAYS BAR MOVES, which is the whole of what the owner
+        # asked for: a thumb that is only there to look at is not a control.
+        #
+        # Measured as its own left edge before and after the key. `C-]` moves
+        # the line, and the thumb has to follow it — where a bar is drawn is
+        # where it is grabbed, and a thumb that stood still while the text
+        # moved would be lying about where one is.
+        # DID THE THUMB LEAVE THE LEFT EDGE? — asked of a four-pixel probe
+        # there, counting the pixels drawn in the bar's own token.
+        #
+        # NOT `-trim`, and the reason is the case that matters most: trim
+        # answers from the CORNER pixel, and at column nought the corner IS the
+        # thumb — so it reported nothing exactly when the thumb was where it
+        # should be. The first version read that "nothing" as a position of
+        # minus one, and then `after > before` passed because 3 is more than
+        # -1 rather than because anything moved.
+        #
+        # This count cannot do that. With no bar at all it is nought at both
+        # ends and the assertion fails; with a bar that does not move it is the
+        # same at both ends and the assertion fails.
+        def thumb_over_the_left(box):
+            probe = f"4x{LINE}+{box.split('+')[1]}+{box.split('+')[2]}"
+            return int(
+                machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {probe} +repage "
+                    f"-fuzz 6% -fill white -opaque '#${barColour}' -fill black "
+                    "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+                ).strip()
+            )
+
+        before_left = thumb_over_the_left(foot)
+        assert before_left > 0, (
+            "the foot of the preview has no bar on it at all — a line one can "
+            "only reach with the keyboard is half a view"
+        )
+        for _ in range(6):
+            machine.succeed(
+                "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+bracketright"
+            )
+        machine.sleep(2)
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        after_left = thumb_over_the_left(foot)
+        assert after_left < before_left, (
+            f"the sideways thumb covered {before_left} pixels of the left edge "
+            f"and still covers {after_left} — the line moved and the bar did "
+            "not follow it"
+        )
+        shot("21-preview-scrolled-sideways")
+
         # AND IT IS MEASURED TOO: the panel's own pixels changed. Restoring
         # `total: 1` leaves the key with nothing to move and this fails.
         machine.succeed(
             "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
             f"{panel} +repage /tmp/after.png"
         )
-        same = machine.succeed(
-            "${pkgs.imagemagick}/bin/magick compare -metric AE /tmp/measured.png "
-            "/tmp/after.png null: 2>&1 || true"
-        ).strip()
-        assert same not in ("0", "0 (0)"), (
-            "the preview drew exactly the same pixels after the page key — "
-            "it did not scroll"
+        # BY SIGNATURE, and not by `compare`.
+        #
+        # `compare`'s EXIT CODE is its answer — nought when the pictures match,
+        # one when they differ — so every attempt to keep the command from
+        # "failing" also threw away the result. The first version wrapped it in
+        # `|| true` and read an error message as "they differ"; the second
+        # measured two crops of different sizes and got away with it.
+        #
+        # A signature is one number per picture. Two of them are equal or they
+        # are not, and a magick that fell over gives two empty strings — which
+        # compare EQUAL, so the assertion below fails rather than passes.
+        def signature(path):
+            return machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick {path} -format '%#' info:"
+            ).strip()
+
+        assert signature("/tmp/panel-before.png") != signature("/tmp/after.png"), (
+            "the preview drew the same pixels after the page key — it did not "
+            "scroll"
         )
 
         # AND IT GOES, or it stands in front of every shot after it. The bracket

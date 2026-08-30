@@ -266,7 +266,7 @@ struct FilesWindow {
     /// The bars were drawn and nothing listened: the owner tried the facts'
     /// with the mouse and it did not move. A bar one cannot drag is a picture
     /// of a bar.
-    dragging: Option<crate::files::Pane>,
+    dragging: Option<(crate::files::Pane, crate::files::Axis)>,
     /// What is left over of a touchpad gesture, in lines.
     ///
     /// A wheel sends whole detents; a touchpad sends fractions of one, and this
@@ -653,7 +653,7 @@ impl FilesWindow {
     }
 
     /// Which section's bar a POINT is on — the same rectangles that were drawn.
-    fn bar_at_point(&self, x: f64, y: f64) -> Option<crate::files::Pane> {
+    fn bar_at_point(&self, x: f64, y: f64) -> Option<(crate::files::Pane, crate::files::Axis)> {
         // THE SAME RECTANGLES THE FRAME DREW, from the same value. Asking
         // `Geometry` here and in `frame()` is what makes "where it is drawn"
         // and "where it is grabbed" one answer instead of two that agree by
@@ -667,14 +667,14 @@ impl FilesWindow {
         let panes = self.view.panes(self.columns);
         geo.bars(panes, &sections, cell, line_px)
             .into_iter()
-            .find(|(_, r)| {
+            .find(|(_, _, r)| {
                 let (bx, by, bw, bh) = *r;
                 x >= f64::from(bx)
                     && x < f64::from(bx + bw)
                     && y >= f64::from(by)
                     && y < f64::from(by + bh)
             })
-            .map(|(p, _)| p)
+            .map(|(p, axis, _)| (p, axis))
     }
 
     fn assemble_gpu(&mut self) {
@@ -961,7 +961,7 @@ impl Geometry {
         sections: &[crate::files::Section],
         cell: f32,
         line_px: f32,
-    ) -> Vec<(crate::files::Pane, (f32, f32, f32, f32))> {
+    ) -> Vec<crate::files::Bar> {
         let edge = self.metric.width;
         let top = self.metric.y_of(FIRST_OF_REGION);
         // WHERE THE SURFACE ENDS, and not where the last whole line does. See
@@ -979,9 +979,19 @@ impl Geometry {
                     cell,
                     edge,
                 )?;
-                sec.bar_box(x + wide, top, bottom, cell, line_px)
-                    .map(|r| (sec.pane, r))
+                // BOTH OF A SECTION'S BARS, and the axis with each: a pane
+                // may have one going down and one going across, and a pointer
+                // holding one of them is not holding the other.
+                let down = sec
+                    .bar_box(x + wide, top, bottom, cell, line_px)
+                    .map(|r| (sec.pane, crate::files::Axis::Down, r));
+                let across = sec
+                    .wide_bar_box(x, top, bottom, wide, cell, line_px)
+                    .map(|r| (sec.pane, crate::files::Axis::Across, r));
+                Some([down, across])
             })
+            .flatten()
+            .flatten()
             .collect()
     }
 }
@@ -1114,6 +1124,8 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             .sections(&chrome, s.geo.room(), s.geo.columns, s.texts)
     } else {
         vec![crate::files::Section {
+            // A fixture's one section, and nothing in it reads sideways.
+            across: None,
             pane: crate::files::Pane::Listing,
             from: 0,
             to: s.geo.columns,
@@ -1267,8 +1279,8 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // column. `Section::bar_box` is the rectangle now — drawn here, and
     // tested against by `FilesWindow::bar_at_point`.
     #[allow(clippy::cast_precision_loss)]
-    for (sec, rect) in s.geo.bars(panes, &sections, cell, line_px) {
-        let _ = sec;
+    for (sec, axis, rect) in s.geo.bars(panes, &sections, cell, line_px) {
+        let _ = (sec, axis);
         quads.push(ronoctua_render::quad::Quad {
             x: rect.0,
             y: rect.1,
@@ -1591,12 +1603,13 @@ impl PointerHandler for FilesWindow {
         let before = (self.under_pointer.clone(), self.cell_under_pointer);
         let mut left = None;
         let mut right = None;
-        let mut dragged: Option<f64> = None;
+        // BOTH COORDINATES: a bar going across is dragged by `x`.
+        let mut dragged: Option<(f64, f64)> = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     if self.dragging.is_some() {
-                        dragged = Some(e.position.1);
+                        dragged = Some(e.position);
                     }
                     self.under_pointer = self.target_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self
@@ -1616,7 +1629,7 @@ impl PointerHandler for FilesWindow {
                     // thumb is a control, not a line of the list under it.
                     self.dragging = self.bar_at_point(e.position.0, e.position.1);
                     if self.dragging.is_some() {
-                        dragged = Some(e.position.1);
+                        dragged = Some(e.position);
                     } else {
                         left = self.under_pointer.clone();
                     }
@@ -1661,8 +1674,8 @@ impl PointerHandler for FilesWindow {
         }
         // THE DRAG, before the row and before the wheel: while the thumb is
         // held, the pointer is not pointing at rows.
-        if let Some(y) = dragged
-            && let Some(pane) = self.dragging
+        if let Some((px, py)) = dragged
+            && let Some((pane, axis)) = self.dragging
         {
             // AGAINST THE SECTION'S OWN BAND, and not the region's.
             //
@@ -1679,14 +1692,33 @@ impl PointerHandler for FilesWindow {
                 .find(|s| s.pane == pane)
                 .map(|s| (s.top, s.lines));
             let (top_line, lines) = band.unwrap_or((0, self.room()));
-            #[allow(clippy::cast_precision_loss)]
-            let top = f64::from(FIRST_OF_REGION) * line_px + top_line as f64 * line_px;
-            #[allow(clippy::cast_precision_loss)]
-            let tall = (line_px * lines as f64).max(1.0);
-            let fraction = (y - top) / tall;
+            // ALONG THE TRACK THAT WAS GRABBED. A bar going across is dragged
+            // by `x` over the panel's own pixels; one going down by `y` over
+            // its band's.
+            let geo = self.geometry();
+            let fraction = if matches!(axis, crate::files::Axis::Across) {
+                let panes = self.view.panes(self.columns);
+                match crate::files::section_px(
+                    panes,
+                    pane,
+                    CONTENT_MARGIN,
+                    self.columns,
+                    geo.metric.cell(),
+                    geo.metric.width,
+                ) {
+                    Some((x, wide)) if wide > 0.0 => (px - f64::from(x)) / f64::from(wide),
+                    _ => return,
+                }
+            } else {
+                #[allow(clippy::cast_precision_loss)]
+                let top = f64::from(FIRST_OF_REGION) * line_px + top_line as f64 * line_px;
+                #[allow(clippy::cast_precision_loss)]
+                let tall = (line_px * lines as f64).max(1.0);
+                (py - top) / tall
+            };
             if self
                 .view
-                .drag_to(pane, fraction, self.columns, self.rooms())
+                .drag_to(pane, axis, fraction, self.columns, self.rooms())
             {
                 self.ask_paint();
                 return;
@@ -2009,7 +2041,13 @@ mod tests {
             // defect only shows at the LAST offset. The first draft measured at
             // zero and stayed green with the regression planted back in.
             for pane in [crate::files::Pane::Listing, crate::files::Pane::Info] {
-                let _ = view.drag_to(pane, 1.0, geo.columns, geo.rooms());
+                let _ = view.drag_to(
+                    pane,
+                    crate::files::Axis::Down,
+                    1.0,
+                    geo.columns,
+                    geo.rooms(),
+                );
             }
             let chrome = view.chrome_rows(geo.columns, &texts);
             let sections = view.sections(&chrome, geo.room(), geo.columns, &texts);
@@ -2017,7 +2055,7 @@ mod tests {
             let bars = geo.bars(panes, &sections, cell, line_px);
             assert!(!bars.is_empty(), "eighty files and not one bar");
 
-            for (pane, (bx, by, bw, bh)) in bars {
+            for (pane, _axis, (bx, by, bw, bh)) in bars {
                 let sec = sections
                     .iter()
                     .find(|s| s.pane == pane)

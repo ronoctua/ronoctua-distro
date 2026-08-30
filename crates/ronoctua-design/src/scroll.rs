@@ -143,6 +143,45 @@ impl Scroll {
         Some((right - cell, band_top + from, cell, tall))
     }
 
+    /// The same thumb, laid ACROSS: a bar along the bottom of a band.
+    ///
+    /// # Why a list needs one at all
+    ///
+    /// Because a preview panel is twenty-four cells at its floor and a line of
+    /// code is not, so the panel shows a WINDOW onto the line and the window
+    /// moves. Keys move it — and a view this system offers only to the keyboard
+    /// is half a view. The owner reported exactly that: the sideways scrolling
+    /// worked and there was nothing to drag.
+    ///
+    /// `left` is the pixel the band starts at and `wide` is how many pixels it
+    /// spans; `band_bottom` is where the band ENDS. The unit is the CELL,
+    /// because sideways the list is measured in cells the way it is measured
+    /// in lines going down.
+    ///
+    /// # It is one CELL thick, and not one line
+    ///
+    /// The same thickness [`Self::bar`] is wide, and that is not tidiness: two
+    /// bars on one panel that are not the same weight read as two different
+    /// controls. The first version made this one a whole LINE — twenty-nine
+    /// pixels against the other's twelve — and the owner saw it at once from a
+    /// screenshot: everything in the interface has to be proportional.
+    ///
+    /// The ROW it sits in is still a whole line, because a text grid has no
+    /// way to give up a fraction of one. What that buys is air ABOVE the bar,
+    /// between it and the last line of text — the same air the bar going down
+    /// has beside it.
+    #[must_use]
+    pub fn bar_across(
+        &self,
+        left: f32,
+        band_bottom: f32,
+        wide: f32,
+        cell: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let (from, long) = self.thumb(wide, cell)?;
+        Some((left + from, band_bottom - cell, long, cell))
+    }
+
     /// Which offset a point in the track means.
     ///
     /// The inverse of [`Scroll::thumb`], and it has to be: where a bar is drawn
@@ -329,5 +368,72 @@ mod tests {
         assert_eq!(s.thumb(400.0, 26.0), None);
         assert!(!s.holds(10.0, 400.0, 26.0));
         assert_eq!(s.bar(700.0, 0.0, 400.0, 10.8, 26.0), None);
+    }
+    /// FAILS IF: the sideways bar stops being the same arithmetic as the one
+    /// going down.
+    ///
+    /// It is the same `thumb`, and it has to be: where a bar is drawn is where
+    /// it is grabbed, and `offset_at` is the inverse of `thumb` whichever way
+    /// the track runs.
+    #[test]
+    fn a_bar_laid_across_is_the_same_arithmetic_as_one_going_down() {
+        // Two hundred cells of line in a forty-cell panel.
+        let bar = Scroll {
+            total: 200,
+            lines: 40,
+            offset: 0,
+            top: 0,
+        };
+        let (cell, line) = (12.0, 29.0);
+        let wide = 40.0 * cell;
+
+        let (x, y, w, h) = bar.bar_across(100.0, 500.0, wide, cell).expect("a bar");
+        assert!(
+            (x - 100.0).abs() < 0.01,
+            "it did not start at the band's left"
+        );
+        assert!(
+            (y - (500.0 - cell)).abs() < 0.01,
+            "it does not sit on the band's own bottom"
+        );
+        assert!(w >= cell, "the thumb is thinner than a cell");
+        assert!(w < wide, "the thumb fills a track it should not");
+
+        // AND IT IS AS THICK AS THE OTHER ONE IS WIDE.
+        //
+        // Two bars on one panel that are not the same weight read as two
+        // different controls. The first version made this one a whole LINE —
+        // twenty-nine pixels against the other's twelve — and the owner saw it
+        // at once from a screenshot.
+        let (_, _, _, across) = bar
+            .bar(500.0, 100.0, 900.0, cell, line)
+            .expect("a bar going down");
+        let _ = across;
+        let (_, _, _, _) = (x, y, w, h);
+        assert!((h - cell).abs() < 0.01, "it is not one cell thick");
+
+        // AND AT THE END IT REACHES THE END, which is the half a track that
+        // was measured wrong going down once already.
+        let end = Scroll {
+            total: 200,
+            lines: 40,
+            offset: 160,
+            top: 0,
+        };
+        let (x2, _, w2, _) = end.bar_across(100.0, 500.0, wide, cell).expect("a bar");
+        assert!(
+            (x2 + w2 - (100.0 + wide)).abs() < 0.5,
+            "at the last column the thumb stopped {} px short",
+            100.0 + wide - (x2 + w2)
+        );
+
+        // AND A LINE THAT FITS HAS NO BAR AT ALL.
+        let whole = Scroll {
+            total: 20,
+            lines: 40,
+            offset: 0,
+            top: 0,
+        };
+        assert!(whole.bar_across(100.0, 500.0, wide, cell).is_none());
     }
 }

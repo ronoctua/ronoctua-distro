@@ -77,7 +77,12 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   os MESMOS da linha — mesma `Hit`, mesma máquina. **A prévia mostra TEXTO** quando o arquivo é
   texto (`is_a(mime, "text/plain")`, 277 tipos pelo DAG do freedesktop), com realce e rolagem: setas
   quando ela tem o foco, `C-,` pagina e dá a volta, `C-[`/`C-]` movem a linha para os lados, e a
-  barra aparece sozinha porque a seção passou a ter `total`. Tetos: 1 MiB, 2 000 linhas, 512 bytes
+  barra aparece sozinha porque a seção passou a ter `total`. **Barra nenhuma
+  desenha por cima do conteúdo** — a que rola vertical tira uma CÉLULA e a que rola
+  horizontal tira uma LINHA, e só quando existem; a listagem e a lateral já
+  recuavam por `EDGE_RIGHT`. **A linha longa tem barra de baixo** (`Scroll::bar_across`,
+  o mesmo `thumb` com os eixos trocados): teclado sem mouse é meia vista, e o
+  arrasto passou a ter EIXO. Tetos: 1 MiB, 2 000 linhas, 512 bytes
   por linha — o último porque `.js` minificado é UMA linha de 2 MB e o `elide_end` a percorreria por
   cluster a cada frame. **Arquivo sem imagem E sem texto diz o que a pasta diz** (`sem prévia`); a
   frase sobre imagem morreu. **As seções são

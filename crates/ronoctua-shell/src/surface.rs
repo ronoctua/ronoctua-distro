@@ -395,7 +395,7 @@ struct Footer {
     /// facts' belong to the view, and until this existed they were drawn and
     /// nothing listened — the owner tried the facts' with the mouse in both
     /// doors and neither moved.
-    dragging_section: Option<crate::files::Pane>,
+    dragging_section: Option<(crate::files::Pane, crate::files::Axis)>,
     /// Which line of the visible PAGE is under the pointer.
     ///
     /// An index into the page, and not into the whole list: it is what the drawing
@@ -3148,8 +3148,8 @@ impl PointerHandler for Footer {
                         .brain_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
                     // DRAGGING: the pointer's position BECOMES the offset.
-                    if let Some(pane) = self.dragging_section {
-                        self.drag_section_to(pane, e.position.1);
+                    if let Some((pane, axis)) = self.dragging_section {
+                        self.drag_section_to(pane, axis, e.position.0, e.position.1);
                     } else if self.dragging {
                         self.drag_to(e.position.1);
                     }
@@ -3263,9 +3263,9 @@ impl PointerHandler for Footer {
                     // sit in their own columns, and the pointer test for the
                     // listing's does not know about them.
                     let section = self.files_bar_at_point(e.position.0, e.position.1);
-                    if let Some(pane) = section {
-                        self.dragging_section = Some(pane);
-                        self.drag_section_to(pane, e.position.1);
+                    if let Some((pane, axis)) = section {
+                        self.dragging_section = Some((pane, axis));
+                        self.drag_section_to(pane, axis, e.position.0, e.position.1);
                     } else if self.on_thumb(e.position.0, e.position.1) {
                         self.dragging = true;
                         self.drag_to(e.position.1);
@@ -6819,7 +6819,55 @@ impl Footer {
     }
 
     /// Drags one section's bar to where the pointer is.
-    fn drag_section_to(&mut self, pane: crate::files::Pane, y: f64) {
+    fn drag_section_to(
+        &mut self,
+        pane: crate::files::Pane,
+        axis: crate::files::Axis,
+        x: f64,
+        y: f64,
+    ) {
+        // ALONG THE TRACK THAT WAS GRABBED. The sideways bar's is the panel's
+        // own pixels, and it answers first because the pane it belongs to also
+        // has one going down.
+        if matches!(axis, crate::files::Axis::Across) {
+            let columns = self.screen_columns();
+            let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+            let edge = self
+                .screens
+                .iter()
+                .find(|t| t.configured && t.width > 0)
+                .map_or(0.0, |t| {
+                    f32::from(u16::try_from(t.width).unwrap_or(u16::MAX))
+                });
+            let rooms = self.files_rooms();
+            let panes = self.files.as_ref().map(|v| v.panes(columns));
+            let Some(panes) = panes else { return };
+            let Some((left, wide)) = crate::files::section_px(
+                panes,
+                pane,
+                crate::chrome::FIELDS_LEAD,
+                columns,
+                cell,
+                edge,
+            ) else {
+                return;
+            };
+            if wide <= 0.0 {
+                return;
+            }
+            if let Some(v) = self.files.as_mut()
+                && v.drag_to(
+                    pane,
+                    axis,
+                    (x - f64::from(left)) / f64::from(wide),
+                    columns,
+                    rooms,
+                )
+            {
+                self.owes_paint = true;
+            }
+            return;
+        }
         let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
         let top = f64::from(self.first_of_expansion()) * line_height;
         let rooms = self.files_rooms();
@@ -6851,7 +6899,7 @@ impl Footer {
             f64::from(bar.track(top as f32, bottom, line_height as f32)).max(1.0)
         };
         if let Some(v) = self.files.as_mut()
-            && v.drag_to(pane, (y - top) / tall, columns, rooms)
+            && v.drag_to(pane, axis, (y - top) / tall, columns, rooms)
         {
             // OWED, not drawn: see `Footer::owes_paint`. A drag sends a
             // `Motion` per pixel of pointer travel, and presenting waits for
@@ -6869,7 +6917,7 @@ impl Footer {
         cell: f32,
         line_height: f32,
         edge: f32,
-    ) -> Vec<(crate::files::Pane, (f32, f32, f32, f32))> {
+    ) -> Vec<crate::files::Bar> {
         let Some(v) = self.files.as_ref() else {
             return Vec::new();
         };
@@ -6890,14 +6938,28 @@ impl Footer {
                     cell,
                     edge,
                 )?;
-                sec.bar_box(x + wide, top, bottom, cell, line_height)
-                    .map(|r| (sec.pane, r))
+                // BOTH OF A SECTION'S BARS. See the window door's twin: a
+                // pane may have one going down and one going across, and a
+                // pointer holding one is not holding the other.
+                let down = sec
+                    .bar_box(x + wide, top, bottom, cell, line_height)
+                    .map(|r| (sec.pane, crate::files::Axis::Down, r));
+                let across = sec
+                    .wide_bar_box(x, top, bottom, wide, cell, line_height)
+                    .map(|r| (sec.pane, crate::files::Axis::Across, r));
+                Some([down, across])
             })
+            .flatten()
+            .flatten()
             .collect()
     }
 
     /// Which section's bar a POINT is on — the same rectangles that were drawn.
-    fn files_bar_at_point(&self, x: f64, y: f64) -> Option<crate::files::Pane> {
+    fn files_bar_at_point(
+        &self,
+        x: f64,
+        y: f64,
+    ) -> Option<(crate::files::Pane, crate::files::Axis)> {
         let width = self
             .screens
             .iter()
@@ -6907,14 +6969,14 @@ impl Footer {
         let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
         self.files_bars(self.screen_columns(), cell, line_height, width)
             .into_iter()
-            .find(|(_, r)| {
+            .find(|(_, _, r)| {
                 let (bx, by, bw, bh) = *r;
                 x >= f64::from(bx)
                     && x < f64::from(bx + bw)
                     && y >= f64::from(by)
                     && y < f64::from(by + bh)
             })
-            .map(|(p, _)| p)
+            .map(|(p, axis, _)| (p, axis))
     }
 
     /// WHAT IS UNDER THE POINTER in the manager, asked of the view.
@@ -9023,7 +9085,7 @@ impl Footer {
                 // of them put the facts' thumb off the side of the screen
                 // whenever the window was not full width.
                 #[allow(clippy::cast_precision_loss)]
-                for (_, rect) in self.files_bars(columns, cell, line_height, width as f32) {
+                for (_, _, rect) in self.files_bars(columns, cell, line_height, width as f32) {
                     backgrounds.push(ronoctua_render::quad::Quad {
                         x: rect.0,
                         y: rect.1,

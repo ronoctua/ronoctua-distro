@@ -3920,6 +3920,43 @@ A tabulação vira espaços **na leitura, antes do realce** — as faixas são d
 texto final, e expandir depois moveria todas. A largura é token (`space.files.tabWidth`) e chega por
 parâmetro, porque o `ronoctua-inspect` não recebe valor de token.
 
+##### Uma barra não desenha por cima do que ela serve para alcançar
+
+O dono fotografou uma linha da prévia correndo por baixo do polegar, com as
+últimas letras atrás dele. A causa é aritmética e valia para **toda** seção que
+rola: a barra fica na ÚLTIMA célula do vão da seção, e os campos recebiam essa
+célula também.
+
+A listagem e a barra lateral nunca tiveram o defeito, e não por sorte — as duas
+recuam as colunas por `EDGE_RIGHT`, então a barra delas cai no ar. Os painéis não
+tinham reserva nenhuma. Agora eles tiram uma célula, **e só quando há barra**:
+`cut` não muda enquanto se rola, então um arquivo curto não paga uma coluna por
+uma barra que nunca vai crescer.
+
+A primeira tentativa encolheu o `to` da seção, e isso moveu a BARRA em vez do
+texto — ela é desenhada em `to - 1`, então o buraco apenas reabriu uma célula à
+esquerda. O que encolhe é a sala que os CAMPOS recebem; a seção guarda o vão
+inteiro, porque é dele que a barra sai.
+
+##### E a linha longa tem barra também, porque metade de uma vista não é uma vista
+
+A prévia rola para os lados por tecla desde o primeiro dia da feature, e o dono
+reportou a falta assim que as teclas funcionaram: **não havia o que arrastar**.
+Este sistema atende o teclado E o mouse, e uma vista que oferece um dos dois não
+está pronta.
+
+A barra de baixo é o MESMO `Scroll` com os eixos trocados — `total` é a linha
+mais larga, `lines` é o que cabe, e `thumb` já era agnóstico ao eixo. O que
+entrou no crate foi só onde pôr o retângulo (`Scroll::bar_across`), e o que
+entrou na seção foi um `across: Option<Scroll>` que só a prévia carrega.
+
+E ela também não desenha por cima: a seção que tem barra de baixo entrega uma
+LINHA, do mesmo jeito que a que tem barra de lado entrega uma célula.
+
+O arrasto passou a ter **eixo**. Antes era só o painel, o que bastava enquanto
+cada seção tinha uma barra — com duas, um ponteiro segurando uma não está
+segurando a outra.
+
 ##### A rolagem saiu de graça, e o que a liberou foram três remoções
 
 A seção da prévia nascia com `offset: 0` e `total: 1`, e três lugares recusavam o gesto por escrito.

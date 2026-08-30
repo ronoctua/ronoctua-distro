@@ -321,6 +321,37 @@ const NO_PREVIEW: &str = ronoctua_i18n::key::FILES_NO_PREVIEW;
 /// multiplying.
 const PANEL_WANT: usize = 64;
 
+/// Which way a bar's track runs.
+///
+/// A drag has to say so: the preview has two bars, and a pointer holding one of
+/// them is not holding the other. Before this the drag was keyed by pane alone,
+/// which was enough while every section had exactly one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    /// The list, top to bottom.
+    Down,
+    /// The line, left to right.
+    Across,
+}
+
+/// A scrollbar somebody could grab: whose it is, which way it runs, and where.
+///
+/// Named because three functions hand it about — each door's "draw them all"
+/// and each door's "which one is under the pointer" — and the whole point of
+/// the pair is that they are the SAME rectangles. A tuple spelled out four
+/// times is four chances for them to stop being the same.
+pub type Bar = (Pane, Axis, (f32, f32, f32, f32));
+
+/// How many cells a scrollbar takes.
+///
+/// One, and it is the cell at the section's right-hand edge. Named because
+/// three places have to agree about it: where the bar is DRAWN
+/// (`Scroll::bar`), where it is GRABBED (the same rectangle, asked again), and
+/// where the content must STOP — which is what this constant is for. The third
+/// was missing, and the owner photographed a line of code running under the
+/// thumb.
+const BAR: u16 = 1;
+
 /// What the facts key says when there is nothing to scroll.
 ///
 /// A key that does nothing and says nothing is the one outcome this project
@@ -1291,6 +1322,12 @@ pub struct Section {
     /// offset and its top reach into its neighbours, and every defect the
     /// owner reported was one of those reaches.
     pub content: Vec<Row>,
+    /// The same list read SIDEWAYS, when its lines are wider than the section.
+    ///
+    /// `None` for a section whose rows are cut to fit and never move — which
+    /// is every one of them but the text preview, where a line of code is
+    /// longer than a twenty-four-cell panel and the window over it moves.
+    pub across: Option<ronoctua_design::Scroll>,
 }
 
 impl Section {
@@ -1351,6 +1388,42 @@ impl Section {
         // has something underneath.
         let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
         self.scroll().bar(right, band_top, bottom, cell, line_px)
+    }
+
+    /// The sideways bar's rectangle, when this section has one.
+    ///
+    /// `left` and `wide` are the section's own pixels, `top` is where the
+    /// region's first line begins, and `bottom` is where the surface ends. The
+    /// twin of [`Section::bar_box`], and it asks the same
+    /// [`ronoctua_design::Scroll`] — where a bar is drawn is where it is
+    /// grabbed, whichever way its track runs.
+    ///
+    /// # Why it needs the SURFACE's bottom and not only its own lines
+    ///
+    /// Because a surface is not a whole number of lines. `lines` is
+    /// `floor(height / line_px)`, so a band that ends at its last whole line
+    /// stops short of the surface by the residue — and the owner photographed
+    /// exactly that: twenty pixels of background under the bar, between it and
+    /// the modeline.
+    ///
+    /// [`ronoctua_design::Scroll::track`] already decides this for the bar
+    /// going down — the last band in a column takes the leftover, and one with
+    /// something underneath does not — so this asks the same question rather
+    /// than answering it a second way.
+    #[must_use]
+    pub fn wide_bar_box(
+        &self,
+        left: f32,
+        top: f32,
+        bottom: f32,
+        wide: f32,
+        cell: f32,
+        line_px: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let across = self.across?;
+        let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
+        let band_bottom = band_top + self.scroll().track(band_top, bottom, line_px);
+        across.bar_across(left, band_bottom, wide, cell)
     }
 
     /// This section as a list that may not fit.
@@ -5650,6 +5723,9 @@ impl View {
             let first = self.side_offset.min(side.len().saturating_sub(1));
             out.push(Section {
                 pane: Pane::Sidebar,
+                // NEVER SIDEWAYS: a sidebar row is a name that is elided, not
+                // a line one reads to its end.
+                across: None,
                 from: 0,
                 to: panes.sidebar,
                 top: 0,
@@ -5708,6 +5784,10 @@ impl View {
             }
             out.push(Section {
                 pane: Pane::Listing,
+                // NEVER SIDEWAYS: the listing's columns GIVE WAY at a narrow
+                // width — that is what `Table` is for — so there is nothing
+                // past its right edge to reach.
+                across: None,
                 from: panes.listing_from(),
                 to: listing_to,
                 top: 0,
@@ -5749,8 +5829,66 @@ impl View {
                 if !wanted(pane) {
                     continue;
                 }
+                let total = if matches!(pane, Pane::Info) {
+                    sheet.len()
+                } else {
+                    self.preview_total()
+                };
+                // THE BAR'S CELL IS NOT THE CONTENT'S.
+                //
+                // A scrollbar sits in the LAST cell of its section's span, and
+                // the fields were being given that cell too — so a line long
+                // enough ran under the thumb and lost its last letters behind
+                // it. The owner photographed it. A bar drawn over the content
+                // hides the thing it exists to help you reach.
+                //
+                // The listing and the sidebar never had it, and that is not
+                // luck: both inset their columns by `EDGE_RIGHT`, so their bar
+                // lands in air. The panels had no such reserve, so they take
+                // one here — and only when there IS a bar, because `cut` does
+                // not change as one scrolls and a short file must not pay a
+                // column for a bar it will never grow.
+                let content_room = if total > lines {
+                    room.saturating_sub(BAR)
+                } else {
+                    room
+                };
+                // AND THE PREVIEW READS SIDEWAYS TOO.
+                //
+                // The owner chose scrolling over a silent cut, and a view this
+                // system offers only to the keyboard is half a view: he
+                // reported the missing bar as soon as the keys worked. The
+                // track is the panel's own cells, so this is the same `Scroll`
+                // with the axes swapped — `total` is the widest line and
+                // `lines` is what fits.
+                let across = if matches!(pane, Pane::Preview) {
+                    let widest = self.preview_widest();
+                    (widest > usize::from(content_room)).then(|| ronoctua_design::Scroll {
+                        total: widest,
+                        lines: usize::from(content_room),
+                        offset: self.preview_column,
+                        top: 0,
+                    })
+                } else {
+                    None
+                };
+                // AND ITS LINE IS NOT THE CONTENT'S EITHER, which is the
+                // same rule the cell follows, turned ninety degrees: a
+                // sideways bar sits on the band's LAST line, so the rows stop
+                // one short of it.
+                let content_lines = if across.is_some() {
+                    lines.saturating_sub(1)
+                } else {
+                    lines
+                };
                 out.push(Section {
                     pane,
+                    across,
+                    // THE SECTION KEEPS ITS WHOLE SPAN. Shrinking `to` was the
+                    // first attempt and it moved the bar instead of the text:
+                    // the bar is drawn at `to - 1`, so the gap simply reopened
+                    // one cell to the left. What shrinks is the room the
+                    // FIELDS are given, below.
                     from: at,
                     to: at.saturating_add(room),
                     top,
@@ -5760,17 +5898,13 @@ impl View {
                     } else {
                         self.preview_offset
                     },
-                    total: if matches!(pane, Pane::Info) {
-                        sheet.len()
-                    } else {
-                        self.preview_total()
-                    },
+                    total,
                     above: 0,
-                    content: (0..lines)
+                    content: (0..content_lines)
                         .map(|k| Row {
                             fields: match which {
-                                Panel::Preview => self.preview_fields(k, at, room, texts),
-                                Panel::Info => self.info_fields(k, at, room, &sheet),
+                                Panel::Preview => self.preview_fields(k, at, content_room, texts),
+                                Panel::Info => self.info_fields(k, at, content_room, &sheet),
                             },
                             marked: false,
                             focused: false,
@@ -5904,7 +6038,34 @@ impl View {
     /// answer `false` for the listing — "not mine, the door's" — and each door
     /// then wrote the case again; the owner found the halves that were missing
     /// by dragging them.
-    pub fn drag_to(&mut self, pane: Pane, fraction: f64, width: u16, room: Room) -> bool {
+    pub fn drag_to(
+        &mut self,
+        pane: Pane,
+        axis: Axis,
+        fraction: f64,
+        width: u16,
+        room: Room,
+    ) -> bool {
+        // THE SIDEWAYS BAR IS A DRAG TOO, and its track is the panel's cells
+        // rather than the region's lines. It answers first because the pane it
+        // belongs to also has a bar going down, and a pointer holding one is
+        // not holding the other.
+        if matches!(axis, Axis::Across) {
+            let Some((_, cells)) = self.panes(width).preview_box(width) else {
+                return false;
+            };
+            let widest = self.preview_widest();
+            let bar = ronoctua_design::Scroll {
+                total: widest,
+                lines: usize::from(cells),
+                offset: 0,
+                top: 0,
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let at = fraction.clamp(0.0, 1.0) as f32;
+            self.preview_column = bar.offset_at(at, 1.0, 0.0);
+            return true;
+        }
         // EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT — see [`Room`].
         let room = match pane {
             // BOTH PANELS SCROLL INSIDE THE PANEL'S OWN HEIGHT, not the
@@ -7903,6 +8064,247 @@ mod tests {
             v.key(of_view("C-["));
         }
         assert_eq!(v.preview_column, 0, "it did not come back to the left edge");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// NOTHING IS DRAWN UNDER A SCROLLBAR, in any section that has one.
+    ///
+    /// The owner photographed it: a line of the preview ran under the bar and
+    /// came out with its last letters behind the thumb. A bar drawn over the
+    /// content is a bar that hides the thing it is there to help you reach.
+    ///
+    /// The bar sits in the LAST cell of its section's own span, so the rule is
+    /// one line of arithmetic: a section that is cut may not put a field in
+    /// that cell.
+    #[test]
+    fn nothing_is_drawn_under_a_scrollbar() {
+        let dir = scratch("under-the-bar");
+        // A LISTING THAT SCROLLS and a PREVIEW THAT SCROLLS, so the assertion
+        // has more than one section to be true of.
+        for n in 0..60 {
+            std::fs::write(dir.join(format!("file-with-a-long-name-{n:02}.txt")), b"x").unwrap();
+        }
+        std::fs::write(
+            dir.join("aaa.rs"),
+            (0..200)
+                .map(|n| format!("let a_fairly_long_identifier_{n} = {n};\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        let read = ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab)
+            .expect("a .rs is text")
+            .expect("and it reads");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            text: Some(read),
+            why: None,
+            facts: Vec::new(),
+        });
+
+        let texts = bundle();
+        let chrome = v.chrome_rows(200, &texts);
+        let mut checked = 0;
+        for sec in v.sections(&chrome, 20, 200, &texts) {
+            if !sec.scroll().cut() {
+                continue;
+            }
+            checked += 1;
+            // THE BAR'S OWN CELL: the last of the section's span.
+            let bar = sec.to.saturating_sub(1);
+            for (n, row) in sec.content.iter().enumerate() {
+                for f in &row.fields {
+                    let ends = f.at + width_of(&f.text);
+                    assert!(
+                        ends <= bar,
+                        "{:?} row {n} draws {:?} out to cell {ends}, and its bar is in cell {bar}",
+                        sec.pane,
+                        f.text
+                    );
+                }
+            }
+        }
+        assert!(checked >= 2, "only {checked} section(s) had a bar to test");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A LINE ONE CAN ONLY REACH WITH THE KEYBOARD IS HALF A VIEW.
+    ///
+    /// The owner reported it as soon as the sideways keys worked: they moved
+    /// the line and there was nothing to drag. This system supports the
+    /// keyboard AND the mouse, and a view that offers one of them is a view
+    /// that is not finished.
+    ///
+    /// FAILS IF: the preview stops carrying its `across`, or carries one for a
+    /// file whose lines already fit.
+    #[test]
+    fn a_line_wider_than_the_panel_has_a_bar_to_drag() {
+        let wide = format!("let s = \"{}\";\n", "x".repeat(600));
+        let (mut v, dir) = a_text_view("across-bar", &wide);
+        let texts = bundle();
+        let chrome = v.chrome_rows(200, &texts);
+
+        let sections = v.sections(&chrome, 20, 200, &texts);
+        let sec = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        assert!(
+            sec.wide_bar_box(700.0, 0.0, 900.0, 480.0, 12.0, 29.0)
+                .is_some(),
+            "a 600-cell line got no sideways bar"
+        );
+
+        // AND IT IS A RECTANGLE, one line tall, inside the panel's own span.
+        let (x, wide_px, cell, line_px) = (700.0f32, 480.0f32, 12.0f32, 29.0f32);
+        let (bx, by, bw, bh) = sec
+            .wide_bar_box(x, 0.0, 900.0, wide_px, cell, line_px)
+            .expect("a bar to drag");
+        // ONE CELL THICK, the same as the other bar is wide — see
+        // `the_two_bars_are_the_same_weight_and_reach_the_same_edge`.
+        assert!((bh - cell).abs() < 0.01, "it is not one cell thick");
+        assert!(bx >= x, "it starts left of its own panel");
+        assert!(bx + bw <= x + wide_px + 0.01, "it runs past the panel");
+        assert!(bw >= cell, "the thumb is thinner than a cell");
+        let top = by;
+
+        // AND DRAGGING IT MOVES THE LINE — the same rule as the bar going
+        // down: where it is drawn is where it is grabbed.
+        let room = Room {
+            list: 20,
+            panel: 12,
+        };
+        assert!(v.drag_to(Pane::Preview, Axis::Across, 1.0, 200, room));
+        assert_eq!(
+            v.preview_column,
+            v.preview_widest() - usize::from(v.panes(200).preview_box(200).expect("a box").1),
+            "dragging to the end did not reach the end"
+        );
+        assert!(v.drag_to(Pane::Preview, Axis::Across, 0.0, 200, room));
+        assert_eq!(v.preview_column, 0, "dragging back did not reach the start");
+
+        // AND THE THUMB MOVED WITH IT.
+        v.preview_column = v.preview_widest() / 2;
+        let sections = v.sections(&chrome, 20, 200, &texts);
+        let sec = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        let (bx2, _, _, _) = sec
+            .wide_bar_box(x, 0.0, 900.0, wide_px, cell, line_px)
+            .expect("a bar");
+        assert!(bx2 > bx, "the thumb did not follow the column");
+        let _ = top;
+
+        // AND A SHORT FILE HAS NO SIDEWAYS BAR AT ALL.
+        let (short, dir2) = a_text_view("across-none", "let x = 1;\n");
+        let chrome2 = short.chrome_rows(200, &texts);
+        let none = short.sections(&chrome2, 20, 200, &texts);
+        let sec2 = none
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        assert!(
+            sec2.wide_bar_box(x, 0.0, 900.0, wide_px, cell, line_px)
+                .is_none(),
+            "a line that fits grew a bar"
+        );
+        assert!(
+            sec2.wide_bar_box(x, 0.0, 900.0, wide_px, cell, line_px)
+                .is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// THE TWO BARS ARE THE SAME WEIGHT, AND NEITHER LEAVES A GAP.
+    ///
+    /// The owner reported both from one screenshot: the sideways bar was a
+    /// whole LINE thick against the other's cell — *"everything in the
+    /// interface has to be proportional"* — and there were twenty pixels of
+    /// background under it, between it and the modeline.
+    ///
+    /// FAILS IF: the thickness stops being the cell, or the band's bottom goes
+    /// back to being its last WHOLE line. A surface is not a whole number of
+    /// lines, and the residue is what showed as the gap.
+    #[test]
+    fn the_two_bars_are_the_same_weight_and_reach_the_same_edge() {
+        let body: String = (0..200)
+            .map(|n| format!("let a{n} = \"{}\";\n", "x".repeat(200)))
+            .collect();
+        let (v, dir) = a_text_view("two-bars", &body);
+        let texts = bundle();
+        let chrome = v.chrome_rows(200, &texts);
+        let sections = v.sections(&chrome, 20, 200, &texts);
+        let sec = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+
+        let (cell, line_px) = (12.0f32, 29.0f32);
+        let (left, wide) = (700.0f32, 480.0f32);
+        // A SURFACE THAT IS NOT A WHOLE NUMBER OF LINES, which is every real
+        // one: the residue is what the gap was made of.
+        let surface_bottom = line_px * 12.0 + 17.0;
+
+        let (_, _, down_w, _) = sec
+            .bar_box(left + wide, 0.0, surface_bottom, cell, line_px)
+            .expect("a bar going down");
+        let (_, across_y, _, across_h) = sec
+            .wide_bar_box(left, 0.0, surface_bottom, wide, cell, line_px)
+            .expect("a bar going across");
+
+        assert!(
+            (across_h - down_w).abs() < 0.01,
+            "one bar is {across_h} thick and the other {down_w} wide — they read \
+             as two different controls"
+        );
+
+        // AND IT REACHES THE BAND'S OWN BOTTOM. This section is the last in
+        // its column, so its band takes the residue and the bar sits on it.
+        assert!(
+            (across_y + across_h - surface_bottom).abs() < 0.01,
+            "the bar ends at {} and the band at {surface_bottom} — that \
+             difference is the gap underneath it",
+            across_y + across_h
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the sideways bar is drawn over the last line of content, which
+    /// is the same defect as the vertical one turned ninety degrees.
+    #[test]
+    fn nothing_is_drawn_under_the_sideways_bar() {
+        // LONG ENOUGH TO NEED BOTH BARS: two hundred lines so the list is
+        // cut, and each of them wider than any panel so the line is too.
+        let body: String = (0..200)
+            .map(|n| format!("let a{n} = \"{}\";\n", "x".repeat(200)))
+            .collect();
+        let (v, dir) = a_text_view("under-across", &body);
+        let texts = bundle();
+        let chrome = v.chrome_rows(200, &texts);
+        let sections = v.sections(&chrome, 20, 200, &texts);
+        let sec = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Preview))
+            .expect("the preview is a section");
+        assert!(
+            sec.wide_bar_box(700.0, 0.0, 900.0, 480.0, 12.0, 29.0)
+                .is_some(),
+            "the fixture grew no sideways bar"
+        );
+        assert_eq!(
+            sec.content.len(),
+            sec.lines.saturating_sub(1),
+            "the rows did not give up the bar's line"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -10636,7 +11038,10 @@ mod tests {
             list: 21,
             panel: usize::from(panes.strip),
         };
-        assert!(v.drag_to(Pane::Info, 1.0, w, room), "the drag was refused");
+        assert!(
+            v.drag_to(Pane::Info, Axis::Down, 1.0, w, room),
+            "the drag was refused"
+        );
         let down = v.sections(&v.chrome_rows(w, &b), 21, w, &b);
         let info = down
             .iter()
@@ -10696,7 +11101,7 @@ mod tests {
                 panel: usize::from(panes.strip),
             };
             assert!(
-                v.drag_to(Pane::Listing, to, w, room),
+                v.drag_to(Pane::Listing, Axis::Down, to, w, room),
                 "the drag was refused"
             );
             let sections = v.sections(&chrome, region, w, &b);
@@ -12368,6 +12773,7 @@ mod tests {
         let line_px = 26.0f32;
         for (total, offset) in [(200_000usize, 199_000usize), (6_000, 5_500), (13, 1)] {
             let sec = Section {
+                across: None,
                 pane: Pane::Listing,
                 from: 0,
                 to: 40,
