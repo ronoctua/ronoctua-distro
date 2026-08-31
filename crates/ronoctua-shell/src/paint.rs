@@ -386,7 +386,11 @@ mod tests {
         // thing on the line. The edge still applies.
         let s = "x".repeat(100);
         let clipped = elide_to_budget(&s, 0, 5, 20);
-        assert_eq!(clipped.chars().count(), 15, "devia ir ate a borda, e parou");
+        assert_eq!(
+            clipped.chars().count(),
+            15,
+            "it should reach the edge, and stopped"
+        );
     }
 
     #[test]

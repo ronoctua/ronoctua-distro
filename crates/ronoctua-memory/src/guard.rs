@@ -386,7 +386,7 @@ pub fn apply(p: &Profile) -> anyhow::Result<()> {
         .output()?;
     anyhow::ensure!(
         out.status.success(),
-        "o systemd recusou a mudanca: {}",
+        "systemd refused the change: {}",
         String::from_utf8_lossy(&out.stderr).trim()
     );
     Ok(())

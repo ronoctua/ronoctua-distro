@@ -11449,7 +11449,7 @@ mod tests {
             sym: Sym::Enter,
         });
         let asking = v.drawn(120, &b)[0].fields[0].text.clone();
-        assert!(!asking.is_empty(), "a confirmacao subiu sem titulo");
+        assert!(!asking.is_empty(), "the confirmation came up with no title");
         assert_ne!(
             asking, title,
             "the confirmation repeated the question's title"
@@ -11640,9 +11640,9 @@ mod tests {
         match step {
             Step::Do(Doing::Owner(paths, uid)) => {
                 assert_eq!(paths.len(), 1);
-                assert_eq!(uid, 65534, "escolheu `nobody` e saiu outro uid");
+                assert_eq!(uid, 65534, "it chose `nobody` and another uid came out");
             }
-            other => panic!("escolher um dono devolveu {other:?}"),
+            other => panic!("choosing an owner gave back {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11668,7 +11668,7 @@ mod tests {
         }
         let (tx, _rx) = channel::channel::<Report>();
         let errand = carry_out(
-            Doing::Owner(vec![std::path::PathBuf::from("/tmp/qualquer")], 65534),
+            Doing::Owner(vec![std::path::PathBuf::from("/tmp/anything")], 65534),
             &tx,
             &Clip::default(),
         );
@@ -11792,7 +11792,7 @@ mod tests {
                 assert_eq!(wanted & 0o170_000, 0o100_000);
                 assert_ne!(wanted & 0o020, 0);
             }
-            other => panic!("clicar no bit devolveu {other:?}"),
+            other => panic!("clicking the bit gave back {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11845,7 +11845,7 @@ mod tests {
         let after = v.key(press('D'));
         assert!(
             matches!(after, Step::Changed),
-            "a confirmacao sobreviveu ao movimento: {after:?}"
+            "the confirmation survived the move: {after:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -12042,7 +12042,7 @@ mod tests {
         let asking = v.picking.as_ref().map(|p| p.asking.clone());
         match asking {
             Some(Asking::Name(path)) => assert_eq!(Some(path), watching),
-            other => panic!("renomear pediu {other:?}"),
+            other => panic!("renaming asked for {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -13331,7 +13331,7 @@ mod tests {
     #[test]
     fn each_refusal_gets_its_own_sentence() {
         use ronoctua_disks::Refusal;
-        let dir = scratch("side-recusa");
+        let dir = scratch("side-refusal");
         let v = view_with_devices(&dir);
         // FOUR ANSWERS A PERSON CAN ACT ON, and they have to be four different
         // sentences — carrying the D-Bus error's NAME instead of its prose is
@@ -14333,7 +14333,7 @@ mod tests {
             saw_strip |= p.strip > 0;
         }
         assert!(saw_right, "it never fitted on the right");
-        assert!(saw_strip, "nunca desceu para a faixa");
+        assert!(saw_strip, "it never went down to the band");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -14455,7 +14455,7 @@ mod tests {
         assert!(v.preview_showing(), "the state has to turn anyway");
         assert!(
             matches!(step, Step::Say(_)),
-            "a recusa tem de dizer alguma coisa: {step:?}"
+            "a refusal has to say something: {step:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -14836,7 +14836,7 @@ mod tests {
         let after = after
             .iter()
             .find(|s| matches!(s.pane, Pane::Info))
-            .expect("os fatos continuam la");
+            .expect("the facts are still there");
         let moved_y = after
             .bar_box(x + wide_px, 0.0, line_px * 12.0, cell, line_px)
             .expect("the bar is still there")

@@ -284,7 +284,7 @@ pub fn buffer_state_at(path: &std::path::Path, order: &str) -> Result<()> {
     std::io::Read::read_to_string(&mut stream, &mut answer).context("the buffer did not answer")?;
     anyhow::ensure!(
         answer.trim() == "ok",
-        "o buffer recusou `{order}`: {}",
+        "the buffer refused `{order}`: {}",
         answer.trim()
     );
     Ok(())
@@ -328,7 +328,7 @@ pub fn buffer_command_at(path: &std::path::Path, id: &str) -> Result<()> {
     std::io::Read::read_to_string(&mut stream, &mut answer).context("the buffer did not answer")?;
     anyhow::ensure!(
         answer.trim() == "ok",
-        "o buffer recusou `{id}`: {}",
+        "the buffer refused `{id}`: {}",
         answer.trim()
     );
     Ok(())
@@ -1600,7 +1600,7 @@ mod tests {
                 let clone = stream.try_clone().expect("clone");
                 std::io::BufReader::new(clone)
                     .read_line(&mut line)
-                    .expect("ler");
+                    .expect("read");
                 let reply = match line.trim() {
                     "states" => "filter\nnormal n\nfilter f\nsheet s".to_owned(),
                     order => {
@@ -1627,7 +1627,7 @@ mod tests {
 
         super::buffer_state_at(&path, "state sheet").expect("ask for the state");
         super::buffer_state_at(&path, "state-next").expect("girar");
-        served.join().expect("a thread do buffer");
+        served.join().expect("the buffer's thread");
         assert_eq!(
             *asked.lock().expect("lock"),
             vec!["state sheet".to_owned(), "state-next".to_owned()]
@@ -1672,7 +1672,7 @@ mod tests {
                 let clone = stream.try_clone().expect("clone");
                 std::io::BufReader::new(clone)
                     .read_line(&mut line)
-                    .expect("ler");
+                    .expect("read");
                 let reply = match line.trim() {
                     "keymap" => "m f s save-file\nm f r reload-file".to_owned(),
                     order => {
@@ -1684,7 +1684,7 @@ mod tests {
             }
         });
 
-        let keymap = super::buffer_keymap_at(&path).expect("ler o keymap");
+        let keymap = super::buffer_keymap_at(&path).expect("read the keymap");
         assert_eq!(
             keymap,
             vec![
@@ -1695,7 +1695,7 @@ mod tests {
         );
 
         super::buffer_command_at(&path, "save-file").expect("run the command");
-        served.join().expect("a thread do falso buffer");
+        served.join().expect("the fake buffer's thread");
         assert_eq!(
             *ran.lock().expect("lock"),
             vec!["command save-file".to_owned()],
@@ -1796,7 +1796,11 @@ mod tests {
         match l.key(&tree, Key::simple(Sym::Char('I'))) {
             Effect::Close {
                 other_case: Some(t),
-            } => assert_eq!(t.sym, Sym::Char('i'), "a sugestao tem de ser a minuscula"),
+            } => assert_eq!(
+                t.sym,
+                Sym::Char('i'),
+                "the suggestion has to be the lower-case one"
+            ),
             otherwise => panic!("`I` should end pointing at `i`; got {otherwise:?}"),
         }
     }

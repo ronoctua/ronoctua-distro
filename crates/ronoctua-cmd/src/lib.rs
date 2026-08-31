@@ -211,7 +211,7 @@ mod tests {
                     label: "x"
                 })
                 .is_err(),
-                "`{bad}` devia ser recusado"
+                "`{bad}` should have been refused"
             );
         }
     }

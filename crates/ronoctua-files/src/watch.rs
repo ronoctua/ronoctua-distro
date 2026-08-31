@@ -356,7 +356,7 @@ pub fn remove(path: &Path, watch: &mut Watch<'_>) -> Result<()> {
         .with_context(|| format!("{} does not exist", path.display()))?;
     if meta.is_dir() && !meta.is_symlink() {
         for child in std::fs::read_dir(path)
-            .with_context(|| format!("ler {}", path.display()))?
+            .with_context(|| format!("read {}", path.display()))?
             .flatten()
         {
             remove(&child.path(), watch)?;
@@ -418,7 +418,8 @@ pub fn shred(path: &Path, passes: u32, watch: &mut Watch<'_>) -> Result<()> {
             _ => u8::try_from(pass % 251).unwrap_or(0x5A),
         };
         let block = vec![byte; BLOCK];
-        file.seek(SeekFrom::Start(0)).context("voltar ao inicio")?;
+        file.seek(SeekFrom::Start(0))
+            .context("go back to the start")?;
         let mut left = size;
         while left > 0 {
             watch.allowed()?;
@@ -524,7 +525,7 @@ fn copy_tree(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
         // surprise that fills a disk.
         let target = std::fs::read_link(source)?;
         std::os::unix::fs::symlink(target, landing)
-            .with_context(|| format!("recriar o link {}", landing.display()))?;
+            .with_context(|| format!("recreate the link {}", landing.display()))?;
         watch.on(source);
         watch.did(meta.len());
         return Ok(());
@@ -545,7 +546,7 @@ fn copy_file(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
     let from = std::fs::File::open(source).with_context(|| format!("open {}", source.display()))?;
     let meta = from
         .metadata()
-        .with_context(|| format!("ler {}", source.display()))?;
+        .with_context(|| format!("read {}", source.display()))?;
     let to =
         std::fs::File::create(landing).with_context(|| format!("create {}", landing.display()))?;
 
@@ -565,7 +566,7 @@ fn copy_file(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
                     tracing::debug!(
                         source = %source.display(),
                         errno = ?e,
-                        "copy_file_range recusou; seguindo por read/write"
+                        "copy_file_range refused; carrying on with read/write"
                     );
                     server_side = false;
                     continue;
@@ -592,7 +593,7 @@ fn copy_file(source: &Path, landing: &Path, watch: &mut Watch<'_>) -> Result<()>
     // The MODE travels, as `std::fs::copy` has always done: a copy of an
     // executable that comes out unexecutable is a copy that does not work.
     to.set_permissions(meta.permissions())
-        .with_context(|| format!("ajustar a permissao de {}", landing.display()))?;
+        .with_context(|| format!("adjust the permission of {}", landing.display()))?;
     Ok(())
 }
 
@@ -736,7 +737,7 @@ mod tests {
         assert_eq!(
             std::fs::metadata(root.join("large.bin")).unwrap().len(),
             size as u64,
-            "o original foi mexido"
+            "the original was touched"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

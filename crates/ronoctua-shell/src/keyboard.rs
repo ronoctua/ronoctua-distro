@@ -59,7 +59,10 @@ pub fn restore_it() -> Result<(), String> {
         let reason = String::from_utf8_lossy(&output.stderr);
         let reason = reason.trim();
         return Err(if reason.is_empty() {
-            format!("{SYSTEMCTL_PATH} restart {UNIT} saiu com {}", output.status)
+            format!(
+                "{SYSTEMCTL_PATH} restart {UNIT} exited with {}",
+                output.status
+            )
         } else {
             reason.to_owned()
         });

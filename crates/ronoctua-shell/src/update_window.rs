@@ -207,7 +207,7 @@ pub fn begin() -> Started {
         return Started::Nowhere;
     }
     let born = std::thread::Builder::new()
-        .name("atualizacao".to_owned())
+        .name("update".to_owned())
         .spawn(|| {
             // THE BRAIN'S OWN CALL, and not a copy of it. `--user` is
             // load-bearing and its reason is written where it lives: on the
@@ -215,7 +215,7 @@ pub fn begin() -> Started {
             // systemd looks the unit up, and with no agent in this session the
             // call would hang on an authentication request nobody asked for.
             if let Err(e) = ronoctua_brain::systemd::start(declared::UNIT) {
-                tracing::error!(unit = declared::UNIT, error = %e, "o systemd recusou");
+                tracing::error!(unit = declared::UNIT, error = %e, "systemd refused");
             }
         });
     match born {
@@ -827,10 +827,10 @@ const BEAT: std::time::Duration = std::time::Duration::from_secs(1);
 pub fn host_it() -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
     let qh: QueueHandle<UpdateWindow> = queue.handle();
 
-    let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
+    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
     let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
     let texts = ronoctua_i18n::Texts::from_env();
 
@@ -1687,7 +1687,7 @@ mod tests {
     use super::*;
 
     fn texts() -> ronoctua_i18n::Texts {
-        ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB tem de existir")
+        ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB has to exist")
     }
 
     fn a_mind(running: &str, queue: &[&str]) -> ronoctua_brain::Mind {
@@ -1867,7 +1867,7 @@ mod tests {
             5,
             "it asked for more than exists"
         );
-        assert_eq!(back.window(100, 2).len(), 0, "subiu alem do comeco");
+        assert_eq!(back.window(100, 2).len(), 0, "it went above the start");
         assert_eq!(back.window(2, 2), vec!["1", "2"]);
     }
 

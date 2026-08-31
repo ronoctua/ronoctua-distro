@@ -779,7 +779,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn texts() -> ronoctua_i18n::Texts {
-        ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR tem de existir")
+        ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR has to exist")
     }
 
     fn a_job(id: u64, stage: Stage) -> Job {

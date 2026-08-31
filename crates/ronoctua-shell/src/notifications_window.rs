@@ -90,10 +90,10 @@ const REREAD: std::time::Duration = std::time::Duration::from_secs(2);
 pub fn host_it() -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
     let qh: QueueHandle<NotificationsWindow> = queue.handle();
 
-    let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
+    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
     let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
 
     let surface_of = compositor.create_surface(&qh);

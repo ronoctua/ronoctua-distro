@@ -180,7 +180,7 @@ mod tests {
     use ronoctua_niri::Window;
 
     fn texts() -> Texts {
-        Texts::fresh("pt-BR").expect("pt-BR tem de existir")
+        Texts::fresh("pt-BR").expect("pt-BR has to exist")
     }
 
     fn with_focus(title: Option<&str>, app_id: Option<&str>) -> State {
@@ -238,7 +238,7 @@ mod tests {
     fn a_window_with_no_title_and_no_app_id_still_has_a_name() {
         let (e, t) = (with_focus(None, None), texts());
         assert_eq!(buffer_name(&e, &t), "*sem nome*");
-        assert_eq!(buffer_mode(&e, &t), "desconhecido");
+        assert_eq!(buffer_mode(&e, &t), t.t(ronoctua_i18n::key::MODE_UNKNOWN));
     }
 
     #[test]

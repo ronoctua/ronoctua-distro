@@ -84,7 +84,7 @@ const CHROME_LINES: u16 = 2;
 pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
     let qh: QueueHandle<FilesWindow> = queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;

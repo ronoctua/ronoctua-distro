@@ -365,7 +365,7 @@ mod tests {
             1,
             "niri".into(),
             None,
-            "Tela capturada".into(),
+            "Screen captured".into(),
             body.into(),
             Urgency::Normal,
         );
@@ -432,12 +432,12 @@ mod tests {
             .pieces
             .iter()
             .find(|p| p.hit == Some(Hit::Read))
-            .expect("a faixa perdeu o controle de marcar como lida");
+            .expect("the band lost its mark-as-read control");
         assert_eq!(
             control.text,
             tokens::icon::NOTIFICATION_MARK_READ.to_string()
         );
-        assert!(control.explain.is_some(), "o ponteiro tem de explicar");
+        assert!(control.explain.is_some(), "the pointer has to explain");
         // At the edge: the first thing on the right, and nothing to its right
         // but the margin.
         let edge = 80 - tokens::space::MODELINE_EDGERIGHT;

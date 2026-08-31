@@ -211,9 +211,9 @@ mod tests {
         let f = "[Desktop Entry]\nNoDisplay=true\nHidden=False\nTerminal=1\n";
         let c = fields(f);
         assert!(boolean(&c, "NoDisplay"));
-        assert!(!boolean(&c, "Hidden"), "`False` e falso");
+        assert!(!boolean(&c, "Hidden"), "`False` is false");
         assert!(!boolean(&c, "Terminal"), "`1` is not a boolean by the spec");
-        assert!(!boolean(&c, "Ausente"));
+        assert!(!boolean(&c, "Absent"));
     }
 
     #[test]

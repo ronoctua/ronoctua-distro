@@ -316,6 +316,6 @@ mod tests {
         for f in Field::ALL {
             assert_eq!(Field::by_id(f.id()), Some(f));
         }
-        assert_eq!(Field::by_id("titulo"), None);
+        assert_eq!(Field::by_id("no-such-field"), None);
     }
 }

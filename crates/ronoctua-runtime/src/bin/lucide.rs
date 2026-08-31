@@ -114,8 +114,8 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
         .with_context(|| format!("the counter is not in the `N / M` shape: {cab}"))?;
 
     Ok(Vision {
-        filtered: n.trim().parse().context("contagem de resultados")?,
-        total: m.trim().parse().context("total da base")?,
+        filtered: n.trim().parse().context("the result count")?,
+        total: m.trim().parse().context("the database total")?,
         field,
         drawings: cells.into_values().collect(),
         focus,
@@ -335,7 +335,7 @@ fn main() -> Result<()> {
         );
     }
     if v.filtered != TOTAL {
-        bail!("o buffer abriu mostrando {} de {TOTAL}", v.filtered);
+        bail!("the buffer opened showing {} of {TOTAL}", v.filtered);
     }
     if v.drawings.is_empty() {
         bail!("the grid opened empty");

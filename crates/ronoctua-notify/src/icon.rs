@@ -404,7 +404,7 @@ mod tests {
             superpack: None,
             generic: None,
         };
-        let i = c.resolve("desconhecido", Some("also-does-not-exist"), Some(vec![9]));
+        let i = c.resolve("does-not-exist", Some("also-does-not-exist"), Some(vec![9]));
         assert_eq!(i.stage(), 3);
     }
 

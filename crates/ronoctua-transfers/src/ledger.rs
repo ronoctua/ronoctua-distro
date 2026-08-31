@@ -292,9 +292,9 @@ mod tests {
         // holding.
         let shared = Shared::fresh_one();
         let (id, _) = shared.take(Engine::Local, some_work());
-        assert!(shared.switch(id).is_some(), "nasceu sem interruptor");
+        assert!(shared.switch(id).is_some(), "it was born with no switch");
         ended(&shared, id, Stage::Done);
-        assert!(shared.switch(id).is_none(), "o interruptor ficou");
+        assert!(shared.switch(id).is_none(), "the switch stayed");
     }
 
     #[test]

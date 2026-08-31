@@ -253,7 +253,7 @@ let
             print("", file=sys.stderr)
             print("       Without it niri uses ITS default, ~/Pictures/Screenshots/,", file=sys.stderr)
             print("       which this distro neither declares nor creates. The screenshot lands, and", file=sys.stderr)
-            print("       nenhum erro aparece em lugar nenhum.", file=sys.stderr)
+            print("       not one error appears anywhere at all.", file=sys.stderr)
             raise SystemExit(1)
         written = line.group(1)
 
@@ -610,7 +610,7 @@ let
     # in any option.
     found=$(nix-store -qR "$system_path" 2>/dev/null | grep -E "gnome-keyring|kwallet" || true)
     if [ -n "$found" ]; then
-      echo "ERRO: um Secret Service entrou no closure:" >&2
+      echo "ERROR: a Secret Service got into the closure:" >&2
       echo "$found" | sed 's/^/       /' >&2
       echo "" >&2
       echo "      With it installed Chrome asks for a password again on opening," >&2
@@ -1029,7 +1029,7 @@ let
     # happens to use it, and looking like a font problem.
     block = re.search(r"enum icon \{(.*?)\n    \}", wit, re.S)
     if block is None:
-        print("ERRO: `icon` deixou de ser enum no WIT", file=sys.stderr)
+        print("ERROR: `icon` stopped being an enum in the WIT", file=sys.stderr)
         raise SystemExit(1)
     icon_wit = {c.strip().lstrip("%").rstrip(",")
                 for c in block.group(1).splitlines()
@@ -1038,7 +1038,7 @@ let
     # `pub const SOME_NAME: &str` inside `pub mod icon`.
     mod_icon = re.search(r"pub mod icon \{(.*?)\n\}", rs, re.S)
     if mod_icon is None:
-        print("ERRO: `pub mod icon` sumiu do Rust gerado", file=sys.stderr)
+        print("ERROR: `pub mod icon` is gone from the generated Rust", file=sys.stderr)
         raise SystemExit(1)
     icon_rs = {n.lower().replace("_", "-")
                for n in re.findall(r"pub const ([A-Z0-9_]+):", mod_icon.group(1))}
@@ -1090,8 +1090,8 @@ let
     printf 'AGE-SECRET-%s\n' 'KEY-1QQPQZRHW4YSHVMKS4YFPXP93KVMHJ2LPXPD9Y6MPQ7TCFVWXHXAS8RXNMV' \
       > tree_out/sub/api_key.txt
     printf 'token = "%sA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"\n' 'ghp_' > tree_out/sub/cfg.toml
-    printf 'psk%s"SenhaDoWifi12345"\n' '=' > tree_out/sub/wifi.conf
-    printf 'maintainer = "fulano.real%sprovedor.com"\n' '@' > tree_out/sub/meta.nix
+    printf 'psk%s"WifiPassword12345"\n' '=' > tree_out/sub/wifi.conf
+    printf 'maintainer = "someone.real%sprovider.com"\n' '@' > tree_out/sub/meta.nix
 
     if python3 ${../nix/scripts/scan-secrets.py} tree_out 2>errors.txt; then
       echo "ERROR: the scan did NOT report the planted secrets." >&2
@@ -1166,7 +1166,7 @@ let
 
     n=$(jq 'length' "$db/unicode.json")
     echo "characters in the database: $n"
-    [ "$n" -gt 7000 ] || { echo "ERRO: base pequena demais ($n)" >&2; exit 1; }
+    [ "$n" -gt 7000 ] || { echo "ERROR: the base came out too small ($n)" >&2; exit 1; }
 
     # THE MANDATORY FIELDS, in every record.
     jq -e 'all(.cp and .name and .shows and .family)' "$db/unicode.json" >/dev/null \
@@ -1548,7 +1548,7 @@ let
     # the crate is a string, not a promise about a bundle.
     block = re.search(r"pub mod key \{(.*?)\n\}", source, re.S)
     if not block:
-        print("ERRO: o modulo `key` sumiu do ronoctua-inspect.", file=sys.stderr)
+        print("ERROR: the `key` module is gone from ronoctua-inspect.", file=sys.stderr)
         raise SystemExit(1)
     owed = sorted(set(re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z][a-z0-9-]*)";', block.group(1))))
     if not owed:
@@ -1858,7 +1858,7 @@ let
       failed=0
       for script in ${runners}/bin/ronoctua-update ${runners}/libexec/ronoctua-update-system; do
         if found=$(grep -nE '(^|[^-[:alnum:]_])(sudo|pkexec|pkttyagent|systemd-run)([^-[:alnum:]_]|$)' "$script"); then
-          echo "ERRO: $script pede autenticacao:" >&2
+          echo "ERROR: $script asks for authentication:" >&2
           echo "$found" >&2
       echo "      The owner is not always near the laptop when this runs." >&2
           failed=1
@@ -1919,14 +1919,14 @@ let
     def constant(name):
         m = re.search(rf"pub const {name}: u16 = (\d+);", design)
         if not m:
-            print(f"ERRO: `{name}` sumiu do ronoctua-design", file=sys.stderr)
+            print(f"ERROR: `{name}` is gone from ronoctua-design", file=sys.stderr)
             raise SystemExit(1)
         return int(m.group(1))
 
     def token(leaf):
         m = re.search(rf"^\s+{leaf}\s*=\s*([0-9.]+);", typography, re.M)
         if not m:
-            print(f"ERRO: o token `{leaf}` sumiu de typography.nix", file=sys.stderr)
+            print(f"ERROR: the token `{leaf}` is gone from typography.nix", file=sys.stderr)
             raise SystemExit(1)
         return float(m.group(1))
 
@@ -1983,12 +1983,12 @@ let
         offenders=$(grep -rlE '^[[:space:]]*wit_bindgen::generate!' ${self}/buffers ${self}/crates || true)
           for f in $offenders; do
             if [ "$f" != "$expected" ]; then
-              echo "ERRO: $f gera bindings proprias — so o ronoctua-design gera." >&2
+              echo "ERROR: $f generates bindings of its own — only ronoctua-design does." >&2
               failed=1
             fi
           done
           if ! grep -qE '^[[:space:]]*wit_bindgen::generate!' "$expected"; then
-            echo "ERRO: o ronoctua-design parou de gerar as bindings." >&2
+            echo "ERROR: ronoctua-design stopped generating the bindings." >&2
             failed=1
           fi
 
@@ -2966,10 +2966,10 @@ let
 
     m = json.loads(pathlib.Path("${extension}/share/ronoctua-extension/manifest.json").read_text())
     forbidden = [
-        ("web_accessible_resources", "qualquer pagina consegue `fetch` de chrome-extension://"),
+        ("web_accessible_resources", "any page can `fetch` from chrome-extension://"),
         ("content_scripts", "what it leaves in the DOM is a marker"),
         ("externally_connectable", "it hands `chrome.runtime` to an origin"),
-        ("host_permissions", "acesso permanente e o que torna o resto possivel"),
+        ("host_permissions", "standing access is what makes the rest possible"),
         ("declarative_net_request", "the page infers it from the request itself"),
     ]
     failed = 0
@@ -3027,13 +3027,13 @@ let
           failed=1
         fi
         test -f "$plugin/getpot_bgutil_script.py" || {
-          echo "ERRO: o provedor de script sumiu" >&2
+          echo "ERROR: the script provider is gone" >&2
           failed=1
         }
         # A namespace package has no `__init__.py`; with one, yt-dlp's plugin
         # finder does not see it and the whole thing is silently absent.
         if [ -e ${potProvider}/plugin/yt_dlp_plugins/__init__.py ]; then
-          echo "ERRO: yt_dlp_plugins deixou de ser namespace package" >&2
+          echo "ERROR: yt_dlp_plugins stopped being a namespace package" >&2
           failed=1
         fi
 
@@ -3529,7 +3529,7 @@ let
       echo "ERROR: the shutdown ran $n times; expected 1." >&2
       echo "      'trap … EXIT INT TERM' cleans up on INT and again on EXIT." >&2
       echo "--- output:" >&2; tail -20 out_text.txt >&2
-      echo "--- erro:" >&2; tail -20 errors.txt >&2
+      echo "--- errors:" >&2; tail -20 errors.txt >&2
       exit 1
     }
 
@@ -3565,11 +3565,11 @@ let
           echo "ERROR: could not find RONOCTUA_RELOAD_CMD in the loop's script" >&2
           exit 1
         }
-        echo "o laco manda rodar: $cmd"
+        echo "the loop tells it to run: $cmd"
 
         grep -q "^  $cmd() {" "$script" || {
           echo "ERROR: '$cmd' is not a function defined in the script — the watcher will" >&2
-          echo "      receber 'command not found', engolir com '|| true', e o hot" >&2
+          echo "      get 'command not found', swallow it with '|| true', and the hot" >&2
           echo "      reload will NEVER fire, with not one line of warning." >&2
           exit 1
         }
@@ -3676,7 +3676,7 @@ let
     # caught here as well as at compile time. A parser that breaks returns a
     # HANDFUL of rows, which reads as "the database is small".
     globs=$(grep -c 'Glob {' "$table")
-    [ "$globs" -ge 900 ] || { echo "ERRO: so $globs globs" >&2; exit 1; }
+    [ "$globs" -ge 900 ] || { echo "ERROR: only $globs globs" >&2; exit 1; }
     echo "OK: $globs name patterns, and the seven tables"
   '';
 
@@ -4234,7 +4234,7 @@ let
         # AND THE FOUR VERBS, none of which destroys.
         for bad in '"rm"' '"remove"' '"mv"' '"move"' '"delete"' '"unlink"'; do
           grep -qE "Self::[A-Za-z]+ => $bad" "$crate" && {
-            echo "ERRO: verbo destrutivo na porta privilegiada: $bad" >&2
+            echo "ERROR: a destructive verb on the privileged door: $bad" >&2
             failed=1
           }
         done
@@ -4777,7 +4777,7 @@ let
 
       # The way out that does not pass through us.
       [ "${burst}" = "reboot-force" ] || {
-        echo "ERRO: CtrlAltDelBurstAction e '${burst}'; os sete toques em dois" >&2
+        echo "ERROR: CtrlAltDelBurstAction is '${burst}'; the seven presses in two" >&2
         echo "      seconds were the only way out with everything locked up." >&2
         exit 1
       }
@@ -4808,7 +4808,7 @@ let
         failed=0
         for unwanted in -zig- -clang- -llvm- -mesa- -vulkan-loader-; do
           if found=$(grep -e "$unwanted" ${closure}/store-paths); then
-            echo "ERRO: o console de resgate arrasta $unwanted:" >&2
+            echo "ERROR: the rescue console drags $unwanted along:" >&2
             echo "$found" >&2
             failed=1
           fi
@@ -4929,13 +4929,38 @@ let
     # The programs a test must never start. `systemd-run` is on the list for a
     # second reason on top of polkit: it is SYNCHRONOUS with `--scope`, and
     # this project has already frozen its own footer on that once.
+    # NAMED ANYWHERE IN THE CALL, literal or variable: these are the programs
+    # that go through polkit or block on a scope, and a test must not reach one
+    # however it spells the path.
+    #
+    # It used to have a first alternative matching `Command::new("` — any
+    # literal at all — which made it a duplicate of the sweep below and, worse,
+    # overrode its one allowance.
     FORBIDDEN = re.compile(
-        r'Command::new\(\s*(?:&)?(?:"|SYSTEMCTL|path)\s*'
-        r'|Command::new\([^)]*\b(sudo|pkexec|systemd-run|systemctl|loginctl|udisksctl)\b'
+        r'Command::new\([^)]*\b(sudo|pkexec|systemd-run|systemctl|loginctl'
+        r'|udisksctl|SYSTEMCTL)\b'
     )
-    # A spawn of ANY kind inside a test module is worth naming, so the two
-    # patterns above do not become a list somebody has to keep complete.
-    SPAWN = re.compile(r"Command::new\(")
+    # A SPAWN WHOSE PROGRAM IS A LITERAL, which is the shape every dangerous
+    # one has: `Command::new("systemctl")`, `Command::new("sudo")`.
+    #
+    # It used to be ANY spawn at all, and the argument for that was good — a
+    # list somebody has to keep complete is a list that goes stale. What broke
+    # it is that the preview grew tests which BUILD their fixtures: three in
+    # `inspect/motion.rs` make a video with the ffmpeg the FLAKE provides, and
+    # one in `shell/motion.rs` pipes through `/bin/sh`. Those reach no polkit
+    # and block on no scope, and the check went red the day they arrived and
+    # stayed red — through two commits, because `most` is not run every time.
+    # A check that is red for a reason nobody accepts stops being read.
+    #
+    # So the rule is the DANGER and not the act: a program named by a literal
+    # is one this repository chose by name, and those are the ones that can be
+    # `systemctl`. A program that arrives in a variable came out of the
+    # environment the flake set, and WHICH programs may exist there at all is
+    # already policed by `inspect-mesh-is-in-process` and by the closure sweep.
+    SPAWN = re.compile(r'Command::new\(\s*"([^"]*)"')
+    # The one literal a test may name: it starts no daemon and asks nobody for
+    # permission.
+    ALLOWED = {"/bin/sh"}
 
     gaps = []
     for rs in sorted((root_dir / "crates").rglob("*.rs")):
@@ -4953,7 +4978,8 @@ let
             stripped = line.strip()
             if stripped.startswith("//") or stripped.startswith("///"):
                 continue
-            if SPAWN.search(line):
+            m = SPAWN.search(line)
+            if (m and m.group(1) not in ALLOWED) or FORBIDDEN.search(line):
                 rel = rs.relative_to(root_dir)
                 gaps.append(f"{rel}: mod tests + {n}: {stripped[:70]}")
 
@@ -5202,7 +5228,7 @@ let
         [ "$died" = yes ] || {
           echo "ERROR: the watcher IGNORED the SIGTERM and is still alive." >&2
           echo "      It will be adopted by init and will recompile on its own for" >&2
-          echo "      sempre. Ver o \`wait\` no fim de nix/reload.nix." >&2
+          echo "      ever after. See the \`wait\` at the end of nix/reload.nix." >&2
           exit 1
         }
 
@@ -5351,7 +5377,7 @@ let
         [ "$reported" = "$pid" ] || {
           echo "ERROR: the footer says it is pid $reported and the pidfile holds $pid." >&2
           echo "      A 'tee' in between would make \$! its own — and the shutdown" >&2
-          echo "      do dev.nix mataria o processo errado." >&2
+          echo "      in dev.nix would kill the wrong process." >&2
           exit 1
         }
 
@@ -5809,9 +5835,9 @@ let
         head = f["head"]
 
         if head.unitsPerEm != 1000:
-            print(f"ERRO {p}: unitsPerEm {head.unitsPerEm} != 1000"); failed = True
+            print(f"ERROR {p}: unitsPerEm {head.unitsPerEm} != 1000"); failed = True
         if len(cmap) != expected_cp:
-            print(f"ERRO {p}: {len(cmap)} codepoints, esperava {expected_cp}"); failed = True
+            print(f"ERROR {p}: {len(cmap)} codepoints, expected {expected_cp}"); failed = True
 
         # Exact monospacing: ONE advance per face, that of its own width.
         width = os2.usWidthClass
@@ -5824,7 +5850,7 @@ let
 
     if failed:
         sys.exit(1)
-    print("OK: 135 faces, 18.053 codepoints cada, monoespacadas, upem 1000")
+    print("OK: 135 faces, 18,053 codepoints each, monospaced, upem 1000")
     print("OK: cell = 0.600 em at the normal width — the footer's arithmetic holds")
     PY
   '';
@@ -6095,9 +6121,9 @@ let
     for name, path, enum in pairs:
         a, b = from_generator(name), from_rust(path, enum)
         if a != b:
-            print(f"ERRO: `{name}` diverge entre o gerador e o Rust")
-            print(f"       so no gerador: {sorted(a - b)}")
-            print(f"       so no Rust:    {sorted(b - a)}")
+            print(f"ERROR: `{name}` differs between the generator and the Rust")
+            print(f"       only in the generator: {sorted(a - b)}")
+            print(f"       only in the Rust:      {sorted(b - a)}")
             failed = True
         else:
             print(f"ok  {name:10s} {len(a)} identical names on both sides")
@@ -6453,8 +6479,8 @@ let
     doc=$sp/share/doc/noctua-icons
     themeName=$sp/share/icons/noctua
 
-    test -f $themeName/index.theme || { echo "ERRO: index.theme ausente" >&2; exit 1; }
-    test -f $doc/manifest.json || { echo "ERRO: manifesto ausente" >&2; exit 1; }
+    test -f $themeName/index.theme || { echo "ERROR: index.theme is missing" >&2; exit 1; }
+    test -f $doc/manifest.json || { echo "ERROR: the manifest is missing" >&2; exit 1; }
     test -f $doc/coverage.md || { echo "ERROR: the coverage report is missing" >&2; exit 1; }
 
     # Inheritance: hicolor last, as the freedesktop spec requires.
@@ -7042,6 +7068,65 @@ let
                 rel = rs.relative_to(root_dir)
                 gaps.append(f"descriptor: {rel}:{n}: {m.group(1)} = {m.group(2)}")
 
+    # 9) THE MESSAGES THEMSELVES, and this half was open all along.
+    #
+    # Everything above reads DECLARATIONS. Not one of them looks inside a
+    # string — so a hundred and eighty-five Portuguese messages lived in
+    # `.context`, `bail!`, `expect` and `write!` through every green battery
+    # this repository has ever run: `"ler o verbo"`, `"mudar o dono de {}"`,
+    # `"o niri recusou {request}"`, `"registry do Wayland"`. They are the
+    # sentences a person actually SEES when something goes wrong, which makes
+    # them the half of invariant 18 that matters most.
+    #
+    # TWO RULES, because Portuguese slips in two ways.
+    #
+    # GRAMMAR: a sentence in Portuguese carries a function word, and the ones
+    # below have no English homograph. `do` and `no` and `a` are left out for
+    # exactly that reason — "do not run" and "no such file" are English.
+    #
+    # VOCABULARY: a one-word message has no grammar to catch. So the verbs and
+    # nouns that were removed are listed, the same bargain `FORBIDDEN` above
+    # already makes: adding one is cheap, and taking one out has to be argued.
+    GRAMMAR = re.compile(
+        r"(?:^| )(da|das|na|nas|ao|aos|uma|umas|pelo|pela|não|nao|são|sao"
+        r"|sem|que|com|para|foi|pra|nem)(?: |$)"
+    )
+    VOCABULARY = re.compile(
+        r"(?<![a-z])(ler|mudar|abrir|criar|gravar|apagar|mover|copiar|verbo|dono"
+        r"|senha|invalido|desconhecid[oa]|duplicar|esvaziar|clonar|esperar"
+        r"|consultar|pendurar|recusou|recusa|saiu|devolver|recriar|ajustar"
+        r"|renomear|permissao|inicio|contagem|devia|fechou|abriu|mostrando"
+        r"|hospedar|mandar|rodar|codificar|geracao|atualizacao|mestre|espacos"
+        r"|colar|folga|escolheu|pediu|verificado|bandeira|distingue|uso"
+        r"|diferencial|fatos|resgate|passou|razao|confirmacao|subiu|desceu"
+        r"|nasceu|interruptor|clicar|avancou|modificador|sumiu|ausente|diferenca"
+        r"|esperava|virou|tela|erro|linha|arquivo|pasta|qualquer)(?![a-z])"
+    )
+    # The macros a message reaches a person through.
+    SPEAKS = re.compile(
+        r"\.(context|with_context)\b|\bbail!|\banyhow!|\bexpect\(|\bpanic!"
+        r"|\be?println!|\bwrite(ln)?!|\bassert(_eq|_ne)?!"
+    )
+    LITERAL = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"')
+    for rs in (root_dir / "crates").rglob("*.rs"):
+        for n, line in enumerate(rs.read_text().splitlines(), 1):
+            if not SPEAKS.search(line):
+                continue
+            for s in LITERAL.findall(line):
+                # WHAT IS IN BACKTICKS IS DATA. Two tests search for
+                # `tag:pasta` and `bandeira brasil`: the query is the fixture
+                # and the sentence around it is English, so the quoted span
+                # comes out before the sentence is read.
+                s = re.sub(r"`[^`]*`", " ", s)
+                # An identifier, a path, an id or a URL is not a sentence.
+                if " " not in s.strip():
+                    hit = VOCABULARY.search(s.lower())
+                else:
+                    hit = GRAMMAR.search(s.lower()) or VOCABULARY.search(s.lower())
+                if hit:
+                    rel = rs.relative_to(root_dir)
+                    gaps.append(f"message: {rel}:{n}: {s[:70]}")
+
     if gaps:
         print("ERROR: a Portuguese name (invariant 18).", file=sys.stderr)
         print("", file=sys.stderr)
@@ -7055,7 +7140,7 @@ let
         print("       Every NAME and every COMMENT is English.", file=sys.stderr)
         print("       In pt-BR, only the 4 docs, the VALUE of a key and the search tag.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: nothing in Portuguese — file name, key, Rust, Nix, Python, subcommand, flag and COMMENT")
+    print("OK: nothing in Portuguese — name, key, comment, subcommand, flag AND message")
     END
   '';
 
@@ -7314,7 +7399,7 @@ let
               *) echo "ERROR: ${name} does not end in .wasm" >&2; failed=1 ;;
             esac
             echo "$lidas" | grep -qx "${name}" || {
-              echo "ERRO: o embrulho define ${name} e nenhum .rs do shell a le" >&2; failed=1; }
+              echo "ERROR: the wrapper sets ${name} and no .rs of the shell reads it" >&2; failed=1; }
           '') rust.bufferComponents
         )}
 
@@ -7396,7 +7481,7 @@ let
                   file=sys.stderr)
             failed = True
         else:
-            print("ERRO: input '" + name + "' com forma inesperada: " + url,
+            print("ERROR: input '" + name + "' has an unexpected shape: " + url,
                   file=sys.stderr)
             failed = True
 
@@ -7918,7 +8003,7 @@ let
   # far above an empty one, which is what makes it a floor and not a target.
   iso-is-measured = mkCheck "iso-is-measured" [ pkgs.coreutils ] ''
     iso=$(find ${self.packages.${system}.iso}/iso -name '*.iso' | head -1)
-    [ -n "$iso" ] || { echo "ERRO: nenhum .iso saiu da derivacao" >&2; exit 1; }
+    [ -n "$iso" ] || { echo "ERROR: no .iso came out of the derivation" >&2; exit 1; }
     bytes=$(stat -c %s "$iso")
     floor=$((100 * 1024 * 1024))
     echo "ISO: $((bytes / 1024 / 1024)) MiB"
@@ -7961,7 +8046,7 @@ let
     # Anchored on a LIST ITEM: the rule at the top itself cites the markers in
     # order to forbid them, and a loose grep would report the text that forbids them.
     if grep -qE '^ *[-*|] *(\[x\]|~~|✅)' ${../docs/PENDING.md}; then
-      echo "ERRO: PENDING.md tem item marcado como feito." >&2
+      echo "ERROR: PENDING.md has an item struck through as done." >&2
       echo "      The rule is to remove, not to strike through — it keeps no history." >&2
       exit 1
     fi

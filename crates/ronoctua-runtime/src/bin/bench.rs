@@ -52,16 +52,16 @@ fn main() -> Result<()> {
     println!("component: {} KiB", wasm.len() / 1024);
 
     let (p50, p99) = measure(&rt, &wasm, repeats)?;
-    println!("com  memory_init_cow: p50={p50:.3} ms  p99={p99:.3} ms  (n={repeats})");
+    println!("with     memory_init_cow: p50={p50:.3} ms  p99={p99:.3} ms  (n={repeats})");
 
     // THE COMPARISON. Without it, "memory_init_cow is mandatory" would be
     // hearsay; with it, it is a number this component produces. It does not fail
     // the build — whoever gates is the production mode, right below.
     match Runtime::without_cow().and_then(|r| measure(&r, &wasm, repeats)) {
         Ok((s50, s99)) => {
-            println!("sem  memory_init_cow: p50={s50:.3} ms  p99={s99:.3} ms");
+            println!("without  memory_init_cow: p50={s50:.3} ms  p99={s99:.3} ms");
             if p99 > 0.0 {
-                println!("diferenca no p99: {:.1}x", s99 / p99);
+                println!("the difference at p99: {:.1}x", s99 / p99);
             }
         }
         Err(e) => println!("(could not measure without cow: {e})"),

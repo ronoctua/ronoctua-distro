@@ -239,7 +239,7 @@ mod tests {
         );
         let mut reading = std::io::BufReader::new(wire.as_slice());
         let back: T = read_line(&mut reading)
-            .expect("ler")
+            .expect("read")
             .expect("nothing on the line");
         assert_eq!(&back, value);
     }
@@ -312,7 +312,7 @@ mod tests {
             "the message became two lines"
         );
         let mut reading = std::io::BufReader::new(wire.as_slice());
-        let Some(Say::Mind { mind: back }) = read_line(&mut reading).expect("ler") else {
+        let Some(Say::Mind { mind: back }) = read_line(&mut reading).expect("read") else {
             panic!("it did not give back a mind");
         };
         assert_eq!(*back, mind);

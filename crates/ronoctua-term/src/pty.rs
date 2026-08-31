@@ -146,9 +146,9 @@ impl Pty {
     ///
     /// The child closed the pty.
     pub fn write_bytes(&self, bytes: &[u8]) -> Result<()> {
-        let mut f = std::fs::File::from(self.master.try_clone().context("clonar o mestre")?);
+        let mut f = std::fs::File::from(self.master.try_clone().context("clone the master")?);
         f.write_all(bytes).context("write to the pty")?;
-        f.flush().context("esvaziar o pty")
+        f.flush().context("drain the pty")
     }
 
     /// Tells the program the new size.
@@ -177,7 +177,7 @@ impl Pty {
     ///
     /// A read error that is not the normal end.
     pub fn pump(&self, mut ver: impl FnMut(&[u8]) -> Stream) -> Result<()> {
-        let mut f = std::fs::File::from(self.master.try_clone().context("clonar o mestre")?);
+        let mut f = std::fs::File::from(self.master.try_clone().context("clone the master")?);
         let mut buf = [0u8; 4096];
         loop {
             match f.read(&mut buf) {
@@ -192,7 +192,7 @@ impl Pty {
                 // terminal that closes.
                 Err(e) if e.raw_os_error() == Some(5) => return Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e).context("ler o pty"),
+                Err(e) => return Err(e).context("read the pty"),
             }
         }
     }
@@ -206,7 +206,7 @@ impl Pty {
         Ok(self
             .child
             .try_wait()
-            .context("consultar o filho")?
+            .context("ask after the child")?
             .is_none())
     }
 
@@ -217,7 +217,7 @@ impl Pty {
     /// Could not wait for the child.
     pub fn finish(&mut self) -> Result<()> {
         let _ = self.child.kill();
-        let _ = self.child.wait().context("esperar o filho")?;
+        let _ = self.child.wait().context("wait for the child")?;
         Ok(())
     }
 }

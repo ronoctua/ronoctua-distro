@@ -58,11 +58,11 @@ fn engines() -> Vec<Box<dyn Engine>> {
 fn main() -> Result<()> {
     let corpus = std::env::args()
         .nth(1)
-        .context("uso: diferencial <corpus> <golden> [--gravar]")?;
+        .context("usage: differential <corpus> <golden> [--record]")?;
     let golden = std::env::args()
         .nth(2)
         .context("the golden's directory is missing")?;
-    let write_out = std::env::args().any(|a| a == "--gravar");
+    let write_out = std::env::args().any(|a| a == "--record");
 
     let corpus = Path::new(&corpus);
     let golden = Path::new(&golden);
@@ -132,9 +132,9 @@ fn main() -> Result<()> {
             format!(
                 "the golden {} is missing.\n\
                  \n\
-                 Gere com: diferencial <corpus> <golden> --gravar\n\
-             and CHECK the result before versioning it — a wrong golden\n\
-                 congela o bug em vez de pegar.",
+                 Make it with: differential <corpus> <golden> --record\n\
+                 and CHECK the result before versioning it — a wrong golden\n\
+                 freezes the bug instead of catching it.",
                 file.display()
             )
         })?;

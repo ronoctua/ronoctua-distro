@@ -132,8 +132,8 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
         .with_context(|| format!("the counter is not in the `N / M` shape: {cab}"))?;
 
     Ok(Vision {
-        filtered: n.trim().parse().context("contagem de resultados")?,
-        total: m.trim().parse().context("total da base")?,
+        filtered: n.trim().parse().context("the result count")?,
+        total: m.trim().parse().context("the database total")?,
         field,
         drawings,
         positions,

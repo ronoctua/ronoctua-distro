@@ -134,7 +134,7 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("rodar {SYSTEMD_CREDS_PATH}"))?;
+        .with_context(|| format!("run {SYSTEMD_CREDS_PATH}"))?;
 
     child
         .stdin
@@ -143,9 +143,7 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
         .write_all(password.as_bytes())
         .context("send the password to systemd-creds")?;
 
-    let output = child
-        .wait_with_output()
-        .context("esperar o systemd-creds")?;
+    let output = child.wait_with_output().context("wait for systemd-creds")?;
     if !output.status.success() {
         // `systemd-creds`'s stderr says whether the TPM is absent, busy or
         // refusing. Passing it along is the difference between "it did not work" and knowing why.
@@ -156,7 +154,7 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
     }
 
     write_restricted(&destination, &output.stdout)
-        .with_context(|| format!("gravar {}", destination.display()))
+        .with_context(|| format!("write {}", destination.display()))
 }
 
 /// Opens the blob and returns the password.
@@ -166,7 +164,7 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
 /// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
 pub fn open(ssid: &str) -> Result<String> {
     let origin = path(ssid);
-    let blob = std::fs::read(&origin).with_context(|| format!("ler {}", origin.display()))?;
+    let blob = std::fs::read(&origin).with_context(|| format!("read {}", origin.display()))?;
 
     let mut child = Command::new(SYSTEMD_CREDS_PATH)
         .arg("decrypt")
@@ -177,18 +175,16 @@ pub fn open(ssid: &str) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("rodar {SYSTEMD_CREDS_PATH}"))?;
+        .with_context(|| format!("run {SYSTEMD_CREDS_PATH}"))?;
 
     child
         .stdin
         .take()
         .context("no stdin for systemd-creds")?
         .write_all(&blob)
-        .context("mandar o blob para o systemd-creds")?;
+        .context("send the blob to systemd-creds")?;
 
-    let output = child
-        .wait_with_output()
-        .context("esperar o systemd-creds")?;
+    let output = child.wait_with_output().context("wait for systemd-creds")?;
     if !output.status.success() {
         bail!(
             "the TPM refused to unseal: {}",

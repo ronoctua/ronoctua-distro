@@ -651,7 +651,7 @@ mod tests {
             l.key(t(Sym::Down));
         }
         assert_eq!(l.cursor(), l.result().len() - 1);
-        assert_eq!(l.key(t(Sym::Down)), Action::Nothing, "passou do fim");
+        assert_eq!(l.key(t(Sym::Down)), Action::Nothing, "it went past the end");
         // Filtering after moving down must not leave the cursor outside: `Enter`
         // would do nothing, without saying why.
         type_in(&mut l, "firefox");
@@ -728,11 +728,11 @@ mod tests {
         assert_eq!(
             &r.pixels[i..i + 4],
             &[255, 0, 0, 255],
-            "o vermelho opaco saiu alterado"
+            "the opaque red came out changed"
         );
         // And the other side stays transparent — the fit did not paint a background.
         let j = (9 * 18 + 15) * 4;
-        assert_eq!(r.pixels[j + 3], 0, "o transparente virou opaco");
+        assert_eq!(r.pixels[j + 3], 0, "the transparent one became opaque");
     }
 
     /// A broken SVG is `None`, and not a panic: the superpackage has 335 thousand
@@ -743,7 +743,7 @@ mod tests {
             ronoctua_notify::icon::from_svg(b"i am not svg", 18, ronoctua_notify::icon::Fit::Fill)
                 .is_none()
         );
-        assert!(ronoctua_notify::icon::from_raster(b"nem png", 18).is_none());
+        assert!(ronoctua_notify::icon::from_raster(b"not a png either", 18).is_none());
         assert!(
             ronoctua_notify::icon::from_svg(SVG.as_bytes(), 0, ronoctua_notify::icon::Fit::Fill)
                 .is_none(),
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn the_app_table_beats_the_category() {
         let ff = input_of("firefox", "Firefox", &["Network", "WebBrowser"]);
-        let otherwise = input_of("qualquer", "Qualquer", &["Network", "WebBrowser"]);
+        let otherwise = input_of("anything", "Anything", &["Network", "WebBrowser"]);
         assert_ne!(glyph_of(&ff), glyph_of(&otherwise));
     }
 }

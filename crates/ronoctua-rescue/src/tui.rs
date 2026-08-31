@@ -138,7 +138,7 @@ pub fn run() -> Result<()> {
 /// section. Two vocabularies would be two behaviours to keep in step, and the
 /// one nobody tests is the mouse's.
 fn read_key() -> Result<Option<Key>> {
-    Ok(match event::read().context("ler evento")? {
+    Ok(match event::read().context("read an event")? {
         Event::Key(KeyEvent {
             code,
             modifiers,

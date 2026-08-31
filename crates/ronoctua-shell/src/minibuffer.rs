@@ -716,7 +716,11 @@ mod tests {
             m.key(ctrl('n'), &r);
         }
         assert_eq!(m.cursor(), m.candidates().len() - 1);
-        assert_eq!(m.key(ctrl('n'), &r), Action::Nothing, "passou do fim");
+        assert_eq!(
+            m.key(ctrl('n'), &r),
+            Action::Nothing,
+            "it went past the end"
+        );
     }
 
     #[test]
@@ -786,7 +790,7 @@ mod tests {
             "it ran straight away"
         );
         assert_eq!(m.asking_for(), Some("niri-focus-workspace"));
-        assert!(m.active(), "fechou em vez de perguntar");
+        assert!(m.active(), "it closed instead of asking");
         // The prompt becomes the command's NAME: whoever got here has already chosen.
         assert!(
             m.prompt().starts_with("niri-focus-workspace:"),
@@ -876,7 +880,7 @@ mod tests {
 
         // With no query, nothing lights up.
         assert_eq!(
-            super::match_up("", "qualquer").unwrap().1,
+            super::match_up("", "anything").unwrap().1,
             Vec::<usize>::new()
         );
         assert!(super::match_up("zzz", "buffer-close").is_none());

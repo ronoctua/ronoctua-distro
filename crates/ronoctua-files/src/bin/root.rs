@@ -97,7 +97,7 @@ pub fn check(path: &Path) -> Result<()> {
 fn act(request: &Staged) -> Result<()> {
     match request.verb {
         Verb::Chown => {
-            let uid: u32 = request.value.parse().context("uid invalido")?;
+            let uid: u32 = request.value.parse().context("invalid uid")?;
             rustix::fs::chownat(
                 rustix::fs::CWD,
                 &request.path,
@@ -105,10 +105,10 @@ fn act(request: &Staged) -> Result<()> {
                 None,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
-            .with_context(|| format!("mudar o dono de {}", request.path.display()))
+            .with_context(|| format!("change the owner of {}", request.path.display()))
         }
         Verb::Chgrp => {
-            let gid: u32 = request.value.parse().context("gid invalido")?;
+            let gid: u32 = request.value.parse().context("invalid gid")?;
             rustix::fs::chownat(
                 rustix::fs::CWD,
                 &request.path,
@@ -125,7 +125,7 @@ fn act(request: &Staged) -> Result<()> {
                 &request.path,
                 std::fs::Permissions::from_mode(mode & 0o7777),
             )
-            .with_context(|| format!("mudar a permissao de {}", request.path.display()))
+            .with_context(|| format!("change the permission of {}", request.path.display()))
         }
         Verb::Trim => {
             let fstrim = option_env!("RONOCTUA_FSTRIM")
@@ -133,7 +133,7 @@ fn act(request: &Staged) -> Result<()> {
             let out = std::process::Command::new(fstrim)
                 .arg(&request.path)
                 .output()
-                .context("rodar o fstrim")?;
+                .context("run fstrim")?;
             if out.status.success() {
                 return Ok(());
             }

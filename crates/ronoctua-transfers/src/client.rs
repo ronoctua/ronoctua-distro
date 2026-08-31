@@ -93,7 +93,7 @@ pub fn ask_at(path: &Path, what: &Ask) -> Result<Say> {
     // A daemon that stopped answering must not take the frame with it. On the
     // other side every ask is a lock, a push and a `writeln!`.
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let mut out = BufWriter::new(stream.try_clone().context("duplicar o socket")?);
+    let mut out = BufWriter::new(stream.try_clone().context("duplicate the socket")?);
     write_line(&mut out, what)?;
     let mut input = BufReader::new(stream);
     read_line(&mut input)?.context("the transfer queue did not answer")
@@ -151,7 +151,7 @@ pub fn watch(mut each: impl FnMut(Vec<Job>) -> bool) -> Result<()> {
 /// One connection's worth of listening. `true` when the caller asked to stop.
 fn listen_once(path: &Path, each: &mut impl FnMut(Vec<Job>) -> bool) -> Result<bool> {
     let stream = connect_or_start(path)?;
-    let mut out = BufWriter::new(stream.try_clone().context("duplicar o socket")?);
+    let mut out = BufWriter::new(stream.try_clone().context("duplicate the socket")?);
     write_line(&mut out, &Ask::Watch)?;
     let mut input = BufReader::new(stream);
     while let Some(said) = read_line::<Say>(&mut input)? {

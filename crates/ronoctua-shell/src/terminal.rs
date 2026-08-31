@@ -157,17 +157,17 @@ pub fn host_monitor(program: &str, args: &[String]) -> Result<()> {
 ///
 /// The same as [`host_it`].
 pub fn host_rescue(program: &str, args: &[String]) -> Result<()> {
-    host_as(APP_ID_RESCUE, "ronoctua: resgate", Some(program), args)
+    host_as(APP_ID_RESCUE, "ronoctua: rescue", Some(program), args)
 }
 
 /// The body of both: everything is the same but the window's identity.
 fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
     let qh: QueueHandle<TerminalWindow> = queue.handle();
 
-    let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
+    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
     let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
 
     let surface_of = compositor.create_surface(&qh);
@@ -199,7 +199,7 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
     cycle
         .handle()
         .insert_source(face, |(), (), j: &mut TerminalWindow| j.paint())
-        .map_err(|e| anyhow::anyhow!("pendurar o ping: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("hang the ping: {e}"))?;
 
     // The PTY's thread. It touches neither Wayland nor wgpu — it only feeds the
     // engine and rings the ping.

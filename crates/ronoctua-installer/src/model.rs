@@ -828,7 +828,7 @@ mod tests {
         // The others are never skipped for any answer.
         for q in Question::ALL_KEYS {
             if q != Question::WifiPassword {
-                assert!(!q.skipped_one(&r), "{q:?} foi pulada");
+                assert!(!q.skipped_one(&r), "{q:?} was skipped");
             }
         }
     }
@@ -921,7 +921,7 @@ mod tests {
         ] {
             assert!(
                 validate_it(Question::Hostname, bad, LANGUAGES, LAYOUTS).is_err(),
-                "`{bad}` devia ser recusado"
+                "`{bad}` should have been refused"
             );
         }
     }

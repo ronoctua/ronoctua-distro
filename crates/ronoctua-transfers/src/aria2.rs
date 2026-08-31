@@ -126,7 +126,7 @@ fn call(method: &str, mut params: Vec<Value>) -> Result<Value> {
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("no message");
-        bail!("o aria2 recusou `{method}`: {message}");
+        bail!("aria2 refused `{method}`: {message}");
     }
     parsed
         .get("result")

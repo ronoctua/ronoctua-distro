@@ -322,9 +322,9 @@ mod tests {
     }
 
     fn mind_of(socket: &Path, ask: &Ask) -> Mind {
-        match client::ask_at(socket, ask).expect("perguntar") {
+        match client::ask_at(socket, ask).expect("ask") {
             Say::Mind { mind } => *mind,
-            Say::Refused { why } => panic!("recusou: {why}"),
+            Say::Refused { why } => panic!("refused: {why}"),
         }
     }
 
@@ -358,7 +358,7 @@ mod tests {
                 rehearsal: false,
             },
         )
-        .expect("perguntar");
+        .expect("ask");
         match said {
             Say::Refused { why } => {
                 assert!(why.contains("system-update"), "{why}");
@@ -422,7 +422,7 @@ mod tests {
                 step: "does-not-exist".to_owned(),
             },
         )
-        .expect("perguntar");
+        .expect("ask");
         assert!(matches!(said, Say::Refused { .. }));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -456,11 +456,11 @@ mod tests {
         desk.shared.queue_up("system-update");
 
         let stream = UnixStream::connect(&socket).expect("connect");
-        let mut out = BufWriter::new(stream.try_clone().expect("duplicar"));
+        let mut out = BufWriter::new(stream.try_clone().expect("duplicate"));
         write_line(&mut out, &Ask::Watch).expect("pedir");
         let mut input = BufReader::new(stream);
         let first: Say = read_line(&mut input)
-            .expect("ler")
+            .expect("read")
             .expect("nothing in the first frame");
         match first {
             Say::Mind { mind } => assert_eq!(mind.queue, vec!["system-update".to_owned()]),

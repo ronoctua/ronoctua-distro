@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(
             f.showing().map(|s| s.notification.id),
             Some(1),
-            "a que saiu se perdeu"
+            "the one that left was lost"
         );
     }
 

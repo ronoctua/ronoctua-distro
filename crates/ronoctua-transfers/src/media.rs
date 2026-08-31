@@ -341,7 +341,7 @@ fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>
                 return Ok(());
             }
             if last_word.is_empty() {
-                bail!("o yt-dlp saiu com {status}");
+                bail!("yt-dlp exited with {status}");
             }
             bail!("{last_word}");
         }

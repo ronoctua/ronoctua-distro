@@ -1473,7 +1473,7 @@ pub const PINNED_MARK: &str = "*";
 pub fn run() -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, mut queue) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let (globals, mut queue) = registry_queue_init(&conn).context("Wayland's registry")?;
     let qh: QueueHandle<Footer> = queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh)
@@ -3568,7 +3568,7 @@ impl Footer {
                 }
                 Err(e) => {
                     let m = e.to_string();
-                    tracing::warn!(command = id, error = %m, "o compositor recusou");
+                    tracing::warn!(command = id, error = %m, "the compositor refused");
                     self.echo_message(m);
                 }
             }
@@ -3587,7 +3587,7 @@ impl Footer {
                     // why the action was refused, and swapping it for "it failed"
                     // would wipe the information on the way.
                     let m = e.to_string();
-                    tracing::warn!(action = name, error = %m, "o compositor recusou");
+                    tracing::warn!(action = name, error = %m, "the compositor refused");
                     self.echo_message(m);
                 }
             }
@@ -4774,7 +4774,7 @@ impl Footer {
             self.close_leader();
             match pid.map(|p| crate::leader::buffer_command(p, &id)) {
                 Some(Ok(())) => tracing::info!(command = %id, "command of the focused buffer"),
-                Some(Err(e)) => tracing::warn!(error = %e, command = %id, "o buffer recusou"),
+                Some(Err(e)) => tracing::warn!(error = %e, command = %id, "the buffer refused"),
                 None => tracing::warn!(command = %id, "no buffer to take the command"),
             }
             return true;
@@ -10238,10 +10238,10 @@ mod tests {
 
         let root = super::narrow_buffer_keymap(&bindings, &["m"]);
         assert_eq!(root.len(), 2, "two distinct keys after `m`: {root:?}");
-        let f = root.iter().find(|e| e.key == "f").expect("sem `f`");
+        let f = root.iter().find(|e| e.key == "f").expect("no `f`");
         assert!(f.is_group, "`m f` carries on, so it is a group");
         assert!(f.command.is_none(), "a group runs nothing");
-        let q = root.iter().find(|e| e.key == "q").expect("sem `q`");
+        let q = root.iter().find(|e| e.key == "q").expect("no `q`");
         assert!(!q.is_group);
         assert_eq!(q.command.as_deref(), Some("memory-close"));
         assert_eq!(
@@ -10569,7 +10569,7 @@ mod tests {
         let last = last_offset(30, 12); // 18
         assert_eq!(last, 18);
         assert_eq!(scrolling(0, last, -1), 0, "it came up from the top");
-        assert_eq!(scrolling(last, last, 1), last, "passou do fim");
+        assert_eq!(scrolling(last, last, 1), last, "it went past the end");
         assert_eq!(scrolling(0, last, 12), 12);
         assert_eq!(
             scrolling(12, last, 12),
@@ -10762,12 +10762,12 @@ mod tests {
         assert_eq!(
             row_at_height(0.0, h, FOOTER_LINES, n),
             None,
-            "modeline virou item"
+            "the modeline became an item"
         );
         assert_eq!(
             row_at_height(h + 1.0, h, FOOTER_LINES, n),
             None,
-            "minibuffer virou item"
+            "the minibuffer became an item"
         );
         assert_eq!(
             row_at_height(f64::from(FOOTER_LINES) * h, h, FOOTER_LINES, n),

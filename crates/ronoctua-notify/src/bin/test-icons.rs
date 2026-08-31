@@ -65,7 +65,7 @@ fn main() -> std::process::ExitCode {
         };
         if (rgba.width, rgba.height) != (SIDE, SIDE) {
             eprintln!(
-                "ERRO: `{name}` saiu {}x{}, e o layout reserva {SIDE}x{SIDE}",
+                "ERROR: `{name}` came out {}x{}, and the layout reserves {SIDE}x{SIDE}",
                 rgba.width, rgba.height
             );
             failed = true;
@@ -77,11 +77,11 @@ fn main() -> std::process::ExitCode {
         let opaque = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
         let total = (SIDE * SIDE) as usize;
         if opaque * 100 < total * 5 {
-            eprintln!("ERRO: `{name}` rasterizou com {opaque}/{total} pixels visiveis");
+            eprintln!("ERROR: `{name}` rasterised with {opaque}/{total} pixels visible");
             failed = true;
             continue;
         }
-        println!("OK: {name} — {opaque}/{total} pixels visiveis");
+        println!("OK: {name} — {opaque}/{total} pixels visible");
     }
 
     // THE OTHER SIDE: without this, "everything resolved" could only mean that the

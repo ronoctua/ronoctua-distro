@@ -131,7 +131,7 @@ impl Niri {
             .with_context(|| format!("niri's answer is not JSON: {line:?}"))?;
 
         if let Some(error) = answer.get("Err") {
-            bail!("o niri recusou {request}: {error}");
+            bail!("niri refused {request}: {error}");
         }
         answer
             .get("Ok")
@@ -320,7 +320,7 @@ fn interpret(raw: &serde_json::Value) -> Result<Event> {
         "WindowsChanged" => {
             let windows = body
                 .get("windows")
-                .context("WindowsChanged sem `windows`")?;
+                .context("WindowsChanged with no `windows`")?;
             Event::WindowsChanged(
                 serde_json::from_value(windows.clone())
                     .context("a WindowsChanged window does not match `Window`")?,
@@ -329,7 +329,7 @@ fn interpret(raw: &serde_json::Value) -> Result<Event> {
         "WindowOpenedOrChanged" => {
             let window = body
                 .get("window")
-                .context("WindowOpenedOrChanged sem `window`")?;
+                .context("WindowOpenedOrChanged with no `window`")?;
             Event::WindowOpenedOrChanged(
                 serde_json::from_value(window.clone())
                     .context("WindowOpenedOrChanged's window does not match `Window`")?,
@@ -338,7 +338,7 @@ fn interpret(raw: &serde_json::Value) -> Result<Event> {
         "WindowClosed" => Event::WindowClosed(
             body.get("id")
                 .and_then(serde_json::Value::as_u64)
-                .context("WindowClosed sem `id`")?,
+                .context("WindowClosed with no `id`")?,
         ),
         "WindowFocusChanged" => {
             Event::FocusChanged(body.get("id").and_then(serde_json::Value::as_u64))

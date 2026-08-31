@@ -461,7 +461,7 @@ mod tests {
         assert!(held.load(Ordering::Relaxed), "the switch was not pressed");
         assert!(
             !shared.stop_flag().load(Ordering::Relaxed),
-            "a proxima corrida ja nasceu abortada"
+            "the next run was born already aborted"
         );
     }
 }

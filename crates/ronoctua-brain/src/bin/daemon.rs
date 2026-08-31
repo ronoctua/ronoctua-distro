@@ -106,7 +106,7 @@ fn unit() -> Result<()> {
 fn look() -> Result<()> {
     match client::ask(&wire::Ask::Look)? {
         wire::Say::Mind { mind } => {
-            let text = serde_json::to_string_pretty(&*mind).context("codificar a mente")?;
+            let text = serde_json::to_string_pretty(&*mind).context("encode the mind")?;
             println!("{text}");
             Ok(())
         }
@@ -118,7 +118,7 @@ fn look() -> Result<()> {
 fn ask_for(rehearsal: bool) -> Result<()> {
     let task = std::env::args()
         .nth(2)
-        .context("uso: ronoctua-brain run <tarefa>")?;
+        .context("usage: ronoctua-brain run <task>")?;
     match client::ask(&wire::Ask::Run {
         task: task.clone(),
         rehearsal,

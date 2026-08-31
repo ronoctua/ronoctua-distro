@@ -222,11 +222,11 @@ mod tests {
 
         let mut reading = pipe.as_slice();
         assert_eq!(
-            read_message::<Request>(&mut reading).expect("ler"),
+            read_message::<Request>(&mut reading).expect("read"),
             Some(Request::Ping)
         );
         assert_eq!(
-            read_message::<Request>(&mut reading).expect("ler"),
+            read_message::<Request>(&mut reading).expect("read"),
             Some(Request::Media {
                 url: "https://exemplo/v".to_owned(),
                 want: Want::Subtitles,

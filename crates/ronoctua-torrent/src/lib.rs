@@ -256,7 +256,7 @@ impl Session {
             };
             self.raw
                 .add_magnet(&uri, &into)
-                .ok_or_else(|| anyhow::anyhow!("o libtorrent recusou o magnet"))
+                .ok_or_else(|| anyhow::anyhow!("libtorrent refused the magnet"))
         }
         #[cfg(not(torrent))]
         {

@@ -94,7 +94,7 @@ fn main() -> Result<()> {
 
     let n = db.faces().count();
     if n != FACES {
-        bail!("o banco tem {n} faces e devia ter {FACES}");
+        bail!("the database has {n} faces and should have {FACES}");
     }
     let families: Vec<String> = db
         .faces()

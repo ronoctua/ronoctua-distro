@@ -198,7 +198,7 @@ pub enum Failure {
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownModifier(s) => write!(f, "modificador desconhecido em `{s}`"),
+            Self::UnknownModifier(s) => write!(f, "an unknown modifier in `{s}`"),
             Self::UnknownSymbol(s) => write!(f, "an unknown key in `{s}`"),
             Self::EmptySequence => write!(f, "an empty key sequence"),
         }

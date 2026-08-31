@@ -149,8 +149,8 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
         .with_context(|| format!("the counter is not in the `N / M` shape: {cab}"))?;
 
     Ok(Vision {
-        total_filtered: n.trim().parse().context("contagem de resultados")?,
-        total_in_db: m.trim().parse().context("total da base")?,
+        total_filtered: n.trim().parse().context("the result count")?,
+        total_in_db: m.trim().parse().context("the database total")?,
         focus,
         tags,
         glyphs,
@@ -1310,7 +1310,7 @@ fn main() -> Result<()> {
     let only_folder = query(&mut inst, "folder")?;
     if pasted.total_filtered != only_folder.total_filtered {
         bail!(
-            "colar `folder` filtrou {} e digitar `folder` filtrou {}",
+            "pasting `folder` filtered {} and typing `folder` filtered {}",
             pasted.total_filtered,
             only_folder.total_filtered
         );
@@ -1371,7 +1371,7 @@ fn main() -> Result<()> {
             dirty.focus
         );
     }
-    println!("colar     com espacos   -> {expected}");
+    println!("paste     with spaces   -> {expected}");
 
     println!("OK: the five filters of section 6.5 narrow, the state persists,");
     println!("    the click lands, search by tag works in both languages,");

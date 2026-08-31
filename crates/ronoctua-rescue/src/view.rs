@@ -406,7 +406,7 @@ mod tests {
         v.row = papers()
             .iter()
             .position(|p| p.origin.is_some())
-            .expect("um gerado");
+            .expect("a generation");
         let Step::Hand(Hand::Read(_)) = v.key(Key::Enter) else {
             panic!("a generated file opened for editing — it goes away on the next rebuild");
         };
@@ -452,7 +452,11 @@ mod tests {
         // Arming is for what cannot be undone. Restarting the footer twice is
         // restarting the footer.
         for a in crate::all_of().iter().filter(|a| a.tier == Tier::Free) {
-            assert!(!View::arms(a), "`{}` pede confirmacao a toa", a.id);
+            assert!(
+                !View::arms(a),
+                "`{}` asks for a confirmation nobody needs",
+                a.id
+            );
         }
     }
 
@@ -462,7 +466,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the directory");
         for n in [7_u32, 9, 8] {
-            std::fs::write(dir.join(format!("system-{n}-link")), b"").expect("a geracao");
+            std::fs::write(dir.join(format!("system-{n}-link")), b"").expect("the generation");
         }
         std::fs::write(dir.join("system-profile"), b"").expect("what is not a generation");
         let got: Vec<u32> = generations(&dir).into_iter().map(|(n, _)| n).collect();

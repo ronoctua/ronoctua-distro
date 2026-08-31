@@ -152,7 +152,7 @@ impl Bin {
     pub fn restore(&self, name: &str) -> Result<PathBuf> {
         let note_at = self.info().join(format!("{name}.trashinfo"));
         let note = std::fs::read_to_string(&note_at)
-            .with_context(|| format!("ler {}", note_at.display()))?;
+            .with_context(|| format!("read {}", note_at.display()))?;
         let origin = origin_of(&note).with_context(|| {
             format!(
                 "{} does not say where the file came from",
@@ -164,10 +164,10 @@ impl Bin {
         }
         if let Some(parent) = origin.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("recriar {}", parent.display()))?;
+                .with_context(|| format!("recreate {}", parent.display()))?;
         }
         std::fs::rename(self.files().join(name), &origin)
-            .with_context(|| format!("devolver para {}", origin.display()))?;
+            .with_context(|| format!("put {} back", origin.display()))?;
         let _ = std::fs::remove_file(&note_at);
         Ok(origin)
     }
@@ -296,7 +296,7 @@ mod tests {
 
         let name = bin.put(&file, 1_755_000_000, &Zone::utc()).unwrap();
         assert_eq!(name, "relatorio.txt");
-        assert!(!file.exists(), "o original continua la");
+        assert!(!file.exists(), "the original is still there");
         assert!(bin.files().join(&name).exists());
 
         let note = std::fs::read_to_string(bin.info().join("relatorio.txt.trashinfo")).unwrap();

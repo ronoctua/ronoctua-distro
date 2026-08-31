@@ -45,18 +45,18 @@ from fontTools.ttLib import TTFont
 
 
 def die(msg: str) -> None:
-    print(f"ERRO: {msg}", file=sys.stderr)
+    print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
-def presenca_de_emoji(emoji_data: pathlib.Path) -> set[int]:
+def emoji_presentation(emoji_data: pathlib.Path) -> set[int]:
     """The codepoints with `Emoji_Presentation=Yes`, from `emoji-data.txt`."""
     not_in: set[int] = set()
     for line in emoji_data.read_text(encoding="utf-8").splitlines():
-        corpo = line.split("#")[0]
-        if "Emoji_Presentation" not in corpo:
+        body = line.split("#")[0]
+        if "Emoji_Presentation" not in body:
             continue
-        range_of = corpo.split(";")[0].strip()
+        range_of = body.split(";")[0].strip()
         if not range_of:
             continue
         if ".." in range_of:
@@ -79,10 +79,10 @@ def main() -> int:
 
     font_file = TTFont(args.primary)
     of_emoji = set(TTFont(args.emoji, lazy=True).getBestCmap())
-    apresenta = presenca_de_emoji(args.emoji_data)
+    presented = emoji_presentation(args.emoji_data)
 
     prior = set(font_file.getBestCmap())
-    give_way = (prior & of_emoji) & apresenta
+    give_way = (prior & of_emoji) & presented
     if not give_way:
         die(
             "nenhum codepoint a give_way — ou a Iosevka deixou de trazer emoji, ou\n"
@@ -104,7 +104,7 @@ def main() -> int:
     # --- THE GUARDS, over what was WRITTEN -----------------------------------
     written = set(TTFont(args.out, lazy=True).getBestCmap())
 
-    leftover = (written & of_emoji) & apresenta
+    leftover = (written & of_emoji) & presented
     if leftover:
         die(
             f"{len(leftover)} emoji-presentation codepoints are still in the face "
@@ -115,7 +115,7 @@ def main() -> int:
 
     # WHAT MUST NOT HAVE LEFT: TEXT presentation. Losing `#` or the digits
     # from the primary face would break ordinary text, and the symptom would show up far away.
-    lost = (prior - written) - apresenta
+    lost = (prior - written) - presented
     if lost:
         die(
             f"{len(lost)} codepoints with TEXT presentation left the face "
@@ -123,7 +123,7 @@ def main() -> int:
         )
 
     # And the canonical ones, by name, because an empty set also passes the test
-    # above — and a bug that zeroed `apresenta` would take everything with it.
+    # above — and a bug that zeroed `presented` would take everything with it.
     for cp, name in ((0x23, "#"), (0x30, "0"), (0xA9, "(c)"), (0x2122, "(tm)")):
         if cp not in written:
             die(f"a face primaria perdeu `{name}` (U+{cp:04X})")

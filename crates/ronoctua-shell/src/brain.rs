@@ -844,7 +844,10 @@ mod tests {
                 ronoctua_protocol::Vital::OnBattery
             ]
         );
-        assert_eq!(over.pulse.signs[0].amount, 0, "zero medido virou ausencia");
+        assert_eq!(
+            over.pulse.signs[0].amount, 0,
+            "a measured zero became an absence"
+        );
     }
 
     #[test]

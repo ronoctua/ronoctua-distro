@@ -123,6 +123,6 @@ fn main() -> std::process::ExitCode {
         );
         return std::process::ExitCode::FAILURE;
     }
-    println!("OK: o layout cabe com folga");
+    println!("OK: the layout fits with room to spare");
     std::process::ExitCode::SUCCESS
 }

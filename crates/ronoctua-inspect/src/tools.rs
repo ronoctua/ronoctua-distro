@@ -192,7 +192,7 @@ pub fn run(tool: Tool, args: &[&OsStr]) -> Result<Vec<u8>, Refusal> {
     let mut chunk = [0_u8; 64 * 1024];
     loop {
         if Instant::now() >= deadline {
-            tracing::warn!(program = %program.display(), "passou da paciencia");
+            tracing::warn!(program = %program.display(), "it went past the patience");
             stop(&mut child);
             return Err(Refusal::TimedOut);
         }
@@ -254,7 +254,7 @@ pub fn run(tool: Tool, args: &[&OsStr]) -> Result<Vec<u8>, Refusal> {
                         program = %program.display(),
                         code = status.code().unwrap_or(-1),
                         bytes = out.len(),
-                        "saiu mal"
+                        "it came out badly"
                     );
                     return Err(Refusal::Failed);
                 }

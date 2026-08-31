@@ -179,7 +179,7 @@ writeShellApplication {
             d.setdefault(item_name, []).append(float(ms))
 
     if not d:
-        print("ERRO: nenhum marco no log", file=sys.stderr)
+        print("ERROR: no milestone in the log at all", file=sys.stderr)
         raise SystemExit(1)
 
     print("== section 5.2's targets ==")

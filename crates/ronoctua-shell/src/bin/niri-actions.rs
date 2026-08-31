@@ -20,7 +20,7 @@ use anyhow::{Context as _, Result, bail};
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .context("uso: ronoctua-niri-actions <socket-do-niri>")?;
+        .context("usage: ronoctua-niri-actions <niri-socket>")?;
 
     let mut failures = Vec::new();
     let table = actions::all_of();
@@ -32,14 +32,14 @@ fn main() -> Result<()> {
         match niri.action(action.clone()) {
             Ok(()) => println!("  ok   {id:24} -> {action}"),
             Err(e) => {
-                println!("  ERRO {id:24} -> {action}");
+                println!("  FAIL {id:24} -> {action}");
                 failures.push(format!("{id}: {e}"));
             }
         }
     }
 
     if !failures.is_empty() {
-        eprintln!("\nERROR: actions niri did not accept:\n");
+        eprintln!("\nERROR: the actions niri did not accept:\n");
         for f in &failures {
             eprintln!("  {f}");
         }

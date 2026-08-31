@@ -227,7 +227,7 @@ pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
                 program: program.clone(),
             };
         }
-        Ok(st) => format!("o systemd-run saiu com {st}"),
+        Ok(st) => format!("systemd-run exited with {st}"),
         Err(e) => format!("sem systemd-run: {e}"),
     };
 
@@ -384,7 +384,7 @@ pub fn satellite_of(display: u8, program: &str, args: &[String]) -> Result<()> {
     }
 
     if !st?.success() {
-        tracing::info!(program, "o buffer saiu com erro");
+        tracing::info!(program, "the buffer exited with an error");
     }
     Ok(())
 }
@@ -409,7 +409,7 @@ fn wait_for_satellite(display: u8, target: &str) -> Result<std::process::Child> 
                 socket.display()
             );
         }
-        if let Some(st) = satellite.try_wait().context("consultar o satellite")? {
+        if let Some(st) = satellite.try_wait().context("ask the satellite")? {
             bail!("xwayland-satellite exited with {st} before creating the socket");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));

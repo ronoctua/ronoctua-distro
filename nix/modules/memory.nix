@@ -138,7 +138,7 @@ let
         # separate key and a separate confirmation.
         generations) nix-collect-garbage --delete-older-than 30d ;;
         journal) journalctl --vacuum-size=256M ;;
-        *) echo "ERRO: faxina desconhecida: $1" >&2; exit 1 ;;
+        *) echo "ERROR: no such sweep: $1" >&2; exit 1 ;;
       esac
     '';
   };

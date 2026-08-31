@@ -971,7 +971,7 @@ fn setting_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protoco
                 // A NAME THIS BUILD CANNOT READ. The WIT gained a case and the
                 // host did not learn it; rounding it to a neighbour would put
                 // the rebuild in a stretch of the day nobody chose.
-                tracing::warn!(part, "parte do dia desconhecida");
+                tracing::warn!(part, "an unknown part of the day");
                 return None;
             };
             Knob::PartOfDay(part)
@@ -990,7 +990,7 @@ fn setting_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protoco
         // It carries nothing: there is one default and it is the flake's.
         ("reset-steps", None) => Knob::ResetSteps,
         (otherwise, _) => {
-            tracing::warn!(knob = otherwise, "preferencia desconhecida");
+            tracing::warn!(knob = otherwise, "an unknown preference");
             return None;
         }
     };

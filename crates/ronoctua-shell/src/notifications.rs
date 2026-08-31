@@ -1113,7 +1113,7 @@ mod tests {
         assert_eq!(v.level, Some(TOP_LEVEL), "it went past the ceiling");
         p.level = 5;
         turn(&p, Knob::Level, -1, &mut v);
-        assert_eq!(v.level, Some(0), "passou do chao");
+        assert_eq!(v.level, Some(0), "it went past the floor");
     }
 
     #[test]
@@ -1278,7 +1278,7 @@ mod tests {
             ronoctua_notify::Action {
                 id: "open".into(),
                 key: Some('a'),
-                label: ronoctua_notify::Label::Text("abrir".into()),
+                label: ronoctua_notify::Label::Text("open".into()),
                 doing: ronoctua_notify::Doing::Invoke,
             },
             ronoctua_notify::Action {
@@ -1307,7 +1307,7 @@ mod tests {
         r.notification.actions = vec![ronoctua_notify::Action {
             id: "open".into(),
             key: Some('a'),
-            label: ronoctua_notify::Label::Text("abrir".into()),
+            label: ronoctua_notify::Label::Text("open".into()),
             doing: ronoctua_notify::Doing::Invoke,
         }];
         let records = vec![r];
@@ -1380,8 +1380,8 @@ mod tests {
         let rows = v.rows(&lists, &b, 200, &t);
         let drawn: Vec<u16> = rows[1].fields.iter().map(|f| f.at).collect();
         let end = at + room;
-        assert!(drawn.contains(&(end - 1)), "sem a lixeira em {}", end - 1);
-        assert!(drawn.contains(&(end - 3)), "sem o envelope em {}", end - 3);
+        assert!(drawn.contains(&(end - 1)), "no trash icon at {}", end - 1);
+        assert!(drawn.contains(&(end - 3)), "no envelope at {}", end - 3);
         assert_eq!(target_at(end - 1, at, room), Some(Hit::Delete));
         assert_eq!(target_at(end - 3, at, room), Some(Hit::MarkRead));
         // And the sentence's cells are not targets: a click there only aims.
@@ -1400,8 +1400,11 @@ mod tests {
         let (at, room) = v.row_extent(200);
         let rows = v.rows(&lists, &b, 200, &t);
         let drawn: Vec<u16> = rows[1].fields.iter().map(|f| f.at).collect();
-        assert!(drawn.contains(&(at + room - 1)), "a lixeira sumiu");
-        assert!(!drawn.contains(&(at + room - 3)), "envelope numa ja lida");
+        assert!(drawn.contains(&(at + room - 1)), "the trash icon is gone");
+        assert!(
+            !drawn.contains(&(at + room - 3)),
+            "an envelope on one already read"
+        );
     }
 
     #[test]

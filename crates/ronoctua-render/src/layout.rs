@@ -749,7 +749,7 @@ mod tests {
     #[test]
     fn an_emoji_cluster_is_not_split() {
         let couple = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}";
-        assert_eq!(width(couple), 1, "seis codepoints, um cluster");
+        assert_eq!(width(couple), 1, "six codepoints, one cluster");
         assert_eq!(
             elide_end(couple, 4),
             couple,
@@ -768,7 +768,7 @@ mod tests {
     #[test]
     fn the_other_sequences_are_also_one_unit() {
         for (name, s) in [
-            ("bandeira", "\u{1F1E7}\u{1F1F7}"),
+            ("flag", "\u{1F1E7}\u{1F1F7}"),
             ("tom de pele", "\u{1F468}\u{1F3FF}"),
             ("a mark over the circle", "\u{25CC}\u{0301}"),
             ("keyboard", "1\u{FE0F}\u{20E3}"),

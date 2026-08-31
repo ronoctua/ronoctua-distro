@@ -237,7 +237,7 @@ pub fn write_line<T: Serialize>(to: &mut impl Write, value: &T) -> Result<()> {
     line.push('\n');
     to.write_all(line.as_bytes())
         .context("write to the transfers socket")?;
-    to.flush().context("esvaziar o socket das transferencias")
+    to.flush().context("drain the transfer queue's socket")
 }
 
 /// Reads one object. `None` when the other side closed cleanly.

@@ -435,7 +435,7 @@ mod tests {
             by_name("backup.tar.gz"),
             Some("application/x-compressed-tar")
         );
-        assert_eq!(by_name("qualquer.gz"), Some("application/gzip"));
+        assert_eq!(by_name("anything.gz"), Some("application/gzip"));
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn a_directory_and_a_link_answer_from_their_kind() {
-        let path = Path::new("/tmp/qualquer-coisa.png");
+        let path = Path::new("/tmp/anything-at-all.png");
         assert_eq!(of_path(path, Kind::Directory, false), DIRECTORY);
         assert_eq!(of_path(path, Kind::Symlink, false), SYMLINK);
         // And a regular file still answers by name, without touching the disk.

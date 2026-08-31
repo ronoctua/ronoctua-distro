@@ -820,7 +820,7 @@ mod tests {
     use super::*;
 
     fn texts() -> Texts {
-        Texts::fresh("pt-BR").expect("pt-BR tem de carregar")
+        Texts::fresh("pt-BR").expect("pt-BR has to load")
     }
 
     fn with_disks() -> State {
@@ -1054,7 +1054,7 @@ mod tests {
             e.key(KeyCode::Char(c), &t);
         }
         e.key(KeyCode::Enter, &t);
-        assert_eq!(e.screen, stayed, "avancou com hostname invalido");
+        assert_eq!(e.screen, stayed, "it moved on with an invalid hostname");
         assert!(e.error.is_some(), "and did not even say why");
     }
 

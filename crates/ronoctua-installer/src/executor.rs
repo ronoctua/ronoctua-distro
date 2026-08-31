@@ -199,7 +199,7 @@ fn run(command: &[String], ver: &mut dyn FnMut(Event)) -> Result<()> {
     }
     let st = child.wait().context("wait for the command")?;
     if !st.success() {
-        bail!("`{prog}` saiu com {st}");
+        bail!("`{prog}` exited with {st}");
     }
     Ok(())
 }
@@ -217,12 +217,12 @@ fn password_hash(password: &str) -> Result<String> {
     child
         .stdin
         .take()
-        .context("mkpasswd sem stdin")?
+        .context("mkpasswd with no stdin")?
         .write_all(password.as_bytes())
         .context("pass the password to mkpasswd")?;
-    let output = child.wait_with_output().context("esperar o mkpasswd")?;
+    let output = child.wait_with_output().context("wait for mkpasswd")?;
     if !output.status.success() {
-        bail!("`mkpasswd` saiu com {}", output.status);
+        bail!("`mkpasswd` exited with {}", output.status);
     }
     let h = String::from_utf8(output.stdout)
         .context("mkpasswd gave back something that is not UTF-8")?

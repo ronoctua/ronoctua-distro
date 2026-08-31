@@ -668,10 +668,10 @@ fn paste_text() -> Result<String> {
 pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, events) = registry_queue_init(&conn).context("registry do Wayland")?;
+    let (globals, events) = registry_queue_init(&conn).context("Wayland's registry")?;
     let qh: QueueHandle<Host> = events.handle();
 
-    let compositor = CompositorState::bind(&globals, &qh).context("sem wl_compositor")?;
+    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
     let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
 
     // THE INSTANCE LIVES. Loaded once, it keeps the component's
@@ -2353,7 +2353,7 @@ impl Host {
                 // THE MANUAL WARNS that not every property may be changed at
                 // runtime. If this one may not, the screen has to say so — which
                 // it does by the next survey carrying the UNCHANGED state.
-                Err(e) => tracing::error!(error = %e, ?mode, "o systemd recusou a troca"),
+                Err(e) => tracing::error!(error = %e, ?mode, "systemd refused the swap"),
             },
             None => tracing::error!(?mode, "the profile table does not have that profile"),
         }

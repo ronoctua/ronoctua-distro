@@ -136,7 +136,7 @@ fn main() -> Result<()> {
         );
     }
     println!(
-        "v2: verificado, {} bytes, hash SHA-256 completo ({}…)",
+        "v2: verified, {} bytes, whole SHA-256 hash ({}…)",
         v2.total,
         &v2.hash[..8]
     );
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
     if v1.hash.len() != 40 {
         bail!("the v1 hash is {} characters, not 40", v1.hash.len());
     }
-    println!("v1: verificado, e a bandeira distingue os dois");
+    println!("v1: verified, and the flag tells the two apart");
 
     // ---- HOLD, LET GO, AND GIVE UP ----
     if !session.pause(&v2.hash) {
@@ -195,6 +195,6 @@ fn main() -> Result<()> {
     println!("give up: it disappears from the list");
 
     session.save();
-    println!("OK: BitTorrent v2 verificado offline, e o v1 continua distinguivel");
+    println!("OK: BitTorrent v2 verified offline, and v1 is still told apart");
     Ok(())
 }

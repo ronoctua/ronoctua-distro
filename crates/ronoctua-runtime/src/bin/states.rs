@@ -148,7 +148,7 @@ fn drive(path: &str) -> Result<()> {
         // not error, must not close, and must not redraw the world.
         let effects = inst.event(&Input::EnterState(BASE_STATE.to_owned()))?;
         if effects.iter().any(|e| matches!(e, Effect::Close)) {
-            bail!("{}: `enter-state` fechou o buffer", d.name);
+            bail!("{}: `enter-state` closed the buffer", d.name);
         }
         return Ok(());
     }

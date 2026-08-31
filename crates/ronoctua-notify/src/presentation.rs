@@ -467,7 +467,11 @@ mod tests {
         assert!(named.contains(&"vibrate"));
         assert!(named.contains(&"audio"));
         for i in INERT {
-            assert!(i.why.starts_with("notif-inert-"), "{} sem razao", i.field);
+            assert!(
+                i.why.starts_with("notif-inert-"),
+                "{} with no reason",
+                i.field
+            );
         }
     }
 

@@ -111,7 +111,7 @@ fn graphical_session() -> Result<bool> {
     if !dir.is_dir() {
         return Ok(false);
     }
-    for entry in std::fs::read_dir(dir).context("ler as sessões do logind")? {
+    for entry in std::fs::read_dir(dir).context("read logind's sessions")? {
         let path = entry.context("session entry")?.path();
         // The directory also holds `*.ref` files, which are not session state.
         if path.extension().is_some() {

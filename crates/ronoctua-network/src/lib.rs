@@ -744,7 +744,7 @@ mod tests {
         // BOTH, and accepts `wpa-psk`. Keying on the presence of `SAE` would
         // push every one of these onto `sae` and break what works today.
         let both = nm::AP_SEC_KEY_MGMT_PSK | nm::AP_SEC_KEY_MGMT_SAE;
-        assert!(!wpa3_only(both), "transicao tem de continuar em wpa-psk");
+        assert!(!wpa3_only(both), "the transition has to stay on wpa-psk");
     }
 
     #[test]
@@ -876,7 +876,7 @@ mod tests {
         // ZERO is the world's default, and it is the one that puts `psk=<password>` inside the
         // profile file — exactly what this work exists to
         // eliminate. Neither of the two paths may fall into it.
-        assert_eq!(flags(true), 1, "lembrar tem de ser AGENT_OWNED");
+        assert_eq!(flags(true), 1, "remembering has to be AGENT_OWNED");
         assert_eq!(flags(false), 2, "not remembering has to be NOT_SAVED");
         for remember in [true, false] {
             assert_ne!(

@@ -252,7 +252,7 @@ mod tests {
             }
             assert!(
                 Instant::now() < deadline,
-                "esperava {stage:?} e vi {:?}",
+                "expected {stage:?} and saw {:?}",
                 job.map(|j| j.stage)
             );
             std::thread::sleep(Duration::from_millis(10));
@@ -343,7 +343,7 @@ mod tests {
             0,
             "a piece was left at the destination after the cancellation"
         );
-        assert!(root.join("large.bin").exists(), "o original foi mexido");
+        assert!(root.join("large.bin").exists(), "the original was touched");
         let _ = std::fs::remove_dir_all(&root);
     }
 

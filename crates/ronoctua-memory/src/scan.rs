@@ -302,14 +302,14 @@ pub fn stop(p: &Places, target: &Consumer) -> anyhow::Result<()> {
                 .output()?;
             anyhow::ensure!(
                 out.status.success(),
-                "o systemd recusou parar `{}`: {}",
+                "systemd refused to stop `{}`: {}",
                 target.name,
                 String::from_utf8_lossy(&out.stderr).trim()
             );
             Ok(())
         }
         ConsumerKind::Process => {
-            let pid = i32::try_from(target.hint).map_err(|_| anyhow::anyhow!("pid invalido"))?;
+            let pid = i32::try_from(target.hint).map_err(|_| anyhow::anyhow!("invalid pid"))?;
             anyhow::ensure!(pid > 1, "pid {pid} cannot be ended");
             let cgroup = read(&p.procfs.join(pid.to_string()).join("cgroup")).unwrap_or_default();
             anyhow::ensure!(

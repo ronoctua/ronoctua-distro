@@ -54,7 +54,7 @@ pub fn rename(from: &Path, to: &Path) -> Result<()> {
         bail!("there is already something at {}", to.display());
     }
     std::fs::rename(from, to)
-        .with_context(|| format!("renomear {} para {}", from.display(), to.display()))
+        .with_context(|| format!("rename {} to {}", from.display(), to.display()))
 }
 
 /// Copies a file, a directory tree or a symlink into a directory.
@@ -172,7 +172,7 @@ pub fn chmod(path: &Path, mode: u32) -> Result<()> {
         bail!("a symbolic link has no permission of its own; change the target's");
     }
     std::fs::set_permissions(path, PermissionsExt::from_mode(mode & 0o7777))
-        .with_context(|| format!("mudar a permissao de {}", path.display()))
+        .with_context(|| format!("change the permission of {}", path.display()))
 }
 
 /// Hands a path to another group — allowed without privilege when this user
@@ -286,9 +286,9 @@ impl Staged {
     /// When a field is missing or the verb is not one of the four.
     pub fn read_from(staging: &Path) -> Result<Self> {
         use std::os::unix::ffi::OsStringExt;
-        let word = std::fs::read_to_string(staging.join("verb")).context("ler o verbo")?;
-        let verb = Verb::of_word(word.trim())
-            .with_context(|| format!("verbo desconhecido: {}", word.trim()))?;
+        let word = std::fs::read_to_string(staging.join("verb")).context("read the verb")?;
+        let verb =
+            Verb::of_word(word.trim()).with_context(|| format!("unknown verb: {}", word.trim()))?;
         let raw = std::fs::read(staging.join("path")).context("read the path")?;
         let value = std::fs::read_to_string(staging.join("value")).unwrap_or_default();
         Ok(Self {
@@ -558,7 +558,7 @@ mod tests {
         std::fs::write(root.join("path"), "/").unwrap();
         std::fs::write(root.join("value"), "").unwrap();
         let e = Staged::read_from(&root).unwrap_err();
-        assert!(e.to_string().contains("desconhecido"), "{e}");
+        assert!(e.to_string().contains("unknown verb"), "{e}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -569,7 +569,7 @@ mod tests {
         for v in Verb::ALL {
             assert!(
                 !matches!(v.word(), "rm" | "remove" | "mv" | "move" | "delete"),
-                "verbo destrutivo na porta privilegiada: {}",
+                "a destructive verb on the privileged door: {}",
                 v.word()
             );
         }

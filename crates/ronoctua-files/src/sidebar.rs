@@ -956,8 +956,8 @@ mod tests {
 
         side.toggle();
         side.add(Item {
-            id: "file:/tmp/qualquer.zip".to_owned(),
-            target: Target::File(PathBuf::from("/tmp/qualquer.zip")),
+            id: "file:/tmp/anything.zip".to_owned(),
+            target: Target::File(PathBuf::from("/tmp/anything.zip")),
             label: None,
         });
         side.save()

@@ -800,7 +800,7 @@ mod tests {
         let pixels: [u8; 8] = [255, 0, 0, 255, 0, 0, 255, 255];
         image::codecs::png::PngEncoder::new(&mut out)
             .write_image(&pixels, 2, 1, image::ExtendedColorType::Rgba8)
-            .expect("codificar o fixture");
+            .expect("encode the fixture");
         out
     }
 

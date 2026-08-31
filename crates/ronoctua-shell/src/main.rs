@@ -117,7 +117,7 @@ fn main() -> Result<()> {
             } else {
                 format!("command {id} {}", rest.join(" "))
             };
-            return leader::send_it(&line).with_context(|| format!("mandar `{id}`"));
+            return leader::send_it(&line).with_context(|| format!("send `{id}`"));
         }
         // WHAT A BUFFER DECLARES, asked of the buffer's own process.
         //
@@ -130,10 +130,10 @@ fn main() -> Result<()> {
         Some("buffer-keymap") => {
             let pid = std::env::args()
                 .nth(2)
-                .context("uso: ronoctua-shell buffer-keymap <pid>")?
+                .context("usage: ronoctua-shell buffer-keymap <pid>")?
                 .parse::<u32>()
                 .context("the pid has to be a number")?;
-            for (keys, id) in leader::buffer_keymap(pid).context("ler o keymap do buffer")? {
+            for (keys, id) in leader::buffer_keymap(pid).context("read the buffer's keymap")? {
                 println!("{keys} {id}");
             }
             return Ok(());
@@ -142,14 +142,14 @@ fn main() -> Result<()> {
             let mut args = std::env::args().skip(2);
             let pid = args
                 .next()
-                .context("uso: ronoctua-shell buffer-command <pid> <id>")?
+                .context("usage: ronoctua-shell buffer-command <pid> <id>")?
                 .parse::<u32>()
                 .context("the pid has to be a number")?;
             let id = args
                 .next()
-                .context("uso: ronoctua-shell buffer-command <pid> <id>")?;
+                .context("usage: ronoctua-shell buffer-command <pid> <id>")?;
             return leader::buffer_command(pid, &id)
-                .with_context(|| format!("mandar `{id}` ao buffer {pid}"));
+                .with_context(|| format!("send `{id}` to buffer {pid}"));
         }
         // It opens a native buffer in a window of its OWN. What decides where it
         // goes is niri (invariant 4) — the shell does not tile.
@@ -166,7 +166,7 @@ fn main() -> Result<()> {
                 std::path::Path::new(&path),
                 file.as_deref().map(std::path::Path::new),
             )
-            .context("hospedar o buffer");
+            .context("host the buffer");
         }
         // It emits the CHORD binds in KDL, for niri's config.
         //
@@ -245,14 +245,14 @@ fn main() -> Result<()> {
         // with nothing running too — a run that has finished is exactly when
         // somebody wants to read what it did.
         Some("update") => {
-            return update_window::host_it().context("hospedar a atualizacao");
+            return update_window::host_it().context("host the update");
         }
         Some("terminal") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (program, rest) = args
                 .split_first()
                 .map_or((None, &[][..]), |(p, r)| (Some(p.as_str()), r));
-            return terminal::host_it(program, rest).context("hospedar o terminal");
+            return terminal::host_it(program, rest).context("host the terminal");
         }
         // THE SAME TERMINAL, under the monitor's `app_id`. It is a subcommand and
         // not a flag on the one above because what changes is the window's
@@ -264,7 +264,7 @@ fn main() -> Result<()> {
             let (program, rest) = args
                 .split_first()
                 .context("usage: ronoctua-shell monitor <program> [args]")?;
-            return terminal::host_monitor(program, rest).context("hospedar o monitor");
+            return terminal::host_monitor(program, rest).context("host the monitor");
         }
         // THE RESCUE CONSOLE, and a third identity for the same terminal.
         //
@@ -278,7 +278,7 @@ fn main() -> Result<()> {
             let (program, rest) = args
                 .split_first()
                 .context("usage: ronoctua-shell rescue <program> [args]")?;
-            return terminal::host_rescue(program, rest).context("hospedar o resgate");
+            return terminal::host_rescue(program, rest).context("host the rescue console");
         }
         // It checks the keymap without bringing anything up. It exists so whoever edits their own
         // keymap gets the same verdict `nix flake check` gives.
