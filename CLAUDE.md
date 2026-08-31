@@ -152,24 +152,65 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   a seção sob o ponteiro (a listagem é da PORTA; **figura** não rola, e engole).
   Barra lateral tem `side_offset` PRÓPRIO: linha `n` deixou de ser a linha `n`
   dela. **Clique SELECIONA; o segundo é que abre** — na listagem e na lateral.
-- **A prévia de `.stl` e `.3mf` GIRA** (`ronoctua-inspect`: `mesh` lê, `solid` desenha; `shell/stage.rs`
-  é a thread, molde do `motion.rs`). Os dois tipos JÁ existem no shared-mime-info e o gerador recusa
-  inventá-los; ganharam só glifo. **Binário ou ASCII é ARITMÉTICA** (`84+50n==len`) — cabeçalho de STL
-  binário pode começar com `solid` —, a normal do arquivo é ignorada e recalculada, e no 3MF a
-  geometria quase sempre está noutra parte (`p:path`) com transformação que MUDA a forma. Unidades
-  viram mm na entrada; teto sobre o que SAI da descompressão (bomba de zip). Rasterizador em
-  processo (precedente: `from_svg`), **fundo TRANSPARENTE** (uma textura, duas portas) e luz fixa na
-  CÂMERA. **41 ms** no Benchy de 225 mil triângulos; face de trás NÃO é descartada — vale 1,5×, e
-  abre buracos em malha com faces invertidas. A malha mora na THREAD (o `Looked` é comparado campo a
-  campo). Arrastar gira, roda dá zoom, `S-<setas>` giram, `C-k`/`C-j` zoom, `C-r` reenquadra; as setas
-  PURAS continuam andando nos ARQUIVOS. **A porta pergunta `live_frame`**, não `moving_frame`: só o
-  filme reenviava textura, e a peça era desenhada sem chegar à tela. **`shift` só vinha do keysym** —
-  certo para caractere, e `Shift+Left` é `Left`: subia um diretório. Fatos (formato, triângulos,
-  vértices, caixa, volume, área, malha fechada) saem da MESMA leitura; sanidade por arestas ORDENADAS.
-  O `fluent-bundle` não localiza número: `Arg::Fraction` formata onde o idioma é conhecido.
-  **Direção de arrasto é da `View::spin`**, que fala em ONDE A MÃO FOI (`right`/`down`): yaw maior
-  escorrega a peça para a ESQUERDA, então puxar para a esquerda é yaw MENOR — escrito nos dois sítios
-  de chamada, saiu invertido num deles.
+- **A prévia 3D GIRA, e são ONZE formatos** (`ronoctua-inspect`: `mesh/` lê — um por leitor —, `solid`
+  desenha; `shell/stage.rs` é a thread, molde do `motion.rs`). **Nove são MALHA** (STL, 3MF, OBJ, PLY,
+  OFF, glTF, GLB, COLLADA, AMF) e **dois não têm triângulo NENHUM**: STEP e IGES são B-Rep. **O STEP é
+  MALHADO** (`mesh/brep.rs` anda as faces, `surface.rs` sabe ir e voltar, `patch.rs` triangula); o
+  IGES fica no arame, que é o desenho das arestas — não tenho `.iges` para provar contra. **Uma
+  câmera, um `Body` com DUAS metades**: preenche e depois traça, no mesmo z-buffer.
+  Malhar uma face é levar o contorno dela ao `(u,v)` da SUPERFÍCIE dela, triangular o plano que sai
+  (com furos, por ponte) e mapear de volta — todo vértice sai de `Surface::at`, logo fica EXATAMENTE
+  sobre a superfície. **Cada aresta é amostrada UMA VEZ**, guardada pela id: duas faces que se
+  encontram têm de receber os MESMOS pontos. **A emenda desdobra ANDANDO** (`atan2` responde numa
+  volta só). **Só cinco superfícies têm inversa fechada**; extrusão, revolução e NURBS usam UMA
+  Gauss-Newton genérica, semeada pelo ponto ANTERIOR do contorno — vizinhos no contorno são vizinhos
+  na superfície, e é isso que tira o ramo errado. **A genérica é medida contra a fechada** — é o que
+  torna a metade cega confiável. **Toda resposta é reposta pela ida**: a inversa da esfera responde
+  para qualquer ponto, inclusive fora dela.
+  **O refino é UNIFORME** (1→4, k vezes) porque dividir só aresta interna NÃO CONVERGE: o ear clipping
+  faz leque, e a aresta mais longa da lasca é a do contorno — medido, o resíduo ficou entre 1,7× e
+  9,3× o alvo com qualquer número de passadas. O preço é que duas faces deixam de se encontrar
+  exatamente (um milésimo do raio, sub-pixel), e por isso **B-Rep não relata volume, área nem
+  "fechada"** — nem triângulos, que seriam do malhador. **A MELHOR orelha, não a primeira**, e
+  **a profundidade sai dos TRIÂNGULOS, não da face** (o aro já vem denso), com a tolerância como
+  FRAÇÃO da peça — as três juntas: 359 mil → 27 mil triângulos e 39 → **18 ms** no arquivo do dono.
+  Teto de 300 mil triângulos por PEÇA, dividido entre as faces; é limite de QUADRO.
+  **Face que não sai vira contorno ELA SOZINHA**, com fato e frase na prévia (última linha, por cima
+  da figura — a ordem é retângulo→imagem→texto). Toda falha cai nesse degrau, que é um desenho que já
+  funcionava: 1 face de 106 no arquivo do dono, 69 de 2 536 num eixo traseiro.
+  Seis tipos MIME já existem na base; cinco nascem no `ours` **com `under`** (`model/x-ply`,
+  `model/x-off`, `model/vnd.collada+xml` — o nome REGISTRADO —, `model/x-amf`, `model/step`).
+  **`*.obj` tinha DOIS reivindicantes no mesmo peso** e o `by_name` fica com o primeiro: resolvia para
+  `application/x-tgif`, sem prévia e sem fatos. Conserta o bloco `prefer`, que REMOVE a linha do
+  perdedor e recusa por tipo inexistente, por tipo que não reivindica o padrão e por pesos que já
+  diferem.
+  Armadilha por leitor, no topo de cada arquivo: **STL** decide a forma por ARITMÉTICA
+  (`84+50n==len`); **3MF** guarda a geometria noutra parte (`p:path`) com transformação que MUDA a
+  forma; **OBJ** tem índice NEGATIVO relativo ao fim da lista naquela linha; **PLY** obriga a entender
+  a propriedade que não se quer, para pular pela largura certa; **glTF** é ÁRVORE (sem compor os nós
+  tudo empilha na origem), sua unidade é o METRO, `sparse` é APLICADO, e é o único que recebe CAMINHO
+  — logo o único que recusa `..`, absoluto e esquema; **COLLADA** obedece `unit` e `up_axis` (`Y_UP` é
+  o padrão, e ignorá-lo deita a peça) e seu `<p>` é ENTRELAÇADO; **AMF** é zip OU XML cru sob a mesma
+  extensão; **STEP** tem CIRCLE inteiro que só o `EDGE_CURVE` recorta (`same_sense` diz por qual
+  lado), cabeçalho que NÃO é UTF-8 — lido como Latin-1 e **MARCADO**, porque campo adivinhado não vira
+  fato na tela —, e **spline em DUAS grafias**: a racional é entidade COMPLEXA, e ler só a simples
+  devolvia CORDA no lugar da curva — o que no arame é aproximação e no preenchido é fatal, porque a
+  corda não está na superfície e a inversa recusa (28 das 77 faces do buggy, e o sintoma apontava para
+  a superfície, que estava certa). Draco é `Refusal::Unsupported` com frase própria, nunca meia peça.
+  A normal do arquivo é sempre ignorada e recalculada. Unidades viram mm na entrada; teto sobre o que
+  SAI da descompressão. Rasterizador em processo (precedente: `from_svg`), **fundo TRANSPARENTE** (uma
+  textura, duas portas), luz fixa na CÂMERA. **44 ms** no Benchy de 225 mil triângulos, **9 ms** no
+  OBJ de 50 mil; face de trás NÃO é descartada — vale 1,5×, e abre buracos em malha com faces
+  invertidas. O corpo mora na THREAD (o `Looked` é comparado campo a campo). Arrastar gira, roda dá
+  zoom, `S-<setas>` giram, `C-k`/`C-j` zoom, `C-r` reenquadra; as setas PURAS continuam andando nos
+  ARQUIVOS. **A porta pergunta `live_frame`**, não `moving_frame`. **`shift` só vinha do keysym** —
+  certo para caractere, e `Shift+Left` é `Left`: subia um diretório. **Forma não é TEXTO**, e três
+  tipos descendem de `text/plain`: sem o `shape.is_none()` o `.obj` de 4,3 MB era lido, realçado e
+  jogado fora. Fatos saem da MESMA leitura, com sanidade por arestas ORDENADAS.
+  O `fluent-bundle` não localiza número: `Arg::Fraction` formata onde o idioma é conhecido. **Direção
+  de arrasto é da `View::spin`**, que fala em ONDE A MÃO FOI (`right`/`down`): yaw maior escorrega a
+  peça para a ESQUERDA, então puxar para a esquerda é yaw MENOR — escrito em dois sítios, saiu
+  invertido num.
 - **O teclado agora REPETE, e não repetia em porta nenhuma** — as duas criavam com `get_keyboard`, e o
   SCTK só repete com `get_keyboard_with_repeat`; o `repeat_key` das duas era código morto e segurar
   `j` nunca andou na lista. A repetição chega pelo CALLBACK, não pelo método, então cada porta tem um

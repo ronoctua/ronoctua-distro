@@ -2733,6 +2733,14 @@ pub struct Looked {
     /// distinction `moving` makes — the door starts the thread, this only
     /// says whether there is one to start.
     pub turns: bool,
+    /// How many of a boundary representation's faces came out as an OUTLINE
+    /// rather than filled.
+    ///
+    /// It is on `Looked` and not only among the facts because the preview says
+    /// it too: a piece drawn part solid and part wire is a piece somebody
+    /// should be told about, and the panel is where they are looking. Zero for
+    /// everything that is not a STEP or an IGES.
+    pub outlined: usize,
 }
 
 /// An action's technical answer, as an [`Explanation`] with nothing to fill in.
@@ -3819,6 +3827,7 @@ impl View {
     fn panel_fields(
         &self,
         n: usize,
+        rows: usize,
         boxes: &[(Panel, u16, u16)],
         sheet: &[Fact],
         texts: &ronoctua_i18n::Texts,
@@ -3826,7 +3835,7 @@ impl View {
         boxes
             .iter()
             .flat_map(|(which, at, room)| match which {
-                Panel::Preview => self.preview_fields(n, *at, *room, texts),
+                Panel::Preview => self.preview_fields(n, rows, *at, *room, texts),
                 Panel::Info => self.info_fields(n, *at, *room, sheet),
             })
             .collect()
@@ -4040,6 +4049,7 @@ impl View {
     fn preview_fields(
         &self,
         n: usize,
+        rows: usize,
         at: u16,
         room: u16,
         texts: &ronoctua_i18n::Texts,
@@ -4086,6 +4096,39 @@ impl View {
         // added for.
         let coming = self.looking_still();
         if coming || looked.is_some_and(|l| l.rgba.is_some() || l.moving.is_some() || l.turns) {
+            // A SENTENCE OVER THE PICTURE, and only when part of the piece is
+            // not filled.
+            //
+            // A boundary representation is meshed face by face, and one this
+            // reader cannot mesh is drawn as its own outline instead — see
+            // `ronoctua_inspect::mesh::brep`. A piece that comes out part
+            // solid and part wire is a piece somebody should be TOLD about,
+            // and the panel is where they are already looking.
+            //
+            // It goes on the LAST line, and it reads because of the drawing
+            // order the transport band already relies on: rectangles, then
+            // images, then text.
+            let outlined = looked.map_or(0, |l| l.outlined);
+            if outlined > 0 && rows > 0 && n + 1 == rows {
+                // `t_args` AND NOT `t_with`: the sentence has a plural branch,
+                // and Fluent picks one on a NUMBER. A string carries no branch
+                // and would print "1 faces".
+                let said = texts.t_args(
+                    ronoctua_i18n::key::FILES_PREVIEW_OUTLINED,
+                    &[(
+                        "n",
+                        ronoctua_i18n::Arg::Number(i64::try_from(outlined).unwrap_or(i64::MAX)),
+                    )],
+                );
+                let said = ronoctua_render::layout::elide_end(&said, room);
+                return vec![Field {
+                    at: centred(at, room, width_of(&said)),
+                    text: said,
+                    color: ronoctua_tokens::color::TEXT_DIM,
+                    hit: target,
+                    explain: None,
+                }];
+            }
             return vec![Field {
                 at,
                 text: " ".repeat(usize::from(room)),
@@ -4423,7 +4466,7 @@ impl View {
         let transport = self.film_here();
         (0..usize::from(panes.strip))
             .map(|n| Row {
-                fields: self.panel_fields(n, &boxes, &sheet, texts),
+                fields: self.panel_fields(n, usize::from(panes.strip), &boxes, &sheet, texts),
                 marked: false,
                 foot: transport && n == last,
                 focused: false,
@@ -5319,7 +5362,15 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 // AND A FILM IS NOT TEXT EITHER: without this a video, now
                 // having no still, would be read for a mebibyte to be told it
                 // is not letters.
-                let said = (!made.drawable() && moving.is_none())
+                //
+                // NOR IS A SHAPE, and three of them ARE text by the database's
+                // reckoning: `model/obj`, `model/x-off` and `model/step` all
+                // descend from `text/plain`, because they are. Without this
+                // arm the owner's 4.3 MB `.obj` was read for a mebibyte,
+                // highlighted, and then thrown away — `preview_fields` returns
+                // blanks for anything that turns, so not one line of it could
+                // ever reach the screen.
+                let said = (!made.drawable() && moving.is_none() && shape.is_none())
                     .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
                     .flatten();
                 let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
@@ -5357,13 +5408,14 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 // is a shape says so; one that CLAIMS to be and does not parse
                 // carries the refusal instead, so the panel gets a sentence
                 // rather than waiting for a frame nobody is going to draw.
-                let (turns, why) = match shape {
-                    None => (false, why),
+                let (turns, outlined, why) = match shape {
+                    None => (false, 0, why),
                     Some(Ok(read)) => {
+                        let outlined = read.census.outlined;
                         facts.extend(ronoctua_inspect::mesh::facts(&read));
-                        (true, why)
+                        (true, outlined, why)
                     }
-                    Some(Err(refused)) => (false, Some(refused)),
+                    Some(Err(refused)) => (false, 0, Some(refused)),
                 };
                 let looked = Looked {
                     key: ask.key,
@@ -5375,6 +5427,7 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     facts,
                     mime: ask.mime,
                     turns,
+                    outlined,
                 };
                 if out.send(Report::Inspected(Box::new(looked))).is_err() {
                     // A closed channel = the door left.
@@ -6903,7 +6956,9 @@ impl View {
                 let mut content: Vec<Row> = (0..content_lines)
                     .map(|k| Row {
                         fields: match which {
-                            Panel::Preview => self.preview_fields(k, at, content_room, texts),
+                            Panel::Preview => {
+                                self.preview_fields(k, content_lines, at, content_room, texts)
+                            }
                             Panel::Info => self.info_fields(k, at, content_room, &sheet),
                         },
                         marked: false,
@@ -8899,6 +8954,12 @@ impl View {
                 elevation.sin(),
             ],
             ambient: f32::from(ronoctua_tokens::space::FILES_MESHSHADOW) / 100.0,
+            // THE TWO A CAGE USES. A STEP or an IGES holds no surface, so it
+            // is drawn as lines; see `ronoctua_inspect::mesh::Wires`. Tenths
+            // of a pixel, because a whole one is too coarse next to the
+            // rasteriser's two samples per side.
+            wire: f32::from(ronoctua_tokens::space::FILES_MESHWIREWIDTH) / 10.0,
+            fade: f32::from(ronoctua_tokens::space::FILES_MESHWIREFADE) / 100.0,
         }
     }
 
@@ -9529,6 +9590,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         (v, dir)
     }
@@ -9669,6 +9731,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         assert_eq!(v.preview_total(), 1, "a picture claimed more than one row");
         assert!(v.wheel(Pane::Preview, 5, 200, 12), "the gesture escaped");
@@ -9818,6 +9881,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         assert_eq!(v.preview_offset, 50, "a re-decode threw the reader back");
         assert_eq!(v.info_offset, 8);
@@ -9834,6 +9898,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         assert_eq!(v.preview_offset, 0, "a new file kept the old one's place");
         assert_eq!(v.preview_column, 0);
@@ -9952,6 +10017,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
 
         let texts = bundle();
@@ -10182,6 +10248,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         assert!(
             v.wants_motion().is_none(),
@@ -10200,6 +10267,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         // THE PANEL HAS TO HAVE BEEN MEASURED, because the frame is decoded at
         // the box's OWN shape — no box, no wish. It is the DOOR that measures
@@ -10263,6 +10331,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10333,6 +10402,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         let still = preview_of(&v, &words);
         assert!(
@@ -10376,6 +10446,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10438,6 +10509,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         // THE WINDOW DOOR'S OWN REPORT: `pane=Preview cell=Some(11) columns=51`.
         let panes = v.panes(51);
@@ -10491,6 +10563,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
 
         // WITH NO FRAME IN HAND, THE PHOTOGRAPH IS WHAT IS DRAWN.
@@ -10592,6 +10665,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10670,6 +10744,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10736,6 +10811,7 @@ mod tests {
                 facts: Vec::new(),
                 mime: "text/plain",
                 turns: false,
+                outlined: 0,
             });
             key
         };
@@ -10873,6 +10949,7 @@ mod tests {
             facts: Vec::new(),
             mime: "text/plain",
             turns: false,
+            outlined: 0,
         });
         let frame = |key: &str| crate::motion::Beat::Frame(a_frame(key));
 
@@ -15006,6 +15083,11 @@ mod tests {
     /// bypassed that would pass while the real path was broken — the same rule
     /// `a_text_view` already follows.
     fn point_at_a_shape(v: &mut View) {
+        point_at_a_shape_with(v, 0);
+    }
+
+    /// The same, for a piece of which `outlined` faces did not fill.
+    fn point_at_a_shape_with(v: &mut View, outlined: usize) {
         // THE PANELS ON: `view_at` uses `plainly`, which switches them off for
         // the tests about the listing's own arithmetic, and `wants_look`
         // answers `None` with both of them off — correctly.
@@ -15028,8 +15110,62 @@ mod tests {
             facts: Vec::new(),
             mime: "model/stl",
             turns: true,
+            outlined,
         });
         assert!(v.shape_here(), "the fixture did not become a shape");
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a piece drawn part solid and part outline with
+    // nothing saying so. A boundary representation is meshed face by face and
+    // one this reader cannot mesh becomes its own outline — which looks
+    // deliberate, and would be read as the file's own shape.
+    //
+    // The blanks arm returns a field of spaces for anything that turns, so the
+    // sentence has to be an exception inside it, on the LAST line and nowhere
+    // else: on any other it would sit across the middle of the picture.
+    fn a_piece_that_did_not_all_fill_says_so_over_the_preview() {
+        let root = scratch("shape-outlined");
+        std::fs::write(root.join("a.stl"), one_triangle_stl()).unwrap();
+        let texts = bundle();
+
+        let mut whole = view_at(&root);
+        point_at_a_shape_with(&mut whole, 0);
+        let mut partly = view_at(&root);
+        point_at_a_shape_with(&mut partly, 3);
+
+        let rows = 4;
+        let words = |v: &View, n: usize| {
+            v.preview_fields(n, rows, 0, 40, &texts)
+                .into_iter()
+                .map(|f| f.text)
+                .collect::<String>()
+        };
+        // Every line of a whole piece is blank, and so is every line of a
+        // partly filled one BUT its last.
+        for n in 0..rows {
+            assert!(
+                words(&whole, n).trim().is_empty(),
+                "line {n} of a whole piece is not blank: {:?}",
+                words(&whole, n)
+            );
+        }
+        for n in 0..rows - 1 {
+            assert!(
+                words(&partly, n).trim().is_empty(),
+                "the sentence landed on line {n}, over the picture"
+            );
+        }
+        let said = words(&partly, rows - 1);
+        assert!(
+            said.contains('3'),
+            "the last line does not say how many: {said:?}"
+        );
+        assert!(
+            !said.starts_with("files-"),
+            "the raw key reached the screen: {said:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -15121,8 +15257,14 @@ mod tests {
             // on a text file, which is right — there is nothing else
             // `S-<left>` could mean there — so a fixture of three `.txt` files
             // would read a correct refusal as a missing arm.
-            if label.starts_with("files-turn")
-                || label.starts_with("files-zoom")
+            // THE HYPHEN IS PART OF THE PREFIX, and not a tidiness. The ids
+            // are `files-turn-left` and the rest, so a prefix written without
+            // the hyphen is a quoted files-key with no translation behind it —
+            // which is exactly what `files-actions-have-text` sweeps this file
+            // for, and it found it. (Its grep does not know a comment from
+            // code, which is why this note spells no key out.)
+            if label.starts_with("files-turn-")
+                || label.starts_with("files-zoom-")
                 || *label == "files-reframe"
             {
                 point_at_a_shape(&mut v);

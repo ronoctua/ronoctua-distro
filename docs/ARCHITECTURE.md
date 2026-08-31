@@ -4315,25 +4315,196 @@ exatamente a divergência que o arranjo de duas portas existe para impedir, ent�
 `Images` do `ronoctua-render` e o mesmo quadro texturizado, na mesma superfície. Não conseguir
 criá-lo custa a figura, e não a janela.
 
-### A prévia 3D — `.stl` e `.3mf`, e ela se deixa girar
+### A prévia 3D — onze formatos, e ela se deixa girar
 
 A pergunta que se leva a um arquivo 3D não é *como é isso*, é *como é isso do outro lado*. Uma
-imagem parada de um modelo responde metade; por isso a prévia de uma malha é a única do sistema que
+imagem parada de um modelo responde metade; por isso a prévia de uma forma é a única do sistema que
 o teclado e o mouse MOVEM.
 
-#### Nada foi inventado no banco de tipos
+#### São DOIS tipos de arquivo, e só um deles guarda triângulos
 
-O `shared-mime-info` 2.4 que o flake pina já tem `model/stl` (glob `*.stl`) e `model/3mf` (glob
-`*.3mf`, com aresta de subclasse para `application/zip`) — e o gerador RECUSA pôr em `ours` um tipo
-que a base já conhece. A resolução também já funcionava: um STL binário não tem magic nenhum (a
-única regra do freedesktop é a palavra `solid`, que é a forma ASCII), então o sniff devolve `None` e
-`settled` fica com o nome; um 3MF sniffa `application/zip` e a base diz que ele DESCENDE disso, então
-os dois concordam e o nome, mais fino, vence. É a mesma figura que o `.dng` já tinha escrita.
+Nove formatos são MALHAS — STL, 3MF, OBJ, PLY, OFF, glTF, GLB, COLLADA e AMF —, e ler um é ler os
+triângulos que estão escritos nele. Dois — STEP e IGES — são REPRESENTAÇÕES DE FRONTEIRA: guardam
+superfícies e as curvas que as recortam, e nenhum triângulo. O arquivo STEP do dono tem 106 faces
+sobre 42 planos, 32 cilindros, 18 toros e 14 cones.
 
-O que os dois ganharam foi glifo: ambos são `image-x-generic` para o freedesktop — correto e inútil
-numa coluna de trinta linhas, onde uma peça que se imprime fica indistinguível de uma fotografia.
+O STEP é MALHADO (`mesh/brep.rs`, `mesh/surface.rs`, `mesh/patch.rs`). O IGES não — o recorte dele se
+expressa por outras entidades e não há um `.iges` para provar contra, então ele continua sendo
+desenhado pelas arestas.
 
-#### O leitor: o que decide a forma é ARITMÉTICA, nunca a primeira palavra
+**A primeira rodada desenhou os dois como arame, e o dono recusou na tela**: *"não está legal, o que
+eu quero é ver o objeto por completo; com preenchimento"*. O que o arame tinha de bom fica: quando
+uma face não sai, é ela sozinha que vira contorno.
+
+#### Malhar uma face é levar o contorno dela ao espaço da superfície
+
+Para cada `ADVANCED_FACE`: andar os `FACE_OUTER_BOUND`/`FACE_BOUND` até os `EDGE_LOOP` e os
+`ORIENTED_EDGE`, amostrar cada `EDGE_CURVE`, inverter esses pontos para o `(u,v)` da superfície,
+triangular o polígono plano que resulta (com furos), e mapear de volta. Todo vértice sai de
+`Surface::at`, então **todo vértice fica exatamente sobre a superfície de verdade**.
+
+**Cada aresta é amostrada UMA VEZ e guardada pela id da entidade.** Duas faces que se encontram
+compartilham a aresta entre elas, e se cada uma amostrasse por si as duas discordariam nos últimos
+bits e o sólido se abriria em toda emenda. A segunda face recebe os pontos da primeira, invertidos.
+
+**A emenda desdobra ANDANDO.** Uma face cilíndrica que dá a volta inteira tem uma aresta em `u = 0`
+que é também `u = 2π`, e a inversa não tem como saber qual das duas está olhando — `atan2` responde
+numa volta e mais nada. Então o laço é percorrido acumulando, e um passo que pularia mais de meia
+volta é tomado como tendo dado a volta.
+
+#### Uma superfície sabe ir; só cinco sabem voltar
+
+`Surface::at` — a ida — é exata e barata para as oito. A VOLTA é que é difícil: plano, cilindro,
+cone, esfera e toro têm inversa em fórmula fechada, quinze linhas cada. Extrusão, revolução e NURBS
+não têm nenhuma, e usam UMA inversa numérica genérica (Gauss-Newton sobre `|S(u,v) − P|²`) dirigida
+pela ida — que é a parte fácil e testável.
+
+**A semente vem do ponto ANTERIOR do contorno**, não de uma busca. Dois vizinhos num contorno são
+vizinhos na superfície, então o passo é minúsculo e não há outro ramo perto o bastante para cair
+nele — que é exatamente onde uma busca fresca responderia diferente para dois pontos vizinhos e
+rasgaria o polígono. Só o primeiro ponto de cada laço paga uma grade.
+
+E é isso que torna a metade cega confiável: **a inversa genérica é medida contra a fechada**, num
+cilindro, num cone, numa esfera e num toro. Código escrito contra um formato que ninguém aqui pode
+conferir fica medido contra código que pode.
+
+**Toda resposta é reposta pela ida.** As fechadas também respondem sempre — a de uma esfera é um
+`atan2` e um `asin`, e diante de um ponto longe dela devolve os parâmetros do ponto mais próximo sem
+reclamar. Um contorno feito disso é um polígono que não é a face. Então toda resposta passa por
+`Surface::at` de volta e tem de cair onde começou.
+
+#### O refino é UNIFORME, e a versão que não era não funcionava
+
+Ear clipping responde "quais triângulos", não "quantos", e numa face que curva ele deita um triângulo
+por cima de um filete inteiro. Então o resultado é subdividido: cada triângulo em quatro, cada aresta
+no meio, um número fixo de vezes.
+
+Dividir só as arestas INTERNAS mantém o contorno onde as duas faces vizinhas concordam que ele está —
+o que é estanque, e é o que se quer. Mas **o ear clipping produz LEQUES**, e a aresta mais longa de
+uma lasca de leque é a do contorno. Recusar dividi-la e dividir a curta faz uma lasca mais fina e um
+raio novo comprido, para sempre: medido, a pior aresta interna ficou entre 1,7 e 9,3 vezes o alvo com
+qualquer número de passadas, enquanto a contagem de triângulos dobrava. Refino que não converge não é
+refino.
+
+**O preço é que duas faces deixam de se encontrar exatamente** — cada uma divide a corda que
+compartilham no meio EM SEUS PRÓPRIOS parâmetros. O contorno chega amostrado a menos de seis graus por
+arco, onde isso é cerca de um milésimo do raio: abaixo de um pixel no tamanho em que isso é desenhado.
+O que não é é exatamente zero, e por isso **um B-Rep não relata volume, área nem "superfície
+fechada"** — seriam números sobre uma malha um milésimo de milímetro aberta. E não relata triângulos
+tampouco, que seriam sobre o malhador; o que o ARQUIVO diz que tem — sólidos, cascas, faces, arestas,
+vértices — já está no painel.
+
+#### A melhor orelha, e não a primeira que serve
+
+Custa uma varredura inteira em vez de uma saída antecipada, e é o que torna o resultado usável. O
+domínio de uma face cilíndrica é um retângulo comprido com os dois lados longos amostrados denso —
+pegar a primeira orelha anda por um dos lados e produz triângulos que atravessam de ponta a ponta.
+São esses que cortam uma corda pelo meio do cilindro, e o refino que depois tem de resgatá-los
+multiplica a face INTEIRA: medido, com a primeira orelha a peça do dono saía com 359 mil triângulos.
+A nota é a área sobre o maior lado ao quadrado.
+
+#### Quanto refinar sai dos TRIÂNGULOS, não da face
+
+A primeira versão perguntava quanto parâmetro a face inteira cobria, e errava pela largura do
+contorno: uma face cilíndrica que dá a volta cobre uma volta, mas o aro dela já chega amostrado a
+seis graus, então o ear clipping produz triângulos de seis graus e não de trezentos e sessenta. Isso
+punha todo cilindro no teto de subdivisão.
+
+E a tolerância é uma FRAÇÃO da peça, não um comprimento: o que "fino o bastante" quer dizer é um
+PIXEL, e um pixel é a peça dividida pelo painel. Vinte e cinco microns absolutos numa peça de 220 mm
+é dezessete vezes mais fino do que a tela mostra — custou 174 mil triângulos e 39 ms por quadro para
+detalhe que ninguém vê.
+
+**Medido, para 512×384**, depois das três correções: a peça do dono sai com 27 mil triângulos e
+**18 ms**; o moon buggy (77 faces, só NURBS) com 69 mil e 15 ms; um eixo traseiro de 2 536 faces com
+150 mil e 32 ms. O teto de 300 mil triângulos por PEÇA é dividido entre as faces, e é um limite de
+QUADRO e não de memória.
+
+#### Face que não sai vira contorno — ela sozinha
+
+Um tipo de superfície que este leitor não conhece, uma inversa que não converge, um laço que sai
+cruzando a si mesmo, uma triangulação que falha: todos têm a mesma resposta, e ela é um desenho que
+já funcionava antes de qualquer disto existir. Você vê a peça cheia com um pedaço em contorno —
+visivelmente outro tipo de desenho, feito só de curvas que ESTÃO no arquivo — e um fato mais uma
+frase na prévia dizem quantas faces são.
+
+É também o que torna este módulo seguro de ter sido escrito: se a malhagem tiver um defeito, ela
+degrada para o arame em vez de virar lixo. No arquivo do dono é 1 face de 106; no eixo traseiro, 69
+de 2 536.
+
+#### O que foi inventado no banco de tipos, e o que não
+
+Seis dos onze já existem no `shared-mime-info` 2.4 que o flake pina: `model/stl`, `model/3mf`,
+`model/obj`, `model/gltf+json`, `model/gltf-binary` e `model/iges` — e o gerador RECUSA pôr em `ours`
+um tipo que a base já conhece. A resolução também já funcionava para os dois primeiros: um STL
+binário não tem magic nenhum (a única regra do freedesktop é a palavra `solid`, que é a forma ASCII),
+então o sniff devolve `None` e `settled` fica com o nome; um 3MF sniffa `application/zip` e a base diz
+que ele DESCENDE disso, então os dois concordam e o nome, mais fino, vence. É a mesma figura que o
+`.dng` já tinha escrita.
+
+Os outros cinco a base não tem — conferido: `*.ply`, `*.off`, `*.dae`, `*.amf`, `*.step` e `*.stp` não
+têm UM reivindicante upstream. Nascem no `ours` do `mime-glyphs.nix`, **com `under`**, e o COLLADA
+usa `model/vnd.collada+xml`, que é o nome registrado dele: o que falta upstream é a linha, não o
+nome. O AMF usa `model/x-amf` e não `application/x-amf`, que é do Action Message Format da Adobe há
+vinte anos.
+
+E todos ganharam glifo: para o freedesktop são `image-x-generic` — correto e inútil numa coluna de
+trinta linhas, onde uma peça que se imprime fica indistinguível de uma fotografia.
+
+#### Quando DOIS tipos reivindicam o mesmo nome: `prefer`
+
+O `globs2` tem duas linhas para `*.obj` no mesmo peso — `application/x-tgif` e `model/obj` — e o
+`mime::by_name` fica com a PRIMEIRA de um par empatado. Resultado: um `.obj` nesta máquina resolvia
+para o documento de um programa de desenho do X11 dos anos 1990, e ficava sem prévia, sem fatos e com
+o glifo neutro. Nem `exact` nem `ours` consertam: o primeiro decide só o ícone, e uma linha de `ours`
+entra no FIM da lista com o mesmo peso 50 e perde o mesmo desempate.
+
+O bloco `prefer` nomeia o vencedor, o perdedor e o padrão, e o gerador **remove a linha do
+perdedor** — não sobe o peso do vencedor, que o faria ganhar também de um reivindicante futuro de
+peso MAIOR, e isso é mais do que a linha diz. E ele recusa de três maneiras: tipo que a base não tem,
+tipo que não reivindica aquele padrão (upstream mudou e a linha caducou), e pesos que já diferem
+(upstream já decidiu e a linha não faz nada). As três foram provadas quebrando a linha de propósito.
+
+#### Um arquivo por leitor, e o defeito que cada um pega no topo dele
+
+`mesh.rs` virou `mesh/` no dia em que passou de dois formatos a onze, porque o que é difícil em cada
+um é diferente — e está escrito no topo do arquivo que o tem:
+
+- **OBJ**: índice NEGATIVO é relativo ao fim da lista COMO ELA ESTÁ NAQUELA LINHA. Está na
+  especificação original, exportadores usam, e um leitor que trate `-1` como fora de faixa não acha
+  face nenhuma e relata um arquivo vazio.
+- **PLY**: uma propriedade que este leitor não quer ainda tem de ser ENTENDIDA, porque o registro não
+  tem separador. Um vértice de scanner é `x y z nx ny nz r g b a confiança intensidade`, e pular isso
+  é saber que `uchar` é um byte e `double` são oito. E o tipo do CONTADOR de uma lista é declarado
+  separado do tipo dos itens porque são coisas separadas.
+- **glTF**: a cena é uma ÁRVORE e a geometria está nas folhas. Sem compor as transformações dos nós,
+  uma cena de várias peças desenha todas empilhadas na origem — uma pilha reconhecível, e errada. A
+  unidade é o METRO pela especificação, então entra ×1000 e o painel diz de onde veio o número. Um
+  acessor `sparse` é APLICADO e não ignorado: ignorá-lo devolve as posições de base, que são as
+  posições erradas sem erro nenhum. E um `.gltf` é o único que recebe o CAMINHO do arquivo, porque é
+  o único cuja geometria pode estar num SEGUNDO arquivo — e por isso é o único que precisa recusar os
+  caminhos que não vai abrir: nada absoluto, nada com `..`, nada com esquema.
+- **COLLADA**: `<asset>` manda em duas coisas. `unit meter=` diz quanto vale um número, e `up_axis`
+  diz que lado é para cima — e `Y_UP` é o padrão e o que toda ferramenta de arte escreve, então um
+  leitor que o ignore deita a maioria dos documentos de lado. As transformações de um `<node>`
+  compõem NA ORDEM EM QUE ESTÃO ESCRITAS. E `<p>` é ENTRELAÇADO: com uma entrada de normal no
+  deslocamento 1, só metade dos números é vértice.
+- **AMF**: pode ser um zip OU o XML cru, sob a mesma extensão, então os BYTES decidem — um leitor que
+  suportasse um só falharia em metade dos arquivos dizendo que estão quebrados.
+- **STEP**: um `CIRCLE` é um círculo INTEIRO; o que faz dele um arco é o `EDGE_CURVE` que o
+  referencia, cujos dois vértices dizem onde começa e para, e cujo `same_sense` diz por qual dos dois
+  lados. Um leitor que desenhasse o círculo poria um anel completo em cada arredondamento da peça. E
+  o cabeçalho **não é UTF-8**: o arquivo do dono carrega bytes Big5 num campo que a norma diz ser
+  ASCII, e `from_utf8` recusaria o arquivo inteiro por causa disso. Lê-se as escapadas `\X2\…\X0\`
+  e o resto como Latin-1 — **e o campo assim lido fica MARCADO**, porque o painel não mostra um valor
+  de que não tem certeza: mostrar `Windows ¨Ï¥Î ªÌ` no lugar do autor lê-se como defeito do
+  gerenciador, não como o que o arquivo diz.
+- **IGES**: é o único leitor sem um arquivo real do dono por trás. Fica provado contra fixtures
+  escritas da especificação, o que testa o entendimento deste leitor e não o que um CAD escreve de
+  verdade. O que isso compra é a FORMA da falha: tipo de entidade que ele não conhece é PULADO e
+  arquivo sem curva nenhuma é recusado — ele falha com arestas de menos, nunca com peça errada.
+
+#### O leitor de STL: o que decide a forma é ARITMÉTICA, nunca a primeira palavra
 
 Os oitenta bytes de cabeçalho de um STL binário são livres, e escritores põem qualquer coisa neles,
 `solid` inclusive. Quem decide é `84 + 50·n == len`. A normal gravada no arquivo é **ignorada e
@@ -4351,6 +4522,37 @@ O ZIP é lido aqui, com `flate2`, e o teto é sobre o que SAI da descompressão 
 bomba de zip não pode mentir. Um leitor de ZIP de biblioteca seria uma entrada nova no lock para
 duzentas linhas.
 
+#### Uma câmera, um corpo com duas metades
+
+O `solid::draw` recebe um `Body` — que carrega uma malha E arestas — e monta um `Lens` antes de olhar
+para o que tem dentro: mesma projeção, mesmo z-buffer, mesmo fundo transparente, mesmo supersampling.
+Separar os dois caminhos seriam duas projeções que têm de concordar, e no dia em que discordassem os
+dois tipos de arquivo enquadrariam diferente sem nada dizendo por quê.
+
+O `Body` era um `enum` de um OU outro, e o B-Rep quebrou isso: uma peça sai cheia com as faces que
+este leitor não malhou desenhadas em contorno, então as duas chegam juntas e são desenhadas juntas.
+Preenche primeiro, traça depois, no mesmo buffer de profundidade — é o que põe um contorno na frente
+do material a que pertence em vez de enterrado dentro dele.
+
+#### A gaiola: sem linha oculta, e a profundidade vira ALFA
+
+Não há remoção de linha oculta, porque sem as faces não há o que ocultar — e inventá-las seria
+inventar a peça. Vê-se a gaiola inteira, que é o que um desenho de CAD é.
+
+O que faz isso ler como volume em vez de como emaranhado é a aresta do fundo DESBOTAR, e o desbote é
+por AMOSTRA e não por segmento: uma aresta comprida que foge do olho muda de profundidade ao longo do
+próprio comprimento, e esse gradiente é a maior parte da leitura. O z-buffer ainda é testado e
+escrito, porque onde duas arestas se cruzam a de perto tem de ganhar — é a única oclusão que existe
+ali, e sem ela decide quem o arquivo escreveu por último.
+
+Espessura e desbote são TOKENS (`space.files.meshWireWidth`, `meshWireFade`), e a espessura é em
+DÉCIMOS de pixel porque o rasterizador tira duas amostras por lado: uma linha de uma amostra sai com
+meio pixel na tela e vira fantasma cinza depois da média.
+
+**Medido**: 2,3 ms para as 251 arestas do STEP do dono, que amostram 2 621 segmentos. Uma ordem de
+grandeza abaixo de uma malha, e por isso o caminho do arame nunca virou a coisa que valia medir duas
+vezes.
+
 #### O rasterizador é em processo, e o fundo é TRANSPARENTE
 
 `pixels::from_svg` é o precedente: o resvg rasteriza NO tamanho, em processo, e monta um `Rgba` à
@@ -4362,8 +4564,8 @@ fundo de cada uma é um token diferente. E a luz é fixa em relação à CÂMERA
 põe a peça na própria sombra assim que alguém a vira, e o gesto que era para mostrar o outro lado
 mostra uma silhueta.
 
-**Medido**, para 512×384: 41 ms nos 225 154 triângulos do 3DBenchy e 14 ms num porta-velas de 21 386,
-dobrando com a peça ocupando o painel. É aritmética no preparo de cada triângulo, não memória —
+**Medido**, para 512×384: 44 ms nos 225 154 triângulos do 3DBenchy, 17 ms num cortador de 121 724, 13
+ms num porta-velas de 21 386 e 9 ms num OBJ de 49 999, dobrando com a peça ocupando o painel. É aritmética no preparo de cada triângulo, não memória —
 empacotar o framebuffer não valeu nada e passar as funções de aresta a incremento valeu 4×. **Faces
 de trás NÃO são descartadas**, e é o único lugar onde a velocidade foi recusada: medido em 1,5× (41
 ms para 33), e correto só numa malha cujas faces estão todas no mesmo sentido. Malha com faces
@@ -4426,6 +4628,17 @@ Um arquivo de cem megabytes lido duas vezes para manter as formas arrumadas são
 duas vezes, então o hospedeiro lê a malha uma vez e usa a resposta para as duas coisas: os fatos, e
 saber que há algo para girar. Malha que não analisa é `Refusal::Failed` com frase, nunca uma espera
 sem fim por um quadro que não vem.
+
+Uma FORMA não é texto, e três dos onze tipos SÃO texto pela conta do banco — `model/obj`,
+`model/x-off` e `model/step` descendem de `text/plain`, porque descendem mesmo. Sem esse braço, o
+`.obj` de 4,3 MB do dono era lido por um mebibyte, realçado e jogado fora: `preview_fields` devolve
+brancos para tudo que gira, então nenhuma linha dele podia chegar à tela.
+
+Um corpo de arestas responde MENOS fatos, e honestamente: não tem volume, não tem área e não tem
+"superfície fechada", porque as três são propriedades de uma SUPERFÍCIE e ali não há nenhuma. Em
+troca tem o que só um B-Rep sabe — esquema, sólidos, cascas, faces, arestas — e a caixa, que é a
+caixa DAS ARESTAS: para peça mecânica é a caixa da peça, e o caso em que difere é uma face que estufa
+para fora do próprio contorno. Está escrito ao lado da conta.
 
 A sanidade sai de ORDENAR as arestas e não de uma tabela de hash: a contagem é conhecida de antemão e
 grande, e a mesma lista ordenada responde "quantos vértices distintos" de graça. E as medidas saem em

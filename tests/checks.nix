@@ -3691,6 +3691,103 @@ let
     cat ${mimeDb.negativeFixture}/verdict
   '';
 
+  # AND THE PREFERENCE STILL PREFERS.
+  #
+  # `prefer` settles `*.obj` between `model/obj` and `application/x-tgif` by
+  # REMOVING the loser's glob — so while it works, nothing in the table says it
+  # is there, and the day upstream drops the ambiguity the row would stop
+  # applying in silence. This breaks the row on purpose and watches the build
+  # refuse; see `nix/mimegen.nix`.
+  mime-preference-is-live = mkCheck "mime-preference-is-live" [ ] ''
+    test -s ${mimeDb.preferenceFixture}/verdict
+    cat ${mimeDb.preferenceFixture}/verdict
+  '';
+
+  # EVERY 3D FORMAT IS REACHABLE BY THE WHOLE PATH, AND NOT BY HALF OF IT.
+  #
+  # A format needs four things to work, in four files: a `Shape` variant, an
+  # arm in `mesh::read`'s dispatch, a MIME type on the table's `mesh` row, and
+  # a sentence in both languages. Three of the four and the file resolves,
+  # decodes, draws — and the panel names the format with a raw key; or it
+  # resolves and nothing draws; or nothing resolves at all and the reader that
+  # was written for it is never called.
+  #
+  # That last one is not hypothetical. A `.obj` had a reader, a `Shape`, a key
+  # and two sentences, and resolved to `application/x-tgif` because of a glob
+  # nobody had looked at — it was found by hand, on the owner's screen.
+  mesh-formats-are-total = mkCheck "mesh-formats-are-total" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-inspect/src}")
+    i18n = pathlib.Path("${../assets/i18n}")
+    mod = (src / "mesh" / "mod.rs").read_text()
+    pixels = (src / "pixels.rs").read_text()
+    bad = []
+
+    # --- the variants, from the enum itself -------------------------------
+    block = re.search(r"pub enum Shape \{(.*?)\n\}", mod, re.S)
+    if block is None:
+        bad.append("no `pub enum Shape` — what does this check read?")
+        variants = []
+    else:
+        variants = re.findall(r"^    ([A-Z][A-Za-z0-9]*),$", block.group(1), re.M)
+    if len(variants) < 10:
+        bad.append(f"only {len(variants)} shapes — the enum is not being read")
+
+    # --- each one has a key, and is in ALL --------------------------------
+    keyed = dict(re.findall(r"Self::([A-Za-z0-9]+) => crate::key::([A-Z_0-9]+),", mod))
+    listed = re.search(r"pub const ALL: \[Self; \d+\] = \[(.*?)\];", mod, re.S)
+    inside = re.findall(r"Self::([A-Za-z0-9]+),", listed.group(1)) if listed else []
+    for v in variants:
+        if v not in keyed:
+            bad.append(f"`Shape::{v}` has no arm in `Shape::key`")
+        if v not in inside:
+            bad.append(f"`Shape::{v}` is missing from `Shape::ALL`")
+
+    # --- the key constants resolve, and both languages carry them ---------
+    lib = (src / "lib.rs").read_text()
+    names = dict(re.findall(r'pub const ([A-Z_0-9]+): &str = "([a-z0-9-]+)";', lib))
+    for v, const in keyed.items():
+        text = names.get(const)
+        if text is None:
+            bad.append(f"`key::{const}`, which `Shape::{v}` uses, does not exist")
+            continue
+        for language in ("en-GB", "pt-BR"):
+            body = (i18n / f"{language}.ftl").read_text()
+            if not re.search(rf"^{re.escape(text)} = .", body, re.M):
+                bad.append(f"`{text}` is missing from {language}.ftl")
+
+    # --- the dispatch and the table claim the SAME types -------------------
+    dispatch = re.search(r"match ronoctua_files::mime::canonical\(mime\) \{(.*?)\n    \}", mod, re.S)
+    if dispatch is None:
+        bad.append("no dispatch in `mesh::read` — what does this check read?")
+        reads = set()
+    else:
+        reads = set(re.findall(r'"([a-z]+/[A-Za-z0-9.+-]+)" =>', dispatch.group(1)))
+    row = re.search(r'id: "mesh",\s*types: &\[(.*?)\],', pixels, re.S)
+    claimed = set(re.findall(r'"([a-z]+/[A-Za-z0-9.+-]+)"', row.group(1))) if row else set()
+    if not claimed:
+        bad.append("the table's `mesh` row claims nothing")
+    for kind in sorted(reads - claimed):
+        bad.append(f"`{kind}` is read but the table does not claim it — nothing resolves to it")
+    for kind in sorted(claimed - reads):
+        bad.append(f"`{kind}` is claimed but `read` has no arm — it draws nothing")
+
+    if bad:
+        print("ERROR: a 3D format is reachable by only part of its path.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A format takes four things: a `Shape`, an arm in `read`, a", file=sys.stderr)
+        print("       type on the table's mesh row, and a sentence in both", file=sys.stderr)
+        print("       languages. Three of them is a file that half works.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {len(variants)} shapes and {len(claimed)} types, whole path each")
+    END
+  '';
+
   # EVERY ROW OF THE FILE MANAGER'S MENU HAS TEXT, IN BOTH LANGUAGES.
   #
   # The same shape as the rescue console's, and for the same reason: a row with
@@ -4435,15 +4532,24 @@ let
 
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
     bad = []
-    mesh = src / "mesh.rs"
+    mesh = src / "mesh"
     solid = src / "solid.rs"
 
-    # ONE. The reader and the rasteriser name no program at all.
+    # ONE. NO READER AND NOT THE RASTERISER NAMES A PROGRAM.
     #
     # `Command` and `tools::` are the two doors to one, and `Tool` is the
     # enum that would have to grow first — so a sixth program cannot be
     # reached from here without one of the three appearing.
-    for f in (mesh, solid):
+    #
+    # THE WHOLE DIRECTORY, and not one file: `mesh.rs` became `mesh/` when
+    # it grew from two formats to eleven, and a check that named one file
+    # would have gone green on ten readers it never looked at.
+    if not mesh.is_dir():
+        bad.append("the mesh readers are gone")
+    readers = sorted(mesh.glob("*.rs")) if mesh.is_dir() else []
+    if len(readers) < 12:
+        bad.append(f"only {len(readers)} files under mesh/ — the readers are one per file")
+    for f in readers + [solid]:
         if not f.is_file():
             bad.append(f"{f.name} is gone")
             continue
@@ -4483,7 +4589,7 @@ let
             if "None" not in b:
                 bad.append(f"How::Mesh asks for a program: {b.strip()}")
 
-    # AND THE ROW IS STILL THERE, claiming both shapes. Without this the
+    # AND THE ROW IS STILL THERE, claiming every shape. Without this the
     # check goes green on a tree where the whole feature was deleted, which
     # is the shape `persistence-takes-its-root-as-a-parameter` already
     # guards against with its own closing clause.
@@ -4491,7 +4597,19 @@ let
     if row is None:
         bad.append("no row in the table claims a mesh")
     else:
-        for kind in ("model/stl", "model/3mf"):
+        for kind in (
+            "model/stl",
+            "model/3mf",
+            "model/obj",
+            "model/x-ply",
+            "model/x-off",
+            "model/gltf+json",
+            "model/gltf-binary",
+            "model/vnd.collada+xml",
+            "model/x-amf",
+            "model/step",
+            "model/iges",
+        ):
             if kind not in row.group(0):
                 bad.append(f"the mesh row no longer claims {kind}")
     if solid.is_file() and "pub fn draw(" not in solid.read_text():
@@ -4507,7 +4625,7 @@ let
         print("       variable in, and one more line in the closure sweep. The", file=sys.stderr)
         print("       rasteriser is two hundred lines and costs none of that.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: the shape is read and drawn in process, and the five programs are five")
+    print(f"OK: {len(readers)} files read and draw in process, and the five programs are five")
     END
   '';
 
@@ -8239,6 +8357,7 @@ let
       files-runs-by-path
       files-notices-the-directory
       inspect-mesh-is-in-process
+      mesh-formats-are-total
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
       motion-never-guesses-a-frame
@@ -8261,6 +8380,7 @@ let
       graphics-does-not-mix-libc
       mime-table-generated
       mime-unknown-icon-fails
+      mime-preference-is-live
       self.packages.${system}.iso
       self.nixosConfigurations.vm.config.system.build.toplevel
     ];
@@ -8291,6 +8411,7 @@ let
       files-runs-by-path
       files-notices-the-directory
       inspect-mesh-is-in-process
+      mesh-formats-are-total
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes
@@ -8304,6 +8425,7 @@ let
       graphics-does-not-mix-libc
       mime-table-generated
       mime-unknown-icon-fails
+      mime-preference-is-live
       gate-fetches-what-no-cache-has
       trap-calls-something-that-exists
       dev-exports-before-it-starts

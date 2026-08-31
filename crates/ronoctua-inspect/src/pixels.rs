@@ -153,18 +153,43 @@ pub struct Row {
 /// types only and never walks the subclass DAG.
 pub const TABLE: [Row; 8] = [
     Row {
-        // BOTH ARE ALREADY IN THE DATABASE, so neither is invented here: the
-        // pinned shared-mime-info has `model/stl` by its `*.stl` glob and
-        // `model/3mf` by `*.3mf` plus a subclass edge to `application/zip`.
-        // That edge is what makes `crate::settled` keep the name for a 3MF,
-        // which sniffs as a zip because it IS one — the same shape the `.dng`
-        // note further down describes.
+        // ELEVEN TYPES, AND SIX OF THEM ARE ALREADY IN THE DATABASE: the
+        // pinned shared-mime-info has `model/stl` by its `*.stl` glob,
+        // `model/3mf` by `*.3mf` plus a subclass edge to `application/zip`,
+        // and `model/obj`, `model/gltf+json`, `model/gltf-binary` and
+        // `model/iges` by their globs. That zip edge is what makes
+        // `crate::settled` keep the name for a 3MF, which sniffs as a zip
+        // because it IS one — the same shape the `.dng` note further down
+        // describes.
+        //
+        // The other five are invented in `assets/icons/mime-glyphs.nix`,
+        // which is the ONLY place a type is invented and which refuses to
+        // invent one the database already has.
         //
         // A binary STL has no magic at all (freedesktop's only rule is the
         // word `solid`, which is the ASCII form), so its type comes from the
-        // name alone and the sniff correctly says nothing.
+        // name alone and the sniff correctly says nothing. The same is true of
+        // a `.step`, a `.ply` and a `.dae`.
+        //
+        // TWO OF THEM HOLD NO TRIANGLE — `model/step` and `model/iges` are
+        // boundary representations and are MESHED here — see `mesh::brep`.
+        // They are in
+        // this row anyway, because what the row decides is "does the manager
+        // turn this rather than show a picture of it", and the answer is yes.
         id: "mesh",
-        types: &["model/stl", "model/3mf"],
+        types: &[
+            "model/stl",
+            "model/3mf",
+            "model/obj",
+            "model/x-ply",
+            "model/x-off",
+            "model/gltf+json",
+            "model/gltf-binary",
+            "model/vnd.collada+xml",
+            "model/x-amf",
+            "model/step",
+            "model/iges",
+        ],
         descends: &[],
         media: &[],
         how: How::Mesh,

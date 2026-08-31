@@ -1151,6 +1151,29 @@ files-facts-scroll = turn to the next page of facts
 files-columns = show or hide the permissions, the owner and the group
 files-sidebar = hide or show the sidebar
 files-sidebar-focus = go to the sidebar, and back
+# THE PREVIEW'S OWN KEYS, and the reason they are here rather than derived from
+# `menu.rs` is `leader::OF_CLIPBOARD_VIEW`'s: a key that exists only inside a
+# `match` arm is a key nothing can enumerate. These are what `LEADER :` lists,
+# so each one is written as the thing it DOES and not as the key it is on.
+files-preview-scroll = turn to the next page of the preview
+files-preview-left = move the preview a column to the left
+files-preview-right = move the preview a column to the right
+# The film's transport. `files-play` is one key for both, because that is what
+# it is: pressing it while it plays is what pauses it.
+files-play = play the film, or pause it
+files-rewind = go back in the film
+files-forward = go forward in the film
+files-sound = turn the film's sound on or off
+files-theatre = give the film the whole region, and take it back
+# The shape's. `files-turn-left` is the hand's direction and not an axis — see
+# `View::spin`, which is where that convention is written down.
+files-turn-left = turn the shape to the left
+files-turn-right = turn the shape to the right
+files-turn-up = turn the shape upwards
+files-turn-down = turn the shape downwards
+files-zoom-in = look closer at the shape
+files-zoom-out = look further from the shape
+files-reframe = put the shape back the way it was
 files-eject = unmount the device
 files-unpin = take it off the sidebar
 files-pin = put on the sidebar
@@ -1351,6 +1374,17 @@ files-preview-missing = { $program } is not installed, and it is what reads this
 files-preview-too-big = too big for a preview ({ $amount })
 files-preview-failed = what came back was not a picture — the file may be damaged
 files-preview-slow = it went past { $seconds } s and was stopped — not the size, something is stuck
+# NOT "damaged". The file is fine and this reader is not equipped for it, which
+# is a different thing to tell somebody: one sends them to repair a file that
+# needs no repair.
+files-preview-draco = the shapes in this file are compressed, and this reader does not open that
+# OVER the picture, on its last line, and only when some face did not fill. A
+# piece that is part outline is a piece somebody should be told about — and the
+# panel is where they are looking.
+files-preview-outlined = { $n ->
+        [one] one face drawn as outline
+       *[other] { $n } faces drawn as outline
+    }
 
 # THE PANEL'S LEFT COLUMN. Short nouns, and short on purpose: the column is as
 # wide as the widest label here, so a needless word costs every other row.
@@ -1426,10 +1460,33 @@ files-fact-application = made with
 files-fact-designer = designer
 files-fact-licence = licence
 files-fact-created = created
+files-fact-schema = written against
+files-fact-source-name = original name
+files-fact-solids = solids
+files-fact-shells = shells
+files-fact-faces = faces
+files-fact-edges = edges
+files-fact-outlined = faces not filled
 
 files-value-stl-binary = STL, as bytes
 files-value-stl-ascii = STL, as words
 files-value-three-mf = 3MF
+files-value-obj = OBJ
+# The same format written two ways, and which one a file is decides whether it
+# opens in a text editor. The panel says so for the same reason it says it of
+# an STL.
+files-value-ply-ascii = PLY, as words
+files-value-ply-binary = PLY, as bytes
+files-value-off = OFF
+files-value-gltf = glTF
+files-value-glb = glTF, as one file
+files-value-collada = COLLADA
+files-value-amf = AMF
+files-value-step = STEP
+files-value-iges = IGES
+# NOT a measurement. glTF's unit is the metre by its own specification, and the
+# file says nothing about it — so the panel says where the number came from.
+files-value-unit-by-convention = metre, by the format
 files-value-count = { $n }
 # THE MEASUREMENTS ARE ALWAYS IN MILLIMETRES. A 3MF may declare inches or
 # metres and the reader converts on the way in, so this unit is not a guess.

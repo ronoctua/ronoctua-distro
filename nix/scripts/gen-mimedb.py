@@ -312,6 +312,41 @@ def main() -> int:
             if (mime, under) not in ours_under:
                 ours_under.append((mime, under))
 
+    # --- who wins a name two types claim ----------------------------------
+    #
+    # `mime::by_name` keeps the FIRST of an equal pair, so an ambiguity
+    # upstream is settled by the order of a generated file — which is to say
+    # not settled at all. A row here names the winner, the loser and the
+    # pattern, and the LOSER'S ROW IS DROPPED: raising the winner's weight
+    # would also beat a future claimant of higher weight, which is more than
+    # the row says.
+    #
+    # Every way this row can rot is an error, because a row that quietly stops
+    # applying looks deliberate and nobody audits it.
+    for row in table.get("prefer", []):
+        pattern, winner, loser = row["glob"], row["mime"], row["over"]
+        where = f"`prefer` for `{pattern}`"
+        if winner not in types or loser not in types:
+            missing = winner if winner not in types else loser
+            refuse(f"{where} names `{missing}`, which the database does not have.")
+            continue
+        claims = [g for g in globs if g[2] == pattern]
+        by = {g[1]: g[0] for g in claims}
+        if winner not in by or loser not in by:
+            absent = winner if winner not in by else loser
+            refuse(
+                f"{where} says `{absent}` claims it, and in this database it does "
+                "not. Upstream changed and the row no longer applies."
+            )
+            continue
+        if by[winner] != by[loser]:
+            refuse(
+                f"{where} has weights {by[winner]} and {by[loser]}, which are not "
+                "equal — upstream has already decided and this row does nothing."
+            )
+            continue
+        globs = [g for g in globs if not (g[1] == loser and g[2] == pattern)]
+
     floors = [
         ("globs", len(globs), FLOOR_GLOBS),
         ("magic", len(magic), FLOOR_MAGIC),

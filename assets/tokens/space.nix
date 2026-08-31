@@ -167,6 +167,28 @@
     # merge into one black blob and a hollow piece looks solid.
     meshShadow = 22;
 
+    # HOW WIDE AN EDGE IS DRAWN, in tenths of a pixel.
+    #
+    # A STEP and an IGES file hold no surface — they hold the curves that trim
+    # one — so those two are drawn as a cage of lines rather than as a lit
+    # solid. See `ronoctua_inspect::mesh::Wires`.
+    #
+    # Fifteen and not ten: the rasteriser takes two samples per pixel per side,
+    # so a line one SAMPLE wide is half a pixel on screen and comes out of the
+    # average as a grey ghost instead of an edge.
+    meshWireWidth = 15;
+
+    # HOW MUCH COLOUR IS LEFT ON THE FURTHEST EDGE, in hundredths.
+    #
+    # A cage has no faces, so the far side of the piece is drawn over the near
+    # side and nothing says which is which — one flat colour reads as a tangle
+    # of lines rather than as an object. Fading with depth is the only cue
+    # available.
+    #
+    # Not zero, for the reason `meshShadow` is not zero: an edge that vanishes
+    # takes a piece of the outline with it.
+    meshWireFade = 35;
+
     # FROM THIS WIDTH ON, THE TWO PANELS SIT ON THE RIGHT — one column each.
     # Below it they do not disappear: they move to a short strip along the
     # BOTTOM, side by side. The owner's sentence is binary, and so is this

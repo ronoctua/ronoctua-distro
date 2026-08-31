@@ -26,6 +26,15 @@
 //! also what makes the piece look like it is sitting in the panel rather than
 //! in a box.
 //!
+//! # Why a wire cage is drawn by the same function
+//!
+//! Because a STEP file has no surface to shade — see [`crate::mesh::Wires`] —
+//! and everything else about the picture is the same: the same camera, the
+//! same depth buffer, the same transparent ground, the same supersampling.
+//! Splitting them would be two projections that have to agree, and the day
+//! they disagreed the two kinds of file would frame differently with nothing
+//! saying why. So there is one [`Lens`] and two inner loops.
+//!
 //! # Why the light does not move with the model
 //!
 //! Because a light fixed in the WORLD puts the piece in its own shadow as soon
@@ -35,7 +44,7 @@
 //! the back of it".
 
 use crate::Rgba;
-use crate::mesh::Mesh;
+use crate::mesh::{Body, Bounds, Mesh, Wires};
 
 /// How many samples per pixel, per side.
 ///
@@ -134,6 +143,19 @@ pub struct Paint {
     /// its silhouette against the next face is what shows the shape. Black
     /// would merge two faces into one blob.
     pub ambient: f32,
+    /// How wide a wire is drawn, in PIXELS of the finished picture.
+    ///
+    /// Only the traced half of a body uses it. It has to be more than one: at two
+    /// samples per pixel a single-sample line is half a pixel on screen, which
+    /// after the average is a grey ghost rather than an edge.
+    pub wire: f32,
+    /// How much of the colour is left on the furthest wire, 0 to 1.
+    ///
+    /// A cage drawn in one flat colour reads as a tangle: every edge is
+    /// present and nothing says which is in front. Fading with depth is the
+    /// only cue available, because there are no faces to hide anything behind
+    /// — the front and the back of the piece are both drawn, always.
+    pub fade: f32,
 }
 
 /// A unit vector, or `None` when there is nothing to normalise.
@@ -172,16 +194,85 @@ fn axes(pose: Pose) -> ([f32; 3], [f32; 3], [f32; 3]) {
     (right, up, towards)
 }
 
-/// Draws the mesh.
+/// Where the camera is, and how a point in the model lands in the picture.
+///
+/// It exists so the two bodies cannot frame differently: the triangles and the
+/// wires ask the same object the same question, and a change to the framing is
+/// a change in one place.
+struct Lens {
+    middle: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+    towards: [f32; 3],
+    /// Model units to samples.
+    across: f32,
+    /// The middle of the picture, in samples.
+    mx: f32,
+    my: f32,
+    /// Half the model's diagonal, which is how far a point can be from the
+    /// middle along any axis and therefore what the depth is measured against.
+    radius: f32,
+}
+
+impl Lens {
+    /// `None` when there is nothing to look at.
+    fn of(bounds: Bounds, pose: Pose, sw: u32, sh: u32) -> Option<Self> {
+        let (right, up, towards) = axes(pose);
+        // HALF THE DIAGONAL, and not half the longest side: the piece has to
+        // fit at every angle, and the diagonal is the widest it can ever look.
+        let size = bounds.size();
+        let radius = 0.5
+            * size[0]
+                .mul_add(size[0], size[1].mul_add(size[1], size[2] * size[2]))
+                .sqrt();
+        if radius <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            middle: bounds.middle(),
+            right,
+            up,
+            towards,
+            across: f32::from(u16::try_from(sw.min(sh)).unwrap_or(u16::MAX)) * 0.5 / radius
+                * pose.zoom,
+            mx: sw as f32 * 0.5,
+            my: sh as f32 * 0.5,
+            radius,
+        })
+    }
+
+    /// A point as a sample position and a depth, smaller being nearer.
+    #[inline]
+    fn project(&self, c: [f32; 3]) -> (f32, f32, f32) {
+        let v = [
+            c[0] - self.middle[0],
+            c[1] - self.middle[1],
+            c[2] - self.middle[2],
+        ];
+        (
+            dot(v, self.right).mul_add(self.across, self.mx),
+            (-dot(v, self.up)).mul_add(self.across, self.my),
+            -dot(v, self.towards),
+        )
+    }
+}
+
+/// Draws the piece.
 ///
 /// # What a frame costs, measured
 ///
-/// On the owner's machine, into 512x384: **41 ms** for the 3DBenchy's 225 154
-/// triangles and **14 ms** for a 21 386-triangle candle holder, roughly
+/// On the owner's machine, into 512x384: **44 ms** for the 3DBenchy's 225 154
+/// triangles, **17 ms** for a 121 724-triangle cutter, **13 ms** for a 21 386-
+/// triangle candle holder and **9 ms** for a 49 999-triangle OBJ, roughly
 /// doubling when the piece is zoomed to fill the panel. It is arithmetic in
 /// the per-triangle setup and not memory — packing the framebuffer and
 /// stepping the edge functions were both measured and the second was worth
 /// 4x, the first nothing.
+///
+/// A CAGE IS A DIFFERENT ORDER: **2.3 ms** for the owner's STEP, whose 251
+/// edges sample to 2 621 segments. A boundary representation has thousands of
+/// segments where a mesh has hundreds of thousands of triangles, so the wire
+/// path never became the thing worth measuring twice.
 ///
 /// BACK FACES ARE NOT CULLED, and that is the one place speed was refused.
 /// Culling was measured at 1.5x — 41 ms down to 33 — and it is correct only
@@ -197,31 +288,48 @@ fn axes(pose: Pose) -> ([f32; 3], [f32; 3], [f32; 3]) {
 /// nothing — a caller that got `None` would have to invent a sentence for a
 /// case that is not a refusal.
 #[must_use]
-pub fn draw(mesh: &Mesh, pose: Pose, width: u32, height: u32, paint: Paint) -> Rgba {
+pub fn draw(body: &Body, pose: Pose, width: u32, height: u32, paint: Paint) -> Rgba {
     let width = width.max(1);
     let height = height.max(1);
     let scale = SAMPLES.min(SAMPLE_CEILING / width.max(height)).max(1);
     let (sw, sh) = (width * scale, height * scale);
 
-    let (right, up, towards) = axes(pose);
-    let light = unit(paint.light).unwrap_or([0.0, 0.0, 1.0]);
-    let middle = mesh.bounds.middle();
-    // HALF THE DIAGONAL, and not half the longest side: the piece has to fit
-    // at every angle, and the diagonal is the widest it can ever look.
-    let size = mesh.bounds.size();
-    let radius = 0.5
-        * size[0]
-            .mul_add(size[0], size[1].mul_add(size[1], size[2] * size[2]))
-            .sqrt();
     let mut depth = vec![f32::MAX; (sw * sh) as usize];
     let mut pixels = vec![0_u32; (sw * sh) as usize];
-    if radius <= 0.0 || mesh.triangles() == 0 {
+    let Some(lens) = Lens::of(body.bounds(), pose, sw, sh).filter(|_| !body.nothing()) else {
         return shrink(&pixels, sw, sh, scale, width, height);
-    }
-    let across =
-        f32::from(u16::try_from(sw.min(sh)).unwrap_or(u16::MAX)) * 0.5 / radius * pose.zoom;
-    let (mx, my) = (sw as f32 * 0.5, sh as f32 * 0.5);
+    };
+    // FILLED FIRST, THEN TRACED, into the one depth buffer. A boundary
+    // representation can produce both at once — a solid with the faces this
+    // reader could not mesh shown in outline — and doing them in this order is
+    // what puts an outline in front of the material it belongs to rather than
+    // buried inside it.
+    shade(&body.mesh, &lens, &paint, &mut depth, &mut pixels, sw, sh);
+    cage(
+        &body.wires,
+        &lens,
+        &paint,
+        scale,
+        &mut depth,
+        &mut pixels,
+        sw,
+        sh,
+    );
+    shrink(&pixels, sw, sh, scale, width, height)
+}
 
+/// Every triangle, lit and filled.
+#[allow(clippy::too_many_arguments)]
+fn shade(
+    mesh: &Mesh,
+    lens: &Lens,
+    paint: &Paint,
+    depth: &mut [f32],
+    pixels: &mut [u32],
+    sw: u32,
+    sh: u32,
+) {
+    let light = unit(paint.light).unwrap_or([0.0, 0.0, 1.0]);
     // BY CHUNKS, and not by index. `positions[i * 9..i * 9 + 9]` is a bounds
     // check per corner on a loop that runs a quarter of a million times; the
     // iterator proves the length once.
@@ -238,12 +346,10 @@ pub fn draw(mesh: &Mesh, pose: Pose, width: u32, height: u32, paint: Paint) -> R
         let mut sy = [0.0_f32; 3];
         let mut sz = [0.0_f32; 3];
         for k in 0..3 {
-            let c = [p[k * 3], p[k * 3 + 1], p[k * 3 + 2]];
-            let v = [c[0] - middle[0], c[1] - middle[1], c[2] - middle[2]];
-            sx[k] = dot(v, right).mul_add(across, mx);
-            sy[k] = (-dot(v, up)).mul_add(across, my);
-            // Away from the viewer, so smaller is nearer.
-            sz[k] = -dot(v, towards);
+            let (x, y, z) = lens.project([p[k * 3], p[k * 3 + 1], p[k * 3 + 2]]);
+            sx[k] = x;
+            sy[k] = y;
+            sz[k] = z;
         }
 
         // The normal in camera space, then turned to face the viewer. Turning
@@ -251,7 +357,11 @@ pub fn draw(mesh: &Mesh, pose: Pose, width: u32, height: u32, paint: Paint) -> R
         // through a hole one sees the far wall from behind, and a slicer's
         // idea of "backwards" is not something a preview should punish.
         let raw = [n[0], n[1], n[2]];
-        let facing = [dot(raw, right), dot(raw, up), dot(raw, towards)];
+        let facing = [
+            dot(raw, lens.right),
+            dot(raw, lens.up),
+            dot(raw, lens.towards),
+        ];
         let Some(unit_n) = unit(if facing[2] < 0.0 {
             [-facing[0], -facing[1], -facing[2]]
         } else {
@@ -263,16 +373,39 @@ pub fn draw(mesh: &Mesh, pose: Pose, width: u32, height: u32, paint: Paint) -> R
             .ambient
             .mul_add(1.0, (1.0 - paint.ambient) * dot(unit_n, light).max(0.0))
             .clamp(0.0, 1.0);
-        let shade = |c: u8| (f32::from(c) * lit).round().clamp(0.0, 255.0) as u8;
-        let colour = u32::from_le_bytes([
-            shade(paint.solid[0]),
-            shade(paint.solid[1]),
-            shade(paint.solid[2]),
-            paint.solid[3],
-        ]);
-        fill(&mut depth, &mut pixels, sw, sh, sx, sy, sz, colour);
+        let colour = dimmed(paint.solid, lit);
+        fill(depth, pixels, sw, sh, sx, sy, sz, colour);
     }
-    shrink(&pixels, sw, sh, scale, width, height)
+}
+
+/// Every edge, drawn as a line that fades into the distance.
+#[allow(clippy::too_many_arguments)]
+fn cage(
+    wires: &Wires,
+    lens: &Lens,
+    paint: &Paint,
+    scale: u32,
+    depth: &mut [f32],
+    pixels: &mut [u32],
+    sw: u32,
+    sh: u32,
+) {
+    // HALF THE WIDTH, IN SAMPLES, and at least half a sample so a line is
+    // never nothing.
+    #[allow(clippy::cast_precision_loss)]
+    let half = (paint.wire * scale as f32 * 0.5).max(0.5);
+    for s in wires.segments.chunks_exact(6) {
+        let a = lens.project([s[0], s[1], s[2]]);
+        let b = lens.project([s[3], s[4], s[5]]);
+        stroke(depth, pixels, sw, sh, a, b, half, lens.radius, paint);
+    }
+}
+
+/// A colour at a fraction of its brightness, alpha untouched.
+#[inline]
+fn dimmed(rgba: [u8; 4], by: f32) -> u32 {
+    let c = |v: u8| (f32::from(v) * by).round().clamp(0.0, 255.0) as u8;
+    u32::from_le_bytes([c(rgba[0]), c(rgba[1]), c(rgba[2]), rgba[3]])
 }
 
 /// One triangle into the buffers.
@@ -350,6 +483,77 @@ fn fill(
     let _ = dzy;
 }
 
+/// One segment into the buffers, with a width and a fade.
+///
+/// # Why the depth is tested and written like a triangle's
+///
+/// So that where two edges cross, the nearer one is the one that shows. It is
+/// the only occlusion available in a cage — there are no faces — and without
+/// it a crossing is decided by whichever edge the file happened to write last.
+///
+/// # Why the fade is per SAMPLE and not per segment
+///
+/// Because a long edge running away from the viewer changes depth along its
+/// own length, and that gradient is most of what makes the cage read as a
+/// solid rather than as a drawing.
+#[allow(clippy::too_many_arguments)]
+fn stroke(
+    depth: &mut [f32],
+    pixels: &mut [u32],
+    sw: u32,
+    sh: u32,
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+    half: f32,
+    radius: f32,
+    paint: &Paint,
+) {
+    // OFF THE PICTURE ENTIRELY, before any stepping — the same rejection the
+    // triangle fill makes, and for the same reason.
+    let (lo_x, hi_x) = (a.0.min(b.0) - half, a.0.max(b.0) + half);
+    let (lo_y, hi_y) = (a.1.min(b.1) - half, a.1.max(b.1) + half);
+    if hi_x < 0.0 || hi_y < 0.0 || lo_x >= sw as f32 || lo_y >= sh as f32 {
+        return;
+    }
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    // ONE STEP PER SAMPLE ALONG THE LONGER AXIS, which is what makes the line
+    // continuous without measuring anything: a shorter step would draw the
+    // same sample twice and a longer one would leave gaps.
+    let steps = dx.abs().max(dy.abs()).ceil().max(1.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let steps = (steps as usize).min((sw + sh) as usize * 2);
+    // A fully faded wire still has to be visible, so the far end keeps
+    // `paint.fade` of the colour rather than none of it.
+    let near = -radius;
+    let span = 2.0 * radius;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = a.0 + dx * t;
+        let y = a.1 + dy * t;
+        let z = a.2 + (b.2 - a.2) * t;
+        let away = ((z - near) / span).clamp(0.0, 1.0);
+        let colour = dimmed(paint.solid, 1.0 - (1.0 - paint.fade) * away);
+        // The square around the sample. A disc would be rounder and this is
+        // half a pixel wide on screen: the difference is under the average
+        // that `shrink` takes.
+        let x0 = (x - half).floor().max(0.0) as u32;
+        let x1 = ((x + half).ceil() as u32).min(sw.saturating_sub(1));
+        let y0 = (y - half).floor().max(0.0) as u32;
+        let y1 = ((y + half).ceil() as u32).min(sh.saturating_sub(1));
+        for py in y0..=y1 {
+            let from = (py * sw) as usize;
+            for px in x0..=x1 {
+                let at = from + px as usize;
+                if z < depth[at] {
+                    depth[at] = z;
+                    pixels[at] = colour;
+                }
+            }
+        }
+    }
+}
+
 /// Averages the samples down to the picture that was asked for.
 ///
 /// Straight alpha throughout, which is what [`crate::Rgba`] promises and what
@@ -399,7 +603,7 @@ fn shrink(pixels: &[u32], sw: u32, sh: u32, scale: u32, width: u32, height: u32)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::Mesh;
+    use crate::mesh::{Body, Mesh, Wires};
 
     /// A cube of ten, wound outwards.
     fn cube() -> Mesh {
@@ -439,7 +643,14 @@ mod tests {
             solid: [200, 200, 200, 255],
             light: [-0.35, 0.55, 0.75],
             ambient: 0.2,
+            wire: 1.5,
+            fade: 0.35,
         }
+    }
+
+    /// The cube as the body the rasteriser takes.
+    fn solid() -> Body {
+        Body::of(cube())
     }
 
     /// How many samples have any paint on them at all.
@@ -453,7 +664,7 @@ mod tests {
     // baked in here is right in the footer and wrong in the window — the same
     // thing the film's letterbox already had to be transparent for.
     fn what_the_piece_does_not_cover_is_fully_transparent() {
-        let r = draw(&cube(), Pose::default(), 64, 64, paint());
+        let r = draw(&solid(), Pose::default(), 64, 64, paint());
         assert_eq!(r.width, 64);
         assert_eq!(r.height, 64);
         // A corner of a 64x64 frame is outside a cube drawn to fit.
@@ -468,7 +679,7 @@ mod tests {
     // the same pixels the whole feature would be inert and every unit test
     // about the keys would still pass.
     fn turning_it_changes_the_picture() {
-        let m = cube();
+        let m = Body::of(cube());
         let a = draw(&m, Pose::default(), 64, 64, paint());
         let b = draw(&m, Pose::default().turned(1.0, 0.2), 64, 64, paint());
         assert_ne!(a.pixels, b.pixels);
@@ -479,7 +690,7 @@ mod tests {
     // more of the frame; the arithmetic that decides is the framing radius,
     // and getting it inverted is invisible to a test that only compares.
     fn nearer_covers_more_of_the_frame() {
-        let m = cube();
+        let m = Body::of(cube());
         let out = draw(&m, Pose::default().scaled(0.5), 64, 64, paint());
         let near = draw(&m, Pose::default().scaled(2.0), 64, 64, paint());
         assert!(
@@ -503,7 +714,7 @@ mod tests {
                 pitch: 0.4,
                 zoom: 1.0,
             };
-            let r = draw(&m, pose, 48, 48, paint());
+            let r = draw(&Body::of(m.clone()), pose, 48, 48, paint());
             // Nothing may touch the border: if it does, something was cut off.
             for x in 0..r.width {
                 let top = (x * 4 + 3) as usize;
@@ -537,9 +748,117 @@ mod tests {
     // that got no picture would have to invent a sentence for a case that is
     // not a refusal — the panel simply has nothing in it yet.
     fn an_empty_mesh_gives_a_transparent_picture_of_the_size_asked_for() {
-        let r = draw(&Mesh::empty(), Pose::default(), 32, 20, paint());
+        let r = draw(&Body::of(Mesh::empty()), Pose::default(), 32, 20, paint());
         assert_eq!((r.width, r.height), (32, 20));
         assert_eq!(covered(&r), 0);
         assert_eq!(r.pixels.len(), 32 * 20 * 4);
+    }
+
+    /// A cage: the twelve edges of a cube of `side`.
+    fn cage_of(side: f32) -> Body {
+        let s = side;
+        let v = [
+            [0.0, 0.0, 0.0],
+            [s, 0.0, 0.0],
+            [s, s, 0.0],
+            [0.0, s, 0.0],
+            [0.0, 0.0, s],
+            [s, 0.0, s],
+            [s, s, s],
+            [0.0, s, s],
+        ];
+        let mut w = Wires::empty();
+        for (a, b) in [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+        ] {
+            w.add(v[a], v[b]);
+        }
+        Body::cage(w)
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a body with no faces drawing nothing. A STEP
+    // file has no triangle in it, so a rasteriser that only knew how to fill
+    // would give back a transparent rectangle and the panel would show an
+    // empty box with no sentence anywhere.
+    fn a_body_with_no_faces_is_still_drawn() {
+        let r = draw(&cage_of(10.0), Pose::default(), 64, 64, paint());
+        assert!(covered(&r) > 0, "the cage drew nothing");
+        // And it is a CAGE: far less of the frame than the solid covers.
+        let filled = draw(&solid(), Pose::default(), 64, 64, paint());
+        assert!(
+            covered(&r) < covered(&filled),
+            "the cage covered {} and the solid {}",
+            covered(&r),
+            covered(&filled)
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: no depth test on a line, which lets whichever
+    // edge the file happened to write last win where two cross. There are no
+    // faces in a cage, so this is the only occlusion there is.
+    fn an_edge_nearer_the_eye_is_drawn_over_one_further_away() {
+        // Two crossing segments, one plainly in front of the other. Straight
+        // down the X axis, so `towards` is +X and the nearer one is at x = 1.
+        let mut w = Wires::empty();
+        w.add([1.0, -5.0, 0.0], [1.0, 5.0, 0.0]);
+        w.add([-1.0, 0.0, -5.0], [-1.0, 0.0, 5.0]);
+        let pose = Pose {
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
+        };
+        let near = Paint {
+            solid: [255, 0, 0, 255],
+            ..paint()
+        };
+        let r = draw(&Body::cage(w), pose, 64, 64, near);
+        // The middle of the picture is where they cross. The nearer one runs
+        // horizontally on screen, so its neighbours left and right are painted
+        // and the crossing pixel belongs to it.
+        let at = ((32 * 64) + 32) * 4;
+        assert!(r.pixels[at + 3] > 0, "nothing at the crossing");
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: one flat colour for every edge, which draws a
+    // tangle. Fading with depth is the only cue a cage has.
+    fn a_wire_further_away_is_drawn_dimmer() {
+        let mut w = Wires::empty();
+        // Two segments across the picture at different depths and different
+        // heights — the heights so the near one does not simply HIDE the far
+        // one, which is the other thing being tested one test up.
+        w.add([5.0, -5.0, 3.0], [5.0, 5.0, 3.0]);
+        w.add([-5.0, -5.0, -3.0], [-5.0, 5.0, -3.0]);
+        let pose = Pose {
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
+        };
+        let r = draw(&Body::cage(w), pose, 64, 64, paint());
+        // Both land on the same screen row; the two lie at different depths,
+        // so the picture has more than one brightness in it.
+        let tones: std::collections::BTreeSet<u8> = r
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0)
+            .map(|p| p[0])
+            .collect();
+        assert!(
+            tones.len() > 1,
+            "every wire came out the same colour: {tones:?}"
+        );
     }
 }

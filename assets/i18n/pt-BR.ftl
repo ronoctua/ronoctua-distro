@@ -1149,6 +1149,29 @@ files-facts-scroll = virar para a proxima pagina de fatos
 files-columns = mostrar ou esconder as permissoes, o dono e o grupo
 files-sidebar = esconder ou mostrar a barra lateral
 files-sidebar-focus = ir para a barra lateral, e voltar
+# AS TECLAS DA PRÓPRIA PRÉVIA, e a razão de estarem aqui em vez de saírem do
+# `menu.rs` é a do `leader::OF_CLIPBOARD_VIEW`: chave que só existe dentro de um
+# braço de `match` é chave que nada consegue enumerar. São estas que o
+# `LEADER :` lista, então cada uma diz o que FAZ, não em que tecla está.
+files-preview-scroll = virar para a próxima página da prévia
+files-preview-left = mover a prévia uma coluna para a esquerda
+files-preview-right = mover a prévia uma coluna para a direita
+# O transporte do filme. `files-play` é uma tecla para os dois porque é isso
+# que ela é: apertar com o filme rodando é o que pausa.
+files-play = tocar o filme, ou pausar
+files-rewind = voltar no filme
+files-forward = avançar no filme
+files-sound = ligar ou desligar o som do filme
+files-theatre = dar a região inteira ao filme, e devolver
+# As da peça. `files-turn-left` é a direção da MÃO e não um eixo — veja o
+# `View::spin`, que é onde essa convenção está escrita.
+files-turn-left = girar a peça para a esquerda
+files-turn-right = girar a peça para a direita
+files-turn-up = girar a peça para cima
+files-turn-down = girar a peça para baixo
+files-zoom-in = olhar a peça mais de perto
+files-zoom-out = olhar a peça de mais longe
+files-reframe = pôr a peça de volta como estava
 files-eject = desmontar o dispositivo
 files-unpin = tirar da barra lateral
 files-pin = pôr na barra lateral
@@ -1348,6 +1371,16 @@ files-preview-missing = { $program } não está instalado, e é ele que lê este
 files-preview-too-big = grande demais para uma prévia ({ $amount })
 files-preview-failed = o que voltou não era uma imagem — o arquivo pode estar quebrado
 files-preview-slow = passou de { $seconds } s e foi parado — não é o tamanho, é algo travado
+# NÃO "quebrado". O arquivo está inteiro e é este leitor que não dá conta —
+# dizer "quebrado" manda a pessoa consertar algo que não tem defeito.
+files-preview-draco = as formas neste arquivo estão comprimidas, e este leitor não abre isso
+# POR CIMA da figura, na última linha dela, e só quando alguma face não encheu.
+# Peça meio contornada é peça sobre a qual alguém precisa ser avisado — e o
+# painel é onde a pessoa está olhando.
+files-preview-outlined = { $n ->
+        [one] uma face em contorno
+       *[other] { $n } faces em contorno
+    }
 
 # THE PANEL'S LEFT COLUMN. Short nouns, and short on purpose: the column is as
 # wide as the widest label here, so a needless word costs every other row.
@@ -1422,10 +1455,32 @@ files-fact-application = feito com
 files-fact-designer = designer
 files-fact-licence = licença
 files-fact-created = criado em
+files-fact-schema = escrito conforme
+files-fact-source-name = nome de origem
+files-fact-solids = sólidos
+files-fact-shells = cascas
+files-fact-faces = faces
+files-fact-edges = arestas
+files-fact-outlined = faces sem preenchimento
 
 files-value-stl-binary = STL, em bytes
 files-value-stl-ascii = STL, em palavras
 files-value-three-mf = 3MF
+files-value-obj = OBJ
+# O mesmo formato escrito de dois jeitos, e qual dos dois decide se o arquivo
+# abre num editor de texto. O painel diz, pela mesma razão que diz do STL.
+files-value-ply-ascii = PLY, em palavras
+files-value-ply-binary = PLY, em bytes
+files-value-off = OFF
+files-value-gltf = glTF
+files-value-glb = glTF, em um arquivo só
+files-value-collada = COLLADA
+files-value-amf = AMF
+files-value-step = STEP
+files-value-iges = IGES
+# NÃO é medida. A unidade do glTF é o metro pela especificação dele, e o
+# arquivo não diz nada — então o painel diz de onde veio o número.
+files-value-unit-by-convention = metro, pelo formato
 files-value-count = { $n }
 # AS MEDIDAS SÃO SEMPRE EM MILÍMETROS. Um 3MF pode declarar polegadas ou
 # metros e o leitor converte na entrada, então esta unidade não é um palpite.

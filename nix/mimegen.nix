@@ -125,10 +125,69 @@ let
       '';
       installPhase = "true";
     };
+  # THE SECOND NEGATIVE FIXTURE, for the `prefer` block.
+  #
+  # That block settles which of two types wins a name they both claim, and it
+  # does so by REMOVING the loser's glob — so when it works, nothing about the
+  # table says it is there. The only way to know the guard still guards is to
+  # break the row on purpose and watch the build refuse.
+  #
+  # This one names a loser that does not claim the pattern, which is what
+  # happens the day upstream drops the ambiguity: the row would silently stop
+  # applying, and a row that looks deliberate and does nothing is the failure
+  # this repository refuses everywhere else.
+  preferenceFixture =
+    let
+      broken = writeText "mime-glyphs-stale-prefer.json" (
+        builtins.toJSON (
+          let
+            t = import mimeTableFile;
+          in
+          t
+          // {
+            prefer = map (r: r // { over = "application/pdf"; }) t.prefer;
+          }
+        )
+      );
+    in
+    stdenvNoCC.mkDerivation {
+      name = "ronoctua-mimedb-stale-prefer";
+      nativeBuildInputs = [ python3 ];
+      dontUnpack = true;
+      dontConfigure = true;
+      buildPhase = ''
+        runHook preBuild
+        # NO PIPE, for the reason the fixture above gives.
+        set +e
+        python3 ${./scripts/gen-mimedb.py} \
+          --mime-dir ${shared-mime-info}/share/mime \
+          --glyphs ${broken} \
+          --icons ${glyphdb.db}/icons.json \
+          --out /dev/null \
+          --version ${version} > output.txt 2>&1
+        rc=$?
+        set -e
+        cat output.txt
+        if [ "$rc" = 0 ]; then
+          echo "ERROR: the generator ACCEPTED a `prefer` row whose loser does not" >&2
+          echo "      claim the pattern. The row would apply to nothing and say so" >&2
+          echo "      to nobody." >&2
+          exit 1
+        fi
+        grep -q "prefer" output.txt || {
+          echo "ERROR: it failed for another reason; the message does not name `prefer`" >&2
+          exit 1
+        }
+        mkdir -p $out
+        echo "OK: it refused a stale preference, and said which pattern" > $out/verdict
+        runHook postBuild
+      '';
+      installPhase = "true";
+    };
 in
 base
 // {
-  inherit negativeFixture;
+  inherit negativeFixture preferenceFixture;
   # What the check compares against `share/mime/version`.
   pinnedVersion = version;
 }

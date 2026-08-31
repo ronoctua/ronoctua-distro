@@ -120,6 +120,26 @@ pub enum Refusal {
     /// on the owner's machine was 0.21 s, so this one means something is
     /// wrong, not that the file is large.
     TimedOut,
+    /// The file is INTACT and this reader is not equipped for it. Carries the
+    /// text key of the WHOLE sentence, not an argument to a general one.
+    ///
+    /// # Why this is not `Failed`
+    ///
+    /// Because `Failed`'s sentence says the file may be damaged, and a glTF
+    /// whose meshes are Draco-compressed is a perfectly good file that a
+    /// reader without a Draco decoder cannot open. Telling somebody their file
+    /// is broken when it is not sends them to repair a thing that is fine —
+    /// and the alternative, drawing the parts that ARE readable, would show
+    /// half a model with nothing saying so.
+    ///
+    /// # Why the WHOLE sentence and not a `{what}` argument
+    ///
+    /// Because both sites that render a refusal call `t_with(key, args)` with
+    /// the arguments as PLAIN STRINGS. A key passed as an argument would be
+    /// substituted un-translated and `files-value-draco` would appear on
+    /// screen — invariant 8 broken by the argument instead of by the sentence.
+    /// One key per case costs one line in each `.ftl` and cannot do that.
+    Unsupported(&'static str),
 }
 
 impl Refusal {
@@ -135,6 +155,7 @@ impl Refusal {
             Self::TooBig(_) => key::PREVIEW_TOO_BIG,
             Self::Failed => key::PREVIEW_FAILED,
             Self::TimedOut => key::PREVIEW_SLOW,
+            Self::Unsupported(sentence) => sentence,
         }
     }
 
@@ -142,9 +163,12 @@ impl Refusal {
     #[must_use]
     pub fn args(&self) -> Vec<(&'static str, String)> {
         match self {
-            Self::Nothing | Self::Failed | Self::NotText | Self::Empty | Self::Unreadable => {
-                Vec::new()
-            }
+            Self::Nothing
+            | Self::Failed
+            | Self::NotText
+            | Self::Empty
+            | Self::Unreadable
+            | Self::Unsupported(_) => Vec::new(),
             Self::Missing(variable) => {
                 vec![("program", tools::program_of(variable))]
             }
@@ -359,6 +383,10 @@ pub mod key {
     pub const PREVIEW_FAILED: &str = "files-preview-failed";
     /// It ran past `{ $seconds }` seconds and was stopped.
     pub const PREVIEW_SLOW: &str = "files-preview-slow";
+    /// The meshes in this glTF are Draco-compressed and this reader has no
+    /// Draco decoder. A WHOLE sentence and not an argument — see
+    /// [`crate::Refusal::Unsupported`].
+    pub const PREVIEW_DRACO: &str = "files-preview-draco";
 
     /// Label: how many pixels across and down.
     pub const FACT_DIMENSIONS: &str = "files-fact-dimensions";
@@ -428,10 +456,12 @@ pub mod key {
     /// Value: one page, or `{ $n }` pages.
     pub const VALUE_PAGES: &str = "files-value-pages";
 
-    // THE SHAPE INSIDE A MESH FILE. Fifteen labels and nine values, and every
+    // THE SHAPE INSIDE A 3D FILE. Twenty labels and twenty values, and every
     // one of them is a row that only appears when the file answers it — a
-    // fact with no answer is absent, never a row saying "unknown".
-    /// Which of the mesh formats this turned out to be.
+    // fact with no answer is absent, never a row saying "unknown". That rule
+    // is what lets ONE panel answer for a triangle soup and for a boundary
+    // representation, which share half of these and not the other half.
+    /// Which of the 3D formats this turned out to be.
     pub const FACT_FORMAT: &str = "files-fact-format";
     /// The unit a 3MF declares its numbers in.
     pub const FACT_UNIT: &str = "files-fact-unit";
@@ -461,6 +491,21 @@ pub mod key {
     pub const FACT_LICENCE: &str = "files-fact-licence";
     /// When the file says it was made.
     pub const FACT_CREATED: &str = "files-fact-created";
+    /// Which application protocol a STEP file was written against.
+    pub const FACT_SCHEMA: &str = "files-fact-schema";
+    /// The name the file carried when it was written, which is not the name it
+    /// has now — the one thing a copied CAD file still remembers.
+    pub const FACT_SOURCE_NAME: &str = "files-fact-source-name";
+    /// How many solids a boundary representation holds.
+    pub const FACT_SOLIDS: &str = "files-fact-solids";
+    /// How many shells.
+    pub const FACT_SHELLS: &str = "files-fact-shells";
+    /// How many trimmed faces.
+    pub const FACT_FACES: &str = "files-fact-faces";
+    /// How many edges.
+    pub const FACT_EDGES: &str = "files-fact-edges";
+    /// How many faces are drawn as an outline rather than filled.
+    pub const FACT_OUTLINED: &str = "files-fact-outlined";
 
     /// Value: an STL written as bytes.
     pub const VALUE_STL_BINARY: &str = "files-value-stl-binary";
@@ -468,6 +513,30 @@ pub mod key {
     pub const VALUE_STL_ASCII: &str = "files-value-stl-ascii";
     /// Value: a 3MF package.
     pub const VALUE_THREE_MF: &str = "files-value-three-mf";
+    /// Value: a Wavefront OBJ.
+    pub const VALUE_OBJ: &str = "files-value-obj";
+    /// Value: a PLY written as words.
+    pub const VALUE_PLY_ASCII: &str = "files-value-ply-ascii";
+    /// Value: a PLY written as bytes.
+    pub const VALUE_PLY_BINARY: &str = "files-value-ply-binary";
+    /// Value: an OFF.
+    pub const VALUE_OFF: &str = "files-value-off";
+    /// Value: a glTF written as JSON.
+    pub const VALUE_GLTF: &str = "files-value-gltf";
+    /// Value: a glTF written as one binary container.
+    pub const VALUE_GLB: &str = "files-value-glb";
+    /// Value: a COLLADA document.
+    pub const VALUE_COLLADA: &str = "files-value-collada";
+    /// Value: an AMF.
+    pub const VALUE_AMF: &str = "files-value-amf";
+    /// Value: a STEP part-21 file.
+    pub const VALUE_STEP: &str = "files-value-step";
+    /// Value: an IGES file.
+    pub const VALUE_IGES: &str = "files-value-iges";
+    /// Value: the unit is the format's convention and not a measurement.
+    pub const VALUE_UNIT_BY_CONVENTION: &str = "files-value-unit-by-convention";
+    /// The sentence over a preview whose piece is only partly filled.
+    pub const PREVIEW_OUTLINED: &str = "files-preview-outlined";
     /// Value: a plain count, `{ $n }`, grouped by the language.
     pub const VALUE_COUNT: &str = "files-value-count";
     /// Value: `{ $w } x { $d } x { $h }` in the file's unit.
@@ -482,7 +551,7 @@ pub mod key {
     pub const VALUE_MESH_OPEN: &str = "files-value-mesh-open";
 
     /// Every key this crate can produce, for the check that keeps them honest.
-    pub const ALL: [&str; 63] = [
+    pub const ALL: [&str; 84] = [
         NO_PREVIEW,
         PREVIEW_NOT_TEXT,
         PREVIEW_EMPTY,
@@ -491,10 +560,12 @@ pub mod key {
         PREVIEW_TOO_BIG,
         PREVIEW_FAILED,
         PREVIEW_SLOW,
+        PREVIEW_DRACO,
         FACT_DIMENSIONS,
         FACT_DURATION,
         FACT_CONTAINER,
         FACT_VIDEO,
+        FACT_MOTION,
         FACT_AUDIO,
         FACT_RATE,
         FACT_SAMPLING,
@@ -537,9 +608,28 @@ pub mod key {
         FACT_DESIGNER,
         FACT_LICENCE,
         FACT_CREATED,
+        FACT_SCHEMA,
+        FACT_SOURCE_NAME,
+        FACT_SOLIDS,
+        FACT_SHELLS,
+        FACT_FACES,
+        FACT_EDGES,
+        FACT_OUTLINED,
         VALUE_STL_BINARY,
         VALUE_STL_ASCII,
         VALUE_THREE_MF,
+        VALUE_OBJ,
+        VALUE_PLY_ASCII,
+        VALUE_PLY_BINARY,
+        VALUE_OFF,
+        VALUE_GLTF,
+        VALUE_GLB,
+        VALUE_COLLADA,
+        VALUE_AMF,
+        VALUE_STEP,
+        VALUE_IGES,
+        VALUE_UNIT_BY_CONVENTION,
+        PREVIEW_OUTLINED,
         VALUE_COUNT,
         VALUE_BOX,
         VALUE_CUBIC_CENTIMETRES,
@@ -567,6 +657,7 @@ mod tests {
             Refusal::TooBig(20_000_001),
             Refusal::Failed,
             Refusal::TimedOut,
+            Refusal::Unsupported(key::PREVIEW_DRACO),
         ];
         for r in &all {
             assert!(!r.key().is_empty(), "{r:?} came with no key");

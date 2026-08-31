@@ -204,10 +204,13 @@
       mime = "application/pgp-keys";
       token = "key";
     }
-    # THE TWO SHAPES. Both are in the database and both are generically
+    # THE SHAPES THE DATABASE ALREADY KNOWS. All six are generically
     # `image-x-generic`, so without these a `.stl` wears the photograph's
     # glyph — correct by freedesktop's lights and useless in a listing, which
     # is exactly what this block is for.
+    #
+    # The five the database does NOT know are in `ours`, further down, and the
+    # generator refuses to let a type appear in both.
     {
       mime = "model/stl";
       token = "mesh";
@@ -215,6 +218,48 @@
     {
       mime = "model/3mf";
       token = "mesh";
+    }
+    {
+      mime = "model/obj";
+      token = "mesh";
+    }
+    {
+      mime = "model/gltf+json";
+      token = "mesh";
+    }
+    {
+      mime = "model/gltf-binary";
+      token = "mesh";
+    }
+    {
+      mime = "model/iges";
+      token = "mesh";
+    }
+  ];
+
+  # WHEN TWO TYPES CLAIM THE SAME NAME AND UPSTREAM DOES NOT DECIDE.
+  #
+  # `globs2` has two rows for `*.obj` at the same weight — `application/x-tgif`
+  # and `model/obj` — and `mime::by_name` keeps the FIRST of an equal pair, so
+  # a `.obj` on this machine resolved to a 1990s X11 drawing program's document
+  # and got no preview, no facts and the neutral glyph. Neither `exact` nor
+  # `ours` can fix that: `exact` decides the icon and nothing else, and an
+  # `ours` row joins the list at the END with the same weight 50 and loses the
+  # same tie.
+  #
+  # WHAT THIS DOES IS REMOVE THE LOSER'S GLOB, and not raise the winner's
+  # weight. Raising it would also beat a future claimant of HIGHER weight,
+  # which is more than "TGIF does not get `.obj`" means.
+  #
+  # AND IT REFUSES TO GO STALE. The generator fails when either type is absent,
+  # when either does not actually claim that pattern, or when their weights
+  # already differ — the last because upstream would then have decided and this
+  # row would be doing nothing while looking deliberate.
+  prefer = [
+    {
+      glob = "*.obj";
+      mime = "model/obj";
+      over = "application/x-tgif";
     }
   ];
 
@@ -275,6 +320,64 @@
       glob = "*.zig";
       under = "text/plain";
       token = "code";
+    }
+
+    # THE FIVE 3D FORMATS THE DATABASE HAS NO TYPE FOR.
+    #
+    # Checked against the pinned `globs2`: not one of `*.ply`, `*.off`,
+    # `*.dae`, `*.amf`, `*.step` or `*.stp` has a single claimant upstream. The
+    # day one of them gains a type, the generator refuses this row by name and
+    # says so — which is the behaviour wanted, because the row would then be a
+    # second answer to a question the database had started answering.
+    #
+    # `model/vnd.collada+xml` is COLLADA's registered name, so it is used
+    # rather than an `x-` one invented here: what is missing upstream is the
+    # entry, not the name.
+    #
+    # `model/x-amf` and not `application/x-amf`, which Adobe's Action Message
+    # Format has had for twenty years.
+    {
+      mime = "model/x-ply";
+      glob = "*.ply";
+      # A PLY may be words or bytes under the same extension, and the header
+      # is what says which — so the honest parent is "some bytes", not text.
+      under = "application/octet-stream";
+      token = "mesh";
+    }
+    {
+      mime = "model/x-off";
+      glob = "*.off";
+      under = "text/plain";
+      token = "mesh";
+    }
+    {
+      mime = "model/vnd.collada+xml";
+      glob = "*.dae";
+      under = "application/xml";
+      token = "mesh";
+    }
+    {
+      mime = "model/x-amf";
+      glob = "*.amf";
+      # Same argument as the PLY: the specification allows the file to be a zip
+      # OR the bare XML, under one extension.
+      under = "application/octet-stream";
+      token = "mesh";
+    }
+    # STEP, under BOTH of its extensions. It is plain text, and saying so is
+    # what lets the preview fall back to showing the source if the geometry
+    # ever refuses.
+    {
+      mime = "model/step";
+      glob = "*.step";
+      under = "text/plain";
+      token = "mesh";
+    }
+    {
+      mime = "model/step";
+      glob = "*.stp";
+      under = "text/plain";
+      token = "mesh";
     }
   ];
 }

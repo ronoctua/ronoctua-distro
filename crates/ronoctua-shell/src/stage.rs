@@ -12,7 +12,7 @@
 //! parts that are written out, and the rest is deliberately the same shape so
 //! that reading one teaches the other.
 //!
-//! # Why the mesh lives HERE and not in the answer
+//! # Why the body lives HERE and not in the answer
 //!
 //! Because it is large and the answer is small. The 3DBenchy's 225 154
 //! triangles are eight megabytes of positions, and `files::Looked` is `Box`ed,
@@ -25,11 +25,16 @@
 //!
 //! Keeping it also means the ONE thing a pose change must not do is re-read the
 //! file, and `Turn::same_file` is where that is decided.
+//!
+//! What is held is a [`Body`] and not a mesh: two of the eleven formats hold
+//! no triangle at all — a STEP and an IGES are boundary representations and
+//! come back as edges — and the difference lives inside the rasteriser, not
+//! here.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ronoctua_inspect::mesh::Mesh;
+use ronoctua_inspect::mesh::Body;
 use ronoctua_inspect::solid::{Paint, Pose};
 use smithay_client_toolkit::reexports::calloop;
 
@@ -151,7 +156,7 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
         .name("ronoctua-stage".to_owned())
         .spawn(move || {
             // WHAT WAS LAST READ, kept for as long as the cursor stays on it.
-            let mut held: Option<(Turn, Mesh)> = None;
+            let mut held: Option<(Turn, Body)> = None;
             while let Ok(order) = orders.recv() {
                 // ONLY THE NEWEST. A drag queues an order per pointer event and
                 // every one behind the last is an angle nobody is looking at
@@ -170,7 +175,7 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                 // makes turning cheap.
                 if !held.as_ref().is_some_and(|(t, _)| t.same_file(&turn)) {
                     match ronoctua_inspect::mesh::read(&turn.path, turn.mime) {
-                        Ok(read) => held = Some(((*turn).clone(), read.mesh)),
+                        Ok(read) => held = Some(((*turn).clone(), read.body)),
                         Err(why) => {
                             held = None;
                             let _ = out.send(Beat::Trouble {
@@ -181,7 +186,7 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                         }
                     }
                 }
-                let Some((_, mesh)) = held.as_ref() else {
+                let Some((_, body)) = held.as_ref() else {
                     continue;
                 };
                 // ASKED AGAIN AFTER THE READ. A big file takes a tenth of a
@@ -192,7 +197,7 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                     continue;
                 }
                 let rgba = ronoctua_inspect::solid::draw(
-                    mesh,
+                    body,
                     turn.pose,
                     turn.width,
                     turn.height,
