@@ -1401,6 +1401,42 @@ files-value-pages = { $n ->
        *[other] { $n } páginas
     }
 
+# === A forma dentro de um arquivo de malha — `.stl` e `.3mf` ===============
+#
+# O gerenciador lê os triângulos e os gira; estas são as linhas que o painel de
+# infos põe ao lado da figura. São o que alguém prestes a IMPRIMIR a peça lê:
+# que tamanho tem, quanto material leva e se a superfície é fechada — que é a
+# primeira pergunta de um fatiador e aquela sobre a qual ele recusa.
+files-fact-format = formato
+files-fact-unit = unidade
+files-fact-objects = objetos
+files-fact-triangles = triângulos
+files-fact-vertices = vértices
+files-fact-bounds = tamanho
+files-fact-volume = volume
+files-fact-area = superfície
+files-fact-watertight = superfície fechada
+files-fact-flipped = faces invertidas
+files-fact-degenerate = triângulos chatos
+files-fact-application = feito com
+files-fact-designer = designer
+files-fact-licence = licença
+files-fact-created = criado em
+
+files-value-stl-binary = STL, em bytes
+files-value-stl-ascii = STL, em palavras
+files-value-three-mf = 3MF
+files-value-count = { $n }
+# AS MEDIDAS SÃO SEMPRE EM MILÍMETROS. Um 3MF pode declarar polegadas ou
+# metros e o leitor converte na entrada, então esta unidade não é um palpite.
+files-value-box = { $w } × { $d } × { $h } mm
+files-value-cubic-centimetres = { $n } cm³
+files-value-square-centimetres = { $n } cm²
+files-value-mesh-closed = sim
+# NÃO "não". O que dá para agir é quantas arestas estão abertas, porque é o
+# número que uma ferramenta de reparo relata e que muda enquanto ela trabalha.
+files-value-mesh-open = não — { $n } arestas abertas
+
 # === A fila de transferências — `LEADER t` =================================
 #
 # Sete operações iam para uma thread sem dizer nada na tela: colar, apagar,

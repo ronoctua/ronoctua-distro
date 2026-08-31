@@ -63,6 +63,7 @@ mod network;
 mod notifications;
 mod notifications_window;
 mod paint;
+mod stage;
 mod surface;
 mod syncthing;
 mod terminal;

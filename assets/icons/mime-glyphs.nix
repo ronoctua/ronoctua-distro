@@ -204,6 +204,18 @@
       mime = "application/pgp-keys";
       token = "key";
     }
+    # THE TWO SHAPES. Both are in the database and both are generically
+    # `image-x-generic`, so without these a `.stl` wears the photograph's
+    # glyph — correct by freedesktop's lights and useless in a listing, which
+    # is exactly what this block is for.
+    {
+      mime = "model/stl";
+      token = "mesh";
+    }
+    {
+      mime = "model/3mf";
+      token = "mesh";
+    }
   ];
 
   # WHAT FREEDESKTOP DOES NOT KNOW, AND THIS MACHINE DOES.

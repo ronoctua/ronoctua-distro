@@ -137,6 +137,36 @@
     # every `configure`.
     panelPixels = 512;
 
+    # WHERE THE LIGHT ON A SHAPE COMES FROM, in whole DEGREES.
+    #
+    # Degrees and integers because that is what this file can carry — a colour
+    # is `0xRRGGBBAA` and a space is a `u16` — and a direction is neither. The
+    # alternative was a fourth kind of token, which means a change to the
+    # generator, to `tokens.rs` and to `tokens.wit`, all three of which
+    # `invalid-token-fails-build` compares. Two integers and a sine in Rust is
+    # the smaller thing, and it is still a token (invariant 9).
+    #
+    # The angles are in CAMERA space, so the light never moves when the piece
+    # does: a light fixed in the world puts a piece in its own shadow the moment
+    # somebody turns it round, and the gesture meant to show the other side
+    # would show a silhouette.
+    #
+    # Azimuth is anticlockwise from the right, so 155 is up and to the LEFT —
+    # where light comes from in every drawing anybody has ever been taught to
+    # make, and the reason a right-lit object looks like a photograph of a
+    # product while a left-lit one looks like a thing on a table.
+    meshLightAzimuth = 155;
+    # Above the horizon. High enough that the top faces are the bright ones,
+    # which is what says which way is up; not so high that the sides go flat.
+    meshLightElevation = 40;
+
+    # HOW MUCH COLOUR SURVIVES IN FULL SHADOW, in hundredths.
+    #
+    # Not zero. A face turned away should be dark and still be THERE, because
+    # its edge against the next face is what shows the shape; at zero the two
+    # merge into one black blob and a hollow piece looks solid.
+    meshShadow = 22;
+
     # FROM THIS WIDTH ON, THE TWO PANELS SIT ON THE RIGHT — one column each.
     # Below it they do not disappear: they move to a short strip along the
     # BOTTOM, side by side. The owner's sentence is binary, and so is this

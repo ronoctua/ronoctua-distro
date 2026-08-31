@@ -54,6 +54,21 @@ rustix = { workspace = true, features = [ "event" ] }
 # buys and what it costs.
 image.workspace = true
 resvg.workspace = true
+# THE TWO A 3MF NEEDS, and neither is a new store path.
+#
+# A 3MF is a zip of XML. `flate2` is already in the lock under `png` and is
+# pure Rust through `miniz_oxide`, and `roxmltree` is already built under
+# `usvg`, which this crate depends on one line up. Naming them here costs
+# compile time that was already being paid and adds nothing to the closure —
+# which is the bar the workspace's own `image` line sets, and what
+# `files-closure-has-no-mime-db` measures.
+#
+# What is deliberately NOT here is a zip crate: walking a central directory and
+# inflating one member is two hundred lines, and a lock entry for that is a
+# dependency taken because it exists rather than because it is needed.
+flate2 = "1.1"
+roxmltree = "0.21"
+
 
 [lints]
 workspace = true

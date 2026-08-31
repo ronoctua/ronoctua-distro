@@ -4315,6 +4315,128 @@ exatamente a divergência que o arranjo de duas portas existe para impedir, ent�
 `Images` do `ronoctua-render` e o mesmo quadro texturizado, na mesma superfície. Não conseguir
 criá-lo custa a figura, e não a janela.
 
+### A prévia 3D — `.stl` e `.3mf`, e ela se deixa girar
+
+A pergunta que se leva a um arquivo 3D não é *como é isso*, é *como é isso do outro lado*. Uma
+imagem parada de um modelo responde metade; por isso a prévia de uma malha é a única do sistema que
+o teclado e o mouse MOVEM.
+
+#### Nada foi inventado no banco de tipos
+
+O `shared-mime-info` 2.4 que o flake pina já tem `model/stl` (glob `*.stl`) e `model/3mf` (glob
+`*.3mf`, com aresta de subclasse para `application/zip`) — e o gerador RECUSA pôr em `ours` um tipo
+que a base já conhece. A resolução também já funcionava: um STL binário não tem magic nenhum (a
+única regra do freedesktop é a palavra `solid`, que é a forma ASCII), então o sniff devolve `None` e
+`settled` fica com o nome; um 3MF sniffa `application/zip` e a base diz que ele DESCENDE disso, então
+os dois concordam e o nome, mais fino, vence. É a mesma figura que o `.dng` já tinha escrita.
+
+O que os dois ganharam foi glifo: ambos são `image-x-generic` para o freedesktop — correto e inútil
+numa coluna de trinta linhas, onde uma peça que se imprime fica indistinguível de uma fotografia.
+
+#### O leitor: o que decide a forma é ARITMÉTICA, nunca a primeira palavra
+
+Os oitenta bytes de cabeçalho de um STL binário são livres, e escritores põem qualquer coisa neles,
+`solid` inclusive. Quem decide é `84 + 50·n == len`. A normal gravada no arquivo é **ignorada e
+recalculada**: metade dos STL do mundo traz `0 0 0`, e uma normal que às vezes está certa é pior que
+nenhuma — a luz falha em ALGUMAS faces e parece defeito do renderizador.
+
+Um 3MF quase nunca tem a geometria em `3D/3dmodel.model`. A extensão *production* deixa a raiz
+carregar só `<components>` apontando outras partes por `p:path`, e os fatiadores usam isso: o arquivo
+do dono tem raiz de 1,5 KB e seus 21 386 triângulos numa parte embaixo. E tanto o componente quanto o
+`<build><item>` levam transformação — aquele arquivo escala Z por 1,808 —, então um leitor que as
+ignorasse desenharia a peça achatada sem nada dizendo por quê. As unidades viram MILÍMETROS na
+entrada: o desenho não se importa com escala, e o painel de infos é a razão inteira de isso importar.
+
+O ZIP é lido aqui, com `flate2`, e o teto é sobre o que SAI da descompressão — o único número que uma
+bomba de zip não pode mentir. Um leitor de ZIP de biblioteca seria uma entrada nova no lock para
+duzentas linhas.
+
+#### O rasterizador é em processo, e o fundo é TRANSPARENTE
+
+`pixels::from_svg` é o precedente: o resvg rasteriza NO tamanho, em processo, e monta um `Rgba` à
+mão. Um programa externo aqui seria a primeira biblioteca C que esta prévia precisou, e o
+`files-closure-has-no-mime-db` é quem diria isso.
+
+O fundo é transparente pela razão que a tarja do filme já registra: há UMA textura e DUAS portas, e o
+fundo de cada uma é um token diferente. E a luz é fixa em relação à CÂMERA — uma luz fixa no mundo
+põe a peça na própria sombra assim que alguém a vira, e o gesto que era para mostrar o outro lado
+mostra uma silhueta.
+
+**Medido**, para 512×384: 41 ms nos 225 154 triângulos do 3DBenchy e 14 ms num porta-velas de 21 386,
+dobrando com a peça ocupando o painel. É aritmética no preparo de cada triângulo, não memória —
+empacotar o framebuffer não valeu nada e passar as funções de aresta a incremento valeu 4×. **Faces
+de trás NÃO são descartadas**, e é o único lugar onde a velocidade foi recusada: medido em 1,5× (41
+ms para 33), e correto só numa malha cujas faces estão todas no mesmo sentido. Malha com faces
+invertidas existe, o `Sanity::flipped` as conta, e o que o descarte faz com uma dessas é abrir buracos
+nela.
+
+#### A thread é o `motion.rs` de novo, e a malha mora NELA
+
+Mesma forma e pelas mesmas razões escritas lá: `mpsc` na entrada, `calloop::channel` na saída, era
+atômica para abandonar um desenho no meio, drenagem até o mais novo, e **o quadro chegando é o
+relógio** — nenhum timer novo. Canal próprio, não o de `Report`, porque um arrasto emite um quadro a
+cada dezenas de milissegundos e nada disso é notícia sobre um diretório.
+
+A malha fica na thread, indexada pela chave do arquivo, e é isso que separa "arrastar é fluido" de
+"arrastar reabre 11 MB". `Looked` é `Box`ado, clonado e comparado pela porta: oito megabytes de
+posições passando por ali seriam oito megabytes comparados campo a campo.
+
+#### Os gestos, e por que as setas puras não giram
+
+Arrastar gira, a roda dá zoom — a figura já engolia a roda —, `S-<setas>` giram, `C-k`/`C-j` aproximam
+e afastam, `C-r` reenquadra. As setas PURAS continuam andando nos ARQUIVOS: o dono pediu isso
+explicitamente para a prévia larga, que é justamente onde uma peça fica boa de olhar.
+
+O arrasto **não** é um quarto `Axis`. `drag_to` inverte um trilho — uma fração, um eixo — e girar são
+dois deltas sem trilho nenhum; ele é um gesto da porta, ao lado do `dragging_section`.
+
+A direção do arrasto mora na `View::spin`, que fala em ONDE A MÃO FOI — `right` e `down` — e não em
+ângulos. O `solid::axes` põe a CÂMERA no `yaw`, então yaw maior anda com a câmera no anti-horário e
+tudo escorrega para a ESQUERDA na tela; um arrasto é o gesto contrário, a mão leva a peça JUNTO, e
+puxar para a esquerda tem de virá-la para a esquerda. As portas tinham o sinal ao contrário e o dono
+viu na tela. Uma convenção escrita em dois sítios de chamada e em nenhum lugar testável é uma
+convenção que sai invertida num deles — agora as teclas passam pela mesma função, e um teste compara
+o arrasto CONTRA a tecla.
+
+#### O teclado não repetia em porta nenhuma
+
+Segurar `S-<seta>` girava a peça uma vez e parava. A causa não era do 3D: as duas portas criavam o
+teclado com `get_keyboard`, e o SCTK só gera repetição para um criado com `get_keyboard_with_repeat`
+— então o `repeat_key`, escrito nas duas e documentado como *"segurar `j` anda na lista"*, era código
+morto, e **nenhuma tecla repetia em lugar nenhum deste shell**. O ritmo e o atraso são do
+COMPOSITOR, chegam como `RepeatInfo`, e nada aqui inventa nenhum dos dois.
+
+O SCTK entrega a repetição pelo CALLBACK e não pelo método, então as duas portas ganharam um `typed`
+por onde passam as duas entradas: uma repetição que tomasse outro caminho é uma tecla que faz algo
+ligeiramente diferente na segunda vez. E o rodapé teve de criar o `calloop` ANTES do roundtrip — é
+durante ele que o assento anuncia o teclado, e o `LoopHandle` precisa existir nessa hora.
+
+Isso custou dois defeitos que estavam ali desde antes. **O `shift` não chegava** em tecla que não é
+caractere: a regra escrita era "shift vem do keysym, porque o xkb já o aplicou", o que é verdade de um
+CARACTERE e de nada mais — `Shift+Left` é `Left`, e o modificador é o único lugar onde aquele shift
+existe. No rodapé o `discount` ainda o zerava por completo. Pego na tela: `S-<left>` subia um
+diretório. E **a textura de um quadro só era enviada para filme**: a porta perguntava `moving_frame`
+pelo nome, então a peça era desenhada, o log dizia que sim, e o painel ficava vazio. Agora as duas
+perguntam `live_frame` — "a figura que se redesenha" —, e a próxima coisa que se redesenhar não
+precisa de um terceiro sítio.
+
+#### Os fatos saem da MESMA leitura
+
+Um arquivo de cem megabytes lido duas vezes para manter as formas arrumadas são cem megabytes lidos
+duas vezes, então o hospedeiro lê a malha uma vez e usa a resposta para as duas coisas: os fatos, e
+saber que há algo para girar. Malha que não analisa é `Refusal::Failed` com frase, nunca uma espera
+sem fim por um quadro que não vem.
+
+A sanidade sai de ORDENAR as arestas e não de uma tabela de hash: a contagem é conhecida de antemão e
+grande, e a mesma lista ordenada responde "quantos vértices distintos" de graça. E as medidas saem em
+centímetros cúbicos porque 15 550 mm³ é um número de que ninguém tem noção e 15,6 cm³ é contra o que
+se compra um rolo de filamento.
+
+O `fluent-bundle` daqui **não localiza número nenhum** — medido, nos dois idiomas —, então uma medida
+entregue como float teria levado o ponto do Rust para o pt-BR. `Arg::Fraction` a formata onde o
+idioma é conhecido. `Arg::Number` não recebe esse tratamento de propósito: o Fluent escolhe ramo de
+plural nele, e um texto não tem ramo.
+
 ### Formatar — `LEADER s f`, e a mesma porta pelo menu da barra
 
 #### Por que é um buffer, e não linhas de menu

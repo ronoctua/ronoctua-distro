@@ -80,6 +80,20 @@ pub enum Arg<'a> {
     Text(&'a str),
     /// A count. This is the one that makes a plural pick the right branch.
     Number(i64),
+    /// A measurement, with a fraction.
+    ///
+    /// # Why it is not simply `Text`
+    ///
+    /// Because the character between the whole part and the fraction is the
+    /// LANGUAGE's, and a string carries whatever the code that formatted it
+    /// happened to write — a full stop, in Rust, in every language. A volume
+    /// of 15,6 cm³ reading `15.6` in pt-BR is the kind of wrong that nobody
+    /// files a report about and everybody notices.
+    ///
+    /// Separate from [`Arg::Number`] and not folded into it: that one exists
+    /// to make a plural pick its branch, and `1.0` is not the same question as
+    /// `1` when a selector asks.
+    Fraction(f64),
 }
 
 impl Texts {
@@ -178,9 +192,34 @@ impl Texts {
             match v {
                 Arg::Text(s) => fluent.set(*k, *s),
                 Arg::Number(n) => fluent.set(*k, *n),
+                // FORMATTED HERE, WHERE THE LANGUAGE IS. `fluent-bundle` is
+                // built without a number formatter — measured, not assumed:
+                // `225154` comes out ungrouped and `15.6` keeps its full stop
+                // in pt-BR — so handing it a float would have been a decimal
+                // separator chosen by Rust for every language on earth.
+                //
+                // A `Number` is deliberately NOT treated this way: Fluent
+                // selects a plural branch on it, and a string has no branch.
+                Arg::Fraction(n) => fluent.set(*k, self.decimal(*n)),
             }
         }
         self.format(key, fluent, args.is_empty())
+    }
+
+    /// One number with the separator this language writes.
+    ///
+    /// Two languages, two separators, and a table of two is the honest size of
+    /// the problem: this bundle ships `en-GB` and `pt-BR` and `face` refuses
+    /// anything else, so a third would fail to load long before it got here.
+    /// One decimal place, which is what every measurement this is used for
+    /// wants — a volume to a tenth of a cubic centimetre, a side to a tenth of
+    /// a millimetre.
+    fn decimal(&self, n: f64) -> String {
+        let plain = format!("{n:.1}");
+        if self.language.starts_with("pt") {
+            return plain.replace('.', ",");
+        }
+        plain
     }
 
     /// The half both public forms share.
@@ -269,5 +308,26 @@ mod tests {
                 "`{key}` came with an isolation mark"
             );
         }
+    }
+    #[test]
+    // THE DEFECT THIS CATCHES: believing `fluent-bundle` localises a number.
+    // It does not — measured here, in both languages — so a measurement handed
+    // over as a float would have carried Rust's full stop into pt-BR, where the
+    // separator is a comma. Nothing else in the bundle would have said so.
+    fn a_measurement_wears_the_separator_of_its_language() {
+        let en = Texts::fresh("en-GB").expect("en-GB");
+        let pt = Texts::fresh("pt-BR").expect("pt-BR");
+        let key = "files-value-cubic-centimetres";
+        assert!(
+            en.t_args(key, &[("n", Arg::Fraction(15.6))])
+                .contains("15.6"),
+            "en-GB should keep the full stop"
+        );
+        assert!(
+            pt.t_args(key, &[("n", Arg::Fraction(15.6))])
+                .contains("15,6"),
+            "pt-BR should use a comma: {}",
+            pt.t_args(key, &[("n", Arg::Fraction(15.6))])
+        );
     }
 }

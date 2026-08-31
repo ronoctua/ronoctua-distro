@@ -152,6 +152,29 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   a seção sob o ponteiro (a listagem é da PORTA; **figura** não rola, e engole).
   Barra lateral tem `side_offset` PRÓPRIO: linha `n` deixou de ser a linha `n`
   dela. **Clique SELECIONA; o segundo é que abre** — na listagem e na lateral.
+- **A prévia de `.stl` e `.3mf` GIRA** (`ronoctua-inspect`: `mesh` lê, `solid` desenha; `shell/stage.rs`
+  é a thread, molde do `motion.rs`). Os dois tipos JÁ existem no shared-mime-info e o gerador recusa
+  inventá-los; ganharam só glifo. **Binário ou ASCII é ARITMÉTICA** (`84+50n==len`) — cabeçalho de STL
+  binário pode começar com `solid` —, a normal do arquivo é ignorada e recalculada, e no 3MF a
+  geometria quase sempre está noutra parte (`p:path`) com transformação que MUDA a forma. Unidades
+  viram mm na entrada; teto sobre o que SAI da descompressão (bomba de zip). Rasterizador em
+  processo (precedente: `from_svg`), **fundo TRANSPARENTE** (uma textura, duas portas) e luz fixa na
+  CÂMERA. **41 ms** no Benchy de 225 mil triângulos; face de trás NÃO é descartada — vale 1,5×, e
+  abre buracos em malha com faces invertidas. A malha mora na THREAD (o `Looked` é comparado campo a
+  campo). Arrastar gira, roda dá zoom, `S-<setas>` giram, `C-k`/`C-j` zoom, `C-r` reenquadra; as setas
+  PURAS continuam andando nos ARQUIVOS. **A porta pergunta `live_frame`**, não `moving_frame`: só o
+  filme reenviava textura, e a peça era desenhada sem chegar à tela. **`shift` só vinha do keysym** —
+  certo para caractere, e `Shift+Left` é `Left`: subia um diretório. Fatos (formato, triângulos,
+  vértices, caixa, volume, área, malha fechada) saem da MESMA leitura; sanidade por arestas ORDENADAS.
+  O `fluent-bundle` não localiza número: `Arg::Fraction` formata onde o idioma é conhecido.
+  **Direção de arrasto é da `View::spin`**, que fala em ONDE A MÃO FOI (`right`/`down`): yaw maior
+  escorrega a peça para a ESQUERDA, então puxar para a esquerda é yaw MENOR — escrito nos dois sítios
+  de chamada, saiu invertido num deles.
+- **O teclado agora REPETE, e não repetia em porta nenhuma** — as duas criavam com `get_keyboard`, e o
+  SCTK só repete com `get_keyboard_with_repeat`; o `repeat_key` das duas era código morto e segurar
+  `j` nunca andou na lista. A repetição chega pelo CALLBACK, não pelo método, então cada porta tem um
+  `typed` por onde passam as duas entradas. O rodapé cria o `calloop` ANTES do roundtrip: é nele que o
+  assento anuncia o teclado e o `LoopHandle` já tem de existir. Ritmo e atraso são do COMPOSITOR.
 - **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `screenshot-path` do niri, que sem isso escrevia em `~/Pictures`). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-o` atravessa, `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**.
 - **Só o `ronoctua-disks` fala udisks2, e ele NÃO escreve regra polkit** — a do upstream já separa removível (`allow_active: yes`) de sistema (`auth_admin_keep`) pelo `HintSystem`, e uma nossa só poderia ALARGAR. **Não há agente polkit na sessão** (só `pkttyagent`, no resgate): toda chamada leva `auth.no_user_interaction`. E a razão é do DONO, não do desenho: ele nem sempre vê o pedido de digital, ou está longe do laptop — pedido não visto vira recusa no relatório, sobre algo que ninguém viu. **Nada que o sistema faça sozinho pode PERGUNTAR**, e volume de SISTEMA não oferece montar — manda ao terminal root. `HintIgnore` vira `quiet` e anda no `C-h` dos dotfiles. O `override` tira só o `xfsprogs` (538,3 → 343,2 MiB; 258 eram Python do `xfs_scrub`, e montar XFS é do KERNEL). Sinal do `ObjectManager` numa thread, mandando o `Rack` INTEIRO — o relógio do rodapé só bate com a vista aberta, e a janela não tem relógio nenhum.
 - **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC b s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.

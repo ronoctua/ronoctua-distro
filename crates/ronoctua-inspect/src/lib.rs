@@ -34,8 +34,10 @@
 #![forbid(unsafe_code)]
 
 pub mod facts;
+pub mod mesh;
 pub mod motion;
 pub mod pixels;
+pub mod solid;
 pub mod text;
 pub mod tools;
 
@@ -426,8 +428,61 @@ pub mod key {
     /// Value: one page, or `{ $n }` pages.
     pub const VALUE_PAGES: &str = "files-value-pages";
 
+    // THE SHAPE INSIDE A MESH FILE. Fifteen labels and nine values, and every
+    // one of them is a row that only appears when the file answers it — a
+    // fact with no answer is absent, never a row saying "unknown".
+    /// Which of the mesh formats this turned out to be.
+    pub const FACT_FORMAT: &str = "files-fact-format";
+    /// The unit a 3MF declares its numbers in.
+    pub const FACT_UNIT: &str = "files-fact-unit";
+    /// How many objects the build places.
+    pub const FACT_OBJECTS: &str = "files-fact-objects";
+    /// How many triangles the surface has.
+    pub const FACT_TRIANGLES: &str = "files-fact-triangles";
+    /// How many distinct corners, after welding.
+    pub const FACT_VERTICES: &str = "files-fact-vertices";
+    /// How big the piece is.
+    pub const FACT_BOUNDS: &str = "files-fact-bounds";
+    /// How much material it encloses.
+    pub const FACT_VOLUME: &str = "files-fact-volume";
+    /// How much surface it has.
+    pub const FACT_AREA: &str = "files-fact-area";
+    /// Whether the surface is closed.
+    pub const FACT_WATERTIGHT: &str = "files-fact-watertight";
+    /// How many faces point the wrong way.
+    pub const FACT_FLIPPED: &str = "files-fact-flipped";
+    /// How many triangles have no area.
+    pub const FACT_DEGENERATE: &str = "files-fact-degenerate";
+    /// The program that wrote the file.
+    pub const FACT_APPLICATION: &str = "files-fact-application";
+    /// Who designed the piece.
+    pub const FACT_DESIGNER: &str = "files-fact-designer";
+    /// The licence the file declares.
+    pub const FACT_LICENCE: &str = "files-fact-licence";
+    /// When the file says it was made.
+    pub const FACT_CREATED: &str = "files-fact-created";
+
+    /// Value: an STL written as bytes.
+    pub const VALUE_STL_BINARY: &str = "files-value-stl-binary";
+    /// Value: an STL written as words.
+    pub const VALUE_STL_ASCII: &str = "files-value-stl-ascii";
+    /// Value: a 3MF package.
+    pub const VALUE_THREE_MF: &str = "files-value-three-mf";
+    /// Value: a plain count, `{ $n }`, grouped by the language.
+    pub const VALUE_COUNT: &str = "files-value-count";
+    /// Value: `{ $w } x { $d } x { $h }` in the file's unit.
+    pub const VALUE_BOX: &str = "files-value-box";
+    /// Value: `{ $n }` cubic centimetres.
+    pub const VALUE_CUBIC_CENTIMETRES: &str = "files-value-cubic-centimetres";
+    /// Value: `{ $n }` square centimetres.
+    pub const VALUE_SQUARE_CENTIMETRES: &str = "files-value-square-centimetres";
+    /// Value: the surface is closed.
+    pub const VALUE_MESH_CLOSED: &str = "files-value-mesh-closed";
+    /// Value: the surface has `{ $n }` open edges.
+    pub const VALUE_MESH_OPEN: &str = "files-value-mesh-open";
+
     /// Every key this crate can produce, for the check that keeps them honest.
-    pub const ALL: [&str; 39] = [
+    pub const ALL: [&str; 63] = [
         NO_PREVIEW,
         PREVIEW_NOT_TEXT,
         PREVIEW_EMPTY,
@@ -467,6 +522,30 @@ pub mod key {
         VALUE_COORDINATES,
         VALUE_PLACE_WITHHELD,
         VALUE_PAGES,
+        FACT_FORMAT,
+        FACT_UNIT,
+        FACT_OBJECTS,
+        FACT_TRIANGLES,
+        FACT_VERTICES,
+        FACT_BOUNDS,
+        FACT_VOLUME,
+        FACT_AREA,
+        FACT_WATERTIGHT,
+        FACT_FLIPPED,
+        FACT_DEGENERATE,
+        FACT_APPLICATION,
+        FACT_DESIGNER,
+        FACT_LICENCE,
+        FACT_CREATED,
+        VALUE_STL_BINARY,
+        VALUE_STL_ASCII,
+        VALUE_THREE_MF,
+        VALUE_COUNT,
+        VALUE_BOX,
+        VALUE_CUBIC_CENTIMETRES,
+        VALUE_SQUARE_CENTIMETRES,
+        VALUE_MESH_CLOSED,
+        VALUE_MESH_OPEN,
     ];
 }
 

@@ -49,6 +49,25 @@
     # about. Four fifths keeps the film visible through it and the glyphs
     # legible over it.
     transport = "0x121212CC";
+
+    # THE MATERIAL A SHAPE IS DRAWN IN — `.stl` and `.3mf`.
+    #
+    # One colour and not a palette: the file carries no colours (neither format
+    # has any here), so any variety would be invented, and a preview that
+    # invents is a preview that lies about the piece. What shows the form is the
+    # shading, which is why this is near-white rather than mid-grey — the darker
+    # the material, the less range the light has left to work in, and a piece
+    # whose far faces are already black has no silhouette between them.
+    #
+    # Warm rather than neutral, by a hair, because the panel's own surface is
+    # cold and a shape that shares its temperature reads as part of the
+    # background rather than as an object sitting in it.
+    #
+    # There is NO background token beside it: what is behind the shape is
+    # transparent, so each door's own surface shows through — the same argument
+    # the film's letterbox already had to make, and for the same reason. One
+    # texture, two doors.
+    mesh = "0xD8D4CEFF";
   };
 
   # -------------------------------------------------------------------

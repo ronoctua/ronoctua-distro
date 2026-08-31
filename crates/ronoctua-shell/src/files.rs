@@ -325,6 +325,22 @@ const THEATRE_OFF: &str = ronoctua_i18n::key::FILES_THEATRE_OFF;
 /// be worth a key press and short enough to be held down.
 const SEEK_STEP: f64 = 5.0;
 
+/// How far one key turns a shape, in radians.
+///
+/// About nine degrees: forty presses go all the way round, which is few enough
+/// to be worth holding the key down for and many enough to stop on the face
+/// one wanted. The pointer is the coarse gesture and this is the fine one.
+const SPIN_STEP: f32 = 0.15;
+
+/// How much one key moves a shape nearer or further.
+const ZOOM_STEP: f32 = 1.25;
+
+/// How much one notch of the wheel does.
+///
+/// Smaller than the key's, because a wheel sends several notches for one flick
+/// of a finger and the same factor would cross the whole range in one gesture.
+const WHEEL_ZOOM: f32 = 1.12;
+
 /// The most lines a panel may ASK the region for.
 ///
 /// Asking is not getting — the footer's ceiling is `expansion.maxLines` and a
@@ -2558,6 +2574,24 @@ pub struct View {
     /// A wish and not a state: [`View::whole`] is what the doors read, and it
     /// answers `false` the moment there is no film to give the region TO.
     theatre: bool,
+    /// Where a shape is being looked at from.
+    ///
+    /// Beside `transport` and for the same reason: it is what was ASKED for,
+    /// not what arrived. Reset when the cursor lands on another file, so
+    /// coming back to a piece shows it the way it is first shown rather than
+    /// at the angle somebody left a different piece at.
+    pose: ronoctua_inspect::solid::Pose,
+    /// The last view of a shape that arrived.
+    turned: Option<crate::stage::Frame>,
+    /// The last order the stage was given.
+    ///
+    /// [`View::wants_turn`] is the difference between this and what SHOULD be
+    /// drawn — the same one comparison in one place that `told` is for the
+    /// film, and for the same reason: enumerating the ways a picture can need
+    /// redrawing is how a case gets missed.
+    told_turn: Option<crate::stage::Turn>,
+    /// What went wrong with the shape, when something did.
+    shape_trouble: Option<ronoctua_inspect::Refusal>,
     /// Which section the pointer is resting in.
     ///
     /// What decides the transport's buttons are drawn — they appear under the
@@ -2685,6 +2719,20 @@ pub struct Looked {
     pub why: Option<ronoctua_inspect::Refusal>,
     /// What the tools said the file is.
     pub facts: Vec<ronoctua_inspect::facts::Fact>,
+    /// The type this was decided to be, already through `settled`.
+    ///
+    /// Carried rather than worked out again: `wants_look` has just resolved it
+    /// and the stage needs the same answer, and two `examined` calls on one
+    /// file is two chances for them to differ.
+    pub mime: &'static str,
+    /// Whether this is a shape the manager turns.
+    ///
+    /// Set only when the mesh actually READ: a `.stl` that is damaged carries
+    /// `false` and a `why` instead, so the panel says what is wrong rather
+    /// than waiting for ever for a frame that is not coming. It is the same
+    /// distinction `moving` makes — the door starts the thread, this only
+    /// says whether there is one to start.
+    pub turns: bool,
 }
 
 /// An action's technical answer, as an [`Explanation`] with nothing to fill in.
@@ -2732,10 +2780,18 @@ fn fact_said(value: &ronoctua_inspect::facts::Value, texts: &ronoctua_i18n::Text
             let crossing: Vec<(&str, Arg<'_>)> = args
                 .iter()
                 .map(|(k, v)| {
-                    if *k == "n"
-                        && let Ok(n) = v.parse::<i64>()
-                    {
+                    // WHICH NAMES CARRY NUMBERS, written down. `n` is the
+                    // count a plural selects on; `w`, `d` and `h` are the
+                    // three sides of a shape's box. Everything else is data —
+                    // a camera model, a date, a licence — and handing THOSE to
+                    // a number formatter would group a year into `2.025`.
+                    if !matches!(*k, "n" | "w" | "d" | "h") {
+                        return (*k, Arg::Text(v.as_str()));
+                    }
+                    if let Ok(n) = v.parse::<i64>() {
                         (*k, Arg::Number(n))
+                    } else if let Ok(n) = v.parse::<f64>() {
+                        (*k, Arg::Fraction(n))
                     } else {
                         (*k, Arg::Text(v.as_str()))
                     }
@@ -2801,6 +2857,10 @@ impl View {
             holding: false,
             trouble: None,
             theatre: false,
+            pose: ronoctua_inspect::solid::Pose::default(),
+            turned: None,
+            told_turn: None,
+            shape_trouble: None,
             pointing: std::cell::Cell::new(None),
             drawn_preview: std::cell::Cell::new((0.0, 0.0)),
             preview_offset: 0,
@@ -4019,8 +4079,13 @@ impl View {
         // to the sentence for "nothing here", and the sentence was replaced by
         // a picture a fraction of a second later. An empty panel is the honest
         // drawing of "not yet".
+        // A SHAPE IS THE FOURTH CASE, and it is the same one as the film: it
+        // has no still either, its views go over these blanks, and without it
+        // the panel falls through to "no preview" — a sentence about a file
+        // that is about to be drawn, which is the very report this arm was
+        // added for.
         let coming = self.looking_still();
-        if coming || looked.is_some_and(|l| l.rgba.is_some() || l.moving.is_some()) {
+        if coming || looked.is_some_and(|l| l.rgba.is_some() || l.moving.is_some() || l.turns) {
             return vec![Field {
                 at,
                 text: " ".repeat(usize::from(room)),
@@ -5202,6 +5267,16 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     // taken" is most often the house it was taken in.
                     ronoctua_inspect::facts::Place::Withheld,
                 );
+                // AND WHETHER IT IS A SHAPE, read ONCE.
+                //
+                // The same read answers the facts and the question of whether
+                // there is anything to turn, so it happens here rather than
+                // inside `facts::facts` — that function is a front for the five
+                // external programs and none of them is involved. Reading a
+                // hundred-megabyte file twice to keep the shapes tidy would be
+                // a hundred megabytes read twice.
+                let shape = ronoctua_inspect::pixels::turns(ask.mime)
+                    .then(|| ronoctua_inspect::mesh::read(&ask.path, ask.mime));
                 // AND WHETHER IT MOVES, out of the probe the facts already ran:
                 // one document, two readers, and no second spawn.
                 let moving = ronoctua_inspect::motion::moving(
@@ -5278,6 +5353,18 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 if let Some(row) = moving.as_ref().and_then(ronoctua_inspect::motion::fact_of) {
                     facts.push(row);
                 }
+                // AND THE SHAPE'S OWN FACTS, out of the read above. A file that
+                // is a shape says so; one that CLAIMS to be and does not parse
+                // carries the refusal instead, so the panel gets a sentence
+                // rather than waiting for a frame nobody is going to draw.
+                let (turns, why) = match shape {
+                    None => (false, why),
+                    Some(Ok(read)) => {
+                        facts.extend(ronoctua_inspect::mesh::facts(&read));
+                        (true, why)
+                    }
+                    Some(Err(refused)) => (false, Some(refused)),
+                };
                 let looked = Looked {
                     key: ask.key,
                     path: ask.path,
@@ -5286,6 +5373,8 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     text,
                     why,
                     facts,
+                    mime: ask.mime,
+                    turns,
                 };
                 if out.send(Report::Inspected(Box::new(looked))).is_err() {
                     // A closed channel = the door left.
@@ -5579,6 +5668,25 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // punctuation, because it is not about the film's time — `w` for the
     // window it becomes.
     ("C-w", "files-theatre"),
+    // TURNING A SHAPE, and the arrows are SHIFTED for a reason the owner gave
+    // about the wide preview: *"sendo inclusive possível navegar para os
+    // próximos arquivos a partir do próprio preview largo"*. The bare arrows
+    // walk the FILES there and must go on doing it, so the gesture that turns
+    // the piece has to be a different one.
+    //
+    // Not `C-<arrow>`: the right Ctrl with an arrow is the compositor's, taken
+    // before the view ever sees it.
+    ("S-<left>", "files-turn-left"),
+    ("S-<right>", "files-turn-right"),
+    ("S-<up>", "files-turn-up"),
+    ("S-<down>", "files-turn-down"),
+    // `C-k` and `C-j` because they were free and they are the only pair left
+    // that reads as a pair; `C--` and `C-=` would have been the obvious two
+    // and they are the film's rewind and forward, and one notation cannot
+    // carry two ids.
+    ("C-k", "files-zoom-in"),
+    ("C-j", "files-zoom-out"),
+    ("C-r", "files-reframe"),
     // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
     //
     // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
@@ -5918,6 +6026,19 @@ impl View {
                 self.open_menu()
             }
             Some("files-measure") => self.measure_focused(),
+            // A SHAPE, TURNED. `spin` answers `false` when there is none, and
+            // then the key does nothing rather than something surprising —
+            // there is nothing else `S-<left>` could sensibly mean here.
+            // THE KEYS SPEAK THE SAME LANGUAGE AS THE HAND. `S-<left>` is
+            // "move it left", which is what dragging left is, so both go
+            // through `spin` and neither knows which way a yaw counts.
+            Some("files-turn-left") => Self::stepped(self.spin(-SPIN_STEP, 0.0)),
+            Some("files-turn-right") => Self::stepped(self.spin(SPIN_STEP, 0.0)),
+            Some("files-turn-up") => Self::stepped(self.spin(0.0, -SPIN_STEP)),
+            Some("files-turn-down") => Self::stepped(self.spin(0.0, SPIN_STEP)),
+            Some("files-zoom-in") => Self::stepped(self.zoom(ZOOM_STEP)),
+            Some("files-zoom-out") => Self::stepped(self.zoom(1.0 / ZOOM_STEP)),
+            Some("files-reframe") => Self::stepped(self.reframe()),
             Some("files-preview") => self.toggle_panel(Panel::Preview),
             Some("files-facts") => self.toggle_panel(Panel::Info),
             Some("files-facts-scroll") => self.scroll_facts(),
@@ -7485,6 +7606,14 @@ impl View {
             // still answers `true` — so a hand resting over a photograph does
             // not move a list somewhere else on the screen.
             Pane::Preview => {
+                // A SHAPE TAKES THE WHEEL AND ZOOMS WITH IT. The figure already
+                // swallows the gesture — `preview_total` is 1 for a picture, so
+                // `slide` computes nothing and returns `true` anyway — and this
+                // is the one figure that has somewhere to put it. Up is nearer,
+                // which is what every map and every photograph does.
+                if self.zoom(WHEEL_ZOOM.powi(-i32::try_from(by).unwrap_or(0))) {
+                    return true;
+                }
                 let total = self.preview_total();
                 self.preview_offset = slide(self.preview_offset, by, total, room);
                 true
@@ -8660,6 +8789,13 @@ impl View {
             // itself when there is nothing under the cursor.
             self.trouble = None;
             self.frame = None;
+            // AND THE SHAPE IS SHOWN FROM THE FRONT AGAIN. Same argument: the
+            // subject changed. Leaving one piece turned upside down and
+            // walking to the next would otherwise hand over an angle chosen
+            // for something else.
+            self.pose = ronoctua_inspect::solid::Pose::default();
+            self.turned = None;
+            self.shape_trouble = None;
         }
         self.looked = Some(l);
     }
@@ -8722,7 +8858,12 @@ impl View {
         //
         // Two keys, two slots out of thirty-nine. Not a key per frame, which is
         // what would fill the cache with one file's film.
-        if self.frame.as_ref().is_some_and(|f| f.key == l.key) {
+        if self.frame.as_ref().is_some_and(|f| f.key == l.key)
+            || self.turned.as_ref().is_some_and(|f| f.key == l.key)
+        {
+            // A TURNED SHAPE IS A FRAME LIKE ANY OTHER. It shares the mark and
+            // therefore the slot, which is right: the two can never both be in
+            // hand, because a file is either a film or a shape.
             return Some(format!("{}{FRAME_MARK}", l.key));
         }
         l.rgba.as_ref().map(|_| l.key.clone())
@@ -8733,6 +8874,42 @@ impl View {
     pub fn preview_pixels(&self) -> Option<&ronoctua_render::image::Rgba> {
         self.showing_now()?;
         self.looked.as_ref()?.rgba.as_ref()
+    }
+
+    /// What a shape is drawn with, out of the tokens.
+    ///
+    /// A function and not a constant because a `Color` cannot be taken apart at
+    /// compile time, and a second spelling of the same colour is exactly what
+    /// invariant 9 exists to prevent. The light's two angles are integers of
+    /// DEGREES for the reason `space.nix` gives — this file is where they become a
+    /// direction.
+    fn paint_of() -> ronoctua_inspect::solid::Paint {
+        let azimuth = f32::from(ronoctua_tokens::space::FILES_MESHLIGHTAZIMUTH).to_radians();
+        let elevation = f32::from(ronoctua_tokens::space::FILES_MESHLIGHTELEVATION).to_radians();
+        ronoctua_inspect::solid::Paint {
+            // sRGB BYTES and not `to_linear`: what comes out of the rasteriser is
+            // a texture, and the pipeline does the curve on write. Handing it
+            // linear values here would lighten the piece by exactly the amount
+            // nobody can trace back to a token.
+            solid: ronoctua_tokens::color::SURFACE_MESH.to_rgba8(),
+            // Camera space: x to the right, y up, z towards whoever is looking.
+            light: [
+                elevation.cos() * azimuth.cos(),
+                elevation.cos() * azimuth.sin(),
+                elevation.sin(),
+            ],
+            ambient: f32::from(ronoctua_tokens::space::FILES_MESHSHADOW) / 100.0,
+        }
+    }
+
+    /// `Changed` when a gesture moved something, `Nothing` when it did not.
+    ///
+    /// The four turn keys and the three zoom keys all answer the same way, and
+    /// writing it out seven times is seven chances to answer `Changed` for a
+    /// gesture that did nothing — which is a repaint per keypress on every file
+    /// that is not a shape.
+    const fn stepped(moved: bool) -> Step {
+        if moved { Step::Changed } else { Step::Nothing }
     }
 
     /// The picture the preview's box should be sized from.
@@ -8749,7 +8926,42 @@ impl View {
     /// picture that is measured.
     #[must_use]
     pub fn preview_now(&self) -> Option<&ronoctua_render::image::Rgba> {
-        self.moving_frame().or_else(|| self.preview_pixels())
+        self.live_frame().or_else(|| self.preview_pixels())
+    }
+
+    /// The picture that is REDRAWN, whatever is redrawing it.
+    ///
+    /// # Why the doors ask this and not the two behind it
+    ///
+    /// Because they do not upload it the way they upload a still. A still goes
+    /// up only `if im.missing(&key)` — it is up to a mebibyte — while a picture
+    /// that changes must be written under the same key every time, or the
+    /// second one never reaches the screen.
+    ///
+    /// A film was the only thing that did that, so the doors asked
+    /// `moving_frame` by name. A turned shape does it too, and the shape of the
+    /// defect was exactly what one would expect: the stage drew every frame,
+    /// the log said so, and the panel stayed empty because nothing uploaded
+    /// them. One question, asked in both doors, and the next thing that redraws
+    /// itself needs no third site.
+    #[must_use]
+    pub fn live_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.moving_frame().or_else(|| self.turned_frame())
+    }
+
+    /// The drawn shape, when there is one and it is about this file.
+    #[must_use]
+    pub fn turned_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.showing_now()?;
+        let l = self.looked.as_ref()?;
+        let f = self.turned.as_ref()?;
+        (f.key == l.key).then_some(&f.rgba)
+    }
+
+    /// Whether the cursor is on a shape the manager turns.
+    #[must_use]
+    pub fn shape_here(&self) -> bool {
+        self.showing_now().is_some() && self.looked.as_ref().is_some_and(|l| l.turns)
     }
 
     /// The player had something to say.
@@ -8905,6 +9117,139 @@ impl View {
             self.told = None;
         }
         ask
+    }
+
+    /// What SHOULD be drawn of a shape, as a value.
+    ///
+    /// `None` is "nothing at all": no shape under the cursor, the preview
+    /// hidden, or a panel not measured yet.
+    fn wish_turn(&self) -> Option<crate::stage::Turn> {
+        let l = self.looked.as_ref()?;
+        self.showing_now()?;
+        if !l.turns {
+            return None;
+        }
+        // THE SAME QUANTISED BOX THE FILM ASKS FOR, and for the same reason:
+        // dragging a window's edge changes the panel sixty times a second, and
+        // a size that followed it exactly would redraw the piece on every one.
+        let fit = self.preview_fit()?;
+        Some(crate::stage::Turn {
+            path: l.path.clone(),
+            mime: l.mime,
+            key: l.key.clone(),
+            width: fit.width,
+            height: fit.height,
+            pose: self.pose,
+            paint: Self::paint_of(),
+        })
+    }
+
+    /// The difference between what is drawn and what should be.
+    ///
+    /// One comparison in one place, the arrangement [`View::wants_motion`]
+    /// already argues for: enumerating the ways a picture can need redrawing —
+    /// the file changed, the panel resized, the piece was turned, zoomed,
+    /// reframed — is how one of them gets missed.
+    pub fn wants_turn(&mut self) -> Option<crate::stage::Ask> {
+        let now = self.wish_turn();
+        let ask = match (&self.told_turn, &now) {
+            (None, None) => None,
+            (Some(_), None) => Some(crate::stage::Ask::Stop),
+            (Some(was), Some(w)) if was == w => None,
+            (_, Some(w)) => Some(crate::stage::Ask::Show(Box::new(w.clone()))),
+        };
+        if ask.is_some() {
+            self.told_turn = now;
+        }
+        ask
+    }
+
+    /// The stage had something to say.
+    ///
+    /// Dropped when it is not about the file the cursor is on — the same rule
+    /// [`View::played`] keeps, and for the same reason.
+    pub fn drew(&mut self, beat: crate::stage::Beat) {
+        let about = match &beat {
+            crate::stage::Beat::Drawn(f) => f.key.clone(),
+            crate::stage::Beat::Trouble { key, .. } => key.clone(),
+        };
+        if self.asked.as_deref() != Some(about.as_str()) {
+            return;
+        }
+        match beat {
+            crate::stage::Beat::Drawn(f) => {
+                self.shape_trouble = None;
+                self.turned = Some(*f);
+            }
+            crate::stage::Beat::Trouble { why, .. } => {
+                self.turned = None;
+                self.shape_trouble = Some(why);
+            }
+        }
+    }
+
+    /// What went wrong with the shape, when something did.
+    ///
+    /// **Refusal is a value, not an absence** — the rule the rest of the panel
+    /// keeps. A `.stl` that will not parse says so instead of leaving a blank
+    /// panel waiting for a frame that is never coming.
+    #[must_use]
+    pub fn shape_said(&self) -> Option<Explanation> {
+        let why = self.shape_trouble.as_ref()?;
+        self.showing_now()?;
+        Some(Explanation {
+            key: why.key(),
+            args: why.args(),
+        })
+    }
+
+    /// Turns the shape as a hand moving ACROSS THE SCREEN would, in radians.
+    ///
+    /// `right` and `down` are the directions the hand went, not angles about
+    /// an axis — which is the whole reason this function exists rather than the
+    /// doors reaching for `Pose::turned` themselves.
+    ///
+    /// # Why `right` is negated
+    ///
+    /// Because `solid::axes` puts the CAMERA at `yaw`, so a larger yaw walks
+    /// the camera anticlockwise and everything on screen slides LEFT — which is
+    /// why `files-turn-left` adds. A drag is the opposite gesture: the hand
+    /// takes the piece WITH it, so pulling left must turn it left, and that is
+    /// a SMALLER yaw. The doors had the sign the other way round and the owner
+    /// reported it from the screen — *"ao arrastar para a esquerda, o objeto
+    /// está girando para a direita"* — which is exactly what a convention
+    /// spelled out at two call sites and nowhere testable produces.
+    ///
+    /// `down` is NOT negated, and it is the same rule: pulling down tips the
+    /// top of the piece towards the viewer, which is more of it seen from
+    /// above, which is a HIGHER elevation.
+    ///
+    /// `false` when there is no shape to turn, so the caller can let the
+    /// gesture mean whatever it means elsewhere.
+    pub fn spin(&mut self, right: f32, down: f32) -> bool {
+        if !self.shape_here() {
+            return false;
+        }
+        self.pose = self.pose.turned(-right, down);
+        true
+    }
+
+    /// Moves the shape nearer or further.
+    pub fn zoom(&mut self, by: f32) -> bool {
+        if !self.shape_here() {
+            return false;
+        }
+        self.pose = self.pose.scaled(by);
+        true
+    }
+
+    /// Puts the shape back the way it is first shown.
+    pub fn reframe(&mut self) -> bool {
+        if !self.shape_here() {
+            return false;
+        }
+        self.pose = ronoctua_inspect::solid::Pose::default();
+        true
     }
 
     /// The frame a moving file is showing, if one is.
@@ -9182,6 +9527,8 @@ mod tests {
             text: Some(read),
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         (v, dir)
     }
@@ -9320,6 +9667,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         assert_eq!(v.preview_total(), 1, "a picture claimed more than one row");
         assert!(v.wheel(Pane::Preview, 5, 200, 12), "the gesture escaped");
@@ -9467,6 +9816,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         assert_eq!(v.preview_offset, 50, "a re-decode threw the reader back");
         assert_eq!(v.info_offset, 8);
@@ -9481,6 +9832,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         assert_eq!(v.preview_offset, 0, "a new file kept the old one's place");
         assert_eq!(v.preview_column, 0);
@@ -9597,6 +9950,8 @@ mod tests {
             text: Some(read),
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
 
         let texts = bundle();
@@ -9825,6 +10180,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         assert!(
             v.wants_motion().is_none(),
@@ -9841,6 +10198,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         // THE PANEL HAS TO HAVE BEEN MEASURED, because the frame is decoded at
         // the box's OWN shape — no box, no wish. It is the DOOR that measures
@@ -9902,6 +10261,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -9970,6 +10331,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         let still = preview_of(&v, &words);
         assert!(
@@ -10011,6 +10374,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10071,6 +10436,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         // THE WINDOW DOOR'S OWN REPORT: `pane=Preview cell=Some(11) columns=51`.
         let panes = v.panes(51);
@@ -10122,6 +10489,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
 
         // WITH NO FRAME IN HAND, THE PHOTOGRAPH IS WHAT IS DRAWN.
@@ -10221,6 +10590,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10297,6 +10668,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -10361,6 +10734,8 @@ mod tests {
                 text: None,
                 why: None,
                 facts: Vec::new(),
+                mime: "text/plain",
+                turns: false,
             });
             key
         };
@@ -10496,6 +10871,8 @@ mod tests {
             text: None,
             why: None,
             facts: Vec::new(),
+            mime: "text/plain",
+            turns: false,
         });
         let frame = |key: &str| crate::motion::Beat::Frame(a_frame(key));
 
@@ -14608,6 +14985,120 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The smallest binary STL there is: one facet.
+    fn one_triangle_stl() -> Vec<u8> {
+        let mut out = vec![0_u8; 80];
+        out.extend_from_slice(&1_u32.to_le_bytes());
+        out.extend_from_slice(&[0_u8; 12]);
+        for v in [[0.0_f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            for x in v {
+                out.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&[0_u8; 2]);
+        out
+    }
+
+    /// Puts the cursor on the `.stl` and installs the answer for it.
+    ///
+    /// Through `wants_look` and `looked` rather than by writing the field: the
+    /// key has to match or `looked` drops the answer, and a fixture that
+    /// bypassed that would pass while the real path was broken — the same rule
+    /// `a_text_view` already follows.
+    fn point_at_a_shape(v: &mut View) {
+        // THE PANELS ON: `view_at` uses `plainly`, which switches them off for
+        // the tests about the listing's own arithmetic, and `wants_look`
+        // answers `None` with both of them off — correctly.
+        v.preview_on = true;
+        v.info_on = true;
+        let at = v
+            .shown
+            .iter()
+            .position(|i| v.entries[*i].name.ends_with(".stl"))
+            .expect("the fixture has a shape in it");
+        v.cursor = at;
+        let ask = v.wants_look(512).expect("a shape wants a look");
+        v.looked(Looked {
+            key: ask.key,
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "model/stl",
+            turns: true,
+        });
+        assert!(v.shape_here(), "the fixture did not become a shape");
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a gesture that is wired and inert. Every one of
+    // these routes through `Pose`, so a `spin` that clamped to nothing or a
+    // `wants_turn` that never saw the change would leave the whole feature
+    // looking like a renderer that does not work.
+    fn every_way_of_moving_a_shape_moves_it() {
+        let root = scratch("shape-keys");
+        std::fs::write(root.join("a.stl"), one_triangle_stl()).unwrap();
+        let mut v = view_at(&root);
+        point_at_a_shape(&mut v);
+        let first = v.pose;
+
+        v.key(of_view("S-<left>"));
+        assert_ne!(v.pose.yaw, first.yaw, "S-<left> did not turn it");
+        v.key(of_view("S-<up>"));
+        assert_ne!(v.pose.pitch, first.pitch, "S-<up> did not tilt it");
+        v.key(of_view("C-k"));
+        assert!(v.pose.zoom > first.zoom, "C-k did not come nearer");
+        v.key(of_view("C-j"));
+        v.key(of_view("C-j"));
+        assert!(v.pose.zoom < first.zoom, "C-j did not go further");
+
+        // AND THE WHEEL, which is the gesture the figure already swallowed.
+        let before = v.pose.zoom;
+        assert!(v.wheel(Pane::Preview, -3, 200, 12), "the wheel was refused");
+        assert!(v.pose.zoom > before, "the wheel did not come nearer");
+
+        // AND THE DRAG GOES THE WAY THE HAND DOES.
+        //
+        // THE DEFECT THIS CATCHES, and the owner caught it on screen: dragging
+        // left turned the piece right. Asserting only that the drag CHANGED
+        // something is what let it through — so this compares it against the
+        // key, which he confirmed was correct.
+        v.key(of_view("C-r"));
+        v.key(of_view("S-<left>"));
+        let by_key = v.pose.yaw;
+        v.key(of_view("C-r"));
+        assert!(v.spin(-SPIN_STEP, 0.0), "the drag was refused");
+        assert!(
+            (v.pose.yaw - by_key).abs() < 1e-6,
+            "a hand moving left gave {} and the left key gives {by_key}",
+            v.pose.yaw
+        );
+
+        // AND ONE KEY PUTS IT ALL BACK.
+        v.key(of_view("C-r"));
+        assert_eq!(v.pose, first, "C-r did not reframe it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: the arrows being taken for turning. The owner
+    // asked for the bare arrows to walk the FILES from the wide preview, and a
+    // shape is exactly where somebody would be tempted to spend them.
+    fn the_bare_arrows_still_walk_the_files_on_a_shape() {
+        let root = scratch("shape-arrows");
+        std::fs::write(root.join("a.stl"), one_triangle_stl()).unwrap();
+        std::fs::write(root.join("b.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        point_at_a_shape(&mut v);
+        let (was, pose) = (v.cursor, v.pose);
+        v.key(of_view("<down>"));
+        assert_ne!(v.cursor, was, "the arrow did not walk the files");
+        assert_eq!(v.pose, pose, "the arrow turned the shape");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn every_view_key_in_the_table_actually_does_something() {
         // The other half of `files-everything-has-a-key`, as a unit test: a
@@ -14617,6 +15108,7 @@ mod tests {
         for n in ["a.txt", "b.txt", "c.txt"] {
             std::fs::write(root.join(n), b"x").unwrap();
         }
+        std::fs::write(root.join("d.stl"), one_triangle_stl()).unwrap();
         std::fs::create_dir(root.join("folder")).unwrap();
         for (notation, label) in OF_THE_VIEW {
             let mut v = view_at(&root);
@@ -14625,6 +15117,16 @@ mod tests {
             // "the key is not handled". The question here is whether the table
             // and the `match` agree, not whether a clamp clamps.
             v.cursor = 1;
+            // AND THE SEVEN THAT NEED A SHAPE GET ONE. They answer `Nothing`
+            // on a text file, which is right — there is nothing else
+            // `S-<left>` could mean there — so a fixture of three `.txt` files
+            // would read a correct refusal as a missing arm.
+            if label.starts_with("files-turn")
+                || label.starts_with("files-zoom")
+                || *label == "files-reframe"
+            {
+                point_at_a_shape(&mut v);
+            }
             let t = ronoctua_keymap::Key::parse(notation)
                 .unwrap_or_else(|_| panic!("`{notation}` is not a valid key"));
             let step = v.key(t);

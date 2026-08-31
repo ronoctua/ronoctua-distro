@@ -4418,6 +4418,99 @@ let
     END
   '';
 
+  # THE SHAPE IS DRAWN IN THIS PROCESS, and nothing it needs is a program.
+  #
+  # `ronoctua-inspect` spawns five programs and the number is load-bearing:
+  # every one of them is a store path, they are named by `RONOCTUA_*` in three
+  # Nix files, and `profile-minimal-closes` allow-lists them one by one. A sixth
+  # arriving because somebody "just called a converter" for the next format is
+  # the cheapest possible way to add a hundred megabytes to a laptop image.
+  #
+  # `files-closure-has-no-mime-db` would eventually say so — after a release
+  # build of the whole shell. This says it in seconds, off the source, and names
+  # the file.
+  inspect-mesh-is-in-process = mkCheck "inspect-mesh-is-in-process" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-inspect/src}")
+    bad = []
+    mesh = src / "mesh.rs"
+    solid = src / "solid.rs"
+
+    # ONE. The reader and the rasteriser name no program at all.
+    #
+    # `Command` and `tools::` are the two doors to one, and `Tool` is the
+    # enum that would have to grow first — so a sixth program cannot be
+    # reached from here without one of the three appearing.
+    for f in (mesh, solid):
+        if not f.is_file():
+            bad.append(f"{f.name} is gone")
+            continue
+        body = f.read_text()
+        for word in ("Command", "tools::", "Tool::", "std::process"):
+            if word in body:
+                bad.append(f"{f.name} names '{word}' — a shape is drawn here, not fetched")
+
+    # TWO. The five are still five.
+    #
+    # Not a forbidden list of program names: what is asserted is the COUNT,
+    # so a sixth of any name at all lands here.
+    tools = (src / "tools.rs").read_text()
+    if "pub const ALL: [Self; 5]" not in tools:
+        bad.append("tools.rs no longer declares exactly five programs")
+
+    # THREE. The table's mesh row asks for no program.
+    pixels = (src / "pixels.rs").read_text()
+    at = pixels.find("pub const fn tool(")
+    if at < 0:
+        bad.append("pixels.rs has no How::tool — what does the grep match?")
+    else:
+        depth, end = 0, at
+        for i in range(pixels.index("{", at), len(pixels)):
+            if pixels[i] == "{":
+                depth += 1
+            elif pixels[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        arms = re.findall(r"([^=>\n{}]+)=>\s*([^,\n]+),", pixels[at:end])
+        found = [(a, b) for a, b in arms if "Mesh" in a]
+        if not found:
+            bad.append("How::Mesh has no arm in How::tool")
+        for a, b in found:
+            if "None" not in b:
+                bad.append(f"How::Mesh asks for a program: {b.strip()}")
+
+    # AND THE ROW IS STILL THERE, claiming both shapes. Without this the
+    # check goes green on a tree where the whole feature was deleted, which
+    # is the shape `persistence-takes-its-root-as-a-parameter` already
+    # guards against with its own closing clause.
+    row = re.search(r'id:\s*"mesh".*?how:\s*How::Mesh', pixels, re.S)
+    if row is None:
+        bad.append("no row in the table claims a mesh")
+    else:
+        for kind in ("model/stl", "model/3mf"):
+            if kind not in row.group(0):
+                bad.append(f"the mesh row no longer claims {kind}")
+    if solid.is_file() and "pub fn draw(" not in solid.read_text():
+        bad.append("solid.rs no longer draws anything")
+
+    if bad:
+        print("ERROR: the mesh preview is not the in-process one it is meant to be.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A program here is a store path, three Nix files to set a", file=sys.stderr)
+        print("       variable in, and one more line in the closure sweep. The", file=sys.stderr)
+        print("       rasteriser is two hundred lines and costs none of that.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: the shape is read and drawn in process, and the five programs are five")
+    END
+  '';
+
   files-columns-degrade = mkCheck "files-columns-degrade" [ pkgs.gnugrep ] ''
     view=${../crates/ronoctua-shell/src}/files.rs
     order=$(sed -n '/^pub const GIVE_WAY/,/^];/p' "$view" | grep -oE 'Column::[A-Za-z]+' | tr -d ' ')
@@ -8145,6 +8238,7 @@ let
       files-everything-has-a-key
       files-runs-by-path
       files-notices-the-directory
+      inspect-mesh-is-in-process
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
       motion-never-guesses-a-frame
@@ -8196,6 +8290,7 @@ let
       files-everything-has-a-key
       files-runs-by-path
       files-notices-the-directory
+      inspect-mesh-is-in-process
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes

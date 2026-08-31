@@ -2622,10 +2622,12 @@ dependencies = [
 name = "ronoctua-inspect"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "image",
  "resvg",
  "ronoctua-files",
  "ronoctua-syntax",
+ "roxmltree 0.21.1",
  "rustix 1.1.4",
  "serde_json",
  "tracing",

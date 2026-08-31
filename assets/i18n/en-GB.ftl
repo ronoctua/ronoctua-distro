@@ -1404,6 +1404,43 @@ files-value-pages = { $n ->
        *[other] { $n } pages
     }
 
+# === The shape inside a mesh file — `.stl` and `.3mf` ======================
+#
+# The manager reads the triangles itself and turns them; these are the rows the
+# info panel puts beside the picture. They are what somebody about to PRINT the
+# thing reads: how big it is, how much material it takes, and whether the
+# surface is closed — which is the first question a slicer asks and the one it
+# refuses over.
+files-fact-format = format
+files-fact-unit = unit
+files-fact-objects = objects
+files-fact-triangles = triangles
+files-fact-vertices = vertices
+files-fact-bounds = size
+files-fact-volume = volume
+files-fact-area = surface
+files-fact-watertight = surface closed
+files-fact-flipped = faces reversed
+files-fact-degenerate = flat triangles
+files-fact-application = made with
+files-fact-designer = designer
+files-fact-licence = licence
+files-fact-created = created
+
+files-value-stl-binary = STL, as bytes
+files-value-stl-ascii = STL, as words
+files-value-three-mf = 3MF
+files-value-count = { $n }
+# THE MEASUREMENTS ARE ALWAYS IN MILLIMETRES. A 3MF may declare inches or
+# metres and the reader converts on the way in, so this unit is not a guess.
+files-value-box = { $w } × { $d } × { $h } mm
+files-value-cubic-centimetres = { $n } cm³
+files-value-square-centimetres = { $n } cm²
+files-value-mesh-closed = yes
+# NOT "no". What a person can act on is how many edges are open, because that
+# is the number a repair tool reports and the number that changes as it works.
+files-value-mesh-open = no — { $n } open edges
+
 # === The transfer queue — `LEADER t` =======================================
 #
 # Seven operations used to go off to a thread saying nothing on screen: paste,

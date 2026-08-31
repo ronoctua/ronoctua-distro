@@ -271,6 +271,14 @@
   link = "cod-link";
   pipe = "md-pipe";
   socket = "md-console_network";
+  # A SHAPE — `.stl`, `.3mf`. Freedesktop calls both of them
+  # `image-x-generic`, which is correct and useless: in a column of thirty rows
+  # a thing one PRINTS is indistinguishable from a photograph, and the two are
+  # opened by entirely different programs. `md-cube_outline` and not
+  # `md-printer_3d`: what the row names is the FILE, and a printer is where the
+  # file might be going, not what it is — the same argument `image` makes one
+  # screen up against a camera.
+  mesh = "md-cube_outline";
 
   # ===================================================================
   # NETWORK — the seventh view of the expansion (LEADER r r).

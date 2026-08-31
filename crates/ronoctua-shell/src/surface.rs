@@ -515,6 +515,22 @@ struct Footer {
     files_looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
     /// The thread that follows a moving file, when there is one to follow.
     files_playing: Option<crate::motion::Player>,
+    /// The loop, so a keyboard can be made that REPEATS.
+    ///
+    /// `Option` because the seat may announce itself before the loop exists —
+    /// it does not any more, and the fallback is still here rather than a
+    /// `panic` on an ordering nobody would think to check.
+    repeat: Option<calloop::LoopHandle<'static, Self>>,
+    /// The thread that draws a shape at the angle it is being looked at.
+    files_turning: Option<crate::stage::Stage>,
+    /// Where the pointer was when it last moved a shape.
+    ///
+    /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
+    /// a track — one scalar, one direction — and turning something is two
+    /// deltas with no track behind them. Beside `dragging_section` because it
+    /// is the same kind of thing: a press that owns the pointer until it is
+    /// let go.
+    spinning: Option<(f64, f64)>,
     /// Who the numeric ids belong to, read ONCE.
     ///
     /// `/etc/passwd` and `/etc/group` do not change while a listing is on
@@ -1430,9 +1446,17 @@ impl Inheritance {
         ronoctua_keymap::Mods {
             ctrl: now.ctrl && !h.ctrl,
             alt: now.alt && !h.alt,
-            // Shift does NOT enter: xkb has already applied it when producing the
-            // character. Counting both would turn `F` into `S-F` and never match.
-            shift: false,
+            // SHIFT IS SUBTRACTED LIKE THE OTHERS AND JUDGED LATER.
+            //
+            // It used to be hard `false` here, with the note that xkb has
+            // already applied it when producing the character — which is true
+            // of a CHARACTER and of nothing else. An arrow is `Left` whether or
+            // not Shift is down, so for those keys this is the only place the
+            // shift exists, and clearing it here made `S-<left>` unreachable in
+            // this door however carefully `translate` asked for it. The rule
+            // "shift is not counted twice" now lives where the two cases can be
+            // told apart: `translate`, which knows the symbol.
+            shift: now.shift && !h.shift,
             logo: now.logo && !h.logo,
         }
     }
@@ -1558,6 +1582,9 @@ pub fn run() -> Result<()> {
         files_sender: None,
         files_looking: None,
         files_playing: None,
+        repeat: None,
+        files_turning: None,
+        spinning: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
         // screen, and asking per row would put two hundred opens inside the
         // frame that draws it.
@@ -1591,6 +1618,15 @@ pub fn run() -> Result<()> {
     //
     // Creating the surface in response to the OUTPUT solves both cases at once:
     // the cold start and the hotplug section 9.2 of the plan requires.
+    // THE LOOP FIRST, and only then the roundtrip.
+    //
+    // It used to be the other way round, and it cost the keyboard its repeat:
+    // the seat announces its capabilities DURING this roundtrip, and
+    // `new_capability` needs a `LoopHandle` to create a keyboard that repeats.
+    // `EventLoop::try_new` depends on nothing, so the order was free to change.
+    let mut cycle: EventLoop<'static, Footer> = EventLoop::try_new().context("calloop")?;
+    let handle = cycle.handle();
+    state.repeat = Some(handle.clone());
     queue.roundtrip(&mut state).context("initial roundtrip")?;
     state.ensure_screens(&qh);
 
@@ -1598,8 +1634,6 @@ pub fn run() -> Result<()> {
     // a `blocking_dispatch` in a loop — with a loop blocked on the Wayland
     // socket, a niri event would only be seen on the next mouse movement.
     // Milestone 5 adds keyboard and timers on the same rails.
-    let mut cycle: EventLoop<Footer> = EventLoop::try_new().context("calloop")?;
-    let handle = cycle.handle();
 
     // THE LAUNCH VERDICT. The thread that waits for `systemd-run --scope` —
     // which is SYNCHRONOUS, see `foreign::launch` — hands it back through here,
@@ -1655,6 +1689,22 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
+
+    // AND THE VIEWS OF A SHAPE, on a channel of their own too, for the reason
+    // written above about frames: a drag emits one every few tens of
+    // milliseconds and none of them is news about a directory.
+    let (turns_sender, turns) = channel::channel::<crate::stage::Beat>();
+    state.files_turning = crate::stage::stage(turns_sender);
+    handle
+        .insert_source(turns, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(b) = event {
+                if let Some(v) = state.files.as_mut() {
+                    v.drew(b);
+                }
+                state.owes_paint = true;
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
 
     // THE END OF A RADIO SCAN.
     //
@@ -2627,7 +2677,24 @@ impl SeatHandler for Footer {
         // surface's `keyboard-interactivity`. Creating it only on the first
         // leader would lose the first event.
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seats.get_keyboard(qh, &seat, None) {
+            // WITH REPEAT, and it had never been. SCTK only calls `repeat_key`
+            // for a keyboard created this way, so that method was dead code in
+            // both doors and NO key repeated anywhere in this shell — holding
+            // an arrow in the file manager moved the cursor exactly once. The
+            // rate and the delay are the compositor's, arriving as
+            // `RepeatInfo`; nothing here invents either.
+            let made = if let Some(handle) = self.repeat.clone() {
+                self.seats.get_keyboard_with_repeat(
+                    qh,
+                    &seat,
+                    None,
+                    handle,
+                    Box::new(|state: &mut Self, _, event| state.typed(event)),
+                )
+            } else {
+                self.seats.get_keyboard(qh, &seat, None)
+            };
+            match made {
                 Ok(k) => {
                     tracing::debug!("the seat's keyboard is ready");
                     self.keyboard = Some(k);
@@ -2738,277 +2805,22 @@ impl KeyboardHandler for Footer {
         _: u32,
         event: KeyEvent,
     ) {
-        // The RIGHT `Ctrl`, tracked by its keysym.
-        //
-        // It does not come in the `Modifiers`: xkb merges both Ctrls into a single
-        // bit, and the modifier event does not say which physical key went down. It
-        // is read here, BEFORE the leader's guard, otherwise holding it with the
-        // leader not running would leave the state stale when it opened.
-        if event.keysym == Keysym::Control_R {
-            self.right_ctrl = true;
-            return;
-        }
-
-        // WHO HOLDS THE KEYBOARD IS NOT ONLY THE LEADER.
-        //
-        // It used to be `self.leader.active_one()`, and that broke both modals: the
-        // `run_command` opened the `M-x`, and the `close_leader` right after
-        // gave the keyboard back — the prompt showed up on screen and did NOT
-        // receive a key. Nothing on screen gave it away; it looked as if the
-        // keyboard had died.
-        if !self.grabbing() {
-            return;
-        }
-        let Some(key) = self.translate(&event) else {
-            return;
-        };
-
-        // WITH THE CtrlRight HELD, THE KEY DOES NOT ENTER THE SEQUENCE.
-        //
-        // That is the request: a combination key that does NOT add itself to the
-        // leader, so that there is a way left to navigate what is on screen without
-        // spending a letter of the keymap. Paging with `←`/`→` would cost two
-        // letters that could never be a command again.
-        if self.right_ctrl {
-            if self.navigate(key.sym) {
-                self.apply_geometry(KeyboardInteractivity::Exclusive);
-                self.draw_and_paint();
-            }
-            return;
-        }
-
-        // THE CLIPBOARD intercepts before the manual: with it open, the whole
-        // keyboard is its — `d` removes, and does not fire `LEADER d`.
-        if self.clipboard_open {
-            self.clipboard_key(key.sym);
-            return;
-        }
-
-        // THE TRANSFER PANEL intercepts for the same reason: with it open the
-        // whole keyboard is its, and `C-c` gives a transfer up rather than
-        // reaching whatever `C-c` would otherwise mean.
-        if self.transfers.is_some() {
-            self.transfers_key(key);
-            return;
-        }
-
-        // THE NOTIFICATION MANAGER intercepts for the same reason as the other
-        // modals: with it open the whole keyboard is its, and `r` marks
-        // everything read rather than firing `SPC r`.
-        if self.notifications_open {
-            self.manager_key(key);
-            return;
-        }
-
-        // THE APPLICATIONS intercept for the same reason as the other modals:
-        // with the list open the whole keyboard is its — typing `f` filters, and
-        // does not fire `SPC f`.
-        if self.apps.is_some() {
-            self.apps_key(key);
-            return;
-        }
-
-        // THE ONE-KEY QUESTION intercepts before the rest of the view: with it
-        // on screen, `s` and `n` answer and do not fire the list's search.
-        if self.network_remember.is_some() {
-            use ronoctua_keymap::Sym;
-            match key.sym {
-                Sym::Char('s') | Sym::Char('S') => self.answer_remember(true),
-                // Any other key is "no". A question that only leaves with `s` or
-                // `n` would trap the keyboard of whoever pressed Esc — and the
-                // safe answer is the one that stores nothing.
-                _ => self.answer_remember(false),
-            }
-            return;
-        }
-
-        // THE NETWORK intercepts for the same reason as the other modals, and
-        // the order matters: it comes AFTER the `M-x` in the precedence of
-        // `view()`, but here it comes before the test of `mx.active()` — and
-        // there is no conflict, because with the list open and the password
-        // prompt asking, whoever answers is the `M-x`. That is why the test of
-        // the prompt comes first.
-        if self.network.is_some() && self.mx.asking_for().is_none() {
-            use ronoctua_keymap::Sym;
-            match key.sym {
-                Sym::Esc => {
-                    self.network = None;
-                    self.first_page();
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Sym::Down | Sym::Up => {
-                    let step = if key.sym == Sym::Down { 1 } else { -1 };
-                    if let Some(v) = self.network.as_mut() {
-                        v.move_by(step);
-                    }
-                    self.draw_and_paint();
-                }
-                // THE VIEW'S KEYS come out of the SAME table the manual reads and
-                // that the orphan check consults — `leader::OF_NETWORK_VIEW`.
-                // A `match` written by hand here would be the second truth this
-                // project has already paid not to have.
-                otherwise => {
-                    // THE SAME NOTATION the table uses, by the same path as the
-                    // clipboard. A key outside the table does nothing and does NOT
-                    // close the view: closing on a wrong key would lose the place
-                    // in the list.
-                    let notation = ronoctua_keymap::Key::simple(otherwise).notation();
-                    if let Some((_, id)) = crate::leader::OF_NETWORK_VIEW
-                        .iter()
-                        .find(|(t, _)| *t == notation)
-                    {
-                        self.run_command(id);
-                    }
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-            }
-            return;
-        }
-
-        // THE FILE MANAGER intercepts before the leader, and before the rest of
-        // the modals for the same reason `view()` ranks it first: it holds a
-        // directory somebody navigated to, a set of marks and possibly an armed
-        // confirmation, and a key that fell through to the keymap would end the
-        // sequence and take all of it with it.
-        //
-        // It is intercepted here and not through a table of its own because its
-        // keys are NOT commands of the registry — they navigate a listing. The
-        // table that a check reads is `files::OF_THE_VIEW`, and the unit test
-        // beside it presses every key in it.
-        if self.files.is_some() {
-            let step = self
-                .files
-                .as_mut()
-                .map_or(crate::files::Step::Nothing, |v| v.key(key));
-            self.apply_files_step(step);
-            return;
-        }
-
-        // THE MANUAL intercepts before everything else: with it open the arrows
-        // SCROLL, and an arrow that fell into the keymap would end the leader
-        // by unknown sequence — the manual would close by itself on the first
-        // gesture of reading.
-        if self.manual {
-            use ronoctua_keymap::Sym;
-            match key.sym {
-                Sym::Esc => {
-                    self.manual = false;
-                    self.first_page();
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                // One LINE at a time, and not a page: the manual is read
-                // straight through, and skipping a screen per arrow loses the
-                // context between what has just been read and what comes. Paging
-                // has its own key (`CtrlRight`+arrows).
-                Sym::Down | Sym::Up => {
-                    let step = if key.sym == Sym::Down { 1 } else { -1 };
-                    if self.scroll_by(step) {
-                        self.draw_and_paint();
-                    }
-                }
-                // Nothing else touches it. It is read-only, and a key that
-                // "almost" works teaches that there is something to type there.
-                _ => {}
-            }
-            return;
-        }
-
-        // The `M-x` intercepts BEFORE the leader: with it open, the whole
-        // keyboard is its — typing `f` filters, and does not fire `SPC f`.
-        if self.mx.active() {
-            use crate::minibuffer::Action;
-            match self.mx.key(key, &self.command_registry) {
-                Action::Nothing => {}
-                Action::Changed => {
-                    // REDRAW HERE, AND NOT ONLY RE-COMMIT THE SIZE.
-                    //
-                    // THE DEFECT THIS WAS: `apply_geometry` only asks for the
-                    // size; whoever paints is the `configure` that comes back — and
-                    // the compositor only sends it when the height CHANGES. With the
-                    // list at the ceiling, filtering from 172 down to 40 candidates
-                    // changes no height at all, and moving the cursor does not
-                    // either. Result: typing did not filter on screen and the arrow
-                    // did not go down, and everything showed up at once when the
-                    // mouse moved — which is the only other thing that painted.
-                    self.follow_cursor();
-                    self.apply_geometry(KeyboardInteractivity::Exclusive);
-                    self.draw_and_paint();
-                }
-                Action::Closed => {
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Action::Run(id) => {
-                    tracing::info!(command = id, "command run by the finder");
-                    self.run_command(&id);
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Action::Selected(id) => {
-                    self.select_item(&id);
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Action::RunWith(id, arg) => {
-                    tracing::info!(command = id, argument = %arg, "a command with an argument");
-                    self.run_with(&id, Some(&arg));
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-            }
-            return;
-        }
-
-        // The sequence BEFORE applying the key: it is the one the message cites
-        // when the key leads nowhere. After ending, the leader has already
-        // forgotten.
-        let attempt = format!(
-            "{} {}",
-            self.leader.raw_prefix(&self.leader_label),
-            ronoctua_keymap::notation(&[key])
-        );
-        // THE FOCUSED BUFFER'S OWN KEYMAP, before the tree gets the key.
-        //
-        // It cannot go through `ronoctua_keymap::Tree`: that crate's bindings
-        // are `&'static str` and these arrive over a socket at runtime. What it
-        // would be as a tree is a filter over a list, because the sequences are
-        // two or three keys deep.
-        // THE STATE SUBMENU, before the buffer's keymap and before the tree.
-        //
-        // Before the tree because `b s` is not in it — the rows come from what
-        // the focused window declared. Before `buffer_key` because that one only
-        // opens at the ROOT of the sequence, and this one opens after `b`; the
-        // order costs nothing and keeps each check about its own level.
-        if self.state_key(key) {
-            self.draw_and_paint();
-            return;
-        }
-        if self.buffer_key(key) {
-            self.draw_and_paint();
-            return;
-        }
-
-        let effect = self.leader.key(&self.tree, key);
-        self.apply_leader_effect_with(effect, Some(&attempt), key.sym);
-        self.draw_and_paint();
+        self.typed(event);
     }
 
     fn repeat_key(
         &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        serial: u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
         event: KeyEvent,
     ) {
         // A repeat inside a leader sequence would be typing the same key twice by
         // accident. But `SPC b b b` does not exist, so a repeat is always an error
         // here — we let it through to the same path, which ends by unknown
         // sequence instead of piling up state.
-        self.press_key(conn, qh, kb, serial, event);
+        self.typed(event);
     }
     fn release_key(
         &mut self,
@@ -3171,6 +2983,7 @@ impl PointerHandler for Footer {
         // modeline has no rows. Folding them together is how the right button
         // came to act one line off once already.
         let mut segment_next = None;
+        let mut spun = false;
         let mut segment_prev = None;
         // AND THE BAND'S, kept apart for the same reason: its lines are not
         // rows of the expanded region either.
@@ -3206,6 +3019,35 @@ impl PointerHandler for Footer {
                     let over = self.files_target().map(|t| t.pane);
                     if let Some(v) = self.files.as_ref() {
                         v.pointing(over);
+                    }
+                    // AND A SHAPE TURNS WITH THE HAND. The deltas are in
+                    // PIXELS and become radians here, because the view has no
+                    // idea how big a pixel is; a whole screen's width is about
+                    // half a turn, which is the ratio that makes a piece feel
+                    // attached to the pointer rather than geared to it.
+                    if let Some((was_x, was_y)) = self.spinning {
+                        let wide = self
+                            .screens
+                            .iter()
+                            .find(|t| t.configured && t.width > 0)
+                            .map_or(1.0, |t| f64::from(t.width));
+                        let by = std::f64::consts::PI / wide;
+                        #[allow(clippy::cast_possible_truncation)]
+                        // WHERE THE HAND WENT, in radians of turn. Which way a
+                        // yaw counts is `View::spin`'s business and written out
+                        // there — a convention spelled at two call sites is a
+                        // convention that gets one of them backwards, which is
+                        // what happened.
+                        let turned = self.files.as_mut().is_some_and(|v| {
+                            v.spin(
+                                ((e.position.0 - was_x) * by) as f32,
+                                ((e.position.1 - was_y) * by) as f32,
+                            )
+                        });
+                        self.spinning = Some(e.position);
+                        if turned {
+                            spun = true;
+                        }
                     }
                     // DRAGGING: the pointer's position BECOMES the offset.
                     if let Some((pane, axis)) = self.dragging_section {
@@ -3332,6 +3174,21 @@ impl PointerHandler for Footer {
                     } else if self.on_thumb(e.position.0, e.position.1) {
                         self.dragging = true;
                         self.drag_to(e.position.1);
+                    } else if self
+                        .files_target()
+                        .is_some_and(|t| matches!(t.pane, crate::files::Pane::Preview))
+                        && self
+                            .files
+                            .as_ref()
+                            .is_some_and(crate::files::View::shape_here)
+                    {
+                        // A PRESS ON THE PIECE TAKES THE POINTER. After the
+                        // bars, because a bar drawn over the panel is still a
+                        // control; before the row, because a shape has no rows
+                        // and the click would otherwise open the file — which
+                        // is what pressing a picture does, and is exactly what
+                        // somebody about to turn it does not want.
+                        self.spinning = Some(e.position);
                     } else {
                         clicked = self.row_under_pointer;
                     }
@@ -3339,6 +3196,7 @@ impl PointerHandler for Footer {
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = false;
                     self.dragging_section = None;
+                    self.spinning = None;
                 }
                 // THE WHEEL AND THE TOUCHPAD GESTURE.
                 //
@@ -3404,6 +3262,13 @@ impl PointerHandler for Footer {
         if let Some(row) = menu_at {
             self.open_files_menu(row);
             return;
+        }
+        // A SHAPE TURNED, which is neither a drag along a track nor a click:
+        // it has already changed the view, so all that is left is to draw it
+        // and to tell the stage.
+        if spun {
+            self.follow_the_turn();
+            self.ask_paint();
         }
         if let Some(i) = clicked {
             self.click_at(i);
@@ -5111,6 +4976,7 @@ impl Footer {
             let _ = queue.send(ask);
         }
         self.follow_the_motion();
+        self.follow_the_turn();
     }
 
     /// Starts, or stops, the player that follows a moving file.
@@ -5130,6 +4996,289 @@ impl Footer {
         // changed and does not need to.
         if let Some(ask) = view.wants_motion() {
             player.tell(ask);
+        }
+    }
+
+    /// One key, however it arrived — pressed, or repeated by the clock.
+    ///
+    /// One body and not two: SCTK delivers a repeat through the CALLBACK given
+    /// to `get_keyboard_with_repeat` and not through `repeat_key`, and a repeat
+    /// that took a different path is a key that does something slightly
+    /// different the second time round.
+    fn typed(&mut self, event: KeyEvent) {
+        // The RIGHT `Ctrl`, tracked by its keysym.
+        //
+        // It does not come in the `Modifiers`: xkb merges both Ctrls into a single
+        // bit, and the modifier event does not say which physical key went down. It
+        // is read here, BEFORE the leader's guard, otherwise holding it with the
+        // leader not running would leave the state stale when it opened.
+        if event.keysym == Keysym::Control_R {
+            self.right_ctrl = true;
+            return;
+        }
+
+        // WHO HOLDS THE KEYBOARD IS NOT ONLY THE LEADER.
+        //
+        // It used to be `self.leader.active_one()`, and that broke both modals: the
+        // `run_command` opened the `M-x`, and the `close_leader` right after
+        // gave the keyboard back — the prompt showed up on screen and did NOT
+        // receive a key. Nothing on screen gave it away; it looked as if the
+        // keyboard had died.
+        if !self.grabbing() {
+            return;
+        }
+        let Some(key) = self.translate(&event) else {
+            return;
+        };
+
+        // WITH THE CtrlRight HELD, THE KEY DOES NOT ENTER THE SEQUENCE.
+        //
+        // That is the request: a combination key that does NOT add itself to the
+        // leader, so that there is a way left to navigate what is on screen without
+        // spending a letter of the keymap. Paging with `←`/`→` would cost two
+        // letters that could never be a command again.
+        if self.right_ctrl {
+            if self.navigate(key.sym) {
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            return;
+        }
+
+        // THE CLIPBOARD intercepts before the manual: with it open, the whole
+        // keyboard is its — `d` removes, and does not fire `LEADER d`.
+        if self.clipboard_open {
+            self.clipboard_key(key.sym);
+            return;
+        }
+
+        // THE TRANSFER PANEL intercepts for the same reason: with it open the
+        // whole keyboard is its, and `C-c` gives a transfer up rather than
+        // reaching whatever `C-c` would otherwise mean.
+        if self.transfers.is_some() {
+            self.transfers_key(key);
+            return;
+        }
+
+        // THE NOTIFICATION MANAGER intercepts for the same reason as the other
+        // modals: with it open the whole keyboard is its, and `r` marks
+        // everything read rather than firing `SPC r`.
+        if self.notifications_open {
+            self.manager_key(key);
+            return;
+        }
+
+        // THE APPLICATIONS intercept for the same reason as the other modals:
+        // with the list open the whole keyboard is its — typing `f` filters, and
+        // does not fire `SPC f`.
+        if self.apps.is_some() {
+            self.apps_key(key);
+            return;
+        }
+
+        // THE ONE-KEY QUESTION intercepts before the rest of the view: with it
+        // on screen, `s` and `n` answer and do not fire the list's search.
+        if self.network_remember.is_some() {
+            use ronoctua_keymap::Sym;
+            match key.sym {
+                Sym::Char('s') | Sym::Char('S') => self.answer_remember(true),
+                // Any other key is "no". A question that only leaves with `s` or
+                // `n` would trap the keyboard of whoever pressed Esc — and the
+                // safe answer is the one that stores nothing.
+                _ => self.answer_remember(false),
+            }
+            return;
+        }
+
+        // THE NETWORK intercepts for the same reason as the other modals, and
+        // the order matters: it comes AFTER the `M-x` in the precedence of
+        // `view()`, but here it comes before the test of `mx.active()` — and
+        // there is no conflict, because with the list open and the password
+        // prompt asking, whoever answers is the `M-x`. That is why the test of
+        // the prompt comes first.
+        if self.network.is_some() && self.mx.asking_for().is_none() {
+            use ronoctua_keymap::Sym;
+            match key.sym {
+                Sym::Esc => {
+                    self.network = None;
+                    self.first_page();
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+                Sym::Down | Sym::Up => {
+                    let step = if key.sym == Sym::Down { 1 } else { -1 };
+                    if let Some(v) = self.network.as_mut() {
+                        v.move_by(step);
+                    }
+                    self.draw_and_paint();
+                }
+                // THE VIEW'S KEYS come out of the SAME table the manual reads and
+                // that the orphan check consults — `leader::OF_NETWORK_VIEW`.
+                // A `match` written by hand here would be the second truth this
+                // project has already paid not to have.
+                otherwise => {
+                    // THE SAME NOTATION the table uses, by the same path as the
+                    // clipboard. A key outside the table does nothing and does NOT
+                    // close the view: closing on a wrong key would lose the place
+                    // in the list.
+                    let notation = ronoctua_keymap::Key::simple(otherwise).notation();
+                    if let Some((_, id)) = crate::leader::OF_NETWORK_VIEW
+                        .iter()
+                        .find(|(t, _)| *t == notation)
+                    {
+                        self.run_command(id);
+                    }
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+            }
+            return;
+        }
+
+        // THE FILE MANAGER intercepts before the leader, and before the rest of
+        // the modals for the same reason `view()` ranks it first: it holds a
+        // directory somebody navigated to, a set of marks and possibly an armed
+        // confirmation, and a key that fell through to the keymap would end the
+        // sequence and take all of it with it.
+        //
+        // It is intercepted here and not through a table of its own because its
+        // keys are NOT commands of the registry — they navigate a listing. The
+        // table that a check reads is `files::OF_THE_VIEW`, and the unit test
+        // beside it presses every key in it.
+        if self.files.is_some() {
+            let step = self
+                .files
+                .as_mut()
+                .map_or(crate::files::Step::Nothing, |v| v.key(key));
+            self.apply_files_step(step);
+            return;
+        }
+
+        // THE MANUAL intercepts before everything else: with it open the arrows
+        // SCROLL, and an arrow that fell into the keymap would end the leader
+        // by unknown sequence — the manual would close by itself on the first
+        // gesture of reading.
+        if self.manual {
+            use ronoctua_keymap::Sym;
+            match key.sym {
+                Sym::Esc => {
+                    self.manual = false;
+                    self.first_page();
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+                // One LINE at a time, and not a page: the manual is read
+                // straight through, and skipping a screen per arrow loses the
+                // context between what has just been read and what comes. Paging
+                // has its own key (`CtrlRight`+arrows).
+                Sym::Down | Sym::Up => {
+                    let step = if key.sym == Sym::Down { 1 } else { -1 };
+                    if self.scroll_by(step) {
+                        self.draw_and_paint();
+                    }
+                }
+                // Nothing else touches it. It is read-only, and a key that
+                // "almost" works teaches that there is something to type there.
+                _ => {}
+            }
+            return;
+        }
+
+        // The `M-x` intercepts BEFORE the leader: with it open, the whole
+        // keyboard is its — typing `f` filters, and does not fire `SPC f`.
+        if self.mx.active() {
+            use crate::minibuffer::Action;
+            match self.mx.key(key, &self.command_registry) {
+                Action::Nothing => {}
+                Action::Changed => {
+                    // REDRAW HERE, AND NOT ONLY RE-COMMIT THE SIZE.
+                    //
+                    // THE DEFECT THIS WAS: `apply_geometry` only asks for the
+                    // size; whoever paints is the `configure` that comes back — and
+                    // the compositor only sends it when the height CHANGES. With the
+                    // list at the ceiling, filtering from 172 down to 40 candidates
+                    // changes no height at all, and moving the cursor does not
+                    // either. Result: typing did not filter on screen and the arrow
+                    // did not go down, and everything showed up at once when the
+                    // mouse moved — which is the only other thing that painted.
+                    self.follow_cursor();
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
+                    self.draw_and_paint();
+                }
+                Action::Closed => {
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+                Action::Run(id) => {
+                    tracing::info!(command = id, "command run by the finder");
+                    self.run_command(&id);
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+                Action::Selected(id) => {
+                    self.select_item(&id);
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+                Action::RunWith(id, arg) => {
+                    tracing::info!(command = id, argument = %arg, "a command with an argument");
+                    self.run_with(&id, Some(&arg));
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+            }
+            return;
+        }
+
+        // The sequence BEFORE applying the key: it is the one the message cites
+        // when the key leads nowhere. After ending, the leader has already
+        // forgotten.
+        let attempt = format!(
+            "{} {}",
+            self.leader.raw_prefix(&self.leader_label),
+            ronoctua_keymap::notation(&[key])
+        );
+        // THE FOCUSED BUFFER'S OWN KEYMAP, before the tree gets the key.
+        //
+        // It cannot go through `ronoctua_keymap::Tree`: that crate's bindings
+        // are `&'static str` and these arrive over a socket at runtime. What it
+        // would be as a tree is a filter over a list, because the sequences are
+        // two or three keys deep.
+        // THE STATE SUBMENU, before the buffer's keymap and before the tree.
+        //
+        // Before the tree because `b s` is not in it — the rows come from what
+        // the focused window declared. Before `buffer_key` because that one only
+        // opens at the ROOT of the sequence, and this one opens after `b`; the
+        // order costs nothing and keeps each check about its own level.
+        if self.state_key(key) {
+            self.draw_and_paint();
+            return;
+        }
+        if self.buffer_key(key) {
+            self.draw_and_paint();
+            return;
+        }
+
+        let effect = self.leader.key(&self.tree, key);
+        self.apply_leader_effect_with(effect, Some(&attempt), key.sym);
+        self.draw_and_paint();
+    }
+
+    /// Starts, or stops, the thread that draws a shape.
+    ///
+    /// The twin of [`Footer::follow_the_motion`], asked in the same places and
+    /// for the same reason: the pose changes from a key, from the wheel, from
+    /// a drag and from the region being resized, and enumerating those is how
+    /// one of them gets missed.
+    fn follow_the_turn(&mut self) {
+        let Some(stage) = self.files_turning.as_mut() else {
+            return;
+        };
+        let Some(view) = self.files.as_mut() else {
+            return;
+        };
+        if let Some(ask) = view.wants_turn() {
+            stage.tell(ask);
         }
     }
 
@@ -7591,6 +7740,7 @@ impl Footer {
                 // AND THE PLAYER IS ASKED AGAIN — see the window door's twin,
                 // and the defect written out there.
                 self.follow_the_motion();
+                self.follow_the_turn();
             }
             crate::files::Report::Racked(rack) => {
                 // ONLY WHEN THERE IS A VIEW TO PUT IT IN. The thread goes on
@@ -8048,9 +8198,15 @@ impl Footer {
         // form of Shift+Tab, exactly as `F` is of Shift+f — so reading it here
         // is reading what xkb decided rather than guessing at a modifier.
         //
-        // `S-TAB` is the only binding in the shell that needs it, and it is the
-        // file manager's "go back one section".
-        mods.shift = event.keysym == Keysym::ISO_Left_Tab;
+        // AND FROM THE MODIFIER FOR EVERY KEY THAT IS NOT A CHARACTER, because
+        // there xkb has nothing to apply it TO: Shift+Left is `Left`, and the
+        // modifier is the only place that shift exists. The paragraph above was
+        // written when `S-TAB` was the only shifted binding, and what it
+        // actually says is "shift is not counted twice" — which an arrow cannot
+        // do. Without this, `S-<left>` arrived as a bare `<left>` and went up a
+        // directory instead of turning the shape in the preview.
+        mods.shift =
+            event.keysym == Keysym::ISO_Left_Tab || (mods.shift && !matches!(sym, Sym::Char(_)));
         let key = Key { mods, sym };
         // THE KEY AS IT ENDED UP, in the log.
         //
@@ -8302,11 +8458,9 @@ impl Footer {
             .files
             .as_ref()
             .and_then(crate::files::View::preview_pixels);
-        // AND THE FRAME OF A MOVING ONE, which replaces it while it lasts.
-        let files_frame = self
-            .files
-            .as_ref()
-            .and_then(crate::files::View::moving_frame);
+        // AND THE PICTURE THAT REDRAWS ITSELF — a film's frame, or a shape at
+        // the angle it is being turned to — which replaces it while it lasts.
+        let files_frame = self.files.as_ref().and_then(crate::files::View::live_frame);
 
         let segments = self.segments_now();
         let mini_repouso = crate::minibuffer_at_rest();
@@ -8499,7 +8653,10 @@ impl Footer {
             // pointing at something is a question, and a question asked now
             // beats a state from before.
             .or_else(|| {
-                let e = self.files.as_ref()?.film_trouble()?;
+                let v = self.files.as_ref()?;
+                // AND WHAT WENT WRONG WITH A SHAPE, on the same line and for
+                // the same reason the film's sentence is here.
+                let e = v.film_trouble().or_else(|| v.shape_said())?;
                 Some(self.texts.t_with(e.key, &e.borrowed()))
             })
             // AND A TRANSFER'S ROW SAYS WHAT WENT WRONG.

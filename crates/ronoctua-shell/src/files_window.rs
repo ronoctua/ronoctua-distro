@@ -106,7 +106,9 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     window.set_app_id(APP_ID);
     window.commit();
 
-    let mut cycle: EventLoop<FilesWindow> = EventLoop::try_new().context("calloop")?;
+    // `'static` SPELLED OUT, because the handle is kept ON the state so the
+    // keyboard can be created with repeat — see `new_capability`.
+    let mut cycle: EventLoop<'static, FilesWindow> = EventLoop::try_new().context("calloop")?;
     let handle = cycle.handle();
     let (sender, reports) = channel::channel::<crate::files::Report>();
     // THE QUEUE, AS REPORTS. This door has no modeline and no panel: what it
@@ -198,6 +200,19 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
 
+    // AND THE VIEWS OF A SHAPE, on a channel of their own too, for the reason
+    // written just above about frames: a drag emits one every few tens of
+    // milliseconds and none of them is news about a directory.
+    let (turns_sender, turns) = channel::channel::<crate::stage::Beat>();
+    handle
+        .insert_source(turns, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(b) = event {
+                state.view.drew(b);
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
+
     let texts = std::rc::Rc::new(ronoctua_i18n::Texts::from_env());
     // The catalogue is swept HERE and not inherited: this is a process of its
     // own, and `open with` needs to know who declares a type. 128 entries in
@@ -240,6 +255,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         texts,
         looking: crate::files::inspector(sender.clone()),
         playing: crate::motion::player(frames_sender),
+        turning: crate::stage::stage(turns_sender),
         sender,
         under_pointer: None,
         dragging: None,
@@ -247,6 +263,8 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         cell_under_pointer: None,
         owed: false,
         message: None,
+        repeat: handle.clone(),
+        spinning: None,
         notice,
     };
     // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
@@ -360,6 +378,22 @@ struct FilesWindow {
     /// last event — which is what every other program does.
     owed: bool,
     message: Option<String>,
+    /// The loop, so a keyboard can be made that REPEATS.
+    ///
+    /// SCTK only generates repeat events for a keyboard created with
+    /// `get_keyboard_with_repeat`, and that one wants a `LoopHandle` — which is
+    /// why this is carried rather than reached for. See `new_capability`.
+    repeat: calloop::LoopHandle<'static, Self>,
+    /// The thread that draws a shape at the angle it is being looked at.
+    turning: Option<crate::stage::Stage>,
+    /// Where the pointer was when it last moved a shape.
+    ///
+    /// A gesture of the door's own and NOT a fourth `Axis`: `drag_to` inverts
+    /// a track — one scalar, one direction — and turning something is two
+    /// deltas with no track behind them. It sits beside `dragging` because it
+    /// is the same kind of thing: a press that owns the pointer until it is
+    /// let go.
+    spinning: Option<(f64, f64)>,
     /// The directory reporting itself, when one could be had.
     ///
     /// `None` means the watch could not be armed and the fallback clock above
@@ -425,6 +459,7 @@ impl FilesWindow {
             let _ = queue.send(ask);
         }
         self.follow_the_motion();
+        self.follow_the_turn();
     }
 
     /// Starts, or stops, the player that follows a moving file.
@@ -440,6 +475,21 @@ impl FilesWindow {
         // twin, and the reason written there.
         if let Some(ask) = self.view.wants_motion() {
             player.tell(ask);
+        }
+    }
+
+    /// Starts, or stops, the thread that draws a shape.
+    ///
+    /// The twin of `follow_the_motion`, asked in the same places and for the
+    /// same reason: the pose changes from a key, from the wheel, from a drag
+    /// and from the panel being resized, and enumerating those is how one gets
+    /// missed.
+    fn follow_the_turn(&mut self) {
+        let Some(stage) = self.turning.as_mut() else {
+            return;
+        };
+        if let Some(ask) = self.view.wants_turn() {
+            stage.tell(ask);
         }
     }
 
@@ -683,6 +733,7 @@ impl FilesWindow {
                 // nothing else could have, because every unit test drives
                 // `wants_motion` by hand.
                 self.follow_the_motion();
+                self.follow_the_turn();
             }
             crate::files::Report::Racked(rack) => {
                 // AND THE SIDEBAR'S FILE, HERE. This process has no clock — a
@@ -717,6 +768,22 @@ impl FilesWindow {
         // from the key that was pressed.
         self.follow_the_place();
         self.ask_paint();
+    }
+
+    /// One key, however it arrived — pressed, or repeated by the clock.
+    ///
+    /// One body and not two: a repeat that took a different path is a key that
+    /// does something slightly different the second time, which is the kind of
+    /// difference nobody looks for.
+    fn typed(&mut self, event: KeyEvent) {
+        let Some(t) = key_of(&event, self.mods) else {
+            return;
+        };
+        // A key clears the last message: it answered something that is no
+        // longer what is being done.
+        self.message = None;
+        let step = self.view.key(t);
+        self.apply(step);
     }
 
     /// Columns and rows from the size in pixels.
@@ -968,7 +1035,7 @@ impl FilesWindow {
                     // every frame — which is what keeps an animation to ONE of
                     // the thirty-nine slots. A key per frame would fill the
                     // cache with one file's film and evict every icon.
-                    if let Some(frame) = self.view.moving_frame() {
+                    if let Some(frame) = self.view.live_frame() {
                         im.upload_it(&gpu.device, &gpu.queue, &key, frame);
                     } else if im.missing(&key)
                         // THE STILL ONE ONLY GOES UP WHEN IT IS MISSING: a
@@ -1216,6 +1283,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // twin: refusal is a value, and pointing at something is a question
         // asked now.
         .or_else(|| s.view.film_trouble())
+        // AND WHAT WENT WRONG WITH A SHAPE, on the same line and for the same
+        // reason: a blank panel and a refused one look identical, and only one
+        // of them has a sentence.
+        .or_else(|| s.view.shape_said())
         .map(|e| s.texts.t_with(e.key, &e.borrowed()));
     // THE QUERY IS NOT HERE. It goes at the end of the path, on the line
     // above — see `files::View::crumbs`. This line is for what the pointer
@@ -1699,10 +1770,18 @@ fn key_of(event: &KeyEvent, mods: Modifiers) -> Option<ronoctua_keymap::Key> {
             // exception to it. `ISO_Left_Tab` is what xkb produces for
             // Shift+Tab — the application has already been made, exactly as it
             // is for `S` — so reading it here is reading what xkb decided
-            // rather than guessing at a modifier. `S-TAB` is the only entry in
-            // `OF_THE_VIEW` that needs it, and without this it arrived as a
-            // bare `TAB` and moved forwards.
-            shift: event.keysym == Keysym::ISO_Left_Tab,
+            // rather than guessing at a modifier.
+            //
+            // AND FROM THE MODIFIER FOR EVERY KEY THAT IS NOT A CHARACTER,
+            // because there xkb has nothing to apply it TO: Shift+Left is
+            // `Left` and the modifier is the only place the shift exists. The
+            // rule above was written when `S-TAB` was the only shifted binding
+            // and it read as "shift comes from the keysym"; what it actually
+            // says is "shift is not counted twice", and an arrow cannot count
+            // it twice. Without this, `S-<left>` arrived as a bare `<left>`
+            // and went UP A DIRECTORY — caught on screen, turning a shape.
+            shift: event.keysym == Keysym::ISO_Left_Tab
+                || (mods.shift && !matches!(sym, Sym::Char(_))),
             logo: mods.logo,
         },
         sym,
@@ -1746,7 +1825,22 @@ impl SeatHandler for FilesWindow {
         cap: Capability,
     ) {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seats.get_keyboard(qh, &seat, None) {
+            // WITH REPEAT, and it had never been. `repeat_key` is written in
+            // both doors and was documented as making holding `j` walk the
+            // list — and SCTK only ever calls it for a keyboard created THIS
+            // way, so it was dead code in both and no key repeated anywhere.
+            // Found looking for why holding `S-<left>` turned a shape once and
+            // then stopped.
+            //
+            // The rate and the delay are the COMPOSITOR's, arriving as
+            // `RepeatInfo`; nothing here invents either.
+            match self.seats.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.repeat.clone(),
+                Box::new(|state: &mut Self, _, event| state.typed(event)),
+            ) {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
@@ -1816,27 +1910,24 @@ impl KeyboardHandler for FilesWindow {
         _: u32,
         event: KeyEvent,
     ) {
-        let Some(t) = key_of(&event, self.mods) else {
-            return;
-        };
-        // A key clears the last message: it answered something that is no
-        // longer what is being done.
-        self.message = None;
-        let step = self.view.key(t);
-        self.apply(step);
+        self.typed(event);
     }
 
     fn repeat_key(
         &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
-        kb: &wl_keyboard::WlKeyboard,
-        serial: u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
         event: KeyEvent,
     ) {
         // Holding `j` walks the list, which is what a listing wants — unlike
         // the footer, where repeating a leader key is always a mistake.
-        self.press_key(conn, qh, kb, serial, event);
+        //
+        // SCTK delivers a repeat through the CALLBACK given to
+        // `get_keyboard_with_repeat` and not through this method, so this is
+        // the second door to the same room and both lead to `typed`.
+        self.typed(event);
     }
 
     fn release_key(
@@ -1876,11 +1967,35 @@ impl PointerHandler for FilesWindow {
         let mut right = None;
         // BOTH COORDINATES: a bar going across is dragged by `x`.
         let mut dragged: Option<(f64, f64)> = None;
+        let mut spun = false;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     if self.dragging.is_some() {
                         dragged = Some(e.position);
+                    }
+                    // AND A SHAPE TURNS WITH THE HAND. The deltas are in
+                    // PIXELS and become radians here, because the view has no
+                    // idea how big a pixel is; a whole panel's width is about
+                    // half a turn, which is the ratio that makes a piece feel
+                    // attached to the pointer rather than geared to it.
+                    if let Some((was_x, was_y)) = self.spinning {
+                        let wide = f64::from(self.width.max(1));
+                        let by = std::f64::consts::PI / wide;
+                        #[allow(clippy::cast_possible_truncation)]
+                        // WHERE THE HAND WENT, in radians of turn. Which way a
+                        // yaw counts is `View::spin`'s business and written out
+                        // there — a convention spelled at two call sites is a
+                        // convention that gets one of them backwards, which is
+                        // what happened.
+                        let turned = self.view.spin(
+                            ((e.position.0 - was_x) * by) as f32,
+                            ((e.position.1 - was_y) * by) as f32,
+                        );
+                        self.spinning = Some(e.position);
+                        if turned {
+                            spun = true;
+                        }
                     }
                     self.under_pointer = self.target_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self
@@ -1912,6 +2027,19 @@ impl PointerHandler for FilesWindow {
                     self.dragging = self.bar_at_point(e.position.0, e.position.1);
                     if self.dragging.is_some() {
                         dragged = Some(e.position);
+                    } else if self
+                        .under_pointer
+                        .as_ref()
+                        .is_some_and(|t| matches!(t.pane, crate::files::Pane::Preview))
+                        && self.view.shape_here()
+                    {
+                        // A PRESS ON THE PIECE TAKES THE POINTER. After the
+                        // bar, because a bar drawn over the panel is still a
+                        // control; before the row, because a shape has no rows
+                        // and the click would otherwise open the file — which
+                        // is what pressing a picture does, and is exactly what
+                        // somebody about to turn it does not want.
+                        self.spinning = Some(e.position);
                     } else {
                         left = self.under_pointer.clone();
                     }
@@ -1924,6 +2052,7 @@ impl PointerHandler for FilesWindow {
                 // one cannot let go of is worse than one that does not move.
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = None;
+                    self.spinning = None;
                 }
                 // THE RIGHT BUTTON OPENS THE MENU. It draws in this window's own
                 // region, has no surface of its own and does not float — see the
@@ -1958,6 +2087,13 @@ impl PointerHandler for FilesWindow {
                 }
                 _ => {}
             }
+        }
+        // A SHAPE TURNED, which is neither a drag along a track nor a click:
+        // it has already changed the view, so all that is left is to draw it
+        // and to tell the stage.
+        if spun {
+            self.follow_the_turn();
+            self.ask_paint();
         }
         // THE DRAG, before the row and before the wheel: while the thumb is
         // held, the pointer is not pointing at rows.

@@ -88,6 +88,13 @@ pub enum How {
     Embedded,
     /// The first page of a document, by pdftoppm.
     Page,
+    /// A shape, drawn by [`crate::solid`] in this process.
+    ///
+    /// It is the only row that produces no picture HERE. A mesh is turned, so
+    /// what the panel shows is a frame at whatever angle the person has it at,
+    /// and the manager's own thread makes those the way the film's player
+    /// makes its own — see [`at`], which answers `Made::unasked` for this.
+    Mesh,
 }
 
 impl How {
@@ -95,7 +102,7 @@ impl How {
     #[must_use]
     pub const fn tool(self) -> Option<Tool> {
         match self {
-            Self::Raster | Self::Vector => None,
+            Self::Raster | Self::Vector | Self::Mesh => None,
             Self::Frame | Self::Inside => Some(Tool::Ffmpeg),
             Self::Embedded => Some(Tool::Exiftool),
             Self::Page => Some(Tool::Pdftoppm),
@@ -144,7 +151,24 @@ pub struct Row {
 /// the database says descends from `image/tiff`. It must NOT reach the `tiff`
 /// decoder — that would read the RAW planes — so the raster row matches exact
 /// types only and never walks the subclass DAG.
-pub const TABLE: [Row; 7] = [
+pub const TABLE: [Row; 8] = [
+    Row {
+        // BOTH ARE ALREADY IN THE DATABASE, so neither is invented here: the
+        // pinned shared-mime-info has `model/stl` by its `*.stl` glob and
+        // `model/3mf` by `*.3mf` plus a subclass edge to `application/zip`.
+        // That edge is what makes `crate::settled` keep the name for a 3MF,
+        // which sniffs as a zip because it IS one — the same shape the `.dng`
+        // note further down describes.
+        //
+        // A binary STL has no magic at all (freedesktop's only rule is the
+        // word `solid`, which is the ASCII form), so its type comes from the
+        // name alone and the sniff correctly says nothing.
+        id: "mesh",
+        types: &["model/stl", "model/3mf"],
+        descends: &[],
+        media: &[],
+        how: How::Mesh,
+    },
     Row {
         // The six the `image` crate reads with no C library behind it, so they
         // cost binary and never a store path. See the workspace's `image` line.
@@ -233,6 +257,15 @@ pub fn how(mime: &str) -> Option<&'static Row> {
     })
 }
 
+/// Whether this type is a shape the manager turns rather than a picture.
+///
+/// The one question the host asks before deciding what to do with the file:
+/// a mesh gets no still and no text, and gets a thread that draws it instead.
+#[must_use]
+pub fn turns(mime: &str) -> bool {
+    how(mime).is_some_and(|r| matches!(r.how, How::Mesh))
+}
+
 /// Where in a moving picture the frame is taken from, in seconds.
 ///
 /// # Why not zero
@@ -278,6 +311,14 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
     let Some(row) = how(mime) else {
         return Made::refused(Refusal::Nothing);
     };
+    // A SHAPE HAS NO STILL, and for the reason a film has none: the manager
+    // turns it, so the picture is a frame at an angle this function knows
+    // nothing about. Rendering a default view here would be a whole parse and
+    // a whole render for an image replaced as soon as the first real frame
+    // arrives — the poster problem, again.
+    if matches!(row.how, How::Mesh) {
+        return Made::unasked();
+    }
     let began = Instant::now();
     let outcome = match row.how {
         // THE FALLBACK, and the only one in this module. `image` claims TIFF
@@ -318,6 +359,8 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
         }),
         How::Page => child_image(Tool::Pdftoppm, &page_args(path, target))
             .and_then(|png| from_raster(&png, target)),
+        // Answered above, before any of this was set up.
+        How::Mesh => return Made::unasked(),
     };
     match outcome {
         Ok(rgba) => {
