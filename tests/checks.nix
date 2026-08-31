@@ -3848,6 +3848,205 @@ let
         echo "OK: $(echo "$keys" | wc -l) menu keys, $(echo "$declared" | wc -l) of the view's, and every Hit has an owner"
       '';
 
+  # THE PREVIEW'S PLAYER NEVER GUESSES A FRAME'S SIZE.
+  #
+  # This is the defect the owner photographed, pinned against the CODE rather
+  # than against a screenshot. `play_video` used to deduce the height from how
+  # many bytes happened to arrive in one 64 KiB read: at width 512 a row is
+  # 2 048 bytes and 65 536 is exactly 32 of them, so the stream was declared
+  # 512x32 and every frame after it was a horizontal slice of the film.
+  #
+  # Three claims, and each of them is what makes the size ours:
+  #
+  #   - the filter pads to a literal `W:H`, so what leaves the pipe is exactly
+  #     what was asked for whatever the file says about itself;
+  #   - `-2` appears in no scale filter — it is ffmpeg's "work this one out"
+  #     marker, and the whole point is that nothing is left to it;
+  #   - and nothing anywhere reads a dimension back out of the stream.
+  motion-never-guesses-a-frame =
+    mkCheck "motion-never-guesses-a-frame"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        probe=${../crates/ronoctua-inspect/src}/motion.rs
+        player=${../crates/ronoctua-shell/src}/motion.rs
+        failed=0
+
+        # --- the size is stated, on both sides of the filter ----------------
+        grep -q 'scale={w}:{h}' "$probe" || {
+          echo "ERROR: the scale filter no longer names both dimensions" >&2
+          failed=1
+        }
+        grep -q 'pad={w}:{h}' "$probe" || {
+          echo "ERROR: the pad filter is gone — the frame's size is the file's again" >&2
+          failed=1
+        }
+
+        # --- and NOTHING is left to ffmpeg ----------------------------------
+        #
+        # `-2` is its marker for "choose this one to keep the aspect". Under it
+        # the height depends on the file, which is what the frame count cannot
+        # survive.
+        left=$(grep -nE 'scale=[^,"]*-2' "$probe" || true)
+        [ -z "$left" ] || {
+          echo "ERROR: a dimension was left to ffmpeg:" >&2
+          echo "$left" >&2
+          failed=1
+        }
+
+        # --- and the player does not read one back --------------------------
+        #
+        # The dead function by name, and the shape of what it did: a height
+        # divided out of a byte count.
+        #
+        # THE COMMENTS COME OFF FIRST, and that is not tidiness — it is what
+        # this check was measured to need. The player's own documentation
+        # explains at length why the old arithmetic is gone, so a grep over the
+        # whole file finds the explanation and fails on it. A check that cannot
+        # tell code from a sentence about code is a check that forbids writing
+        # down why.
+        code=$(grep -vE "^[[:space:]]*(///|//|\*)" "$player")
+        back=$(printf '%s' "$code" | grep -nE 'first_frame_height|/ *row|bytes_read */' || true)
+        [ -z "$back" ] || {
+          echo "ERROR: the player is working a dimension out of the bytes again:" >&2
+          echo "$back" >&2
+          failed=1
+        }
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: the frame's size is stated and nothing derives it"
+      '';
+
+  # A PICTURE WITH A FILM IN IT IS FOUND BY ITS BYTES, NOT BY A TABLE OF MAKERS.
+  #
+  # Phones from several makers record a second or two of video alongside the
+  # shutter, and each writes it a little differently. The temptation is a parser
+  # per maker — and this machine has files from exactly ONE of them, so every
+  # other parser would be code written from a document and never run against a
+  # file.
+  #
+  # What is here instead is one general route: an MP4 begins with an `ftyp` box,
+  # so the tail is searched for one. It is exercised by the owner's own two
+  # Pixel files, where it lands on the very byte their XMP declares.
+  #
+  # Three claims:
+  #
+  #   - the general route exists and is not commented out;
+  #   - the film is read WHERE IT LIES, with ffmpeg's `subfile`, and never
+  #     copied out to a temporary — a motion photo's video is megabytes;
+  #   - and nothing decides by the file's NAME. `MVIMG_`, `PXL_` and `.MP.` are
+  #     the makers' naming habits, not facts about the bytes, and a rename would
+  #     turn the feature off with nothing saying why.
+  motion-photo-is-found-by-bytes =
+    mkCheck "motion-photo-is-found-by-bytes"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        probe=${../crates/ronoctua-inspect/src}/motion.rs
+        failed=0
+
+        # THE CODE, WITHOUT ITS TESTS OR ITS REASONING.
+        #
+        # Everything below asks about the code, and every one of these strings
+        # also appears in a test that asserts it or a comment that explains it.
+        # Measured with each defect planted back: the `subfile` claim passed on
+        # the TEST's own copy of the word while the code had stopped using it.
+        code=$(sed '/^mod tests {/,$d' "$probe" | grep -vE "^[[:space:]]*(///|//|\*)")
+
+        # --- the general route -----------------------------------------------
+        printf '%s' "$code" | grep -q 'fn tail_video' || {
+          echo "ERROR: the scan for an appended film is gone — what covers a maker" >&2
+          echo "      whose file nobody here has?" >&2
+          failed=1
+        }
+        printf '%s' "$code" | grep -q 'b"ftyp"' || {
+          echo "ERROR: nothing looks for an MP4's own first box any more" >&2
+          failed=1
+        }
+
+        # --- read where it lies ----------------------------------------------
+        printf '%s' "$code" | grep -q 'subfile,,start,' || {
+          echo "ERROR: the film inside a picture is no longer read with subfile" >&2
+          echo "      — the only other way is copying megabytes to a temporary." >&2
+          failed=1
+        }
+
+        # --- and never by the name -------------------------------------------
+        #
+        # AND NEVER BY THE NAME. The reasoning above names the makers' file
+        # prefixes and a fixture is called `IMG_1.MOV` because that is what an
+        # iPhone calls one; neither is a decision.
+        named=$(printf '%s' "$code" | grep -nE 'MVIMG|PXL_|\.MP\.|IMG_[0-9]' || true)
+        [ -z "$named" ] || {
+          echo "ERROR: a maker's naming habit is being read as a fact:" >&2
+          echo "$named" >&2
+          failed=1
+        }
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: the film is found by its bytes and read where it lies"
+      '';
+
+  # THE PLAYER NEVER LEAVES A CHILD, AND NEVER BLOCKS FOR EVER.
+  #
+  # Two properties one cannot see on a screenshot and that both end as a
+  # process the owner finds later:
+  #
+  #   - a `read` with no deadline hangs the player's thread for the rest of the
+  #     session, silently — the door keeps painting and `orders.recv()` never
+  #     runs again;
+  #   - and a `kill` written out at each exit leaks an ffmpeg the day somebody
+  #     adds a fifth exit.
+  motion-never-leaks-a-child =
+    mkCheck "motion-never-leaks-a-child"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        player=${../crates/ronoctua-shell/src}/motion.rs
+        failed=0
+
+        # --- every read has a deadline --------------------------------------
+        #
+        # OVER THE CODE AND NOT THE COMMENTS. The player documents at length why
+        # `read_exact` is gone, and a grep over the whole file finds that
+        # sentence and fails on it — measured, before this check was written
+        # down. A check that cannot tell code from a sentence about code is a
+        # check that forbids writing down why.
+        code=$(grep -vE "^[[:space:]]*(///|//|\*)" "$player")
+        blocking=$(printf '%s' "$code" \
+          | grep -nE 'read_exact\(|read_to_end\(|read_to_string\(' || true)
+        [ -z "$blocking" ] || {
+          echo "ERROR: a blocking read with no deadline in the player:" >&2
+          echo "$blocking" >&2
+          echo "      A source that stops answering takes the thread with it." >&2
+          failed=1
+        }
+        grep -q 'rustix::event::poll' "$player" || {
+          echo "ERROR: the player no longer polls — what bounds its reads?" >&2
+          failed=1
+        }
+
+        # --- the child goes by a GUARD and not by hand ----------------------
+        grep -q 'impl Drop for Reaped' "$player" || {
+          echo "ERROR: the Drop guard is gone; every exit has to kill by hand again" >&2
+          failed=1
+        }
+        # AND ITS OWN GROUP, so a signal reaches whatever ffmpeg started.
+        grep -q 'process_group(0)' "$player" || {
+          echo "ERROR: the child is not in a group of its own" >&2
+          failed=1
+        }
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: every read has a deadline and every child has a guard"
+      '';
+
   # NOTHING THE FILE MANAGER SPAWNS COMES BY NAME.
   #
   # `bsdtar`, `fstrim` and `pkexec`. Same two sides as the rescue console's:
@@ -7789,6 +7988,11 @@ let
       files-actions-have-text
       files-everything-has-a-key
       files-runs-by-path
+      # The preview's player: the size it never guesses, and the child it never
+      # leaves behind.
+      motion-never-guesses-a-frame
+      motion-never-leaks-a-child
+      motion-photo-is-found-by-bytes
       # And the sidebar's device half: the border with udisks2, the polkit
       # posture we depend on and do not write, and the refusal that must not
       # hang.
@@ -7834,6 +8038,9 @@ let
       files-actions-have-text
       files-everything-has-a-key
       files-runs-by-path
+      motion-never-guesses-a-frame
+      motion-never-leaks-a-child
+      motion-photo-is-found-by-bytes
       files-polkit-is-narrow
       files-closure-has-no-mime-db
       files-columns-degrade

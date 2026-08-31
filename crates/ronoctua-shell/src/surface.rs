@@ -505,6 +505,8 @@ struct Footer {
     /// raised — the panels then draw the type's glyph, which is what they draw
     /// for a file that has no picture anyway.
     files_looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
+    /// The thread that follows a moving file, when there is one to follow.
+    files_playing: Option<crate::motion::Player>,
     /// Who the numeric ids belong to, read ONCE.
     ///
     /// `/etc/passwd` and `/etc/group` do not change while a listing is on
@@ -719,6 +721,12 @@ struct ExpansionRow {
     /// seven columns with a hit target each, which is exactly what `key`/`text`
     /// cannot express.
     fields: Vec<crate::files::Field>,
+    /// Whether this line is anchored to the surface's BOTTOM edge.
+    ///
+    /// The film's transport, and nothing else — see `files::Row::foot`. A
+    /// surface is not a whole number of lines, and the leftover under the last
+    /// one is where the owner found the controls sitting high.
+    foot: bool,
 }
 
 /// What a click on a line of the expansion does.
@@ -820,6 +828,7 @@ impl ExpansionRow {
             key_color: tokens::color::STATE_ACCENT,
             text_color: tokens::color::TEXT_SECONDARY,
             fields: Vec::new(),
+            foot: false,
         }
     }
 
@@ -991,6 +1000,7 @@ fn highlight_line(
         column,
         color: tokens::color::TEXT_PRIMARY,
         edge: false,
+        foot: false,
     };
     let Some(l) = tongue else {
         return vec![simple(line)];
@@ -1017,6 +1027,7 @@ fn highlight_line(
             column: column + u16::try_from(line[..kdl_of].chars().count()).unwrap_or(0),
             color,
             edge: false,
+            foot: false,
         });
     };
 
@@ -1538,6 +1549,7 @@ pub fn run() -> Result<()> {
         files: None,
         files_sender: None,
         files_looking: None,
+        files_playing: None,
         // Read ONCE, at startup. Neither answer changes while a listing is on
         // screen, and asking per row would put two hundred opens inside the
         // frame that draws it.
@@ -1612,6 +1624,28 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
+
+    // THE FRAMES OF A MOVING FILE, on a channel of their own — see the window
+    // door's twin for why they are not on the reports': a frame arrives ten
+    // times a second, and the reports' channel wakes the parts that read a
+    // directory.
+    //
+    // AND THE FRAME ARRIVING IS THE CLOCK. This door has a one-second timer
+    // and it is nowhere near fast enough; rather than a second timer that
+    // would have to be told when to run, the player sleeps for the frame's own
+    // delay and sends it. When it stops, the wake-ups stop with it.
+    let (frames_sender, frames) = channel::channel::<crate::motion::Beat>();
+    state.files_playing = crate::motion::player(frames_sender);
+    handle
+        .insert_source(frames, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(f) = event {
+                if let Some(v) = state.files.as_mut() {
+                    v.played(f);
+                }
+                state.owes_paint = true;
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
 
     // THE END OF A RADIO SCAN.
     //
@@ -3147,6 +3181,14 @@ impl PointerHandler for Footer {
                     self.brain_hint = self
                         .brain_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
+                    // AND WHICH OF THE MANAGER'S SECTIONS, which is what
+                    // decides the film's two buttons are drawn — see the
+                    // window door's twin. Their CELLS are reserved either way,
+                    // so nothing moves when they arrive.
+                    let over = self.files_target().map(|t| t.pane);
+                    if let Some(v) = self.files.as_ref() {
+                        v.pointing(over);
+                    }
                     // DRAGGING: the pointer's position BECOMES the offset.
                     if let Some((pane, axis)) = self.dragging_section {
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
@@ -3162,6 +3204,9 @@ impl PointerHandler for Footer {
                     self.band_hint = None;
                     self.brain_hint = None;
                     self.dragging = false;
+                    if let Some(v) = self.files.as_ref() {
+                        v.pointing(None);
+                    }
                 }
                 // THE RIGHT BUTTON OPENS THE FILE MANAGER'S MENU, and nothing
                 // else.
@@ -5041,14 +5086,32 @@ impl Footer {
     /// same file has already been asked about — all three decided by
     /// `files::View::wants_look`, which is the one place that knows.
     fn look_again(&mut self) {
-        let Some(queue) = self.files_looking.as_ref() else {
+        if let Some(queue) = self.files_looking.as_ref()
+            && let Some(view) = self.files.as_mut()
+            && let Some(ask) = view.wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
+        {
+            let _ = queue.send(ask);
+        }
+        self.follow_the_motion();
+    }
+
+    /// Starts, or stops, the player that follows a moving file.
+    ///
+    /// The window door's twin, and asked in the same place for the same
+    /// reason: the cursor can move a dozen ways, and enumerating them is how a
+    /// case gets missed.
+    fn follow_the_motion(&mut self) {
+        let Some(player) = self.files_playing.as_mut() else {
             return;
         };
         let Some(view) = self.files.as_mut() else {
             return;
         };
-        if let Some(ask) = view.wants_look(u32::from(tokens::space::FILES_PANELPIXELS)) {
-            let _ = queue.send(ask);
+        // ONE QUESTION, ONE ANSWER, PASSED STRAIGHT ON. The view decides what
+        // should be running by comparing values; this door does not know what
+        // changed and does not need to.
+        if let Some(ask) = view.wants_motion() {
+            player.tell(ask);
         }
     }
 
@@ -6087,6 +6150,10 @@ impl Footer {
                 // it is not a target. The strip is four lines and the info
                 // panel may have two facts.
                 click: (!r.fields.is_empty()).then_some(Click::FilesStrip),
+                // AND THE TRANSPORT'S ANCHOR TRAVELS WITH IT — see
+                // `files::Row::foot`: the strip's last line is the one the
+                // remainder must fall above rather than below.
+                foot: r.foot,
                 fields: r.fields,
                 ..ExpansionRow::empty_one()
             })
@@ -6106,11 +6173,13 @@ impl Footer {
             ExpansionRow {
                 click: Some(Click::FilesPath),
                 fields: files.crumbs(width),
+                foot: false,
                 ..ExpansionRow::empty_one()
             },
             ExpansionRow {
                 click: Some(Click::Files(usize::MAX)),
                 fields: files.header(width, &self.texts).fields,
+                foot: false,
                 ..ExpansionRow::empty_one()
             },
         ]
@@ -6168,6 +6237,7 @@ impl Footer {
                 .map(|(n, r)| ExpansionRow {
                     click: (!r.fields.is_empty()).then_some(Click::Files(skip + n)),
                     fields: r.fields,
+                    foot: false,
                     ..ExpansionRow::empty_one()
                 })
                 .collect();
@@ -6179,6 +6249,7 @@ impl Footer {
             .map(|r| crate::files::Row {
                 fields: r.fields.clone(),
                 marked: false,
+                foot: r.foot,
                 focused: false,
             })
             .collect();
@@ -6266,6 +6337,7 @@ impl Footer {
                 .map(|(n, r)| ExpansionRow {
                     click: Some(Click::Transfers(n)),
                     fields: r.fields,
+                    foot: false,
                     ..ExpansionRow::empty_one()
                 })
                 .collect();
@@ -6405,6 +6477,7 @@ impl Footer {
                         tokens::color::TEXT_DIM
                     },
                     fields: Vec::new(),
+                    foot: false,
                 })
                 .collect();
         }
@@ -6578,6 +6651,7 @@ impl Footer {
                         tokens::color::TEXT_SECONDARY
                     },
                     fields: Vec::new(),
+                    foot: false,
                 })
                 .collect();
         }
@@ -6648,6 +6722,7 @@ impl Footer {
                 // first item while the pointer was on the title.
                 click: (n > 0).then(|| Click::Notifications(n - 1)),
                 fields: r.fields,
+                foot: false,
                 ..ExpansionRow::empty_one()
             })
             .collect()
@@ -6829,7 +6904,10 @@ impl Footer {
         // ALONG THE TRACK THAT WAS GRABBED. The sideways bar's is the panel's
         // own pixels, and it answers first because the pane it belongs to also
         // has one going down.
-        if matches!(axis, crate::files::Axis::Across) {
+        // AND THE FILM'S AXIS RUNS ACROSS TOO, over the track's own pixels
+        // rather than the panel's — `files::track_px` is the one answer, asked
+        // here and by the rectangle that was drawn.
+        if matches!(axis, crate::files::Axis::Across | crate::files::Axis::Time) {
             let columns = self.screen_columns();
             let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
             let edge = self
@@ -6855,6 +6933,23 @@ impl Footer {
             if wide <= 0.0 {
                 return;
             }
+            let Some((left, wide)) = (if matches!(axis, crate::files::Axis::Time) {
+                // THE CLOCK'S WIDTH IS THE SECTION'S — it decides where the
+                // track ends, so grabbing it by any other arithmetic would read
+                // a position the cursor was never drawn at.
+                let clock = self.files.as_ref().map_or(0, |v| {
+                    let chrome = v.chrome_rows(columns, &self.texts);
+                    v.sections(&chrome, self.grid().lines, columns, &self.texts)
+                        .iter()
+                        .find(|s| s.pane == pane)
+                        .map_or(0, |s| s.clock)
+                });
+                crate::files::track_px(left, wide, cell, clock)
+            } else {
+                Some((left, wide))
+            }) else {
+                return;
+            };
             if let Some(v) = self.files.as_mut()
                 && v.drag_to(
                     pane,
@@ -6947,11 +7042,84 @@ impl Footer {
                 let across = sec
                     .wide_bar_box(x, top, bottom, wide, cell, line_height)
                     .map(|r| (sec.pane, crate::files::Axis::Across, r));
-                Some([down, across])
+                // AND THE FILM'S — see the window door's twin.
+                // AND THE FILM'S TRACK — see the window door's twin.
+                let time = sec
+                    .time_track_box(x, top, wide, cell, line_height)
+                    .map(|r| (sec.pane, crate::files::Axis::Time, r));
+                Some([down, across, time])
             })
             .flatten()
             .flatten()
             .collect()
+    }
+
+    /// The film's controls, as rectangles that go ON the picture.
+    ///
+    /// Three of them and in this order: the half-transparent band, the
+    /// timeline's track, and the cursor on it. They are painted after the
+    /// pictures — see the `draw_range` pair in `paint` — because the film keeps
+    /// the whole panel and anything drawn with the other backgrounds would be
+    /// underneath it.
+    ///
+    /// `Section::time_bar_box` is where the cursor's rectangle lives, which is
+    /// what keeps this in step with what the drag reads back.
+    fn files_transport(
+        &self,
+        columns: u16,
+        cell: f32,
+        line_height: f32,
+        edge: f32,
+    ) -> Vec<ronoctua_render::quad::Quad> {
+        let Some(v) = self.files.as_ref() else {
+            return Vec::new();
+        };
+        if !v.transport_showing() {
+            return Vec::new();
+        }
+        let panes = v.panes(columns);
+        let top = f32::from(self.first_of_expansion()) * line_height;
+        let chrome = v.chrome_rows(columns, &self.texts);
+        let mut out = Vec::new();
+        for sec in &v.sections(&chrome, self.grid().lines, columns, &self.texts) {
+            let Some((_x, _wide)) = crate::files::section_px(
+                panes,
+                sec.pane,
+                crate::chrome::FIELDS_LEAD,
+                columns,
+                cell,
+                edge,
+            ) else {
+                continue;
+            };
+            let mut band = |rect: (f32, f32, f32, f32), color| {
+                out.push(ronoctua_render::quad::Quad {
+                    x: rect.0,
+                    y: rect.1,
+                    width: rect.2,
+                    height: rect.3,
+                    color,
+                });
+            };
+            // EVERY PART OF THE TRANSPORT FROM THE SAME FOOT — see
+            // `files::transport_top`, and the window door's twin.
+            let foot = self.metric().map_or(top, crate::chrome::Frame::bottom);
+            // THE FIELDS' OWN CELLS, and not the section's rails — see
+            // `Section::fields_px`: the glyphs and the clock sit at `from`..`to`
+            // and the rails are wider, which is the gap the owner photographed
+            // between the timeline and the numbers.
+            let (fx, fwide) = sec.fields_px(crate::chrome::FIELDS_LEAD, cell);
+            if let Some(r) = crate::files::transport_band(sec, fx, fwide, line_height, foot) {
+                band(r, tokens::color::SURFACE_TRANSPORT);
+            }
+            if let Some(r) = sec.time_track_box(fx, fwide, cell, line_height, foot) {
+                band(r, tokens::color::RULE_STRONG);
+            }
+            if let Some(r) = sec.time_bar_box(fx, fwide, cell, line_height, foot) {
+                band(r, tokens::color::TEXT_PRIMARY);
+            }
+        }
+        out
     }
 
     /// Which section's bar a POINT is on — the same rectangles that were drawn.
@@ -7346,6 +7514,9 @@ impl Footer {
                 if let Some(v) = self.files.as_mut() {
                     v.looked(*looked);
                 }
+                // AND THE PLAYER IS ASKED AGAIN — see the window door's twin,
+                // and the defect written out there.
+                self.follow_the_motion();
             }
             crate::files::Report::Racked(rack) => {
                 // ONLY WHEN THERE IS A VIEW TO PUT IT IN. The thread goes on
@@ -8031,6 +8202,11 @@ impl Footer {
             .files
             .as_ref()
             .and_then(crate::files::View::preview_pixels);
+        // AND THE FRAME OF A MOVING ONE, which replaces it while it lasts.
+        let files_frame = self
+            .files
+            .as_ref()
+            .and_then(crate::files::View::moving_frame);
 
         let segments = self.segments_now();
         let mini_repouso = crate::minibuffer_at_rest();
@@ -8214,6 +8390,18 @@ impl Footer {
                 let e = self.files_target()?.explain?;
                 Some(self.texts.t_with(e.key, &e.borrowed()))
             })
+            // AND WHAT WENT WRONG WITH A FILM, which nothing else on screen
+            // could say: **refusal is a value, not an absence**. A panel with
+            // no sound and a panel whose film went silent look the same, and
+            // only one of them has a sentence.
+            //
+            // BELOW the pointer's answer, which is this line's own precedence:
+            // pointing at something is a question, and a question asked now
+            // beats a state from before.
+            .or_else(|| {
+                let e = self.files.as_ref()?.film_trouble()?;
+                Some(self.texts.t_with(e.key, &e.borrowed()))
+            })
             // AND A TRANSFER'S ROW SAYS WHAT WENT WRONG.
             //
             // A row that says only "failed" sends somebody to the journal —
@@ -8256,8 +8444,29 @@ impl Footer {
         //
         // The background says "this responds to the click". In the manual, which
         // is only read, a lit line would promise an action that does not exist.
+        //
+        // AND NEVER OVER A PICTURE. The band says which ROW of a list the
+        // pointer is on, and a preview showing a photograph or a film is not a
+        // list — the owner reported it lighting *"o background da linha no
+        // preview de vídeos e imagens"*, where it says nothing and covers part
+        // of what one came to look at. `View::band_belongs` is the one place
+        // that decides, so both doors answer the same.
+        //
+        // ASKED OF THE CELL, which is the same input the band's own rectangle
+        // comes from — see `View::band_belongs_at`. Asked of the resolved
+        // target instead, it answered "draw it" wherever the target came back
+        // `None` while `band_of` went on banding the cell, and the owner would
+        // have gone on seeing the stripe.
+        let over_a_picture = self.files.as_ref().is_some_and(|v| {
+            let columns = self.screen_columns();
+            let in_strip = self
+                .row_under_pointer
+                .is_some_and(|line| line >= self.grid().lines);
+            !v.band_belongs_at(self.cell_under_pointer.unwrap_or(0), columns, in_strip)
+        });
         let under_the_pointer = self
             .row_under_pointer
+            .filter(|_| !over_a_picture)
             .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
             .map(place_of);
         // Does the footer have the keyboard? It is what decides whether the
@@ -8452,6 +8661,7 @@ impl Footer {
                     line: mini_line,
                     color: mini_color,
                     edge: false,
+                    foot: false,
                 });
             }
 
@@ -8468,6 +8678,7 @@ impl Footer {
                         line: mini_line,
                         color: tokens::color::TEXT_DIM,
                         edge: false,
+                        foot: false,
                     });
                 }
             }
@@ -8525,6 +8736,10 @@ impl Footer {
                                 f.color
                             },
                             edge: false,
+                            // AND THE TRANSPORT'S ROW IS ANCHORED TO THE FOOT,
+                            // the only row in this manager that is — see
+                            // `files::Row::foot`.
+                            foot: line.foot,
                         });
                     }
                     continue;
@@ -8542,6 +8757,7 @@ impl Footer {
                         line: y,
                         color: line.key_color,
                         edge: false,
+                        foot: false,
                     });
                 }
                 if with_key {
@@ -8580,6 +8796,7 @@ impl Footer {
                                 line.key_color
                             },
                             edge: false,
+                            foot: false,
                         });
                     }
                     if line.separator {
@@ -8592,6 +8809,7 @@ impl Footer {
                             // the modeline gives to what dies first in the elision.
                             color: tokens::color::TEXT_DIM,
                             edge: false,
+                            foot: false,
                         });
                     }
                 }
@@ -8609,6 +8827,7 @@ impl Footer {
                     line: y,
                     color: line.text_color,
                     edge: false,
+                    foot: false,
                 });
             }
 
@@ -8651,9 +8870,22 @@ impl Footer {
                 // picture is touching the top line and has a lot of extra space
                 // underneath"*.
                 //
-                if let (Some((at, room)), Some(key)) = (panes.preview_box(columns), v.preview_key())
-                    && let Some(rgba) = v.preview_pixels()
-                {
+                // AND THE BOX IS MEASURED FROM THE PICTURE THAT IS DRAWN.
+                //
+                // It used to ask `preview_pixels` — the STILL frame — and then
+                // draw whatever the player had sent into the rectangle that
+                // answer produced. The two are different shapes, so every film
+                // came out stretched to its poster's proportions; under the old
+                // height guess that was ninefold, and it is what *"the frames
+                // look rotated"* was. `preview_now` is the one answer, and
+                // the picture that is measured is the picture that is drawn.
+                //
+                // AND THE BOX IS MEASURED WHETHER OR NOT THERE IS ANYTHING IN
+                // IT YET — see the window door's twin. Measured inside the
+                // `preview_key` guard it DEADLOCKED: a film has no still any
+                // more, so nothing is drawn until the player produces a frame,
+                // and the player is not started until the box is known.
+                if let Some((at, room)) = panes.preview_box(columns) {
                     let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
                     #[allow(clippy::cast_possible_truncation)]
                     let (top, tall) = crate::files::panel_band(
@@ -8661,40 +8893,66 @@ impl Footer {
                         grid.lines as u16,
                         panes.strip,
                     );
-                    // AND THE AIR ON ALL FOUR SIDES IS THE VIEW'S, not this
-                    // door's. `fit_into` centres and that was never the whole
-                    // promise: whichever dimension is the tight one comes out
-                    // exactly as long as the box, so the picture was centred
-                    // AND touching the rule on its right. See
-                    // `files::picture_in`.
-                    // THE REGION'S RAILS, not the text's — see
-                    // `files::panel_px`.
                     #[allow(clippy::cast_precision_loss)]
-                    let (box_x, box_wide) = crate::files::panel_px(
+                    let measured = crate::files::panel_px(
                         panes,
                         crate::files::Panel::Preview,
                         crate::chrome::FIELDS_LEAD,
                         columns,
                         cell,
                         width as f32,
-                    )
-                    .unwrap_or((
-                        f32::from(crate::chrome::FIELDS_LEAD + at) * cell,
-                        f32::from(room) * cell,
-                    ));
-                    file_preview = Some((
-                        key.to_owned(),
-                        crate::files::picture_in(
-                            ronoctua_render::image::Area {
-                                x: box_x,
-                                y: f32::from(top) * line_height,
-                                width: box_wide,
-                                height: f32::from(tall) * line_height,
-                            },
-                            rgba.width,
-                            rgba.height,
-                        ),
-                    ));
+                    );
+                    if let Some((_, box_wide)) = measured {
+                        let air = f32::from(tokens::space::FILES_PICTUREAIR);
+                        v.measured_preview(
+                            box_wide - air - air,
+                            f32::from(tall) * line_height - air - air,
+                        );
+                    }
+                    // AND THE DRAWING IS A GUARD AND NOT A `continue`: the
+                    // nearest loop here is the one walking the region's visible
+                    // LINES, so bailing out of it would drop a line of text
+                    // whenever the preview had nothing to show.
+                    if let (Some(key), Some(rgba)) = (v.preview_key(), v.preview_now()) {
+                        // AND THE AIR ON ALL FOUR SIDES IS THE VIEW'S, not this
+                        // door's. `fit_into` centres and that was never the whole
+                        // promise: whichever dimension is the tight one comes out
+                        // exactly as long as the box, so the picture was centred
+                        // AND touching the rule on its right. See
+                        // `files::picture_in`.
+                        // THE REGION'S RAILS, not the text's — see
+                        // `files::panel_px`.
+                        #[allow(clippy::cast_precision_loss)]
+                        let (box_x, box_wide) = crate::files::panel_px(
+                            panes,
+                            crate::files::Panel::Preview,
+                            crate::chrome::FIELDS_LEAD,
+                            columns,
+                            cell,
+                            width as f32,
+                        )
+                        .unwrap_or((
+                            f32::from(crate::chrome::FIELDS_LEAD + at) * cell,
+                            f32::from(room) * cell,
+                        ));
+                        file_preview = Some((
+                            key.to_owned(),
+                            crate::files::picture_in(
+                                ronoctua_render::image::Area {
+                                    x: box_x,
+                                    y: f32::from(top) * line_height,
+                                    width: box_wide,
+                                    // AND THE TRANSPORT TAKES NOTHING OFF IT — see
+                                    // the window door's twin: the controls are
+                                    // painted over the film's last line, so the
+                                    // picture keeps the whole panel.
+                                    height: f32::from(tall) * line_height,
+                                },
+                                rgba.width,
+                                rgba.height,
+                            ),
+                        ));
+                    }
                 }
             }
 
@@ -8823,6 +9081,7 @@ impl Footer {
                         column: start,
                         color: tokens::color::TEXT_DIM,
                         edge: false,
+                        foot: false,
                     });
                 }
 
@@ -8843,6 +9102,7 @@ impl Footer {
                     column: start,
                     color: tokens::color::STATE_WARNING,
                     edge: false,
+                    foot: false,
                 });
 
                 // THE ACTIONS, with each one's key. They come out of the SAME
@@ -8867,6 +9127,7 @@ impl Footer {
                     column: start,
                     color: tokens::color::TEXT_DIM,
                     edge: false,
+                    foot: false,
                 });
             }
 
@@ -8880,6 +9141,14 @@ impl Footer {
             //
             // The rest of the surface is already `surface.chrome`, the color the
             // `frame` clears with.
+            //
+            // AND THE FILM'S CONTROLS, WORKED OUT HERE AND APPENDED LAST.
+            //
+            // Here because `screen.quads` is borrowed mutably further down and
+            // this reads `self`; appended last because they are painted AFTER
+            // the pictures, and the order in the list is what says so.
+            #[allow(clippy::cast_precision_loss)]
+            let transport_now = self.files_transport(columns, cell, line_height, width as f32);
             let mut backgrounds = vec![ronoctua_render::quad::Quad {
                 x: 0.0,
                 y: f32::from(modeline_line) * line_height,
@@ -9084,8 +9353,15 @@ impl Footer {
                 // opinion; the owner found each place they disagreed, and one
                 // of them put the facts' thumb off the side of the screen
                 // whenever the window was not full width.
+                //
+                // THE FILM'S OWN ARE NOT HERE. They go over the picture — see
+                // the overlay below — and a rectangle pushed here would be
+                // painted before it and hidden by it.
                 #[allow(clippy::cast_precision_loss)]
-                for (_, _, rect) in self.files_bars(columns, cell, line_height, width as f32) {
+                for (_, axis, rect) in self.files_bars(columns, cell, line_height, width as f32) {
+                    if matches!(axis, crate::files::Axis::Time) {
+                        continue;
+                    }
                     backgrounds.push(ronoctua_render::quad::Quad {
                         x: rect.0,
                         y: rect.1,
@@ -9163,7 +9439,13 @@ impl Footer {
                 // clipboard's `clip:<version>` and the icons' bare `Icon=` name
                 // in this one map.
                 if let Some((key, area)) = file_preview {
-                    if im.missing(&key)
+                    // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY,
+                    // every frame — which is what keeps an animation to ONE of
+                    // the thirty-nine slots. A key per frame would fill the
+                    // cache with one file's film and evict every icon.
+                    if let Some(frame) = files_frame {
+                        im.upload_it(&gpu.device, &gpu.queue, &key, frame);
+                    } else if im.missing(&key)
                         && let Some(rgba) = files_pixels
                     {
                         im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
@@ -9179,6 +9461,16 @@ impl Footer {
                 }
                 im.prepare(&gpu.queue, gpu.config.width, gpu.config.height, &batch);
             }
+            // THE FILM'S CONTROLS, LAST AND ON TOP.
+            //
+            // The half-transparent band that makes the glyphs legible against
+            // any frame, the timeline's track, and the cursor on it. All three
+            // arrive and leave with the pointer, and all three are painted
+            // AFTER the pictures — the picture keeps the whole panel now, so a
+            // rectangle drawn with the other backgrounds would be under it.
+            #[allow(clippy::cast_possible_truncation)]
+            let under = backgrounds.len() as u32;
+            backgrounds.extend(transport_now);
             if let Some(q) = screen.quads.as_mut() {
                 q.prepare(
                     &gpu.device,
@@ -9219,10 +9511,15 @@ impl Footer {
             let images = screen.images.as_ref();
             if let Err(e) = gpu.frame(|pass| {
                 if let Some(q) = quads {
-                    q.draw(pass);
+                    q.draw_range(pass, 0, under);
                 }
                 if let Some(im) = images {
                     im.draw(pass);
+                }
+                // AND THE FEW THAT GO ON TOP OF IT: the film's transport, which
+                // is drawn ON the film by design.
+                if let Some(q) = quads {
+                    q.draw_range(pass, under, u32::MAX);
                 }
                 text.draw(ronoctua_render::Atlas::Pinned, pass)
             }) {
@@ -9501,6 +9798,7 @@ fn glyph_and_text(
             line,
             color,
             edge,
+            foot: false,
         }];
     };
     let mut out = vec![ronoctua_render::Span {
@@ -9510,6 +9808,7 @@ fn glyph_and_text(
         line,
         color,
         edge,
+        foot: false,
     }];
     // An empty rest is the elided case — one cell left, and it went to the
     // glyph. An empty run would cost a `glyphon::Buffer` to draw nothing.
@@ -9521,6 +9820,7 @@ fn glyph_and_text(
             line,
             color,
             edge,
+            foot: false,
         });
     }
     out

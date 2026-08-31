@@ -188,7 +188,23 @@
   key = "cod-key";
   code = "cod-code";
   mail = "cod-mail";
-  play = "cod-play";
+  # THE PREVIEW'S TRANSPORT — the two things one does to a film in the panel.
+  #
+  # A MATCHED PAIR, from one family, and that is the whole point of changing
+  # them. They were `cod-play` and `cod-debug_pause`, which are Codicons but not
+  # a pair: the second is a DEBUGGER's pause, drawn with heavier bars, and the
+  # owner saw it beside the other two glyphs — *"o ícone de pausa é maior que o
+  # resto"*. Two glyphs that alternate in the same cell have to be the same
+  # weight, or the row twitches every time the film is held.
+  #
+  # `md-` because Material has both halves designed together; the transfer
+  # queue's `transfer-paused` keeps its Codicon, and that is not a divergence —
+  # it is a STATE in a list, not a button one presses.
+  play = "md-play";
+  pause = "md-pause";
+  # And sound OFF, which is what a preview starts as: a panel that speaks when
+  # a cursor passes over a file is a panel one turns off.
+  volume-off = "md-volume_off";
   sync = "cod-sync";
   save = "cod-save";
   trash = "cod-trash";

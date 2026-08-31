@@ -58,6 +58,7 @@ mod keyboard;
 mod leader;
 mod manual;
 mod minibuffer;
+mod motion;
 mod network;
 mod notifications;
 mod notifications_window;

@@ -162,6 +162,7 @@ fn spans_from(
                 line: *line,
                 color,
                 edge: false,
+                foot: false,
             }]
         }
         // THE RULE IS NOT TEXT, and it took a photograph of the screen to
@@ -201,6 +202,7 @@ fn spans_from(
                     line: line.saturating_add(u16::try_from(n).unwrap_or(u16::MAX)),
                     color,
                     edge: false,
+                    foot: false,
                 })
                 .collect()
         }

@@ -441,6 +441,7 @@ impl NotificationsWindow {
             line: 0,
             color: tokens::color::TEXT_PRIMARY,
             edge: false,
+            foot: false,
         });
 
         // LINE 1: what the last action said, or the keys.
@@ -459,6 +460,7 @@ impl NotificationsWindow {
             line: 1,
             color: tokens::color::TEXT_SECONDARY,
             edge: false,
+            foot: false,
         });
 
         let line_px = tokens::metrics::line_height(size);
@@ -482,6 +484,7 @@ impl NotificationsWindow {
                     line: y,
                     color: f.color,
                     edge: false,
+                    foot: false,
                 });
             }
         }

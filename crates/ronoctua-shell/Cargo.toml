@@ -65,6 +65,15 @@ ronoctua-files = { path = "../ronoctua-files" }
 # that runs as root is exactly what that split exists to prevent, and
 # `files-vm` asserts the closure.
 ronoctua-inspect = { path = "../ronoctua-inspect" }
+# THE POLL THE PLAYER READS ITS PIPE WITH — `rustix` and not `libc` because its
+# API is SAFE, which is the same argument the terminal's pty makes one table
+# down. The `event` feature is what `ronoctua-inspect` already enables for
+# `tools::run`; enabling it here is what lets THIS crate name the call.
+#
+# It is not a nicety. A blocking `read_exact` on a child that has stopped
+# writing hangs the player's thread for the rest of the session, with nothing on
+# screen saying so, and that is the hole the owner asked not to exist.
+rustix = { workspace = true, features = [ "event" ] }
 # THE DISK BORDER. It enters HERE and not in `ronoctua-files`, which builds the
 # root-privileged helper: pulling zbus in there would put a D-Bus client inside
 # a binary that runs as root, and would give that crate a second border. The

@@ -134,6 +134,26 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
 
+    // THE FRAMES OF A MOVING FILE, on a channel of their own.
+    //
+    // Their own, and not the reports': a frame arrives ten times a second
+    // while a cursor rests on a video, and putting that through the channel
+    // that also carries "the directory changed" would make every one of those
+    // wake the parts of the door that read a directory.
+    //
+    // AND THE FRAME ARRIVING IS THE CLOCK. Neither door has a timer for this
+    // and neither gained one — the player sleeps for the frame's own delay and
+    // sends it, so when it stops, the wake-ups stop with it.
+    let (frames_sender, frames) = channel::channel::<crate::motion::Beat>();
+    handle
+        .insert_source(frames, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(f) = event {
+                state.view.played(f);
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
+
     let texts = std::rc::Rc::new(ronoctua_i18n::Texts::from_env());
     // The catalogue is swept HERE and not inherited: this is a process of its
     // own, and `open with` needs to know who declares a type. 128 entries in
@@ -179,6 +199,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         catalogue,
         texts,
         looking: crate::files::inspector(sender.clone()),
+        playing: crate::motion::player(frames_sender),
         sender,
         under_pointer: None,
         dragging: None,
@@ -254,6 +275,8 @@ struct FilesWindow {
     /// glyph and nothing else, which is honest, rather than the door refusing
     /// to open.
     looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
+    /// The thread that follows a moving file, when there is one to follow.
+    playing: Option<crate::motion::Player>,
     /// WHAT IS UNDER THE POINTER, resolved by `files::View::hit`.
     ///
     /// One answer and not three numbers: the section, the row inside it and
@@ -345,14 +368,29 @@ impl FilesWindow {
     /// answers `None` when the answer is already in hand, so this is a cheap
     /// call and not a decision made here.
     fn look_again(&mut self) {
-        let Some(queue) = self.looking.as_ref() else {
-            return;
-        };
-        if let Some(ask) = self
-            .view
-            .wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
+        if let Some(queue) = self.looking.as_ref()
+            && let Some(ask) = self
+                .view
+                .wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
         {
             let _ = queue.send(ask);
+        }
+        self.follow_the_motion();
+    }
+
+    /// Starts, or stops, the player that follows a moving file.
+    ///
+    /// Asked once a frame beside the still preview, and for the same reason:
+    /// the cursor can move a dozen ways and enumerating them is how a case
+    /// gets missed. One question, one place.
+    fn follow_the_motion(&mut self) {
+        let Some(player) = self.playing.as_mut() else {
+            return;
+        };
+        // ONE QUESTION, ONE ANSWER, PASSED STRAIGHT ON — see the footer door's
+        // twin, and the reason written there.
+        if let Some(ask) = self.view.wants_motion() {
+            player.tell(ask);
         }
     }
 
@@ -569,7 +607,20 @@ impl FilesWindow {
             // WHAT IS INSIDE THE FILE. It arrives on the same channel as
             // everything else a thread came back with, which is what keeps this
             // door with one place to receive and not two.
-            crate::files::Report::Inspected(looked) => self.view.looked(*looked),
+            crate::files::Report::Inspected(looked) => {
+                self.view.looked(*looked);
+                // AND THE PLAYER IS ASKED AGAIN, because THIS is the moment the
+                // answer arrives — and the answer is what says the file moves.
+                //
+                // Without it the player only ever started when the cursor moved
+                // AFTER the answer: on the file the cursor was already resting
+                // on, the wish became askable a fraction of a second too late
+                // and nothing ever asked again. The shots caught it —
+                // *"the preview drew the same pixels a second apart"* — and
+                // nothing else could have, because every unit test drives
+                // `wants_motion` by hand.
+                self.follow_the_motion();
+            }
             crate::files::Report::Racked(rack) => {
                 // AND THE SIDEBAR'S FILE, HERE. This process has no clock — a
                 // disk signal is the only thing that wakes it on its own — so
@@ -818,8 +869,11 @@ impl FilesWindow {
         let Painted {
             spans,
             quads,
+            over,
             picture,
         } = painted;
+        #[allow(clippy::cast_possible_truncation)]
+        let under = (quads.len() - over) as u32;
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
@@ -827,9 +881,16 @@ impl FilesWindow {
             im.clear();
             let batch = match picture {
                 Some((key, area)) => {
-                    // THE TEXTURE ONLY GOES UP WHEN IT IS MISSING: a preview is
-                    // up to a mebibyte, and `prepare` is sixteen bytes.
-                    if im.missing(&key)
+                    // A MOVING FILE REPLACES THE TEXTURE UNDER THE SAME KEY,
+                    // every frame — which is what keeps an animation to ONE of
+                    // the thirty-nine slots. A key per frame would fill the
+                    // cache with one file's film and evict every icon.
+                    if let Some(frame) = self.view.moving_frame() {
+                        im.upload_it(&gpu.device, &gpu.queue, &key, frame);
+                    } else if im.missing(&key)
+                        // THE STILL ONE ONLY GOES UP WHEN IT IS MISSING: a
+                        // preview is up to a mebibyte, and `prepare` is
+                        // sixteen bytes.
                         && let Some(rgba) = self.view.preview_pixels()
                     {
                         im.upload_it(&gpu.device, &gpu.queue, &key, rgba);
@@ -861,16 +922,22 @@ impl FilesWindow {
             );
         }
         let quads_ref = self.quads.as_ref();
-        // QUADS, THEN IMAGES, THEN TEXT. There is no depth test: whoever draws
-        // later ends up on top. The picture sits on the background and UNDER
-        // the text, which has to stay legible over a light photograph.
+        // QUADS, THEN IMAGES, THEN THE FEW QUADS THAT GO ON TOP, THEN TEXT.
+        //
+        // There is no depth test: whoever draws later ends up on top. The
+        // picture sits on the background and UNDER the text, which has to stay
+        // legible over a light photograph — and under the film's transport,
+        // which is drawn ON the film by design.
         let images_ref = self.images.as_ref();
         if let Err(e) = gpu.frame(|pass| {
             if let Some(q) = quads_ref {
-                q.draw(pass);
+                q.draw_range(pass, 0, under);
             }
             if let Some(im) = images_ref {
                 im.draw(pass);
+            }
+            if let Some(q) = quads_ref {
+                q.draw_range(pass, under, u32::MAX);
             }
             text.draw(ronoctua_render::Atlas::Pinned, pass)
         }) {
@@ -888,7 +955,17 @@ pub(crate) struct Painted {
     /// Every run of text, in the grid's own coordinates.
     pub spans: Vec<ronoctua_render::Span>,
     /// Every rectangle: bands, rules, dividers and the scrollbars.
+    ///
+    /// The last [`Painted::over`] of them are drawn AFTER the pictures — see
+    /// `ronoctua_render::quad::Quads::draw_range`.
     pub quads: Vec<ronoctua_render::quad::Quad>,
+    /// How many of `quads`, at the end, belong ON TOP of the pictures.
+    ///
+    /// There is no depth test: whoever draws later ends up on top. Everything
+    /// else in this manager is a background and belongs under the picture; the
+    /// film's transport is the one thing that does not, because the owner asked
+    /// for the film to keep the whole panel and be controlled where it plays.
+    pub over: usize,
     /// The preview's texture and where it goes, when there is one.
     pub picture: Option<(String, ronoctua_render::image::Area)>,
 }
@@ -988,7 +1065,15 @@ impl Geometry {
                 let across = sec
                     .wide_bar_box(x, top, bottom, wide, cell, line_px)
                     .map(|r| (sec.pane, crate::files::Axis::Across, r));
-                Some([down, across])
+                // AND THE FILM'S, which is the same promise turned into time:
+                // where the cursor is drawn is where it is grabbed.
+                // AND THE FILM'S TRACK, which is what one grabs: `offset_at`
+                // maps any point of it to a position, so aiming at a one-cell
+                // cursor is not required of anybody.
+                let time = sec
+                    .time_track_box(x, top, wide, cell, line_px)
+                    .map(|r| (sec.pane, crate::files::Axis::Time, r));
+                Some([down, across, time])
             })
             .flatten()
             .flatten()
@@ -1044,6 +1129,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         .under_pointer
         .as_ref()
         .and_then(|t| t.explain.clone())
+        // AND WHAT WENT WRONG WITH A FILM, BELOW IT — see the footer door's
+        // twin: refusal is a value, and pointing at something is a question
+        // asked now.
+        .or_else(|| s.view.film_trouble())
         .map(|e| s.texts.t_with(e.key, &e.borrowed()));
     // THE QUERY IS NOT HERE. It goes at the end of the path, on the line
     // above — see `files::View::crumbs`. This line is for what the pointer
@@ -1092,6 +1181,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             line: 0,
             color: tokens::color::TEXT_SECONDARY,
             edge: false,
+            foot: false,
         });
     }
 
@@ -1134,6 +1224,9 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             offset: s.view.list_offset(),
             total: s.geo.room(),
             above: 0,
+            time: None,
+            transport: None,
+            clock: 0,
             content: s
                 .view
                 .modal_rows(s.view.list_offset(), s.geo.room(), s.geo.columns, s.texts),
@@ -1164,6 +1257,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // POINTER's section that decides which line, so a band never lights a
     // row of a list the pointer is not over.
     if let Some(t) = s.under_pointer.as_ref()
+        && s.view.band_belongs_at(
+            s.cell_under_pointer.unwrap_or(0),
+            s.geo.columns,
+            t.pane == crate::files::Pane::Preview || t.pane == crate::files::Pane::Info,
+        )
         && let Some(sec) = sections.iter().find(|s| s.pane == t.pane)
         && let Some(line) = sec.line_of(t.row)
     {
@@ -1235,6 +1333,9 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                         f.color
                     },
                     edge: false,
+                    // AND THE TRANSPORT'S ROW IS ANCHORED TO THE FOOT, which is
+                    // the only row in this manager that is — see `Row::foot`.
+                    foot: line.foot,
                 });
             }
         }
@@ -1278,9 +1379,15 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // and gone off screen, and a thumb that stopped half way down its own
     // column. `Section::bar_box` is the rectangle now — drawn here, and
     // tested against by `FilesWindow::bar_at_point`.
+    // THE FILM'S OWN THREE ARE NOT HERE. They go over the picture — see the
+    // overlay at the end of this function — and a rectangle pushed here would
+    // be painted before it and hidden by it.
     #[allow(clippy::cast_precision_loss)]
     for (sec, axis, rect) in s.geo.bars(panes, &sections, cell, line_px) {
-        let _ = (sec, axis);
+        let _ = sec;
+        if matches!(axis, crate::files::Axis::Time) {
+            continue;
+        }
         quads.push(ronoctua_render::quad::Quad {
             x: rect.0,
             y: rect.1,
@@ -1311,16 +1418,21 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // know whether what is skewed is the image or the panel.
     // `preview_box` is asked as the QUESTION "is there a preview at all";
     // where it goes is `files::panel_px`'s answer, in pixels.
-    let picture = panes.preview_box(s.geo.columns).and_then(|_| {
-        let key = s.view.preview_key()?.to_owned();
-        let rgba = s.view.preview_pixels()?;
-        // THE PANELS' OWN ROWS, and never the whole surface: this door
-        // puts three lines above the listing — the path, the message and
-        // the header — and a picture centred in a box that included them
-        // would sit a line and a half too high. `files::panel_band` is the
-        // one place that arithmetic lives, and the footer had it wrong.
-        // ONLY THE TOP is wanted here: where the box ENDS is the surface's
-        // business, argued at `height` below.
+    // AND THE BOX IS MEASURED WHETHER OR NOT THERE IS ANYTHING IN IT YET.
+    //
+    // It used to be measured inside the closure below, after `preview_key`, and
+    // that DEADLOCKED: a film has no still picture any more, so there is
+    // nothing to draw until the player produces a frame — and the player is not
+    // started until the box has been measured, because the frame is decoded at
+    // the box's shape. Each waited for the other and no film ever played. The
+    // shots caught it, and nothing else could have: the box is a door's number.
+    let preview_box = panes.preview_box(s.geo.columns).and_then(|_| {
+        // THE PANELS' OWN ROWS, and never the whole surface: this door puts
+        // three lines above the listing — the path, the message and the header
+        // — and a picture centred in a box that included them would sit a line
+        // and a half too high. `files::panel_band` is the one place that
+        // arithmetic lives, and the footer had it wrong. ONLY THE TOP is wanted
+        // here: where the box ENDS is the surface's business.
         let (top, _) =
             crate::files::panel_band(FIRST_OF_REGION, strip_top - FIRST_OF_REGION, panes.strip);
         #[allow(clippy::cast_precision_loss)]
@@ -1332,6 +1444,20 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             cell,
             s.geo.metric.width,
         )?;
+        Some((top, box_x, box_wide))
+    });
+    if let Some((top, _, box_wide)) = preview_box {
+        let air = f32::from(tokens::space::FILES_PICTUREAIR);
+        let box_tall = (s.geo.metric.bottom() - f32::from(top) * line_px).max(0.0);
+        s.view
+            .measured_preview(box_wide - air - air, box_tall - air - air);
+    }
+    let picture = preview_box.and_then(|(top, box_x, box_wide)| {
+        let key = s.view.preview_key()?;
+        // THE PICTURE THAT IS DRAWN IS THE PICTURE THAT IS MEASURED — the
+        // footer door's twin, and the defect written out there: a film measured
+        // by its poster comes out stretched to the poster's shape.
+        let rgba = s.view.preview_now()?;
         // AND THE AIR ON ALL FOUR SIDES IS THE VIEW'S. `fit_into` centres
         // and that was never the whole promise: whichever dimension is the
         // tight one comes out exactly as long as the box, which in this
@@ -1362,6 +1488,13 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                     // `tall` still decides where the box BEGINS, through
                     // `top`; what it may not decide is where the surface
                     // ends, because it does not know.
+                    //
+                    // AND THE TRANSPORT TAKES NOTHING OFF IT. The controls are
+                    // painted OVER the film's last line now, on a band of their
+                    // own — the owner asked for the picture to have *"toda a
+                    // altura possível"*, and a line reserved for controls that
+                    // are only there under the pointer is a line spent on
+                    // nothing the rest of the time.
                     height: (s.geo.metric.bottom() - f32::from(top) * line_px).max(0.0),
                 },
                 rgba.width,
@@ -1369,9 +1502,64 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             ),
         ))
     });
+    // THE FILM'S CONTROLS, LAST AND ON TOP.
+    //
+    // Three rectangles that go over the picture: the half-transparent band that
+    // makes the glyphs legible against any frame, the timeline's track, and the
+    // cursor on it. They arrive and leave together with the pointer, which is
+    // what the owner asked for — *"tudo deve sumir e aparecer apenas com o
+    // hover do mouse"*.
+    let over = {
+        let before = quads.len();
+        if s.view.transport_showing() {
+            let edge = s.geo.metric.width;
+            for sec in &sections {
+                let Some((_x, _wide)) = crate::files::section_px(
+                    panes,
+                    sec.pane,
+                    CONTENT_MARGIN,
+                    s.geo.columns,
+                    cell,
+                    edge,
+                ) else {
+                    continue;
+                };
+                let mut band = |rect: (f32, f32, f32, f32), color| {
+                    quads.push(ronoctua_render::quad::Quad {
+                        x: rect.0,
+                        y: rect.1,
+                        width: rect.2,
+                        height: rect.3,
+                        color,
+                    });
+                };
+                let (fx, fwide) = sec.fields_px(CONTENT_MARGIN, cell);
+                // EVERY PART OF THE TRANSPORT FROM THE SAME FOOT — see
+                // `files::transport_top`. The row itself is placed by the text
+                // renderer counting up from the bottom (`Row::foot`), and a
+                // rectangle counted down from the region's top lands a
+                // remainder away from it.
+                let foot = s.geo.metric.bottom();
+                if let Some(r) = crate::files::transport_band(sec, fx, fwide, line_px, foot) {
+                    band(r, tokens::color::SURFACE_TRANSPORT);
+                }
+                // THE TRACK IS THE QUIETER TONE, because it is the part that
+                // does not move: the cursor on it is what says where the film
+                // is, and two rectangles in one colour say nothing.
+                if let Some(r) = sec.time_track_box(fx, fwide, cell, line_px, foot) {
+                    band(r, tokens::color::RULE_STRONG);
+                }
+                if let Some(r) = sec.time_bar_box(fx, fwide, cell, line_px, foot) {
+                    band(r, tokens::color::TEXT_PRIMARY);
+                }
+            }
+        }
+        quads.len() - before
+    };
     Painted {
         spans,
         quads,
+        over,
         picture,
     }
 }
@@ -1615,16 +1803,27 @@ impl PointerHandler for FilesWindow {
                     self.cell_under_pointer = self
                         .line_and_cell(e.position.0, e.position.1)
                         .map(|(_, c)| c);
+                    // AND WHICH SECTION, which is what decides the film's two
+                    // buttons are drawn: they appear under the pointer, and
+                    // their CELLS are reserved either way so nothing moves.
+                    self.view
+                        .pointing(self.under_pointer.as_ref().map(|t| t.pane));
                 }
                 PointerEventKind::Leave { .. } => {
                     self.under_pointer = None;
                     self.cell_under_pointer = None;
+                    self.view.pointing(None);
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     self.under_pointer = self.target_at(e.position.0, e.position.1);
                     self.cell_under_pointer = self
                         .line_and_cell(e.position.0, e.position.1)
                         .map(|(_, c)| c);
+                    // AND WHICH SECTION, which is what decides the film's two
+                    // buttons are drawn: they appear under the pointer, and
+                    // their CELLS are reserved either way so nothing moves.
+                    self.view
+                        .pointing(self.under_pointer.as_ref().map(|t| t.pane));
                     // A BAR TAKES THE PRESS, and the row does not get it: the
                     // thumb is a control, not a line of the list under it.
                     self.dragging = self.bar_at_point(e.position.0, e.position.1);
@@ -1651,6 +1850,11 @@ impl PointerHandler for FilesWindow {
                     self.cell_under_pointer = self
                         .line_and_cell(e.position.0, e.position.1)
                         .map(|(_, c)| c);
+                    // AND WHICH SECTION, which is what decides the film's two
+                    // buttons are drawn: they appear under the pointer, and
+                    // their CELLS are reserved either way so nothing moves.
+                    self.view
+                        .pointing(self.under_pointer.as_ref().map(|t| t.pane));
                     right = self.under_pointer.as_ref().map(|t| t.row);
                 }
                 PointerEventKind::Axis {
@@ -1685,28 +1889,45 @@ impl PointerHandler for FilesWindow {
             // stayed there, which reads exactly like a bar that does not work.
             let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
             let chrome = self.view.chrome_rows(self.columns, &self.texts);
-            let band = self
+            let found = self
                 .view
                 .sections(&chrome, self.room(), self.columns, &self.texts)
                 .into_iter()
-                .find(|s| s.pane == pane)
-                .map(|s| (s.top, s.lines));
-            let (top_line, lines) = band.unwrap_or((0, self.room()));
+                .find(|s| s.pane == pane);
+            // AND THE CLOCK'S WIDTH COMES FROM THE SECTION TOO. It is what
+            // decides where the track ends, so grabbing it anywhere else would
+            // read a position the cursor was never drawn at.
+            let sec_clock = found.as_ref().map_or(0, |s| s.clock);
+            let (top_line, lines) = found.map_or((0, self.room()), |s| (s.top, s.lines));
             // ALONG THE TRACK THAT WAS GRABBED. A bar going across is dragged
             // by `x` over the panel's own pixels; one going down by `y` over
             // its band's.
             let geo = self.geometry();
-            let fraction = if matches!(axis, crate::files::Axis::Across) {
+            let fraction = if matches!(axis, crate::files::Axis::Across | crate::files::Axis::Time)
+            {
                 let panes = self.view.panes(self.columns);
+                let cell = geo.metric.cell();
                 match crate::files::section_px(
                     panes,
                     pane,
                     CONTENT_MARGIN,
                     self.columns,
-                    geo.metric.cell(),
+                    cell,
                     geo.metric.width,
                 ) {
-                    Some((x, wide)) if wide > 0.0 => (px - f64::from(x)) / f64::from(wide),
+                    Some((x, wide)) if wide > 0.0 => {
+                        // THE FILM'S TRACK IS INSET, and by the same answer the
+                        // cursor was drawn at — see `files::track_px`.
+                        let (x, wide) = if matches!(axis, crate::files::Axis::Time) {
+                            match crate::files::track_px(x, wide, cell, sec_clock) {
+                                Some(it) => it,
+                                None => return,
+                            }
+                        } else {
+                            (x, wide)
+                        };
+                        (px - f64::from(x)) / f64::from(wide)
+                    }
                     _ => return,
                 }
             } else {

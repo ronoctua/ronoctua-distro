@@ -309,6 +309,21 @@ const PANEL_NO_ROOM: &str = ronoctua_i18n::key::FILES_PANEL_NO_ROOM;
 /// yet: there is no picture, and the panel says so instead of drawing a large
 /// icon that says what the listing's own icon column already said.
 const NO_PREVIEW: &str = ronoctua_i18n::key::FILES_NO_PREVIEW;
+/// What a transport key says when there is no film under the cursor.
+const NOTHING_PLAYING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
+/// What the sound key says on a film that carries none.
+const NO_SOUND_IN_IT: &str = ronoctua_i18n::key::FILES_SOUND_NONE;
+/// The three the whole-region key says.
+const THEATRE_NOTHING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
+/// The whole region, given.
+const THEATRE_ON: &str = ronoctua_i18n::key::FILES_THEATRE_ON;
+/// And given back.
+const THEATRE_OFF: &str = ronoctua_i18n::key::FILES_THEATRE_OFF;
+/// How far one key moves along a film, in seconds.
+///
+/// Five, which is about a sentence of speech and a shot of picture: enough to
+/// be worth a key press and short enough to be held down.
+const SEEK_STEP: f64 = 5.0;
 
 /// The most lines a panel may ASK the region for.
 ///
@@ -332,6 +347,66 @@ pub enum Axis {
     Down,
     /// The line, left to right.
     Across,
+    /// The film, beginning to end.
+    ///
+    /// A third axis and not a third mechanism: the timeline is a
+    /// [`ronoctua_design::Scroll`] whose `total` is the film's length in tenths
+    /// of a second and whose `offset` is where the picture is. `bar_across`
+    /// draws the cursor and `offset_at` reads it back, so where it is drawn is
+    /// where it is grabbed — the law the bars already keep, applied to time.
+    Time,
+}
+
+/// What a film in the preview is DOING.
+///
+/// # It is not the frame, and it is not the file
+///
+/// The frame is what arrived; this is what was asked for. Keeping them apart is
+/// what lets the picture keep showing the last frame while the film is paused,
+/// and what lets `wants_motion` compare a wish against an order without
+/// consulting pixels.
+///
+/// Every field resets when the cursor lands on another file: coming back to a
+/// film starts it, and never resumes somebody else's pause.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transport {
+    /// Whether there should be a child at all.
+    ///
+    /// `false` is the film having ENDED, or having been stopped. Pausing does
+    /// not clear it — a paused film keeps its child, which is what makes
+    /// resuming instant instead of a 108-to-242-millisecond seek.
+    pub on: bool,
+    /// Whether it is held on one frame.
+    pub paused: bool,
+    /// Whether the sound was asked for.
+    ///
+    /// Off by default, which is the owner's decision and the only sensible one
+    /// for a panel that follows a cursor: a preview that speaks when a cursor
+    /// passes over a file is a preview one turns off.
+    pub sound: bool,
+    /// Where the child was told to start, in seconds.
+    ///
+    /// This and not [`Transport::at`] is what the player is given: `at` moves
+    /// with every frame, and a wish that moved with every frame would respawn
+    /// the film thirty times a second.
+    pub from: f64,
+    /// Where the picture is now, in seconds.
+    pub at: f64,
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self {
+            // IT PLAYS ON ARRIVAL. A film in a preview that waits to be
+            // started is a preview that shows one frame, which is the still
+            // picture it already had.
+            on: true,
+            paused: false,
+            sound: false,
+            from: 0.0,
+            at: 0.0,
+        }
+    }
 }
 
 /// A scrollbar somebody could grab: whose it is, which way it runs, and where.
@@ -351,6 +426,156 @@ pub type Bar = (Pane, Axis, (f32, f32, f32, f32));
 /// was missing, and the owner photographed a line of code running under the
 /// thumb.
 const BAR: u16 = 1;
+
+/// What tells a moving frame's texture from its file's photograph.
+///
+/// A suffix and not a second field, because the doors carry ONE key from
+/// `View::preview_key` to `Images::upload_it` and back — see that function for
+/// why there have to be two textures at all.
+const FRAME_MARK: &str = ":frame";
+
+/// Where the sound glyph sits, counted from the transport's first cell.
+///
+/// Two, which is one for the play glyph and one of air. Named for the reason
+/// [`BAR`] is: the row is built here and the track is drawn by the doors, and a
+/// number written twice is a number that stops agreeing.
+const TRANSPORT_SOUND: u16 = 2;
+
+/// The air on EACH SIDE of the timeline's track.
+///
+/// The owner asked for it in those words — *"com espaços em branco idênticos na
+/// esquerda e na direita"* — and identical is what a single constant makes it.
+/// Before, the left gap was a fixed cell and the right gap was whatever the
+/// clock's own width happened to leave over: one cell against two, on a control
+/// whose two ends are a hand's width apart.
+pub const TRANSPORT_AIR: u16 = 2;
+
+/// Where the transport's first cell is, counted from the panel's.
+///
+/// One, and it is the air the owner asks for beside every drawing: a glyph
+/// against the panel's own edge reads as a glyph that was cut.
+pub const TRANSPORT_LEAD: u16 = 1;
+
+/// The timeline's track inside a panel, in pixels.
+///
+/// # One answer, three readers
+///
+/// [`Section::time_bar_box`] draws the cursor with it and both doors turn a
+/// pointer into a fraction with it. Written out at each of the three, the day
+/// somebody moved the clock a cell the drawing and the grabbing would stop
+/// agreeing — which is the defect this manager has already paid for twice, in
+/// the facts' bar and in the listing's.
+///
+/// `clock` is how many cells the time at the right-hand end occupies, MEASURED
+/// and not assumed: it is `1:23 / 5:40` on one film and `3:44 / 10:34` on
+/// another, and a fixed reserve leaves a different gap on each. The air is
+/// [`TRANSPORT_AIR`] on both sides, which is what makes the two identical.
+///
+/// `None` when the panel is too narrow for a track worth grabbing.
+#[must_use]
+pub fn track_px(left: f32, wide: f32, cell: f32, clock: u16) -> Option<(f32, f32)> {
+    // THE GLYPHS, THEN THE AIR: play, a space, sound, then the air.
+    let lead = f32::from(TRANSPORT_LEAD + TRANSPORT_SOUND + 1 + TRANSPORT_AIR) * cell;
+    let tail = f32::from(clock + TRANSPORT_AIR + TRANSPORT_LEAD) * cell;
+    let track = wide - lead - tail;
+    (track > cell).then_some((left + lead, track))
+}
+
+/// The band the transport is painted on, in pixels — or none.
+///
+/// # The controls sit ON the film now, and this is what makes them legible
+///
+/// The owner asked for both halves: *"todos os controles do player apareçam
+/// por cima do vídeo/gif, de forma a deixar o vídeo/gif ocupando toda a
+/// altura possível"*, and a background *"com semi-transparência, para que
+/// seja possível visualizá-los em todas as condições de contraste"*.
+///
+/// So the picture keeps the whole panel — nothing is subtracted from its
+/// box any more — and this rectangle goes over its last line, under the
+/// glyphs. It is the one place in this manager that draws over its own
+/// content, and it is drawn over a PICTURE rather than over text: a film is
+/// not read line by line, and a control one has to move the film to find is
+/// not a control.
+///
+/// `left`, `wide` and `top` are the section's own pixels, as
+/// [`Section::time_bar_box`] takes them.
+#[must_use]
+pub fn transport_band(
+    section: &Section,
+    left: f32,
+    wide: f32,
+    line_px: f32,
+    bottom: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    section.transport?;
+    Some((left, transport_top(bottom, line_px), wide, line_px))
+}
+
+/// Where the transport's line BEGINS, in pixels — counted up from the foot.
+///
+/// # One answer for the glyphs and the rectangles, or they come apart
+///
+/// The row is drawn with `Row::foot`, so the text renderer places it counting
+/// lines UP from the surface's bottom. The band, the track and the cursor were
+/// still counted DOWN from the region's top — and the difference between the
+/// two is the surface's remainder, which is exactly what the owner
+/// photographed: *"a barra de tempo está em cima, ela está desalinhada do resto
+/// dos controles"*. It was my own fix for the row's position producing the next
+/// defect, because only half of the row moved.
+///
+/// So there is one arithmetic, here, and every part of the transport asks it.
+#[must_use]
+pub fn transport_top(bottom: f32, line_px: f32) -> f32 {
+    (bottom - line_px).max(0.0)
+}
+
+/// The time a transport shows: where the film is, and how long it runs.
+///
+/// One function, because the width of what it returns decides the length of the
+/// track — see [`track_px`] — and a string built in one place and measured in
+/// another is two answers waiting to disagree.
+#[must_use]
+pub fn clock_text(time: &ronoctua_design::Scroll) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let (at, total) = (time.offset as f64 / 10.0, time.total as f64 / 10.0);
+    format!("{} / {}", clock_of(at), clock_of(total))
+}
+
+/// A position in a film, as somebody would say it.
+///
+/// `1:23`, and `1:02:03` once there is an hour of it — never `0:01:23`, which
+/// is a stopwatch's idea of a time and not a person's.
+#[must_use]
+pub fn clock_of(seconds: f64) -> String {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let whole = seconds.max(0.0).floor() as u64;
+    let (h, m, s) = (whole / 3600, (whole / 60) % 60, whole % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// What the film's letterbox is filled with: NOTHING.
+///
+/// # Why it is air and not a token
+///
+/// A film is letterboxed into the frame the panel asked for, and the bars
+/// beside a picture of another shape should be the air the panel would have
+/// left anyway. A colour would have had to be one of TWO — the footer's chrome
+/// and the window's buffer background are different tokens — and the frame is
+/// one texture drawn in both doors, so either door would get the other's.
+///
+/// Fully transparent removes the question. Measured against the real binary:
+/// the bars arrive with alpha 0 and the picture with alpha 255, and the image
+/// pipeline blends with `ALPHA_BLENDING` — so each door shows its own
+/// background through, and no token value crosses into `ronoctua-inspect`
+/// (invariant 11's rule, one crate along).
+#[must_use]
+pub fn letterbox() -> String {
+    "#00000000".to_owned()
+}
 
 /// What the facts key says when there is nothing to scroll.
 ///
@@ -565,6 +790,13 @@ pub struct Panes {
     pub preview: bool,
     /// Whether the info panel is on.
     pub info: bool,
+    /// Whether the preview has been given the region and everything in it.
+    ///
+    /// `C-w`. The panels' arithmetic is unchanged — the preview is still a
+    /// panel occupying `right` cells — and this says only that `right` is the
+    /// whole width, so there is nothing to its LEFT to be separated from and
+    /// the leading rule would be drawn against the screen's own edge.
+    pub whole: bool,
 }
 
 impl Panes {
@@ -615,7 +847,14 @@ impl Panes {
         // strip from the listing is the rule ABOVE it, which is a line and not a
         // column.
         let (from, room, leading) = if self.right > 0 {
-            (width.saturating_sub(self.right), self.right, 1u16)
+            (
+                width.saturating_sub(self.right),
+                self.right,
+                // NO RULE WHEN THERE IS NOTHING ON THE OTHER SIDE OF IT. A rule
+                // is what separates two things; drawn against the screen's own
+                // edge it is a line with one thing beside it.
+                u16::from(!self.whole),
+            )
         } else if self.strip > 0 {
             (0, width, 0u16)
         } else {
@@ -658,6 +897,15 @@ impl Panes {
     /// separation by whitespace and a rule, never by a container (invariant 15).
     #[must_use]
     pub fn rules(self, width: u16) -> Vec<u16> {
+        // AND NONE AT ALL WITH THE REGION GIVEN AWAY. A rule separates two
+        // things; with one panel filling the width there is nothing to its left
+        // to be separated from, and the saturating subtraction below put the
+        // line in cell nought — against the screen's own edge. The owner
+        // photographed it: *"no modo largo há uma linha vertical na esquerda
+        // que continua aparecendo"*.
+        if self.whole {
+            return Vec::new();
+        }
         let boxes = self.boxes(width);
         let mut out = Vec::new();
         for (n, (_, at, _)) in boxes.iter().enumerate() {
@@ -1028,6 +1276,20 @@ pub fn picture_in(
     h: u32,
 ) -> ronoctua_render::image::Area {
     let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR);
+    // AND IT ALWAYS FITS, and never stretches to fill.
+    //
+    // Drawing a frame across the box unconditionally was the first shape of
+    // the double-letterbox fix, and it is wrong for a reason the owner
+    // photographed twice: a frame is only the box's shape while it is FRESH.
+    // Pause a film and give the preview the whole region and no new frame
+    // arrives — so the old one, cut for a small panel, was stretched across a
+    // large one. Same for a GIF whose box moved.
+    //
+    // What removes the second letterbox is the frame being CUT to the box's
+    // shape (see `Fit::of`), not the fit being skipped: when the two shapes
+    // agree, `fit_into` fills the box exactly. When they do not — because the
+    // picture is a moment stale — it letterboxes, which is honest, instead of
+    // distorting, which is not.
     ronoctua_render::image::Area {
         x: space.x + air,
         y: space.y + air,
@@ -1174,6 +1436,14 @@ pub enum Hit {
     /// is a device that is not mounted. As `Enter` does on a listing row, which
     /// is why it costs no key of its own.
     Sidebar(usize),
+    /// The transport's play glyph: hold the film, or let it go on. As `C-;`.
+    ///
+    /// A DRAWN target and not a click anywhere on the picture, for the reason
+    /// the eject glyph gives below: a click on a picture says nothing about
+    /// which of two things it would do.
+    Play,
+    /// The transport's sound glyph: let the film be heard, or not. As `C-'`.
+    Sound,
     /// A mounted device's eject glyph, in the sidebar's last cell. As `C-e`.
     ///
     /// TAKING A ROW OFF THE SIDEBAR HAS NO TARGET HERE, and that is a decision:
@@ -1250,6 +1520,16 @@ pub struct Field {
 pub struct Row {
     /// The pieces, left to right.
     pub fields: Vec<Field>,
+    /// Whether this row is anchored to the surface's BOTTOM edge.
+    ///
+    /// Only the film's transport is. A surface is not a whole number of lines,
+    /// and the leftover under the last one is where the owner found the
+    /// controls sitting high: *"os controles continuam elevados (com espaço
+    /// abaixo deles) quando há apenas um espaço menor que uma linha"*. Anchored
+    /// to the foot, the remainder falls above them — inside the picture, where
+    /// nothing is looking for it. It is `Span::edge`'s decision on the other
+    /// axis, and the same argument.
+    pub foot: bool,
     /// Whether this entry is marked for a batch operation.
     pub marked: bool,
     /// Whether the cursor is on it.
@@ -1328,6 +1608,35 @@ pub struct Section {
     /// is every one of them but the text preview, where a line of code is
     /// longer than a twenty-four-cell panel and the window over it moves.
     pub across: Option<ronoctua_design::Scroll>,
+    /// The film's timeline, when this section is showing one that has a length.
+    ///
+    /// The SAME [`ronoctua_design::Scroll`] the other two axes are, counted in
+    /// tenths of a second: `total` is how long the film runs, `offset` is where
+    /// the picture is, and `lines` is one tenth — which is what makes the
+    /// cursor a mark rather than a page. `bar_across` draws it and `offset_at`
+    /// reads it back, so grabbing it lands where it looks.
+    ///
+    /// `None` for a GIF, and that is not an omission: a GIF loops and declares
+    /// no duration, and its frames are inter-dependent, so seeking into one
+    /// means composing every frame before it — 707 ms on the owner's own
+    /// forty-four-frame sample. No duration is what draws that line, with no
+    /// branch anywhere else.
+    pub time: Option<ronoctua_design::Scroll>,
+    /// How many cells the clock at the transport's right-hand end occupies.
+    ///
+    /// It travels with the section because the TRACK's length depends on it and
+    /// three places compute that: the cursor's rectangle, and each door's drag.
+    /// `1:23 / 5:40` and `3:44 / 10:34` are not the same width, so a reserve
+    /// guessed once is a gap that differs per film.
+    pub clock: u16,
+    /// Which of `content`'s rows is the transport, when there is one.
+    ///
+    /// The controls are a ROW and not a rectangle — two of their cells are
+    /// clickable, so `Section::line_of` and `View::hit` resolve them with the
+    /// arithmetic they already have. What needs a rectangle is the timeline,
+    /// because where a bar is drawn is where it is grabbed; this is the line it
+    /// is drawn on, and [`Section::time_bar_box`] is the rectangle.
+    pub transport: Option<usize>,
 }
 
 impl Section {
@@ -1424,6 +1733,85 @@ impl Section {
         let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
         let band_bottom = band_top + self.scroll().track(band_top, bottom, line_px);
         across.bar_across(left, band_bottom, wide, cell)
+    }
+
+    /// The cells the transport's own fields occupy, in pixels.
+    ///
+    /// # Why not the section's rails
+    ///
+    /// Because the glyphs and the clock are placed at `from`..`to` — the CELLS
+    /// the layout gave the panel — while `section_px` answers with the RAILS,
+    /// which run from rule to rule and are wider. The two nearly coincide in a
+    /// narrow panel and do not in a wide one: the owner photographed the
+    /// timeline touching the clock, and that gap is exactly the difference.
+    #[must_use]
+    pub fn fields_px(&self, lead: u16, cell: f32) -> (f32, f32) {
+        (
+            f32::from(lead + self.from) * cell,
+            f32::from(self.to.saturating_sub(self.from)) * cell,
+        )
+    }
+
+    /// The timeline's rectangle, when this section is showing a film with one.
+    ///
+    /// `left` and `wide` are the transport's own pixels — see
+    /// [`Section::fields_px`] — and `top` is where the region's first line
+    /// begins. The THIRD axis, on the same [`ronoctua_design::Scroll`] the
+    /// other two are — so the cursor is drawn by `bar_across` and read back by
+    /// `offset_at`, and grabbing it lands where it looks.
+    ///
+    /// The track stops short of the clock at the right and starts after the two
+    /// buttons at the left. Those cells are reserved WHATEVER the pointer is
+    /// doing: had the track grown when the buttons went away, the cursor would
+    /// slide out from under the pointer in the instant of the click.
+    #[must_use]
+    pub fn time_bar_box(
+        &self,
+        left: f32,
+        wide: f32,
+        cell: f32,
+        line_px: f32,
+        bottom: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let time = self.time?;
+        self.transport?;
+        let (from, track) = track_px(left, wide, cell, self.clock)?;
+        let line_top = transport_top(bottom, line_px);
+        // CENTRED IN THE LINE, level with the glyphs beside it.
+        //
+        // It used to sit at the line's FOOT, which is where a scrollbar belongs
+        // and where a timeline does not: the owner photographed the play glyph
+        // and the track on two different heights and asked for them level.
+        // `bar_across` measures up from what it is given, so what it is given
+        // is the bar's own bottom.
+        time.bar_across(from, line_top + (line_px + cell) / 2.0, track, cell)
+    }
+
+    /// The timeline's TRACK, which is the part one grabs.
+    ///
+    /// # The track and not the cursor is the hit target
+    ///
+    /// Because [`ronoctua_design::Scroll::offset_at`] maps any point of the
+    /// track to a position — that is what it is for. A timeline one could only
+    /// grab by its one-cell cursor would be a control one has to aim at, and
+    /// clicking half way along a film is the ordinary way to use one.
+    ///
+    /// The cursor is drawn from [`Section::time_bar_box`] on top of this, in a
+    /// stronger tone. Two rectangles, one arithmetic.
+    #[must_use]
+    pub fn time_track_box(
+        &self,
+        left: f32,
+        wide: f32,
+        cell: f32,
+        line_px: f32,
+        bottom: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        self.time?;
+        self.transport?;
+        let (from, track) = track_px(left, wide, cell, self.clock)?;
+        let line_top = transport_top(bottom, line_px);
+        Some((from, line_top + (line_px - cell) / 2.0, track, cell))
     }
 
     /// This section as a list that may not fit.
@@ -1905,7 +2293,7 @@ impl Picker {
 /// cancellation rather than a number. The walk that DOES take minutes reports
 /// its result, and `ronoctua_memory::scan` is where a cancellable version with
 /// progress already lives if the day comes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Report {
     /// It worked; read the directory again.
     Done,
@@ -2112,6 +2500,56 @@ pub struct View {
     /// memory, which is the argument `ronoctua_render::image` already makes
     /// about its thirty-nine textures.
     looked: Option<Looked>,
+    /// The frame a moving file is showing right now.
+    ///
+    /// It REPLACES the still one on screen and does not disturb it in
+    /// `looked`: a file that stops moving — because the cursor left, or the
+    /// preview was switched off — falls back to the picture it always had.
+    frame: Option<crate::motion::Frame>,
+    /// What the film is DOING — the transport, and the whole of it.
+    ///
+    /// Kept beside the frame and never inside it: a frame is what arrived, and
+    /// this is what was asked for. It is reset whenever the cursor lands on
+    /// another file, which is what makes leaving and coming back start the
+    /// film again rather than resume somebody else's pause.
+    transport: Transport,
+    /// The last order the player was given.
+    ///
+    /// [`View::wants_motion`] is the difference between this and what SHOULD be
+    /// running. One comparison, in one place: enumerating the ways a film can
+    /// need restarting is how a case gets missed, which is the lesson
+    /// `wants_look` already carries.
+    told: Option<crate::motion::Reel>,
+    /// Whether the player has been told to hold.
+    ///
+    /// Beside [`Transport::paused`] and not inside it, because they answer two
+    /// different questions: that one is what somebody asked for, this one is
+    /// what the player was told. The difference between them is the order.
+    holding: bool,
+    /// What went wrong with the film, when something did.
+    ///
+    /// **Refusal is a value, not an absence.** A picture that is not there and
+    /// a picture that was refused look the same on screen, and only one of them
+    /// has a sentence — the rule the panels already keep.
+    trouble: Option<crate::motion::Trouble>,
+    /// Whether the preview was asked for the whole region.
+    ///
+    /// A wish and not a state: [`View::whole`] is what the doors read, and it
+    /// answers `false` the moment there is no film to give the region TO.
+    theatre: bool,
+    /// Which section the pointer is resting in.
+    ///
+    /// What decides the transport's buttons are drawn — they appear under the
+    /// pointer and the timeline does not, which is the owner's choice. It is a
+    /// `Cell` for the reason `drawn_lines` is: [`View::hit`] runs on every
+    /// pointer motion and takes `&self`.
+    pointing: std::cell::Cell<Option<Pane>>,
+    /// The preview's own box, in pixels, as it was last laid out.
+    ///
+    /// What the frame's size is asked FOR. It cannot come from the door at the
+    /// moment the player is told, because only the layout knows how many cells
+    /// the panel got — so the layout writes it down, once, where it decides.
+    drawn_preview: std::cell::Cell<(f32, f32)>,
     /// The first line of the text preview that is on screen.
     ///
     /// Its own, like `info_offset` and `side_offset`: a gesture over the
@@ -2176,10 +2614,29 @@ pub struct Ask {
     /// TOKEN (`space.files.tabWidth`), and `ronoctua-inspect` does not receive
     /// token values. Whoever asks holds the tokens.
     pub tab: usize,
+    /// A film that might belong to this picture, from the SAME folder.
+    ///
+    /// # Why the folder is asked about HERE
+    ///
+    /// An iPhone's Live Photo is two files — `IMG_1.HEIC` and `IMG_1.MOV` —
+    /// and the inspector's whole promise is what is inside ONE file. Knowing
+    /// what else is in the directory is the view's business, and the listing is
+    /// already in memory, so the candidate costs a scan of a `Vec` and no
+    /// syscall.
+    ///
+    /// It is a CANDIDATE and not a pairing: whether the two belong together is
+    /// decided by the `ContentIdentifier` both carry, which is a question about
+    /// what is inside them.
+    pub beside: Option<PathBuf>,
 }
 
 /// What the inspector came back with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Eq` is NOT derived, and it is the frame rate's doing: `Moving` carries a
+/// `f64` cadence, and a float has no total equality. `PartialEq` is what the
+/// comparisons here actually want — "is this still the same answer" — and it is
+/// what they have always used.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Looked {
     /// `Stamp::key()` — what identifies this answer in the texture map.
     pub key: String,
@@ -2187,6 +2644,12 @@ pub struct Looked {
     pub path: PathBuf,
     /// The pixels, when there are any.
     pub rgba: Option<ronoctua_render::image::Rgba>,
+    /// How this file's frames would be produced, when it moves.
+    ///
+    /// The player is started by the DOOR and not here: this crate answers what
+    /// is in a file, and running a child process for as long as a cursor rests
+    /// on it is the shell's business.
+    pub moving: Option<ronoctua_inspect::motion::Moving>,
     /// The letters, when there are any and there is no picture.
     ///
     /// # Everything expensive is already done
@@ -2311,6 +2774,14 @@ impl View {
             preview_on: true,
             info_on: true,
             info_offset: 0,
+            frame: None,
+            transport: Transport::default(),
+            told: None,
+            holding: false,
+            trouble: None,
+            theatre: false,
+            pointing: std::cell::Cell::new(None),
+            drawn_preview: std::cell::Cell::new((0.0, 0.0)),
             preview_offset: 0,
             preview_column: 0,
             // AND THE THREE COLUMNS ONE LOOKS UP COME UP OFF, which is the
@@ -2526,6 +2997,7 @@ impl View {
         Row {
             fields,
             marked: false,
+            foot: false,
             focused: false,
         }
     }
@@ -2653,6 +3125,7 @@ impl View {
                 Row {
                     fields,
                     marked: of_listing.is_some_and(|r| r.marked),
+                    foot: false,
                     focused: of_listing.is_some_and(|r| r.focused),
                 }
             })
@@ -2808,6 +3281,22 @@ impl View {
         if !self.plain() {
             return Panes::default();
         }
+        // THE WHOLE REGION, AND IT IS STILL A PANEL. `C-w` does not invent a
+        // layout: the preview keeps being the panel it was and is handed every
+        // cell, which is what makes the picture, the bars, the transport and
+        // the hit test carry on working without a case of their own.
+        if self.whole() {
+            return Panes {
+                sidebar: 0,
+                right: width,
+                strip: 0,
+                preview: true,
+                // AND THE FACTS STEP ASIDE. Two panels sharing the region would
+                // be half a region each, which is what one already had.
+                info: false,
+                whole: true,
+            };
+        }
         let sidebar = sidebar_columns(width, self.sidebar_showing(), self.side_content());
         let beside = width.saturating_sub(if sidebar == 0 { 0 } else { sidebar + RULE });
         let wanted = u16::from(self.preview_on) + u16::from(self.info_on);
@@ -2822,6 +3311,7 @@ impl View {
             },
             preview: self.preview_on,
             info: self.info_on,
+            whole: false,
         }
     }
 
@@ -2870,6 +3360,16 @@ impl View {
         // ON, and what they ask for is what they have to say.
         if self.focused().is_none() {
             return 0;
+        }
+        // AND WITH THE REGION GIVEN AWAY THE PREVIEW ASKS FOR EVERYTHING.
+        //
+        // `C-w` means "the whole region", so asking for a picture's four lines
+        // would be the key contradicting itself: the footer's region grows to
+        // what its panels ask for, and it stayed four lines tall. The ceiling
+        // still holds (invariant 14) — this is a request, and the door's
+        // twelve-line limit is what answers it.
+        if self.whole() {
+            return usize::from(ronoctua_tokens::space::EXPANSION_MAXLINES);
         }
         // AND THE PANELS ASK FOR WHAT THEY HAVE TO SAY, which is a picture's
         // box or a sheet's rows.
@@ -3272,6 +3772,190 @@ impl View {
     /// the plain sentence when they did not. A blank panel and a refused panel
     /// must not look the same — that is `ronoctua-inspect`'s rule, "refusal is
     /// a VALUE, not an absence" — and now neither of them is blank.
+    /// The transport's own line: the two buttons, the timeline and the clock.
+    ///
+    /// ```text
+    /// ▶  🔇   ▁▁▁▁▁▁▁●▁▁▁▁▁▁▁▁▁   1:23 / 5:40
+    /// ```
+    ///
+    /// # It is drawn ON the film, and all of it arrives with the pointer
+    ///
+    /// The owner asked for both: *"quero que todos os controles do player
+    /// apareçam por cima do vídeo/gif, de forma a deixar o vídeo/gif ocupando
+    /// toda a altura possível"*, and *"tudo deve sumir e aparecer apenas com o
+    /// hover do mouse sobre QUALQUER parte do elemento de preview"*.
+    ///
+    /// So the picture keeps the whole panel and this row is painted over its
+    /// last line, on a half-transparent band so the glyphs read against a bright
+    /// frame as well as a dark one. And nothing here is drawn unless the
+    /// pointer is somewhere in the preview — the timeline included, which used
+    /// to stay.
+    ///
+    /// The CELLS are still fixed whatever the pointer does. That is not the
+    /// same question: what comes and goes is the ink, and a track that changed
+    /// LENGTH on hover would slide the play cursor out from under the pointer
+    /// in the instant of the click.
+    ///
+    /// The track itself is drawn by the DOOR, as a rectangle, for the reason
+    /// every other bar is: where it is drawn is where it is grabbed, and a row
+    /// of glyphs cannot promise that. What is here is the room it occupies and
+    /// the two things one clicks.
+    fn transport_fields(
+        &self,
+        at: u16,
+        room: u16,
+        time: Option<&ronoctua_design::Scroll>,
+    ) -> Vec<Field> {
+        // A BACKING FIELD FIRST, AND ALWAYS — even with the controls away.
+        //
+        // Without it this row carries nothing, `Row::field_at` answers `None`,
+        // and `View::hit` therefore answers `None` for every point on it. The
+        // consequence is the one the owner ruled out in as many words —
+        // *"inclusive deve se manter em tela com o hover nos próprios
+        // controles"*: reaching for the play glyph would land on a line that
+        // resolves to no section, the pointer would stop being "in the
+        // preview", and the controls would vanish from under the hand going
+        // for them.
+        let mut out = vec![Field {
+            at,
+            text: " ".repeat(usize::from(room)),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            // AND THE TRANSPORT'S BACKING FIELD TOGGLES TOO, so the whole row
+            // answers the way the picture above it does — including the air
+            // between the buttons and the clock.
+            hit: Hit::Play,
+            explain: None,
+        }];
+        // AND NOTHING MORE WITHOUT THE POINTER. The row still holds the panel's
+        // last line either way, so the film does not move when they arrive.
+        if !self.pointing_at_preview() {
+            return out;
+        }
+        let at = at.saturating_add(TRANSPORT_LEAD);
+        let holding = self.transport.paused || !self.transport.on;
+        let glyph = |g: char| g.to_string();
+        out.push(Field {
+            at,
+            text: glyph(if holding {
+                ronoctua_tokens::icon::PLAY
+            } else {
+                ronoctua_tokens::icon::PAUSE
+            }),
+            color: ronoctua_tokens::color::TEXT_PRIMARY,
+            hit: Hit::Play,
+            explain: Some(Explanation {
+                key: if holding {
+                    ronoctua_i18n::key::FILES_PLAY_RESUME
+                } else {
+                    ronoctua_i18n::key::FILES_PLAY_HOLD
+                },
+                args: Vec::new(),
+            }),
+        });
+        // AND THE SOUND, WHICH A SILENT FILM DOES NOT OFFER. A control that
+        // does nothing where it is drawn is the shape `menu::Applies` exists to
+        // refuse — and here it would also be a lie, because ffmpeg refuses the
+        // whole command when there is no audio stream to fill the output with.
+        if self.film_has_sound() {
+            out.push(Field {
+                at: at.saturating_add(TRANSPORT_SOUND),
+                text: glyph(if self.transport.sound {
+                    ronoctua_tokens::icon::VOLUME
+                } else {
+                    ronoctua_tokens::icon::VOLUME_OFF
+                }),
+                color: ronoctua_tokens::color::TEXT_PRIMARY,
+                hit: Hit::Sound,
+                explain: Some(Explanation {
+                    key: if self.transport.sound {
+                        ronoctua_i18n::key::FILES_SOUND_OFF
+                    } else {
+                        ronoctua_i18n::key::FILES_SOUND_ON
+                    },
+                    args: Vec::new(),
+                }),
+            });
+        }
+        // AND THE CLOCK, at the right-hand end, in the file's own terms. A film
+        // with no length has none, which is the GIF: it loops, and "0:03 / "
+        // with nothing after it says less than nothing.
+        if let Some(time) = time {
+            let said = clock_text(time);
+            let wide = width_of(&said);
+            out.push(Field {
+                at: at
+                    .saturating_add(room)
+                    .saturating_sub(TRANSPORT_LEAD)
+                    .saturating_sub(TRANSPORT_LEAD)
+                    .saturating_sub(wide),
+                text: said,
+                color: ronoctua_tokens::color::TEXT_PRIMARY,
+                hit: Hit::Nothing,
+                explain: None,
+            });
+        }
+        out
+    }
+
+    /// Whether a hover band belongs on a section at all.
+    ///
+    /// # A picture has no LINES to light
+    ///
+    /// The band exists to say which ROW of a list the pointer is on, and a
+    /// preview showing a photograph or a film is not a list: the owner reported
+    /// it as *"o hover do mouse está destacando o background da linha no
+    /// preview de vídeos e imagens, o que é totalmente desnecessário"*, and he
+    /// is right — it lights an arbitrary stripe across a picture, which says
+    /// nothing and covers part of what one came to look at.
+    ///
+    /// A preview showing TEXT keeps it: there the rows are lines, and the band
+    /// answers the question it was written for.
+    #[must_use]
+    pub fn band_belongs(&self, pane: Pane) -> bool {
+        !matches!(pane, Pane::Preview) || self.showing_text().is_some()
+    }
+
+    /// The same question asked of a CELL, which is what the band itself uses.
+    ///
+    /// # Why not the resolved target
+    ///
+    /// Because the band's rectangle comes from [`band_of`], which needs only a
+    /// cell — and a guard that needed a whole [`Target`] would answer "yes,
+    /// draw it" wherever the target came back `None` while the band went on
+    /// being drawn from the cell. Two questions with different inputs cannot be
+    /// kept in step; one input can.
+    #[must_use]
+    pub fn band_belongs_at(&self, cell: u16, width: u16, in_strip: bool) -> bool {
+        self.band_belongs(self.panes(width).section_at(cell, width, in_strip))
+    }
+
+    /// Whether the film's controls are on screen right now.
+    ///
+    /// What the doors ask before painting the band, the track and the cursor —
+    /// all three arrive and leave together, with the pointer.
+    #[must_use]
+    pub fn transport_showing(&self) -> bool {
+        self.film_here() && self.pointing_at_preview()
+    }
+
+    /// Whether the pointer is anywhere in the preview.
+    ///
+    /// ANYWHERE, which is the owner's word: the picture, the controls, the air
+    /// beside them. `View::hit` resolves the SECTION first, and every line of
+    /// the preview carries a field — so resting on the play glyph keeps the
+    /// controls up exactly as resting on the film does.
+    fn pointing_at_preview(&self) -> bool {
+        self.pointing.get() == Some(Pane::Preview)
+    }
+
+    /// Whether the film under the cursor carries any sound.
+    fn film_has_sound(&self) -> bool {
+        self.looked
+            .as_ref()
+            .and_then(|l| l.moving.as_ref())
+            .is_some_and(|m| m.shape.sound)
+    }
+
     fn preview_fields(
         &self,
         n: usize,
@@ -3284,12 +3968,38 @@ impl View {
         };
         let path = self.where_.join(&entry.name);
         let looked = self.looked.as_ref().filter(|l| l.path == path);
-        let target = Hit::Name(self.cursor);
-        if looked.is_some_and(|l| l.rgba.is_some()) {
-            // A FIELD OF BLANKS, and not "no field at all". A picture has no
-            // text to hit-test against, and a panel one cannot click would be
-            // the mouse reaching less than the keyboard — the one direction
-            // `files-everything-has-a-key` rules out.
+        // WHAT A CLICK ON THE PREVIEW DOES, and it is no longer "open it".
+        //
+        // The owner asked for both halves: *"ao clicar com o mouse em qualquer
+        // preview, não quero mais que abra o arquivo; e ao clicar em vídeos ou
+        // gif animado, quero que ocorra um toggle no play/pause"*.
+        //
+        // Opening was the old answer and it was a hazard on a panel one now
+        // points at constantly — the controls only appear under the pointer, so
+        // reaching for them means putting the pointer on the picture, and a
+        // stray click launched the file in another program.
+        let target = if looked.is_some_and(|l| l.moving.is_some()) {
+            Hit::Play
+        } else {
+            Hit::Nothing
+        };
+        // A FIELD OF BLANKS, and not "no field at all". A picture has no text
+        // to hit-test against, and a panel one cannot click would be the mouse
+        // reaching less than the keyboard — the one direction
+        // `files-everything-has-a-key` rules out.
+        //
+        // THREE CASES SHARE IT, and the last two are the owner's report.
+        //
+        // A picture; a file that MOVES, which now has no still at all and whose
+        // frames go over these blanks; and a file still being LOOKED AT. That
+        // third one is *"momentos antes do preview aparecer, é mostrada a
+        // mensagem 'no preview', que é desnecessária, pois há um preview sendo
+        // carregado"* — the answer had not arrived, so the panel fell through
+        // to the sentence for "nothing here", and the sentence was replaced by
+        // a picture a fraction of a second later. An empty panel is the honest
+        // drawing of "not yet".
+        let coming = self.looking_still();
+        if coming || looked.is_some_and(|l| l.rgba.is_some() || l.moving.is_some()) {
             return vec![Field {
                 at,
                 text: " ".repeat(usize::from(room)),
@@ -3325,6 +4035,40 @@ impl View {
                 return Vec::new();
             };
             return text_fields(line, at, room, self.preview_column, target);
+        }
+        // TWO LINES WITH THE WHOLE REGION, and one without.
+        //
+        // The sentence says a preview could not be made; with the region given
+        // over to it, the owner asked for the file to say WHICH file it is —
+        // *"também mostrar o nome completo do arquivo, ou path caso for um
+        // diretório; mas apenas no modo preview largo"*. In the narrow panel
+        // the name is a cell away in the listing; with the listing gone it is
+        // nowhere, and a whole screen saying only "no preview" says nothing.
+        let named = self.whole();
+        if named && n == 1 {
+            let entry = self.focused();
+            let said = entry.map_or_else(String::new, |e| {
+                // A DIRECTORY IS A PLACE and a file is a name, which is what
+                // the owner distinguished: what identifies a folder is the path
+                // one has walked to it, and what identifies a file is what it
+                // is called.
+                if matches!(e.kind, ronoctua_files::Kind::Directory) {
+                    self.where_.join(&e.name).display().to_string()
+                } else {
+                    e.name.clone()
+                }
+            });
+            if said.is_empty() {
+                return Vec::new();
+            }
+            let said = ronoctua_render::layout::elide_middle(&said, room);
+            return vec![Field {
+                at: centred(at, room, width_of(&said)),
+                text: said,
+                color: ronoctua_tokens::color::TEXT_SECONDARY,
+                hit: target,
+                explain: None,
+            }];
         }
         // ONE LINE, AND NOTHING ON THE REST: a line that does nothing must not
         // look like a line that does something, which is the rule the blank
@@ -3584,10 +4328,18 @@ impl View {
         }
         let boxes = panes.boxes(width);
         let sheet = if panes.info { self.sheet() } else { Vec::new() };
+        // AND THE TRANSPORT IS THE STRIP'S LAST LINE, marked as the foot.
+        //
+        // The footer draws its strip through this path and not through
+        // `sections()`, so the row's anchor has to be decided here too — it is
+        // the same row, reached by the other door's own arithmetic.
+        let last = usize::from(panes.strip).saturating_sub(1);
+        let transport = self.film_here();
         (0..usize::from(panes.strip))
             .map(|n| Row {
                 fields: self.panel_fields(n, &boxes, &sheet, texts),
                 marked: false,
+                foot: transport && n == last,
                 focused: false,
             })
             .collect()
@@ -3804,6 +4556,7 @@ impl View {
             fields,
             marked,
             focused,
+            foot: false,
         }
     }
 
@@ -3852,6 +4605,7 @@ impl View {
                 explain: None,
             }],
             marked: false,
+            foot: false,
             focused: false,
         };
         std::iter::once(title)
@@ -3889,6 +4643,7 @@ impl View {
                         },
                     ],
                     marked: false,
+                    foot: false,
                     focused: n == chosen,
                 }
             }))
@@ -3920,6 +4675,7 @@ impl View {
                 explain: None,
             }],
             marked: false,
+            foot: false,
             focused: false,
         };
 
@@ -3979,6 +4735,7 @@ impl View {
                 },
             ],
             marked: false,
+            foot: false,
             focused: n == chosen,
         }));
         rows
@@ -4413,16 +5170,9 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 while let Ok(newer) = asks.try_recv() {
                     ask = newer;
                 }
-                let made = ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target);
-                // THE TEXT, ONLY WHEN THERE IS NO PICTURE. A picture wins, and
-                // reading a mebibyte to throw it away is a mebibyte read for
-                // every video walked past. It is also why SVG and EPS need no
-                // exception: the database says both descend from `text/plain`,
-                // and both get a picture first.
-                let said = (!made.drawable())
-                    .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
-                    .flatten();
-                let facts = ronoctua_inspect::facts::facts(
+                // THE FACTS FIRST, because their probe is what says whether the
+                // file MOVES — and a file that moves needs no still picture.
+                let told = ronoctua_inspect::facts::facts(
                     &ask.path,
                     ask.mime,
                     // WITHHELD, and it is the default for a reason the crate
@@ -4431,6 +5181,51 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     // taken" is most often the house it was taken in.
                     ronoctua_inspect::facts::Place::Withheld,
                 );
+                // AND WHETHER IT MOVES, out of the probe the facts already ran:
+                // one document, two readers, and no second spawn.
+                let moving = ronoctua_inspect::motion::moving(
+                    &ask.path,
+                    ask.mime,
+                    &told.probe,
+                    ask.beside.as_deref(),
+                );
+                // A FILE THAT MOVES GETS NO STILL PICTURE.
+                //
+                // It used to get one, and the owner reported what that looks
+                // like: *"está sendo carregada primeiro a imagem de um só
+                // frame, e na sequência o vídeo, o que acaba fazendo essa
+                // imagem apenas piscar rapidamente na tela"*. The poster is a
+                // whole ffmpeg run — a spawn, a seek and a decode — for a
+                // picture replaced 84 milliseconds later by the player's first
+                // frame. Work paid to produce a flicker.
+                //
+                // What fills the gap is NOTHING: `preview_key` answers `None`
+                // until a frame arrives, so the panel is empty rather than
+                // briefly wrong.
+                //
+                // A MOTION PHOTO IS THE EXCEPTION, and it is the whole point of
+                // one: the photograph is what it IS, and the film is a second
+                // and a half of what was happening around it. Both are wanted,
+                // and the loop alternates between them. The condition is
+                // therefore "is this a film" and not "does this move".
+                let a_film = moving.as_ref().is_some_and(|m| m.inside.is_none());
+                let made = if a_film {
+                    ronoctua_inspect::Made::unasked()
+                } else {
+                    ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target)
+                };
+                // THE TEXT, ONLY WHEN THERE IS NO PICTURE. A picture wins, and
+                // reading a mebibyte to throw it away is a mebibyte read for
+                // every video walked past. It is also why SVG and EPS need no
+                // exception: the database says both descend from `text/plain`,
+                // and both get a picture first.
+                //
+                // AND A FILM IS NOT TEXT EITHER: without this a video, now
+                // having no still, would be read for a mebibyte to be told it
+                // is not letters.
+                let said = (!made.drawable() && moving.is_none())
+                    .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
+                    .flatten();
                 let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
                     width: r.width,
                     height: r.height,
@@ -4454,10 +5249,19 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     Some(Ok(read)) => (None, None, Some(read)),
                     Some(Err(why)) => (None, Some(why), None),
                 };
+                // AND THE SHEET SAYS THE PICTURE MOVES. Nothing else on it
+                // does: the dimensions, the camera and the date are all about
+                // the photograph, and a person looking at the facts has no
+                // other way to learn there is a film in the file.
+                let mut facts = told.facts;
+                if let Some(row) = moving.as_ref().and_then(ronoctua_inspect::motion::fact_of) {
+                    facts.push(row);
+                }
                 let looked = Looked {
                     key: ask.key,
                     path: ask.path,
                     rgba,
+                    moving,
                     text,
                     why,
                     facts,
@@ -4510,6 +5314,7 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 explain: None,
             }],
             marked: false,
+            foot: false,
             focused: false,
         },
         Row {
@@ -4521,6 +5326,7 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 explain: None,
             }],
             marked: false,
+            foot: false,
             focused: false,
         },
     ];
@@ -4541,6 +5347,7 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 explain: None,
             }],
             marked: false,
+            foot: false,
             focused: n == picker.cursor,
         });
     }
@@ -4732,6 +5539,25 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // track that Ctrl at all — so the two doors would disagree.
     ("C-[", "files-preview-left"),
     ("C-]", "files-preview-right"),
+    // THE FILM'S TRANSPORT, and every one of them is PUNCTUATION for the
+    // reason `C-,` two lines up gives: every bare key is a letter of the query,
+    // and an arrow held with the RIGHT `Ctrl` is paging before the view sees
+    // it, in one door and not the other.
+    //
+    // `C-;` and `C-'` are neighbours on the keyboard as play and sound are
+    // neighbours on the row; `C--` and `C-=` are the pair either side of it,
+    // and they go backwards and forwards along the film. `Key::parse` handles
+    // `C--` on purpose — the comment in `ronoctua-keymap` says so, because the
+    // modifier loop would otherwise read the hyphen as an empty prefix.
+    ("C-;", "files-play"),
+    ("C-'", "files-sound"),
+    ("C--", "files-rewind"),
+    ("C-=", "files-forward"),
+    // AND THE WHOLE REGION, which is the owner's answer to "how big": one key
+    // gives it and the same key takes it back. A LETTER here and not
+    // punctuation, because it is not about the film's time — `w` for the
+    // window it becomes.
+    ("C-w", "files-theatre"),
     // THE THREE COLUMNS ONE LOOKS UP, hidden until asked for.
     //
     // `C-d` for the DETAIL, and a letter for the reason the sidebar's four
@@ -5077,6 +5903,11 @@ impl View {
             Some("files-preview-scroll") => self.scroll_preview(),
             Some("files-preview-left") => self.slide_preview(-1),
             Some("files-preview-right") => self.slide_preview(1),
+            Some("files-play") => self.play_pause(),
+            Some("files-sound") => self.hear(),
+            Some("files-rewind") => self.seek_by(-SEEK_STEP),
+            Some("files-forward") => self.seek_by(SEEK_STEP),
+            Some("files-theatre") => self.theatre(),
             Some("files-pane-next") => self.cycle_pane(true),
             Some("files-pane-previous") => self.cycle_pane(false),
             Some("files-columns") => {
@@ -5437,6 +6268,11 @@ impl View {
     pub fn click(&mut self, row: usize, hit: &Hit) -> Step {
         match hit {
             Hit::Nothing => Step::Nothing,
+            // THE TRANSPORT'S TWO, AND THROUGH THE KEYS' OWN CODE. The rule
+            // this whole function keeps: the mouse never reaches anything the
+            // keyboard cannot, and never by a second path.
+            Hit::Play => self.play_pause(),
+            Hit::Sound => self.hear(),
             // THE MOUSE GOES THROUGH THE SAME CODE THE KEY GOES THROUGH: it
             // puts the cursor where it clicked and then presses the key. That
             // is what keeps `files-everything-has-a-key` honest — the mouse
@@ -5623,6 +6459,7 @@ impl View {
             Row {
                 fields: self.crumbs(width),
                 marked: false,
+                foot: false,
                 focused: false,
             },
             self.header(width, texts),
@@ -5716,7 +6553,20 @@ impl View {
         // — and clamping the STRIP's top with it would float the strip up
         // under the header, drawn a second time over the listing.
         let region = take;
-        let take = take.min(most);
+        // AND WITH THE REGION GIVEN AWAY THE PREVIEW TAKES ALL OF IT.
+        //
+        // `most` is what the columns have to SAY, and a picture says
+        // `preview_lines` — four. Clamped to that, `C-w` produced a four-line
+        // panel at the top of an empty region: the owner photographed the
+        // consequences and read them as three separate defects. The controls
+        // sat on the fourth line rather than at the foot; the band under them,
+        // which runs to the panel's real bottom, then covered the whole film
+        // and darkened it; and the picture was fitted into four lines while the
+        // door drew it down to the surface.
+        //
+        // Asking for the region is the whole point of the key, so there is
+        // nothing to clamp against.
+        let take = if panes.whole { take } else { take.min(most) };
 
         let wanted = |p: Pane| only.is_none_or(|o| o == p);
         if panes.sidebar > 0 && wanted(Pane::Sidebar) {
@@ -5726,6 +6576,9 @@ impl View {
                 // NEVER SIDEWAYS: a sidebar row is a name that is elided, not
                 // a line one reads to its end.
                 across: None,
+                time: None,
+                transport: None,
+                clock: 0,
                 from: 0,
                 to: panes.sidebar,
                 top: 0,
@@ -5742,6 +6595,7 @@ impl View {
                                 self.side_fields(first + k, place, panes.sidebar, texts)
                             }),
                         marked: false,
+                        foot: false,
                         focused: false,
                     })
                     .collect(),
@@ -5749,8 +6603,12 @@ impl View {
         }
 
         // THE LISTING: its chrome first, then its rows from ITS offset.
+        //
+        // AND NOT AT ALL WITH THE REGION GIVEN AWAY. A section of nought cells
+        // would still answer `holds` on every line at cell nought and take the
+        // hits the preview should have.
         let above = chrome_lines.min(take);
-        if wanted(Pane::Listing) {
+        if wanted(Pane::Listing) && !panes.whole {
             let layout = layout_beside(width, panes.listing_from(), panes.right, self.details_on);
             let first = self.list_offset;
             let listing_to = if panes.right > 0 {
@@ -5765,6 +6623,7 @@ impl View {
                     || Row {
                         fields: Vec::new(),
                         marked: false,
+                        foot: false,
                         focused: false,
                     },
                     |i| self.row_of(n, *i, &layout),
@@ -5788,6 +6647,9 @@ impl View {
                 // width — that is what `Table` is for — so there is nothing
                 // past its right edge to reach.
                 across: None,
+                time: None,
+                transport: None,
+                clock: 0,
                 from: panes.listing_from(),
                 to: listing_to,
                 top: 0,
@@ -5872,18 +6734,62 @@ impl View {
                 } else {
                     None
                 };
+                // AND THE FILM'S TIMELINE IS THE THIRD AXIS, on the same
+                // `Scroll`: tenths of a second, from nought to the length of
+                // the film. `None` for a GIF, which has no duration and whose
+                // frames could not be sought into anyway.
+                let time = matches!(pane, Pane::Preview)
+                    .then(|| self.timeline())
+                    .flatten();
                 // AND ITS LINE IS NOT THE CONTENT'S EITHER, which is the
                 // same rule the cell follows, turned ninety degrees: a
                 // sideways bar sits on the band's LAST line, so the rows stop
                 // one short of it.
-                let content_lines = if across.is_some() {
-                    lines.saturating_sub(1)
-                } else {
-                    lines
-                };
+                //
+                // THE TRANSPORT TAKES ONE THE SAME WAY, and the picture gives
+                // it: nothing in this manager draws over its own content, which
+                // is the rule the owner set when he photographed a scrollbar
+                // sitting on a line of code.
+                let transport = matches!(pane, Pane::Preview) && self.film_here();
+                // HOW WIDE THE CLOCK IS, measured once and carried, because the
+                // track's length is what depends on it — and the cursor's
+                // rectangle and both doors' drags all have to agree about that.
+                let clock = time.as_ref().map_or(0, |t| width_of(&clock_text(t)));
+                let content_lines = lines
+                    .saturating_sub(usize::from(across.is_some()))
+                    .saturating_sub(usize::from(transport));
+                let mut content: Vec<Row> = (0..content_lines)
+                    .map(|k| Row {
+                        fields: match which {
+                            Panel::Preview => self.preview_fields(k, at, content_room, texts),
+                            Panel::Info => self.info_fields(k, at, content_room, &sheet),
+                        },
+                        marked: false,
+                        foot: false,
+                        focused: false,
+                    })
+                    .collect();
+                if transport {
+                    // A ROW AND NOT A RECTANGLE, unlike the two bars: two of
+                    // its cells are clickable, so `Section::line_of` and
+                    // `View::hit` resolve them with the arithmetic they already
+                    // have rather than with a fourth opinion about where the
+                    // panel is.
+                    content.push(Row {
+                        fields: self.transport_fields(at, content_room, time.as_ref()),
+                        marked: false,
+                        // AND ANCHORED TO THE FOOT — the one row in this
+                        // manager that is. See `Row::foot`.
+                        foot: true,
+                        focused: false,
+                    });
+                }
                 out.push(Section {
                     pane,
                     across,
+                    time,
+                    transport: transport.then_some(content_lines),
+                    clock,
                     // THE SECTION KEEPS ITS WHOLE SPAN. Shrinking `to` was the
                     // first attempt and it moved the bar instead of the text:
                     // the bar is drawn at `to - 1`, so the gap simply reopened
@@ -5900,16 +6806,7 @@ impl View {
                     },
                     total,
                     above: 0,
-                    content: (0..content_lines)
-                        .map(|k| Row {
-                            fields: match which {
-                                Panel::Preview => self.preview_fields(k, at, content_room, texts),
-                                Panel::Info => self.info_fields(k, at, content_room, &sheet),
-                            },
-                            marked: false,
-                            focused: false,
-                        })
-                        .collect(),
+                    content,
                 });
             }
         }
@@ -5963,8 +6860,21 @@ impl View {
         let in_strip = panes.strip > 0 && line >= room;
         let which = panes.section_at(cell, width, in_strip);
         let sections = self.sections_of(&chrome, room, width, texts, Some(which));
-        let sec = sections.iter().find(|s| s.holds(line, cell))?;
-        let inside = line - sec.top;
+        // THE LEFTOVER BELONGS TO THE LAST LINE.
+        //
+        // A surface is not a whole number of lines, so the strip of pixels
+        // under the last whole one turns into a line index ONE PAST the
+        // section — and answered nothing. The owner found it with the pointer:
+        // *"nem o hover do mouse funciona nesse espaço"*, on the very strip the
+        // film's controls are painted across. The band already takes that
+        // residue (see `transport_band`); this is the same decision for the
+        // pointer, so what is drawn there is what answers there.
+        let sec = sections.iter().find(|s| s.holds(line, cell)).or_else(|| {
+            sections
+                .iter()
+                .find(|s| line == s.top + s.lines && cell >= s.from && cell < s.to)
+        })?;
+        let inside = (line - sec.top).min(sec.lines.saturating_sub(1));
         let f = sec.content.get(inside)?.field_at(cell)?;
         // WHICH ROW OF ITS OWN LIST. The listing's chrome is not one of them —
         // `usize::MAX` is what both doors already spell for the header — and
@@ -6050,6 +6960,31 @@ impl View {
         // rather than the region's lines. It answers first because the pane it
         // belongs to also has a bar going down, and a pointer holding one is
         // not holding the other.
+        // THE FILM'S AXIS ANSWERS FIRST, because a pointer holding the
+        // timeline is not holding either of the panel's bars — and because a
+        // seek is not a scroll: it kills a child and starts another.
+        if matches!(axis, Axis::Time) {
+            let Some(total) = self
+                .looked
+                .as_ref()
+                .and_then(|l| l.moving.as_ref())
+                .and_then(|m| m.shape.seconds)
+            else {
+                return false;
+            };
+            let Some(bar) = self.timeline() else {
+                return false;
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let at = fraction.clamp(0.0, 1.0) as f32;
+            // THROUGH `offset_at`, which is `thumb`'s own inverse — the same
+            // call the other two axes make. Tenths of a second in, tenths of a
+            // second out.
+            #[allow(clippy::cast_precision_loss)]
+            let to = bar.offset_at(at, 1.0, 0.0) as f64 / 10.0;
+            self.seek_to(to.clamp(0.0, (total - 0.1).max(0.0)));
+            return true;
+        }
         if matches!(axis, Axis::Across) {
             let Some((_, cells)) = self.panes(width).preview_box(width) else {
                 return false;
@@ -6281,6 +7216,17 @@ impl View {
             // With TEXT there is something being read, and a pane whose arrows
             // do not move what one is reading is a pane one learns to Tab
             // past. The condition is the same one the bar asks.
+            // AND WITH THE WHOLE REGION THEY ALWAYS WALK THE FILES.
+            //
+            // The owner asked for it: *"sendo inclusive possível navegar para
+            // os próximos arquivos a partir do próprio preview largo (assim
+            // pulando para o próximo arquivo sem sair do preview largo)"*. With
+            // the listing gone there is no other way to move, and `TAB` has
+            // nowhere to go — the wide preview is the only section there is.
+            //
+            // Reading a long file that way is not lost: `C-,` pages the text
+            // and comes back round, and `C-[`/`C-]` move the line sideways.
+            Pane::Preview if self.whole() => self.move_by(by),
             Pane::Preview => {
                 if self.preview_total() > usize::from(self.drawn_lines.get()) {
                     self.step_preview(by)
@@ -6315,6 +7261,13 @@ impl View {
         let panes = self.panes(width);
         let placed = panes.right > 0 || panes.strip > 0;
         let mut out = Vec::with_capacity(4);
+        // AND WITH THE REGION GIVEN AWAY THERE IS ONE SECTION. `TAB` walking
+        // onto a listing that is not drawn would put the cursor where nobody
+        // can see it — the case `cycle_pane` already lands on the listing for,
+        // read the other way round.
+        if panes.whole {
+            return vec![Pane::Preview];
+        }
         if panes.sidebar > 0 {
             out.push(Pane::Sidebar);
         }
@@ -7226,6 +8179,7 @@ impl View {
                     },
                 ],
                 marked: false,
+                foot: false,
                 focused: false,
             })
             .collect()
@@ -7463,6 +8417,120 @@ impl View {
         Step::Changed
     }
 
+    /// Holds the film, or lets it go on. `C-;`, and the play glyph.
+    ///
+    /// # Three states, one key
+    ///
+    /// Playing, held, and ENDED — and the third is why this is not a `not`. A
+    /// film that ran out has no child to resume, so pressing play there starts
+    /// it again from the beginning, which is what everybody expects a play
+    /// button at the end of a film to do.
+    fn play_pause(&mut self) -> Step {
+        if !self.film_here() {
+            return Step::Say(does(NOTHING_PLAYING));
+        }
+        if self.transport.on {
+            self.transport.paused = !self.transport.paused;
+        } else {
+            // FROM THE TOP. The child is gone, so this is a spawn either way,
+            // and starting where the film ended would show its last frame and
+            // stop.
+            self.transport = Transport::default();
+        }
+        Step::Changed
+    }
+
+    /// Lets the film be heard, or not. `C-'`, and the sound glyph.
+    ///
+    /// A film with no audio stream REFUSES rather than pretending: measured
+    /// against the real binary, asking ffmpeg for a sound output it cannot fill
+    /// makes it refuse the whole command — so the picture would stop, in answer
+    /// to a key about the sound.
+    fn hear(&mut self) -> Step {
+        let has = self
+            .looked
+            .as_ref()
+            .and_then(|l| l.moving.as_ref())
+            .is_some_and(|m| m.shape.sound);
+        if !self.film_here() {
+            return Step::Say(does(NOTHING_PLAYING));
+        }
+        if !has {
+            return Step::Say(does(NO_SOUND_IN_IT));
+        }
+        self.transport.sound = !self.transport.sound;
+        // AND IT IS A RESPAWN, FROM WHERE THE PICTURE IS. The sound comes out
+        // of the same child, so there is no way to add it to one already
+        // running — and starting again from nought would be a key about the
+        // sound that moved the picture.
+        self.transport.from = self.transport.at;
+        Step::Changed
+    }
+
+    /// Moves along the film, and says where it got to. `C--` and `C-=`.
+    ///
+    /// A GIF refuses, and it is the length that refuses it: its frames are
+    /// inter-dependent, so reaching frame five hundred means composing five
+    /// hundred — 707 ms on the owner's own forty-four-frame sample. No
+    /// duration is what draws that line, with no branch of its own.
+    fn seek_by(&mut self, by: f64) -> Step {
+        let Some(total) = self
+            .looked
+            .as_ref()
+            .and_then(|l| l.moving.as_ref())
+            .and_then(|m| m.shape.seconds)
+        else {
+            return Step::Say(does(NOTHING_PLAYING));
+        };
+        if !self.film_here() {
+            return Step::Say(does(NOTHING_PLAYING));
+        }
+        self.seek_to((self.transport.at + by).clamp(0.0, (total - 0.1).max(0.0)));
+        Step::Say(Explanation {
+            key: ronoctua_i18n::key::FILES_FILM_SEEK,
+            args: vec![
+                ("at", clock_of(self.transport.from)),
+                ("total", clock_of(total)),
+            ],
+        })
+    }
+
+    /// Puts the film at a point, in seconds.
+    ///
+    /// One place, because three things reach it — the two keys and the drag —
+    /// and a seek written three times is three chances for the picture and the
+    /// cursor to disagree about where the film is.
+    pub fn seek_to(&mut self, to: f64) {
+        self.transport.on = true;
+        self.transport.paused = false;
+        self.transport.from = to.max(0.0);
+        self.transport.at = self.transport.from;
+        // AND THE PICTURE ON SCREEN STAYS until the new one arrives.
+        //
+        // Clearing it was the first shape of this and it was worse: a seek is a
+        // kill and a respawn, 108 to 242 milliseconds, and blanking the panel
+        // for each of them turns a drag along the timeline into a strobe. The
+        // texture is reused under the same key, so the new frame simply
+        // overwrites the old one when it lands.
+    }
+
+    /// Gives the preview the whole region, or gives it back. `C-w`.
+    ///
+    /// It REFUSES when there is no film, and the refusal is the point: a
+    /// manager whose listing vanished because a key was pressed over a text
+    /// file is a manager that lost its listing.
+    fn theatre(&mut self) -> Step {
+        if self.focused().is_none() {
+            return Step::Say(does(THEATRE_NOTHING));
+        }
+        self.theatre = !self.theatre;
+        Step::Say(does(if self.theatre {
+            THEATRE_ON
+        } else {
+            THEATRE_OFF
+        }))
+    }
+
     /// What the inspector should be asked for, or `None` when nothing is due.
     ///
     /// # Why the ASK is remembered and not only the answer
@@ -7520,6 +8588,11 @@ impl View {
         let (named, sniffed) = mime::examined(&path, kind);
         let mime = ronoctua_inspect::settled(named, sniffed);
         Some(Ask {
+            // A FILM THAT MIGHT BELONG TO THIS PICTURE, out of the listing that
+            // is already in memory — see `Ask::beside`. It is a CANDIDATE:
+            // whether the two are one Live Photo is settled by what is inside
+            // them, which is the inspector's question and not this one.
+            beside: self.film_beside(&path),
             path,
             mime,
             target,
@@ -7552,8 +8625,51 @@ impl View {
             self.preview_offset = 0;
             self.preview_column = 0;
             self.info_offset = 0;
+            // AND THE FILM STARTS AGAIN, which is the same causal argument one
+            // line up: the subject changed. Without it, leaving a film paused,
+            // walking two files away and coming back would show another film
+            // held at somebody else's pause, muted or not according to a
+            // decision made about a different file.
+            self.transport = Transport::default();
+            // AND THE WIDE MODE STAYS. It used to go with the file, and that is
+            // the opposite of what the owner asked for: *"sendo inclusive
+            // possível navegar para os próximos arquivos a partir do próprio
+            // preview largo"*. It is a way of LOOKING, not a property of what
+            // is being looked at — and `whole` still gives the region back by
+            // itself when there is nothing under the cursor.
+            self.trouble = None;
+            self.frame = None;
         }
         self.looked = Some(l);
+    }
+
+    /// What went wrong with the film, when something did.
+    ///
+    /// **Refusal is a value, not an absence** — a panel that is blank and a
+    /// panel that was refused look the same on screen, and only one of them has
+    /// a sentence. The doors put it on the message line.
+    #[must_use]
+    pub fn film_trouble(&self) -> Option<Explanation> {
+        let what = self.trouble?;
+        // THE CURSOR IS STILL ON A FILM, and that is the whole condition. It is
+        // NOT "there is a frame": a starved film has none, and that is exactly
+        // when the sentence matters most — the panel is empty and nothing else
+        // says why.
+        self.showing_now()?;
+        self.looked.as_ref()?.moving.as_ref()?;
+        Some(match what {
+            crate::motion::Trouble::NoSound => Explanation {
+                key: ronoctua_i18n::key::FILES_NO_SOUND,
+                args: Vec::new(),
+            },
+            crate::motion::Trouble::Starved => Explanation {
+                key: ronoctua_i18n::key::FILES_FILM_STUCK,
+                args: vec![(
+                    "seconds",
+                    ronoctua_inspect::motion::STARVED.as_secs().to_string(),
+                )],
+            },
+        })
     }
 
     /// The texture key of the picture the preview is showing, if there is one.
@@ -7561,11 +8677,34 @@ impl View {
     /// The door asks `Images::missing` with it BEFORE uploading — a preview is
     /// up to a mebibyte of RGBA, and putting that on the bus every frame is the
     /// transfer the key exists to avoid.
+    ///
+    /// # A FRAME counts, and that was a defect
+    ///
+    /// It used to answer only when there was a still picture, and a film whose
+    /// poster failed to decode then drew NOTHING for ever: the player ran, the
+    /// frames arrived, the view stored them, and no door ever asked for a
+    /// rectangle to put them in. A moving file has a picture whether or not it
+    /// has a poster.
     #[must_use]
-    pub fn preview_key(&self) -> Option<&str> {
+    pub fn preview_key(&self) -> Option<String> {
         self.showing_now()?;
         let l = self.looked.as_ref()?;
-        l.rgba.as_ref().map(|_| l.key.as_str())
+        // A FRAME AND A PHOTOGRAPH ARE TWO TEXTURES, and that is a defect
+        // avoided rather than found.
+        //
+        // A door uploads the still only `if im.missing(&key)` — a preview is up
+        // to a mebibyte — while every frame is written under the key it is
+        // given. Sharing one key, the film's frames overwrite the photograph,
+        // and on a MOTION PHOTO the loop's return to the photograph would find
+        // the key present and upload nothing: the panel would hold the film's
+        // last frame for ever, and the feature would work once.
+        //
+        // Two keys, two slots out of thirty-nine. Not a key per frame, which is
+        // what would fill the cache with one file's film.
+        if self.frame.as_ref().is_some_and(|f| f.key == l.key) {
+            return Some(format!("{}{FRAME_MARK}", l.key));
+        }
+        l.rgba.as_ref().map(|_| l.key.clone())
     }
 
     /// The pixels behind that key, for the door that has to upload them.
@@ -7573,6 +8712,289 @@ impl View {
     pub fn preview_pixels(&self) -> Option<&ronoctua_render::image::Rgba> {
         self.showing_now()?;
         self.looked.as_ref()?.rgba.as_ref()
+    }
+
+    /// The picture the preview's box should be sized from.
+    ///
+    /// # The frame first, and it is the defect the owner photographed
+    ///
+    /// Both doors used to measure the box from [`View::preview_pixels`] — the
+    /// STILL frame — and then draw whatever the player had sent into it. The
+    /// two are different shapes, so every film was stretched to the poster's
+    /// proportions. Under the old height guess that was a ninefold vertical
+    /// stretch, which is what *"the frames look rotated"* was.
+    ///
+    /// One answer, asked by both doors, and the picture that is DRAWN is the
+    /// picture that is measured.
+    #[must_use]
+    pub fn preview_now(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.moving_frame().or_else(|| self.preview_pixels())
+    }
+
+    /// The player had something to say.
+    ///
+    /// Dropped when it is not about the file the cursor is on — the same rule
+    /// [`View::looked`] keeps, and for the same reason: one file's picture
+    /// under another file's name is the one failure a preview must not have.
+    pub fn played(&mut self, beat: crate::motion::Beat) {
+        let key = match &beat {
+            crate::motion::Beat::Frame(f) => &f.key,
+            crate::motion::Beat::Ended { key }
+            | crate::motion::Beat::Still { key }
+            | crate::motion::Beat::Trouble { key, .. } => key,
+        };
+        if self.asked.as_deref() != Some(key.as_str()) {
+            return;
+        }
+        match beat {
+            crate::motion::Beat::Frame(f) => {
+                self.transport.at = f.at;
+                self.frame = Some(f);
+            }
+            // THE FILM RAN OUT, and it has to SAY so. Before this the frames
+            // simply stopped arriving, the last one stayed up for ever and the
+            // play glyph never came back — the absence of a wake-up is not an
+            // event and cannot be drawn.
+            crate::motion::Beat::Ended { .. } => {
+                self.transport.on = false;
+                self.transport.paused = false;
+            }
+            // A MOTION PHOTO'S OTHER HALF. Letting the frame go is what puts
+            // the photograph back on screen: the panel draws the still whenever
+            // there is no frame in hand.
+            crate::motion::Beat::Still { .. } => {
+                self.frame = None;
+                self.transport.at = 0.0;
+            }
+            crate::motion::Beat::Trouble { what, .. } => match what {
+                // THE MACHINE HAS NO SOUND. The picture goes on without it and
+                // the wish is corrected, so nothing asks again every frame.
+                crate::motion::Trouble::NoSound => {
+                    self.transport.sound = false;
+                    self.trouble = Some(crate::motion::Trouble::NoSound);
+                }
+                crate::motion::Trouble::Starved => {
+                    self.transport.on = false;
+                    self.frame = None;
+                    self.trouble = Some(crate::motion::Trouble::Starved);
+                }
+            },
+        }
+    }
+
+    /// What SHOULD be running, as a value.
+    ///
+    /// `None` is "nothing at all": no film under the cursor, the preview hidden,
+    /// or a film that has ended or been stopped.
+    fn wish(&self) -> Option<crate::motion::Reel> {
+        let l = self.looked.as_ref()?;
+        self.showing_now()?;
+        let moving = l.moving.as_ref()?;
+        if !self.transport.on {
+            return None;
+        }
+        let fit = self.preview_fit()?;
+        Some(crate::motion::Reel {
+            path: l.path.clone(),
+            key: l.key.clone(),
+            how: moving.how,
+            fit,
+            fps: moving.shape.fps,
+            from: self.transport.from,
+            // AND SOUND IS REFUSED WHERE THERE IS NONE TO HEAR. Measured
+            // against the real binary: ffmpeg refuses the WHOLE command when
+            // the audio output cannot be filled, so asking for sound on a
+            // silent film would stop the picture.
+            sound: self.transport.sound && moving.shape.sound,
+            background: letterbox(),
+            // WHERE THE FILM IS, when the picture is a photograph with one in
+            // it. `None` for an ordinary film, which IS the file.
+            inside: moving.inside.clone(),
+        })
+    }
+
+    /// What the player should be told, given everything that has changed.
+    ///
+    /// `None` is "nothing has changed". One question, one place, one
+    /// comparison: the door asks once a frame and passes the answer straight
+    /// on. Enumerating the ways a film can need restarting — the cursor moved,
+    /// the panel was hidden, the window was resized, the sound was asked for,
+    /// somebody scrubbed — is how a case gets missed, and every one of them is
+    /// a field of [`crate::motion::Reel`].
+    pub fn wants_motion(&mut self) -> Option<crate::motion::Ask> {
+        let now = self.wish();
+        let ask = match (&self.told, &now) {
+            (None, None) => None,
+            (Some(_), None) => {
+                // AND THE FRAME GOES WITH IT ONLY WHEN THE FILM WENT.
+                //
+                // A film that ENDED keeps its last picture and its play glyph,
+                // because pressing play is how one watches it again. A cursor
+                // that MOVED must not: one file's picture under another file's
+                // name is the one failure a preview must not have.
+                if !self.film_here() {
+                    self.frame = None;
+                }
+                Some(crate::motion::Ask::Stop)
+            }
+            (None, Some(w)) => Some(crate::motion::Ask::Play(w.clone(), self.transport.paused)),
+            (Some(was), Some(w)) if was == w => None,
+            // A RESPAWN OF THE SAME FILM PICKS UP WHERE THE PICTURE IS.
+            //
+            // `from` is where the last child was TOLD to start, and it only
+            // moves when somebody seeks — which is right, or the wish would
+            // change thirty times a second. But a respawn for another reason —
+            // the panel resized, `C-w` given or taken back, the sound switched
+            // — would then start the film at that old mark again. The owner
+            // photographed it: *"ao trocar para o modo largo, ou retornar dele,
+            // o vídeo retrocede em vez de continuar no exato último tempo"*.
+            (Some(was), Some(w)) if was.path == w.path && was.key == w.key => {
+                self.transport.from = self.transport.at;
+                // AND THE WISH IS REBUILT AT THE NEW MARK, so what is recorded
+                // as told is what was actually asked for.
+                let w = self.wish()?;
+                Some(crate::motion::Ask::Play(w, self.transport.paused))
+            }
+            (Some(_), Some(w)) => Some(crate::motion::Ask::Play(w.clone(), self.transport.paused)),
+        };
+        // AND PAUSING IS NOT A RESPAWN. It is not part of the wish at all: the
+        // child stays alive, blocked on a pipe nobody is draining, at no cost —
+        // against the 108 to 242 milliseconds a seek costs, measured.
+        if ask.is_none() && now.is_some() {
+            if self.transport.paused != self.holding {
+                self.holding = self.transport.paused;
+                return Some(if self.holding {
+                    crate::motion::Ask::Pause
+                } else {
+                    crate::motion::Ask::Resume
+                });
+            }
+            return None;
+        }
+        if let Some(crate::motion::Ask::Play(w, held)) = &ask {
+            // AND THE PLAYER WAS TOLD THE HOLD, so `wants_motion` must not go
+            // on believing it is running — or it would send a Resume nobody
+            // asked for on the very next frame.
+            self.holding = *held;
+            // WHAT WAS ACTUALLY ASKED FOR, and not what was wished a moment
+            // earlier: the branch above may have moved the mark.
+            self.told = Some(w.clone());
+        } else if ask.is_some() {
+            self.holding = false;
+            self.told = None;
+        }
+        ask
+    }
+
+    /// The frame a moving file is showing, if one is.
+    #[must_use]
+    pub fn moving_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.showing_now()?;
+        let l = self.looked.as_ref()?;
+        let f = self.frame.as_ref()?;
+        (f.key == l.key).then_some(&f.rgba)
+    }
+
+    /// How large a frame the preview wants, in pixels.
+    ///
+    /// From the panel's OWN box, quantised — see [`ronoctua_inspect::motion::Fit`].
+    /// The player used to decode at a fixed 512 whatever the panel was, which
+    /// is 576 KiB a frame against 83 for a four-line strip: seven times the
+    /// traffic to the graphics card for a picture nobody could see the
+    /// difference in.
+    fn preview_fit(&self) -> Option<ronoctua_inspect::motion::Fit> {
+        let (wide, tall) = self.drawn_preview.get();
+        ronoctua_inspect::motion::Fit::of(wide, tall)
+    }
+
+    /// The box the door is actually drawing the picture into, in pixels.
+    ///
+    /// # It has to be the DOOR's number and not an estimate from cells
+    ///
+    /// The frame is decoded at the box's own shape, so ffmpeg's letterbox is
+    /// the panel's own air and the picture is framed once. Estimating the box
+    /// as `cells × cell_width` gets the shape WRONG — the door then takes
+    /// `pictureAir` off each side, and a box six pixels narrower on each axis
+    /// is a different aspect. The owner photographed the result: *"a imagem do
+    /// GIF está distorcida"*.
+    ///
+    /// A `Cell`, for the reason `drawn_lines` is one: the painter holds the
+    /// view immutably, and this is written where the box is decided.
+    pub fn measured_preview(&self, wide: f32, tall: f32) {
+        if wide > 1.0 && tall > 1.0 {
+            self.drawn_preview.set((wide, tall));
+        }
+    }
+
+    /// The film's timeline, when there is a film with a length.
+    fn timeline(&self) -> Option<ronoctua_design::Scroll> {
+        let l = self.looked.as_ref()?;
+        self.showing_now()?;
+        let seconds = l.moving.as_ref()?.shape.seconds?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let total = (seconds * 10.0).round().max(1.0) as usize;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let offset = (self.transport.at.max(0.0) * 10.0).round() as usize;
+        Some(ronoctua_design::Scroll {
+            total,
+            // ONE TENTH OF A SECOND WIDE, which is what makes the cursor a MARK
+            // and not a page: `Scroll::thumb` never draws one shorter than a
+            // cell, so the shortest film and the longest get the same handle.
+            lines: 1,
+            offset: offset.min(total.saturating_sub(1)),
+            top: 0,
+        })
+    }
+
+    /// Whether the preview has been given the whole region.
+    ///
+    /// # It is DERIVED, and that is what makes it undo itself
+    ///
+    /// Not a mode that is stored and switched off: the film ending, the cursor
+    /// moving, `C-v` hiding the preview — each of them would be a case somebody
+    /// has to remember to undo, and the one that gets forgotten leaves the
+    /// manager showing a blank region. Asking the question every frame has no
+    /// such case.
+    #[must_use]
+    pub fn whole(&self) -> bool {
+        // ANY PREVIEW, and not only a film. The owner asked for it: *"fazer o
+        // modo largo funcionar em todos os preview, de todos os arquivos"* —
+        // a photograph is exactly as worth a whole region as a film, and so is
+        // a page of code.
+        //
+        // What it still needs is something to BE a preview of: with no file
+        // under the cursor the region would be given to an empty panel, and
+        // `C-w` would have lost the listing for nothing.
+        self.theatre && self.preview_on && self.focused().is_some()
+    }
+
+    /// Whether the cursor is on a film the preview is showing.
+    ///
+    /// # It is not "is there a frame"
+    ///
+    /// A film that has ENDED keeps its last frame and its controls, so one can
+    /// press play and watch it again — so a frame is not the question. A film
+    /// that STARVED has neither, and it is the one case where there is nothing
+    /// left to transport.
+    ///
+    /// The five keys and the whole-region wish all ask this, which is what
+    /// makes them refuse together: five conditions written five times is five
+    /// chances for one of them to say yes where the others say no.
+    fn film_here(&self) -> bool {
+        self.showing_now().is_some()
+            && self.looked.as_ref().is_some_and(|l| l.moving.is_some())
+            && !matches!(self.trouble, Some(crate::motion::Trouble::Starved))
+    }
+
+    /// Which section the pointer is resting in.
+    ///
+    /// The doors say so where they already resolve a [`Target`]; it decides
+    /// whether the transport's two buttons are drawn. The timeline is NOT
+    /// hidden with them — the owner's choice, and the right one: a track that
+    /// appeared under the pointer would move the cursor out from under it in
+    /// the instant of the click.
+    pub fn pointing(&self, pane: Option<Pane>) {
+        self.pointing.set(pane);
     }
 
     /// The letters behind the cursor, when the file has any and no picture.
@@ -7614,6 +9036,49 @@ impl View {
                 .map(|l| usize::from(ronoctua_render::layout::width(&l.text)))
                 .max()
                 .unwrap_or(0)
+        })
+    }
+
+    /// Whether an answer about the focused file is still on its way.
+    ///
+    /// `asked` names a file and `looked` does not answer for it yet. It is the
+    /// difference between "there is nothing to show" and "nothing has arrived",
+    /// and the panel draws them differently — the second one draws nothing at
+    /// all, because a sentence that is replaced by a picture a fraction of a
+    /// second later is a flicker with a message in it.
+    fn looking_still(&self) -> bool {
+        let Some(asked) = self.asked.as_deref() else {
+            return false;
+        };
+        self.looked.as_ref().is_none_or(|l| l.key != asked)
+    }
+
+    /// A film in this folder that shares a picture's name.
+    ///
+    /// # The name is the CANDIDATE and never the answer
+    ///
+    /// An iPhone writes `IMG_1234.HEIC` and `IMG_1234.MOV`, so the name is how
+    /// one FINDS the other half — cheaply, out of the listing that is already
+    /// in memory. It is not how one knows they belong together: an unrelated
+    /// `photo.jpg` and `photo.mov` are perfectly ordinary, and pairing them
+    /// would play a stranger's video under somebody's photograph. That question
+    /// is `facts::content_identifier`'s, one crate along.
+    fn film_beside(&self, path: &std::path::Path) -> Option<PathBuf> {
+        let stem = path.file_stem()?;
+        self.shown.iter().find_map(|i| {
+            let entry = self.entries.get(*i)?;
+            let other = self.where_.join(&entry.name);
+            if other == path || std::path::Path::new(&entry.name).file_stem()? != stem {
+                return None;
+            }
+            // THE MOVING HALF, by the two extensions Apple writes. Asking the
+            // type database would be a `stat` and a sniff per neighbour, on
+            // every file the cursor walks past.
+            let ext = std::path::Path::new(&entry.name)
+                .extension()?
+                .to_str()?
+                .to_ascii_lowercase();
+            matches!(ext.as_str(), "mov" | "mp4").then_some(other)
         })
     }
 
@@ -7692,6 +9157,7 @@ mod tests {
             key: ask.key,
             path: ask.path,
             rgba: None,
+            moving: None,
             text: Some(read),
             why: None,
             facts: Vec::new(),
@@ -7829,6 +9295,7 @@ mod tests {
                 height: 4,
                 pixels: vec![0; 64],
             }),
+            moving: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -7975,6 +9442,7 @@ mod tests {
             key: "prev:again".to_owned(),
             path: same,
             rgba: None,
+            moving: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -7988,6 +9456,7 @@ mod tests {
             key: "prev:other".to_owned(),
             path: dir.join("other.rs"),
             rgba: None,
+            moving: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -8103,6 +9572,7 @@ mod tests {
             key: ask.key,
             path: ask.path,
             rgba: None,
+            moving: None,
             text: Some(read),
             why: None,
             facts: Vec::new(),
@@ -8304,6 +9774,728 @@ mod tests {
             sec.content.len(),
             sec.lines.saturating_sub(1),
             "the rows did not give up the bar's line"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A MOVING FILE IS FOLLOWED, AND ONLY WHILE IT IS THE ONE IN FRONT.
+    ///
+    /// FAILS IF: the player is asked for a still picture (a thread and a child
+    /// process for a photograph), or is left running when the cursor leaves —
+    /// which would be ffmpeg reading a film nobody is looking at.
+    #[test]
+    fn a_player_is_asked_for_only_while_the_moving_file_is_in_front() {
+        let dir = scratch("motion");
+        std::fs::write(dir.join("a-still.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+
+        // NOTHING TO FOLLOW YET, and nothing playing: no question to answer.
+        assert!(v.wants_motion().is_none(), "it asked before anything moved");
+
+        // A STILL PICTURE ARRIVES. Still nothing to follow.
+        let ask = v.wants_look(512).expect("a file wants a look");
+        v.looked(Looked {
+            key: ask.key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        assert!(
+            v.wants_motion().is_none(),
+            "a still picture asked for a player"
+        );
+
+        // AND NOW ONE THAT MOVES.
+        v.asked = Some("prev:moves".to_owned());
+        v.looked(Looked {
+            key: "prev:moves".to_owned(),
+            path: dir.join("a-still.png"),
+            rgba: None,
+            moving: Some(a_gif()),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        // THE PANEL HAS TO HAVE BEEN MEASURED, because the frame is decoded at
+        // the box's OWN shape — no box, no wish. It is the DOOR that measures
+        // it, in pixels, for the reason `View::measured_preview` gives: a box
+        // estimated from cells is a different aspect once the air comes off,
+        // and the picture then comes out distorted.
+        v.measured_preview(300.0, 200.0);
+        let Some(crate::motion::Ask::Play(reel, _)) = v.wants_motion() else {
+            panic!("a moving file did not ask for a player");
+        };
+        assert_eq!(reel.key, "prev:moves");
+        assert_eq!(reel.path, dir.join("a-still.png"));
+        assert_eq!(reel.how, ronoctua_inspect::motion::Source::InProcess);
+        assert!(!reel.sound, "a preview started with the sound on");
+
+        // A FRAME ARRIVES, and the question stops being asked: asking again
+        // every frame would restart the film on each one of them.
+        v.played(crate::motion::Beat::Frame(a_frame("prev:moves")));
+        assert!(
+            v.wants_motion().is_none(),
+            "it asked again while already following"
+        );
+        assert!(v.moving_frame().is_some(), "the frame is not on screen");
+
+        // AND THE PREVIEW GOES OFF: stop, and let the still picture back.
+        v.preview_on = false;
+        assert_eq!(
+            v.wants_motion(),
+            Some(crate::motion::Ask::Stop),
+            "the player was left running with the preview off"
+        );
+        assert!(v.moving_frame().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the transport stops being drawn ON the film, or the film stops
+    /// getting the whole panel.
+    ///
+    /// The owner asked for the reverse of what this file had: *"todos os
+    /// controles do player apareçam por cima do vídeo/gif, de forma a deixar o
+    /// vídeo/gif ocupando toda a altura possível"*. So the picture's box loses
+    /// nothing to the controls, and the controls come back as a band painted
+    /// over its last line.
+    #[test]
+    fn the_transport_is_painted_on_the_film_and_costs_it_no_room() {
+        let dir = scratch("motion-room");
+        std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        let words = bundle();
+        let ask = v.wants_look(512).expect("a file wants a look");
+        let key = ask.key.clone();
+        v.looked(Looked {
+            key: key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_film(60.0, true)),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        v.played(crate::motion::Beat::Frame(a_frame(&key)));
+
+        // THE PANEL'S ROWS ARE ALL THE PICTURE'S. `content.len()` is the whole
+        // height either way, and what used to differ — how many of them the
+        // picture got — no longer does: the band goes on top.
+        let with_a_film = preview_of(&v, &words);
+        let rows = with_a_film.content.len();
+        assert!(rows > 0, "the panel has no rows at all");
+        assert_eq!(
+            with_a_film.transport,
+            Some(rows - 1),
+            "the transport is not the panel's LAST line: {:?}",
+            with_a_film.transport
+        );
+
+        // AND EVERY PART OF THE TRANSPORT IS COUNTED UP FROM THE FOOT.
+        //
+        // The row itself is placed that way by the text renderer (`Row::foot`),
+        // so a rectangle counted DOWN from the region's top lands a remainder
+        // away from the glyphs — which is what the owner photographed as *"a
+        // barra de tempo está em cima, ela está desalinhada do resto dos
+        // controles"*. It was the fix for the row's own position producing the
+        // next defect, because only half of the row moved.
+        let band = transport_band(&with_a_film, 0.0, 400.0, 20.0, 500.0).expect("a band");
+        assert!(
+            (band.1 - 480.0).abs() < 0.01 && (band.3 - 20.0).abs() < 0.01,
+            "the band is at {band:?} and the foot is at 500"
+        );
+        let track = with_a_film
+            .time_track_box(0.0, 400.0, 10.0, 20.0, 500.0)
+            .expect("a track");
+        let cursor = with_a_film
+            .time_bar_box(0.0, 400.0, 10.0, 20.0, 500.0)
+            .expect("a cursor");
+        for (what, rect) in [("track", track), ("cursor", cursor)] {
+            assert!(
+                rect.1 >= band.1 - 0.01 && rect.1 + rect.3 <= band.1 + band.3 + 0.01,
+                "the {what} is at {rect:?}, outside the controls' own line {band:?}"
+            );
+        }
+        assert!(
+            (track.1 - cursor.1).abs() < 0.01,
+            "the track is at {} and the cursor at {} — two different heights",
+            track.1,
+            cursor.1
+        );
+
+        // AND A SEEK DOES NOT MOVE IT: the child dies, the next picture is a
+        // fifth of a second away, and the controls have to stay where the hand
+        // is.
+        v.seek_to(30.0);
+        assert_eq!(
+            preview_of(&v, &words).content.len(),
+            rows,
+            "the panel changed height in the middle of a seek"
+        );
+
+        // AND WITH NO FILM THERE IS NO BAND AT ALL.
+        v.frame = None;
+        v.looked(Looked {
+            key,
+            path: v.focused_path().expect("a file"),
+            rgba: None,
+            moving: None,
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        let still = preview_of(&v, &words);
+        assert!(
+            still.transport.is_none(),
+            "controls with nothing to control"
+        );
+        assert!(transport_band(&still, 0.0, 400.0, 20.0, 500.0).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a point anywhere in a film's preview stops resolving to the
+    /// preview.
+    ///
+    /// This is the DOOR's question, asked of the view: both doors decide
+    /// whether the pointer is "in the preview" by `View::hit`, and everything
+    /// the owner asked for hangs off that answer — the controls appearing, the
+    /// controls STAYING while one reaches for them, and the hover band NOT
+    /// lighting a picture.
+    ///
+    /// Every line of the panel is asked, the transport's own included. That
+    /// last one was the hole: with the controls away its row carried no field
+    /// at all, so `hit` answered `None` there and the pointer going for the
+    /// play glyph left the preview on the way to it.
+    #[test]
+    fn every_point_of_a_films_preview_is_the_preview() {
+        let dir = scratch("motion-hit");
+        std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        let words = bundle();
+        let ask = v.wants_look(512).expect("a look");
+        let key = ask.key.clone();
+        v.looked(Looked {
+            key: key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_film(60.0, true)),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        v.played(crate::motion::Beat::Frame(a_frame(&key)));
+
+        let width = 200;
+        let room = 12;
+        let sec = v
+            .sections(&v.chrome_rows(width, &words), room, width, &words)
+            .into_iter()
+            .find(|s| s.pane == Pane::Preview)
+            .expect("a preview section");
+        assert!(sec.lines > 1, "the panel is one line — nothing to walk");
+        // EVERY LINE OF IT, and a cell inside its own span.
+        let cell = sec.from + 1;
+        for line in sec.top..sec.top + sec.content.len() {
+            let got = v.hit(width, room, line, cell, &words);
+            assert_eq!(
+                got.map(|t| t.pane),
+                Some(Pane::Preview),
+                "line {line} of the preview resolved to {:?}",
+                v.hit(width, room, line, cell, &words).map(|t| t.pane)
+            );
+        }
+        // AND THE BAND DOES NOT BELONG ON ANY OF THEM, which is the other half
+        // of what the owner asked: a picture has no rows to light.
+        assert!(!v.band_belongs(Pane::Preview), "a picture got a hover band");
+        // AND WITH THE POINTER ON THE CONTROLS, THEY STAY. `pointing` is what
+        // the doors set from that same answer, so this is the loop closing.
+        v.pointing(Some(Pane::Preview));
+        assert!(v.transport_showing(), "the controls did not arrive");
+        let with = v
+            .sections(&v.chrome_rows(width, &words), room, width, &words)
+            .into_iter()
+            .find(|s| s.pane == Pane::Preview)
+            .expect("a preview section");
+        let last = with.content.last().expect("a transport row");
+        assert!(
+            last.fields.iter().any(|f| matches!(f.hit, Hit::Play)),
+            "the controls are not on the transport row"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The numbers the WINDOW door reported from the shots, reproduced here.
+    #[test]
+    fn the_band_is_refused_on_the_cell_the_door_reported() {
+        let dir = scratch("motion-band");
+        std::fs::write(dir.join("a.gif"), b"GIF89a").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.info_on = true;
+        v.reread();
+        let ask = v.wants_look(512).expect("a look");
+        v.looked(Looked {
+            key: ask.key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_gif()),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        // THE WINDOW DOOR'S OWN REPORT: `pane=Preview cell=Some(11) columns=51`.
+        let panes = v.panes(51);
+        assert_eq!(
+            panes.section_at(11, 51, true),
+            Pane::Preview,
+            "cell 11 of 51 is not the preview: strip={} right={} boxes={:?}",
+            panes.strip,
+            panes.right,
+            panes.boxes(51)
+        );
+        assert!(
+            !v.band_belongs_at(11, 51, true),
+            "the band was allowed onto a film"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a motion photo stops keeping BOTH halves, or the two share a
+    /// texture.
+    ///
+    /// A photograph with a film in it is the one preview that needs a still
+    /// AND frames: the loop shows one, then the other. Two things follow, and
+    /// both were defects waiting to happen.
+    #[test]
+    fn a_motion_photo_keeps_its_photograph_and_its_film_apart() {
+        let dir = scratch("motion-photo");
+        std::fs::write(dir.join("a.jpg"), b"\xff\xd8\xff").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        v.measured_preview(300.0, 200.0);
+        let ask = v.wants_look(512).expect("a look");
+        let key = ask.key.clone();
+        let mut film = a_film(3.0, false);
+        // A PHOTOGRAPH WITH A FILM IN IT, which is what `inside` means.
+        film.inside = Some(ronoctua_inspect::motion::Inside::Range { at: 100, to: 900 });
+        v.looked(Looked {
+            key: key.clone(),
+            path: ask.path,
+            // AND IT HAS A PHOTOGRAPH TOO. An ordinary film has none — the
+            // poster was a flicker — but here the still is half the feature.
+            rgba: Some(ronoctua_render::image::Rgba {
+                width: 4,
+                height: 3,
+                pixels: vec![0; 48],
+            }),
+            moving: Some(film),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+
+        // WITH NO FRAME IN HAND, THE PHOTOGRAPH IS WHAT IS DRAWN.
+        let photo = v.preview_key().expect("a photograph");
+        assert!(
+            !photo.contains(FRAME_MARK),
+            "the still asked for the film's texture: {photo}"
+        );
+
+        // AND A FRAME IS A DIFFERENT TEXTURE.
+        v.played(crate::motion::Beat::Frame(a_frame(&key)));
+        let moving = v.preview_key().expect("a frame");
+        assert_ne!(
+            moving, photo,
+            "the frame and the photograph share one texture — the loop's return \
+             to the photograph would upload nothing and hold the film's last frame"
+        );
+
+        // AND THE LOOP COMES BACK. `Beat::Still` is what says so; without it
+        // the panel would simply stop changing, which reads as a hung film.
+        v.played(crate::motion::Beat::Still { key });
+        assert_eq!(
+            v.preview_key().as_deref(),
+            Some(photo.as_str()),
+            "the photograph did not come back after the film"
+        );
+
+        // AND THE PLAYER IS TOLD WHERE THE FILM IS.
+        let Some(crate::motion::Ask::Play(reel, _)) = v.wants_motion() else {
+            panic!("a motion photo did not ask for a player");
+        };
+        assert_eq!(
+            reel.inside,
+            Some(ronoctua_inspect::motion::Inside::Range { at: 100, to: 900 }),
+            "the stretch did not reach the player"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the timeline's air is not the same on both sides.
+    ///
+    /// The owner asked for it in those words — *"com espaços em branco
+    /// idênticos na esquerda e na direita"* — and before this the left gap was
+    /// a fixed cell while the right was whatever the clock's own width left
+    /// over: one cell against two, on a control a hand's width across.
+    #[test]
+    fn the_timeline_has_the_same_air_on_both_sides() {
+        let cell = 10.0_f32;
+        // A CLOCK OF ELEVEN CELLS, which is `1:23 / 5:40`.
+        let (from, track) = track_px(0.0, 400.0, cell, 11).expect("a track");
+        let before = from;
+        let after = 400.0 - (from + track);
+        // The glyphs and the lead are on the left, so the two are not equal
+        // outright: what has to match is the AIR, which is what is left after
+        // the things beside it.
+        let left_air = before - f32::from(TRANSPORT_LEAD + TRANSPORT_SOUND + 1) * cell;
+        let right_air = after - f32::from(11 + TRANSPORT_LEAD) * cell;
+        assert!(
+            (left_air - right_air).abs() < 0.01,
+            "the air is {left_air} on the left and {right_air} on the right"
+        );
+        assert!(
+            (left_air - f32::from(TRANSPORT_AIR) * cell).abs() < 0.01,
+            "the air is not what the token says: {left_air}"
+        );
+
+        // AND IT FOLLOWS THE CLOCK, which is the reason this is measured and
+        // not reserved: `3:44 / 10:34` is a cell wider than `1:23 / 5:40`, and
+        // a fixed reserve would leave a different gap on each film.
+        let (_, wider) = track_px(0.0, 400.0, cell, 12).expect("a track");
+        assert!(
+            (track - wider - cell).abs() < 0.01,
+            "a clock one cell wider did not take one cell of track: {track} then {wider}"
+        );
+    }
+
+    /// FAILS IF: the two buttons move when the pointer arrives.
+    ///
+    /// Had the track grown when they went away, the play cursor would slide out
+    /// from under the pointer in the instant of the click — the class of defect
+    /// the comment on `Scroll::offset_at` already records.
+    #[test]
+    fn the_controls_do_not_move_when_the_pointer_arrives() {
+        let dir = scratch("motion-hover");
+        std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        let words = bundle();
+        let ask = v.wants_look(512).expect("a look");
+        let key = ask.key.clone();
+        v.looked(Looked {
+            key: key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_film(60.0, true)),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        v.played(crate::motion::Beat::Frame(a_frame(&key)));
+
+        v.pointing(None);
+        let cold = preview_of(&v, &words);
+        v.pointing(Some(Pane::Preview));
+        let warm = preview_of(&v, &words);
+
+        let track = |sec: &Section| sec.time_track_box(0.0, 0.0, 400.0, 10.0, 20.0);
+        assert_eq!(
+            track(&cold),
+            track(&warm),
+            "the track moved when the pointer arrived"
+        );
+
+        // AND THE BUTTONS DO ARRIVE, which is the other half: a hover that
+        // shows nothing is not a hover.
+        // BY THE GLYPH, and not by the target.
+        //
+        // The whole row answers `Hit::Play` now — the backing field included,
+        // so a click anywhere on the film toggles it, which is what the owner
+        // asked for. What comes and goes with the pointer is the INK, so that
+        // is what this counts: a field whose text is not blank.
+        let drawn = |sec: &Section| -> usize {
+            sec.content.last().map_or(0, |r| {
+                r.fields
+                    .iter()
+                    .filter(|f| !f.text.trim().is_empty())
+                    .count()
+            })
+        };
+        assert_eq!(
+            drawn(&cold),
+            0,
+            "the buttons were drawn with no pointer on the panel"
+        );
+        let hits = |sec: &Section| -> Vec<Hit> {
+            sec.content
+                .last()
+                .map(|r| r.fields.iter().map(|f| f.hit.clone()).collect())
+                .unwrap_or_default()
+        };
+        assert!(
+            drawn(&warm) >= 2 && hits(&warm).contains(&Hit::Sound),
+            "the pointer arrived and the buttons did not: {} fields, {:?}",
+            drawn(&warm),
+            hits(&warm)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the whole region stops giving itself back, or stops working
+    /// for previews that are not films.
+    ///
+    /// It is DERIVED and not stored, which is what makes the cursor moving off
+    /// a file and `C-v` each undo it without a case of their own — and the one
+    /// that gets forgotten is a manager whose listing vanished.
+    #[test]
+    fn the_whole_region_gives_itself_back() {
+        let dir = scratch("motion-theatre");
+        std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
+        std::fs::write(dir.join("b.txt"), b"letters").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        v.measured_preview(300.0, 200.0);
+        let ask = v.wants_look(512).expect("a look");
+        let key = ask.key.clone();
+        v.looked(Looked {
+            key: key.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_film(60.0, false)),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        v.played(crate::motion::Beat::Frame(a_frame(&key)));
+
+        let _ = v.key(of_view("C-w"));
+        assert!(v.whole(), "the region was not given");
+        assert_eq!(
+            v.panes_on(200),
+            vec![Pane::Preview],
+            "TAB could still walk onto a listing nobody is drawing"
+        );
+        // AND NO RULE IS DRAWN, because there is nothing to its left to be
+        // separated from — the owner photographed the line it left in cell
+        // nought.
+        assert!(
+            v.panes(200).rules(200).is_empty(),
+            "a rule was drawn against the screen's own edge"
+        );
+
+        // A FILM THAT ENDS KEEPS THE REGION: its last frame and its play glyph
+        // are still there, and pressing play is how one watches it again.
+        v.played(crate::motion::Beat::Ended { key });
+        assert!(v.whole(), "a film that ended threw the region away");
+
+        // AND IT SURVIVES WALKING TO THE NEXT FILE, which is what the owner
+        // asked for — the wide preview is a way of LOOKING, not a property of
+        // what is being looked at.
+        let was = v.cursor;
+        let _ = v.key(of_view("C-n"));
+        assert_ne!(v.cursor, was, "the arrow did not walk to the next file");
+        assert!(v.whole(), "walking to the next file left the wide preview");
+
+        // AND IT WORKS FOR A FILE THAT IS NOT A FILM AT ALL.
+        v.frame = None;
+        assert!(v.whole(), "the wide preview is still only for films");
+
+        // THE PREVIEW GOING OFF DOES take it back.
+        v.preview_on = false;
+        assert!(
+            !v.whole(),
+            "the preview was hidden and the region stayed away"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: pausing respawns the film, or a pause survives the file.
+    #[test]
+    fn leaving_the_file_forgets_the_transport() {
+        let dir = scratch("motion-forget");
+        std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
+        std::fs::write(dir.join("b.mp4"), b"\0\0\0\x18ftyp").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        let install = |v: &mut View, sound: bool| {
+            let ask = v.wants_look(512).expect("a look");
+            let key = ask.key.clone();
+            v.looked(Looked {
+                key: key.clone(),
+                path: ask.path,
+                rgba: None,
+                moving: Some(a_film(60.0, sound)),
+                text: None,
+                why: None,
+                facts: Vec::new(),
+            });
+            key
+        };
+        let key = install(&mut v, true);
+        v.measured_preview(300.0, 200.0);
+        v.played(crate::motion::Beat::Frame(a_frame(&key)));
+        let Some(crate::motion::Ask::Play(first, _)) = v.wants_motion() else {
+            panic!("no player was asked for");
+        };
+
+        // PAUSING IS NOT A RESPAWN. It is 0% of CPU against a 108-to-242
+        // millisecond seek, measured — and the child stays alive.
+        let _ = v.key(of_view("C-;"));
+        assert_eq!(
+            v.wants_motion(),
+            Some(crate::motion::Ask::Pause),
+            "a pause killed the child"
+        );
+        assert!(v.wants_motion().is_none(), "the pause was sent twice");
+
+        // AND A RESPAWN OF A PAUSED FILM COMES BACK PAUSED.
+        //
+        // A respawn happens for reasons that have nothing to do with the
+        // transport — the panel resized, `C-w` given or taken back — and the
+        // owner met the consequence by pressing `C-w` on a film he had paused:
+        // it started playing again.
+        v.measured_preview(600.0, 400.0);
+        let Some(crate::motion::Ask::Play(_, held)) = v.wants_motion() else {
+            panic!("a new box did not respawn the film");
+        };
+        assert!(held, "a paused film came back playing");
+        assert!(
+            v.wants_motion().is_none(),
+            "the respawn was followed by an order nobody asked for"
+        );
+
+        // THE SOUND IS A RESPAWN, and from where the picture IS.
+        let _ = v.key(of_view("C-'"));
+        let Some(crate::motion::Ask::Play(loud, _)) = v.wants_motion() else {
+            panic!("the sound did not respawn the child");
+        };
+        assert!(loud.sound, "the sound was asked for and did not arrive");
+        assert_eq!(loud.path, first.path);
+
+        // AND THE NEXT FILE STARTS CLEAN: playing, silent, from the top.
+        v.key(of_view("C-n"));
+        let next = install(&mut v, true);
+        assert_ne!(next, key, "the cursor did not move");
+        v.played(crate::motion::Beat::Frame(a_frame(&next)));
+        let Some(crate::motion::Ask::Play(reel, _)) = v.wants_motion() else {
+            panic!("the next file did not ask for a player");
+        };
+        assert!(!reel.sound, "another file's sound followed the cursor");
+        assert!(
+            reel.from.abs() < f64::EPSILON,
+            "it resumed somebody else's place"
+        );
+        assert!(
+            !v.transport.paused,
+            "another file's pause followed the cursor"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The preview's section, laid out at a generous width.
+    fn preview_of(v: &View, words: &ronoctua_i18n::Texts) -> Section {
+        v.sections(&v.chrome_rows(200, words), 12, 200, words)
+            .into_iter()
+            .find(|s| s.pane == Pane::Preview)
+            .expect("a preview section")
+    }
+
+    /// A GIF, as `motion::moving` would answer for one.
+    fn a_gif() -> ronoctua_inspect::motion::Moving {
+        ronoctua_inspect::motion::Moving {
+            how: ronoctua_inspect::motion::Source::InProcess,
+            shape: ronoctua_inspect::facts::Shape {
+                fps: 10.0,
+                seconds: None,
+                sound: false,
+            },
+            inside: None,
+        }
+    }
+
+    /// A film with a length, which is what gets a timeline.
+    fn a_film(seconds: f64, sound: bool) -> ronoctua_inspect::motion::Moving {
+        ronoctua_inspect::motion::Moving {
+            how: ronoctua_inspect::motion::Source::Ffmpeg,
+            shape: ronoctua_inspect::facts::Shape {
+                fps: 25.0,
+                seconds: Some(seconds),
+                sound,
+            },
+            inside: None,
+        }
+    }
+
+    /// One frame, under a key.
+    fn a_frame(key: &str) -> crate::motion::Frame {
+        crate::motion::Frame {
+            key: key.to_owned(),
+            rgba: ronoctua_render::image::Rgba {
+                width: 2,
+                height: 2,
+                pixels: vec![0; 16],
+            },
+            at: 0.0,
+        }
+    }
+
+    /// FAILS IF: a frame for another file is drawn. One file's picture under
+    /// another file's name is the one failure a preview must not have, and a
+    /// player that is being stopped is exactly when a stale frame arrives.
+    #[test]
+    fn a_frame_for_another_file_is_dropped() {
+        let dir = scratch("motion-stale");
+        std::fs::write(dir.join("a.gif"), b"GIF89a").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+
+        // A FILE IN FRONT, with an answer installed — without this the panel
+        // draws nothing whatever arrives, and the test passes for a reason
+        // that has nothing to do with the guard it is about. It did, once.
+        let ask = v.wants_look(512).expect("a file wants a look");
+        let here = ask.key.clone();
+        v.looked(Looked {
+            key: here.clone(),
+            path: ask.path,
+            rgba: None,
+            moving: Some(a_gif()),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+        });
+        let frame = |key: &str| crate::motion::Beat::Frame(a_frame(key));
+
+        // THE ONE THAT BELONGS reaches the screen.
+        v.played(frame(&here));
+        assert!(
+            v.moving_frame().is_some(),
+            "the file's own frame was dropped"
+        );
+
+        // AND ONE FROM THE FILE BEFORE IT DOES NOT. A player being stopped is
+        // exactly when a stale frame arrives.
+        v.played(frame("prev:somewhere-else"));
+        assert_eq!(
+            v.moving_frame().map(|r| r.width),
+            Some(2),
+            "a frame of another file replaced the one on screen"
+        );
+        assert!(
+            v.frame.as_ref().is_some_and(|f| f.key == here),
+            "the stale frame was stored"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -10765,6 +12957,7 @@ mod tests {
             Row {
                 fields: v.crumbs(width),
                 marked: false,
+                foot: false,
                 focused: false,
             },
             v.header(width, &bundle()),
@@ -10806,6 +12999,7 @@ mod tests {
             Row {
                 fields: v.crumbs(width),
                 marked: false,
+                foot: false,
                 focused: false,
             },
             v.header(width, &bundle()),
@@ -10925,6 +13119,7 @@ mod tests {
             Row {
                 fields: v.crumbs(w),
                 marked: false,
+                foot: false,
                 focused: false,
             },
             v.header(w, &b),
@@ -12020,6 +14215,7 @@ mod tests {
             strip: ronoctua_tokens::space::FILES_STRIPLINES,
             preview: true,
             info: true,
+            whole: false,
         };
         let cell = 12.0;
         let (x, wide) = panel_px(panes, Panel::Preview, 1, 60, cell, 60.0 * cell)
@@ -12456,6 +14652,7 @@ mod tests {
             strip: 0,
             preview: true,
             info: true,
+            whole: false,
         };
         let line = rule_x(panes.sidebar, lead, cell);
 
@@ -12774,6 +14971,9 @@ mod tests {
         for (total, offset) in [(200_000usize, 199_000usize), (6_000, 5_500), (13, 1)] {
             let sec = Section {
                 across: None,
+                time: None,
+                transport: None,
+                clock: 0,
                 pane: Pane::Listing,
                 from: 0,
                 to: 40,

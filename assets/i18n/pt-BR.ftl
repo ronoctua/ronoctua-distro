@@ -1089,6 +1089,19 @@ files-no-preview = sem prévia
 files-facts-all-shown = todos os fatos já estão à vista
 files-preview-all-shown = a prévia inteira já está à vista
 files-preview-cut = só as primeiras { $lines } linhas estão aqui — o arquivo continua
+# O TRANSPORTE DA PRÉVIA. O que o ponteiro parado sobre um controle diz, e o que
+# o gerenciador responde quando uma tecla faz algo que não se vê.
+files-play-hold = segurar o filme onde está
+files-play-resume = deixar o filme seguir
+files-sound-on = ouvir o filme
+files-sound-off = assistir em silêncio
+files-sound-none = este filme não tem som nenhum
+files-no-sound = esta máquina não tem som para tocá-lo — a imagem segue sem ele
+files-film-stuck = nada saiu do filme por { $seconds } s — ele foi parado
+files-film-seek = ir para { $at } de { $total }
+files-theatre-on = dar a região inteira à prévia
+files-theatre-off = devolver o espaço à listagem
+files-theatre-nothing = nada está tocando, então não há região para dar
 files-no-root-helper = trocar o dono precisa do sistema instalado — a unidade ronoctua-files-root nao esta aqui
 files-yes = sim, aplicar
 files-no = não, deixar como está
@@ -1341,6 +1354,7 @@ files-preview-slow = passou de { $seconds } s e foi parado — não é o tamanho
 files-fact-dimensions = dimensões
 files-fact-duration = duração
 files-fact-container = formato
+files-fact-motion = foto com movimento
 files-fact-video = vídeo
 files-fact-audio = áudio
 files-fact-rate = quadros

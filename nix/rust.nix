@@ -626,11 +626,30 @@ rec {
   '';
 
   # Tests. A separate derivation so it can say WHAT broke.
+  #
+  # AND THE FIVE PROGRAMS, which is a defect being closed and not a nicety.
+  #
+  # `tools::Tool::path` reads its variable at RUN TIME, and nothing set those
+  # variables for `cargo test` — not the dev shell, not this derivation. So
+  # every test that opens ffmpeg began with `let Ok(x) = ffmpeg() else { return }`
+  # and took that branch, always. Measured: `a_rotated_video_is_the_size_we_asked_for`
+  # finishes in 0,00 s without them and 0,75 s with them — it had never once
+  # built the three videos it claims to compare, in any environment.
+  #
+  # They go HERE and not in `commonArgs`: the workspace build must not reference
+  # ffmpeg, which is the "extract the binary" rule this file already keeps for
+  # the installer and the rescue console. A test derivation may; nothing ships
+  # it.
   tests = craneLib.cargoTest (
     commonArgs
     // {
       inherit cargoArtifacts;
       pname = "ronoctua-tests";
+      RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
+      RONOCTUA_FFPROBE = "${pkgs.ffmpeg-full}/bin/ffprobe";
+      RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
+      RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
+      RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
     }
   );
 

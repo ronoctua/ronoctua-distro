@@ -1091,6 +1091,19 @@ files-no-preview = no preview
 files-facts-all-shown = every fact is already on screen
 files-preview-all-shown = the whole preview is already on screen
 files-preview-cut = only the first { $lines } lines are here — the file goes on
+# THE PREVIEW'S TRANSPORT. What the pointer resting on a control says, and what
+# the manager says back when a key does something one cannot see.
+files-play-hold = hold the film where it is
+files-play-resume = let the film go on
+files-sound-on = let the film be heard
+files-sound-off = watch it in silence
+files-sound-none = this film carries no sound
+files-no-sound = this machine has no sound to play it through — the picture goes on without it
+files-film-stuck = nothing has come out of the film for { $seconds } s — it was stopped
+files-film-seek = go to { $at } of { $total }
+files-theatre-on = give the preview the whole region
+files-theatre-off = give the listing its room back
+files-theatre-nothing = nothing is playing, so there is no region to give
 files-no-root-helper = changing the owner needs the installed system — the ronoctua-files-root unit is not here
 files-yes = yes, apply it
 files-no = no, leave it as it is
@@ -1344,6 +1357,7 @@ files-preview-slow = it went past { $seconds } s and was stopped — not the siz
 files-fact-dimensions = dimensions
 files-fact-duration = duration
 files-fact-container = format
+files-fact-motion = moving photo
 files-fact-video = video
 files-fact-audio = audio
 files-fact-rate = frame rate

@@ -174,6 +174,22 @@ pub struct Span {
     /// is looking — on the inside, between the segments and the text to their
     /// left.
     pub edge: bool,
+    /// Whether this run is anchored to the surface's BOTTOM EDGE.
+    ///
+    /// # The same remainder, on the other axis
+    ///
+    /// [`Span::edge`] exists because the grid does not reach the RIGHT border:
+    /// `columns` is `floor(width / cell)` and the leftover shows up as a gap
+    /// that changes with the window. The vertical is identical — `lines` is
+    /// `floor(height / line)` — and the owner found it the same way, on the
+    /// file manager's transport: *"os controles continuam elevados (com espaço
+    /// abaixo deles) quando há apenas um espaço menor que uma linha"*.
+    ///
+    /// With this set the run is placed counting lines UP from the bottom, so
+    /// the remainder falls where nobody is looking — above the run, inside the
+    /// panel — instead of below the one thing that was supposed to sit at the
+    /// foot of it.
+    pub foot: bool,
 }
 
 /// The line box a run occupies, which is what decides whether it moves the
@@ -471,7 +487,16 @@ impl Text {
                     } else {
                         f32::from(t.column).mul_add(cw, t.size.nudge(self.size))
                     },
-                    top: *top,
+                    // COUNTED UP FROM THE BOTTOM when the run is anchored
+                    // there — see `Span::foot`, and `Span::edge` for the same
+                    // decision on the other axis.
+                    top: if t.foot {
+                        let lines = (height as f32 / lh).floor();
+                        (lines - f32::from(t.line)).mul_add(-lh, height as f32)
+                            + (*top - f32::from(t.line) * lh)
+                    } else {
+                        *top
+                    },
                     scale: 1.0,
                     bounds: glyphon::TextBounds {
                         left: 0,

@@ -41,6 +41,13 @@ let
   # THE COLOUR A SCROLLBAR IS DRAWN IN, out of the same file, so a measurement
   # of one is tied to the token rather than to a number typed here.
   barColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).rule.strong;
+  # THE COLOUR A GLYPH IS DRAWN IN, for the transport's two buttons. Counting
+  # pixels of THIS rather than thresholding the row is what tells a control
+  # apart from the hover band behind it: the band is a background and the glyph
+  # is text, and only one of them is what the pointer is supposed to summon.
+  textColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).text.primary;
+  # THE HOVER BAND'S COLOUR, so a shot can assert it is NOT on a picture.
+  bandColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).surface.selection;
 
   # THE FILE THE PREVIEW IS PHOTOGRAPHED SHOWING.
   #
@@ -109,6 +116,8 @@ pkgs.testers.runNixOSTest {
 
     FOOTER = ${toString footerPx}
     LINE = ${toString linePx}
+    STRIP = ${toString (import ../assets/tokens/space.nix).files.stripLines}
+    AIR = ${toString (import ../assets/tokens/space.nix).files.pictureAir}
 
 
     def notify(summary, body="", level="normal", app="tests"):
@@ -701,6 +710,414 @@ pkgs.testers.runNixOSTest {
             "the preview drew the same pixels after the page key — it did not "
             "scroll"
         )
+
+    with subtest("the miniplayer: it moves, it holds, and it draws over nothing"):
+        # A GIF MADE HERE, and not a video, and that is not a compromise.
+        #
+        # The GIF path is the `image` crate, decoded in process — so this
+        # subtest needs none of the five external programs and runs on a machine
+        # with no media group at all. What it proves is the whole player: a
+        # frame reaching the panel, the box being sized from the FRAME rather
+        # than from a still, the transport taking a line of its own, and the
+        # hold being real.
+        #
+        # What it cannot prove is the TIMELINE, which needs a duration, which
+        # needs a video, which needs `ffmpeg-full` inside this VM. That is a
+        # closure decision and not a test decision, so it is not taken here.
+        #
+        # FOUR COLOURS THIS INTERFACE DOES NOT CONTAIN, and that is measured
+        # rather than assumed. The first version used four palette colours and
+        # the blue one matched the interface elsewhere within the fuzz: the
+        # picture's own box came back as 172x644 — most of the panel — while
+        # the orange, which is not near anything, came back as 130x97 for
+        # exactly 12610 pixels. A measurement that catches its neighbours is
+        # not a measurement.
+        FILM = ["#FF00FF", "#00FFFF", "#FFFF00", "#FF6000"]
+        machine.succeed(
+            "${pkgs.imagemagick}/bin/magick -delay 20 -loop 0 -size 240x180 "
+            + " ".join(f"xc:'{c}'" for c in FILM)
+            + " /root/shots/moving.gif"
+        )
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key BackSpace")
+        machine.sleep(1)
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 40 'moving'"
+        )
+        machine.sleep(3)
+        shot("22-miniplayer")
+
+        w_m, h_m, x_m, y_m = niri_geometry()
+        # THE SAME BOX THE TEXT PREVIEW USES, and for the reason written there:
+        # a quarter of the width reaches past the rule into the facts.
+        pane = f"{w_m // 4 - 70}x{h_m - 4 * LINE}+{w_m // 2 + 10}+{2 * LINE}"
+
+        def panel_now(name):
+            """Crops the preview out of a fresh capture."""
+            machine.succeed(
+                "${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd"
+            )
+            machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+                f"{pane} +repage /tmp/{name}.png"
+            )
+            return f"/tmp/{name}.png"
+
+        def film_pixels(path, colour):
+            """How many pixels of one of the film's colours the panel holds."""
+            return int(
+                machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
+                    f"-fill white -opaque '{colour}' -fill black +opaque white "
+                    "-format '%[fx:int(mean*w*h+0.5)]' info:"
+                ).strip()
+            )
+
+        def frame_showing(path):
+            """Which of the film's frames is on screen, or None."""
+            counts = [film_pixels(path, c) for c in FILM]
+            best = max(range(len(FILM)), key=lambda i: counts[i])
+            # A THRESHOLD, because "none of them" has to be answerable: the
+            # picture is thousands of pixels, and a stray match is tens.
+            return (best, counts) if counts[best] > 500 else (None, counts)
+
+        # ZERO: THE PLAYER OPENED, AND AT THE SIZE THE PANEL ASKED FOR.
+        #
+        # This one needs no pixels, and it is the sharpest of the four: under
+        # the defect the owner photographed, this line said `512x32`.
+        opened = machine.succeed(
+            "journalctl --no-pager | grep -o 'motion stream opened.*' | tail -1 || true"
+        ).strip()
+        assert opened, (
+            "the player never opened a stream at all — the file under the "
+            "cursor is not being read as one that moves"
+        )
+        assert "height=32" not in opened, (
+            f"the frame's height is being guessed again: {opened}"
+        )
+
+        # ONE: DIFFERENT FRAMES OF THE FILM REACH THE SCREEN.
+        #
+        # Asked as "which frame is up", sampled six times, and NOT as "did two
+        # signatures differ" — which is what this was first and which is flaky
+        # by construction: two samples can land on the same frame, and the
+        # answer then reads exactly like a film that is frozen. It did, once,
+        # with the player provably running.
+        #
+        # Naming the frame also tells apart the two things a frozen signature
+        # cannot: a film that is stuck, and frames that never arrive at all.
+        seen = []
+        for k in range(6):
+            which, counts = frame_showing(panel_now(f"moving-{k}"))
+            assert which is not None, (
+                f"not one of the film's four colours is in the panel: {counts} "
+                "— the frames are not reaching the screen at all"
+            )
+            seen.append(which)
+            machine.sleep(1)
+        assert len(set(seen)) >= 2, (
+            f"the panel showed frame {seen} over five seconds — the film is not "
+            "running"
+        )
+
+        # TWO: THE HOLD IS REAL, and this is the sharper half. A stopped film is
+        # DETERMINISTIC — the same frame every time — and it proves the
+        # transport rather than the decoder.
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+semicolon"
+        )
+        machine.sleep(2)
+        held = []
+        for k in range(3):
+            which, _ = frame_showing(panel_now(f"held-{k}"))
+            held.append(which)
+            machine.sleep(1)
+        assert len(set(held)) == 1 and held[0] is not None, (
+            f"the panel showed frames {held} after the hold key — pausing did "
+            "not stop the player"
+        )
+        shot("23-miniplayer-held")
+
+        # THREE: THE SHAPE IS RIGHT, and this one assertion catches what the
+        # owner photographed.
+        #
+        # Measured as the BOX OF THE FILM'S OWN COLOUR, which is the picture and
+        # nothing else. A plain threshold was the first attempt and it answered
+        # 250x658 — the whole panel, text included — so it passed whatever the
+        # picture looked like.
+        #
+        # The GIF is 240x180, four to three. Under the old defect the player
+        # declared its frames 512 by 32 and the doors stretched that inside a
+        # box measured from the STILL, so the picture came out a band of roughly
+        # sixteen to one.
+        box = machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
+            f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
+            "-trim -format '%[fx:w] %[fx:h]' info:"
+        ).split()
+        ink_w, ink_h = int(box[0]), int(box[1])
+        assert ink_w > 0 and ink_h > 0, "the picture has no extent at all"
+        assert ink_w < ink_h * 2, (
+            f"the picture is {ink_w} by {ink_h} — a four-to-three film came out "
+            "as a band, which is the frame's height being guessed again"
+        )
+
+        # FOUR: THE CONTROLS ARRIVE WITH THE POINTER, AND NOT BEFORE.
+        #
+        # The owner asked for exactly this — *"controles que aparecem no hover
+        # do mouse"* — and it is the only claim here that has to be written as a
+        # negative as well as a positive. Without the first half, a row that was
+        # always drawn would pass the second.
+        #
+        # The transport is the panel's LAST line, which is where the picture
+        # stops: `View::transport_rows` takes it off the box, so this row is
+        # never ink drawn over the film.
+        # THE BOTTOM OF THE PANEL, which is where the controls go — counted in
+        # the colour a GLYPH is drawn in and not by a threshold. Hovering used
+        # to light the section's own band, and a band is ink: a threshold would
+        # have risen for the hover rather than for the control, and passed
+        # either way. (The band over a picture is gone now — see
+        # `View::band_belongs` — but the measurement stays honest by colour.)
+        foot = f"{w_m // 4 - 70}x{2 * LINE}+{w_m // 2 + 10}+{2 * LINE + (h_m - 4 * LINE) - 2 * LINE}"
+
+        def glyph_pixels(box):
+            return int(
+                machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} "
+                    "+repage -fuzz 12% -fill white -opaque '#${textColour}' "
+                    "-fill black +opaque white "
+                    "-format '%[fx:int(mean*w*h+0.5)]' info:"
+                ).strip()
+            )
+
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        cold = glyph_pixels(foot)
+        assert cold == 0, (
+            f"the transport row has {cold} pixels of glyph with the pointer "
+            "elsewhere — the controls are drawn whether or not anybody is "
+            "reaching for them"
+        )
+
+        # AND ON THE PICTURE, found by ITS OWN COLOUR rather than computed.
+        #
+        # The panel's midpoint is not the film: here the preview sits in the
+        # bottom STRIP, so the middle of the column is the LISTING. That is
+        # where this pointer went the first time, and the controls correctly did
+        # not arrive — the assertion was right and the aim was wrong.
+        spot = machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/held-0.png -fuzz 4% "
+            f"-fill white -opaque '{FILM[held[0]]}' -fill black +opaque white "
+            "-trim -format '%[fx:page.x] %[fx:page.y] %[fx:w] %[fx:h]' info:"
+        ).split()
+        px, py, pw, ph = (int(v) for v in spot)
+        machine.succeed(
+            "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
+            f"{x_m + (w_m // 2 + 10) + px + pw // 2} "
+            f"{y_m + (2 * LINE) + py + ph // 2}"
+        )
+        machine.sleep(2)
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        warm = glyph_pixels(foot)
+        shot("24-miniplayer-controls")
+        assert warm > 0, (
+            "the pointer is on the film and the transport row has no glyph in "
+            "it — the controls do not arrive"
+        )
+
+        # FIVE: THE CONTROLS ARE ON THE FILM, AND COST IT NO HEIGHT.
+        #
+        # The owner asked for the picture to keep *"toda a altura possível"*, so
+        # the transport is a band painted over the film's last line rather than
+        # a line taken off it. Measured as the picture's own box, with the
+        # controls up and with them away: the same number, or the band is still
+        # eating a line.
+        def film_box(path, colour):
+            got = machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick {path} -fuzz 4% "
+                f"-fill white -opaque '{colour}' -fill black +opaque white "
+                "-trim -format '%[fx:w] %[fx:h]' info:"
+            ).split()
+            return int(got[0]), int(got[1])
+
+        machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+            f"{pane} +repage /tmp/with-controls.png"
+        )
+        held_w, held_h = film_box("/tmp/held-0.png", FILM[held[0]])
+
+        # MEASURED AGAINST THE PANEL, and NOT against the same picture with the
+        # controls up.
+        #
+        # That was the first shape of this and it is self-contradicting: the
+        # band is half-transparent, so it DARKENS the film it covers, and the
+        # film's own colour stops matching there. The picture then measures
+        # shorter exactly BECAUSE the band works — and the assertion two blocks
+        # down checks that the film still shows through it. One of the two had
+        # to be wrong, and it was this one.
+        #
+        # What says the controls cost the film nothing is the film filling the
+        # panel's own height: four to three in a panel twice as wide as it is
+        # tall is bounded by the height, so it reaches the box's edge. A line
+        # reserved for the controls would leave it a whole line short.
+        panel_tall = STRIP * LINE - 2 * AIR
+        assert held_h > panel_tall - LINE, (
+            f"the film is {held_w} by {held_h} in a panel {panel_tall} tall — "
+            "more than a line short, so the transport is still costing it room"
+        )
+
+        # AND NO HOVER BAND ON THE FILM.
+        #
+        # The owner reported it in those words — *"o hover do mouse está
+        # destacando o background da linha no preview de vídeos e imagens, o
+        # que é totalmente desnecessário"*. A band says which ROW of a list the
+        # pointer is on, and a picture is not a list: it lights an arbitrary
+        # stripe across the film and covers part of what one came to look at.
+        #
+        # MEASURED IN BOTH STATES, and that is not caution — it is the only way
+        # this can be measured at all.
+        #
+        # `surface.selection` and `rule.default` are THE SAME VALUE, so a count
+        # of that colour inside the panel includes every divider and rule that
+        # is always there. Asserting it is nought is asserting something
+        # impossible: the baseline is 808 pixels of rules, and it failed on them
+        # while the band it was written for was already gone. What answers the
+        # question is the DIFFERENCE — 808 against 4357 with the band, 877
+        # without it.
+        def band_pixels(path):
+            return int(
+                machine.succeed(
+                    f"${pkgs.imagemagick}/bin/magick {path} -crop {pane} +repage "
+                    "-fuzz 2% -fill white -opaque '#${bandColour}' -fill black "
+                    "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+                ).strip()
+            )
+
+        cold_band = band_pixels("/tmp/held-0.png")
+        warm_band = band_pixels("/tmp/with-controls.png")
+        # A BAND IS A WHOLE LINE of the panel — thousands of pixels. Antialiasing
+        # around the controls moves this by tens, so the bound is generous and
+        # still an order of magnitude under what a band costs.
+        assert warm_band - cold_band < 500, (
+            f"the panel holds {cold_band} pixels of the band's colour with the "
+            f"pointer away and {warm_band} with it on the film — a picture has "
+            "no rows to light"
+        )
+
+        # AND THE BAND IS REALLY SEMI-TRANSPARENT: the film's own colour is
+        # still there under the controls. Opaque, the row would be a strip of
+        # chrome across the picture — which is what invariant 14 is about.
+        strip = machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {foot} +repage "
+            f"-fuzz 18% -fill white -opaque '{FILM[held[0]]}' -fill black "
+            "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+        ).strip()
+        assert int(strip) > 0, (
+            "the film does not show through the transport's band at all — it is "
+            "opaque, and a strip of chrome across a picture is what invariant 14 "
+            "rules out"
+        )
+
+        # SIX: THE WHOLE REGION, AND WHAT THE OWNER FOUND IN IT.
+        #
+        # `C-w` gives the preview the region. Three of the defects he
+        # photographed only exist here, so this is where they are pinned.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
+        # LONG ENOUGH FOR THE RESPAWN. Giving the region away changes the box,
+        # which changes the frame's shape, which is a kill and a new child —
+        # 108 to 242 ms measured, and this machine is a software-rendered VM.
+        # Photographed sooner, what is on screen is the frame cut for the OLD
+        # box, letterboxed into the new one, which is a true picture of a
+        # transient and a false picture of the layout.
+        machine.sleep(4)
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        shot("25-miniplayer-whole")
+
+        # A RULE AGAINST THE SCREEN'S OWN EDGE. With one panel filling the
+        # width there is nothing to its left to be separated from, and the
+        # arithmetic put the line in cell nought: *"no modo largo há uma linha
+        # vertical na esquerda que continua aparecendo"*. Measured as ink in the
+        # first two columns of the region.
+        edge = f"2x{h_m - 4 * LINE}+{x_m}+{y_m + 2 * LINE}"
+        rule_ink = int(
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {edge} +repage "
+                "-fuzz 2% -fill white -opaque '#${barColour}' -fill black "
+                "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
+            ).strip()
+        )
+        assert rule_ink == 0, (
+            f"{rule_ink} pixels of a rule are against the screen's own edge in "
+            "the wide preview"
+        )
+
+        # AND THE PICTURE IS NOT DISTORTED. The film is 240x180 — four to
+        # three — and a frame stretched to a region three times as wide as it
+        # is tall is what the owner photographed twice: once on the GIF and
+        # once after pausing and going wide. Asked of the picture's own colour,
+        # which is the picture and nothing else.
+        # WHICHEVER FRAME IS UP, and not the one that was up before.
+        #
+        # Naming a colour was the first shape of this and it measured 17 by 27 —
+        # a glyph, not a film. Giving the region away is a respawn, and the film
+        # comes back at another frame; asking for the OLD colour then measures
+        # whatever stray pixels match it. What is being asserted here is the
+        # SHAPE of the picture, so which frame is showing is not the question.
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop "
+            f"{w_m}x{h_m}+{x_m}+{y_m} +repage /tmp/whole.png"
+        )
+        # THE LARGEST CONNECTED RUN OF THE COLOUR, and not its bounding box.
+        #
+        # `-trim` answers with the box around EVERY matching pixel, and a
+        # handful of antialiased ones elsewhere on the screen stretch it: the
+        # film measured 356 by 451 while its own rectangle was 356 by 268 and
+        # its pixel count 95 408 — a box holding sixty per cent background.
+        # Connected components answer the question that was actually being
+        # asked, which is "how big is the picture".
+        def biggest_blob(path, colour):
+            out = machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick {path} -fuzz 2% "
+                f"-fill white -opaque '{colour}' -fill black +opaque white "
+                "-define connected-components:verbose=true "
+                "-define connected-components:area-threshold=2000 "
+                "-connected-components 8 null: 2>/dev/null || true"
+            )
+            best = (0, 0, 0)
+            for row in out.splitlines():
+                if "srgb(255,255,255)" not in row or ":" not in row:
+                    continue
+                box = row.split(":")[1].split()[0]
+                across, down = box.split("+")[0].split("x")
+                area = int(row.split()[-2])
+                if area > best[2]:
+                    best = (int(across), int(down), area)
+            return best
+
+        ww, wh = 0, 0
+        for colour in FILM:
+            w, h, area = biggest_blob("/tmp/whole.png", colour)
+            if area > ww * wh:
+                ww, wh = w, h
+        # A FILM, AND NOT A GLYPH. The picture is thousands of pixels; a stray
+        # match is a few hundred.
+        # A FILM, AND NOT A GLYPH. The picture is thousands of pixels; a stray
+        # match is a few hundred. It also has to be BRIGHT — the band under the
+        # controls runs to the panel's real bottom, and when the panel was four
+        # lines tall in a whole region that band covered the entire film and
+        # darkened it. The fuzz is tight for exactly that reason.
+        assert ww * wh > 20000, (
+            f"the largest thing matching the film's colours is {ww} by {wh} — "
+            "the film is either not in the region or is being covered by the "
+            "transport's own band"
+        )
+        assert abs((ww / wh) - (240 / 180)) < 0.08, (
+            f"the film is {ww} by {wh} — {ww / wh:.2f} against the four to "
+            "three it was authored at, so it is being stretched"
+        )
+
+        # AND `C-w` GIVES THE REGION BACK.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+w")
+        machine.sleep(2)
 
         # AND IT GOES, or it stands in front of every shot after it. The bracket
         # keeps the pattern from matching the `pkill` that carries it —

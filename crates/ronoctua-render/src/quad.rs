@@ -194,13 +194,37 @@ impl Quads {
 
     /// Draws what was prepared.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if self.amount == 0 {
+        self.draw_range(pass, 0, self.amount);
+    }
+
+    /// Draws only some of what was prepared, by position in the list.
+    ///
+    /// # Why a rectangle sometimes has to come AFTER the pictures
+    ///
+    /// There is no depth test: whoever draws later ends up on top, and the
+    /// order is quads, then pictures, then text. That is right for a
+    /// background and wrong for the file manager's transport, whose controls
+    /// sit ON the film — a background drawn with the other quads would be
+    /// behind the picture and invisible, and drawing the whole list twice would
+    /// put every background over the picture instead.
+    ///
+    /// So the caller puts the few that belong on top at the END of the list and
+    /// names where they begin. One buffer, one pipeline, two calls.
+    pub fn draw_range(&self, pass: &mut wgpu::RenderPass<'_>, from: u32, to: u32) {
+        let to = to.min(self.amount);
+        if self.amount == 0 || from >= to {
             return;
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
         // Four vertices in a `TriangleStrip` = one rectangle, with no index.
-        pass.draw(0..4, 0..self.amount);
+        pass.draw(0..4, from..to);
+    }
+
+    /// How many rectangles were prepared.
+    #[must_use]
+    pub const fn amount(&self) -> u32 {
+        self.amount
     }
 }
 

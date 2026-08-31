@@ -135,13 +135,30 @@ pub fn needs(mime: &str) -> Vec<Tool> {
     out
 }
 
+/// Everything the tools said about one file, and the document one of them said
+/// it in.
+///
+/// # The probe is HANDED BACK and not thrown away
+///
+/// Because two questions are asked of the same ffprobe document — what the file
+/// IS, which is the facts, and how it PLAYS, which is `shape_of` — and running
+/// ffprobe twice for them costs 29 ms per file walked past, measured on a
+/// 339-mebibyte film. One document, two readers.
+pub struct Told {
+    /// The sentences the panel shows.
+    pub facts: Vec<Fact>,
+    /// ffprobe's own JSON, empty when it was not run or said nothing.
+    pub probe: String,
+}
+
 /// Everything the tools can say about one file, in order.
 ///
 /// Synchronous, and it spawns at most two children. The caller runs it off the
 /// loop that draws — the same long-lived thread the preview uses.
 #[must_use]
-pub fn facts(path: &Path, mime: &str, place: Place) -> Vec<Fact> {
+pub fn facts(path: &Path, mime: &str, place: Place) -> Told {
     let mut out = Vec::new();
+    let mut probe = String::new();
     for tool in needs(mime) {
         let args = match tool {
             Tool::Ffprobe => probe_args(path),
@@ -154,7 +171,10 @@ pub fn facts(path: &Path, mime: &str, place: Place) -> Vec<Fact> {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
                 out.extend(match tool {
-                    Tool::Ffprobe => from_probe(&text),
+                    Tool::Ffprobe => {
+                        probe = text.clone().into_owned();
+                        from_probe(&text)
+                    }
                     Tool::Exiftool => from_exif(&text, place),
                     _ => from_pdfinfo(&text),
                 });
@@ -167,7 +187,7 @@ pub fn facts(path: &Path, mime: &str, place: Place) -> Vec<Fact> {
             }
         }
     }
-    out
+    Told { facts: out, probe }
 }
 
 /// How long a moving picture is, for the preview's seek.
@@ -209,6 +229,43 @@ pub fn probe_args(path: &Path) -> Vec<OsString> {
         "--".into(),
         path.as_os_str().to_owned(),
     ]
+}
+
+/// What ties a Live Photo's two files together.
+///
+/// # It is the identifier or it is nothing
+///
+/// An iPhone writes `IMG_1234.HEIC` and `IMG_1234.MOV` and stamps the same
+/// `ContentIdentifier` into both — into the Apple maker note on the picture's
+/// side and the QuickTime keys on the film's. The NAME is not the tie: an
+/// unrelated `photo.jpg` and `photo.mov` are perfectly ordinary, and pairing on
+/// the name would play a stranger's video under somebody's photograph.
+///
+/// `None` when there is none, which is the answer for every picture that is not
+/// half of a Live Photo — and also when exiftool is not installed, which is the
+/// same answer for the caller: do not pair.
+#[must_use]
+pub fn content_identifier(path: &Path) -> Option<String> {
+    let args = [
+        OsStr::new("-json"),
+        OsStr::new("-n"),
+        // BOTH SPELLINGS, because the two halves keep it in different places:
+        // the picture in Apple's maker note, the film in the QuickTime keys.
+        // exiftool answers with whichever it finds and says nothing about the
+        // other.
+        OsStr::new("-ContentIdentifier"),
+        OsStr::new("-MediaGroupUUID"),
+        OsStr::new("--"),
+        path.as_os_str(),
+    ];
+    let out = tools::run(Tool::Exiftool, &args).ok()?;
+    let doc: serde_json::Value = serde_json::from_slice(&out).ok()?;
+    let first = doc.as_array()?.first()?;
+    ["ContentIdentifier", "MediaGroupUUID"]
+        .iter()
+        .find_map(|k| first.get(*k).and_then(serde_json::Value::as_str))
+        .map(ToOwned::to_owned)
+        .filter(|id| !id.is_empty())
 }
 
 /// exiftool's argument list.
@@ -257,6 +314,134 @@ pub fn exif_args(path: &Path) -> Vec<OsString> {
 /// HEIC and a DNG have none, an animated GIF has 3.96 s. So dimensions are
 /// always reported and everything that implies time is reported only when
 /// there is time.
+/// What a moving file needs to be PLAYED, out of the probe that was already run.
+///
+/// # Why there is no width and no height here
+///
+/// Because the frame's size is not the file's business. The player asks ffmpeg
+/// for an exact `W×H` and lets it letterbox whatever shape it has into that —
+/// so the size is decided by the panel, and a file that lies about its
+/// dimensions cannot make the byte count wrong.
+///
+/// That is not the obvious design and it is worth saying why it beat the
+/// obvious one. Asking ffprobe for `width`/`height` and computing the scale
+/// from them looks like "ask instead of guess", and it is wrong: measured, a
+/// phone video reports 640×360 CODED with a matrix saying "rotate 90", and
+/// ffmpeg renders 256×456. Scaling to the reported shape would squash the
+/// picture AND desynchronise the frame length — a new defect introduced by the
+/// fix for the old one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shape {
+    /// Frames a second, already clamped to something a player can pace by.
+    pub fps: f64,
+    /// How long it runs; `None` is legal and means no timeline and no seek.
+    pub seconds: Option<f64>,
+    /// Whether there is anything to HEAR.
+    ///
+    /// # It is not a nicety, it is what keeps the picture alive
+    ///
+    /// Measured against the real binary: asking ffmpeg for a pulse output on a
+    /// file with no audio stream makes it refuse the WHOLE command — *"output
+    /// file does not contain any stream"*, exit 234, zero frames. So somebody
+    /// pressing the sound key on a silent film would stop the picture, and the
+    /// only thing that says the key is pointless is this.
+    ///
+    /// The player's respawn-in-silence still catches it if this is ever wrong;
+    /// this is what stops it being reached.
+    pub sound: bool,
+}
+
+/// The fastest a video is followed, in frames a second.
+///
+/// A panel is some 256 pixels across, and at that size sixty frames a second
+/// and thirty are the same picture — while sixty is twice the wake-ups on a
+/// laptop. A GIF is not capped: its cadence is what it declares, and a GIF at
+/// another rate reads as broken.
+pub const FASTEST_VIDEO: f64 = 30.0;
+
+/// The slowest cadence a player will pace by.
+///
+/// Under this, a container is not describing a film — `1/1000` and `90000/1`
+/// are what a stream with no rate reports.
+const SLOWEST_FPS: f64 = 1.0;
+
+/// What a moving file needs, read from the SAME probe the facts come from.
+///
+/// One document, two readers: [`from_probe`] takes the sentences and this
+/// takes the numbers. No second spawn.
+///
+/// `None` means "this does not play": no video stream, or one that is an
+/// album's cover, or a document ffprobe could not make sense of.
+#[must_use]
+pub fn shape_of(text: &str) -> Option<Shape> {
+    let doc: serde_json::Value = serde_json::from_str(text).ok()?;
+    let streams = doc.get("streams")?.as_array()?;
+    let video = streams.iter().find(|s| {
+        s.get("codec_type").and_then(serde_json::Value::as_str) == Some("video")
+            // AN ALBUM'S COVER IS A VIDEO STREAM, and `from_probe` refuses it
+            // for the same reason: playing an mp3's artwork as a film is a
+            // player started for a still picture.
+            && s.pointer("/disposition/attached_pic")
+                .and_then(serde_json::Value::as_i64)
+                != Some(1)
+    })?;
+
+    let container = doc
+        .get("format")
+        .and_then(|f| f.get("format_name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    // A PNG IS NOT A ONE-FRAME FILM. `pretend_film` is the same guard the
+    // facts use, and it is what stops a photograph being handed to a player.
+    if pretend_film(container) {
+        return None;
+    }
+
+    let seconds = doc
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(text_or_number)
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.05 && *d < 86_400.0);
+
+    // A CONTAINER WITH NO USABLE RATE IS PACED AT THE CEILING rather than
+    // refused: `0/0` and `90000/1` are what a stream without one reports, and
+    // neither says the file cannot be played.
+    let fps = video
+        .get("avg_frame_rate")
+        .or_else(|| video.get("r_frame_rate"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(ratio)
+        .filter(|f| f.is_finite() && (SLOWEST_FPS..=240.0).contains(f))
+        .unwrap_or(FASTEST_VIDEO)
+        .min(FASTEST_VIDEO);
+
+    // AND WHETHER THERE IS ANYTHING TO HEAR — asked of the same document, and
+    // an ordinary stream and not an attached picture, for the reason above.
+    let sound = streams
+        .iter()
+        .any(|s| s.get("codec_type").and_then(serde_json::Value::as_str) == Some("audio"));
+
+    Some(Shape {
+        fps,
+        seconds,
+        sound,
+    })
+}
+
+/// The sentences the panel shows, read out of ffprobe's JSON.
+///
+/// # A picture opened as a film
+///
+/// ffprobe reports `codec_name: png` and a frame rate of `25/1` for a still
+/// photograph, invented by the `png_pipe` demuxer; the container comes back as
+/// "piped png sequence" for the same reason. Neither is a fact about the file —
+/// both are facts about how ffmpeg opened it.
+///
+/// A `duration` in the FORMAT is what actually separates the two: a PNG, a HEIC
+/// and a DNG have none, an animated GIF has 3.96 s. So dimensions are always
+/// reported and everything that implies time is reported only when there is
+/// time.
 #[must_use]
 pub fn from_probe(text: &str) -> Vec<Fact> {
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
@@ -597,7 +782,7 @@ fn trimmed(n: f64) -> String {
 ///
 /// Digits and colons, which is the same notation in every language this ships
 /// in — so no key, the way a filename needs no key.
-fn clock(seconds: f64) -> String {
+pub(crate) fn clock(seconds: f64) -> String {
     let whole = seconds.max(0.0).round() as u64;
     let (h, m, s) = (whole / 3600, (whole % 3600) / 60, whole % 60);
     if h > 0 {

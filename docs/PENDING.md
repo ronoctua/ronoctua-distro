@@ -54,6 +54,26 @@ Medido, para quando alguém for: com o crate na árvore e a feature DESLIGADA, o
 
 
 
+### 0.0003. A linha do tempo do miniplayer não está numa foto · pequeno, e tem preço
+
+As fotos provam o player inteiro — o filme anda (seis amostras nomeiam qual quadro está na tela), o
+`C-;` segura (três amostras idênticas), a imagem sai 130x97 (1,34, o 4:3 do arquivo; sob o defeito
+seria uma faixa de ~16:1) e os controles chegam com o ponteiro (0 pixel de glifo sem ele, 29 com).
+
+O que elas NÃO provam é a linha do tempo, e por um motivo de projeto e não de descuido: elas usam um
+**GIF**, que o crate `image` decodifica em processo — a `shots` não tem grupo de mídia nenhum. E um
+GIF não tem duração, então não ganha linha do tempo (buscar num GIF é compor desde o primeiro
+quadro: 707 ms no arquivo do dono).
+
+Provar a linha do tempo pede um **vídeo**, que pede `ffmpeg-full` DENTRO da VM das fotos, mais as
+duas variáveis que o `nix/modules/media.nix` põe na sessão. Isso é decisão de closure numa VM de
+teste, não decisão de teste — por isso não foi tomada.
+
+- acabou quando: a `shots` arrasta o cursor da linha do tempo e mede que ele andou, ou o dono decide
+  que o custo de closure não vale
+
+
+
 ### 0.0. As nove vistas do rodapé não têm estado · pequeno, e é uma decisão
 
 O estado é do BUFFER, e um buffer é uma janela do compositor (invariante 4): o `Esc` que volta ao

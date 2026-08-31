@@ -246,6 +246,7 @@ impl View {
                 fields: row_of(j, width, texts),
                 marked: false,
                 focused: Some(n) == focused,
+                foot: false,
             })
             .collect()
     }

@@ -3920,6 +3920,265 @@ A tabulação vira espaços **na leitura, antes do realce** — as faixas são d
 texto final, e expandir depois moveria todas. A largura é token (`space.files.tabWidth`) e chega por
 parâmetro, porque o `ronoctua-inspect` não recebe valor de token.
 
+#### O que se mexe, se mexe na prévia
+
+O dono pediu: *"quando o arquivo for animado, o preview deve mostrar a animação"* — e, ao ser
+perguntado até onde ia, respondeu GIF **e vídeo**, com variedade. As duas metades são o mesmo
+problema visto de dois lados, e a medição decidiu o desenho.
+
+##### Os números que decidiram
+
+No GIF do próprio dono: 44 quadros, 400×400, 90 ms cada, **707 ms** para compor todos e **26,9 MiB**
+de RGBA. No vídeo dele (1080p60, 355 MB): trinta quadros escalados a 256 saíram em **139 ms** — o
+ffmpeg decodifica ~215 quadros por segundo, muito acima do que a reprodução pede, e entrega RGBA cru
+de tamanho exato.
+
+Três conclusões caem daí, e nenhuma é opinião:
+
+1. **Guardar o filme decodificado está fora.** 26,9 MiB por GIF, e o cache de textura inteiro são
+   39 fatias de 1 MiB. Um quadro por vez é o que cabe.
+2. **Uma textura por quadro está fora.** 44 quadros encheriam as 39 fatias com o filme de um
+   arquivo e despejariam todos os ícones. É UMA textura, reenviada sob a mesma chave.
+3. **PNG por quadro está fora.** Seria um encode no ffmpeg e um decode aqui, por quadro, para uma
+   imagem que vive 90 ms. Cru não custa nenhum dos dois.
+
+##### O quadro chegando É o relógio
+
+Nenhuma das duas portas tinha timer rápido o bastante, e nenhuma ganhou um. O player espera a hora
+DEVIDA do próprio quadro e o manda pelo canal `calloop` que as portas já escutam — então **o quadro
+chegando é o que acorda o laço**, e quando o player para, as acordadas param com ele.
+
+Um timer na porta teria de ser avisado de quando rodar e de quando não. Este não pode errar isso,
+porque não há o que avisar.
+
+##### A `era`, e por que um `Stop` no canal não bastava
+
+O player é uma thread com `mpsc` na entrada, como o inspetor. Mas um `Stop` mandado enquanto o
+ffmpeg está no meio de um quadro fica na fila até o quadro terminar — e "terminar" pode ser o fim de
+um filme. Então o laço lê um **número**, e "parar" é incrementá-lo. A espera também é em passos de
+20 ms pelo mesmo motivo: um GIF pode declarar segundos.
+
+Pausar e retomar são um **sinalizador** e não uma mensagem, pelo mesmo argumento visto do outro
+lado: a thread está DENTRO de uma leitura quando a ordem chega, então uma mensagem seria obedecida
+no fim do filme. E o número passou a ser lido dentro da leitura também, não só entre quadros — é
+disso que trata "o travamento vivo", mais abaixo.
+
+É isso que garante que o filho morre quando o cursor sai, e é a razão de a thread possuir o processo
+em vez de a porta.
+
+##### O que o `ronoctua-inspect` responde, e o que ele não faz
+
+Ele responde **se** um arquivo se mexe (`motion::moving`) e nada mais. A pergunta é da mesma
+família que "o que tem dentro", e é barata: contar dois quadros de um GIF custa **41 ms** contra os
+707 de compor os 44, porque o iterador do `image` é preguiçoso e dois quadros já respondem "mais de
+um".
+
+Rodar a animação não é dessa família: precisa de thread e de um processo vivo, e a promessa escrita
+do crate é que ele não sobe thread nenhuma — a concorrência é do hospedeiro. O player mora no
+`ronoctua-shell`.
+
+Um GIF de um quadro só é uma FOTOGRAFIA, e é por isso que a contagem existe: subir thread e relógio
+para uma imagem parada é custo sem nada do outro lado.
+
+##### O teto de quadros saiu, e a frase que o justificava também (2026-08-30)
+
+Havia um teto de seiscentos quadros, e o argumento escrito aqui era: *"uma prévia que toca um filme
+no canto de um gerenciador de arquivos é um reprodutor de vídeo que ninguém pediu"*.
+
+O dono pediu. As palavras dele: *"Eu gostaria que fosse uma pequena reprodução do vídeo, como um
+miniplayer, com controles que aparecem no hover do mouse"*, *"quero que seja possível rodar o vídeo
+inteiro"*, *"e quero que no controle tenha 'linha do tempo' para eu escolher a parte do vídeo"*.
+
+O invariante 14 não mudou, e nada aqui é chrome nova: os controles são a última LINHA da própria
+prévia, tirada do conteúdo, do mesmo jeito que a barra horizontal já tirava uma. O que estava datado
+era o argumento — a mesma forma da reversão do menu de botão direito, que o `surface.rs` recusava
+por escrito até o dia em que foi pedido.
+
+O teto de cadência do vídeo (30) FICA, e o GIF continua andando no ritmo declarado dele: num painel
+de 256 píxeis, sessenta quadros por segundo e trinta são a mesma imagem, e sessenta são o dobro das
+acordadas num laptop. O GIF não tem teto porque um GIF em outra cadência **parece quebrado**, e a
+cadência é o que o arquivo diz.
+
+##### A imagem era enquadrada DUAS vezes, e é isso que deixava tanto ar em volta
+
+O relato foi *"o vídeo pode ser maior e os espaços em branco muito menores"*, com foto.
+
+O `pad` do ffmpeg letterboxa o filme dentro de um quadro cujo tamanho nós escolhemos, e os dois
+lados desse quadro eram quantizados em passos de 128 INDEPENDENTEMENTE. Uma caixa de 380 por 300
+virava um quadro de **384 por 128** — três para um —, então um filme 16:9 ganhava setenta e oito
+colunas transparentes de cada lado, e a porta enquadrava esse retângulo de novo dentro da caixa,
+acrescentando faixas em cima e embaixo. Duas molduras para uma imagem.
+
+Agora a largura é quantizada e a **altura segue a forma da caixa**, então o `pad` É o ar que o painel
+deixaria de qualquer jeito: uma moldura só, a que a forma do filme exige. Como o quadro já vem
+enquadrado, a porta o desenha PREENCHENDO a caixa — `View::preview_fills` é quem diz isso, e a foto
+parada, que não vem enquadrada, continua passando pelo `fit_into`.
+
+O GIF é compostado no mesmo tamanho, com as barras transparentes, pelo mesmo motivo: as duas fontes
+dão UMA forma de quadro, e as portas têm uma regra só.
+
+Contas na mesma caixa, com um filme 16:9: antes a parte visível saía 163 por 92; agora sai 237 por
+128.
+
+##### O tamanho do quadro é NOSSO, e é o que consertou o defeito que ele fotografou
+
+O relato foi *"parece que os frames foram girados na maioria dos vídeos; e ainda a amostra parece
+ser muito pequena"*. Eram dois defeitos que se compunham.
+
+O primeiro: `play_video` deduzia a ALTURA do quadro pelo número de bytes que por acaso chegaram num
+`read()` de 64 KiB. Com largura 512 uma linha tem 2 048 bytes, e 65 536 são exatamente 32 delas — o
+código declarava o quadro como 512×32 e passava a ler fatias horizontais do filme.
+
+O segundo sobrevivia ao conserto do primeiro: as duas portas mediam a caixa da imagem pela FOTO
+(`preview_pixels`) e desenhavam dentro dela o quadro que o player tivesse mandado. Duas formas
+diferentes, então todo filme saía esticado nas proporções do próprio pôster.
+
+O caminho óbvio — perguntar `width`/`height` ao ffprobe em vez de adivinhar — teria trocado um
+defeito por outro, e isso foi MEDIDO: um vídeo de celular reporta 640×360 codificado com uma matriz
+dizendo "gire 90°", e o ffmpeg renderiza **256×456**. Escalar para a forma reportada achataria a
+imagem *e* dessincronizaria a contagem de bytes.
+
+A resposta remove a classe inteira:
+
+```
+-vf scale=W:H:force_original_aspect_ratio=decrease,pad=W:H:-1:-1:color=#00000000
+```
+
+O que sai do pipe é **exatamente** `W×H`, qualquer que seja o arquivo — verificado contra o binário
+real nas três formas (paisagem, retrato-por-rotação, retrato-por-codificação). `frame_bytes` virou
+aritmética, e um quadro curto é DESCARTADO em vez de enviado. E `W`/`H` vêm da caixa que o painel
+mediu, quantizada em passos de 128 px: arrastar a borda da janela custa no máximo sete respawns em
+vez de sessenta por segundo.
+
+A cor do letterbox é **transparente**, e não um token: a moldura seria uma de DUAS — o rodapé é
+`surface.chrome` e a janela é `surface.buffer` — e a textura é uma só, desenhada nas duas portas.
+Medido: as barras chegam com alfa 0 e a imagem com alfa 255, e o pipeline de imagem mistura com
+`ALPHA_BLENDING`. Cada porta mostra o próprio fundo através delas, e nenhum valor de token atravessa
+para o `ronoctua-inspect`.
+
+##### O relógio é o de parede, e quem atrasa perde um quadro
+
+O sono era fixo (`1000/fps`) e vinha DEPOIS da leitura, do envio e da pintura — então o período real
+era isso mais o trabalho, o filme corria uns 17% devagar, e o erro ACUMULAVA: um minuto depois, dez
+segundos atrás.
+
+Agora o quadro `n` vence em `origin + n/fps`. Atrasado, o seguinte é **lido e descartado** — a
+leitura é obrigatória, um pipe não se pula, mas o envio, o upload e a pintura, que são a metade
+cara, não acontecem. Passando de trinta descartes seguidos o `origin` é reancorado: uma máquina que
+não dá conta deve rodar o filme em câmera lenta, que é honesto, e não disparar por ele.
+
+##### O transporte não são quatro mecanismos
+
+| pedido | o que acontece | o que custa |
+|---|---|---|
+| pausar | o laço PARA DE LER; o ffmpeg trava num pipe cheio | nada, e 0% de CPU |
+| retomar | volta a ler | nada |
+| buscar | o filho morre e outro nasce em `-ss` | 108–242 ms, medido |
+| som | o mesmo, com uma segunda saída | o mesmo |
+| redimensionar | o mesmo, no `Fit` novo | o mesmo |
+
+`SIGSTOP` era a alternativa óbvia e está errada: congela o dispositivo de áudio no meio do buffer, o
+que estala. Travar num pipe é o mecanismo que o kernel já dá, e para o som no MESMO instante porque
+o som sai do mesmo filho — `-map 0:a:0? -f pulse -buffer_duration 80 default`, uma segunda saída do
+mesmo ffmpeg. Um segundo processo (`ffplay`) demuxaria e leria o arquivo duas vezes, e começaria com
+o desencontro da própria latência de seek, sem nada capaz de corrigi-lo.
+
+**Pedir som num filme MUDO mata a imagem**, e isso é medido: o ffmpeg recusa o comando INTEIRO
+(*"output file does not contain any stream"*, saída 234, zero quadros). Por isso `Shape` carrega
+`sound`, a tecla recusa e o glifo não é desenhado — e o respawn-em-silêncio depois de 400 ms existe
+como guarda, não como caminho.
+
+Um filme que ACABA precisa DIZER isso (`Beat::Ended`): antes os quadros simplesmente paravam de
+chegar, o último ficava para sempre e o glifo de play nunca voltava. Ausência de acordada não é um
+evento e não se desenha.
+
+##### O travamento vivo que ninguém teria visto
+
+`read_exact` é uma leitura **bloqueante sem prazo**, e a `era` só era checada *entre* quadros. Um
+ffmpeg que abre o pipe e nunca escreve — um mount que travou, um dispositivo que sumiu — segurava a
+thread do player pelo resto da sessão: a porta continuava pintando, `orders.recv()` nunca mais
+rodava, e nada na tela dizia. Agora a leitura é `poll` com tique de 50 ms, e o prazo e a `era` são
+perguntados a cada volta.
+
+E o filho morre por uma **guarda de `Drop`**. Estava escrito à mão em quatro saídas, e a quinta que
+alguém acrescentasse amanhã vazaria um ffmpeg lendo um filme que ninguém está olhando; um `Drop`
+cobre `return`, `?`, `break` e pânico, e não sobra onde esquecer. Mais `process_group(0)`, o idioma
+do `transfers/media.rs`, para o sinal alcançar o grupo.
+
+##### Os controles ficam POR CIMA do filme (2026-08-30)
+
+Eles ocupavam uma linha tirada da imagem, e o dono pediu o contrário: *"quero que todos os controles
+do player apareçam por cima do vídeo/gif, de forma a deixar o vídeo/gif ocupando toda a altura
+possível do preview, e com os controles com um background com semi-transparência, para que seja
+possível visualizá-los em todas as condições de contraste"*.
+
+Isso custou uma coisa no renderer, e vale dizer qual: **não há teste de profundidade**, e a ordem é
+retângulos → imagens → texto. Uma faixa empurrada junto com os outros retângulos fica ATRÁS da
+imagem e não se vê; desenhar a lista inteira duas vezes poria todos os fundos por cima dela. Então
+quem vai em cima entra no FIM da lista e o chamador diz onde esses começam — `Quads::draw_range`,
+um buffer, um pipeline, duas chamadas.
+
+A faixa é `surface.transport`, e é a única cor do sistema com alfa. Não é elevação e não faz card
+(invariante 15): não tem borda, raio nem sombra — é uma banda da largura do painel, de uma linha,
+que escurece o que cobre, com o filme aparecendo através dela. `CC` é quatro quintos: abaixo de uns
+dois terços os glifos brigam com um quadro claro, e opaca ela deixa de ler como parte da imagem e
+vira uma tira de chrome atravessando o filme, que é do que trata o invariante 14.
+
+A linha continua carregando uma `Row`, porque duas células são clicáveis; então `Section::line_of` e
+`View::hit` as resolvem com a aritmética que já existe.
+
+##### A linha dos controles tem campo de fundo SEMPRE, e sem isso ela foge da mão
+
+O dono pediu que os controles se mantivessem *"com o hover nos próprios controles"*. Com eles
+escondidos a `Row` ficava sem campo nenhum, `Row::field_at` respondia `None`, e portanto `View::hit`
+respondia `None` para todo ponto daquela linha. O ponteiro indo buscar o play saía da prévia no
+caminho, `pointing` deixava de ser `Preview`, e os controles sumiam de baixo da mão que ia pegá-los.
+
+O campo de fundo é o mesmo que a imagem já usa para ser clicável. E há um teste que caminha TODAS as
+linhas do painel, a dos controles inclusive, exigindo que cada uma resolva para a prévia.
+
+##### O relógio é MEDIDO, e é isso que dá ar igual dos dois lados
+
+*"Com espaços em branco idênticos na esquerda e na direita."* Antes, a folga da esquerda era uma
+célula fixa e a da direita era o que sobrasse depois de uma reserva de catorze: `1:23 / 5:40` tem
+onze células e `3:44 / 10:34` tem doze, então a folga mudava de filme para filme. Agora `TRANSPORT_AIR`
+é uma constante só, aplicada dos dois lados, e a largura do relógio viaja na `Section` — porque três
+lugares dependem dela: o retângulo do cursor e o arrasto de cada porta.
+
+A trilha também subiu para o MEIO da linha, no nível dos glifos. Ela estava no pé, que é onde uma
+barra de rolagem mora e uma linha do tempo não.
+
+```
+▶  🔇     ▁▁▁▁▁▁▁●▁▁▁▁▁▁▁▁▁▁▁▁▁   1:23 / 5:40
+```
+
+**As quatro células da esquerda são reservadas sempre, e só a tinta depende do ponteiro.** Se a
+trilha crescesse quando os botões somem, o cursor de reprodução escorregaria de baixo do ponteiro no
+instante do clique — a mesma classe de defeito que o comentário do `Scroll::offset_at` já registra.
+
+A linha do tempo é um `Scroll` em decissegundos (`total` = duração, `offset` = posição): o
+`bar_across` desenha o cursor e o `offset_at` é o inverso exato, então **onde é desenhado é onde é
+agarrado**, a lei que as outras duas barras já mantêm. O que se agarra é a TRILHA e não o cursor,
+porque `offset_at` mapeia qualquer ponto dela para uma posição — uma linha do tempo que só se pegasse
+pelo cursor de uma célula seria um controle em que é preciso mirar.
+
+**GIF não ganha linha do tempo**, e é a duração que traça essa linha, sem `if` a mais: os quadros de
+um GIF são interdependentes, então buscar significa decodificar desde o zero — 707 ms no arquivo do
+dono — e não há duração, só laço.
+
+##### `C-w` dá a região inteira, e é DERIVADO
+
+```rust
+fn whole(&self) -> bool { self.theatre && self.preview_on && self.film_here() }
+```
+
+Não é um modo guardado. Assim ele se desfaz sozinho quando o cursor sai, quando `C-v` esconde a
+prévia e quando o filme não produziu nada — e não há caso de que alguém tenha de lembrar de desfazer,
+que é o caso esquecido que deixaria o gerenciador sem listagem. Um filme que ACABOU mantém a região,
+de propósito: o último quadro e o glifo de play ainda estão lá, e apertar play é como se assiste de
+novo.
+
+
 ##### Uma barra não desenha por cima do que ela serve para alcançar
 
 O dono fotografou uma linha da prévia correndo por baixo do polegar, com as

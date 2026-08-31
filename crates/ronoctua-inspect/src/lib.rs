@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 
 pub mod facts;
+pub mod motion;
 pub mod pixels;
 pub mod text;
 pub mod tools;
@@ -184,6 +185,20 @@ impl Made {
         Self {
             rgba: None,
             why: Some(why),
+        }
+    }
+
+    /// NOTHING WAS ASKED, which is neither a picture nor a refusal.
+    ///
+    /// For a file the caller decided not to decode at all — a film, whose
+    /// still picture would be a whole ffmpeg run for a frame the player
+    /// replaces 84 milliseconds later. A `Refusal` here would put a sentence in
+    /// the panel about a file that has plenty to show.
+    #[must_use]
+    pub const fn unasked() -> Self {
+        Self {
+            rgba: None,
+            why: None,
         }
     }
 
@@ -351,6 +366,8 @@ pub mod key {
     pub const FACT_CONTAINER: &str = "files-fact-container";
     /// Label: what encoded the picture.
     pub const FACT_VIDEO: &str = "files-fact-video";
+    /// A photograph that carries a film inside it.
+    pub const FACT_MOTION: &str = "files-fact-motion";
     /// Label: what encoded the sound.
     pub const FACT_AUDIO: &str = "files-fact-audio";
     /// Label: frames per second.

@@ -141,6 +141,13 @@ pub struct Images {
     buffer: wgpu::Buffer,
     /// What is already on the GPU, by key.
     uploads: HashMap<String, Upload>,
+    /// The textures behind them, kept so a frame can be written into one again.
+    ///
+    /// A bind group holds a VIEW and cannot hand back the texture it was built
+    /// from, so the texture is kept beside it. Thirty-nine of them, the same
+    /// ceiling `uploads` has, and each one is the memory its picture already
+    /// occupies — nothing new is held.
+    textures: HashMap<String, wgpu::Texture>,
     /// The keys to draw this frame, in instance order.
     batch: Vec<String>,
 }
@@ -243,6 +250,7 @@ impl Images {
                 mapped_at_creation: false,
             }),
             uploads: HashMap::new(),
+            textures: HashMap::new(),
             batch: Vec::new(),
         })
     }
@@ -279,6 +287,35 @@ impl Images {
             height: rgba.height,
             depth_or_array_layers: 1,
         };
+        // THE SAME TEXTURE AGAIN WHEN THE SHAPE HAS NOT CHANGED.
+        //
+        // A moving file arrives under one key, thirty times a second, at one
+        // size — and this used to allocate a texture, a view and a bind group
+        // for every one of them, then drop the lot on the next. `write_texture`
+        // is the only part a new frame actually needs.
+        if let Some(had) = self.textures.get(key)
+            && self
+                .uploads
+                .get(key)
+                .is_some_and(|u| u.width == rgba.width && u.height == rgba.height)
+        {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: had,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba.pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(rgba.width * 4),
+                    rows_per_image: Some(rgba.height),
+                },
+                size,
+            );
+            return;
+        }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("image"),
             size,
@@ -330,6 +367,7 @@ impl Images {
                 height: rgba.height,
             },
         );
+        self.textures.insert(key.to_owned(), texture);
     }
 
     /// Forgets everything that was drawn. The textures stay on the GPU.
@@ -394,6 +432,10 @@ impl Images {
         let alive: std::collections::HashSet<&str> =
             self.batch.iter().map(String::as_str).collect();
         self.uploads.retain(|k, _| alive.contains(k.as_str()));
+        // AND THE TEXTURES GO WITH THEM. Kept separately they would be a second
+        // map growing without a ceiling — which is the thing this function
+        // exists to stop.
+        self.textures.retain(|k, _| alive.contains(k.as_str()));
     }
 
     /// Draws what was prepared.
@@ -430,6 +472,32 @@ pub struct Rgba {
     pub height: u32,
     /// `width × height × 4` bytes, RGBA8.
     pub pixels: Vec<u8>,
+}
+
+impl Rgba {
+    /// A picture, or nothing at all when the bytes do not make one.
+    ///
+    /// # Why the count is CHECKED and not assumed
+    ///
+    /// Because the player reads its frames out of a pipe, and a pipe closing
+    /// mid-frame hands back fewer bytes than a picture needs. Uploaded anyway,
+    /// that is the smear that slides a little further sideways every frame —
+    /// the defect the owner photographed, in its second form. One place asks,
+    /// and a partial frame becomes `None` instead of a texture.
+    #[must_use]
+    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Option<Self> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let want = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        (pixels.len() == want).then_some(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
 }
 
 /// The colour the image's area is cleared with before drawing.

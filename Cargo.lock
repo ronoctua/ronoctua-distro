@@ -2764,6 +2764,7 @@ dependencies = [
  "ronoctua-term",
  "ronoctua-tokens",
  "ronoctua-transfers",
+ "rustix 1.1.4",
  "serde_json",
  "smithay-client-toolkit",
  "tracing",

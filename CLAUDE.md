@@ -85,7 +85,61 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   arrasto passou a ter EIXO. Tetos: 1 MiB, 2 000 linhas, 512 bytes
   por linha — o último porque `.js` minificado é UMA linha de 2 MB e o `elide_end` a percorreria por
   cluster a cada frame. **Arquivo sem imagem E sem texto diz o que a pasta diz** (`sem prévia`); a
-  frase sobre imagem morreu. **As seções são
+  frase sobre imagem morreu. **A prévia é um MINIPLAYER** (2026-08-30, a pedido do dono, que
+  reverte a frase "um reprodutor que ninguém pediu"): GIF pelo `image`, vídeo por um ffmpeg VIVO
+  cuspindo RGBA cru; um player (`motion.rs`), uma thread, um quadro por vez, e **o quadro chegando
+  É o relógio** (nenhuma porta ganhou timer). **O TAMANHO DO QUADRO É NOSSO**, não do arquivo:
+  `scale`+`pad` para o `Fit` que o painel mediu, então `bytes` é aritmética. Perguntar largura ao
+  ffprobe teria trocado o defeito por outro — vídeo de celular diz 640×360 e RENDERIZA 256×456.
+  **E o quadro tem o FORMATO DA CAIXA** (largura quantizada, altura seguindo a caixa), senão a
+  imagem é enquadrada DUAS vezes: 380×300 virava quadro 384×128, o ffmpeg letterboxava um 16:9 ali
+  dentro e a porta enquadrava de novo. Como o quadro já vem enquadrado, a porta o desenha
+  PREENCHENDO a caixa (`preview_fills`); só a foto parada ainda passa pelo `fit_into`. O GIF é
+  compostado no mesmo tamanho, para as duas fontes darem UMA forma de quadro.
+  Letterbox TRANSPARENTE: a cor seria uma das DUAS (rodapé e janela), e a textura é uma só.
+  **O relógio é o de PAREDE e quem atrasa perde quadro** (sono fixo depois do trabalho corria 17%
+  devagar, e acumulava). **Pausar é PARAR DE LER** — o ffmpeg trava no pipe, 0% de CPU, e o som para
+  junto porque sai do MESMO filho (`-f pulse default`, uma segunda saída); `SIGSTOP` estalaria o
+  áudio. Buscar, ligar o som e redimensionar são respawn (108-242 ms); o teto de pausa é 5 min.
+  **Som em filme mudo MATA a imagem** — o ffmpeg recusa o comando inteiro —, então a tecla recusa e
+  o glifo não aparece. **Fim é MENSAGEM** (`Beat::Ended`): ausência de acordada não se desenha.
+  Nenhuma leitura sem prazo (`poll`, 50 ms) e nenhum `kill` à mão (guarda de `Drop`): o
+  `read_exact` de antes matava a thread do player pelo resto da sessão, mudo. **Os controles ficam
+  POR CIMA do filme** — a imagem leva o painel inteiro — numa faixa `surface.transport` (alfa `CC`,
+  a única do sistema): sem teste de profundidade, a ordem é retângulo→imagem→texto, então a cauda da
+  lista desenha depois das imagens (`Quads::draw_range`). **TUDO some sem o ponteiro**, linha do
+  tempo inclusive; as CÉLULAS ficam, senão a trilha mudaria de tamanho no hover e o cursor escaparia
+  de baixo do clique. A linha dos controles tem campo de fundo SEMPRE — sem ele o `hit` devolvia
+  `None` ali e os controles fugiam da mão que ia pegá-los. Trilha centrada na linha e com ar igual
+  dos dois lados, o que obriga a MEDIR o relógio (`1:23 / 5:40` e `3:44 / 10:34` não têm a mesma
+  largura). `C-;` `C-'` `C--` `C-=`, e `C-w` dá a região INTEIRA (derivado, então se desfaz sozinho)
+  — **para QUALQUER prévia**, sobrevivendo à troca de arquivo: as setas andam nos ARQUIVOS, e sem
+  prévia a região diz o nome (ou o caminho, se for pasta). Lá a prévia pede TODAS as linhas; pedindo
+  as 4 de `preview_lines` ela ficava no topo, com os controles na quarta linha e a faixa deles
+  cobrindo o filme. A faixa vai até o fundo REAL do painel — o resto de linha ficava sem tinta e sem
+  hover —, e o `hit` dá esse resto à última linha; a linha dos controles é `foot: true`, contada de
+  BAIXO PARA CIMA, então o resto cai ACIMA dela, dentro da imagem — é o `Span::edge` no outro eixo,
+  e a mesma razão. **TODO o transporte sai do mesmo pé** (`transport_top`): ancorar só a LINHA
+  deixou a trilha contada do topo, a um resto de distância dos glifos. **A trilha usa as CÉLULAS dos
+  campos** (`Section::fields_px`) e não os trilhos da
+  seção, que são mais largos: num painel largo a diferença era a folga até o relógio. **Clique na
+  prévia NÃO abre** — em filme alterna o play, e o alvo cobre a linha inteira dos controles.
+  **Respawn devolve o filme como estava**:
+  `Ask::Play` leva se começa SEGURADO (fora do `Reel`, senão pausar viraria respawn) e adianta a
+  marca para onde a imagem está; sem isso o `C-w` despausava e retrocedia.
+  **Faixa de hover não vai sobre figura** — ela diz que LINHA de uma lista está sob o ponteiro, e
+  foto não é lista; e a pergunta é por CÉLULA, a mesma entrada que a faixa usa. **FOTO COM FILME DENTRO** (motion photo): a prévia mostra a foto 1,5 s, depois o filme, e
+  repete — `Beat::Still` é quem devolve a foto, porque ausência de quadro não se desenha. Achada
+  pelos BYTES e não por fabricante: janela XMP de 128 KB (o `Item:Length` do Google) e, senão, um
+  `ftyp` na cauda — que cobre a Samsung sem um parser que eu não possa testar. Apple é OUTRO arquivo,
+  e o par se confirma pelo `ContentIdentifier`, nunca pelo nome. Lida por `subfile` do ffmpeg, sem
+  copiar os megabytes. **A foto e o quadro são DUAS texturas** (`:frame`): com uma só, a volta do
+  laço acharia a chave presente, não subiria nada, e a tela ficaria no último quadro para sempre.
+  **Arquivo que se
+  mexe não ganha foto** (o pôster era um ffmpeg inteiro para uma imagem trocada 84 ms depois) e
+  **enquanto a resposta não chega o painel fica VAZIO**, nunca "sem prévia". Uma textura reenviada
+  sob a MESMA chave, e agora a MESMA textura — chave por quadro encheria as 39 fatias com o filme
+  de um arquivo. **As seções são
   INDEPENDENTES**: `Panes::section_at` diz em que seção um cell está, e é quem a
   faixa, a roda e o foco perguntam — painel acende a si mesmo, e o gesto rola só
   a seção sob o ponteiro (a listagem é da PORTA; **figura** não rola, e engole).
@@ -196,6 +250,11 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
   Rust. **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
+- **`cargo test` não tinha os cinco programas, e todo teste de ffmpeg era VAZIO** — eles saem por
+  `let Ok(x) = ffmpeg() else { return }`, e nem o devshell nem a derivação `tests` definiam as
+  variáveis. Medido: o teste de rotação fecha em 0,00 s sem elas e 0,75 s com elas — nunca construiu
+  os três vídeos que compara. Vão na derivação `tests` e NÃO em `commonArgs`: a build do workspace
+  não pode referenciar o ffmpeg.
 - **Três baterias, e só o gate fecha**: `quick` (dez escolhidos), `most` (tudo que não constrói instalação), `gate` (tudo). `tests/slow.nix` diz o que sai do `most`, e `test-tiers-are-total` cobra a divisão. **`nix flake check` SEM `-L` não mostra log** — silêncio não é sintoma. **`nix fmt` sem argumento formata a árvore**; `--check` confere.
 - **`rustc` morto por `signal: 15` SEM diagnóstico é o `earlyoom` do HOST** (`-m 10,5`, `rustc` no `--prefer`), e `--max-jobs` não salva: o que estoura é jobs × cores. Por isso o gate mede e limita o produto. **`cannot download … from any mirror` NÃO é arquivo removido**: o `fetchurl` repete SEM retomar, e o android-studio (1,37 GB, unfree, um espelho, fora de todo cache) reseta aos ~150 MB — quem baixa é o `nix/prefetch.nix`, que o gate roda ANTES de compilar. **`pkill`/`pgrep` casa o PRÓPRIO comando**, e **`git checkout <arquivo>` apaga o não-commitado** (o store guarda cópia: `ls -dt /nix/store/*-source`).
 - **Modificador segurado mata o keymap.** No aninhado a leader É `Ctrl+Alt+Espaço`: DESCONTE o que já estava em baixo ao ganhar o foco E ao começar a sequência. Caps Lock idem — `not bound` mudo.

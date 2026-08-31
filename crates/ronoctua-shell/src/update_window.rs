@@ -1220,6 +1220,7 @@ impl UpdateWindow {
             line: 0,
             color: tokens::color::TEXT_SECONDARY,
             edge: false,
+            foot: false,
         });
         spans.push(ronoctua_render::Span {
             size: ronoctua_render::Size::Px(size),
@@ -1232,6 +1233,7 @@ impl UpdateWindow {
             line: 0,
             color: tokens::color::TEXT_PRIMARY,
             edge: false,
+            foot: false,
         });
 
         // LINE 1: the second register — what the step under the cursor really
@@ -1250,6 +1252,7 @@ impl UpdateWindow {
             line: 1,
             color: tokens::color::TEXT_SECONDARY,
             edge: false,
+            foot: false,
         });
 
         // THE STEPS, only the ones that fit.
@@ -1285,6 +1288,7 @@ impl UpdateWindow {
                     line: y,
                     color: piece.color,
                     edge: false,
+                    foot: false,
                 });
             }
         }
@@ -1312,6 +1316,7 @@ impl UpdateWindow {
                 line: top,
                 color: tokens::color::TEXT_DIM,
                 edge: false,
+                foot: false,
             });
         } else {
             let room = self.output_room();
@@ -1330,6 +1335,7 @@ impl UpdateWindow {
                     line: y,
                     color: tokens::color::TEXT_SECONDARY,
                     edge: false,
+                    foot: false,
                 });
             }
         }

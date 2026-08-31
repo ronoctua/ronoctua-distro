@@ -30,6 +30,25 @@
     # The background of the focused row inside an expanded list (4.3). It is a
     # change of colour, not an outline and not a box.
     selection = "0x2A2A2AFF";
+
+    # THE ONE SURFACE WITH AN ALPHA, and it is the film's controls.
+    #
+    # The file manager's transport is painted ON the picture — the owner asked
+    # for the video to keep the whole height of the preview — so its glyphs have
+    # to read against whatever frame is underneath. A bright sky and a night
+    # scene are both ordinary, and text alone loses one of them.
+    #
+    # This is NOT elevation and does not make a card (invariant 15): there is no
+    # border, no radius and no shadow. It is a band the width of the panel, one
+    # line tall, that darkens what it covers — the same kind of thing as the
+    # modeline's background, with the picture showing through.
+    #
+    # `CC` is four fifths. Below about two thirds the glyphs start to fight a
+    # white frame; at full opacity the band stops reading as part of the picture
+    # and becomes a strip of chrome across it, which is what invariant 14 is
+    # about. Four fifths keeps the film visible through it and the glyphs
+    # legible over it.
+    transport = "0x121212CC";
   };
 
   # -------------------------------------------------------------------
