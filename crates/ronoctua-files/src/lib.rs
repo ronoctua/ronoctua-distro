@@ -37,6 +37,7 @@ pub mod listing;
 pub mod menu;
 pub mod mime;
 pub mod mode;
+pub mod notice;
 pub mod sidebar;
 pub mod sidebar_menu;
 pub mod size;

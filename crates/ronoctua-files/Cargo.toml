@@ -23,7 +23,15 @@ anyhow.workspace = true
 tracing.workspace = true
 # `chown`, `getgroups` and `statfs`. `rustix` and not `libc` for the reason the
 # workspace already gives: the API is safe, and this crate forbids `unsafe`.
-rustix = { workspace = true, features = [ "fs", "process" ] }
+#
+# `event` is for `poll`, which is how ONE thread waits on the inotify descriptor
+# and the shutdown pipe at once (`notice`). It has to be named HERE even though
+# `ronoctua-shell` already enables it: with `resolver = "3"` features do not
+# unify across a `-p` build, so without this line `cargo test -p ronoctua-files`
+# — the loop this repository tells its agents to iterate in — does not compile.
+# No new crate in the lock and no new store reference: `inotify` and `poll` are
+# syscalls.
+rustix = { workspace = true, features = [ "fs", "process", "event" ] }
 # THE SIDEBAR'S FILE, and this crate builds a ROOT BINARY, so the line deserves
 # a word. `serde` is code and not a store reference, so neither
 # `files-runs-by-path` nor the `${../.}` trap `CLAUDE.md` records is affected —

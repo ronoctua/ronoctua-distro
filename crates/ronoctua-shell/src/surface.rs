@@ -465,6 +465,14 @@ struct Footer {
     /// `LEADER .`, and it outlives every open — a stick plugged in with the
     /// manager closed has to be there when it opens.
     disks_watching: bool,
+    /// The directory on screen reporting itself.
+    ///
+    /// Raised at most once, on the first `LEADER .`, and it outlives every open
+    /// for the same reason `disks_watching` does. Closing the manager RESTS it
+    /// rather than dropping it: a watch nobody is touching costs nothing, and
+    /// tearing the thread down to raise it again on the next open would be
+    /// churn with something to get wrong in between.
+    files_notice: Option<ronoctua_files::notice::Notice>,
     /// The last reading of the machine's disks.
     ///
     /// Kept even with no view on screen, so opening the manager draws the
@@ -1560,6 +1568,7 @@ pub fn run() -> Result<()> {
         scan_watching: false,
         notes,
         disks_watching: false,
+        files_notice: None,
         rack: None,
         catalogue: std::sync::Arc::default(),
         apps_stamp: Vec::new(),
@@ -1857,6 +1866,14 @@ pub fn run() -> Result<()> {
                 // it, an operation of ours finished, an archive was unpacked. A
                 // listing that only refreshes when a key is pressed is a listing
                 // that lies quietly.
+                //
+                // IT STAYS EVEN THOUGH `notice` NOW WATCHES THE SAME DIRECTORY,
+                // and it is not redundant. inotify reports what THIS machine
+                // does; a file put there by another machine over NFS, sshfs or
+                // SMB emits nothing at all, and the mtime is the only thing that
+                // moves. The tick was already being paid for the blink, the pie
+                // and the brain's countdown, so the floor is one `stat` — the
+                // window door, which has no tick, does without it and says so.
                 let changed = state.files.as_ref().is_some_and(crate::files::View::stale);
                 // AND THE SIDEBAR'S FILE, on the same tick and for the same reason:
                 // `LEADER a` pins an application without this view being open, and
@@ -2706,6 +2723,7 @@ impl KeyboardHandler for Footer {
             // without the keyboard would be worse — a listing on screen that
             // answers nothing, with an armed `delete` nobody can see is armed.
             self.files = None;
+            self.rest_the_watch();
             self.first_page();
             self.close_leader();
             self.draw_and_paint();
@@ -7212,11 +7230,30 @@ impl Footer {
         // the frame that draws.
         let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
         let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
-        let side = crate::files::sidebar_of(
-            home.as_deref(),
-            bin.as_ref(),
-            ronoctua_files::sidebar::store::config_dir(),
-        );
+        let store = ronoctua_files::sidebar::store::config_dir();
+        let side = crate::files::sidebar_of(home.as_deref(), bin.as_ref(), store.clone());
+        // THE DIRECTORY IS WATCHED LAZILY TOO, and only once, for the reasons
+        // written against `disks_watching` just below. The footer's one-second
+        // tick already noticed a directory whose mtime had moved; what this adds
+        // is everything that leaves the mtime alone — a file rewritten in place,
+        // a permission changed, and anything at all on a `vfat` stick, whose
+        // stamps land in two-second buckets.
+        if self.files_notice.is_none()
+            && let Some(sender) = self.files_sender.clone()
+        {
+            match ronoctua_files::notice::Notice::watching(store.as_deref(), move || {
+                sender.send(crate::files::Report::Stirred).is_ok()
+            }) {
+                Ok(n) => self.files_notice = Some(n),
+                // NOT FATAL and not worth a sentence: unlike the window, this
+                // door keeps its one-second `stale()`, so what is lost here is
+                // promptness and the two cases mtime cannot see — not the
+                // refreshing itself.
+                Err(e) => {
+                    tracing::warn!(error = %e, "no directory watcher; the one-second stat is on its own");
+                }
+            }
+        }
         self.files = Some(crate::files::View::at(
             &start,
             self.roster.clone(),
@@ -7250,6 +7287,13 @@ impl Footer {
                 self.echo_message(m);
             }
         }
+        // AND THE WATCH IS POINTED AT WHERE THE VIEW OPENED, here and not only
+        // from the next keypress. Leaving it out left the arming to whatever
+        // happened to arrive first — in practice the disks thread's `Racked`,
+        // which ends in `files_reported` and therefore does point it. That is
+        // luck, and on a machine with no udisks2 it is a manager that refreshes
+        // only after the first key.
+        self.follow_the_place();
         self.first_page();
         self.apply_geometry(KeyboardInteractivity::Exclusive);
     }
@@ -7298,10 +7342,12 @@ impl Footer {
                 self.apply_geometry(self.interactivity());
                 // OWED, not painted here: a held-down arrow is a burst too, and
                 // it blocked per key for the same reason the pointer did.
+                self.follow_the_place();
                 self.ask_paint();
             }
             Step::Closed => {
                 self.files = None;
+                self.rest_the_watch();
                 self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
             }
@@ -7310,7 +7356,35 @@ impl Footer {
                 self.echo_message(text);
                 self.draw_and_paint();
             }
-            Step::Do(doing) => self.do_about_files(doing),
+            Step::Do(doing) => {
+                self.do_about_files(doing);
+                self.follow_the_place();
+            }
+        }
+    }
+
+    /// Points the watch at whatever directory the view is on now.
+    ///
+    /// Called after anything that could have navigated, rather than at the one
+    /// place that navigates: `View::enter` is inside the view, which knows
+    /// nothing about watches and should not start. When the place has not moved
+    /// this is a `PathBuf` compare and nothing else, which is what makes calling
+    /// it after every keypress honest.
+    fn follow_the_place(&mut self) {
+        if let (Some(n), Some(v)) = (self.files_notice.as_mut(), self.files.as_ref()) {
+            n.look_at(v.where_());
+        }
+    }
+
+    /// Stops watching the directory, keeping the thread and the sidebar.
+    ///
+    /// BOTH places the view goes away call this, and the second one is easy to
+    /// miss: losing keyboard focus drops the manager without anything having
+    /// been closed. Without it the watch would stay on the last directory for
+    /// the rest of the session, waking a footer that has no view to re-read.
+    fn rest_the_watch(&mut self) {
+        if let Some(n) = self.files_notice.as_mut() {
+            n.rest();
         }
     }
 
@@ -7531,7 +7605,33 @@ impl Footer {
                 v.racked(&rack);
                 self.rack = Some(rack);
             }
+            // SOMEBODY ELSE TOUCHED THE DIRECTORY. Answered with a plain
+            // re-read and NOT with `stale()`: that asks the directory's mtime,
+            // which a file rewritten in place does not move — and refusing the
+            // kernel's word in favour of the poll's would drop exactly what the
+            // watch was added to catch.
+            //
+            // The sidebar keeps its `stale()`, and that asymmetry is deliberate:
+            // `save_sidebar` writes our OWN file, so an unconditional re-read
+            // here would throw the sidebar's cursor away every time something is
+            // pinned. See `View::sidebar_stale`.
+            crate::files::Report::Stirred => {
+                if let Some(v) = self.files.as_mut() {
+                    v.reread();
+                    if v.sidebar_stale() {
+                        v.reread_sidebar();
+                    }
+                }
+            }
         }
+        // A MOUNT MOVES THE VIEW. `Report::Mounted` goes into the directory it
+        // just mounted, so the watch has to follow from here too and not only
+        // from the key that was pressed.
+        self.follow_the_place();
+        // THE HEIGHT FOLLOWS THE ROW COUNT, up to the region's ceiling — the
+        // same pair the one-second tick uses. Painting a longer listing into a
+        // surface still sized for the shorter one is how rows go missing with
+        // nothing having gone wrong.
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
     }

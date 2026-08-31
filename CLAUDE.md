@@ -72,7 +72,14 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
   **Prévia e infos nascem LIGADAS** (`C-v`/`C-i` ainda escondem) e por isso a região sobe ao teto
   com o gerenciador aberto — a ALTURA deixou de responder ao que foi digitado, e o `leader-vm` lê
-  a TELA. Sem foco, painel não pede linha nenhuma. A ficha ROLA (`C-.`, e a barra diz que cortou);
+  a TELA. Sem foco, painel não pede linha nenhuma. **A pasta DÁ NOTÍCIA** (`ronoctua_files::notice`,
+  o nome `watch` já é das cópias): inotify na pasta aberta e na da barra, um watch e nunca recursivo,
+  rajada absorvida na thread (a 1ª mudança sai na hora, o resto 1×/s — senão copiar N arquivos custa
+  N `reread()`, que é O(N²)). Responde com `reread()` SECO: `stale()` é o mtime da PASTA e não vê
+  arquivo reescrito no lugar nem o balde de 2 s do vfat. O rodapé FICA com o `stat` de 1 s — é o piso
+  para NFS, que o inotify não vê —; a janela não ganhou relógio (em repouso não acorda NENHUMA vez,
+  que é o custo de ter várias abertas), só se o observador não subir. Fechar DESCANSA o watch, e os
+  dois lugares que largam a vista chamam — o segundo é perder o FOCO. A ficha ROLA (`C-.`, e a barra diz que cortou);
   permissão, dono e grupo nascem OCULTOS na listagem (`C-d`), e no painel de infos os campos são
   os MESMOS da linha — mesma `Hit`, mesma máquina. **A prévia mostra TEXTO** quando o arquivo é
   texto (`is_a(mime, "text/plain")`, 277 tipos pelo DAG do freedesktop), com realce e rolagem: setas

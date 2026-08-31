@@ -27,7 +27,7 @@ use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
-    reexports::calloop::{EventLoop, channel},
+    reexports::calloop::{self, EventLoop, channel},
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -126,6 +126,50 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     }) {
         tracing::warn!(error = %e, "no disk watcher");
     }
+    // WHERE THE SIDEBAR PERSISTS, read once and used twice: the watch below is
+    // told about it, and the sidebar itself is built with it.
+    let store = ronoctua_files::sidebar::store::config_dir();
+    // AND THE DIRECTORY ITSELF, on the same channel again.
+    //
+    // This is the door the owner reported: it has no clock, so until now a file
+    // put into the open folder by anything else — a download finishing, a copy
+    // from a terminal, Syncthing — appeared only if the person left the folder
+    // and came back. The footer had `View::stale` on its one-second tick and
+    // this process had nothing.
+    //
+    // A watch and not a clock of its own, and that is the whole point: with
+    // several of these windows open, a timer would be one wake-up per second per
+    // window for ever, while a watch that nobody touches costs nothing at all.
+    let notice = match ronoctua_files::notice::Notice::watching(store.as_deref(), {
+        let s = sender.clone();
+        move || s.send(crate::files::Report::Stirred).is_ok()
+    }) {
+        Ok(n) => Some(n),
+        // NOT SILENT, and not the reported bug coming back either. Out of
+        // inotify instances is the realistic failure, and a window that simply
+        // stopped refreshing with nothing said would be exactly the silent
+        // fallback this project refuses — so THIS is the one case that arms a
+        // clock, and it is the only one.
+        Err(e) => {
+            tracing::warn!(error = %e, "no directory watcher; falling back to a clock");
+            handle
+                .insert_source(
+                    calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+                    |_, (), state: &mut FilesWindow| {
+                        if state.view.stale() {
+                            state.view.reread();
+                        }
+                        if state.view.sidebar_stale() {
+                            state.view.reread_sidebar();
+                        }
+                        state.ask_paint();
+                        calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+                    },
+                )
+                .map_err(|e| anyhow::anyhow!("could not hang the fallback clock: {e}"))?;
+            None
+        }
+    };
     handle
         .insert_source(reports, |event, (), state: &mut FilesWindow| {
             if let channel::Event::Msg(r) = event {
@@ -161,11 +205,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     let catalogue = std::sync::Arc::new(ronoctua_apps::scan(&language()));
     let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
     let bin = ronoctua_files::trash::Bin::of_home(data.as_deref(), home.as_deref());
-    let side = crate::files::sidebar_of(
-        home.as_deref(),
-        bin.as_ref(),
-        ronoctua_files::sidebar::store::config_dir(),
-    );
+    let side = crate::files::sidebar_of(home.as_deref(), bin.as_ref(), store);
     let view = crate::files::View::at(
         &where_,
         ronoctua_files::who::Roster::read_from(&ronoctua_files::who::Files::default()),
@@ -207,7 +247,11 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         cell_under_pointer: None,
         owed: false,
         message: None,
+        notice,
     };
+    // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
+    // by now, so what this arms is the watch for everything that happens NEXT.
+    state.follow_the_place();
 
     WaylandSource::new(conn, queue)
         .insert(cycle.handle())
@@ -316,6 +360,11 @@ struct FilesWindow {
     /// last event — which is what every other program does.
     owed: bool,
     message: Option<String>,
+    /// The directory reporting itself, when one could be had.
+    ///
+    /// `None` means the watch could not be armed and the fallback clock above
+    /// is doing the work instead.
+    notice: Option<ronoctua_files::notice::Notice>,
 }
 
 impl FilesWindow {
@@ -523,7 +572,21 @@ impl FilesWindow {
             }
         }
         self.follow();
+        self.follow_the_place();
         self.ask_paint();
+    }
+
+    /// Points the watch at whatever directory the view is on now.
+    ///
+    /// Called after anything that could have navigated, rather than at the one
+    /// place that navigates: `View::enter` is inside the view, which knows
+    /// nothing about watches and should not start. It is a `PathBuf` compare and
+    /// nothing else when the place has not moved, which is what makes calling it
+    /// on every keypress honest.
+    fn follow_the_place(&mut self) {
+        if let Some(n) = self.notice.as_mut() {
+            n.look_at(self.view.where_());
+        }
     }
 
     /// Opens a file with whatever handles its type.
@@ -632,7 +695,27 @@ impl FilesWindow {
                 }
                 self.view.racked(&rack);
             }
+            // SOMEBODY ELSE TOUCHED THE DIRECTORY. Answered with a plain
+            // re-read and NOT with `stale()`: that asks the directory's mtime,
+            // which a file rewritten in place does not move — and refusing the
+            // kernel's word in favour of the poll's would drop exactly what the
+            // watch was added to catch.
+            //
+            // The sidebar keeps its `stale()`, and that asymmetry is deliberate:
+            // `save_sidebar` writes our OWN file, so an unconditional re-read
+            // here would throw the sidebar's cursor away every time something is
+            // pinned. See `View::sidebar_stale`.
+            crate::files::Report::Stirred => {
+                self.view.reread();
+                if self.view.sidebar_stale() {
+                    self.view.reread_sidebar();
+                }
+            }
         }
+        // A MOUNT MOVES THE VIEW. `Report::Mounted` goes into the directory it
+        // just mounted, so the watch has to follow from here too and not only
+        // from the key that was pressed.
+        self.follow_the_place();
         self.ask_paint();
     }
 

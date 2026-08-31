@@ -4262,6 +4262,162 @@ let
   # that nothing leaks past the edge. This check exists so the constant cannot
   # be reordered without the test being re-read: it pins the FIRST to give way
   # and the one that never does.
+  # THE WATCH IS WIRED, and that is a different question from whether it works.
+  #
+  # `ronoctua_files::notice` has eight tests against a real filesystem, and they
+  # answer "does the watcher fire". They cannot answer "do the doors call it, in
+  # every place they must" — and that gap is not hypothetical. It is the lesson
+  # at the top of this file, and it happened again while this feature was being
+  # written: the footer armed its watch only because the disks thread happened to
+  # send a `Racked`, whose handler points it. On a machine with no udisks2 the
+  # manager would have refreshed only after the first keypress, with eight green
+  # tests and two correct screenshots saying otherwise.
+  #
+  # Four claims, all read off the source. None of them compiles anything.
+  files-notices-the-directory = mkCheck "files-notices-the-directory" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    bad = []
+
+    def production(text):
+        """The part of a file that is not its test module.
+
+        Every crate here puts its tests in one '#[cfg(test)] mod tests' at
+        the end, and 'files::View::at' is called fifteen times inside one of
+        them. Counting those as doors would make claim one meaningless.
+        """
+        cut = text.find("#[cfg(test)]")
+        return text if cut < 0 else text[:cut]
+
+    def body_from(text, opening):
+        """The braces balanced from 'opening' to its match, or None."""
+        start = text.find(opening)
+        if start < 0:
+            return None
+        i = text.index("{", start)
+        depth = 0
+        for j in range(i, len(text)):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[i : j + 1]
+        return None
+
+    files = {f: production(f.read_text()) for f in sorted(crates.rglob("*.rs"))}
+
+    # ONE. Every door that builds a view builds a watcher.
+    #
+    # This is the reported bug in check form: the window door existed for
+    # months with no way at all to notice a directory changing.
+    doors = [f for f, body in files.items() if "View::at(" in body]
+    if not doors:
+        bad.append("no door builds a files::View at all — has the grep gone stale?")
+    for f in doors:
+        if "Notice::watching" not in files[f]:
+            bad.append(
+                f"{f.relative_to(crates)}: builds a files::View and never a "
+                "notice::Notice — this door cannot see a directory change"
+            )
+
+    # TWO. Whatever builds the view also points the watch at it.
+    #
+    # The defect this catches, exactly: arming left to whichever report
+    # happened to arrive first.
+    for f in doors:
+        text = files[f]
+        for m in re.finditer(r"\n(\s*)(?:pub )?fn (\w+)", text):
+            indent, name = m.group(1), m.group(2)
+            rest = text[m.end() :]
+            stop = re.search("\n" + indent + "}\n", rest)
+            inside = rest[: stop.start()] if stop else rest
+            if "View::at(" in inside and "follow_the_place" not in inside:
+                bad.append(
+                    f"{f.relative_to(crates)}: '{name}' opens a view without "
+                    "pointing the watch at it"
+                )
+
+    # THREE. Every place that drops the view rests the watch.
+    #
+    # The second site is the one nobody remembers: losing keyboard focus
+    # drops the manager without anything having been closed, and a watch left
+    # on the last directory wakes a footer with no view for the rest of the
+    # session.
+    for f, text in files.items():
+        for m in re.finditer(r"\n[^\n]*\bfiles = None;", text):
+            after = text[m.end() : m.end() + 200]
+            if "rest_the_watch" not in after and "rest()" not in after:
+                line = text[: m.start()].count("\n") + 2
+                bad.append(
+                    f"{f.relative_to(crates)}:{line}: the view is dropped and "
+                    "the watch is not rested"
+                )
+
+    # FOUR. The nudge is answered with a re-read, never with the poll.
+    #
+    # THE ONE THAT PINS A DECISION RATHER THAN A WIRE. An arm that consulted
+    # 'View::stale' compiles, runs, and passes every test there is — and
+    # silently stops noticing a file rewritten in place, which is half of why
+    # this is a watch and not a clock. 'sidebar_stale' is a different
+    # identifier and is meant to be there: our own 'save_sidebar' writes that
+    # file, so an unconditional re-read would throw the sidebar's cursor away
+    # every time something is pinned.
+    arms = 0
+    for f, text in files.items():
+        arm = body_from(text, "Report::Stirred =>")
+        if arm is None:
+            continue
+        arms += 1
+        where = f.relative_to(crates)
+        if "reread(" not in arm:
+            bad.append(f"{where}: the Stirred arm does not re-read")
+        if ".stale()" in arm:
+            bad.append(
+                f"{where}: the Stirred arm asks View::stale — that is the "
+                "directory's mtime, which a file rewritten in place does not move"
+            )
+    if arms != len(doors):
+        bad.append(
+            f"{arms} doors answer Report::Stirred, but {len(doors)} build a view"
+        )
+
+    if bad:
+        print("ERROR: the directory watch is not wired the way it is meant to be.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for b in bad:
+            print("       " + b, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Every one of these compiles and passes the unit tests. What", file=sys.stderr)
+        print("       they cost is a listing that quietly stops refreshing, which", file=sys.stderr)
+        print("       is the report this feature answers.", file=sys.stderr)
+        raise SystemExit(1)
+
+    # AND THE WATCHER ITSELF IS STILL THERE, with the mask it was argued
+    # into. Without this the check goes green on a tree where the whole
+    # thing was deleted, and MODIFY creeping back in is a hose: it fires on
+    # every write, so one log being appended to would re-read the directory
+    # without pause.
+    notice = crates / "ronoctua-files" / "src" / "notice.rs"
+    if not notice.is_file():
+        print("ERROR: crates/ronoctua-files/src/notice.rs is gone.", file=sys.stderr)
+        raise SystemExit(1)
+    mask = notice.read_text()
+    for flag in ("CREATE", "DELETE", "MOVED_TO", "MOVED_FROM", "ATTRIB", "CLOSE_WRITE"):
+        if f"WatchFlags::{flag}" not in mask:
+            print(f"ERROR: the watch no longer asks for {flag}.", file=sys.stderr)
+            raise SystemExit(1)
+    if "WatchFlags::MODIFY" in mask:
+        print("ERROR: the watch asks for MODIFY, which fires on every write.", file=sys.stderr)
+        print("       A log being appended to would re-read the directory in a", file=sys.stderr)
+        print("       loop. CLOSE_WRITE is the moment a listing cares about.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {len(doors)} doors watch what they show, and answer the nudge with a re-read")
+    END
+  '';
+
   files-columns-degrade = mkCheck "files-columns-degrade" [ pkgs.gnugrep ] ''
     view=${../crates/ronoctua-shell/src}/files.rs
     order=$(sed -n '/^pub const GIVE_WAY/,/^];/p' "$view" | grep -oE 'Column::[A-Za-z]+' | tr -d ' ')
@@ -7988,6 +8144,7 @@ let
       files-actions-have-text
       files-everything-has-a-key
       files-runs-by-path
+      files-notices-the-directory
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
       motion-never-guesses-a-frame
@@ -8038,6 +8195,7 @@ let
       files-actions-have-text
       files-everything-has-a-key
       files-runs-by-path
+      files-notices-the-directory
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes

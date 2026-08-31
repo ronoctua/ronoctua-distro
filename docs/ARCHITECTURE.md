@@ -3749,6 +3749,45 @@ A thread manda o `Rack` INTEIRO, e não um cutucão: plugar um pendrive emite qu
 `GetManagedObjects`. Assim o barramento só é tocado nessa thread, e a última mensagem vence. E chega
 às DUAS portas sem fonte de evento nova nenhuma, porque as duas já carregavam `files::Report`.
 
+#### E a pasta também dá notícia — `ronoctua_files::notice`
+
+A frase acima continua verdadeira e ficou pela metade: mtime é estado, **e não é o estado inteiro**.
+Um arquivo REESCRITO no lugar não mexe no mtime da PASTA, e o `vfat` de um pendrive carimba em
+baldes de dois segundos — nos dois casos o `stat` responde "nada mudou" para sempre, e as colunas de
+tamanho e data mentem enquanto a vista estiver aberta. Por isso a resposta ao aviso é um `reread()`
+seco: **perguntar `stale()` depois do kernel ter falado é deixar o oráculo pior derrubar o melhor**,
+e derrubaria exatamente a notícia que o aviso carrega.
+
+O nome é `notice` porque `watch` já é do harness de pausa/cancelamento das cópias longas. Uma
+instância de inotify por porta, **um watch na pasta ABERTA e nunca recursivo** (é assim que o
+`max_user_watches` não é o limite), mais um na pasta em que a barra lateral persiste. `MODIFY` fica
+DE FORA de propósito — dispara a cada `write` e um log crescendo viraria mangueira; `CLOSE_WRITE` é
+o momento que uma listagem quer, e `ATTRIB` entra porque as colunas de permissão e dono mudam sem a
+pasta mudar.
+
+Todas as chamadas de inotify moram na thread do observador: a porta manda o caminho por `mpsc` e
+toca um `pipe`, que é um dos dois descritores do `poll`. Assim não há corrida sobre a qual watch um
+evento enfileirado pertencia — as ordens são tomadas ANTES de drenar, e evento sem dono é
+descartado. Largar o `Notice` fecha a ponta de escrita, o `poll` volta com `HUP` e a thread sai:
+encerrar não custa nenhuma syscall que possa falhar, que é o que um `Drop` quer.
+
+A rajada é absorvida **na thread**, onde dormir é de graça: a primeira mudança sai NA HORA (segurá-la
+faria um gerenciador que só debouncing parecer um gerenciador pensando) e o resto vem numa segunda
+mensagem, no máximo uma vez por segundo. Sem isso, copiar N arquivos para dentro da pasta aberta
+custaria um `reread()` por arquivo — e `reread()` é um `readdir` mais um `lstat` e uma consulta de
+MIME POR ENTRADA, ou seja, O(N²) no gesto em que a listagem é maior.
+
+O rodapé **fica com o `stat` de um segundo**, e não é redundância: o inotify vê o que ESTA máquina
+faz, e um arquivo posto por outra máquina em NFS, sshfs ou SMB não emite nada — só o mtime se mexe.
+O relógio já estava sendo pago pelo piscar, pela pizza e pela contagem do cérebro, então o piso custa
+um `stat`. A janela **não ganhou relógio nenhum**: em repouso ela não acorda uma vez sequer, que é
+o que faz várias janelas abertas não custarem nada. O único caso em que ela arma um Timer é o
+observador não ter subido — aí o silêncio seria o defeito relatado voltando sem nada dizer.
+
+Fechar o gerenciador **descansa** o watch em vez de matar a thread (`Notice::rest`), e os DOIS
+lugares em que a vista some chamam por isso — o segundo é fácil de esquecer: perder o foco do
+teclado derruba o gerenciador sem ninguém ter fechado nada.
+
 #### O `ronoctua-files` não conhece o `ronoctua-disks`, e é de propósito
 
 A barra modela o que alguém CONFIGUROU — pasta, arquivo, aplicativo, lixeira. Um dispositivo é

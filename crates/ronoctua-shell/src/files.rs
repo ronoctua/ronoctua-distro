@@ -2324,6 +2324,27 @@ pub enum Report {
     /// `Box`ed for the same reason `Racked` is: it carries up to a mebibyte of
     /// RGBA, and a `Report` is moved by value through the channel.
     Inspected(Box<Looked>),
+    /// Somebody else touched the directory on screen, or the sidebar's file.
+    ///
+    /// # Why this one carries nothing, when `Racked` carries everything
+    ///
+    /// Because the answer lives on the other side. `Racked` is the whole
+    /// reading since re-reading udisks2 costs a bus round trip; here the answer
+    /// is [`View::reread`], which only the door can run — it is the one place
+    /// that knows the sort, the filter and which NAME the cursor is on. So this
+    /// is a nudge, and being a nudge it is idempotent: an event misattributed
+    /// to a directory just left costs one wasted re-read, never a wrong screen.
+    ///
+    /// **It must not be answered with [`View::stale`].** That asks the
+    /// directory's mtime, and a file rewritten in place does not move it — which
+    /// is one of the two holes `notice` exists to close. Consulting the poll
+    /// after the kernel has spoken is asking the worse oracle to overrule the
+    /// better one, and it would drop exactly the news this variant carries.
+    ///
+    /// It rides this channel and gains no event source of its own, for the
+    /// reason `ARCHITECTURE.md` already gives about `Racked`: both doors were
+    /// carrying a `Report` before this existed.
+    Stirred,
 }
 
 /// What is on the clipboard, and whether it moves or copies.

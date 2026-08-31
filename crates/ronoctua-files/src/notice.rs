@@ -1,0 +1,840 @@
+//! The directory saying it moved, instead of being asked once a second.
+//!
+//! # Why this is not `crate::watch`
+//!
+//! Because that module answers *how do I follow MY OWN long copy, and how do I
+//! stop it*. This one answers *who else touched the directory I am looking at*.
+//! They share the word and nothing else: one is a switch a copy reads between
+//! bites, the other is a descriptor the kernel writes into.
+//!
+//! # Why an event and not a clock
+//!
+//! `listing::stamp` answers "has the directory's mtime moved", and the footer
+//! asks it once a second. It is a fair question with two holes no interval
+//! closes:
+//!
+//! 1. **A file rewritten in place does not move the DIRECTORY's mtime.** The
+//!    row's size and date are stale and every poll agrees they are fine.
+//! 2. **`vfat` stamps with a granularity of two seconds.** A file landing in
+//!    the same bucket as the reading is invisible for ever — and a USB stick is
+//!    exactly what this manager exists to look at.
+//!
+//! The cost runs the other way from what one expects: this thread waits with no
+//! deadline, so a directory nobody touches costs **nothing at all**, while a
+//! clock wakes its process once a second for its whole life. With several
+//! windows open, that difference is the whole point.
+//!
+//! What inotify cannot see is a change made by ANOTHER MACHINE on a network
+//! filesystem. The footer keeps its one-second `stat` for that; it was already
+//! paying for the tick.
+//!
+//! # Why the report carries nothing
+//!
+//! `ronoctua_disks::watch` sends the whole `Rack` because re-reading udisks2
+//! costs a bus round trip and one stick emits four signals in milliseconds.
+//! Here the opposite holds: the answer is `View::reread`, which the door must
+//! run anyway on its own thread — it is the only place that knows the sort, the
+//! filter and which name the cursor is on. So the message is a nudge, and being
+//! a nudge it is **idempotent**: an event misattributed to a directory just left
+//! costs one wasted re-read, never a wrong screen.
+//!
+//! And the nudge must NOT be answered with `stale()`. That is the mtime again,
+//! and `CLOSE_WRITE` and `ATTRIB` — the two events this mask was widened for —
+//! do not move it. A door that second-guessed the kernel with a worse oracle
+//! would drop exactly the news this module exists to carry.
+//!
+//! # Why every inotify call happens on the watcher's thread
+//!
+//! The thread lives inside a blocking wait, so the door cannot hand it a new
+//! directory the ordinary way. The tempting shortcut is to share the descriptor
+//! and let the door call `add_watch` itself — which opens a race with the reader
+//! over which watch a queued event belonged to.
+//!
+//! Instead the door sends the path down an `mpsc` and rings a pipe, which is one
+//! of the two descriptors the thread waits on. Dropping the [`Notice`] closes
+//! the pipe's writing end, the wait comes back with `HUP`, and the thread
+//! leaves — so ending it costs no syscall that can fail, which is what a `Drop`
+//! wants. A thread parked on a descriptor nobody can close would stay parked for
+//! the rest of the session; the player already paid for that mistake once.
+
+use std::io::{Read as _, Write as _};
+use std::mem::MaybeUninit;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context as _, Result};
+use rustix::event::{PollFlags, Timespec};
+use rustix::fd::OwnedFd;
+use rustix::fs::inotify;
+
+/// How long the thread waits for silence before reporting a burst's tail.
+///
+/// It is a HOLD-OFF and not a delay: the first change of a burst goes out at
+/// once, and this only bounds how often the ones behind it may. A quarter of a
+/// second is what turns an editor's atomic save — a write, a rename and a
+/// permission change within a few milliseconds — into one further re-read
+/// rather than three.
+const QUIET: Duration = Duration::from_millis(250);
+
+/// The longest a burst may hold its tail back.
+///
+/// Without a ceiling, copying a directory into the one on screen is an unbroken
+/// stream and the tail never lands. With it, a copy that never goes quiet still
+/// refreshes about twice a second — where the footer's clock managed once, so
+/// this is never the worse of the two.
+const BURST: Duration = Duration::from_secs(1);
+
+/// The read buffer, in bytes.
+///
+/// An `inotify_event` is sixteen bytes plus the name, so this holds upwards of a
+/// hundred at a time. It is not a limit on anything: whatever does not fit stays
+/// in the kernel's queue and comes out of the next read.
+const BUFFER: usize = 4096;
+
+/// What is asked of the kernel, on the CURRENT directory and never recursively.
+///
+/// One watch per open directory is what keeps this inside `max_user_watches`
+/// however big the tree is; a recursive watch on a home directory is how that
+/// limit is normally reached.
+///
+/// `MODIFY` is deliberately absent. It fires on every `write`, so a log being
+/// appended to would be a hose; `CLOSE_WRITE` is the moment a listing cares
+/// about, which is when the writer let go. `ATTRIB` is present because the
+/// permission, owner and group columns (`C-d`) change without the directory
+/// changing at all.
+///
+/// `EXCL_UNLINK` stops events for a file that is unlinked but still open, and
+/// `ONLYDIR` makes a path that is not a directory a refusal here rather than a
+/// surprise later.
+const WANTED: inotify::WatchFlags = inotify::WatchFlags::CREATE
+    .union(inotify::WatchFlags::DELETE)
+    .union(inotify::WatchFlags::MOVED_FROM)
+    .union(inotify::WatchFlags::MOVED_TO)
+    .union(inotify::WatchFlags::ATTRIB)
+    .union(inotify::WatchFlags::CLOSE_WRITE)
+    .union(inotify::WatchFlags::DELETE_SELF)
+    .union(inotify::WatchFlags::MOVE_SELF)
+    .union(inotify::WatchFlags::ONLYDIR)
+    .union(inotify::WatchFlags::EXCL_UNLINK);
+
+/// The door's handle on a directory that reports itself.
+///
+/// Dropping it ends the thread and closes both descriptors.
+pub struct Notice {
+    /// Where the thread is told to look. `None` means "nowhere".
+    orders: mpsc::Sender<Option<PathBuf>>,
+    /// How the thread is woken to hear it — and, when this is dropped, how it
+    /// learns to leave.
+    ring: std::io::PipeWriter,
+    /// What was last asked for, so asking again costs nothing.
+    ///
+    /// The door calls [`Notice::look_at`] after every keypress rather than
+    /// having to know which gestures navigate, and this is what makes that free.
+    listing: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for Notice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Notice")
+            .field("listing", &self.listing)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Notice {
+    /// Opens the descriptors and raises the thread.
+    ///
+    /// The fallible part happens HERE, on the caller's thread, so a door that
+    /// cannot have a watcher learns it now and can arrange its own floor — the
+    /// arrangement `ronoctua_disks::watch` already uses. `on_stir` returning
+    /// `false` ends the thread, which is how a closed channel says "the door
+    /// left".
+    ///
+    /// `sidebar` is the DIRECTORY the sidebar persists into, and it is taken
+    /// once because it never changes for the life of a view. The directory and
+    /// not the file: `sidebar::store::write_to` writes a scratch file and
+    /// renames it over, so the inode a file watch sat on is gone by the time the
+    /// new content is there.
+    ///
+    /// # Errors
+    ///
+    /// The process is out of descriptors, or out of inotify instances
+    /// (`/proc/sys/fs/inotify/max_user_instances`), or the thread could not be
+    /// raised.
+    pub fn watching<F>(sidebar: Option<&Path>, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        // NONBLOCK so draining ends with `WOULDBLOCK` instead of parking inside
+        // the drain; CLOEXEC so the manager's children — ffmpeg, the root
+        // helper — do not inherit a descriptor they have no use for.
+        let fd = inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK)
+            .context("could not open inotify")?;
+        let (reader, ring) = std::io::pipe().context("could not open the notice's pipe")?;
+        // THE DOORBELL NEVER BLOCKS THE DRAWING LOOP. `add_watch` on a hung
+        // network mount parks the watcher's thread, and a blocking write into a
+        // pipe nobody is draining would park the door behind it — a file
+        // manager frozen by the filesystem it was merely looking at.
+        //
+        // Losing a ring costs nothing, and that is not luck: a full pipe means
+        // bytes are ALREADY waiting, so the thread has not woken yet — and when
+        // it does it drains the whole channel, this order included.
+        if let Ok(flags) = rustix::fs::fcntl_getfl(&ring) {
+            let _ = rustix::fs::fcntl_setfl(&ring, flags | rustix::fs::OFlags::NONBLOCK);
+        }
+        let (orders, told) = mpsc::channel();
+        let sidebar = sidebar.map(Path::to_path_buf);
+        std::thread::Builder::new()
+            .name("ronoctua-notice".to_owned())
+            .spawn(move || {
+                Watcher {
+                    fd,
+                    ring: reader,
+                    told,
+                    listing: None,
+                    sidebar,
+                    held: Vec::new(),
+                }
+                .run(&on_stir);
+            })
+            .context("could not start the notice thread")?;
+        Ok(Self {
+            orders,
+            ring,
+            listing: None,
+        })
+    }
+
+    /// Points the watch at a directory.
+    ///
+    /// Asking for the one already watched returns without a syscall and without
+    /// a message.
+    pub fn look_at(&mut self, dir: &Path) {
+        if self.listing.as_deref() == Some(dir) {
+            return;
+        }
+        self.listing = Some(dir.to_path_buf());
+        self.tell(self.listing.clone());
+    }
+
+    /// Stops watching the listing, without ending the thread.
+    ///
+    /// This is what the footer does when the manager closes: it drops the watch
+    /// but keeps the thread, which is cheaper than tearing one down and raising
+    /// it again on the next `LEADER .`, and has nothing to get wrong in between.
+    /// A thread waiting on watches nobody is touching costs no wake-ups at all.
+    ///
+    /// The sidebar's watch stays, and deliberately: `LEADER a` pins an
+    /// application with no manager open, and that is precisely when the other
+    /// door needs to hear about it.
+    pub fn rest(&mut self) {
+        if self.listing.is_none() {
+            return;
+        }
+        self.listing = None;
+        self.tell(None);
+    }
+
+    /// What is being watched.
+    #[must_use]
+    pub fn watching_now(&self) -> Option<&Path> {
+        self.listing.as_deref()
+    }
+
+    /// Hands an order over and rings for it to be taken.
+    fn tell(&mut self, order: Option<PathBuf>) {
+        if self.orders.send(order).is_err() {
+            // The thread is gone. Ringing a bell nobody hears would only fill a
+            // pipe.
+            return;
+        }
+        // ONE BYTE, and its value means nothing: the pipe is a doorbell, not a
+        // queue. The order itself travelled by channel, where a `PathBuf` needs
+        // no encoding and a name that is not UTF-8 survives.
+        let _ = self.ring.write(&[1]);
+    }
+}
+
+/// What one wait came back with.
+enum Waited {
+    /// The wait itself failed, or the door has gone. Nothing to retry.
+    Over,
+    /// Nothing happened before the deadline.
+    Quiet,
+    /// One or both descriptors have something.
+    Ready {
+        /// The kernel wrote events.
+        stirred: bool,
+        /// The door rang.
+        told: bool,
+    },
+}
+
+/// The thread's own state. None of it is shared.
+struct Watcher {
+    /// The inotify instance.
+    fd: OwnedFd,
+    /// The doorbell. Its writing end closing is how this thread learns to leave.
+    ring: std::io::PipeReader,
+    /// Where orders arrive.
+    told: mpsc::Receiver<Option<PathBuf>>,
+    /// The directory on screen.
+    listing: Option<PathBuf>,
+    /// The directory the sidebar persists into. Fixed for the life of the view.
+    sidebar: Option<PathBuf>,
+    /// Every watch descriptor held.
+    ///
+    /// A list and not two fields because inotify keys a watch by INODE: asking
+    /// for the same directory twice hands back the SAME descriptor, which
+    /// happens the moment somebody browses the directory the sidebar persists
+    /// to. Dropping them all and asking again — see [`Watcher::rearm`] — is what
+    /// makes that case need no special sentence.
+    held: Vec<i32>,
+}
+
+impl Watcher {
+    /// Waits, takes orders, drains events, reports — while the door is there.
+    fn run(mut self, on_stir: &dyn Fn() -> bool) {
+        let mut buffer = [MaybeUninit::<u8>::uninit(); BUFFER];
+        // The sidebar is wanted from the first moment; the listing arrives with
+        // the first order.
+        self.rearm();
+        loop {
+            // ASLEEP, with no deadline. This is the line that makes an open
+            // window cost nothing while nothing happens.
+            let (stirred, told) = match self.wait(None) {
+                Waited::Over => return,
+                // Not reachable without a deadline, and cheaper to treat as a
+                // spurious wake-up than to prove impossible.
+                Waited::Quiet => continue,
+                Waited::Ready { stirred, told } => (stirred, told),
+            };
+            if told && !self.orders_taken() {
+                return;
+            }
+            if !stirred || !self.drain(&mut buffer) {
+                continue;
+            }
+            // THE LEADING EDGE. One file appearing is reported at once: holding
+            // it for the quiet time would make a manager that is merely
+            // debouncing look like a manager that is thinking.
+            if !on_stir() || !self.hold_off(&mut buffer, on_stir) {
+                return;
+            }
+        }
+    }
+
+    /// Absorbs the rest of a burst, and reports its tail once.
+    ///
+    /// This is the whole reason the coalescing lives on the thread: sleeping is
+    /// free here, and the door does one `View::reread` per burst instead of one
+    /// per file. `reread` is a `readdir` plus an `lstat` and a MIME lookup PER
+    /// ENTRY, so answering every event would be quadratic in the size of the
+    /// directory for the one gesture that matters — copying a lot of files into
+    /// it.
+    fn hold_off(&mut self, buffer: &mut [MaybeUninit<u8>], on_stir: &dyn Fn() -> bool) -> bool {
+        let since = Instant::now();
+        let mut more = false;
+        loop {
+            let left = BURST.saturating_sub(since.elapsed());
+            if left.is_zero() {
+                break;
+            }
+            match self.wait(Some(QUIET.min(left))) {
+                Waited::Over => return false,
+                Waited::Quiet => break,
+                Waited::Ready { stirred, told } => {
+                    if told && !self.orders_taken() {
+                        return false;
+                    }
+                    if stirred {
+                        more |= self.drain(buffer);
+                    }
+                }
+            }
+        }
+        !more || on_stir()
+    }
+
+    /// One wait on both descriptors.
+    fn wait(&self, hush: Option<Duration>) -> Waited {
+        let deadline = hush.map(|d| Timespec {
+            tv_sec: i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(d.subsec_nanos()),
+        });
+        loop {
+            let mut fds = [
+                rustix::event::PollFd::new(&self.fd, PollFlags::IN),
+                rustix::event::PollFd::new(&self.ring, PollFlags::IN),
+            ];
+            match rustix::event::poll(&mut fds, deadline.as_ref()) {
+                Ok(0) => return Waited::Quiet,
+                Ok(_) => {
+                    let bell = fds[1].revents();
+                    // THE DOOR IS GONE. Dropping the `Notice` closed the writing
+                    // end, and `HUP` is how that arrives — no message to miss and
+                    // no syscall in a `Drop` that could have failed.
+                    if bell.intersects(PollFlags::HUP | PollFlags::ERR) {
+                        return Waited::Over;
+                    }
+                    return Waited::Ready {
+                        stirred: fds[0]
+                            .revents()
+                            .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR),
+                        told: bell.contains(PollFlags::IN),
+                    };
+                }
+                // A signal is a wake-up, not a failure — the rule the player's
+                // poll already follows.
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => {
+                    tracing::warn!(error = %e, "the notice's wait failed; this directory stops reporting itself");
+                    return Waited::Over;
+                }
+            }
+        }
+    }
+
+    /// Takes every order waiting, and says whether to carry on.
+    ///
+    /// BEFORE the events are drained, and that ordering is what makes a
+    /// re-pointing race harmless: a watch dropped here leaves its queued events
+    /// with no owner in [`Watcher::held`], and [`Watcher::drain`] discards those.
+    fn orders_taken(&mut self) -> bool {
+        // The doorbell is emptied whatever it holds: what a byte means is "there
+        // is something in the channel", never how many.
+        let mut rung = [0_u8; 8];
+        match self.ring.read(&mut rung) {
+            // The writing end closed between the poll and here.
+            Ok(0) => return false,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "the notice could not read its doorbell");
+                return false;
+            }
+        }
+        let mut moved = false;
+        loop {
+            match self.told.try_recv() {
+                Ok(where_) => {
+                    self.listing = where_;
+                    moved = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return false,
+            }
+        }
+        if moved {
+            self.rearm();
+        }
+        true
+    }
+
+    /// Drops every watch and asks for the ones wanted now.
+    ///
+    /// Whole rather than differential, and that is not laziness: inotify hands
+    /// back the SAME descriptor for two paths that are one inode, so "remove
+    /// just the listing's" is a sentence that can silently take the sidebar's
+    /// watch with it. Removing all and asking again cannot express that mistake.
+    /// It only runs when a path actually changed — `Notice::look_at` swallows
+    /// the repeats — so it is two syscalls on a keypress that navigates.
+    fn rearm(&mut self) {
+        for wd in self.held.drain(..) {
+            // A directory that was deleted has already had its watch removed by
+            // the kernel, and asking again is `EINVAL`. Nothing to report.
+            let _ = inotify::remove_watch(&self.fd, wd);
+        }
+        for dir in [self.listing.clone(), self.sidebar.clone()]
+            .into_iter()
+            .flatten()
+        {
+            match inotify::add_watch(&self.fd, &dir, WANTED) {
+                Ok(wd) => {
+                    if !self.held.contains(&wd) {
+                        self.held.push(wd);
+                    }
+                }
+                // Not fatal and not silent. A directory just deleted, one that
+                // cannot be read, and a machine at its watch limit all land here,
+                // and in every case the door goes on working — it simply stops
+                // hearing about this one.
+                Err(e) => {
+                    tracing::warn!(error = %e, directory = %dir.display(), "could not watch the directory");
+                }
+            }
+        }
+    }
+
+    /// Reads everything the kernel has, and says whether any of it was ours.
+    fn drain(&mut self, buffer: &mut [MaybeUninit<u8>]) -> bool {
+        let mut ours = false;
+        let mut gone: Vec<i32> = Vec::new();
+        {
+            let mut reader = inotify::Reader::new(&self.fd, buffer);
+            loop {
+                let event = match reader.next() {
+                    Ok(e) => e,
+                    // Everything the kernel had has now been looked at.
+                    Err(rustix::io::Errno::WOULDBLOCK) => break,
+                    Err(rustix::io::Errno::INTR) => continue,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "the notice could not read its events");
+                        break;
+                    }
+                };
+                let flags = event.events();
+                // THE QUEUE OVERFLOWED, and what was dropped could have been
+                // anything. Re-reading is the only honest answer; carrying on as
+                // if nothing happened is how a listing lies quietly.
+                if flags.contains(inotify::ReadFlags::QUEUE_OVERFLOW) {
+                    ours = true;
+                    continue;
+                }
+                let wd = event.wd();
+                // A watch that is over — dropped by us a moment ago, or by the
+                // kernel because the directory went away.
+                if flags.contains(inotify::ReadFlags::IGNORED) {
+                    gone.push(wd);
+                    continue;
+                }
+                // AN EVENT WITH NO OWNER IS DISCARDED. This is the arm that makes
+                // re-pointing safe: orders are taken first, so anything queued
+                // against the directory just left is no longer in `held`.
+                ours |= self.held.contains(&wd);
+            }
+        }
+        self.held.retain(|wd| !gone.contains(wd));
+        ours
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// A directory of this test's own, emptied first.
+    ///
+    /// Keyed by the process id like `serve::scratch`, so two runs of the suite
+    /// at once do not read each other's files.
+    fn scratch(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ronoctua-notice-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// A notice whose reports are counted, and the counter.
+    fn counted(sidebar: Option<&Path>) -> (Notice, Arc<AtomicUsize>) {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let notice = Notice::watching(sidebar, move || {
+            mine.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .unwrap();
+        (notice, seen)
+    }
+
+    /// How long a test may wait for something that should be immediate.
+    ///
+    /// Generous because it is a CEILING and not a sleep: every wait below
+    /// returns the moment the count moves, so a fast machine pays none of it.
+    const PATIENCE: Duration = Duration::from_secs(5);
+
+    /// Waits for the count to pass `was`, and gives back what it reached.
+    ///
+    /// NEVER a fixed sleep. One long enough for a loaded machine makes a slow
+    /// suite, and one short enough for an idle machine makes a test that fails
+    /// on somebody else's laptop for no reason it can name — the rule
+    /// `serve::a_daemon` already follows for its socket.
+    fn past(seen: &Arc<AtomicUsize>, was: usize, patience: Duration) -> usize {
+        let deadline = Instant::now() + patience;
+        loop {
+            let now = seen.load(Ordering::SeqCst);
+            if now > was || Instant::now() >= deadline {
+                return now;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Keeps nudging until the watch is live, so that what follows is not a
+    /// race.
+    ///
+    /// `look_at` hands the path to another thread, so a test that touched a file
+    /// immediately afterwards could beat `add_watch` to it. Retrying the
+    /// stimulus is what makes "the watch is now armed" an OBSERVED fact rather
+    /// than an assumed one.
+    fn armed(seen: &Arc<AtomicUsize>, dir: &Path) -> bool {
+        let deadline = Instant::now() + PATIENCE;
+        let mut n = 0_u32;
+        loop {
+            let was = seen.load(Ordering::SeqCst);
+            n += 1;
+            std::fs::write(dir.join(format!("arming-{n}")), b"x").unwrap();
+            if past(seen, was, Duration::from_millis(100)) > was {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+        }
+    }
+
+    /// Waits until the watcher is back to its wait with no deadline.
+    ///
+    /// The hold-off is what makes this necessary, and it is not a wrinkle of the
+    /// tests: a report puts the thread into a window where the NEXT change is
+    /// reported at the TRAILING edge, deliberately. A test that wants to measure
+    /// the leading edge must let that window close first — and it does so by
+    /// watching the count stop moving, not by sleeping a number.
+    fn settled(seen: &Arc<AtomicUsize>) {
+        let deadline = Instant::now() + PATIENCE;
+        let mut last = seen.load(Ordering::SeqCst);
+        let mut since = Instant::now();
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+            let now = seen.load(Ordering::SeqCst);
+            if now == last {
+                if since.elapsed() > BURST + QUIET {
+                    return;
+                }
+            } else {
+                last = now;
+                since = Instant::now();
+            }
+        }
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: the window door never re-read at all. A file
+    // arriving in the open directory needed the person to leave it and come
+    // back, which is the report this whole module was written for.
+    fn a_file_created_in_the_watched_directory_stirs_the_door() {
+        let dir = scratch("created");
+        let (mut notice, seen) = counted(None);
+        notice.look_at(&dir);
+        assert!(armed(&seen, &dir), "the watch never came alive");
+
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(dir.join("brand-new"), b"hello").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "a file was created and nothing said so"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: answering the nudge with `stale()`. Writing to a
+    // file that already exists moves the FILE's mtime and NOT the directory's,
+    // so the poll the footer has always used says no — and the size column goes
+    // on lying for as long as the manager is open.
+    fn a_file_written_in_place_stirs_though_the_directory_did_not_change() {
+        let dir = scratch("in-place");
+        let file = dir.join("ledger");
+        std::fs::write(&file, b"one").unwrap();
+        let before = crate::listing::stamp(&dir);
+
+        let (mut notice, seen) = counted(None);
+        notice.look_at(&dir);
+        assert!(armed(&seen, &dir), "the watch never came alive");
+        // The arming wrote files, which DID move the directory. Take the reading
+        // that matters from here.
+        let quiet = crate::listing::stamp(&dir);
+
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(&file, b"one and a half").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "a file grew and nothing said so"
+        );
+        // BOTH STATES, and this is the assertion that pins the design: the
+        // directory looks untouched to the oracle the clock uses.
+        assert_eq!(
+            crate::listing::stamp(&dir),
+            quiet,
+            "the directory's own stamp moved after all — this test proves nothing"
+        );
+        assert!(
+            before.is_some(),
+            "the scratch directory has no stamp at all"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: one report per file. The door answers with
+    // `View::reread`, which is a `readdir` plus an `lstat` and a MIME lookup PER
+    // ENTRY — so a report per file makes copying N files cost O(N²), on the one
+    // gesture where the listing is largest.
+    fn a_hundred_files_arriving_at_once_are_a_handful_of_reports() {
+        let dir = scratch("burst");
+        let (mut notice, seen) = counted(None);
+        notice.look_at(&dir);
+        assert!(armed(&seen, &dir), "the watch never came alive");
+
+        let was = seen.load(Ordering::SeqCst);
+        let started = Instant::now();
+        for n in 0..100 {
+            std::fs::write(dir.join(format!("of-many-{n}")), b"x").unwrap();
+        }
+        let took = started.elapsed();
+        assert!(past(&seen, was, PATIENCE) > was, "a burst said nothing");
+        // Let the tail land before counting.
+        std::thread::sleep(BURST + QUIET * 2);
+        let reports = seen.load(Ordering::SeqCst) - was;
+
+        // A CEILING FROM THE CLOCK, never an exact number: how many bursts a
+        // hundred writes fall into depends on the machine, and a test that
+        // demanded one exact answer would be a test about this laptop.
+        let bursts = took.as_millis() / BURST.as_millis() + 1;
+        let most = usize::try_from(bursts).unwrap_or(1) * 2 + 2;
+        assert!(
+            (1..=most).contains(&reports),
+            "a hundred files became {reports} reports; expected between 1 and {most}"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: coalescing that only reports the trailing edge.
+    // One file appearing a quarter of a second late reads as a manager that is
+    // thinking, and it contradicts the rule the player already follows — what
+    // arrives IS the clock.
+    fn the_first_change_is_reported_at_once() {
+        let dir = scratch("leading");
+        let (mut notice, seen) = counted(None);
+        notice.look_at(&dir);
+        assert!(armed(&seen, &dir), "the watch never came alive");
+        // The arming was itself a burst, and the hold-off it opened is exactly
+        // what this test must not measure.
+        settled(&seen);
+
+        let was = seen.load(Ordering::SeqCst);
+        let started = Instant::now();
+        std::fs::write(dir.join("now"), b"x").unwrap();
+        assert!(past(&seen, was, PATIENCE) > was, "nothing was reported");
+        assert!(
+            started.elapsed() < QUIET,
+            "the first change waited {:?}, which is the hold-off and not the report",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: `remove_watch` forgotten when the path moves, so
+    // every directory ever visited goes on reporting for the rest of the
+    // session — and each one of those reports costs a full re-read of a
+    // directory nobody is looking at.
+    fn looking_somewhere_else_stops_reporting_the_place_one_left() {
+        let left = scratch("left");
+        let arrived = scratch("arrived");
+        let (mut notice, seen) = counted(None);
+        notice.look_at(&left);
+        assert!(armed(&seen, &left), "the first watch never came alive");
+        notice.look_at(&arrived);
+        // Observing the SECOND watch alive is what proves the order was taken;
+        // without it this test would only be asserting that a race went its way.
+        assert!(armed(&seen, &arrived), "the second watch never came alive");
+        settled(&seen);
+
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(left.join("nobody-is-looking"), b"x").unwrap();
+        assert_eq!(
+            past(&seen, was, QUIET * 4),
+            was,
+            "the directory that was left is still reporting"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: `inotify_add_watch` is keyed on the INODE, so
+    // watching the sidebar's own directory as the listing hands back the SAME
+    // descriptor — and re-pointing the listing away then removes the sidebar's
+    // watch too, silently, for the rest of the session. Nothing on screen would
+    // say why a pin stopped crossing between the two doors.
+    fn the_sidebar_survives_the_listing_walking_through_its_directory() {
+        let store = scratch("store");
+        let elsewhere = scratch("elsewhere");
+        let (mut notice, seen) = counted(Some(&store));
+        notice.look_at(&store);
+        assert!(armed(&seen, &store), "the watch never came alive");
+        notice.look_at(&elsewhere);
+        assert!(
+            armed(&seen, &elsewhere),
+            "the second watch never came alive"
+        );
+
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(store.join("sidebar.json"), b"{}").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "the sidebar's watch went with the listing's"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a thread parked in a wait nothing can end. One
+    // per dropped notice is one per test and one per closed window, and this
+    // repository has already been OOM-killed six times in twenty minutes by
+    // tests that each held on to something.
+    fn a_notice_that_is_dropped_lets_its_thread_go() {
+        let dir = scratch("dropped");
+        let alive = Arc::new(());
+        let held = Arc::clone(&alive);
+        let mut notice = Notice::watching(None, move || {
+            // Only to own the `Arc`: it dies with the closure, and the closure
+            // dies with the thread.
+            let _ = &held;
+            true
+        })
+        .unwrap();
+        notice.look_at(&dir);
+        drop(notice);
+
+        let deadline = Instant::now() + PATIENCE;
+        while Arc::strong_count(&alive) > 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            Arc::strong_count(&alive),
+            1,
+            "the notice was dropped and its thread stayed"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: resting taking the sidebar with it. The footer
+    // rests the watch whenever the manager closes — including on losing focus —
+    // and `LEADER a` pins an application with no manager open at all, which is
+    // exactly when the other door must still hear about it.
+    fn resting_drops_the_listing_and_keeps_the_sidebar() {
+        let store = scratch("resting-store");
+        let dir = scratch("resting-dir");
+        let (mut notice, seen) = counted(Some(&store));
+        notice.look_at(&dir);
+        assert!(armed(&seen, &dir), "the watch never came alive");
+        notice.rest();
+        assert_eq!(notice.watching_now(), None);
+        settled(&seen);
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(dir.join("after-the-rest"), b"x").unwrap();
+        assert_eq!(
+            past(&seen, was, QUIET * 4),
+            was,
+            "resting left the listing reporting"
+        );
+
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(store.join("sidebar.json"), b"{}").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "resting took the sidebar's watch with it"
+        );
+    }
+}
