@@ -1220,8 +1220,18 @@ impl Geometry {
                 // AND THE FILM'S TRACK, which is what one grabs: `offset_at`
                 // maps any point of it to a position, so aiming at a one-cell
                 // cursor is not required of anybody.
+                // THE SAME RECORD THE DRAWING USES, and that is the point of
+                // it: this call had its arguments in the wrong order for as
+                // long as the timeline existed, and every one of them was an
+                // `f32`. See `files::Foot`.
                 let time = sec
-                    .time_track_box(x, top, wide, cell, line_px)
+                    .time_track_box(crate::files::Foot {
+                        left: x,
+                        wide,
+                        cell,
+                        line_px,
+                        bottom,
+                    })
                     .map(|r| (sec.pane, crate::files::Axis::Time, r));
                 Some([down, across, time])
             })
@@ -1693,17 +1703,23 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 // renderer counting up from the bottom (`Row::foot`), and a
                 // rectangle counted down from the region's top lands a
                 // remainder away from it.
-                let foot = s.geo.metric.bottom();
-                if let Some(r) = crate::files::transport_band(sec, fx, fwide, line_px, foot) {
+                let foot = crate::files::Foot {
+                    left: fx,
+                    wide: fwide,
+                    cell,
+                    line_px,
+                    bottom: s.geo.metric.bottom(),
+                };
+                if let Some(r) = crate::files::transport_band(sec, foot) {
                     band(r, tokens::color::SURFACE_TRANSPORT);
                 }
                 // THE TRACK IS THE QUIETER TONE, because it is the part that
                 // does not move: the cursor on it is what says where the film
                 // is, and two rectangles in one colour say nothing.
-                if let Some(r) = sec.time_track_box(fx, fwide, cell, line_px, foot) {
+                if let Some(r) = sec.time_track_box(foot) {
                     band(r, tokens::color::RULE_STRONG);
                 }
-                if let Some(r) = sec.time_bar_box(fx, fwide, cell, line_px, foot) {
+                if let Some(r) = sec.time_bar_box(foot) {
                     band(r, tokens::color::TEXT_PRIMARY);
                 }
             }

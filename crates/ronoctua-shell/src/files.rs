@@ -37,6 +37,7 @@ use ronoctua_files::{
     when::{self, Zone},
     who::Roster,
 };
+use ronoctua_inspect::motion::Show;
 use ronoctua_keymap::{Key, Sym};
 use ronoctua_tokens::Color;
 use ronoctua_transfers::Work;
@@ -313,6 +314,14 @@ const NO_PREVIEW: &str = ronoctua_i18n::key::FILES_NO_PREVIEW;
 const NOTHING_PLAYING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
 /// What the sound key says on a film that carries none.
 const NO_SOUND_IN_IT: &str = ronoctua_i18n::key::FILES_SOUND_NONE;
+/// What pressing an entry that is not on this machine says.
+const ENTRY_NOT_HERE: &str = ronoctua_i18n::key::FILES_ENTRY_NOT_HERE;
+/// What the queue keys say on a list where nothing can be played.
+const NOTHING_TO_PLAY: &str = ronoctua_i18n::key::FILES_LIST_NOTHING;
+/// And at either end of one.
+const LIST_AT_START: &str = ronoctua_i18n::key::FILES_LIST_AT_START;
+/// And at either end of one.
+const LIST_AT_END: &str = ronoctua_i18n::key::FILES_LIST_AT_END;
 /// The three the whole-region key says.
 const THEATRE_NOTHING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
 /// The whole region, given.
@@ -425,6 +434,50 @@ impl Default for Transport {
     }
 }
 
+impl Transport {
+    /// How the transport stands the instant the cursor LANDS on a file.
+    ///
+    /// # A film runs and a sound waits, and they are not the same question
+    ///
+    /// A film that waited would show one frame — the still it already had —
+    /// so there is nothing to see until somebody presses a key, and the key
+    /// would be a tax on every video walked past.
+    ///
+    /// A SOUND is the other way round, and the owner asked for it in as many
+    /// words: it never starts by itself. A panel that begins speaking because
+    /// a cursor passed over a file is a panel one turns off — which is the
+    /// argument [`Transport::sound`] already makes about a film's audio, one
+    /// register louder, because here the sound is the whole content.
+    ///
+    /// And `on: false` rather than `paused: true`: a pause still spawns a
+    /// child, holds the file open and hands it to the five-minute killer, for
+    /// a file nobody has asked to hear. With `on` clear there is no child at
+    /// all, the panel shows the cover, and `play_pause`'s third state already
+    /// means "start from the top".
+    fn arriving(show: Option<Show>, a_list: bool) -> Self {
+        if a_list {
+            // A LIST IS SOUND BY ANOTHER NAME, and the owner's rule reaches it
+            // for the same reason: nine tracks starting because a cursor
+            // passed over an `.m3u` is the panel one turns off.
+            return Self {
+                on: false,
+                sound: true,
+                ..Self::default()
+            };
+        }
+        match show {
+            // AND THE SOUND IS ON, because a sound player that is silent is
+            // not a player. It costs nothing while `on` is false.
+            Some(Show::Sound { .. }) => Self {
+                on: false,
+                sound: true,
+                ..Self::default()
+            },
+            _ => Self::default(),
+        }
+    }
+}
+
 /// A scrollbar somebody could grab: whose it is, which way it runs, and where.
 ///
 /// Named because three functions hand it about — each door's "draw them all"
@@ -497,6 +550,40 @@ pub fn track_px(left: f32, wide: f32, cell: f32, clock: u16) -> Option<(f32, f32
     (track > cell).then_some((left + lead, track))
 }
 
+/// Where the transport's rectangles are measured from, in pixels.
+///
+/// # Why five numbers travel as ONE value
+///
+/// Because they were five `f32` parameters, and five `f32` parameters are
+/// positionally interchangeable: the compiler has nothing to say about a
+/// caller that passes them in the wrong order, and one did. The two sites that
+/// offer the timeline as something to GRAB — one in each door — called
+/// `time_track_box(x, top, wide, cell, line_px)` against a signature reading
+/// `(left, wide, cell, line_px, bottom)`. Every argument after the first was
+/// wrong, it compiled without a word, and the grab rectangle landed somewhere
+/// nobody could reach.
+///
+/// The symptom was the owner's: *"todas as linhas de tempo não estão
+/// funcionando; ao clicar em uma linha do tempo a mídia pausa/play"* — the
+/// press missed the track, fell through to the row's own field, and that field
+/// is [`Hit::Play`].
+///
+/// It is the trap `CLAUDE.md` records for `#[repr(C)]`, in ordinary Rust: a
+/// layout that is promised rather than checked. Named fields are the check.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Foot {
+    /// The transport's own left edge — see [`Section::fields_px`].
+    pub left: f32,
+    /// How wide the transport is.
+    pub wide: f32,
+    /// One cell.
+    pub cell: f32,
+    /// One line.
+    pub line_px: f32,
+    /// The bottom of the band the section was drawn in.
+    pub bottom: f32,
+}
+
 /// The band the transport is painted on, in pixels — or none.
 ///
 /// # The controls sit ON the film now, and this is what makes them legible
@@ -516,15 +603,14 @@ pub fn track_px(left: f32, wide: f32, cell: f32, clock: u16) -> Option<(f32, f32
 /// `left`, `wide` and `top` are the section's own pixels, as
 /// [`Section::time_bar_box`] takes them.
 #[must_use]
-pub fn transport_band(
-    section: &Section,
-    left: f32,
-    wide: f32,
-    line_px: f32,
-    bottom: f32,
-) -> Option<(f32, f32, f32, f32)> {
+pub fn transport_band(section: &Section, foot: Foot) -> Option<(f32, f32, f32, f32)> {
     section.transport?;
-    Some((left, transport_top(bottom, line_px), wide, line_px))
+    Some((
+        foot.left,
+        transport_top(section, foot),
+        foot.wide,
+        foot.line_px,
+    ))
 }
 
 /// Where the transport's line BEGINS, in pixels — counted up from the foot.
@@ -539,10 +625,25 @@ pub fn transport_band(
 /// dos controles"*. It was my own fix for the row's position producing the next
 /// defect, because only half of the row moved.
 ///
-/// So there is one arithmetic, here, and every part of the transport asks it.
+/// # And it counts what is BELOW it, which is the second half of the same rule
+///
+/// The transport is not always the last line: a sideways scrollbar sits on the
+/// band's own last line, and the rows — the transport's among them — stop one
+/// short of it. The rectangles did not, so on the one preview that has both,
+/// they landed a line below the glyphs. The owner photographed that too, on an
+/// `.m3u8`: *"aparece um scrollbar horizontal, assim fazendo que os botões de
+/// controle fiquem mais acima, e a linha de tempo mais abaixo"*.
+///
+/// So the offset is counted rather than assumed, and it is counted HERE — the
+/// one place the whole transport asks. Anything else anchored to the foot in
+/// future is one more line in this function and nowhere else.
 #[must_use]
-pub fn transport_top(bottom: f32, line_px: f32) -> f32 {
-    (bottom - line_px).max(0.0)
+pub fn transport_top(section: &Section, foot: Foot) -> f32 {
+    // WHAT SITS UNDER THE TRANSPORT, in whole lines.
+    let below = f32::from(u8::from(section.across.is_some()));
+    below
+        .mul_add(-foot.line_px, foot.bottom - foot.line_px)
+        .max(0.0)
 }
 
 /// The time a transport shows: where the film is, and how long it runs.
@@ -563,14 +664,11 @@ pub fn clock_text(time: &ronoctua_design::Scroll) -> String {
 /// is a stopwatch's idea of a time and not a person's.
 #[must_use]
 pub fn clock_of(seconds: f64) -> String {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let whole = seconds.max(0.0).floor() as u64;
-    let (h, m, s) = (whole / 3600, (whole / 60) % 60, whole % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    }
+    // AND IT IS THE FACTS SHEET'S OWN FUNCTION, because the two are read side
+    // by side and were not the same rule: one truncated and the other rounded,
+    // so a 293,8-second track was `4:53` under the timeline and `4:54` two
+    // panels over. One function cannot disagree with itself.
+    ronoctua_inspect::facts::clock(seconds)
 }
 
 /// What the film's letterbox is filled with: NOTHING.
@@ -591,6 +689,18 @@ pub fn clock_of(seconds: f64) -> String {
 #[must_use]
 pub fn letterbox() -> String {
     "#00000000".to_owned()
+}
+
+/// A token's colour in the notation ffmpeg reads.
+///
+/// The one place a `Color` becomes a string for a child process — the same
+/// rule `pixels.rs` keeps for the other direction, where `Rgba` is born in one
+/// function. `ronoctua-inspect` receives no token values (invariant 11's rule,
+/// one crate along), so whoever holds the tokens does this.
+#[must_use]
+pub fn ink(colour: ronoctua_tokens::Color) -> String {
+    let [r, g, b, a] = colour.to_rgba8();
+    format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
 }
 
 /// What the facts key says when there is nothing to scroll.
@@ -1448,6 +1558,13 @@ pub enum Hit {
     SideMenu(&'static str),
     /// A choice of the open picker.
     Choice(usize),
+    /// One entry of a playlist in the preview: play THAT one.
+    ///
+    /// Reached by the keyboard through `C-{` and `C-}`, which walk the list one
+    /// entry at a time — the mouse arrives in one press and the keys arrive in
+    /// several, which is what `files-everything-has-a-key` asks for. It is the
+    /// argument [`Hit::Sidebar`] already makes.
+    Track(usize),
     /// A row of the sidebar: go there, open it, run it — or mount it, when it
     /// is a device that is not mounted. As `Enter` does on a listing row, which
     /// is why it costs no key of its own.
@@ -1781,18 +1898,12 @@ impl Section {
     /// doing: had the track grown when the buttons went away, the cursor would
     /// slide out from under the pointer in the instant of the click.
     #[must_use]
-    pub fn time_bar_box(
-        &self,
-        left: f32,
-        wide: f32,
-        cell: f32,
-        line_px: f32,
-        bottom: f32,
-    ) -> Option<(f32, f32, f32, f32)> {
+    pub fn time_bar_box(&self, foot: Foot) -> Option<(f32, f32, f32, f32)> {
         let time = self.time?;
         self.transport?;
-        let (from, track) = track_px(left, wide, cell, self.clock)?;
-        let line_top = transport_top(bottom, line_px);
+        let (from, track) = track_px(foot.left, foot.wide, foot.cell, self.clock)?;
+        let line_top = transport_top(self, foot);
+        let (cell, line_px) = (foot.cell, foot.line_px);
         // CENTRED IN THE LINE, level with the glyphs beside it.
         //
         // It used to sit at the line's FOOT, which is where a scrollbar belongs
@@ -1815,19 +1926,17 @@ impl Section {
     /// The cursor is drawn from [`Section::time_bar_box`] on top of this, in a
     /// stronger tone. Two rectangles, one arithmetic.
     #[must_use]
-    pub fn time_track_box(
-        &self,
-        left: f32,
-        wide: f32,
-        cell: f32,
-        line_px: f32,
-        bottom: f32,
-    ) -> Option<(f32, f32, f32, f32)> {
+    pub fn time_track_box(&self, foot: Foot) -> Option<(f32, f32, f32, f32)> {
         self.time?;
         self.transport?;
-        let (from, track) = track_px(left, wide, cell, self.clock)?;
-        let line_top = transport_top(bottom, line_px);
-        Some((from, line_top + (line_px - cell) / 2.0, track, cell))
+        let (from, track) = track_px(foot.left, foot.wide, foot.cell, self.clock)?;
+        let line_top = transport_top(self, foot);
+        Some((
+            from,
+            line_top + (foot.line_px - foot.cell) / 2.0,
+            track,
+            foot.cell,
+        ))
     }
 
     /// This section as a list that may not fit.
@@ -2605,6 +2714,20 @@ pub struct View {
     /// moment the player is told, because only the layout knows how many cells
     /// the panel got — so the layout writes it down, once, where it decides.
     drawn_preview: std::cell::Cell<(f32, f32)>,
+    /// Which entry of the playlist under the cursor is the one being played.
+    ///
+    /// # Why it is here and not on `Transport` or on `Looked`
+    ///
+    /// Not on [`Transport`]: every field there is `Copy`, it is compared by
+    /// value each frame and reset wholesale by two keys.
+    ///
+    /// Not on [`Looked`]: that is what the FILE says, boxed and compared field
+    /// by field. Which entry somebody is on is what the PERSON did, and it
+    /// survives none of the re-reads that answer is subject to.
+    ///
+    /// It is an index into `List::entries` — the drawn rows — and not into the
+    /// playable ones, so the mark and the row are one arithmetic.
+    playing: usize,
     /// The first line of the text preview that is on screen.
     ///
     /// Its own, like `info_offset` and `side_offset`: a gesture over the
@@ -2669,6 +2792,11 @@ pub struct Ask {
     /// TOKEN (`space.files.tabWidth`), and `ronoctua-inspect` does not receive
     /// token values. Whoever asks holds the tokens.
     pub tab: usize,
+    /// The waveform's ink, for a sound with no artwork.
+    ///
+    /// It travels the way `tab` does, and for the same reason: it is a TOKEN
+    /// (`surface.wave`), and `ronoctua-inspect` does not receive token values.
+    pub wave: String,
     /// A film that might belong to this picture, from the SAME folder.
     ///
     /// # Why the folder is asked about HERE
@@ -2705,6 +2833,11 @@ pub struct Looked {
     /// is in a file, and running a child process for as long as a cursor rests
     /// on it is the shell's business.
     pub moving: Option<ronoctua_inspect::motion::Moving>,
+    /// The things this file names, when it names things rather than being one.
+    ///
+    /// A playlist has no picture and is not read as text: it is a LIST, and it
+    /// is drawn as one. See [`ronoctua_inspect::playlist`].
+    pub list: Option<ronoctua_inspect::playlist::List>,
     /// The letters, when there are any and there is no picture.
     ///
     /// # Everything expensive is already done
@@ -2871,6 +3004,7 @@ impl View {
             shape_trouble: None,
             pointing: std::cell::Cell::new(None),
             drawn_preview: std::cell::Cell::new((0.0, 0.0)),
+            playing: 0,
             preview_offset: 0,
             preview_column: 0,
             // AND THE THREE COLUMNS ONE LOOKS UP COME UP OFF, which is the
@@ -3916,9 +4050,13 @@ impl View {
             hit: Hit::Play,
             explain: None,
         }];
-        // AND NOTHING MORE WITHOUT THE POINTER. The row still holds the panel's
-        // last line either way, so the film does not move when they arrive.
-        if !self.pointing_at_preview() {
+        // AND NOTHING MORE WITHOUT THE POINTER — for a film. The row still
+        // holds the panel's last line either way, so the picture does not move
+        // when they arrive.
+        //
+        // A SOUND KEEPS ITS CONTROLS, which is the owner's word and the reason
+        // this asks `transport_inked` rather than the pointer directly.
+        if !self.transport_inked() {
             return out;
         }
         let at = at.saturating_add(TRANSPORT_LEAD);
@@ -3946,7 +4084,7 @@ impl View {
         // does nothing where it is drawn is the shape `menu::Applies` exists to
         // refuse — and here it would also be a lie, because ffmpeg refuses the
         // whole command when there is no audio stream to fill the output with.
-        if self.film_has_sound() {
+        if self.has_sound() {
             out.push(Field {
                 at: at.saturating_add(TRANSPORT_SOUND),
                 text: glyph(if self.transport.sound {
@@ -4019,13 +4157,46 @@ impl View {
         self.band_belongs(self.panes(width).section_at(cell, width, in_strip))
     }
 
-    /// Whether the film's controls are on screen right now.
+    /// Whether the transport's controls are on screen right now.
     ///
     /// What the doors ask before painting the band, the track and the cursor —
-    /// all three arrive and leave together, with the pointer.
+    /// all three arrive and leave together.
     #[must_use]
     pub fn transport_showing(&self) -> bool {
-        self.film_here() && self.pointing_at_preview()
+        self.plays_here() && self.transport_inked()
+    }
+
+    /// Whether the transport's INK is drawn — as opposed to its cells.
+    ///
+    /// # A film's controls come and go, and a sound's never leave
+    ///
+    /// A film's hide with the pointer, which is the owner's decision and what
+    /// keeps the picture whole: the controls sit ON the film, and a band
+    /// across it permanently is chrome across a picture.
+    ///
+    /// A SOUND has nothing under them to uncover — the panel IS the player —
+    /// and the owner asked for them to stay. A player one has to find with the
+    /// mouse before one can stop it is not a player.
+    ///
+    /// The CELLS are reserved either way, by `plays_here`, so the row never
+    /// changes height under a pointer and the track never slides out from
+    /// under a click.
+    fn transport_inked(&self) -> bool {
+        self.sound_here() || self.pointing_at_preview()
+    }
+
+    /// Whether what is under the cursor is a SOUND rather than a picture.
+    fn sound_here(&self) -> bool {
+        self.plays_here()
+            && self.looked.as_ref().is_some_and(|l| {
+                // A LIST IS SOUND BY ANOTHER NAME. Its controls stay for the
+                // same reason a track's do: the panel IS the player, and
+                // there is nothing under them to uncover.
+                l.list.is_some()
+                    || l.moving
+                        .as_ref()
+                        .is_some_and(|m| matches!(m.show, Show::Sound { .. }))
+            })
     }
 
     /// Whether the pointer is anywhere in the preview.
@@ -4038,12 +4209,15 @@ impl View {
         self.pointing.get() == Some(Pane::Preview)
     }
 
-    /// Whether the film under the cursor carries any sound.
-    fn film_has_sound(&self) -> bool {
-        self.looked
-            .as_ref()
-            .and_then(|l| l.moving.as_ref())
-            .is_some_and(|m| m.shape.sound)
+    /// Whether what is under the cursor carries any sound.
+    fn has_sound(&self) -> bool {
+        self.looked.as_ref().is_some_and(|l| {
+            // A LIST NAMES SOUND, and the key that turns it off must be
+            // offered — a control that is not drawn is a key one cannot
+            // discover, which is the argument the silent film's refusal makes
+            // from the other side.
+            l.list.is_some() || l.moving.as_ref().is_some_and(|m| m.shape.sound)
+        })
     }
 
     fn preview_fields(
@@ -4136,6 +4310,30 @@ impl View {
                 hit: target,
                 explain: None,
             }];
+        }
+        // A LIST OF THINGS TO PLAY, which is a list and not a picture and not
+        // text — `audio/x-mpegurl` descends from `text/plain`, so without this
+        // arm an `.m3u` would be shown as source code with its paths coloured.
+        if let Some(list) = self.showing_list() {
+            let row = n.saturating_add(self.preview_offset);
+            if list.cut && row == list.entries.len() {
+                let said = texts.t_with(
+                    ronoctua_i18n::key::FILES_PREVIEW_CUT,
+                    &[("lines", &list.entries.len().to_string())],
+                );
+                let said = ronoctua_render::layout::elide_end(&said, room);
+                return vec![Field {
+                    at: centred(at, room, width_of(&said)),
+                    text: said,
+                    color: ronoctua_tokens::color::TEXT_DIM,
+                    hit: Hit::Nothing,
+                    explain: None,
+                }];
+            }
+            let Some(entry) = list.entries.get(row) else {
+                return Vec::new();
+            };
+            return self.entry_fields(entry, row, at, room);
         }
         // THE FILE'S OWN CONTENT, when there is any. It comes BEFORE the
         // sentence for the same reason the picture comes before both: a panel
@@ -4463,7 +4661,7 @@ impl View {
         // `sections()`, so the row's anchor has to be decided here too — it is
         // the same row, reached by the other door's own arithmetic.
         let last = usize::from(panes.strip).saturating_sub(1);
-        let transport = self.film_here();
+        let transport = self.plays_here();
         (0..usize::from(panes.strip))
             .map(|n| Row {
                 fields: self.panel_fields(n, usize::from(panes.strip), &boxes, &sheet, texts),
@@ -5347,11 +5545,21 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 // and a half of what was happening around it. Both are wanted,
                 // and the loop alternates between them. The condition is
                 // therefore "is this a film" and not "does this move".
-                let a_film = moving.as_ref().is_some_and(|m| m.inside.is_none());
+                //
+                // AND SOUND IS NOT A FILM EITHER, which is what makes this
+                // line say what the paragraph above already claimed. A sound's
+                // picture is DRAWN, and it is drawn only while it plays — and
+                // a sound never starts by itself. Asking `does this move` here
+                // would leave every audio file with an empty panel for ever,
+                // with no sentence, because the frame that was meant to fill
+                // it is waiting for a key nobody has a reason to press.
+                let a_film = moving
+                    .as_ref()
+                    .is_some_and(|m| m.inside.is_none() && m.show == Show::Film);
                 let made = if a_film {
                     ronoctua_inspect::Made::unasked()
                 } else {
-                    ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target)
+                    ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target, &ask.wave)
                 };
                 // THE TEXT, ONLY WHEN THERE IS NO PICTURE. A picture wins, and
                 // reading a mebibyte to throw it away is a mebibyte read for
@@ -5370,9 +5578,33 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                 // highlighted, and then thrown away — `preview_fields` returns
                 // blanks for anything that turns, so not one line of it could
                 // ever reach the screen.
-                let said = (!made.drawable() && moving.is_none() && shape.is_none())
-                    .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
-                    .flatten();
+                // A LIST OF THINGS TO PLAY, which is neither a picture nor
+                // text: `audio/x-mpegurl` descends from `text/plain`, so
+                // without this the panel would show an `.m3u` as source code
+                // with the paths highlighted — true, and not what the file is
+                // FOR.
+                let mut listed = ronoctua_inspect::playlist::of(&ask.path, ask.mime);
+                // AND WHAT THE LIST DID NOT SAY, ASKED — here, on the
+                // inspector's own thread, where every other child process this
+                // manager starts is started.
+                //
+                // The reader itself stays pure and spawns nothing: it answers
+                // WHICH entries to ask about, with its own ceiling, and this
+                // asks. See `playlist::TIMED_CEILING` for what it costs.
+                if let Some(Ok(list)) = listed.as_mut() {
+                    for n in list.untimed() {
+                        let ronoctua_inspect::playlist::Where::Local(path) = &list.entries[n].at
+                        else {
+                            continue;
+                        };
+                        let found = ronoctua_inspect::facts::duration_of(path);
+                        list.entries[n].seconds = found;
+                    }
+                }
+                let said =
+                    (!made.drawable() && moving.is_none() && shape.is_none() && listed.is_none())
+                        .then(|| ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab))
+                        .flatten();
                 let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
                     width: r.width,
                     height: r.height,
@@ -5395,6 +5627,14 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     None => (rgba, made.why, None),
                     Some(Ok(read)) => (None, None, Some(read)),
                     Some(Err(why)) => (None, Some(why), None),
+                };
+                // AND THE LIST'S OWN ANSWER, folded the same way: a spelling
+                // this reader does not open is a SENTENCE, and a panel that is
+                // blank and a panel that was refused look the same on screen.
+                let (list, why) = match listed {
+                    None => (None, why),
+                    Some(Ok(read)) => (Some(read), why),
+                    Some(Err(refused)) => (None, Some(refused)),
                 };
                 // AND THE SHEET SAYS THE PICTURE MOVES. Nothing else on it
                 // does: the dimensions, the camera and the date are all about
@@ -5422,6 +5662,7 @@ pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mps
                     path: ask.path,
                     rgba,
                     moving,
+                    list,
                     text,
                     why,
                     facts,
@@ -5702,6 +5943,18 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // track that Ctrl at all — so the two doors would disagree.
     ("C-[", "files-preview-left"),
     ("C-]", "files-preview-right"),
+    // THE BRACES MOVE THE ENTRY, and the brackets one line up move the LINE.
+    //
+    // Punctuation, so they are not letters of the query; the SHIFTED members
+    // of the pair that already belongs to this panel, so the family reads
+    // without being learnt; and `C-` and never `M-`, which is the compositor's
+    // chord family.
+    //
+    // Not `C-<arrow>`: the footer sends an arrow held with the RIGHT `Ctrl` to
+    // `navigate` before the view sees it, and the window door does not track
+    // that Ctrl at all.
+    ("C-{", "files-playlist-previous"),
+    ("C-}", "files-playlist-next"),
     // THE FILM'S TRANSPORT, and every one of them is PUNCTUATION for the
     // reason `C-,` two lines up gives: every bare key is a letter of the query,
     // and an arrow held with the RIGHT `Ctrl` is paging before the view sees
@@ -6098,6 +6351,8 @@ impl View {
             Some("files-preview-scroll") => self.scroll_preview(),
             Some("files-preview-left") => self.slide_preview(-1),
             Some("files-preview-right") => self.slide_preview(1),
+            Some("files-playlist-previous") => self.step_entry(-1),
+            Some("files-playlist-next") => self.step_entry(1),
             Some("files-play") => self.play_pause(),
             Some("files-sound") => self.hear(),
             Some("files-rewind") => self.seek_by(-SEEK_STEP),
@@ -6487,6 +6742,8 @@ impl View {
                 self.side_cursor = *n;
                 self.eject_focused()
             }
+            // ONE ENTRY OF A PLAYLIST, and through the same code the keys use.
+            Hit::Track(n) => self.play_entry(*n),
             Hit::Choice(n) => {
                 if let Some(p) = self.picking.as_mut() {
                     p.cursor = *n;
@@ -6945,7 +7202,7 @@ impl View {
                 // it: nothing in this manager draws over its own content, which
                 // is the rule the owner set when he photographed a scrollbar
                 // sitting on a line of code.
-                let transport = matches!(pane, Pane::Preview) && self.film_here();
+                let transport = matches!(pane, Pane::Preview) && self.plays_here();
                 // HOW WIDE THE CLOCK IS, measured once and carried, because the
                 // track's length is what depends on it — and the cursor's
                 // rectangle and both doors' drags all have to agree about that.
@@ -7161,12 +7418,7 @@ impl View {
         // timeline is not holding either of the panel's bars — and because a
         // seek is not a scroll: it kills a child and starts another.
         if matches!(axis, Axis::Time) {
-            let Some(total) = self
-                .looked
-                .as_ref()
-                .and_then(|l| l.moving.as_ref())
-                .and_then(|m| m.shape.seconds)
-            else {
+            let Some(total) = self.playing_seconds() else {
                 return false;
             };
             let Some(bar) = self.timeline() else {
@@ -8525,7 +8777,14 @@ impl View {
         // nothing this manager does could change one.
         if let Some(l) = self.looked.as_ref().filter(|l| l.path == path) {
             out.extend(l.facts.iter().map(|f| Fact {
-                label: texts.t(f.label),
+                // A KEY IS TRANSLATED AND A NAME IS NOT, which is the whole
+                // of `Label`: a row this system decided to show has a sentence
+                // in both languages, and a tag the FILE chose to write has the
+                // name the file wrote.
+                label: match &f.label {
+                    ronoctua_inspect::facts::Label::Key(k) => texts.t(k),
+                    ronoctua_inspect::facts::Label::Named(name) => name.clone(),
+                },
                 value: fact_said(&f.value, &texts),
                 does: Doable::Nothing,
             }));
@@ -8622,6 +8881,123 @@ impl View {
         Step::Changed
     }
 
+    /// Starts one entry of the playlist under the cursor.
+    ///
+    /// One place, because three things reach it — the two keys and the click —
+    /// which is the rule `seek_to` already keeps for the transport.
+    fn play_entry(&mut self, to: usize) -> Step {
+        let Some(list) = self.showing_list() else {
+            return Step::Say(does(NOTHING_PLAYING));
+        };
+        // AN ENTRY THAT CANNOT BE PLAYED IS NOT SKIPPED SILENTLY. A remote one
+        // is on screen with the address it names, and pressing it should say
+        // why nothing happened rather than jumping to the next.
+        let Some(entry) = list.entries.get(to) else {
+            return Step::Nothing;
+        };
+        if !matches!(entry.at, ronoctua_inspect::playlist::Where::Local(_)) {
+            // AND IT SAYS WHICH ONE. "This entry is somewhere else" about a
+            // list of nine is a sentence one still has to go and check.
+            return Step::Say(Explanation {
+                key: ENTRY_NOT_HERE,
+                args: vec![("path", entry.written.clone())],
+            });
+        }
+        self.playing = to;
+        // FROM THE TOP OF THE NEW ONE, and audible: an entry chosen by hand is
+        // an entry somebody wants to hear.
+        self.transport = Transport {
+            on: true,
+            paused: false,
+            from: 0.0,
+            at: 0.0,
+            sound: true,
+        };
+        Step::Changed
+    }
+
+    /// Walks to the next entry that can be played, or the one before it.
+    ///
+    /// `C-{` and `C-}`. The braces and not the brackets: `C-[` and `C-]` slide
+    /// a long line sideways and belong to the panel, and this pair belongs to
+    /// the LIST — the family reads as "brackets move the line, braces move the
+    /// entry".
+    fn step_entry(&mut self, by: isize) -> Step {
+        let Some(list) = self.showing_list() else {
+            return Step::Say(does(NOTHING_PLAYING));
+        };
+        let playable: Vec<usize> = list.playable().collect();
+        if playable.is_empty() {
+            return Step::Say(does(NOTHING_TO_PLAY));
+        }
+        // WHERE THE QUEUE IS AMONG THE PLAYABLE ONES, and not among the drawn
+        // rows: stepping past a remote entry must not stop on it.
+        let now = playable
+            .iter()
+            .position(|n| *n >= self.playing)
+            .unwrap_or(playable.len() - 1);
+        let next = if by < 0 {
+            now.checked_sub(1)
+        } else {
+            (now + 1 < playable.len()).then_some(now + 1)
+        };
+        let Some(next) = next else {
+            return Step::Say(does(if by < 0 { LIST_AT_START } else { LIST_AT_END }));
+        };
+        self.play_entry(playable[next])
+    }
+
+    /// How much of the preview's foot the controls cover, in hundredths.
+    ///
+    /// # Derived, and not a token
+    ///
+    /// The controls are ONE line, and how much of the panel one line is depends
+    /// on how many lines the panel got — four in the strip, a screenful with
+    /// the region given over. A token would have to be one number for both.
+    ///
+    /// The two the view already records are enough: `drawn_lines` is how many
+    /// lines the panel was laid out in, and one of them is the transport's. No
+    /// font size crosses this line — which matters, because the two doors do
+    /// not use the same one.
+    fn controls_foot(&self) -> u16 {
+        let lines = self.drawn_lines.get().max(1);
+        (100 / lines).min(100)
+    }
+
+    /// How long what is under the cursor runs, in seconds.
+    ///
+    /// # One source, because four things ask it
+    ///
+    /// The timeline draws from it, the two seek keys clamp against it and the
+    /// drag maps a fraction onto it. Written out at each, a playlist answered
+    /// three of the four — the drawing knew its entry's length and the two
+    /// keys and the drag went on asking `moving`, which a playlist has not
+    /// got. The controls appeared and did nothing, which is exactly what the
+    /// owner reported: *"nenhum botão de pause e de linha de tempo está
+    /// funcionando nos arquivos de playlist"*.
+    ///
+    /// A PLAYLIST'S IS ITS OWN WORD. Nothing here has opened the entry, so the
+    /// only length available is the one the list declares — and a list that
+    /// declares none gets no timeline, which is the answer a GIF gets and for
+    /// the same reason.
+    fn playing_seconds(&self) -> Option<f64> {
+        if let Some(list) = self.showing_list() {
+            return list.entries.get(self.playing)?.seconds;
+        }
+        self.looked.as_ref()?.moving.as_ref()?.shape.seconds
+    }
+
+    /// The next entry that could be played, when there is one.
+    ///
+    /// `None` at the end of the list, and that is what stops it: a preview
+    /// that never stops is a child process that never stops. Pressing play on
+    /// a finished list starts it again from the first entry, which is
+    /// `play_pause`'s third state doing what it already does.
+    fn after_the_one_playing(&self) -> Option<usize> {
+        let list = self.showing_list()?;
+        list.playable().find(|n| *n > self.playing)
+    }
+
     /// Holds the film, or lets it go on. `C-;`, and the play glyph.
     ///
     /// # Three states, one key
@@ -8631,7 +9007,7 @@ impl View {
     /// it again from the beginning, which is what everybody expects a play
     /// button at the end of a film to do.
     fn play_pause(&mut self) -> Step {
-        if !self.film_here() {
+        if !self.plays_here() {
             return Step::Say(does(NOTHING_PLAYING));
         }
         if self.transport.on {
@@ -8640,7 +9016,27 @@ impl View {
             // FROM THE TOP. The child is gone, so this is a spawn either way,
             // and starting where the film ended would show its last frame and
             // stop.
-            self.transport = Transport::default();
+            //
+            // AND A LIST THAT RAN OUT STARTS AGAIN AT THE TOP, which is the
+            // same sentence one register up: the child is gone, so this is a
+            // spawn either way, and resuming on the last entry would play its
+            // final second and stop.
+            if let Some(first) = self.showing_list().and_then(|l| l.playable().next())
+                && self.after_the_one_playing().is_none()
+            {
+                self.playing = first;
+            }
+            // AND THE SOUND CHOICE SURVIVES. `Transport::default` is silent,
+            // and a sound arrives with its audio on — so rebuilding wholesale
+            // would answer a key about PLAYING by muting the file, once, at
+            // the end, with nothing saying why.
+            self.transport = Transport {
+                on: true,
+                paused: false,
+                from: 0.0,
+                at: 0.0,
+                sound: self.transport.sound,
+            };
         }
         Step::Changed
     }
@@ -8657,7 +9053,7 @@ impl View {
             .as_ref()
             .and_then(|l| l.moving.as_ref())
             .is_some_and(|m| m.shape.sound);
-        if !self.film_here() {
+        if !self.plays_here() {
             return Step::Say(does(NOTHING_PLAYING));
         }
         if !has {
@@ -8679,15 +9075,10 @@ impl View {
     /// hundred — 707 ms on the owner's own forty-four-frame sample. No
     /// duration is what draws that line, with no branch of its own.
     fn seek_by(&mut self, by: f64) -> Step {
-        let Some(total) = self
-            .looked
-            .as_ref()
-            .and_then(|l| l.moving.as_ref())
-            .and_then(|m| m.shape.seconds)
-        else {
+        let Some(total) = self.playing_seconds() else {
             return Step::Say(does(NOTHING_PLAYING));
         };
-        if !self.film_here() {
+        if !self.plays_here() {
             return Step::Say(does(NOTHING_PLAYING));
         }
         self.seek_to((self.transport.at + by).clamp(0.0, (total - 0.1).max(0.0)));
@@ -8803,6 +9194,7 @@ impl View {
             target,
             key,
             tab: usize::from(ronoctua_tokens::space::FILES_TABWIDTH),
+            wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
         })
     }
 
@@ -8830,12 +9222,22 @@ impl View {
             self.preview_offset = 0;
             self.preview_column = 0;
             self.info_offset = 0;
+            // AND THE QUEUE GOES BACK TO THE TOP, by the same causal rule one
+            // line down: the subject changed. Without it, walking from one
+            // playlist to another would start the second one at whichever
+            // entry the first was on.
+            self.playing = 0;
             // AND THE FILM STARTS AGAIN, which is the same causal argument one
             // line up: the subject changed. Without it, leaving a film paused,
             // walking two files away and coming back would show another film
             // held at somebody else's pause, muted or not according to a
             // decision made about a different file.
-            self.transport = Transport::default();
+            //
+            // A SOUND ARRIVES STOPPED, which is the one thing that differs and
+            // the reason this asks the answer what it is. See
+            // [`Transport::arriving`].
+            self.transport =
+                Transport::arriving(l.moving.as_ref().map(|m| m.show), l.list.is_some());
             // AND THE WIDE MODE STAYS. It used to go with the file, and that is
             // the opposite of what the owner asked for: *"sendo inclusive
             // possível navegar para os próximos arquivos a partir do próprio
@@ -8901,6 +9303,18 @@ impl View {
     pub fn preview_key(&self) -> Option<String> {
         self.showing_now()?;
         let l = self.looked.as_ref()?;
+        // A LIST IS DRAWN AS A LIST, and its player's frames are never drawn.
+        //
+        // They are still MADE, and that is not waste with a name: the frames
+        // are the clock — the position, the end of a track and the pause all
+        // come out of them, and a door with no frames would need a timer, a
+        // second way to pause and a message for the end. What is dropped is
+        // only the picture, so the rows underneath stay legible; the frame is
+        // asked for at the smallest size there is, so what is thrown away is
+        // sixteen bytes a frame. See `View::wish`.
+        if l.list.is_some() {
+            return None;
+        }
         // A FRAME AND A PHOTOGRAPH ARE TWO TEXTURES, and that is a defect
         // avoided rather than found.
         //
@@ -9050,6 +9464,17 @@ impl View {
             // play glyph never came back — the absence of a wake-up is not an
             // event and cannot be drawn.
             crate::motion::Beat::Ended { .. } => {
+                // A LIST GOES ON TO THE NEXT ONE, and it costs no new message
+                // and no new state machine: `wish` builds the reel from the
+                // entry, `Reel` is compared by value, and a changed path is
+                // therefore already a respawn.
+                if let Some(next) = self.after_the_one_playing() {
+                    self.playing = next;
+                    self.transport.from = 0.0;
+                    self.transport.at = 0.0;
+                    self.transport.paused = false;
+                    return;
+                }
                 self.transport.on = false;
                 self.transport.paused = false;
             }
@@ -9083,15 +9508,62 @@ impl View {
     fn wish(&self) -> Option<crate::motion::Reel> {
         let l = self.looked.as_ref()?;
         self.showing_now()?;
-        let moving = l.moving.as_ref()?;
         if !self.transport.on {
             return None;
         }
         let fit = self.preview_fit()?;
+        // A PLAYLIST PLAYS A FILE IT HAS NOT LOOKED INSIDE, and that is a
+        // limit worth writing down rather than working around.
+        //
+        // Everything else the player is asked for comes out of a probe the
+        // inspector already ran for the facts. An entry has had no such probe:
+        // it is another file, named by this one, and probing it here would be
+        // an ffprobe on the door's event loop with the five-second patience
+        // `tools::run` gives every child — which is the footer frozen.
+        //
+        // So an entry plays with what is safe to assume: the waveform, which
+        // needs no picture in the file, and `cover: false`, which is the SAFE
+        // half of that flag — claiming a cover a file has not got makes ffmpeg
+        // refuse the whole command, while missing one that is there only costs
+        // the artwork. The length is the playlist's own word, which is what a
+        // playlist is FOR.
+        if let Some(list) = self.showing_list() {
+            let entry = list.entries.get(self.playing)?;
+            let ronoctua_inspect::playlist::Where::Local(path) = &entry.at else {
+                return None;
+            };
+            return Some(crate::motion::Reel {
+                path: path.clone(),
+                // A FRAME NOBODY DRAWS, AND STILL BIG ENOUGH TO STOP ITS OWN
+                // CHILD. The panel shows the list, so the picture is thrown
+                // away — but the frames are the clock and the pause, and a
+                // frame smaller than a pipe pauses nothing at all. See
+                // `motion::PIPE_BYTES` and `View::preview_key`.
+                // THE PLAYLIST'S KEY, not the entry's: `View::played` drops a
+                // beat whose key is not the one that was asked for, and what
+                // was asked for is the file in front. Frames from a child that
+                // has been replaced are dropped by the ERA, in the thread,
+                // which is what that mechanism is for.
+                key: l.key.clone(),
+                how: ronoctua_inspect::motion::Source::Ffmpeg,
+                show: ronoctua_inspect::motion::Show::Sound { cover: false },
+                fit: ronoctua_inspect::motion::Fit::UNSEEN,
+                fps: ronoctua_inspect::facts::WAVES_FPS,
+                from: self.transport.from,
+                sound: self.transport.sound,
+                background: letterbox(),
+                wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
+                wave_height: ronoctua_tokens::space::FILES_WAVEHEIGHT,
+                wave_foot: self.controls_foot(),
+                inside: None,
+            });
+        }
+        let moving = l.moving.as_ref()?;
         Some(crate::motion::Reel {
             path: l.path.clone(),
             key: l.key.clone(),
             how: moving.how,
+            show: moving.show,
             fit,
             fps: moving.shape.fps,
             from: self.transport.from,
@@ -9101,6 +9573,9 @@ impl View {
             // silent film would stop the picture.
             sound: self.transport.sound && moving.shape.sound,
             background: letterbox(),
+            wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
+            wave_height: ronoctua_tokens::space::FILES_WAVEHEIGHT,
+            wave_foot: self.controls_foot(),
             // WHERE THE FILM IS, when the picture is a photograph with one in
             // it. `None` for an ordinary film, which IS the file.
             inside: moving.inside.clone(),
@@ -9126,7 +9601,7 @@ impl View {
                 // because pressing play is how one watches it again. A cursor
                 // that MOVED must not: one file's picture under another file's
                 // name is the one failure a preview must not have.
-                if !self.film_here() {
+                if !self.plays_here() {
                     self.frame = None;
                 }
                 Some(crate::motion::Ask::Stop)
@@ -9355,9 +9830,9 @@ impl View {
 
     /// The film's timeline, when there is a film with a length.
     fn timeline(&self) -> Option<ronoctua_design::Scroll> {
-        let l = self.looked.as_ref()?;
+        self.looked.as_ref()?;
         self.showing_now()?;
-        let seconds = l.moving.as_ref()?.shape.seconds?;
+        let seconds = self.playing_seconds()?;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let total = (seconds * 10.0).round().max(1.0) as usize;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -9407,9 +9882,20 @@ impl View {
     /// The five keys and the whole-region wish all ask this, which is what
     /// makes them refuse together: five conditions written five times is five
     /// chances for one of them to say yes where the others say no.
-    fn film_here(&self) -> bool {
+    ///
+    /// It answers for a SOUND as well, which is why it is no longer called
+    /// `film_here`: a sound plays, has a timeline, is sought and is paused by
+    /// the same five keys, and the only thing that differs is where its
+    /// picture comes from.
+    fn plays_here(&self) -> bool {
         self.showing_now().is_some()
-            && self.looked.as_ref().is_some_and(|l| l.moving.is_some())
+            && self
+                .looked
+                .as_ref()
+                // A PLAYLIST PLAYS TOO, and through the same five keys: what
+                // it names is what is heard, and the transport is about the
+                // entry rather than about the file naming it.
+                .is_some_and(|l| l.moving.is_some() || l.list.is_some())
             && !matches!(self.trouble, Some(crate::motion::Trouble::Starved))
     }
 
@@ -9435,6 +9921,119 @@ impl View {
         self.looked.as_ref()?.text.as_ref()
     }
 
+    /// One row of a playlist: the mark, the name, and how long it says it runs.
+    ///
+    /// # The mark's cell is always there
+    ///
+    /// Reserved whether or not this is the entry being played, so the rows do
+    /// not shift sideways as the queue advances — the argument `info_fields`
+    /// already makes about the scrollbar's cell, one panel over.
+    ///
+    /// Hierarchy is colour, never size and never a rule: the entry being
+    /// played is `TEXT_PRIMARY` against `TEXT_SECONDARY` for the rest, and one
+    /// that cannot be played from here is `TEXT_DIM` with the reason on the
+    /// message line.
+    fn entry_fields(
+        &self,
+        entry: &ronoctua_inspect::playlist::Entry,
+        row: usize,
+        at: u16,
+        room: u16,
+    ) -> Vec<Field> {
+        use ronoctua_inspect::playlist::Where;
+        const MARK: u16 = 2;
+        let here = matches!(entry.at, Where::Local(_));
+        let colour = if row == self.playing && here {
+            ronoctua_tokens::color::TEXT_PRIMARY
+        } else if here {
+            ronoctua_tokens::color::TEXT_SECONDARY
+        } else {
+            ronoctua_tokens::color::TEXT_DIM
+        };
+        // WHAT THE PLAYLIST WROTE, and not what it resolved to: somebody who
+        // wrote `../Album/01.flac` should see that. The resolved path goes on
+        // the message line, which is the register `files-fact-says` uses.
+        let said = entry.title.clone().unwrap_or_else(|| entry.written.clone());
+        let clock = entry.seconds.map(clock_of).unwrap_or_default();
+        let tail = width_of(&clock);
+        let for_name = room.saturating_sub(MARK).saturating_sub(tail);
+        // AND A BACKING FIELD ACROSS THE WHOLE ROW, so `View::hit` answers for
+        // the air as well as for the letters — a row one can only click on its
+        // text is a row that misses the click that was aimed at it.
+        let mut out = vec![Field {
+            at,
+            text: " ".repeat(usize::from(room)),
+            color: colour,
+            hit: Hit::Track(row),
+            explain: None,
+        }];
+        if row == self.playing && here {
+            out.push(Field {
+                at,
+                text: ronoctua_tokens::icon::PLAY.to_string(),
+                color: colour,
+                hit: Hit::Track(row),
+                explain: None,
+            });
+        }
+        out.push(Field {
+            at: at.saturating_add(MARK),
+            text: ronoctua_render::layout::elide_end(&said, for_name),
+            color: colour,
+            hit: Hit::Track(row),
+            // WHERE IT ACTUALLY POINTS, on the message line. The row shows
+            // what the playlist WROTE; this is what that resolved to, which is
+            // the half somebody needs when a name does not find a file.
+            // THE WHOLE NAME AND WHERE IT POINTS, un-elided.
+            //
+            // The row cuts what does not fit; this is where the rest of it is,
+            // which is the register `files-fact-says` already keeps for the
+            // same reason one panel over. It is also why a playlist needs no
+            // sideways bar — see `View::preview_widest`.
+            explain: Some(Explanation {
+                key: match (&entry.at, entry.title.is_some()) {
+                    (Where::Remote(_), _) => ronoctua_i18n::key::FILES_ENTRY_NOT_HERE,
+                    (Where::Refused, _) => ronoctua_i18n::key::FILES_ENTRY_REFUSED,
+                    (Where::Local(_), true) => ronoctua_i18n::key::FILES_ENTRY_TITLED,
+                    (Where::Local(_), false) => ronoctua_i18n::key::FILES_ENTRY_AT,
+                },
+                args: {
+                    let path = match &entry.at {
+                        Where::Local(p) => p.display().to_string(),
+                        Where::Remote(url) => url.clone(),
+                        Where::Refused => entry.written.clone(),
+                    };
+                    match &entry.title {
+                        Some(name) if matches!(entry.at, Where::Local(_)) => {
+                            vec![("name", name.clone()), ("path", path)]
+                        }
+                        _ => vec![("path", path)],
+                    }
+                },
+            }),
+        });
+        if tail > 0 {
+            out.push(Field {
+                at: at.saturating_add(room).saturating_sub(tail),
+                text: clock,
+                color: ronoctua_tokens::color::TEXT_DIM,
+                hit: Hit::Track(row),
+                explain: None,
+            });
+        }
+        out
+    }
+
+    /// The list of things to play under the cursor, if the panel is showing one.
+    ///
+    /// `showing_now` first, for the reason its twin has: an answer that arrived
+    /// for a file the cursor has already left is not about what is on screen.
+    #[must_use]
+    pub fn showing_list(&self) -> Option<&ronoctua_inspect::playlist::List> {
+        self.showing_now()?;
+        self.looked.as_ref()?.list.as_ref()
+    }
+
     /// How many ROWS the preview has.
     ///
     /// A picture is one and a sentence is one; text is its lines, plus the row
@@ -9444,6 +10043,9 @@ impl View {
     /// a special case.
     #[must_use]
     pub fn preview_total(&self) -> usize {
+        if let Some(l) = self.showing_list() {
+            return l.entries.len() + usize::from(l.cut);
+        }
         match self.showing_text() {
             Some(t) => t.lines.len() + usize::from(t.cut),
             None => 1,
@@ -9457,6 +10059,23 @@ impl View {
     /// bytes would let an accented line claim columns it does not fill.
     #[must_use]
     pub fn preview_widest(&self) -> usize {
+        // A LIST NEVER READS SIDEWAYS, and that is the listing's own rule
+        // rather than a shortcut.
+        //
+        // A row of a playlist is a RECORD — a mark, a name and a length, with
+        // the length against the right edge — and not a line of text. Sliding
+        // a record sideways moves two of its three parts out from under the
+        // third. The owner met the half-built version of that: *"há playlists
+        // que aparecem com scrollbar horizontal, e ainda mais inúteis, pois ao
+        // deslizar tudo para o lado oposto, nada ocorre na tela"* — the bar was
+        // offered and the rows never moved, because they never could.
+        //
+        // What a long name costs is an ellipsis, and what it does not cost is
+        // the name: the whole of it is on the message line, where the manager
+        // already puts what a row had to cut. See `View::entry_fields`.
+        if self.showing_list().is_some() {
+            return 0;
+        }
         self.showing_text().map_or(0, |t| {
             t.lines
                 .iter()
@@ -9585,6 +10204,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: None,
+            list: None,
             text: Some(read),
             why: None,
             facts: Vec::new(),
@@ -9726,6 +10346,7 @@ mod tests {
                 pixels: vec![0; 64],
             }),
             moving: None,
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -9876,6 +10497,7 @@ mod tests {
             path: same,
             rgba: None,
             moving: None,
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -9893,6 +10515,7 @@ mod tests {
             path: dir.join("other.rs"),
             rgba: None,
             moving: None,
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10012,6 +10635,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: None,
+            list: None,
             text: Some(read),
             why: None,
             facts: Vec::new(),
@@ -10220,6 +10844,222 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A list of things to play, as the inspector would answer for one.
+    fn a_list(names: &[&str], folder: &std::path::Path) -> ronoctua_inspect::playlist::List {
+        use ronoctua_inspect::playlist::{Entry, Kind, List, Where};
+        List {
+            kind: Kind::M3u,
+            entries: names
+                .iter()
+                .map(|n| Entry {
+                    at: if n.starts_with("http") {
+                        Where::Remote((*n).to_owned())
+                    } else {
+                        Where::Local(folder.join(n))
+                    },
+                    title: None,
+                    seconds: Some(30.0),
+                    written: (*n).to_owned(),
+                })
+                .collect(),
+            cut: false,
+        }
+    }
+
+    /// A LIST PLAYS THROUGH, AND STOPS AT THE END OF ITSELF.
+    ///
+    /// FAILS IF: a playlist starts because a cursor passed over it; or the end
+    /// of one entry does not reach the next; or an entry nobody here can fetch
+    /// is played anyway, or silently skipped when somebody presses it.
+    #[test]
+    fn a_list_plays_through_and_stops_where_it_ends() {
+        let dir = scratch("queue");
+        std::fs::write(dir.join("a.m3u"), b"one.mp3\n").unwrap();
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        v.measured_preview(256.0, 144.0);
+        v.cursor = v
+            .shown
+            .iter()
+            .position(|&n| v.entries[n].name == "a.m3u")
+            .expect("the playlist is in the listing");
+        v.asked = Some("prev:list".to_owned());
+        v.looked(Looked {
+            key: "prev:list".to_owned(),
+            path: dir.join("a.m3u"),
+            rgba: None,
+            moving: None,
+            list: Some(a_list(
+                &["one.mp3", "https://example.invalid/two.mp3", "three.flac"],
+                &dir,
+            )),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "audio/x-mpegurl",
+            turns: false,
+            outlined: 0,
+        });
+
+        // IT DOES NOT START BY ITSELF, which is the owner's rule reaching a
+        // list of nine tracks rather than one file.
+        assert!(!v.transport.on, "a playlist started by itself");
+        assert!(v.wants_motion().is_none());
+        // BUT THE TRANSPORT IS THERE, because what it names is playable.
+        assert!(v.plays_here(), "a playlist offered no transport");
+
+        // PLAY STARTS THE FIRST ENTRY, and the reel is about the ENTRY while
+        // the key stays the playlist's — the era drops the old child's frames,
+        // not the key.
+        let _ = v.play_pause();
+        let reel = v.wish().expect("a started list wants a player");
+        assert_eq!(reel.path, dir.join("one.mp3"));
+        assert_eq!(reel.key, "prev:list");
+        assert!(reel.sound);
+
+        // THE END OF ONE REACHES THE NEXT — and SKIPS the remote one, which is
+        // listed and never opened.
+        v.played(crate::motion::Beat::Ended {
+            key: "prev:list".to_owned(),
+        });
+        assert!(v.transport.on, "the list stopped at its first entry");
+        assert_eq!(v.playing, 2, "the remote entry was played");
+        assert_eq!(
+            v.wish().expect("still playing").path,
+            dir.join("three.flac")
+        );
+        // AND IT STARTS THAT ONE FROM ITS BEGINNING.
+        assert!((v.transport.from - 0.0).abs() < f64::EPSILON);
+
+        // AND THE END OF THE LAST ONE STOPS.
+        v.played(crate::motion::Beat::Ended {
+            key: "prev:list".to_owned(),
+        });
+        assert!(!v.transport.on, "the list looped instead of ending");
+
+        // PRESSING PLAY ON A FINISHED LIST STARTS IT AGAIN AT THE TOP.
+        let _ = v.play_pause();
+        assert_eq!(v.playing, 0, "a finished list resumed on its last entry");
+        assert!(v.transport.on);
+
+        // THE TWO KEYS WALK THE PLAYABLE ONES AND REFUSE AT THE ENDS.
+        assert!(
+            matches!(v.step_entry(-1), Step::Say(_)),
+            "it walked past the start"
+        );
+        let _ = v.step_entry(1);
+        assert_eq!(v.playing, 2, "the key stopped on the remote entry");
+        assert!(
+            matches!(v.step_entry(1), Step::Say(_)),
+            "it walked past the end"
+        );
+
+        // AND PRESSING THE REMOTE ONE SAYS WHY, rather than doing nothing.
+        assert!(matches!(v.play_entry(1), Step::Say(_)));
+        assert_eq!(v.playing, 2, "a remote entry became the one playing");
+    }
+
+    /// A SOUND WAITS TO BE STARTED, AND ITS CONTROLS NEVER LEAVE.
+    ///
+    /// The two things the owner asked for in as many words, and they pull in
+    /// opposite directions from the film's behaviour — so both are pinned
+    /// here, beside a film asserting the film's own.
+    ///
+    /// FAILS IF: a cursor resting on an album starts playing it; or the
+    /// controls hide when the pointer leaves, which for a sound leaves a panel
+    /// that shows a picture and offers nothing.
+    #[test]
+    fn a_sound_waits_to_be_started_and_keeps_its_controls() {
+        let dir = scratch("sound");
+        for name in ["a.mp3", "b.mp4", "c.flac"] {
+            std::fs::write(dir.join(name), b"ID3").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.preview_on = true;
+        v.reread();
+        v.measured_preview(256.0, 144.0);
+
+        // A FILE OF ITS OWN EACH TIME, because `looked` resets the transport
+        // on a change of SUBJECT — which is the causal rule it keeps — and a
+        // test that reused one path would be asserting about a transport that
+        // was never reset.
+        let arrives = |v: &mut View, name: &str, moving: ronoctua_inspect::motion::Moving| {
+            // AND THE CURSOR GOES WITH IT. `plays_here` asks whether the
+            // answer in hand is about the file in FRONT, so a test that left
+            // the cursor behind would be asserting about a panel showing
+            // somebody else.
+            v.cursor = v
+                .shown
+                .iter()
+                .position(|&n| v.entries[n].name == name)
+                .expect("the file is in the listing");
+            v.asked = Some(format!("prev:{name}"));
+            v.looked(Looked {
+                key: format!("prev:{name}"),
+                path: dir.join(name),
+                rgba: None,
+                moving: Some(moving),
+                list: None,
+                text: None,
+                why: None,
+                facts: Vec::new(),
+                mime: "audio/mpeg",
+                turns: false,
+                outlined: 0,
+            });
+        };
+
+        arrives(&mut v, "a.mp3", a_sound(132.9, true));
+        // IT DOES NOT START. No child is asked for, which is the whole of it:
+        // `wish` returns nothing while `on` is clear.
+        assert!(!v.transport.on, "a sound started by itself");
+        assert!(
+            v.wants_motion().is_none(),
+            "a sound asked for a player nobody started"
+        );
+        // AND IT ARRIVES AUDIBLE, so the key that starts it is the only key
+        // needed. A film arrives the other way round.
+        assert!(v.transport.sound, "a sound arrived muted");
+
+        // THE CONTROLS ARE THERE WITH NO POINTER ANYWHERE.
+        v.pointing(None);
+        assert!(
+            v.transport_showing(),
+            "a sound's controls hid when the pointer left"
+        );
+        // AND THE GLYPHS WITH THEM, not just the band: the row's fields are
+        // what carry the play mark and the clock.
+        let bare = v.transport_fields(0, 40, None);
+        assert!(
+            bare.len() > 1,
+            "the controls' ink went away with the pointer: {bare:?}"
+        );
+
+        // A FILM KEEPS ITS OWN BEHAVIOUR, which is the half that must not have
+        // been broken by the half above.
+        arrives(&mut v, "b.mp4", a_film(60.0, true));
+        assert!(v.transport.on, "a film stopped playing on arrival");
+        assert!(!v.transport.sound, "a film arrived speaking");
+        v.pointing(None);
+        assert!(
+            !v.transport_showing(),
+            "a film's controls stayed up with no pointer"
+        );
+        v.pointing(Some(Pane::Preview));
+        assert!(v.transport_showing(), "a film's controls did not come back");
+
+        // AND PRESSING PLAY ON A SOUND STARTS IT, still audible: the restart
+        // must not answer a key about playing by muting the file.
+        arrives(&mut v, "c.flac", a_sound(132.9, false));
+        let _ = v.play_pause();
+        assert!(v.transport.on, "play did not start a sound");
+        assert!(v.transport.sound, "play muted the sound it started");
+        let reel = v.wish().expect("a started sound wants a player");
+        assert_eq!(reel.show, Show::Sound { cover: false });
+        assert!(reel.sound, "the player was asked for a silent sound");
+    }
+
     /// A MOVING FILE IS FOLLOWED, AND ONLY WHILE IT IS THE ONE IN FRONT.
     ///
     /// FAILS IF: the player is asked for a still picture (a thread and a child
@@ -10243,6 +11083,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: None,
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10262,6 +11103,7 @@ mod tests {
             path: dir.join("a-still.png"),
             rgba: None,
             moving: Some(a_gif()),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10326,6 +11168,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: Some(a_film(60.0, true)),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10356,17 +11199,20 @@ mod tests {
         // barra de tempo está em cima, ela está desalinhada do resto dos
         // controles"*. It was the fix for the row's own position producing the
         // next defect, because only half of the row moved.
-        let band = transport_band(&with_a_film, 0.0, 400.0, 20.0, 500.0).expect("a band");
+        let foot = Foot {
+            left: 0.0,
+            wide: 400.0,
+            cell: 10.0,
+            line_px: 20.0,
+            bottom: 500.0,
+        };
+        let band = transport_band(&with_a_film, foot).expect("a band");
         assert!(
             (band.1 - 480.0).abs() < 0.01 && (band.3 - 20.0).abs() < 0.01,
             "the band is at {band:?} and the foot is at 500"
         );
-        let track = with_a_film
-            .time_track_box(0.0, 400.0, 10.0, 20.0, 500.0)
-            .expect("a track");
-        let cursor = with_a_film
-            .time_bar_box(0.0, 400.0, 10.0, 20.0, 500.0)
-            .expect("a cursor");
+        let track = with_a_film.time_track_box(foot).expect("a track");
+        let cursor = with_a_film.time_bar_box(foot).expect("a cursor");
         for (what, rect) in [("track", track), ("cursor", cursor)] {
             assert!(
                 rect.1 >= band.1 - 0.01 && rect.1 + rect.3 <= band.1 + band.3 + 0.01,
@@ -10397,6 +11243,7 @@ mod tests {
             path: v.focused_path().expect("a file"),
             rgba: None,
             moving: None,
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10409,8 +11256,92 @@ mod tests {
             still.transport.is_none(),
             "controls with nothing to control"
         );
-        assert!(transport_band(&still, 0.0, 400.0, 20.0, 500.0).is_none());
+        assert!(transport_band(&still, foot).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE CONTROLS SIT ON THEIR OWN LINE WHATEVER ELSE IS ANCHORED TO THE FOOT.
+    ///
+    /// FAILS IF: the rectangles stop counting what is below them.
+    ///
+    /// A sideways scrollbar takes the band's LAST line, so the rows — the
+    /// transport's among them — stop one short of it. The rectangles did not,
+    /// and the owner photographed the result on an `.m3u8`: *"aparece um
+    /// scrollbar horizontal, assim fazendo que os botões de controle fiquem
+    /// mais acima, e a linha de tempo mais abaixo"*.
+    ///
+    /// It is asserted against the ROW's own line rather than against a number,
+    /// because a number would have to be kept in step with the layout by hand —
+    /// which is the whole class of defect this is in.
+    #[test]
+    fn the_transport_keeps_its_line_with_a_sideways_bar_under_it() {
+        let scroll = ronoctua_design::Scroll {
+            total: 40,
+            lines: 10,
+            offset: 0,
+            top: 0,
+        };
+        let of = |across: Option<ronoctua_design::Scroll>| Section {
+            pane: Pane::Preview,
+            across,
+            time: Some(scroll),
+            // THE LAST LINE OF THE CONTENT, which is what `sections` gives it:
+            // the rows stop short of whatever is anchored below.
+            transport: Some(if across.is_some() { 8 } else { 9 }),
+            clock: 11,
+            from: 0,
+            to: 40,
+            top: 0,
+            lines: 10,
+            offset: 0,
+            total: 10,
+            above: 0,
+            content: Vec::new(),
+        };
+        let foot = Foot {
+            left: 0.0,
+            wide: 400.0,
+            cell: 10.0,
+            line_px: 20.0,
+            bottom: 200.0,
+        };
+
+        // WITHOUT ONE the transport is the band's last line.
+        let bare = of(None);
+        let band = transport_band(&bare, foot).expect("a band");
+        assert!((band.1 - 180.0).abs() < 0.01, "{band:?}");
+
+        // WITH ONE it is the line above, and so is every rectangle.
+        let barred = of(Some(scroll));
+        let band = transport_band(&barred, foot).expect("a band");
+        assert!(
+            (band.1 - 160.0).abs() < 0.01,
+            "the band stayed on the scrollbar's line: {band:?}"
+        );
+        let track = barred.time_track_box(foot).expect("a track");
+        let cursor = barred.time_bar_box(foot).expect("a cursor");
+        for (what, rect) in [("track", track), ("cursor", cursor)] {
+            assert!(
+                rect.1 >= band.1 - 0.01 && rect.1 + rect.3 <= band.1 + band.3 + 0.01,
+                "the {what} is at {rect:?}, off the controls' own line {band:?}"
+            );
+        }
+
+        // AND THE ROW AND THE RECTANGLES AGREE, which is the invariant itself:
+        // the row is placed counting lines up from the band's bottom, so the
+        // two must name the same line.
+        for sec in [&bare, &barred] {
+            let row = sec.transport.expect("a transport");
+            let lines_up = sec.lines - 1 - row;
+            #[allow(clippy::cast_precision_loss)]
+            let where_the_row_is = foot.bottom - (lines_up as f32 + 1.0) * foot.line_px;
+            let where_the_band_is = transport_band(sec, foot).expect("a band").1;
+            assert!(
+                (where_the_row_is - where_the_band_is).abs() < 0.01,
+                "the glyphs are at {where_the_row_is} and their band at \
+                 {where_the_band_is}"
+            );
+        }
     }
 
     /// FAILS IF: a point anywhere in a film's preview stops resolving to the
@@ -10441,6 +11372,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: Some(a_film(60.0, true)),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10504,6 +11436,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: Some(a_gif()),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10558,6 +11491,7 @@ mod tests {
                 pixels: vec![0; 48],
             }),
             moving: Some(film),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10660,6 +11594,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: Some(a_film(60.0, true)),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10674,7 +11609,15 @@ mod tests {
         v.pointing(Some(Pane::Preview));
         let warm = preview_of(&v, &words);
 
-        let track = |sec: &Section| sec.time_track_box(0.0, 0.0, 400.0, 10.0, 20.0);
+        let track = |sec: &Section| {
+            sec.time_track_box(Foot {
+                left: 0.0,
+                wide: 400.0,
+                cell: 10.0,
+                line_px: 20.0,
+                bottom: 500.0,
+            })
+        };
         assert_eq!(
             track(&cold),
             track(&warm),
@@ -10739,6 +11682,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: Some(a_film(60.0, false)),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -10806,6 +11750,7 @@ mod tests {
                 path: ask.path,
                 rgba: None,
                 moving: Some(a_film(60.0, sound)),
+                list: None,
                 text: None,
                 why: None,
                 facts: Vec::new(),
@@ -10888,6 +11833,7 @@ mod tests {
     fn a_gif() -> ronoctua_inspect::motion::Moving {
         ronoctua_inspect::motion::Moving {
             how: ronoctua_inspect::motion::Source::InProcess,
+            show: Show::Film,
             shape: ronoctua_inspect::facts::Shape {
                 fps: 10.0,
                 seconds: None,
@@ -10901,10 +11847,26 @@ mod tests {
     fn a_film(seconds: f64, sound: bool) -> ronoctua_inspect::motion::Moving {
         ronoctua_inspect::motion::Moving {
             how: ronoctua_inspect::motion::Source::Ffmpeg,
+            show: Show::Film,
             shape: ronoctua_inspect::facts::Shape {
                 fps: 25.0,
                 seconds: Some(seconds),
                 sound,
+            },
+            inside: None,
+        }
+    }
+
+    /// A sound, which plays through the same player with a drawn picture.
+    fn a_sound(seconds: f64, cover: bool) -> ronoctua_inspect::motion::Moving {
+        ronoctua_inspect::motion::Moving {
+            how: ronoctua_inspect::motion::Source::Ffmpeg,
+            show: Show::Sound { cover },
+            shape: ronoctua_inspect::facts::Shape {
+                fps: ronoctua_inspect::facts::WAVES_FPS,
+                seconds: Some(seconds),
+                // ALWAYS, because that is what the file IS.
+                sound: true,
             },
             inside: None,
         }
@@ -10944,6 +11906,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: Some(a_gif()),
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),
@@ -15105,6 +16068,7 @@ mod tests {
             path: ask.path,
             rgba: None,
             moving: None,
+            list: None,
             text: None,
             why: None,
             facts: Vec::new(),

@@ -7212,7 +7212,13 @@ impl Footer {
                 // AND THE FILM'S — see the window door's twin.
                 // AND THE FILM'S TRACK — see the window door's twin.
                 let time = sec
-                    .time_track_box(x, top, wide, cell, line_height)
+                    .time_track_box(crate::files::Foot {
+                        left: x,
+                        wide,
+                        cell,
+                        line_px: line_height,
+                        bottom,
+                    })
                     .map(|r| (sec.pane, crate::files::Axis::Time, r));
                 Some([down, across, time])
             })
@@ -7270,19 +7276,30 @@ impl Footer {
             };
             // EVERY PART OF THE TRANSPORT FROM THE SAME FOOT — see
             // `files::transport_top`, and the window door's twin.
-            let foot = self.metric().map_or(top, crate::chrome::Frame::bottom);
+            let foot = crate::files::Foot {
+                left: 0.0,
+                wide: 0.0,
+                cell,
+                line_px: line_height,
+                bottom: self.metric().map_or(top, crate::chrome::Frame::bottom),
+            };
             // THE FIELDS' OWN CELLS, and not the section's rails — see
             // `Section::fields_px`: the glyphs and the clock sit at `from`..`to`
             // and the rails are wider, which is the gap the owner photographed
             // between the timeline and the numbers.
             let (fx, fwide) = sec.fields_px(crate::chrome::FIELDS_LEAD, cell);
-            if let Some(r) = crate::files::transport_band(sec, fx, fwide, line_height, foot) {
+            let foot = crate::files::Foot {
+                left: fx,
+                wide: fwide,
+                ..foot
+            };
+            if let Some(r) = crate::files::transport_band(sec, foot) {
                 band(r, tokens::color::SURFACE_TRANSPORT);
             }
-            if let Some(r) = sec.time_track_box(fx, fwide, cell, line_height, foot) {
+            if let Some(r) = sec.time_track_box(foot) {
                 band(r, tokens::color::RULE_STRONG);
             }
-            if let Some(r) = sec.time_bar_box(fx, fwide, cell, line_height, foot) {
+            if let Some(r) = sec.time_bar_box(foot) {
                 band(r, tokens::color::TEXT_PRIMARY);
             }
         }

@@ -3703,6 +3703,220 @@ let
     cat ${mimeDb.preferenceFixture}/verdict
   '';
 
+  # EVERY PLAYLIST TYPE IS EITHER READ OR REFUSED, AND NEVER NEITHER.
+  #
+  # `mesh-formats-are-total`'s argument, one medium along. A type on the
+  # table's `playlist` row with no arm in `playlist::kind_of` resolves, reaches
+  # the reader, and comes back with a sentence about a spelling nobody wrote —
+  # or worse, is claimed by the `sound` row below it and handed to ffmpeg,
+  # whose `hls` demuxer OPENS the first file the list names and reports THAT
+  # file's codec and duration as the playlist's. Measured against the pinned
+  # binary.
+  #
+  # So the three lists have to agree: what the table claims, what the parser
+  # dispatches, and what the two languages can say about it.
+  playlist-formats-are-total = mkCheck "playlist-formats-are-total" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-inspect/src}")
+    i18n = pathlib.Path("${../assets/i18n}")
+    module = (src / "playlist.rs").read_text()
+    pixels = (src / "pixels.rs").read_text()
+    bad = []
+
+    # --- what the module says it serves -----------------------------------
+    declared = re.search(r"pub const TYPES: \[&str; \d+\] = \[(.*?)\];", module, re.S)
+    if declared is None:
+        bad.append("playlist.rs no longer declares TYPES")
+        claimed = set()
+    else:
+        claimed = set(re.findall(r'"([^"]+)"', declared.group(1)))
+
+    # --- what it can actually PARSE ---------------------------------------
+    arm = re.search(r"fn kind_of\(mime: &str\) -> Option<Kind> \{(.*?)\n\}", module, re.S)
+    read = set(re.findall(r'"([^"]+)"', arm.group(1))) if arm else set()
+    if arm is None:
+        bad.append("playlist.rs no longer dispatches on the type")
+
+    # --- and the refusal each unread one gets -----------------------------
+    if read - claimed:
+        bad.append("parsed but not claimed: " + ", ".join(sorted(read - claimed)))
+    named = re.search(r"pub const REFUSED: \[&str; \d+\] = \[(.*?)\];", module, re.S)
+    refused = set(re.findall(r'"([^"]+)"', named.group(1))) if named else set()
+    if named is None:
+        bad.append("playlist.rs no longer declares which spellings it refuses")
+    # THE THREE LISTS MUST PARTITION THE CLAIM. A type in none of them is the
+    # omission this check exists for: it resolves, reaches the reader, and comes
+    # back with a sentence written about somebody else's format.
+    if claimed - read - refused:
+        bad.append(
+            "claimed and neither read nor refused: "
+            + ", ".join(sorted(claimed - read - refused))
+        )
+    if read & refused:
+        bad.append("read AND refused: " + ", ".join(sorted(read & refused)))
+    if refused - claimed:
+        bad.append("refused but not claimed: " + ", ".join(sorted(refused - claimed)))
+    if "Refusal::Unsupported(key::PREVIEW_PLAYLIST_UNREAD)" not in module:
+        bad.append("the refused spellings no longer carry a sentence of their own")
+
+    # --- the table must claim exactly the same set, ABOVE the sound row ----
+    row = re.search(
+        r'id: "playlist",\s*types: &crate::playlist::TYPES,', pixels
+    )
+    if row is None:
+        bad.append("pixels.rs's playlist row no longer claims playlist::TYPES")
+    else:
+        order = [m.group(1) for m in re.finditer(r'id: "([a-z-]+)"', pixels)]
+        if "playlist" not in order or "sound" not in order:
+            bad.append("the table lost one of the two rows this depends on")
+        elif order.index("playlist") > order.index("sound"):
+            bad.append(
+                "the playlist row sits below the sound row, so `media: audio` "
+                "claims it first and ffmpeg is handed a list of names"
+            )
+
+    # --- and no playlist type may be probed --------------------------------
+    facts = (src / "facts.rs").read_text()
+    if "playlist::is_a_playlist(mime)" not in facts:
+        bad.append("facts::needs no longer keeps ffprobe away from a playlist")
+
+    # --- the sentence, in both languages ----------------------------------
+    for name in ("en-GB", "pt-BR"):
+        text = (i18n / f"{name}.ftl").read_text()
+        if "files-preview-playlist-unread =" not in text:
+            bad.append(f"{name} cannot say why a spelling is not opened")
+
+    if bad:
+        print("\n".join(bad))
+        sys.exit(1)
+    print(
+        f"OK: {len(read)} spellings read, {len(refused)} refused by name, "
+        "and the row sits above the sound row"
+    )
+    END
+    touch $out
+  '';
+
+  # THE VIEW'S KEYS ARE NOT THE COMPOSITOR'S, AND NOTHING ABOVE US CLAIMS `Ctrl`.
+  #
+  # `crates/ronoctua-shell/src/files.rs` says, above its own table: *"`Ctrl` is
+  # the family nothing above us claims … the check
+  # `files-keys-are-not-the-compositors` is what keeps it that way"*.
+  #
+  # It did not exist. The comment promised a guarantee nothing provided, for as
+  # long as the table has been there — found while reading the file for another
+  # reason, and worth more than the check itself: a comment that names a check
+  # is read as a check having been run.
+  #
+  # What it forbids is `M-`, and the reason is on the screen rather than in
+  # theory: the first attempt at these keys used `M-`, and in the nested loop
+  # the leader's chord family IS `Alt` — so `M-RET` never reached the footer, it
+  # opened a terminal.
+  files-keys-are-not-the-compositors =
+    mkCheck "files-keys-are-not-the-compositors" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        files = pathlib.Path("${../crates/ronoctua-shell/src/files.rs}").read_text()
+        bad = []
+
+        # THE TABLE ITSELF, and not the whole file: a comment may name `M-` while
+        # explaining why it is not used, and this reads the bindings.
+        block = re.search(r"OF_THE_VIEW[^=]*= &\[(.*?)\n\];", files, re.S)
+        if block is None:
+            bad.append("files.rs no longer declares OF_THE_VIEW as a table")
+        else:
+            body = re.sub(r"//.*", "", block.group(1))
+            bound = re.findall(r'\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)', body)
+            if not bound:
+                bad.append("OF_THE_VIEW binds nothing, which cannot be right")
+            for chord, action in bound:
+                if chord.startswith("M-") or "-M-" in chord:
+                    bad.append(
+                        f"{action} is bound to {chord}: `M-` is the compositor's "
+                        "chord family and the key would never arrive"
+                    )
+                if chord.startswith("Mod") or "Super" in chord:
+                    bad.append(f"{action} is bound to {chord}, which the compositor takes first")
+
+        # AND THE COMMENT STAYS TRUE. This check is named in the file; if the
+        # sentence goes, the reader loses the reason and this loses its subject.
+        if "files-keys-are-not-the-compositors" not in files:
+            bad.append("files.rs stopped naming this check, so nothing explains the rule")
+
+        if bad:
+            print("\n".join(bad))
+            sys.exit(1)
+        print(f"OK: {len(bound)} of the view's keys, none of them the compositor's")
+        END
+        touch $out
+      '';
+
+  # A ROW'S LABEL IS A KEY, AND THE ONE EXCEPTION IS NARROW ON PURPOSE.
+  #
+  # `facts::Label::Named` exists so a tag the FILE wrote can be shown under the
+  # name the file wrote — `BPM (beats per minute)` has no key and can have
+  # none, because nobody has seen it before it is read. That is the same rule
+  # a `Choice`'s label already follows, and it is right.
+  #
+  # It is also a hole in invariant 8's MECHANISM: nothing in the compiler stops
+  # somebody writing `Label::Named("Bit rate".into())` and putting an English
+  # string on a Portuguese screen. Nothing in `english-names` would either — it
+  # reads declarations, and that is a value.
+  #
+  # So the hole is closed from the other side: the variant may be built at ONE
+  # site, and never from a literal. Tests are exempt, and they are where a
+  # literal is the point.
+  inspect-labels-are-keys = mkCheck "inspect-labels-are-keys" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-inspect/src}")
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    bad = []
+
+    def code_only(text):
+        """The file with its test module and its comments cut away."""
+        cut = re.split(r"\n#\[cfg\(test\)\]", text)[0]
+        return re.sub(r"//.*", "", cut)
+
+    built = []
+    for path in sorted(src.rglob("*.rs")):
+        for n, line in enumerate(code_only(path.read_text()).splitlines(), 1):
+            if "Label::Named(" in line:
+                built.append((path.name, n, line.strip()))
+
+    if len(built) != 1:
+        bad.append(
+            "Label::Named is built at "
+            + str(len(built))
+            + " sites and must be built at exactly one: "
+            + "; ".join(f"{f}:{n}" for f, n, _ in built)
+        )
+
+    for f, n, line in built:
+        if re.search(r'Label::Named\(\s*"', line):
+            bad.append(f"{f}:{n} builds a label from a literal, which is a key by another name")
+
+    # AND THE ONE PLACE THAT RESOLVES ONE must still tell the two apart, or a
+    # key reaches the screen as itself.
+    files = (shell / "files.rs").read_text()
+    if "Label::Named(name) => name.clone()" not in files:
+        bad.append("files.rs no longer shows a named label verbatim")
+    if "Label::Key(k) => texts.t(k)" not in files:
+        bad.append("files.rs no longer translates a keyed label")
+
+    if bad:
+        print("\n".join(bad))
+        sys.exit(1)
+    print(f"OK: one site builds Label::Named, and it reads a name rather than writing one")
+    END
+    touch $out
+  '';
+
   # EVERY 3D FORMAT IS REACHABLE BY THE WHOLE PATH, AND NOT BY HALF OF IT.
   #
   # A format needs four things to work, in four files: a `Shape` variant, an
@@ -8443,6 +8657,9 @@ let
       files-notices-the-directory
       inspect-mesh-is-in-process
       mesh-formats-are-total
+      inspect-labels-are-keys
+      files-keys-are-not-the-compositors
+      playlist-formats-are-total
       # The preview's player: the size it never guesses, and the child it never
       # leaves behind.
       motion-never-guesses-a-frame
@@ -8497,6 +8714,9 @@ let
       files-notices-the-directory
       inspect-mesh-is-in-process
       mesh-formats-are-total
+      inspect-labels-are-keys
+      files-keys-are-not-the-compositors
+      playlist-formats-are-total
       motion-never-guesses-a-frame
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes

@@ -1,0 +1,725 @@
+//! A list of things to play, read out of the file that names them.
+//!
+//! # Why a playlist is read HERE and not in `ronoctua-files`
+//!
+//! Because it is a CONTENT parser, and this crate is where content parsers
+//! live — the same argument `text.rs` makes at its top, word for word.
+//! `ronoctua-files` also builds the binary that runs as ROOT, and a playlist
+//! reader brings an XML parser and a percent-decoder with it; neither belongs
+//! in that closure.
+//!
+//! And the three functions that must agree about what a playlist IS —
+//! `pixels::how`, `text::is_text` and `facts::needs` — are all here. A parser
+//! one crate away would leave the table and the parser as two answers to one
+//! question.
+//!
+//! # What this deliberately does NOT do
+//!
+//! It does not touch the network, and nothing here can be made to. A remote
+//! entry is LISTED and never opened: fetching is `ronoctua-transfers`' work, a
+//! separate daemon, and this crate gains no edge to it.
+//!
+//! It does not follow a playlist that names another playlist. That would be an
+//! unbounded read driven by a file's content.
+//!
+//! It does not `stat` the entries. Resolving one is arithmetic on a `Path`;
+//! asking the disk about N of them is N syscalls for a panel, and whether a
+//! file is there is a truth the row tells when somebody plays it.
+
+use std::path::{Path, PathBuf};
+
+use crate::Refusal;
+use crate::key;
+
+/// The most of a playlist that is read.
+///
+/// `text::BYTE_CEILING`'s number and its argument: a file that claims to be a
+/// list of names should not be able to allocate four hundred megabytes in the
+/// inspector's thread before anything checks its size.
+pub const BYTE_CEILING: u64 = 1024 * 1024;
+
+/// How many entries are ASKED how long they run, when the list does not say.
+///
+/// # A list that declares nothing still deserves a timeline
+///
+/// Most playlists carry `#EXTINF`, and those cost nothing here. A bare list of
+/// names — the hand-written kind — carries no lengths at all, and without them
+/// the transport has a play glyph and no track: the owner reported exactly
+/// that, *"também a playlist sem linha de tempo"*.
+///
+/// So the gap is filled by asking, and asking costs a child process: measured
+/// on this machine, `ffprobe` takes 113 ms whatever the file's size, because
+/// what dominates is starting it. Sixteen of them is about a second and three
+/// quarters, spent on the inspector's own thread, on the ONE file the cursor
+/// is resting on — the thread drains to the newest ask, so walking a cursor
+/// past a folder of playlists costs one of these and not one each.
+///
+/// Past the ceiling an entry keeps whatever the list said about it, which for
+/// a bare list is nothing. It is a bound on a cost, not a promise about a
+/// length.
+pub const TIMED_CEILING: usize = 16;
+
+/// How many entries are kept.
+///
+/// `text::LINE_CEILING`'s number, and the same reasoning: past a couple of
+/// thousand rows nobody is reading the list, and the panel says it was cut.
+pub const ENTRY_CEILING: usize = 2_000;
+
+/// Which spelling of "a list of things to play" this turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The plain one: a name a line, with optional `#EXTINF:` before each.
+    M3u,
+    /// The ini one, whose fields are joined by a NUMBER rather than by order.
+    Pls,
+    /// The XML one, whose durations are in MILLISECONDS.
+    Xspf,
+}
+
+/// Where an entry points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Where {
+    /// A file on this machine, already resolved against the playlist's folder.
+    Local(PathBuf),
+    /// Somewhere else, shown and never opened.
+    Remote(String),
+    /// A name this system will not turn into a path.
+    ///
+    /// A NUL or a newline inside one — which no filesystem accepts and no
+    /// honest playlist writes.
+    Refused,
+}
+
+/// One thing to play.
+///
+/// `Eq` is not derived, and it is the declared duration's doing: a float has
+/// no total equality. `PartialEq` is what the comparisons here want — "is this
+/// still the same answer" — which is the decision `files::Looked` already made
+/// for the same reason.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    /// Where it points.
+    pub at: Where,
+    /// What the playlist called it, when it said.
+    pub title: Option<String>,
+    /// How long the playlist SAYS it runs.
+    ///
+    /// The playlist's word and not the file's — nothing here opens the file to
+    /// check, and a list that lies about a length is still the list.
+    pub seconds: Option<f64>,
+    /// What the playlist wrote, before it was resolved.
+    ///
+    /// The row shows this, because a person who wrote `../Album/01.flac`
+    /// should see that and not a path they never typed. The resolved one goes
+    /// on the message line.
+    pub written: String,
+}
+
+/// A playlist, read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct List {
+    /// Which spelling it was.
+    pub kind: Kind,
+    /// What it names, in the order it named them.
+    pub entries: Vec<Entry>,
+    /// There was more than this, and the panel says so on its last row.
+    pub cut: bool,
+}
+
+impl List {
+    /// The entries that are on this machine and do not say how long they run.
+    ///
+    /// What the host fills in. It is answered HERE — rather than the host
+    /// walking the entries itself — because the ceiling and the rule ("local,
+    /// and undeclared") belong with the list, and this module stays pure: it
+    /// returns which ones to ask about and never asks.
+    pub fn untimed(&self) -> Vec<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.seconds.is_none() && matches!(e.at, Where::Local(_)))
+            .map(|(n, _)| n)
+            .take(TIMED_CEILING)
+            .collect()
+    }
+
+    /// The entries something could actually be played from.
+    ///
+    /// One place, because the queue walks these and the rows are drawn from
+    /// the same list — and a drawn row number that did not match a queue
+    /// position would put the playing mark on the wrong line.
+    pub fn playable(&self) -> impl Iterator<Item = usize> + '_ {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.at, Where::Local(_)))
+            .map(|(n, _)| n)
+    }
+}
+
+/// Which types are a list of things to play rather than one of them.
+///
+/// The five the pinned database knows, and `application/xspf+xml`, which lives
+/// outside the `audio` branch and is a playlist all the same.
+pub const TYPES: [&str; 6] = [
+    "audio/x-mpegurl",
+    "application/vnd.apple.mpegurl",
+    "audio/x-scpls",
+    "application/xspf+xml",
+    "audio/x-ms-asx",
+    "audio/x-iriver-pla",
+];
+
+/// The two spellings this reader claims and does NOT open.
+///
+/// Declared rather than left as "whatever `kind_of` did not match", because
+/// the two are different things: one is a decision, the other is an omission,
+/// and only the first should reach a person as a sentence. With this list,
+/// `playlist-formats-are-total` can tell them apart — a seventh type added to
+/// [`TYPES`] and to neither side fails the check instead of quietly getting a
+/// refusal written for somebody else's format.
+pub const REFUSED: [&str; 2] = ["audio/x-ms-asx", "audio/x-iriver-pla"];
+
+/// Whether this type names other files rather than carrying sound.
+#[must_use]
+pub fn is_a_playlist(mime: &str) -> bool {
+    let mime = ronoctua_files::mime::canonical(mime);
+    TYPES.contains(&mime)
+}
+
+/// Which parser a type gets, or `None` for one that is refused.
+fn kind_of(mime: &str) -> Option<Kind> {
+    match ronoctua_files::mime::canonical(mime) {
+        "audio/x-mpegurl" | "application/vnd.apple.mpegurl" => Some(Kind::M3u),
+        "audio/x-scpls" => Some(Kind::Pls),
+        "application/xspf+xml" => Some(Kind::Xspf),
+        _ => None,
+    }
+}
+
+/// The list a file holds, if it holds one.
+///
+/// Three answers, and they are `text::of`'s three: `None` is "this is not a
+/// playlist and I have no opinion", `Some(Ok)` is the list, and `Some(Err)` is
+/// a sentence saying why there is none.
+#[must_use]
+pub fn of(path: &Path, mime: &str) -> Option<Result<List, Refusal>> {
+    if !is_a_playlist(mime) {
+        return None;
+    }
+    // TWO SPELLINGS THIS READER DOES NOT OPEN, and it says so rather than
+    // showing an empty list.
+    //
+    // ASX is Microsoft's, whose `<entryref href=…>` is a playlist inside a
+    // playlist BY URL — half of it is a fetch instruction, and there is no
+    // network here. PLA is iRiver's, a binary format with no published
+    // specification: writing a parser from a reverse-engineering note and
+    // never running it against a real file is what `mesh/` refuses to do per
+    // format, and the same answer applies.
+    let Some(kind) = kind_of(mime) else {
+        debug_assert!(
+            REFUSED.contains(&ronoctua_files::mime::canonical(mime)),
+            "a claimed type with no reader and no place among the refused"
+        );
+        return Some(Err(Refusal::Unsupported(key::PREVIEW_PLAYLIST_UNREAD)));
+    };
+    Some(read_it(path, kind))
+}
+
+/// The whole of it, once the spelling is settled.
+fn read_it(path: &Path, kind: Kind) -> Result<List, Refusal> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path).map_err(|_| Refusal::Unreadable)?;
+    let mut raw = Vec::new();
+    file.by_ref()
+        .take(BYTE_CEILING)
+        .read_to_end(&mut raw)
+        .map_err(|_| Refusal::Unreadable)?;
+    // LOSSY, because a playlist is a list of NAMES and a name is bytes: a
+    // stray Latin-1 accent in one line should not lose the other forty.
+    let text = String::from_utf8_lossy(&raw);
+    let folder = path.parent().unwrap_or(Path::new("."));
+
+    let mut found = match kind {
+        Kind::M3u => from_m3u(&text, folder),
+        Kind::Pls => from_pls(&text, folder),
+        Kind::Xspf => from_xspf(&text, folder),
+    };
+    let cut = found.len() > ENTRY_CEILING;
+    found.truncate(ENTRY_CEILING);
+    if found.is_empty() {
+        // NOTHING IN IT is a sentence the panel already has, and the true one:
+        // a file of comments is a file with nothing inside.
+        return Err(Refusal::Empty);
+    }
+    Ok(List {
+        kind,
+        entries: found,
+        cut,
+    })
+}
+
+/// Where a name in a playlist points.
+///
+/// # `..` and absolute paths are ALLOWED here, and refused in glTF
+///
+/// The difference is who opens what. A glTF's buffer URI is a resource the
+/// RENDERER opens behind the person's back, mid-parse, so `..` there is a file
+/// read nobody asked for. A playlist entry is SHOWN first and played on
+/// request — it is a listing row, and the same file is one `Enter` away in the
+/// listing already.
+///
+/// Refusing them would also break the feature outright: a `.m3u` exported by
+/// any music player is absolute, and `../Album/01.flac` is ordinary.
+///
+/// What they must not do is arrive silently, which is why [`Entry::written`]
+/// keeps what the file said and the row shows that.
+fn points_at(written: &str, folder: &Path) -> Where {
+    let written = written.trim();
+    if written.is_empty() {
+        return Where::Refused;
+    }
+    // A SCHEME IS A SCHEME. `file://` is a local path spelled long and is
+    // decoded; everything else is somewhere this crate does not go.
+    if let Some((scheme, rest)) = written.split_once("://")
+        && !scheme.is_empty()
+        && scheme.chars().next().is_some_and(char::is_alphabetic)
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+    {
+        if scheme.eq_ignore_ascii_case("file") {
+            let decoded = percent_decoded(rest);
+            return local(&decoded, folder);
+        }
+        return Where::Remote(written.to_owned());
+    }
+    local(&percent_decoded(written), folder)
+}
+
+/// A name that is not a URL, resolved against the playlist's own folder.
+fn local(name: &str, folder: &Path) -> Where {
+    // A NAME NO FILESYSTEM ACCEPTS IS NOT A NAME. A newline would also split
+    // one row into two on screen, which is a list saying something the file
+    // does not.
+    if name.contains('\0') || name.contains('\n') || name.contains('\r') {
+        return Where::Refused;
+    }
+    let as_path = Path::new(name);
+    Where::Local(if as_path.is_absolute() {
+        as_path.to_owned()
+    } else {
+        folder.join(as_path)
+    })
+}
+
+/// `%20` becomes a space, and a broken escape stays as it was written.
+fn percent_decoded(text: &str) -> String {
+    if !text.contains('%') {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut n = 0;
+    while n < bytes.len() {
+        if bytes[n] == b'%'
+            && n + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[n + 1] as char).to_digit(16),
+                (bytes[n + 2] as char).to_digit(16),
+            )
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            out.push((hi * 16 + lo) as u8);
+            n += 3;
+            continue;
+        }
+        out.push(bytes[n]);
+        n += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A duration a playlist declares, where `-1` is its way of saying "unknown".
+fn declared(text: &str) -> Option<f64> {
+    let n: f64 = text.trim().parse().ok()?;
+    (n.is_finite() && n > 0.0).then_some(n)
+}
+
+/// The plain list: a name a line, with an optional `#EXTINF:` above each.
+fn from_m3u(text: &str, folder: &Path) -> Vec<Entry> {
+    let mut out = Vec::new();
+    let mut title = None;
+    let mut seconds = None;
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("#EXTINF:") {
+            // THE FIRST COMMA ONLY. A title with a comma in it is ordinary —
+            // *"Michael Jackson - Billie Jean, single version"* — and
+            // splitting on all of them loses the half after it.
+            let (length, name) = rest.split_once(',').unwrap_or((rest, ""));
+            seconds = declared(length);
+            title = (!name.trim().is_empty()).then(|| name.trim().to_owned());
+            continue;
+        }
+        // EVERY OTHER `#` LINE IS A DIRECTIVE, and the HLS ones (`#EXT-X-…`)
+        // are directives this reader has no use for.
+        if line.starts_with('#') {
+            continue;
+        }
+        out.push(Entry {
+            at: points_at(line, folder),
+            title: title.take(),
+            seconds: seconds.take(),
+            written: line.to_owned(),
+        });
+    }
+    out
+}
+
+/// The ini list, whose fields are joined by a NUMBER rather than by order.
+fn from_pls(text: &str, folder: &Path) -> Vec<Entry> {
+    // BY THE NUMBER IN THE KEY, because `File2=` may be written before
+    // `File1=` and a `Title3=` may have no `File3=` at all.
+    let mut found: Vec<(u32, String, Option<String>, Option<f64>)> = Vec::new();
+    fn slot_for(found: &mut Vec<(u32, String, Option<String>, Option<f64>)>, n: u32) -> usize {
+        if let Some(seen) = found.iter().position(|(m, ..)| *m == n) {
+            return seen;
+        }
+        found.push((n, String::new(), None, None));
+        found.len() - 1
+    }
+    for line in text.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        let digits: String = key.chars().filter(char::is_ascii_digit).collect();
+        let Ok(n) = digits.parse::<u32>() else {
+            continue;
+        };
+        let word: String = key.chars().filter(|c| !c.is_ascii_digit()).collect();
+        // CASE-INSENSITIVE, because a dozen programs write this format and
+        // they do not agree on it.
+        if word.eq_ignore_ascii_case("File") {
+            let slot = slot_for(&mut found, n);
+            found[slot].1 = value.to_owned();
+        } else if word.eq_ignore_ascii_case("Title") {
+            let slot = slot_for(&mut found, n);
+            found[slot].2 = (!value.is_empty()).then(|| value.to_owned());
+        } else if word.eq_ignore_ascii_case("Length") {
+            let slot = slot_for(&mut found, n);
+            found[slot].3 = declared(value);
+        }
+    }
+    found.sort_by_key(|(n, ..)| *n);
+    found
+        .into_iter()
+        .filter(|(_, file, ..)| !file.is_empty())
+        .map(|(_, file, title, seconds)| Entry {
+            at: points_at(&file, folder),
+            title,
+            seconds,
+            written: file,
+        })
+        .collect()
+}
+
+/// The XML list, whose durations are in MILLISECONDS.
+fn from_xspf(text: &str, folder: &Path) -> Vec<Entry> {
+    let Ok(doc) = roxmltree::Document::parse(text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for track in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "track")
+    {
+        let child = |name: &str| {
+            track
+                .children()
+                .find(|c| c.is_element() && c.tag_name().name() == name)
+                .and_then(|c| c.text())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+        };
+        let Some(location) = child("location") else {
+            continue;
+        };
+        out.push(Entry {
+            at: points_at(location, folder),
+            title: child("title").map(ToOwned::to_owned),
+            // MILLISECONDS, which is this format's one unit trap: everything
+            // else in this file speaks seconds.
+            seconds: child("duration")
+                .and_then(|d| d.trim().parse::<f64>().ok())
+                .filter(|d| d.is_finite() && *d > 0.0)
+                .map(|d| d / 1000.0),
+            written: location.to_owned(),
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, Kind, Where, from_m3u, from_pls, from_xspf, is_a_playlist, of};
+    use std::path::{Path, PathBuf};
+
+    /// The folder every fixture resolves against.
+    fn folder() -> &'static Path {
+        Path::new("/music/album")
+    }
+
+    fn at(entry: &Entry) -> Option<&PathBuf> {
+        match &entry.at {
+            Where::Local(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// FAILS IF: the plain list stops reading like one.
+    ///
+    /// Three traps live in these six lines: an `#EXTINF` title may contain a
+    /// COMMA, `-1` is the format's way of saying "I do not know", and every
+    /// other `#` line is a directive — including the HLS ones, which name
+    /// nothing.
+    #[test]
+    fn the_plain_list_reads_its_directives_and_its_commas() {
+        let text = "#EXTM3U\r\n\
+                    #EXT-X-TARGETDURATION:10\r\n\
+                    #EXTINF:132,sample (mp3)\r\n\
+                    sample-aud.mp3\r\n\
+                    #EXTINF:293,Michael Jackson - Billie Jean, single version\n\
+                    Billie Jean - Michael Jackson.flac\n\
+                    #EXTINF:-1,length unknown\n\
+                    sample-aud.ogg\n\
+                    \n\
+                    /elsewhere/absolute.wav\n";
+        let out = from_m3u(text, folder());
+        assert_eq!(out.len(), 4, "{out:#?}");
+
+        assert_eq!(out[0].title.as_deref(), Some("sample (mp3)"));
+        assert_eq!(out[0].seconds, Some(132.0));
+        assert_eq!(
+            at(&out[0]),
+            Some(&PathBuf::from("/music/album/sample-aud.mp3"))
+        );
+
+        // THE FIRST COMMA ONLY — the rest of the title is part of the title.
+        assert_eq!(
+            out[1].title.as_deref(),
+            Some("Michael Jackson - Billie Jean, single version")
+        );
+        assert_eq!(
+            at(&out[1]),
+            Some(&PathBuf::from(
+                "/music/album/Billie Jean - Michael Jackson.flac"
+            ))
+        );
+
+        // `-1` IS NOT A DURATION.
+        assert_eq!(out[2].seconds, None, "-1 became a length");
+        assert_eq!(out[2].title.as_deref(), Some("length unknown"));
+
+        // AN ABSOLUTE NAME IS TAKEN AS WRITTEN, and it has no `#EXTINF` above
+        // it, so it carries neither a title nor a length.
+        assert_eq!(at(&out[3]), Some(&PathBuf::from("/elsewhere/absolute.wav")));
+        assert_eq!(out[3].title, None);
+        assert_eq!(out[3].seconds, None);
+
+        // AND THE CARRIAGE RETURNS ARE GONE, or every other path would end in
+        // one and no file would ever be found.
+        assert!(out.iter().all(|e| !e.written.contains('\r')));
+    }
+
+    /// FAILS IF: the ini list is read by ORDER rather than by its numbers.
+    ///
+    /// Which is the whole of this format: `File2=` may be written above
+    /// `File1=`, and a `Title` may arrive before the `File` it belongs to.
+    #[test]
+    fn the_ini_list_joins_its_fields_by_number() {
+        let text = "[playlist]\n\
+                    NumberOfEntries=2\n\
+                    Title2=second, with a comma\n\
+                    File2=/elsewhere/two.wav\n\
+                    Length2=29\n\
+                    file1=sample-aud.mp3\n\
+                    TITLE1=first\n\
+                    length1=132\n\
+                    Version=2\n";
+        let out = from_pls(text, folder());
+        assert_eq!(out.len(), 2, "{out:#?}");
+        // SORTED BY THE NUMBER, not by where the lines sat.
+        assert_eq!(out[0].title.as_deref(), Some("first"));
+        assert_eq!(out[0].seconds, Some(132.0));
+        assert_eq!(
+            at(&out[0]),
+            Some(&PathBuf::from("/music/album/sample-aud.mp3"))
+        );
+        assert_eq!(out[1].title.as_deref(), Some("second, with a comma"));
+        assert_eq!(at(&out[1]), Some(&PathBuf::from("/elsewhere/two.wav")));
+
+        // A `Title` WITH NO `File` IS NOT AN ENTRY.
+        let orphan = from_pls("[playlist]\nTitle7=nothing points here\n", folder());
+        assert!(orphan.is_empty(), "{orphan:#?}");
+    }
+
+    /// FAILS IF: XSPF's milliseconds are read as seconds, or its escapes are
+    /// left in the path.
+    #[test]
+    fn the_xml_list_speaks_milliseconds_and_percent_escapes() {
+        let text = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <playlist version="1" xmlns="http://xspf.org/ns/0/">
+              <trackList>
+                <track>
+                  <location>Billie%20Jean%20-%20Michael%20Jackson.flac</location>
+                  <title>Billie Jean</title>
+                  <duration>293800</duration>
+                </track>
+                <track>
+                  <location>file:///elsewhere/two.wav</location>
+                </track>
+                <track>
+                  <location>https://example.invalid/stream.mp3</location>
+                  <title>a stream</title>
+                </track>
+                <track><title>no location at all</title></track>
+              </trackList>
+            </playlist>"#;
+        let out = from_xspf(text, folder());
+        assert_eq!(out.len(), 3, "a track with no location became an entry");
+
+        // MILLISECONDS. Every other format here says seconds.
+        assert_eq!(out[0].seconds, Some(293.8));
+        assert_eq!(
+            at(&out[0]),
+            Some(&PathBuf::from(
+                "/music/album/Billie Jean - Michael Jackson.flac"
+            ))
+        );
+
+        // `file://` IS A LOCAL PATH SPELLED LONG.
+        assert_eq!(at(&out[1]), Some(&PathBuf::from("/elsewhere/two.wav")));
+
+        // AND ANY OTHER SCHEME IS SOMEWHERE THIS CRATE DOES NOT GO.
+        assert_eq!(
+            out[2].at,
+            Where::Remote("https://example.invalid/stream.mp3".to_owned())
+        );
+    }
+
+    /// FAILS IF: a name that is not a name becomes a path, or a remote entry
+    /// becomes a local one.
+    #[test]
+    fn a_name_that_is_not_a_name_is_refused_and_a_url_is_never_opened() {
+        let out = from_m3u(
+            "ordinary.mp3\n\
+             ../other album/one.flac\n\
+             /absolute/two.wav\n\
+             http://192.0.2.1/three.mp3\n\
+             ftp://host/four.mp3\n\
+             file:///five.wav\n",
+            folder(),
+        );
+        assert_eq!(
+            at(&out[0]),
+            Some(&PathBuf::from("/music/album/ordinary.mp3"))
+        );
+        // `..` IS ALLOWED, and shown as it was written — a playlist any music
+        // player exports is full of them.
+        assert_eq!(
+            at(&out[1]),
+            Some(&PathBuf::from("/music/album/../other album/one.flac"))
+        );
+        assert_eq!(out[1].written, "../other album/one.flac");
+        assert_eq!(at(&out[2]), Some(&PathBuf::from("/absolute/two.wav")));
+        // TWO SCHEMES THIS CRATE DOES NOT GO TO.
+        assert!(matches!(out[3].at, Where::Remote(_)));
+        assert!(matches!(out[4].at, Where::Remote(_)));
+        // AND ONE THAT IS LOCAL ALL ALONG.
+        assert_eq!(at(&out[5]), Some(&PathBuf::from("/five.wav")));
+
+        // A NUL IS NOT A NAME.
+        let bad = from_m3u("one\u{0}two.mp3\n", folder());
+        assert_eq!(bad[0].at, Where::Refused);
+    }
+
+    /// FAILS IF: a type this reader cannot open is answered with an empty list
+    /// rather than a sentence.
+    #[test]
+    fn the_two_spellings_this_reader_does_not_open_say_so() {
+        let nowhere = Path::new("/nonexistent.asx");
+        for kind in ["audio/x-ms-asx", "audio/x-iriver-pla"] {
+            assert!(is_a_playlist(kind));
+            match of(nowhere, kind) {
+                Some(Err(crate::Refusal::Unsupported(key))) => {
+                    assert_eq!(key, crate::key::PREVIEW_PLAYLIST_UNREAD);
+                }
+                other => panic!("{kind} answered {other:?}"),
+            }
+        }
+        // AND A FILE THAT IS NOT A PLAYLIST GETS NO OPINION AT ALL.
+        assert!(of(nowhere, "audio/mpeg").is_none());
+        assert!(of(nowhere, "image/png").is_none());
+        // THE THREE THAT ARE READ reach the reader, and fail on the file
+        // rather than on the spelling.
+        for kind in ["audio/x-mpegurl", "audio/x-scpls", "application/xspf+xml"] {
+            assert!(matches!(
+                of(nowhere, kind),
+                Some(Err(crate::Refusal::Unreadable))
+            ));
+        }
+    }
+
+    /// FAILS IF: the host is asked to probe something it should not, or is not
+    /// asked about something it should be.
+    ///
+    /// A bare list has no lengths and still needs a timeline; a remote entry
+    /// must never be opened; and a list of a thousand names must not cost a
+    /// thousand child processes for a cursor resting on it.
+    #[test]
+    fn what_the_list_did_not_declare_is_asked_about_within_a_bound() {
+        let bare = super::List {
+            kind: Kind::M3u,
+            entries: from_m3u("one.mp3\nhttp://192.0.2.1/two.mp3\nthree.flac\n", folder()),
+            cut: false,
+        };
+        // THE LOCAL ONES, and never the remote one.
+        assert_eq!(bare.untimed(), vec![0, 2]);
+
+        // AND WHAT THE LIST ALREADY SAID IS NOT ASKED AGAIN.
+        let told = super::List {
+            kind: Kind::M3u,
+            entries: from_m3u("#EXTINF:132,a\none.mp3\ntwo.flac\n", folder()),
+            cut: false,
+        };
+        assert_eq!(told.untimed(), vec![1], "a declared length was asked about");
+
+        // AND A LONG LIST COSTS A BOUNDED NUMBER OF THEM.
+        let many = super::List {
+            kind: Kind::M3u,
+            entries: from_m3u(&"x.mp3\n".repeat(500), folder()),
+            cut: false,
+        };
+        assert_eq!(many.untimed().len(), super::TIMED_CEILING);
+    }
+
+    /// FAILS IF: the queue and the drawn rows stop agreeing about which entry
+    /// is which.
+    #[test]
+    fn only_the_local_entries_are_playable_and_they_keep_their_row() {
+        let out = from_m3u("one.mp3\nhttp://192.0.2.1/two.mp3\nthree.flac\n", folder());
+        let list = super::List {
+            kind: Kind::M3u,
+            entries: out,
+            cut: false,
+        };
+        // THE INDICES ARE THE DRAWN ROWS', so a mark put on `playable[1]` lands
+        // on row two and not on row one.
+        assert_eq!(list.playable().collect::<Vec<_>>(), vec![0, 2]);
+    }
+}

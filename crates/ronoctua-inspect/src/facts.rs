@@ -48,10 +48,41 @@ use crate::tools::{self, Tool};
 /// A row of the info panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fact {
-    /// The row's label, as a text key.
-    pub label: &'static str,
+    /// What the row is called.
+    pub label: Label,
     /// What the row says.
     pub value: Value,
+}
+
+/// What a row is CALLED — a phrase of ours, or a name out of the file.
+///
+/// # Why a label is ever anything but a key
+///
+/// Nearly every row here is a question this system decided to ask, so its
+/// label is a sentence in both languages and a key is the only honest way to
+/// carry it. Invariant 8 is about exactly that.
+///
+/// A file's own tags are the other kind. A container may carry `BPM (beats per
+/// minute)`, `MUSICBRAINZ_TRACKID` or anything at all a program chose to write,
+/// and the owner asked for them to be shown. There is no key for a name nobody
+/// has seen — and inventing `files-fact-other = { $name }` would be worse, not
+/// better: the name would then arrive as a Fluent argument, which is precisely
+/// how an untranslated key reaches the screen.
+///
+/// So the name is DATA, and it travels as data. It is the rule the manager
+/// already keeps in the other direction — a camera's model is `Pixel 8 Pro` in
+/// every language — and the same rule a `Choice`'s label follows.
+///
+/// The mechanism is narrow on purpose: [`Label::Named`] is built at ONE site,
+/// out of a tag name read from a file, and `inspect-labels-are-keys` is what
+/// keeps it that way. A literal there would be invariant 8's defect wearing
+/// this type as a disguise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Label {
+    /// A phrase of ours, by text key.
+    Key(&'static str),
+    /// A name the FILE chose, shown as it was written.
+    Named(String),
 }
 
 /// What a fact's value is.
@@ -123,7 +154,16 @@ pub fn needs(mime: &str) -> Vec<Tool> {
     let mime = ronoctua_files::mime::canonical(mime);
     let media = mime.split_once('/').map_or(mime, |(m, _)| m);
     let mut out = Vec::new();
-    if matches!(media, "image" | "audio" | "video") {
+    // AND NEVER OF A PLAYLIST, whose type is `audio/*` and whose content is
+    // the names of other files.
+    //
+    // Measured against the pinned binary: ffprobe on an `.m3u8` OPENS the
+    // first segment it names and reports that file's codec, sample rate and
+    // duration — so the panel would say a list of nine tracks is two minutes
+    // twelve long and encoded as MP3. (`http` is not on ffmpeg's default
+    // protocol whitelist, so the segment it opens is a local one; the wrong
+    // answer is the defect here, not a fetch.)
+    if matches!(media, "image" | "audio" | "video") && !crate::playlist::is_a_playlist(mime) {
         out.push(Tool::Ffprobe);
     }
     if matches!(media, "image" | "video") {
@@ -429,6 +469,74 @@ pub fn shape_of(text: &str) -> Option<Shape> {
     })
 }
 
+/// How fast a drawn waveform runs, in frames a second.
+///
+/// It is not a picture being reproduced, it is one being drawn, so there is no
+/// "the file's own rate" to honour — only what reads as movement against what
+/// it costs. Twelve, measured: ten seconds of waveform render in 22 to 32 ms,
+/// and at a panel's size the frames above that are the same picture twice.
+///
+/// A cadence is not a colour, a font, a size, a spacing or a codepoint, so it
+/// is a constant and not a token — the same standing that [`FASTEST_VIDEO`]
+/// has, three lines up.
+pub const WAVES_FPS: f64 = 12.0;
+
+/// Whether a sound file carries artwork.
+///
+/// ANY video stream in an audio container is the artwork — the question is not
+/// asked of `disposition.attached_pic`, because a demuxer that fails to mark it
+/// would silently pick the wrong filter graph, and the wrong graph is the one
+/// that hangs. See [`crate::motion::Show`].
+#[must_use]
+pub fn has_cover(text: &str) -> bool {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    doc.get("streams")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|streams| {
+            streams
+                .iter()
+                .any(|s| s.get("codec_type").and_then(serde_json::Value::as_str) == Some("video"))
+        })
+}
+
+/// What a SOUND needs to be watched, out of the same probe.
+///
+/// The twin of [`shape_of`], and separate from it on purpose: `shape_of`'s
+/// requirement of a video stream that is not an album's cover is the one thing
+/// standing between a player and a still picture, and widening it to let sound
+/// through would dissolve it.
+///
+/// `None` means there is no sound in here — which for an `audio/*` file means
+/// the container lied or the demuxer failed, and either way there is nothing
+/// to play.
+#[must_use]
+pub fn sound_shape_of(text: &str) -> Option<Shape> {
+    let doc: serde_json::Value = serde_json::from_str(text).ok()?;
+    let streams = doc.get("streams")?.as_array()?;
+    streams
+        .iter()
+        .find(|s| s.get("codec_type").and_then(serde_json::Value::as_str) == Some("audio"))?;
+
+    let seconds = doc
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(text_or_number)
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.05 && *d < 86_400.0);
+
+    Some(Shape {
+        fps: WAVES_FPS,
+        seconds,
+        // AND THERE IS ALWAYS SOMETHING TO HEAR, because that is what this
+        // file IS. The field exists to stop a pulse output being asked for on
+        // a silent film — a request ffmpeg answers by refusing the whole
+        // command — and here the audio stream was just found.
+        sound: true,
+    })
+}
+
 /// The sentences the panel shows, read out of ffprobe's JSON.
 ///
 /// # A picture opened as a film
@@ -482,7 +590,7 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
         )
     {
         out.push(Fact {
-            label: key::FACT_DIMENSIONS,
+            label: Label::Key(key::FACT_DIMENSIONS),
             value: Value::Phrase {
                 key: key::VALUE_PIXELS,
                 args: vec![("width", w.to_string()), ("height", h.to_string())],
@@ -493,7 +601,7 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
         return out;
     };
     out.push(Fact {
-        label: key::FACT_DURATION,
+        label: Label::Key(key::FACT_DURATION),
         value: Value::Data(clock(seconds)),
     });
     if let Some(name) = format
@@ -501,14 +609,14 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
         .and_then(serde_json::Value::as_str)
     {
         out.push(Fact {
-            label: key::FACT_CONTAINER,
+            label: Label::Key(key::FACT_CONTAINER),
             value: Value::Data(name.to_owned()),
         });
     }
     if let Some(v) = video {
         if let Some(codec) = codec_name(v) {
             out.push(Fact {
-                label: key::FACT_VIDEO,
+                label: Label::Key(key::FACT_VIDEO),
                 value: Value::Data(codec),
             });
         }
@@ -519,7 +627,7 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
             .and_then(ratio)
         {
             out.push(Fact {
-                label: key::FACT_RATE,
+                label: Label::Key(key::FACT_RATE),
                 value: Value::Phrase {
                     key: key::VALUE_FPS,
                     args: vec![("fps", trimmed(fps))],
@@ -530,7 +638,7 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
     if let Some(a) = audio {
         if let Some(codec) = codec_name(a) {
             out.push(Fact {
-                label: key::FACT_AUDIO,
+                label: Label::Key(key::FACT_AUDIO),
                 value: Value::Data(codec),
             });
         }
@@ -540,7 +648,7 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
             .and_then(|s| s.parse::<f64>().ok())
         {
             out.push(Fact {
-                label: key::FACT_SAMPLING,
+                label: Label::Key(key::FACT_SAMPLING),
                 value: Value::Phrase {
                     key: key::VALUE_HERTZ,
                     args: vec![("khz", trimmed(hz / 1000.0))],
@@ -549,7 +657,7 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
         }
         if let Some(n) = a.get("channels").and_then(serde_json::Value::as_u64) {
             out.push(Fact {
-                label: key::FACT_CHANNELS,
+                label: Label::Key(key::FACT_CHANNELS),
                 value: Value::Phrase {
                     key: key::VALUE_CHANNELS,
                     args: vec![("n", n.to_string())],
@@ -564,27 +672,240 @@ pub fn from_probe(text: &str) -> Vec<Fact> {
         .filter(|b| *b > 0.0)
     {
         out.push(Fact {
-            label: key::FACT_BITRATE,
+            label: Label::Key(key::FACT_BITRATE),
             value: Value::Phrase {
                 key: key::VALUE_KBPS,
                 args: vec![("kbps", ((bits / 1000.0).round() as u64).to_string())],
             },
         });
     }
-    // THE TAGS ARE CASE-INSENSITIVE because the containers disagree: Matroska
-    // and Ogg write `TITLE`, MP4 writes `title`, and a panel that showed one
-    // and not the other would look like a bug in the file.
-    for (label, wanted) in [
-        (key::FACT_TITLE, "title"),
-        (key::FACT_ARTIST, "artist"),
-        (key::FACT_ALBUM, "album"),
-    ] {
-        if let Some(v) = tag(format, wanted) {
+    out.extend(written_inside(format, audio, streams));
+    out
+}
+
+/// The names a container might use for one thing.
+///
+/// # Why a table and not a name each
+///
+/// Because the containers disagree twice over. They disagree about CASE —
+/// Matroska and Ogg write `TITLE`, MP4 writes `title` — and about the name
+/// itself: the same fact is `album_artist` in one file, `ALBUMARTIST` in
+/// another and `TPE2` where a raw ID3 frame survived. A panel that showed one
+/// spelling and not the other looks like a bug in the file.
+///
+/// The order within a row is the order they are TRIED, so the modern spelling
+/// wins where a file carries both.
+///
+/// It is also what the unknown tags are subtracted from: every name here is
+/// already on screen under a phrase of ours, and showing it twice — once
+/// translated and once raw — is one fact wearing two labels.
+const SOUND_TAGS: [(&str, &[&str]); 12] = [
+    (key::FACT_TITLE, &["title", "TIT2"]),
+    (key::FACT_ARTIST, &["artist", "TPE1"]),
+    (key::FACT_ALBUM, &["album", "TALB"]),
+    (
+        key::FACT_ALBUM_ARTIST,
+        &["album_artist", "albumartist", "album artist", "TPE2"],
+    ),
+    (key::FACT_YEAR, &["date", "year", "TDRC", "TYER"]),
+    (key::FACT_GENRE, &["genre", "TCON"]),
+    (key::FACT_COMPOSER, &["composer", "TCOM"]),
+    (
+        key::FACT_PUBLISHER,
+        &["publisher", "label", "organization", "TPUB"],
+    ),
+    (key::FACT_ISRC, &["ISRC", "TSRC"]),
+    (
+        key::FACT_ENCODER,
+        &["encoder", "encoded_by", "encoded by", "TENC", "TSSE"],
+    ),
+    // THE TWO THAT ARE COUNTED rather than shown verbatim — they are here so
+    // their names are subtracted from the unknown tags, and read below.
+    (key::FACT_TRACK, &["track", "tracknumber", "TRCK"]),
+    (key::FACT_DISC, &["disc", "discnumber", "TPOS"]),
+];
+
+/// The names that carry a TOTAL for the two counted tags.
+const SOUND_TOTALS: [&str; 4] = ["TRACKTOTAL", "totaltracks", "DISCTOTAL", "totaldiscs"];
+
+/// The codecs that throw nothing away.
+///
+/// A named set and not a field, because ffprobe has none: there is no
+/// "lossless" in the document, and it cannot be inferred from a bit rate. The
+/// short `codec_name` and never `codec_long_name`, which is prose and changes
+/// between releases.
+///
+/// Every `pcm_*` is lossless by construction — there are some thirty of them,
+/// and a list of thirty names is a list that goes stale — so they are matched
+/// by prefix.
+const LOSSLESS: [&str; 8] = [
+    "flac", "alac", "wavpack", "tta", "truehd", "mlp", "ape", "shorten",
+];
+
+/// What the file itself says about the recording.
+///
+/// The curated rows first, in the order of [`SOUND_TAGS`], and then every
+/// other tag the file carries under its own name — which is what the owner
+/// asked for, and why [`Label`] exists.
+fn written_inside(
+    format: Option<&serde_json::Value>,
+    audio: Option<&serde_json::Value>,
+    streams: &[serde_json::Value],
+) -> Vec<Fact> {
+    let mut out = Vec::new();
+    let tags = tags_of(format, audio);
+
+    for (label, names) in SOUND_TAGS {
+        // THE TWO COUNTED ONES ARE READ BELOW, out of the same table so their
+        // names are subtracted from the unknown tags exactly once.
+        if label == key::FACT_TRACK || label == key::FACT_DISC {
+            continue;
+        }
+        if let Some(v) = tag_named(&tags, names) {
             out.push(Fact {
-                label,
+                label: Label::Key(label),
                 value: Value::Data(v),
             });
         }
+    }
+
+    // A TRACK IS `6` WITH A TOTAL BESIDE IT, OR `6/9` IN ONE FIELD, and which
+    // of the two a file uses is the container's business rather than ours.
+    for (label, names, totals) in [
+        (
+            key::FACT_TRACK,
+            &["track", "tracknumber", "TRCK"][..],
+            &["TRACKTOTAL", "totaltracks"][..],
+        ),
+        (
+            key::FACT_DISC,
+            &["disc", "discnumber", "TPOS"][..],
+            &["DISCTOTAL", "totaldiscs"][..],
+        ),
+    ] {
+        let Some(raw) = tag_named(&tags, names) else {
+            continue;
+        };
+        let (at, within) = raw
+            .split_once('/')
+            .map_or((raw.as_str(), None), |(a, b)| (a, Some(b)));
+        let total = within
+            .map(str::to_owned)
+            .or_else(|| tag_named(&tags, totals));
+        let at = at.trim().to_owned();
+        out.push(Fact {
+            label: Label::Key(label),
+            value: match total.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) {
+                Some(total) => Value::Phrase {
+                    key: key::VALUE_OF_TOTAL,
+                    args: vec![("at", at), ("total", total)],
+                },
+                None => Value::Data(at),
+            },
+        });
+    }
+
+    if let Some(a) = audio {
+        // BITS PER SAMPLE, AND NEVER `sample_fmt`.
+        //
+        // `sample_fmt` is the DECODER's output format: a 24-bit FLAC says
+        // `s32` and every lossy codec says `fltp`, so reporting it would put
+        // "32 bits" under an mp3. Measured on the owner's five files.
+        //
+        // `bits_per_raw_sample` arrives as a STRING in some containers and a
+        // number in others — `"24"` in his FLAC — which is what `text_or_number`
+        // is for; and `bits_per_sample` is 0 for "not applicable" rather than
+        // absent, which is why it is filtered rather than merely parsed.
+        if let Some(bits) = a
+            .get("bits_per_raw_sample")
+            .and_then(text_or_number)
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| {
+                a.get("bits_per_sample")
+                    .and_then(text_or_number)
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .filter(|b| *b > 0)
+        {
+            out.push(Fact {
+                label: Label::Key(key::FACT_DEPTH),
+                value: Value::Phrase {
+                    key: key::VALUE_BITS,
+                    args: vec![("n", bits.to_string())],
+                },
+            });
+        }
+        // HOW THE CHANNELS SIT, and only when it says something the channel
+        // COUNT did not: `files-fact-channels` already reads "stereo", and two
+        // rows saying one thing is one row too many.
+        if let Some(layout) = a
+            .get("channel_layout")
+            .and_then(serde_json::Value::as_str)
+            .filter(|l| !matches!(*l, "mono" | "stereo" | "unknown"))
+        {
+            out.push(Fact {
+                label: Label::Key(key::FACT_LAYOUT),
+                value: Value::Data(layout.to_owned()),
+            });
+        }
+        if let Some(short) = a
+            .get("codec_name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|c| !c.is_empty() && *c != "unknown")
+        {
+            let kept = short.starts_with("pcm_") || LOSSLESS.contains(&short);
+            out.push(Fact {
+                label: Label::Key(key::FACT_COMPRESSION),
+                value: Value::phrase(if kept {
+                    key::VALUE_LOSSLESS
+                } else {
+                    key::VALUE_LOSSY
+                }),
+            });
+        }
+    }
+
+    // THE ARTWORK, which is the ONE stream the reader above deliberately skips
+    // — the opposite question, asked on purpose. Measured: 600×600 in the
+    // owner's FLAC and 1280×720 in his mp3.
+    if let Some(art) = streams.iter().find(|s| {
+        s.pointer("/disposition/attached_pic")
+            .and_then(serde_json::Value::as_i64)
+            == Some(1)
+    }) && let (Some(w), Some(h)) = (
+        art.get("width").and_then(serde_json::Value::as_u64),
+        art.get("height").and_then(serde_json::Value::as_u64),
+    ) {
+        out.push(Fact {
+            label: Label::Key(key::FACT_COVER),
+            value: Value::Phrase {
+                key: key::VALUE_PIXELS,
+                args: vec![("width", w.to_string()), ("height", h.to_string())],
+            },
+        });
+    }
+
+    // AND EVERY OTHER TAG THE FILE CARRIES, under the name the file wrote.
+    //
+    // Sorted by name, and that is not tidiness: ffprobe's object order is a
+    // hash order, and rows that move between two readings of the same file
+    // read as a bug in the panel.
+    let mut named: Vec<&(&str, String)> = tags
+        .iter()
+        .filter(|(k, _)| {
+            !SOUND_TAGS
+                .iter()
+                .flat_map(|(_, names)| names.iter())
+                .chain(SOUND_TOTALS.iter())
+                .any(|known| known.eq_ignore_ascii_case(k))
+        })
+        .collect();
+    named.sort_by_key(|(name, _)| name.to_lowercase());
+    for (name, value) in named.into_iter().take(TAGS_CEILING) {
+        out.push(Fact {
+            label: Label::Named((*name).to_owned()),
+            value: Value::Data(value.clone()),
+        });
     }
     out
 }
@@ -618,43 +939,43 @@ pub fn from_exif(text: &str, place: Place) -> Vec<Fact> {
     // repeats the first on most cameras ("NIKON CORPORATION" / "NIKON D850").
     if let Some(camera) = camera(string("Make").as_deref(), string("Model").as_deref()) {
         out.push(Fact {
-            label: key::FACT_CAMERA,
+            label: Label::Key(key::FACT_CAMERA),
             value: Value::Data(camera),
         });
     }
     if let Some(lens) = string("LensModel") {
         out.push(Fact {
-            label: key::FACT_LENS,
+            label: Label::Key(key::FACT_LENS),
             value: Value::Data(lens),
         });
     }
     if let Some(when) = string("DateTimeOriginal").as_deref().and_then(taken) {
         out.push(Fact {
-            label: key::FACT_TAKEN,
+            label: Label::Key(key::FACT_TAKEN),
             value: Value::Data(when),
         });
     }
     if let Some(iso) = number("ISO") {
         out.push(Fact {
-            label: key::FACT_ISO,
+            label: Label::Key(key::FACT_ISO),
             value: Value::Data(trimmed(iso)),
         });
     }
     if let Some(t) = number("ExposureTime").filter(|t| *t > 0.0) {
         out.push(Fact {
-            label: key::FACT_SHUTTER,
+            label: Label::Key(key::FACT_SHUTTER),
             value: shutter(t),
         });
     }
     if let Some(f) = number("FNumber").filter(|f| *f > 0.0) {
         out.push(Fact {
-            label: key::FACT_APERTURE,
+            label: Label::Key(key::FACT_APERTURE),
             value: Value::Data(format!("f/{}", trimmed(f))),
         });
     }
     if let Some(mm) = number("FocalLength").filter(|m| *m > 0.0) {
         out.push(Fact {
-            label: key::FACT_FOCAL,
+            label: Label::Key(key::FACT_FOCAL),
             value: Value::Phrase {
                 key: key::VALUE_MILLIMETRES,
                 args: vec![("mm", trimmed(mm))],
@@ -663,7 +984,7 @@ pub fn from_exif(text: &str, place: Place) -> Vec<Fact> {
     }
     if let (Some(lat), Some(lon)) = (number("GPSLatitude"), number("GPSLongitude")) {
         out.push(Fact {
-            label: key::FACT_PLACE,
+            label: Label::Key(key::FACT_PLACE),
             value: match place {
                 Place::Withheld => Value::phrase(key::VALUE_PLACE_WITHHELD),
                 // FIVE DECIMALS is about a metre, which is as much as a phone
@@ -690,7 +1011,7 @@ pub fn from_pdfinfo(text: &str) -> Vec<Fact> {
         .and_then(|n| n.trim().parse::<u64>().ok())
         .map(|n| {
             vec![Fact {
-                label: key::FACT_PAGES,
+                label: Label::Key(key::FACT_PAGES),
                 value: Value::Phrase {
                     key: key::VALUE_PAGES,
                     args: vec![("n", n.to_string())],
@@ -743,17 +1064,97 @@ fn codec_name(stream: &serde_json::Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// One of the container's tags, by a name compared without case.
-fn tag(format: Option<&serde_json::Value>, wanted: &str) -> Option<String> {
-    format
-        .and_then(|f| f.get("tags"))
-        .and_then(serde_json::Value::as_object)?
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(wanted))
-        .and_then(|(_, v)| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
+/// The most of one tag's value that is kept.
+///
+/// `text::LINE_BYTES`' number and its argument, one register along: a value is
+/// cloned into a `Field`'s `explain` once per visible row per FRAME, and the
+/// owner's own FLAC carries a 2 545-character review in `comment`. Measured on
+/// his files: 548 characters in an mp3's `description`, and the same 548 again
+/// in its `synopsis`.
+///
+/// What it costs is honest and worth writing down: the end of that review is
+/// not on the message line either, and nothing on screen says it was cut.
+const TAG_BYTES: usize = 512;
+
+/// How many tags of the file's own the panel will show.
+///
+/// ID3 permits arbitrary `TXXX` frames, so "every tag" has no upper bound in
+/// the format. The curated rows are never cut — only the ones nobody named.
+const TAGS_CEILING: usize = 64;
+
+/// A tag's value, made fit to be one row of a panel.
+///
+/// Control characters become spaces and runs of whitespace become one. Not a
+/// nicety: `elide_end` counts CLUSTERS, and a newline is one cluster that
+/// draws nothing — so a value with three of them looks short on the row and
+/// arrives at the one-line message register as three lines.
+fn tidy(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len().min(TAG_BYTES));
+    let mut space = false;
+    for c in raw.chars() {
+        if c.is_control() || c.is_whitespace() {
+            space = !out.is_empty();
+            continue;
+        }
+        if space {
+            out.push(' ');
+            space = false;
+        }
+        // ON A CHARACTER BOUNDARY, because a byte ceiling applied to bytes
+        // makes invalid UTF-8 out of any tag that is not ASCII.
+        if out.len() + c.len_utf8() > TAG_BYTES {
+            break;
+        }
+        out.push(c);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Every tag the file carries, from BOTH places it may have put them.
+///
+/// # Ogg writes them on the stream, and everything else on the container
+///
+/// Measured on the owner's own files: `sample-aud.ogg` has no `tags` object on
+/// its format at all, and `streams[0].tags` holds all three of them — Vorbis
+/// comments belong to the stream by construction. The same three tags sit on
+/// `format.tags` in his `.mp3` and his `.wav`. Reading one place found half of
+/// what he has.
+///
+/// The format comes FIRST where both carry a name: a container's tag is about
+/// the file and a stream's is about the stream, and where they disagree it is
+/// the file that was asked about. His mp3 says `Lavf61.7.100` on one and
+/// `Lavc61.19` on the other.
+///
+/// `stream` is the ORDINARY audio stream, never the artwork's — whose own tags
+/// are `title: "Album cover"`, which would otherwise become the file's title.
+fn tags_of<'a>(
+    format: Option<&'a serde_json::Value>,
+    stream: Option<&'a serde_json::Value>,
+) -> Vec<(&'a str, String)> {
+    let mut out: Vec<(&str, String)> = Vec::new();
+    for place in [format, stream].into_iter().flatten() {
+        let Some(object) = place.get("tags").and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        for (name, value) in object {
+            if out.iter().any(|(k, _)| k.eq_ignore_ascii_case(name)) {
+                continue;
+            }
+            if let Some(text) = value.as_str().and_then(tidy) {
+                out.push((name.as_str(), text));
+            }
+        }
+    }
+    out
+}
+
+/// One tag out of that list, by any of the names a container might use for it.
+fn tag_named(tags: &[(&str, String)], names: &[&str]) -> Option<String> {
+    names.iter().find_map(|wanted| {
+        tags.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(wanted))
+            .map(|(_, v)| v.clone())
+    })
 }
 
 /// `"24/1"` becomes 24, `"0/0"` becomes nothing.
@@ -782,8 +1183,17 @@ fn trimmed(n: f64) -> String {
 ///
 /// Digits and colons, which is the same notation in every language this ships
 /// in — so no key, the way a filename needs no key.
-pub(crate) fn clock(seconds: f64) -> String {
-    let whole = seconds.max(0.0).round() as u64;
+pub fn clock(seconds: f64) -> String {
+    // TRUNCATED, and not rounded, because the ELAPSED time is truncated and
+    // the two are read side by side: a track of 293,8 s rounded to `4:54` is a
+    // total the counter beside it never reaches. The owner has both on screen
+    // at once — the transport says one and the facts sheet said the other, on
+    // the same file.
+    //
+    // It is also what every other player writes, and what `ffprobe`'s own
+    // 293.802154 becomes everywhere else.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let whole = seconds.max(0.0).floor() as u64;
     let (h, m, s) = (whole / 3600, (whole % 3600) / 60, whole % 60);
     if h > 0 {
         format!("{h}:{m:02}:{s:02}")
@@ -847,8 +1257,8 @@ fn camera(make: Option<&str>, model: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Fact, Place, Value, camera, clock, from_exif, from_pdfinfo, from_probe, needs, ratio,
-        shutter, taken, trimmed,
+        Fact, Label, Place, Value, camera, clock, from_exif, from_pdfinfo, from_probe, needs,
+        ratio, shutter, taken, trimmed,
     };
     use crate::key;
     use crate::tools::Tool;
@@ -856,7 +1266,213 @@ mod tests {
     fn value(facts: &[Fact], label: &'static str) -> Option<Value> {
         facts
             .iter()
-            .find(|f| f.label == label)
+            .find(|f| f.label == Label::Key(label))
+            .map(|f| f.value.clone())
+    }
+
+    /// FAILS IF: half the tags a file carries stop reaching the panel.
+    ///
+    /// The gap this pins was measured on the owner's own files, not imagined:
+    /// `sample-aud.ogg` has NO `tags` object on its format at all, and all
+    /// three of its tags sit on `streams[0]` — Vorbis comments belong to the
+    /// stream by construction. Reading one place showed half of what he has.
+    #[test]
+    fn a_sounds_tags_are_read_from_both_places_it_may_have_put_them() {
+        // THE OGG SHAPE: nothing on the format, everything on the stream.
+        let ogg = r#"{"streams":[{"codec_type":"audio","codec_name":"vorbis",
+                                  "sample_rate":"44100","channels":2,
+                                  "tags":{"TITLE":"Heaven","ARTIST":"Julia Michaels",
+                                          "DATE":"2018","BPM (beats per minute)":"120"}}],
+                      "format":{"format_name":"ogg","duration":"75.0"}}"#;
+        let f = from_probe(ogg);
+        assert_eq!(
+            value(&f, key::FACT_TITLE),
+            Some(Value::Data("Heaven".to_owned()))
+        );
+        assert_eq!(
+            value(&f, key::FACT_ARTIST),
+            Some(Value::Data("Julia Michaels".to_owned()))
+        );
+        assert_eq!(
+            value(&f, key::FACT_YEAR),
+            Some(Value::Data("2018".to_owned()))
+        );
+        // AND A TAG NOBODY NAMED KEEPS THE NAME THE FILE WROTE — which is what
+        // `Label::Named` is for, and the whole of the owner's "and the unknown
+        // ones too".
+        assert_eq!(
+            named(&f, "BPM (beats per minute)"),
+            Some(Value::Data("120".to_owned()))
+        );
+        // AND IT IS NOT ALSO SHOWN UNDER A PHRASE OF OURS: a curated name and
+        // its aliases are subtracted, so nothing appears twice.
+        assert!(named(&f, "TITLE").is_none());
+        assert!(named(&f, "DATE").is_none());
+
+        // THE FORMAT WINS WHERE BOTH CARRY A NAME. Measured: his mp3 says
+        // `Lavf61.7.100` on the format and `Lavc61.19` on the stream, and it
+        // is the file that was asked about.
+        let both = r#"{"streams":[{"codec_type":"audio","codec_name":"mp3",
+                                   "tags":{"encoder":"Lavc61.19"}}],
+                       "format":{"format_name":"mp3","duration":"191.8",
+                                 "tags":{"encoder":"Lavf61.7.100"}}}"#;
+        assert_eq!(
+            value(&from_probe(both), key::FACT_ENCODER),
+            Some(Value::Data("Lavf61.7.100".to_owned()))
+        );
+    }
+
+    /// FAILS IF: a number the file did not state is reported as if it had.
+    ///
+    /// Every rule here came out of reading the owner's five files, and the
+    /// dangerous one is `sample_fmt`: it is the DECODER's output format, so a
+    /// 24-bit FLAC says `s32` and every lossy codec says `fltp`. Reporting it
+    /// would put "32 bits" under an mp3 — true of the decoder and a lie about
+    /// the file.
+    #[test]
+    fn bit_depth_comes_from_the_file_and_never_from_the_decoder() {
+        // A FLAC: the depth is a STRING, on `bits_per_raw_sample`.
+        let flac = r#"{"streams":[{"codec_type":"audio","codec_name":"flac",
+                                   "sample_fmt":"s32","bits_per_sample":0,
+                                   "bits_per_raw_sample":"24","channels":2}],
+                       "format":{"format_name":"flac","duration":"293.8"}}"#;
+        let f = from_probe(flac);
+        assert_eq!(
+            value(&f, key::FACT_DEPTH),
+            Some(Value::Phrase {
+                key: key::VALUE_BITS,
+                args: vec![("n", "24".to_owned())],
+            })
+        );
+        assert_eq!(
+            value(&f, key::FACT_COMPRESSION),
+            Some(Value::phrase(key::VALUE_LOSSLESS))
+        );
+
+        // AN MP3: no depth at all, and nothing invented from `fltp`.
+        let mp3 = r#"{"streams":[{"codec_type":"audio","codec_name":"mp3",
+                                  "sample_fmt":"fltp","bits_per_sample":0,
+                                  "channels":2}],
+                      "format":{"format_name":"mp3","duration":"132.9"}}"#;
+        let f = from_probe(mp3);
+        assert!(
+            value(&f, key::FACT_DEPTH).is_none(),
+            "a bit depth was invented for a lossy codec"
+        );
+        assert_eq!(
+            value(&f, key::FACT_COMPRESSION),
+            Some(Value::phrase(key::VALUE_LOSSY))
+        );
+
+        // A WAV: `bits_per_sample` is the one that carries it, and every
+        // `pcm_*` is lossless by construction rather than by a list.
+        let wav = r#"{"streams":[{"codec_type":"audio","codec_name":"pcm_s16le",
+                                  "sample_fmt":"s16","bits_per_sample":16,
+                                  "channels":2}],
+                      "format":{"format_name":"wav","duration":"29.98"}}"#;
+        let f = from_probe(wav);
+        assert_eq!(
+            value(&f, key::FACT_DEPTH),
+            Some(Value::Phrase {
+                key: key::VALUE_BITS,
+                args: vec![("n", "16".to_owned())],
+            })
+        );
+        assert_eq!(
+            value(&f, key::FACT_COMPRESSION),
+            Some(Value::phrase(key::VALUE_LOSSLESS))
+        );
+    }
+
+    /// FAILS IF: the artwork's own tags become the file's, or a track number
+    /// stops reading like one.
+    #[test]
+    fn a_record_says_which_track_it_is_and_what_its_sleeve_measures() {
+        // `6/9` IN ONE FIELD, and a cover whose tags must not leak.
+        let one = r#"{"streams":[{"codec_type":"audio","codec_name":"flac",
+                                  "tags":{"track":"6/9","TITLE":"Billie Jean"}},
+                                 {"codec_type":"video","codec_name":"mjpeg",
+                                  "width":600,"height":600,
+                                  "disposition":{"attached_pic":1},
+                                  "tags":{"title":"Album cover","comment":"Cover (front)"}}],
+                      "format":{"format_name":"flac","duration":"293.8"}}"#;
+        let f = from_probe(one);
+        assert_eq!(
+            value(&f, key::FACT_TRACK),
+            Some(Value::Phrase {
+                key: key::VALUE_OF_TOTAL,
+                args: vec![("at", "6".to_owned()), ("total", "9".to_owned())],
+            })
+        );
+        assert_eq!(
+            value(&f, key::FACT_COVER),
+            Some(Value::Phrase {
+                key: key::VALUE_PIXELS,
+                args: vec![("width", "600".to_owned()), ("height", "600".to_owned())],
+            })
+        );
+        // THE SLEEVE'S OWN TITLE IS NOT THE RECORD'S.
+        assert_eq!(
+            value(&f, key::FACT_TITLE),
+            Some(Value::Data("Billie Jean".to_owned()))
+        );
+
+        // AND THE OTHER SPELLING: a number here and a total beside it.
+        let two = r#"{"streams":[{"codec_type":"audio","codec_name":"flac",
+                                  "tags":{"track":"06","TRACKTOTAL":"09"}}],
+                      "format":{"format_name":"flac","duration":"293.8"}}"#;
+        assert_eq!(
+            value(&from_probe(two), key::FACT_TRACK),
+            Some(Value::Phrase {
+                key: key::VALUE_OF_TOTAL,
+                args: vec![("at", "06".to_owned()), ("total", "09".to_owned())],
+            })
+        );
+        // AND THE TOTAL IS NOT ALSO SHOWN AS A TAG OF ITS OWN.
+        assert!(named(&from_probe(two), "TRACKTOTAL").is_none());
+    }
+
+    /// FAILS IF: one tag can fill the panel, or bring newlines into a register
+    /// that holds one line.
+    ///
+    /// Measured on the owner's files: a 2 545-character AllMusic review in a
+    /// FLAC's `comment`, with embedded newlines, and a 548-character YouTube
+    /// blurb repeated in an mp3's `description` and `synopsis`.
+    #[test]
+    fn a_tag_is_cut_and_flattened_before_it_reaches_a_row() {
+        let long = "a ".repeat(600);
+        let probe = format!(
+            r#"{{"streams":[{{"codec_type":"audio","codec_name":"flac",
+                              "tags":{{"comment":"{long}","note":"one\ntwo\t three"}}}}],
+                "format":{{"format_name":"flac","duration":"293.8"}}}}"#
+        );
+        let f = from_probe(&probe);
+        let Some(Value::Data(cut)) = named(&f, "comment") else {
+            panic!("the tag did not become a row");
+        };
+        assert!(
+            cut.len() <= super::TAG_BYTES,
+            "{} bytes survived",
+            cut.len()
+        );
+        // AND ON A CHARACTER BOUNDARY, which is what the length being valid
+        // UTF-8 at all proves.
+        assert!(cut.is_char_boundary(cut.len()));
+
+        let Some(Value::Data(flat)) = named(&f, "note") else {
+            panic!("the tag did not become a row");
+        };
+        assert_eq!(
+            flat, "one two three",
+            "a newline reached a one-line register"
+        );
+    }
+
+    /// What a row the FILE named says, by that name.
+    fn named(facts: &[Fact], name: &str) -> Option<Value> {
+        facts
+            .iter()
+            .find(|f| f.label == Label::Named(name.to_owned()))
             .map(|f| f.value.clone())
     }
 
@@ -943,7 +1559,12 @@ mod tests {
             Some(Value::Data("Big Buck Bunny".to_owned()))
         );
         // The DATA stream must not become the video codec.
-        assert_eq!(f.iter().filter(|x| x.label == key::FACT_VIDEO).count(), 1);
+        assert_eq!(
+            f.iter()
+                .filter(|x| x.label == Label::Key(key::FACT_VIDEO))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1120,7 +1741,7 @@ mod tests {
         assert_eq!(
             from_pdfinfo(report),
             vec![Fact {
-                label: key::FACT_PAGES,
+                label: Label::Key(key::FACT_PAGES),
                 value: Value::Phrase {
                     key: key::VALUE_PAGES,
                     args: vec![("n", "12".to_owned())],
@@ -1134,7 +1755,12 @@ mod tests {
     fn the_small_conversions_are_what_a_person_would_write() {
         assert_eq!(clock(596.46), "9:56");
         assert_eq!(clock(3956.0), "1:05:56");
-        assert_eq!(clock(3.96), "0:04");
+        // TRUNCATED, and the same rule the transport's counter uses: a total
+        // the elapsed time can never reach is a total that is wrong on screen
+        // beside it. `3.96` is three seconds and a bit, and the counter beside
+        // it will read `0:03` at its last frame.
+        assert_eq!(clock(3.96), "0:03");
+        assert_eq!(clock(293.802_154), "4:53", "the owner's own FLAC");
         assert_eq!(trimmed(48.0), "48");
         assert_eq!(trimmed(44.1), "44.1");
         assert_eq!(trimmed(1.68), "1.68");

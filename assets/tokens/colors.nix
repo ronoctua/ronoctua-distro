@@ -68,6 +68,22 @@
     # the film's letterbox already had to make, and for the same reason. One
     # texture, two doors.
     mesh = "0xD8D4CEFF";
+
+    # THE WAVEFORM DRAWN FROM A SOUND, and one colour for the same reason the
+    # mesh has one: a sound carries no colours, so any variety would be
+    # invented.
+    #
+    # It is drawn by ffmpeg, not by us — the only token in the system that
+    # leaves the process — and it has to read over two different grounds: an
+    # album's cover, which can be anything, and the panel's own surface showing
+    # through where there is no cover. So it is near-white with the accent's
+    # temperature: bright enough to survive a pale sleeve, and not the flat
+    # white that would read as a scratch on a dark one.
+    #
+    # There is no background token beside it, and no second colour for the
+    # strip it sits in: what is behind is transparent, and the transport's own
+    # band already handles the one place ink has to be guaranteed legible.
+    wave = "0xBFD3E6E6";
   };
 
   # -------------------------------------------------------------------

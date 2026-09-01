@@ -37,6 +37,7 @@ pub mod facts;
 pub mod mesh;
 pub mod motion;
 pub mod pixels;
+pub mod playlist;
 pub mod solid;
 pub mod text;
 pub mod tools;
@@ -387,6 +388,15 @@ pub mod key {
     /// Draco decoder. A WHOLE sentence and not an argument — see
     /// [`crate::Refusal::Unsupported`].
     pub const PREVIEW_DRACO: &str = "files-preview-draco";
+    /// Refusal: this is a score to be PLAYED, and nothing here can play it.
+    pub const PREVIEW_NO_SYNTH: &str = "files-preview-no-synth";
+    /// Refusal: a list of things to play, in a spelling this reader does not
+    /// open.
+    ///
+    /// ONE key for both spellings, and the sentence names neither: the format
+    /// is already on screen one panel over, on `files-detail-type`. That is one
+    /// line per language rather than two, and it cannot name the wrong one.
+    pub const PREVIEW_PLAYLIST_UNREAD: &str = "files-preview-playlist-unread";
 
     /// Label: how many pixels across and down.
     pub const FACT_DIMENSIONS: &str = "files-fact-dimensions";
@@ -414,6 +424,32 @@ pub mod key {
     pub const FACT_ARTIST: &str = "files-fact-artist";
     /// Label: which album.
     pub const FACT_ALBUM: &str = "files-fact-album";
+    /// Label: whose album it is, which is not always the track's artist.
+    pub const FACT_ALBUM_ARTIST: &str = "files-fact-album-artist";
+    /// Label: which track of the record.
+    pub const FACT_TRACK: &str = "files-fact-track";
+    /// Label: which disc of the set.
+    pub const FACT_DISC: &str = "files-fact-disc";
+    /// Label: when it came out, as the file wrote it.
+    pub const FACT_YEAR: &str = "files-fact-year";
+    /// Label: what kind of music the file says it is.
+    pub const FACT_GENRE: &str = "files-fact-genre";
+    /// Label: who wrote it, as opposed to who performed it.
+    pub const FACT_COMPOSER: &str = "files-fact-composer";
+    /// Label: who published it.
+    pub const FACT_PUBLISHER: &str = "files-fact-publisher";
+    /// Label: the recording's international code.
+    pub const FACT_ISRC: &str = "files-fact-isrc";
+    /// Label: which program encoded it.
+    pub const FACT_ENCODER: &str = "files-fact-encoder";
+    /// Label: how many bits each sample carries.
+    pub const FACT_DEPTH: &str = "files-fact-depth";
+    /// Label: how the channels are arranged.
+    pub const FACT_LAYOUT: &str = "files-fact-layout";
+    /// Label: whether anything was thrown away to make it smaller.
+    pub const FACT_COMPRESSION: &str = "files-fact-compression";
+    /// Label: the artwork carried inside the file.
+    pub const FACT_COVER: &str = "files-fact-cover";
     /// Label: which camera.
     pub const FACT_CAMERA: &str = "files-fact-camera";
     /// Label: which lens.
@@ -444,6 +480,22 @@ pub mod key {
     pub const VALUE_CHANNELS: &str = "files-value-channels";
     /// Value: `{ $kbps } kbit/s`.
     pub const VALUE_KBPS: &str = "files-value-kbps";
+    /// Value: `{ $at } of { $total }` — a track or a disc within a set.
+    ///
+    /// The arguments are deliberately NOT `n`: only `n`, `w`, `d` and `h`
+    /// cross as numbers, and a track number is an ordinal label rather than a
+    /// quantity — `6 of 9` and never `6 of 9,000`.
+    pub const VALUE_OF_TOTAL: &str = "files-value-of-total";
+    /// Value: `{ $n } bits` — a Fluent selector, so `n` is load-bearing.
+    pub const VALUE_BITS: &str = "files-value-bits";
+    /// Value: nothing was thrown away.
+    ///
+    /// A whole key and not an argument, for the reason [`Refusal::Unsupported`]
+    /// carries whole sentences: a key handed to Fluent as an argument is
+    /// substituted untranslated and reaches the screen as itself.
+    pub const VALUE_LOSSLESS: &str = "files-value-lossless";
+    /// Value: something was thrown away to make it smaller.
+    pub const VALUE_LOSSY: &str = "files-value-lossy";
     /// Value: `{ $mm } mm`.
     pub const VALUE_MILLIMETRES: &str = "files-value-millimetres";
     /// Value: `{ $s } s` — an exposure of a second or more.
@@ -551,7 +603,7 @@ pub mod key {
     pub const VALUE_MESH_OPEN: &str = "files-value-mesh-open";
 
     /// Every key this crate can produce, for the check that keeps them honest.
-    pub const ALL: [&str; 84] = [
+    pub const ALL: [&str; 103] = [
         NO_PREVIEW,
         PREVIEW_NOT_TEXT,
         PREVIEW_EMPTY,
@@ -561,6 +613,8 @@ pub mod key {
         PREVIEW_FAILED,
         PREVIEW_SLOW,
         PREVIEW_DRACO,
+        PREVIEW_NO_SYNTH,
+        PREVIEW_PLAYLIST_UNREAD,
         FACT_DIMENSIONS,
         FACT_DURATION,
         FACT_CONTAINER,
@@ -574,6 +628,19 @@ pub mod key {
         FACT_TITLE,
         FACT_ARTIST,
         FACT_ALBUM,
+        FACT_ALBUM_ARTIST,
+        FACT_TRACK,
+        FACT_DISC,
+        FACT_YEAR,
+        FACT_GENRE,
+        FACT_COMPOSER,
+        FACT_PUBLISHER,
+        FACT_ISRC,
+        FACT_ENCODER,
+        FACT_DEPTH,
+        FACT_LAYOUT,
+        FACT_COMPRESSION,
+        FACT_COVER,
         FACT_CAMERA,
         FACT_LENS,
         FACT_TAKEN,
@@ -588,6 +655,10 @@ pub mod key {
         VALUE_HERTZ,
         VALUE_CHANNELS,
         VALUE_KBPS,
+        VALUE_OF_TOTAL,
+        VALUE_BITS,
+        VALUE_LOSSLESS,
+        VALUE_LOSSY,
         VALUE_MILLIMETRES,
         VALUE_SECONDS,
         VALUE_COORDINATES,

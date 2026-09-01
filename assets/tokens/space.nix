@@ -189,6 +189,23 @@
     # takes a piece of the outline with it.
     meshWireFade = 35;
 
+    # HOW TALL THE WAVEFORM IS OVER A COVER, in hundredths of the frame.
+    #
+    # A sound with artwork shows the artwork; the waves are the thing that says
+    # it is RUNNING, and they only have to say it. A fifth leaves the sleeve
+    # legible — a square cover in a tall panel still shows whole — while a
+    # strip much thinner than this stops reading as movement at a panel's size
+    # and becomes a flickering line.
+    #
+    # It is a fraction and not a number of pixels because the panel's height is
+    # not fixed: the same file is 128 pixels tall in the footer and 768 in the
+    # window, and a fixed strip would be the whole picture in one and a hairline
+    # in the other.
+    #
+    # With no cover there is no strip: the waveform is given the whole frame,
+    # and this number is not asked.
+    waveHeight = 20;
+
     # FROM THIS WIDTH ON, THE TWO PANELS SIT ON THE RIGHT — one column each.
     # Below it they do not disappear: they move to a short strip along the
     # BOTTOM, side by side. The owner's sentence is binary, and so is this

@@ -117,8 +117,15 @@ pub struct Read {
 ///
 /// And the four descendants that are NOT text — `image/svg+xml`,
 /// `image/x-eps`, `audio/x-mpegurl`, `video/vnd.mpegurl` — need no exception
-/// list either, because the picture is asked FIRST: the two images get one,
-/// and an `.m3u` genuinely is text.
+/// list either, because something is always asked FIRST: the two images are
+/// asked of the picture, and the two playlists are asked of
+/// [`crate::playlist`].
+///
+/// The playlists were the exception for a while, and the sentence here said
+/// *"an `.m3u` genuinely is text"* — which was true and is no longer the
+/// point. It IS text, and showing it as text meant showing a person the paths
+/// of nine tracks with the slashes syntax-coloured, rather than the nine
+/// tracks. What decides is not what a file is made of but what it is FOR.
 #[must_use]
 pub fn is_text(mime: &str) -> bool {
     ronoctua_files::mime::is_a(mime, "text/plain")

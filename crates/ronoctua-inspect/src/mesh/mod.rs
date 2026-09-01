@@ -741,12 +741,12 @@ pub fn facts(read: &Read) -> Vec<crate::facts::Fact> {
         args: vec![("n", n.to_string())],
     };
     let mut out = vec![Fact {
-        label: key::FACT_FORMAT,
+        label: crate::facts::Label::Key(key::FACT_FORMAT),
         value: Value::phrase(read.shape.key()),
     }];
     if let Some(unit) = &read.unit {
         out.push(Fact {
-            label: key::FACT_UNIT,
+            label: crate::facts::Label::Key(key::FACT_UNIT),
             value: Value::Data(unit.clone()),
         });
     }
@@ -755,7 +755,7 @@ pub fn facts(read: &Read) -> Vec<crate::facts::Fact> {
     // carry it.
     if read.objects > 1 {
         out.push(Fact {
-            label: key::FACT_OBJECTS,
+            label: crate::facts::Label::Key(key::FACT_OBJECTS),
             value: count(read.objects),
         });
     }
@@ -770,7 +770,7 @@ pub fn facts(read: &Read) -> Vec<crate::facts::Fact> {
     ] {
         if n > 0 {
             out.push(Fact {
-                label,
+                label: crate::facts::Label::Key(label),
                 value: count(n),
             });
         }
@@ -802,10 +802,12 @@ pub fn facts(read: &Read) -> Vec<crate::facts::Fact> {
         ("SourceName", key::FACT_SOURCE_NAME),
     ] {
         if let Some((_, v)) = read.notes.iter().find(|(k, _)| k == name)
-            && !out.iter().any(|f| f.label == label)
+            && !out
+                .iter()
+                .any(|f| f.label == crate::facts::Label::Key(label))
         {
             out.push(Fact {
-                label,
+                label: crate::facts::Label::Key(label),
                 value: Value::Data(v.clone()),
             });
         }
@@ -836,36 +838,36 @@ fn mesh_facts(mesh: &Mesh, out: &mut Vec<crate::facts::Fact>) {
     };
     let sane = sanity(mesh);
     out.push(Fact {
-        label: key::FACT_TRIANGLES,
+        label: crate::facts::Label::Key(key::FACT_TRIANGLES),
         value: count(mesh.triangles()),
     });
     out.push(Fact {
-        label: key::FACT_VERTICES,
+        label: crate::facts::Label::Key(key::FACT_VERTICES),
         value: count(sane.vertices),
     });
     out.push(Fact {
-        label: key::FACT_BOUNDS,
+        label: crate::facts::Label::Key(key::FACT_BOUNDS),
         value: box_fact(mesh.bounds.size()),
     });
     // CUBIC CENTIMETRES AND NOT CUBIC MILLIMETRES. The Benchy is 15 550 mm3,
     // which is a number nobody has a feel for, and 15.6 cm3, which is what a
     // spool of filament is sold against.
     out.push(Fact {
-        label: key::FACT_VOLUME,
+        label: crate::facts::Label::Key(key::FACT_VOLUME),
         value: Value::Phrase {
             key: key::VALUE_CUBIC_CENTIMETRES,
             args: vec![("n", format!("{:.1}", mesh.volume() / 1000.0))],
         },
     });
     out.push(Fact {
-        label: key::FACT_AREA,
+        label: crate::facts::Label::Key(key::FACT_AREA),
         value: Value::Phrase {
             key: key::VALUE_SQUARE_CENTIMETRES,
             args: vec![("n", format!("{:.1}", mesh.area() / 100.0))],
         },
     });
     out.push(Fact {
-        label: key::FACT_WATERTIGHT,
+        label: crate::facts::Label::Key(key::FACT_WATERTIGHT),
         value: if sane.watertight() {
             Value::phrase(key::VALUE_MESH_CLOSED)
         } else {
@@ -877,13 +879,13 @@ fn mesh_facts(mesh: &Mesh, out: &mut Vec<crate::facts::Fact>) {
     });
     if sane.flipped > 0 {
         out.push(Fact {
-            label: key::FACT_FLIPPED,
+            label: crate::facts::Label::Key(key::FACT_FLIPPED),
             value: count(sane.flipped),
         });
     }
     if sane.degenerate > 0 {
         out.push(Fact {
-            label: key::FACT_DEGENERATE,
+            label: crate::facts::Label::Key(key::FACT_DEGENERATE),
             value: count(sane.degenerate),
         });
     }
@@ -911,7 +913,7 @@ fn brep_facts(read: &Read, out: &mut Vec<crate::facts::Fact>) {
 
     if read.census.vertices > 0 {
         out.push(Fact {
-            label: key::FACT_VERTICES,
+            label: crate::facts::Label::Key(key::FACT_VERTICES),
             value: Value::Phrase {
                 key: key::VALUE_COUNT,
                 args: vec![("n", read.census.vertices.to_string())],
@@ -920,7 +922,7 @@ fn brep_facts(read: &Read, out: &mut Vec<crate::facts::Fact>) {
     }
     if !read.body.nothing() {
         out.push(Fact {
-            label: key::FACT_BOUNDS,
+            label: crate::facts::Label::Key(key::FACT_BOUNDS),
             value: box_fact(read.body.bounds().size()),
         });
     }
@@ -928,7 +930,7 @@ fn brep_facts(read: &Read, out: &mut Vec<crate::facts::Fact>) {
     // limit nobody ran into.
     if read.census.outlined > 0 {
         out.push(Fact {
-            label: key::FACT_OUTLINED,
+            label: crate::facts::Label::Key(key::FACT_OUTLINED),
             value: Value::Phrase {
                 key: key::VALUE_COUNT,
                 args: vec![("n", read.census.outlined.to_string())],

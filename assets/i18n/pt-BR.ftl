@@ -1091,13 +1091,22 @@ files-preview-all-shown = a prévia inteira já está à vista
 files-preview-cut = só as primeiras { $lines } linhas estão aqui — o arquivo continua
 # O TRANSPORTE DA PRÉVIA. O que o ponteiro parado sobre um controle diz, e o que
 # o gerenciador responde quando uma tecla faz algo que não se vê.
-files-play-hold = segurar o filme onde está
-files-play-resume = deixar o filme seguir
-files-sound-on = ouvir o filme
-files-sound-off = assistir em silêncio
-files-sound-none = este filme não tem som nenhum
+files-play-hold = segurar onde está
+files-play-resume = deixar seguir
+files-sound-on = ouvir
+files-sound-off = em silêncio
+files-sound-none = este arquivo não tem som nenhum
+files-entry-not-here = esta entrada está noutro lugar, e nada aqui a busca: { $path }
+files-entry-at = { $path }
+files-entry-titled = { $name } · { $path }
+files-entry-refused = este nome não pode ser um caminho: { $path }
+files-list-nothing = não há nesta lista nada que se possa tocar daqui
+files-list-at-start = esta é a primeira da lista
+files-list-at-end = esta é a última da lista
+files-playlist-previous = ir para a entrada anterior
+files-playlist-next = ir para a entrada seguinte
 files-no-sound = esta máquina não tem som para tocá-lo — a imagem segue sem ele
-files-film-stuck = nada saiu do filme por { $seconds } s — ele foi parado
+files-film-stuck = nada saiu dele por { $seconds } s — foi parado
 files-film-seek = ir para { $at } de { $total }
 files-theatre-on = dar a região inteira à prévia
 files-theatre-off = devolver o espaço à listagem
@@ -1158,11 +1167,11 @@ files-preview-left = mover a prévia uma coluna para a esquerda
 files-preview-right = mover a prévia uma coluna para a direita
 # O transporte do filme. `files-play` é uma tecla para os dois porque é isso
 # que ela é: apertar com o filme rodando é o que pausa.
-files-play = tocar o filme, ou pausar
-files-rewind = voltar no filme
-files-forward = avançar no filme
-files-sound = ligar ou desligar o som do filme
-files-theatre = dar a região inteira ao filme, e devolver
+files-play = tocar, ou pausar
+files-rewind = voltar
+files-forward = avançar
+files-sound = ligar ou desligar o som
+files-theatre = dar a região inteira à prévia, e devolver
 # As da peça. `files-turn-left` é a direção da MÃO e não um eixo — veja o
 # `View::spin`, que é onde essa convenção está escrita.
 files-turn-left = girar a peça para a esquerda
@@ -1374,6 +1383,8 @@ files-preview-slow = passou de { $seconds } s e foi parado — não é o tamanho
 # NÃO "quebrado". O arquivo está inteiro e é este leitor que não dá conta —
 # dizer "quebrado" manda a pessoa consertar algo que não tem defeito.
 files-preview-draco = as formas neste arquivo estão comprimidas, e este leitor não abre isso
+files-preview-no-synth = este arquivo guarda uma partitura, não uma gravação, e não há aqui com que tocá-la
+files-preview-playlist-unread = isto é uma lista do que tocar, numa grafia que este leitor não abre
 # POR CIMA da figura, na última linha dela, e só quando alguma face não encheu.
 # Peça meio contornada é peça sobre a qual alguém precisa ser avisado — e o
 # painel é onde a pessoa está olhando.
@@ -1397,6 +1408,19 @@ files-fact-bitrate = taxa de bits
 files-fact-title = título
 files-fact-artist = artista
 files-fact-album = álbum
+files-fact-album-artist = artista do álbum
+files-fact-track = faixa
+files-fact-disc = disco
+files-fact-year = ano
+files-fact-genre = gênero
+files-fact-composer = compositor
+files-fact-publisher = editora
+files-fact-isrc = ISRC
+files-fact-encoder = codificador
+files-fact-depth = bits por amostra
+files-fact-layout = arranjo dos canais
+files-fact-compression = compressão
+files-fact-cover = capa
 files-fact-camera = câmera
 files-fact-lens = lente
 files-fact-taken = feita em
@@ -1421,6 +1445,13 @@ files-value-channels = { $n ->
        *[other] { $n } canais
     }
 files-value-kbps = { $kbps } kbit/s
+files-value-of-total = { $at } de { $total }
+files-value-bits = { $n ->
+        [one] { $n } bit
+       *[other] { $n } bits
+    }
+files-value-lossless = nada foi descartado
+files-value-lossy = encolhido descartando som
 files-value-millimetres = { $mm } mm
 files-value-seconds = { $s } s
 files-value-coordinates = { $lat }, { $lon }

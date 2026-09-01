@@ -34,6 +34,27 @@ pub const WIDEST: u32 = 1024;
 /// Two, because `pad` wants even numbers and one pixel is not a picture.
 pub const NARROWEST: u32 = 2;
 
+/// What a pipe holds before the process writing to it has to wait, in bytes.
+///
+/// # The pause depends on this number, and nothing else says so
+///
+/// Pausing is the loop not reading: the child fills the pipe, blocks on the
+/// write, and the sound stops with it because it comes out of the same
+/// process. That only works while a FRAME IS BIGGER THAN THE PIPE — otherwise
+/// the child writes frame after frame into the slack and goes on making sound
+/// with nobody reading.
+///
+/// Measured, and the arithmetic is not close: Linux gives a pipe 65 536 bytes,
+/// so a two-by-two frame — sixteen bytes — leaves room for four thousand of
+/// them, which is **five and a half minutes** of sound at twelve frames a
+/// second. The owner found it exactly that way: *"após o clique no pause, o
+/// ícone volta para o ícone de play e a contagem de tempo para, como esperado,
+/// porém o áudio continua tocando no background"*.
+///
+/// It was my own doing — a frame nobody draws, made as small as possible to
+/// save the transfer, which quietly bought the saving out of the pause.
+pub const PIPE_BYTES: usize = 64 * 1024;
+
 /// How long the player waits for a frame before giving up on the child.
 ///
 /// Five seconds, the same patience `tools::run` spends, against a measured
@@ -82,6 +103,9 @@ pub const SLOWEST_FRAME_MS: u32 = 20;
 pub struct Moving {
     /// Which decoder the player should open.
     pub how: Source,
+    /// What the frames are made of — the file's own picture, or one drawn from
+    /// its sound.
+    pub show: Show,
     /// How fast it runs and how long it lasts.
     ///
     /// A GIF has no duration — it loops — so `seconds` is `None` there, and
@@ -134,6 +158,36 @@ pub enum Source {
     Ffmpeg,
 }
 
+/// What the frames are MADE of.
+///
+/// # Sound is a film whose picture we draw
+///
+/// A player needs a stream of frames for a reason that has nothing to do with
+/// looking at anything: the frames ARE the clock, and not reading them is what
+/// pauses the child. Take them away and each of those mechanisms needs a second
+/// implementation — a timer in both doors, and a pause that kills instead of
+/// blocking, which clicks.
+///
+/// So for a file with no picture of its own, one is drawn: the album's cover
+/// with a live waveform along its foot, or the waveform alone. Measured, ten
+/// seconds of waveform costs 22 to 32 ms, and not reading it leaves the child
+/// on 0.04 s of CPU over three — exactly what a film does.
+///
+/// This is a field on [`Moving`] and NOT a third [`Source`], because `Source`
+/// says which decoder, and the decoder is still ffmpeg. A third arm would be a
+/// second player function beside `play_video`, and `motion-never-leaks-a-child`
+/// guards that one by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Show {
+    /// The file's own moving picture — a film, or a GIF.
+    Film,
+    /// A picture drawn FROM the sound, because the file has none.
+    Sound {
+        /// Whether there is artwork to draw the waves over.
+        cover: bool,
+    },
+}
+
 /// Does this file move, and how would one watch it?
 ///
 /// `None` is the ordinary answer: a photograph does not move, and neither does
@@ -166,6 +220,8 @@ pub fn moving(path: &Path, mime: &str, probe: &str, beside: Option<&Path>) -> Op
         }
         return Some(Moving {
             how: Source::InProcess,
+            // A GIF IS A PICTURE, silent by construction.
+            show: Show::Film,
             shape: crate::facts::Shape {
                 // ITS OWN CADENCE, uncapped: a GIF at another rate reads as
                 // broken, and the owner asked for the file's own.
@@ -183,6 +239,28 @@ pub fn moving(path: &Path, mime: &str, probe: &str, beside: Option<&Path>) -> Op
             inside: None,
         });
     }
+    // AND SOUND, whose picture does not exist until we draw it.
+    //
+    // It is asked BEFORE the media gate below and answered from the SAME
+    // probe: an audio file has no video stream to shape a film from, so
+    // `shape_of` would refuse it — rightly, because what it guards is a player
+    // being started for an album's cover.
+    if media == "audio" {
+        // A SCORE IS NOT A RECORDING, and starting a player for one would be a
+        // thread and a child process to produce silence. The panel says so
+        // instead — see `pixels::needs_a_synthesiser`.
+        if crate::pixels::needs_a_synthesiser(mime) {
+            return None;
+        }
+        return Some(Moving {
+            how: Source::Ffmpeg,
+            show: Show::Sound {
+                cover: crate::facts::has_cover(probe),
+            },
+            shape: crate::facts::sound_shape_of(probe)?,
+            inside: None,
+        });
+    }
     // EVERY MOVING PICTURE ffmpeg READS, which is the variety the owner asked
     // for — decided by the SHAPE the probe reports, so a file with no video
     // stream, or one whose only video stream is an album's cover, does not
@@ -192,6 +270,7 @@ pub fn moving(path: &Path, mime: &str, probe: &str, beside: Option<&Path>) -> Op
     }
     Some(Moving {
         how: Source::Ffmpeg,
+        show: Show::Film,
         shape: crate::facts::shape_of(probe)?,
         inside: None,
     })
@@ -234,6 +313,8 @@ fn motion_photo(path: &Path, beside: Option<&Path>) -> Option<Moving> {
     let shape = crate::facts::shape_of(&probe_inside(path, &inside)?)?;
     Some(Moving {
         how: Source::Ffmpeg,
+        // A MOTION PHOTO IS A FILM, and one the file really carries.
+        show: Show::Film,
         shape,
         inside: Some(inside),
     })
@@ -250,7 +331,7 @@ pub fn fact_of(moving: &Moving) -> Option<crate::facts::Fact> {
     moving.inside.as_ref()?;
     let seconds = moving.shape.seconds?;
     Some(crate::facts::Fact {
-        label: crate::key::FACT_MOTION,
+        label: crate::facts::Label::Key(crate::key::FACT_MOTION),
         // THE SAME CLOCK THE DURATION ROW USES, so a film of three seconds
         // reads the same whether it is a file or is inside a photograph.
         value: crate::facts::Value::Data(crate::facts::clock(seconds)),
@@ -507,10 +588,51 @@ impl Fit {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let bring =
             |v: u32| -> u32 { (((f64::from(v) / over).round() as u32).max(NARROWEST)) & !1 };
-        Some(Self {
+        let fit = Self {
             width: bring(width),
             height: bring(height),
-        })
+        };
+        // AND A FRAME THAT CANNOT STOP ITS OWN CHILD IS GROWN UNTIL IT CAN.
+        //
+        // BOTH SIDES TOGETHER, by the same argument the ceiling above makes:
+        // the shape is what this function exists to keep, and a floor applied
+        // to one side would bring the double letterbox back at the one size
+        // that needed the guard.
+        //
+        // A panel narrow enough to reach here is unusual — every real one is
+        // already several times a pipe — but `NARROWEST` is two, and two by two
+        // is sixteen bytes: four thousand of those fit in a pipe, so the child
+        // would never block and PAUSING WOULD DO NOTHING. See [`PIPE_BYTES`].
+        // The defect was found on a frame chosen by hand rather than by this
+        // function; it is guarded here so it cannot be reached by either road.
+        Some(fit.at_least_a_pipe())
+    }
+
+    /// The same frame, grown until it can block the process writing it.
+    ///
+    /// # The shape is kept while it can be, and given up before the pause is
+    ///
+    /// Both sides double together, so an ordinary frame keeps its box's shape
+    /// exactly and is merely larger — which costs nothing on screen, because
+    /// the door fits it into the box either way.
+    ///
+    /// A shape extreme enough to put one side against [`WIDEST`] before the
+    /// frame reaches a pipe cannot have both. Then the other side goes on
+    /// alone, and the shape is what gives way: a letterbox is a picture with
+    /// air around it, and a frame that cannot be paused is a control that
+    /// lies. No panel this system lays out is anywhere near that — a preview
+    /// is cells wide and lines tall — so this is a guarantee holding at the
+    /// edge rather than a case anybody meets.
+    #[must_use]
+    fn at_least_a_pipe(self) -> Self {
+        let mut grown = self;
+        while !grown.blocks_a_writer() && (grown.width < WIDEST || grown.height < WIDEST) {
+            grown = Self {
+                width: (grown.width * 2).min(WIDEST),
+                height: (grown.height * 2).min(WIDEST),
+            };
+        }
+        grown
     }
 
     /// How coarsely a box is measured, in pixels.
@@ -521,9 +643,86 @@ impl Fit {
     pub const fn bytes(self) -> usize {
         self.width as usize * self.height as usize * 4
     }
+
+    /// Whether a frame this size can still STOP the child that writes it.
+    ///
+    /// # It is a frame's SHARE of the pipe that decides, not a threshold
+    ///
+    /// What a paused child can still do is run ahead by whatever the pipe will
+    /// take: `PIPE_BYTES / bytes()` frames, plus the part of one more. So the
+    /// question is not "is the frame big" but "how many of it fit", and the
+    /// answer wanted is at most one.
+    ///
+    /// At exactly a pipe the child writes one frame, blocks on the next, and
+    /// the sound stops within a frame's own time — eighty-three milliseconds
+    /// at twelve a second, thirty-three at thirty. At a sixteenth of a pipe it
+    /// runs four thousand ahead and the sound goes on for five minutes, which
+    /// is the defect this exists to name.
+    #[must_use]
+    pub const fn blocks_a_writer(self) -> bool {
+        self.bytes() >= PIPE_BYTES
+    }
+
+    /// The smallest frame that still stops the child that writes it.
+    ///
+    /// For a picture nobody draws — a playlist's, whose panel is the LIST. The
+    /// frames are still the clock and still the pause, so they cannot be made
+    /// as small as one likes: see [`PIPE_BYTES`].
+    ///
+    /// A hundred and twenty-eight across, which is [`Fit::STEP`], by a hundred
+    /// and ninety-two down: ninety-six kibibytes, half again the pipe. At
+    /// twelve frames a second that is a megabyte and a bit each second, and it
+    /// buys the one mechanism that pauses everything in this manager.
+    pub const UNSEEN: Self = Self {
+        width: Self::STEP,
+        height: Self::STEP + Self::STEP / 2,
+    };
 }
 
-/// The arguments ffmpeg is given to stream a file as raw frames.
+/// What the player wants opened, in one value.
+///
+/// A record and not nine positional parameters: the last three to arrive were
+/// all `&str` — the letterbox, the waveform's ink and the sink — and three
+/// strings in a row is an argument order nobody can check by reading the call.
+#[derive(Debug, Clone, Copy)]
+pub struct Stream<'a> {
+    /// The file.
+    pub path: &'a Path,
+    /// What its frames are made of.
+    pub show: Show,
+    /// Where the film is, when the file is not itself the film.
+    pub inside: Option<&'a Inside>,
+    /// The exact frame the panel measured.
+    pub fit: Fit,
+    /// Frames a second.
+    pub fps: f64,
+    /// Where to start, in seconds.
+    pub from: f64,
+    /// The sound device, or nothing for silence.
+    pub sound: Option<&'a str>,
+    /// The letterbox's colour, as ffmpeg reads colours.
+    pub background: &'a str,
+    /// The waveform's ink, as ffmpeg reads colours.
+    pub wave: &'a str,
+    /// How tall the waveform is over a cover, in hundredths of the frame.
+    pub wave_height: u16,
+    /// How much of the frame's foot the controls cover, in hundredths.
+    ///
+    /// # The waves have to sit ABOVE the controls, not under them
+    ///
+    /// A sound's controls are always drawn, on a band across the frame's last
+    /// line — so a strip at the frame's own foot is exactly the strip nobody
+    /// can see. The owner photographed it: with an album's cover in the file,
+    /// *"o espectro/ondas animado fica por trás dos controles"*.
+    ///
+    /// It is a fraction rather than a number of pixels because the caller
+    /// cannot give pixels: the frame is decoded at the panel's shape and then
+    /// fitted into it, so what one line of the PANEL covers is one line of the
+    /// FRAME only in the same proportion. A fraction survives the fit.
+    pub wave_foot: u16,
+}
+
+/// The filter chain that makes a picture EXACTLY the frame we asked for.
 ///
 /// # The frame's size is OURS, and that is the whole design
 ///
@@ -541,23 +740,67 @@ impl Fit {
 /// portrait-by-encoding — and all three come out of this filter at the size
 /// asked for.
 ///
+/// # And it is ONE function because there are now two graphs
+///
+/// A film's picture and a sound's drawn one are built differently, and the
+/// check that guards this rule — `motion-never-guesses-a-frame` — looks for
+/// these literals ANYWHERE in the file. A second graph with its own copy of
+/// them would satisfy the grep while leaving its own dimensions to ffmpeg, and
+/// the check would go green on the defect it exists to catch. Written once,
+/// the claim is structurally true of both.
+///
 /// `background` is the panel's own colour, so the letterboxing is the air the
 /// panel would have left anyway rather than a black bar. It arrives as a
 /// string because this crate receives no token values.
+fn size_tail(fit: Fit, background: &str) -> String {
+    format!(
+        "scale={w}:{h}:force_original_aspect_ratio=decrease,\
+         pad={w}:{h}:-1:-1:color={background},setsar=1",
+        w = fit.width,
+        h = fit.height,
+    )
+}
+
+/// How tall the waveform is drawn over a cover, in pixels.
+///
+/// At least one row: a fraction of a very short frame rounds to nothing, and a
+/// zero-height filter is an ffmpeg error rather than an absent strip.
+fn wave_rows(fit: Fit, hundredths: u16) -> u32 {
+    (fit.height * u32::from(hundredths) / 100).max(1)
+}
+
+/// The arguments ffmpeg is given to stream a file as raw frames.
 ///
 /// Raw RGBA and not a PNG per frame: a PNG is an encode in ffmpeg and a decode
 /// here, per frame, for a picture that lives eighty milliseconds.
+///
+/// # A sound is two inputs of the same file, and that is not a flourish
+///
+/// An album's cover is an `attached_pic` — ONE frame, at timestamp zero. Seek
+/// the input and there is no frame after the seek at all, so `overlay` waits
+/// for one that never comes while the audio runs out underneath it. Measured:
+/// `-ss 150` on a five-minute FLAC took **143 875 ms and produced no frame**.
+///
+/// So the cover is read from an input that is never seeked, and the sound from
+/// a second input of the same file that is. Measured at 159 to 298 ms to the
+/// first frame, anywhere in the file — the same class as a film's respawn.
 #[must_use]
-pub fn stream_args(
-    path: &Path,
-    inside: Option<&Inside>,
-    fit: Fit,
-    fps: f64,
-    from: f64,
-    sound: Option<&str>,
-    background: &str,
-) -> Vec<std::ffi::OsString> {
+pub fn stream_args(stream: &Stream<'_>) -> Vec<std::ffi::OsString> {
     use std::ffi::OsString;
+
+    let &Stream {
+        path,
+        show,
+        inside,
+        fit,
+        fps,
+        from,
+        sound,
+        background,
+        wave,
+        wave_height,
+        wave_foot,
+    } = stream;
 
     let mut out: Vec<OsString> = Vec::new();
     macro_rules! push {
@@ -567,6 +810,14 @@ pub fn stream_args(
     // NOTHING ON STDIN. Without it ffmpeg reads the terminal and a shell that
     // shares one loses its keystrokes.
     push!("-nostdin");
+
+    // THE COVER'S INPUT COMES FIRST AND IS NEVER SEEKED — see the note above.
+    let cover = matches!(show, Show::Sound { cover: true });
+    if cover {
+        push!("-i");
+        out.push(path.as_os_str().to_owned());
+    }
+
     if from > 0.0 {
         // BEFORE `-i`, which is what makes the seek an INPUT seek — the fast
         // one, measured at 108 to 242 ms anywhere in a ten-minute film.
@@ -586,15 +837,65 @@ pub fn stream_args(
         |inside| input_url(path, inside),
     ));
 
-    push!("-map");
-    push!("0:v:0");
-    push!("-vf");
-    out.push(OsString::from(format!(
-        "scale={w}:{h}:force_original_aspect_ratio=decrease,\
-         pad={w}:{h}:-1:-1:color={background},setsar=1,fps={fps:.4}",
-        w = fit.width,
-        h = fit.height,
-    )));
+    match show {
+        Show::Film => {
+            push!("-map");
+            push!("0:v:0");
+            push!("-vf");
+            out.push(OsString::from(format!(
+                "{tail},fps={fps:.4}",
+                tail = size_tail(fit, background)
+            )));
+        }
+        Show::Sound { .. } => {
+            // WHICH INPUT THE SOUND IS ON: the second when a cover took the
+            // first, the only one otherwise.
+            let a = u8::from(cover);
+            let tail = size_tail(fit, background);
+            // AND THE AUDIO IS SPLIT ONLY WHEN BOTH HALVES ARE WANTED.
+            //
+            // `showwaves` CONSUMES the stream it draws, so with a pulse output
+            // as well there is no stream left to map — ffmpeg refuses the
+            // WHOLE command, exit 234, measured. And the converse is just as
+            // fatal: a labelled pad created and never mapped is the same
+            // refusal, so a silent sound must not split at all.
+            let (into, from_pad) = if sound.is_some() {
+                (
+                    format!("[{a}:a]asplit=2[wave][heard];"),
+                    "[wave]".to_owned(),
+                )
+            } else {
+                (String::new(), format!("[{a}:a]"))
+            };
+            let graph = if cover {
+                let rows = wave_rows(fit, wave_height);
+                // AND IT SITS ABOVE WHAT THE CONTROLS COVER, which is the only
+                // reason this is not simply the frame's foot.
+                let under = wave_rows(fit, wave_foot);
+                format!(
+                    "{into}\
+                     {from_pad}showwaves=s={w}x{rows}:mode=cline:rate={fps:.4}:colors={wave},\
+                     format=rgba[drawn];\
+                     [0:v]{tail},format=rgba,loop=loop=-1:size=1:start=0,fps={fps:.4}[sleeve];\
+                     [sleeve][drawn]overlay=0:{top}:shortest=1[picture]",
+                    w = fit.width,
+                    top = fit.height.saturating_sub(rows + under),
+                )
+            } else {
+                format!(
+                    "{into}\
+                     {from_pad}showwaves=s={w}x{h}:mode=cline:rate={fps:.4}:colors={wave},\
+                     format=rgba[picture]",
+                    w = fit.width,
+                    h = fit.height,
+                )
+            };
+            push!("-filter_complex");
+            out.push(OsString::from(graph));
+            push!("-map");
+            push!("[picture]");
+        }
+    }
     push!("-pix_fmt");
     push!("rgba");
     // NOTHING BUT PICTURE IN THIS OUTPUT, and these belong HERE — an ffmpeg
@@ -622,7 +923,15 @@ pub fn stream_args(
     // refuses audio, subtitles and data, so there is no second output to write.
     if let Some(sink) = sound {
         push!("-map");
-        push!("0:a:0?");
+        // A FILM MAPS THE STREAM; A SOUND MAPS THE HALF THE FILTER LEFT.
+        match show {
+            Show::Film => {
+                push!("0:a:0?");
+            }
+            Show::Sound { .. } => {
+                push!("[heard]");
+            }
+        }
         push!("-f");
         push!("pulse");
         push!("-buffer_duration");
@@ -647,7 +956,31 @@ pub fn ffmpeg() -> Result<std::path::PathBuf, Refusal> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fit, Inside, Moving, NARROWEST, Source, WIDEST, ffmpeg, moving, stream_args};
+    use super::{
+        Fit, Inside, Moving, NARROWEST, PIPE_BYTES, Show, Source, Stream, WIDEST, ffmpeg, moving,
+        stream_args,
+    };
+
+    /// A wish with everything ordinary, for a test to vary one field of.
+    ///
+    /// [`Stream`] is a record precisely so a call site can say what it is ABOUT
+    /// and inherit the rest — `Stream { from: 61.5, ..asking(path, fit) }` is a
+    /// test about seeking, and reads like one.
+    fn asking<'a>(path: &'a std::path::Path, fit: Fit) -> Stream<'a> {
+        Stream {
+            path,
+            show: Show::Film,
+            inside: None,
+            fit,
+            fps: 30.0,
+            from: 0.0,
+            sound: None,
+            background: "#161616",
+            wave: "#BFD3E6",
+            wave_height: 20,
+            wave_foot: 10,
+        }
+    }
 
     /// FAILS IF: a still picture starts a player. A thread and a child process
     /// for a photograph is a cost with nothing on the other side.
@@ -664,6 +997,154 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a score starts a player that can only produce silence.
+    ///
+    /// MIDI and its relatives hold instructions rather than sound, and this
+    /// build has no synthesiser to follow them — measured against the pinned
+    /// binary, which lists no audio decoder for any of them. A tracker module
+    /// is the opposite case and must keep playing: `libopenmpt` IS built in,
+    /// and it was proved against a module built by hand.
+    #[test]
+    fn a_score_is_refused_and_a_tracker_module_is_not() {
+        let path = std::path::Path::new("/x");
+        let sounds = r#"{"streams":[{"codec_type":"audio","codec_name":"pcm_f32le"}],
+                         "format":{"format_name":"libopenmpt","duration":"7.68"}}"#;
+        for score in [
+            "audio/midi",
+            "audio/prs.sid",
+            "audio/x-psf",
+            "audio/x-psflib",
+            "audio/x-xmf",
+        ] {
+            assert!(
+                moving(path, score, sounds, None).is_none(),
+                "{score} started a player nothing can feed"
+            );
+            assert!(crate::pixels::needs_a_synthesiser(score), "{score}");
+        }
+        // AND THE TRACKERS PLAY.
+        for module in ["audio/x-mod", "audio/x-it", "audio/x-s3m", "audio/x-xm"] {
+            assert!(
+                !crate::pixels::needs_a_synthesiser(module),
+                "{module} was refused, and libopenmpt plays it"
+            );
+            assert!(
+                moving(path, module, sounds, None).is_some(),
+                "{module} did not reach the player"
+            );
+        }
+    }
+
+    /// FAILS IF: a frame gets small enough that pausing stops being a pause.
+    ///
+    /// The pause is the loop not reading: the child fills the pipe, blocks on
+    /// the write, and the sound stops with it. That holds only while a frame is
+    /// BIGGER than the pipe — and the arithmetic is not close, which is what
+    /// makes it easy to break by accident. A two-by-two frame is sixteen bytes,
+    /// four thousand of them fit in a pipe, and the owner heard the result:
+    /// the glyph and the counter stopped and the sound went on for minutes.
+    #[test]
+    fn no_frame_is_too_small_to_stop_the_child_writing_it() {
+        // THE ONE CHOSEN BY HAND, for a picture nobody draws.
+        assert!(
+            Fit::UNSEEN.blocks_a_writer(),
+            "the unseen frame is {} bytes against a pipe of {PIPE_BYTES}",
+            Fit::UNSEEN.bytes()
+        );
+
+        // AND EVERY ONE THIS FUNCTION CAN PRODUCE, across every panel a door
+        // could measure — from a sliver to a whole screen.
+        for w in [
+            1.0_f32, 2.0, 17.0, 64.0, 128.0, 380.0, 512.0, 1024.0, 4096.0,
+        ] {
+            for h in [1.0_f32, 2.0, 9.0, 26.5, 64.0, 300.0, 768.0, 2160.0] {
+                let Some(fit) = Fit::of(w, h) else {
+                    continue;
+                };
+                assert!(
+                    fit.blocks_a_writer(),
+                    "a {w}x{h} panel gives {}x{} — {} bytes, and a pipe holds \
+                     {PIPE_BYTES}: pausing it would do nothing",
+                    fit.width,
+                    fit.height,
+                    fit.bytes()
+                );
+                // AND THE SHAPE SURVIVES THE GROWING for every box a panel
+                // could really be — which is the reason both sides are
+                // multiplied by the same number: a frame of another shape than
+                // its box is letterboxed TWICE.
+                //
+                // A SLIVER IS NOT ONE OF THOSE. The bound is the box's
+                // lopsidedness rather than its size, because that is what
+                // decides whether one side reaches `WIDEST` before the frame
+                // reaches a pipe: past about thirty-two to one it cannot have
+                // both, and there the shape gives way rather than the pause.
+                // See `Fit::at_least_a_pipe`.
+                //
+                // And a box smaller than a few cells across and a line tall is
+                // not a panel either: the rounding to even pixels is a whole
+                // percent of a frame that small, which is arithmetic older than
+                // any of this.
+                let lopsided = (w / h).max(h / w);
+                if lopsided > 32.0 || w < 32.0 || h < 16.0 {
+                    continue;
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let (want, got) = (
+                    f64::from(w) / f64::from(h),
+                    f64::from(fit.width) / f64::from(fit.height),
+                );
+                assert!(
+                    (got - want).abs() / want < 0.05,
+                    "a {w}x{h} panel asked for {want:.3} and got {got:.3}"
+                );
+            }
+        }
+    }
+
+    /// FAILS IF: sound stops reaching the player, or reaches it as a film.
+    ///
+    /// The line either side of this is thin and both sides matter: an audio
+    /// file with an audio stream MUST play, and an audio file whose probe
+    /// shows no audio stream must not — a container that lied, or a demuxer
+    /// that failed, is not a player's problem to discover.
+    #[test]
+    fn a_sound_plays_and_says_whether_it_has_a_sleeve() {
+        let path = std::path::Path::new("/x.mp3");
+        let bare = r#"{"streams":[{"codec_type":"audio","codec_name":"mp3"}],
+                       "format":{"format_name":"mp3","duration":"132.9"}}"#;
+        let m = moving(path, "audio/mpeg", bare, None).expect("a sound plays");
+        assert_eq!(m.show, Show::Sound { cover: false });
+        assert_eq!(m.how, Source::Ffmpeg);
+        assert!(m.inside.is_none());
+        // AND IT HAS A TIMELINE, which is what makes the scrub and the two
+        // seek keys work at all.
+        assert_eq!(m.shape.seconds, Some(132.9));
+        // AND SOMETHING TO HEAR, always: that is what this file IS.
+        assert!(m.shape.sound);
+
+        // AN ALBUM'S COVER IS A VIDEO STREAM, and here it is the one thing
+        // that decides which graph gets built.
+        let sleeved = r#"{"streams":[{"codec_type":"audio","codec_name":"flac"},
+                                     {"codec_type":"video","codec_name":"mjpeg",
+                                      "disposition":{"attached_pic":1}}],
+                          "format":{"format_name":"flac","duration":"293.8"}}"#;
+        let m = moving(path, "audio/flac", sleeved, None).expect("a sound plays");
+        assert_eq!(m.show, Show::Sound { cover: true });
+
+        // AND NO AUDIO STREAM IS NO PLAYER, whatever the name said.
+        let silent = r#"{"streams":[{"codec_type":"video","codec_name":"mjpeg"}],
+                         "format":{"format_name":"mp3","duration":"10.0"}}"#;
+        assert!(moving(path, "audio/mpeg", silent, None).is_none());
+
+        // A FILM IS STILL A FILM — the branch above must not swallow it.
+        let film = r#"{"streams":[{"codec_type":"video","codec_name":"h264",
+                                   "avg_frame_rate":"25/1"}],
+                        "format":{"format_name":"mov,mp4","duration":"60.0"}}"#;
+        let m = moving(path, "video/mp4", film, None).expect("a film plays");
+        assert_eq!(m.show, Show::Film);
     }
 
     /// FAILS IF: a video with no readable shape starts a player anyway.
@@ -812,7 +1293,7 @@ mod tests {
             width: 256,
             height: 144,
         };
-        let args = stream_args(path, None, fit, 30.0, 0.0, None, "#161616");
+        let args = stream_args(&asking(path, fit));
         let joined: Vec<String> = args
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
@@ -842,15 +1323,10 @@ mod tests {
         assert!(before_dash.contains("-an"), "{all}");
 
         // AND WITH SOUND, one child and two outputs.
-        let loud = stream_args(
-            path,
-            None,
-            fit,
-            30.0,
-            0.0,
-            Some("ronoctua-preview"),
-            "#161616",
-        );
+        let loud = stream_args(&Stream {
+            sound: Some("ronoctua-preview"),
+            ..asking(path, fit)
+        });
         let all = loud
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
@@ -866,13 +1342,249 @@ mod tests {
 
         // AND A SEEK IS AN INPUT SEEK — `-ss` before `-i`, which is the fast
         // one: 108 to 242 ms anywhere in a ten-minute film, measured.
-        let sought = stream_args(path, None, fit, 30.0, 61.5, None, "#161616");
+        let sought = stream_args(&Stream {
+            from: 61.5,
+            ..asking(path, fit)
+        });
         let ss = sought.iter().position(|a| a == "-ss").expect("a seek");
         let i = sought.iter().position(|a| a == "-i").expect("an input");
         assert!(
             ss < i,
             "the seek came after the input, which is the slow one"
         );
+    }
+
+    /// FAILS IF: a sound's arguments stop being a graph ffmpeg will accept.
+    ///
+    /// Two refusals are being guarded, and both are total — ffmpeg rejects the
+    /// WHOLE command, both outputs, exit 234:
+    ///
+    /// 1. `showwaves` CONSUMES the stream it draws, so asking for a pulse
+    ///    output as well without splitting first leaves nothing to map.
+    /// 2. A labelled pad that is created and never mapped is the same refusal,
+    ///    so a SILENT sound must not split at all.
+    #[test]
+    fn a_sounds_graph_splits_only_what_it_maps() {
+        let path = std::path::Path::new("/x.mp3");
+        let fit = Fit {
+            width: 256,
+            height: 144,
+        };
+        let said = |stream: &Stream<'_>| {
+            stream_args(stream)
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+
+        // SILENT: no split, and no pad left dangling.
+        let quiet = said(&Stream {
+            show: Show::Sound { cover: false },
+            ..asking(path, fit)
+        });
+        assert!(!quiet.contains("asplit"), "{quiet}");
+        assert!(!quiet.contains("[heard]"), "{quiet}");
+        assert!(quiet.contains("-map [picture]"), "{quiet}");
+
+        // HEARD: split, and BOTH halves mapped.
+        let loud = said(&Stream {
+            show: Show::Sound { cover: false },
+            sound: Some("default"),
+            ..asking(path, fit)
+        });
+        assert!(loud.contains("asplit=2[wave][heard]"), "{loud}");
+        assert!(loud.contains("-map [picture]"), "{loud}");
+        assert!(loud.contains("-map [heard]"), "{loud}");
+        // AND NOT THE STREAM: `0:a:0?` is the film's map, and here the filter
+        // has already eaten that stream.
+        assert!(!loud.contains("0:a:0?"), "{loud}");
+
+        // A COVER IS A SECOND INPUT, and the seek belongs to the second one.
+        let sought = said(&Stream {
+            show: Show::Sound { cover: true },
+            from: 61.5,
+            ..asking(path, fit)
+        });
+        let words: Vec<&str> = sought.split(' ').collect();
+        let inputs: Vec<usize> = words
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| **w == "-i")
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(inputs.len(), 2, "a cover needs two inputs: {sought}");
+        let ss = words.iter().position(|w| *w == "-ss").expect("a seek");
+        assert!(
+            inputs[0] < ss && ss < inputs[1],
+            "the seek must fall between the two inputs, or the cover is sought \
+             and the graph waits for a frame that is not there: {sought}"
+        );
+        // AND THE COVER IS THE ONE THAT IS LOOPED, so a still frame lasts as
+        // long as the sound does.
+        assert!(sought.contains("loop=loop=-1:size=1"), "{sought}");
+        assert!(sought.contains("[0:v]"), "{sought}");
+        assert!(sought.contains("[1:a]"), "{sought}");
+
+        // WITHOUT A COVER THERE IS ONE INPUT AND NO OVERLAY.
+        let bare = said(&Stream {
+            show: Show::Sound { cover: false },
+            from: 61.5,
+            ..asking(path, fit)
+        });
+        assert_eq!(bare.matches(" -i ").count(), 1, "{bare}");
+        assert!(!bare.contains("overlay"), "{bare}");
+        // AND THE WAVES TAKE THE WHOLE FRAME.
+        assert!(bare.contains("showwaves=s=256x144"), "{bare}");
+
+        // THE SIZE IS OURS IN BOTH GRAPHS — the same claim the film makes.
+        for all in [&quiet, &sought] {
+            assert!(all.contains("showwaves=s=256x"), "{all}");
+        }
+        assert!(sought.contains("scale=256:144"), "{sought}");
+        assert!(sought.contains("pad=256:144"), "{sought}");
+    }
+
+    /// THE PROOF, AGAINST REAL FFMPEG, THAT A SOUND BECOMES FRAMES.
+    ///
+    /// A drawn picture has three ways to be wrong and only one of them is
+    /// visible in the argument list, so this counts BYTES: the graph can stall
+    /// with nothing on stdout, it can produce a single frame and stop, or it
+    /// can hand back a frame that is not the size the panel asked for. All
+    /// three are one assertion here.
+    ///
+    /// FAILS IF: the cover is put on the SEEKED input. Measured before this was
+    /// written — `-ss 150` with the artwork in the graph ran for **143 875 ms
+    /// and produced no frame at all**, because an `attached_pic` is one frame
+    /// at timestamp zero and `overlay ... shortest=1` waits for a second one
+    /// that a seek has already skipped past. The seeked case below is that
+    /// regression, and it is why the cover gets an input of its own.
+    #[test]
+    fn a_sound_is_drawn_at_the_size_we_asked_for() {
+        let Ok(ffmpeg) = super::ffmpeg() else {
+            // The environment does not name it — the same refusal the still
+            // preview makes, and not a failure of this test.
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ronoctua-snd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let make = |name: &str, args: &[&str]| {
+            let out = dir.join(name);
+            let ok = std::process::Command::new(&ffmpeg)
+                .args(["-v", "error", "-y"])
+                .args(args)
+                .arg(&out)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            ok.then_some(out)
+        };
+        // TEN SECONDS, so a seek has somewhere to land.
+        let plain = make(
+            "plain.mp3",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=10",
+                "-c:a",
+                "libmp3lame",
+            ],
+        );
+        // AND THE COVER IS MUXED IN A SECOND PASS, from a picture that is
+        // already one frame long.
+        //
+        // Doing it in one — `-map 0:a -map 1:v -frames:v 1` — truncates the
+        // WHOLE file: the frame limit ends the output, and the sound came out
+        // thirty milliseconds long. This test found that as "two frames of
+        // four" and it looked exactly like a stalling graph.
+        let sleeve = make(
+            "sleeve.jpg",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=64x64:d=1",
+                "-frames:v",
+                "1",
+            ],
+        );
+        let (Some(plain), Some(sleeve)) = (plain, sleeve) else {
+            return;
+        };
+        let covered = make(
+            "covered.mp3",
+            &[
+                "-i",
+                plain.to_str().expect("a path"),
+                "-i",
+                sleeve.to_str().expect("a path"),
+                "-map",
+                "0:a",
+                "-map",
+                "1:v",
+                "-c:a",
+                "copy",
+                "-c:v",
+                "mjpeg",
+                "-disposition:v",
+                "attached_pic",
+            ],
+        );
+        let Some(covered) = covered else {
+            return;
+        };
+
+        let fit = Fit {
+            width: 256,
+            height: 144,
+        };
+        const WANTED: usize = 4;
+        for (path, cover, from) in [
+            (&plain, false, 0.0),
+            (&covered, true, 0.0),
+            // THE ONE THAT USED TO HANG.
+            (&covered, true, 6.0),
+            (&plain, false, 6.0),
+        ] {
+            let mut args = stream_args(&Stream {
+                show: Show::Sound { cover },
+                fps: 8.0,
+                from,
+                background: "#00000000",
+                ..asking(path, fit)
+            });
+            // THE FRAME COUNT GOES BEFORE THE OUTPUT SPECIFIER, for the reason
+            // written out in the film's twin: an option applies to the output
+            // that FOLLOWS it.
+            let dash = args
+                .iter()
+                .position(|a| a == "-f")
+                .expect("an output format");
+            args.splice(
+                dash..dash,
+                [
+                    std::ffi::OsString::from("-frames:v"),
+                    std::ffi::OsString::from(WANTED.to_string()),
+                ],
+            );
+            let out = std::process::Command::new(&ffmpeg)
+                .args(&args)
+                .output()
+                .expect("ffmpeg ran");
+            assert!(
+                out.status.success(),
+                "cover={cover} from={from}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(
+                out.stdout.len(),
+                WANTED * fit.bytes(),
+                "cover={cover} from={from}: {} frames' worth came out, not {WANTED}",
+                out.stdout.len() as f64 / fit.bytes() as f64
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// THE PROOF, AGAINST REAL FFMPEG, THAT THE FRAME IS THE SIZE WE ASKED FOR.
@@ -960,7 +1672,11 @@ mod tests {
             // putting it after the `-` is a silent no-op. That is how this
             // test first read ten frames and called the size wrong, and it is
             // the same mistake the arguments themselves carried.
-            let mut args = stream_args(&made, None, fit, 10.0, 0.0, None, "black");
+            let mut args = stream_args(&Stream {
+                fps: 10.0,
+                background: "black",
+                ..asking(&made, fit)
+            });
             let dash = args
                 .iter()
                 .position(|a| a == "-f")
@@ -1183,7 +1899,11 @@ mod tests {
             at: 1_607_058,
             to: 5_901_053,
         };
-        let args = stream_args(path, Some(&inside), fit, 30.0, 0.0, None, "#00000000");
+        let args = stream_args(&Stream {
+            inside: Some(&inside),
+            background: "#00000000",
+            ..asking(path, fit)
+        });
         let all = args
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
@@ -1201,12 +1921,19 @@ mod tests {
         // AND A FILM BESIDE IS OPENED AS ITSELF — Apple's half, which is an
         // ordinary file and needs no protocol at all.
         let beside = Inside::Beside(std::path::PathBuf::from("/IMG_1.MOV"));
-        let args = stream_args(path, Some(&beside), fit, 30.0, 0.0, None, "#00000000");
+        let args = stream_args(&Stream {
+            inside: Some(&beside),
+            background: "#00000000",
+            ..asking(path, fit)
+        });
         let i = args.iter().position(|a| a == "-i").expect("an input");
         assert_eq!(args[i + 1].to_string_lossy(), "/IMG_1.MOV");
 
         // AND AN ORDINARY FILM IS UNTOUCHED.
-        let args = stream_args(path, None, fit, 30.0, 0.0, None, "#00000000");
+        let args = stream_args(&Stream {
+            background: "#00000000",
+            ..asking(path, fit)
+        });
         let i = args.iter().position(|a| a == "-i").expect("an input");
         assert_eq!(args[i + 1].to_string_lossy(), "/x.jpg");
     }
@@ -1219,6 +1946,7 @@ mod tests {
         // draws that line, and it needs no branch anywhere else.
         let m = Moving {
             how: Source::InProcess,
+            show: Show::Film,
             shape: crate::facts::Shape {
                 fps: 11.1,
                 seconds: None,

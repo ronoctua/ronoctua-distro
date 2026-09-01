@@ -1093,13 +1093,22 @@ files-preview-all-shown = the whole preview is already on screen
 files-preview-cut = only the first { $lines } lines are here — the file goes on
 # THE PREVIEW'S TRANSPORT. What the pointer resting on a control says, and what
 # the manager says back when a key does something one cannot see.
-files-play-hold = hold the film where it is
-files-play-resume = let the film go on
-files-sound-on = let the film be heard
-files-sound-off = watch it in silence
-files-sound-none = this film carries no sound
+files-play-hold = hold it where it is
+files-play-resume = let it go on
+files-sound-on = let it be heard
+files-sound-off = in silence
+files-sound-none = this file carries no sound
+files-entry-not-here = this entry is somewhere else, and nothing here fetches it: { $path }
+files-entry-at = { $path }
+files-entry-titled = { $name } · { $path }
+files-entry-refused = this name cannot be a path: { $path }
+files-list-nothing = there is nothing on this list that can be played from here
+files-list-at-start = this is the first of the list
+files-list-at-end = this is the last of the list
+files-playlist-previous = go to the entry before this one
+files-playlist-next = go to the entry after this one
 files-no-sound = this machine has no sound to play it through — the picture goes on without it
-files-film-stuck = nothing has come out of the film for { $seconds } s — it was stopped
+files-film-stuck = nothing has come out of it for { $seconds } s — it was stopped
 files-film-seek = go to { $at } of { $total }
 files-theatre-on = give the preview the whole region
 files-theatre-off = give the listing its room back
@@ -1160,11 +1169,11 @@ files-preview-left = move the preview a column to the left
 files-preview-right = move the preview a column to the right
 # The film's transport. `files-play` is one key for both, because that is what
 # it is: pressing it while it plays is what pauses it.
-files-play = play the film, or pause it
-files-rewind = go back in the film
-files-forward = go forward in the film
-files-sound = turn the film's sound on or off
-files-theatre = give the film the whole region, and take it back
+files-play = play it, or pause it
+files-rewind = go back
+files-forward = go forward
+files-sound = turn the sound on or off
+files-theatre = give the preview the whole region, and take it back
 # The shape's. `files-turn-left` is the hand's direction and not an axis — see
 # `View::spin`, which is where that convention is written down.
 files-turn-left = turn the shape to the left
@@ -1378,6 +1387,8 @@ files-preview-slow = it went past { $seconds } s and was stopped — not the siz
 # is a different thing to tell somebody: one sends them to repair a file that
 # needs no repair.
 files-preview-draco = the shapes in this file are compressed, and this reader does not open that
+files-preview-no-synth = this file holds a score rather than a recording, and there is nothing here to play it with
+files-preview-playlist-unread = this is a list of things to play, in a spelling this reader does not open
 # OVER the picture, on its last line, and only when some face did not fill. A
 # piece that is part outline is a piece somebody should be told about — and the
 # panel is where they are looking.
@@ -1401,6 +1412,19 @@ files-fact-bitrate = bit rate
 files-fact-title = title
 files-fact-artist = artist
 files-fact-album = album
+files-fact-album-artist = album artist
+files-fact-track = track
+files-fact-disc = disc
+files-fact-year = year
+files-fact-genre = genre
+files-fact-composer = composer
+files-fact-publisher = publisher
+files-fact-isrc = ISRC
+files-fact-encoder = encoder
+files-fact-depth = bit depth
+files-fact-layout = channels laid out
+files-fact-compression = compression
+files-fact-cover = cover
 files-fact-camera = camera
 files-fact-lens = lens
 files-fact-taken = taken
@@ -1425,6 +1449,13 @@ files-value-channels = { $n ->
        *[other] { $n } channels
     }
 files-value-kbps = { $kbps } kbit/s
+files-value-of-total = { $at } of { $total }
+files-value-bits = { $n ->
+        [one] { $n } bit
+       *[other] { $n } bits
+    }
+files-value-lossless = nothing thrown away
+files-value-lossy = made smaller by throwing sound away
 files-value-millimetres = { $mm } mm
 files-value-seconds = { $s } s
 files-value-coordinates = { $lat }, { $lon }

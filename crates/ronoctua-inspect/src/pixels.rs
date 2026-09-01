@@ -88,6 +88,29 @@ pub enum How {
     Embedded,
     /// The first page of a document, by pdftoppm.
     Page,
+    /// An album's cover, and the sound's own shape when there is none.
+    ///
+    /// The same ffmpeg call [`How::Inside`] makes, with a step under it: a
+    /// great many sound files carry no artwork at all, and the panel used to
+    /// answer them with "there is no preview of this" — true, and useless
+    /// about a file whose whole content is a waveform we can draw.
+    ///
+    /// So the fallback draws the WHOLE file as one still waveform, measured at
+    /// 261 ms on a five-megabyte mp3 and 305 ms on a hundred-megabyte FLAC.
+    ///
+    /// It is a variant of its own and not a step bolted onto [`How::Inside`],
+    /// because that row also serves HEICs — and a waveform drawn for a
+    /// photograph would be a picture of nothing.
+    Cover,
+    /// Nothing, ever — the panel shows something that is not a picture.
+    ///
+    /// A playlist is a list of NAMES. There is no image of it, and the two
+    /// pictures ffmpeg could be talked into making are both wrong: the cover
+    /// of the first track it names, which is a picture of another file, or —
+    /// measured, and this is what happens today — the `hls` demuxer OPENING
+    /// the first segment and the panel reporting that file's duration and
+    /// codec as if they were the playlist's.
+    Nothing,
     /// A shape, drawn by [`crate::solid`] in this process.
     ///
     /// It is the only row that produces no picture HERE. A mesh is turned, so
@@ -102,8 +125,8 @@ impl How {
     #[must_use]
     pub const fn tool(self) -> Option<Tool> {
         match self {
-            Self::Raster | Self::Vector | Self::Mesh => None,
-            Self::Frame | Self::Inside => Some(Tool::Ffmpeg),
+            Self::Raster | Self::Vector | Self::Mesh | Self::Nothing => None,
+            Self::Frame | Self::Inside | Self::Cover => Some(Tool::Ffmpeg),
             Self::Embedded => Some(Tool::Exiftool),
             Self::Page => Some(Tool::Pdftoppm),
         }
@@ -151,7 +174,7 @@ pub struct Row {
 /// the database says descends from `image/tiff`. It must NOT reach the `tiff`
 /// decoder — that would read the RAW planes — so the raster row matches exact
 /// types only and never walks the subclass DAG.
-pub const TABLE: [Row; 8] = [
+pub const TABLE: [Row; 9] = [
     Row {
         // ELEVEN TYPES, AND SIX OF THEM ARE ALREADY IN THE DATABASE: the
         // pinned shared-mime-info has `model/stl` by its `*.stl` glob,
@@ -239,13 +262,25 @@ pub const TABLE: [Row; 8] = [
         how: How::Frame,
     },
     Row {
+        // A LIST OF THINGS TO PLAY, and it must come BEFORE the sound row
+        // below or `media: audio` would claim it — which is what happens
+        // today, and what makes an `.m3u8` report the first segment's codec
+        // and duration as its own. See `crate::playlist`.
+        id: "playlist",
+        types: &crate::playlist::TYPES,
+        descends: &[],
+        media: &[],
+        how: How::Nothing,
+    },
+    Row {
         // The cover art, which is a video stream inside an audio file — which
-        // is why it is `-map 0:v:0` and the same program.
+        // is why it is `-map 0:v:0` and the same program — and the file's own
+        // waveform when it carries none.
         id: "sound",
         types: &[],
         descends: &[],
         media: &["audio"],
-        how: How::Inside,
+        how: How::Cover,
     },
     Row {
         id: "page",
@@ -263,6 +298,43 @@ pub const TABLE: [Row; 8] = [
         how: How::Inside,
     },
 ];
+
+/// The sound types nothing on this machine can turn into sound.
+///
+/// # A score is not a recording
+///
+/// MIDI, SID, PSF and XMF do not contain sound at all — they contain
+/// instructions for making it, and playing them needs a synthesiser with a
+/// bank of instruments. ffmpeg has no MIDI decoder and this build carries no
+/// soundfont; putting one in would be a package on the ISO for a format
+/// nobody here has a file of.
+///
+/// Measured against the pinned binary: `ffmpeg -decoders` lists no audio
+/// decoder for any of them, and `libgme` — which IS built in, and does play
+/// the chiptunes — does not cover SID.
+///
+/// They are refused BY NAME rather than left to fail, because a child that
+/// exits with nothing on stdout reaches the panel as "there is no preview of
+/// this", which is true of every broken file and says nothing about this one.
+/// Tracker modules are NOT here: `libopenmpt` plays them, proved against a
+/// module built by hand.
+const NO_SYNTHESISER: [&str; 6] = [
+    "audio/midi",
+    "audio/prs.sid",
+    "audio/x-psf",
+    "audio/x-psflib",
+    "audio/mobile-xmf",
+    "audio/x-xmf",
+];
+
+/// Whether this type is a score no synthesiser here can play.
+#[must_use]
+pub fn needs_a_synthesiser(mime: &str) -> bool {
+    let mime = ronoctua_files::mime::canonical(mime);
+    NO_SYNTHESISER
+        .iter()
+        .any(|kind| mime == *kind || ronoctua_files::mime::is_a(mime, kind))
+}
 
 /// The row that serves a type, if any.
 ///
@@ -321,8 +393,8 @@ pub fn seek_at(duration: Option<f64>) -> f64 {
 /// It never panics and never returns nothing: a [`Made`] always has either
 /// pixels or a sentence.
 #[must_use]
-pub fn preview(path: &Path, mime: &str, target: u32) -> Made {
-    at(path, mime, target, None)
+pub fn preview(path: &Path, mime: &str, target: u32, wave: &str) -> Made {
+    at(path, mime, target, None, wave)
 }
 
 /// The same, with a duration the caller already knows.
@@ -331,7 +403,7 @@ pub fn preview(path: &Path, mime: &str, target: u32) -> Made {
 /// what it learned and save a spawn. `None` means "probe if you need it", and
 /// only [`How::Frame`] ever does.
 #[must_use]
-pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
+pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>, wave: &str) -> Made {
     let target = crate::step(target);
     let Some(row) = how(mime) else {
         return Made::refused(Refusal::Nothing);
@@ -341,8 +413,12 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
     // nothing about. Rendering a default view here would be a whole parse and
     // a whole render for an image replaced as soon as the first real frame
     // arrives — the poster problem, again.
-    if matches!(row.how, How::Mesh) {
+    if matches!(row.how, How::Mesh | How::Nothing) {
         return Made::unasked();
+    }
+    // AND A SCORE SAYS SO, rather than failing into "there is no preview".
+    if needs_a_synthesiser(mime) {
+        return Made::refused(Refusal::Unsupported(crate::key::PREVIEW_NO_SYNTH));
     }
     let began = Instant::now();
     let outcome = match row.how {
@@ -371,6 +447,18 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
         }
         How::Inside => child_image(Tool::Ffmpeg, &inside_args(path, target))
             .and_then(|png| from_raster(&png, target)),
+        // AND ITS OWN FALLBACK, for the reason `How::Embedded` has one: a
+        // great many sound files carry no artwork, and the answer "there is no
+        // preview of this" is true and useless about a file we can draw.
+        How::Cover => child_image(Tool::Ffmpeg, &inside_args(path, target))
+            .and_then(|png| from_raster(&png, target))
+            .or_else(|why| {
+                if !matches!(why, Refusal::Failed) {
+                    return Err(why);
+                }
+                child_image(Tool::Ffmpeg, &wave_args(path, target, wave))
+                    .and_then(|png| from_raster(&png, target))
+            }),
         // AND ITS OWN FALLBACK: not every RAW carries a preview, and a file
         // that only claims to be one carries nothing at all. ffmpeg's dark
         // rectangle is a worse picture than the camera's JPEG and a better
@@ -385,7 +473,7 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>) -> Made {
         How::Page => child_image(Tool::Pdftoppm, &page_args(path, target))
             .and_then(|png| from_raster(&png, target)),
         // Answered above, before any of this was set up.
-        How::Mesh => return Made::unasked(),
+        How::Mesh | How::Nothing => return Made::unasked(),
     };
     match outcome {
         Ok(rgba) => {
@@ -480,6 +568,49 @@ pub fn inside_args(path: &Path, target: u32) -> Vec<std::ffi::OsString> {
         "png".into(),
         "-".into(),
     ]
+}
+
+/// The command line that draws a whole sound as one still waveform.
+///
+/// The picture a sound file has when it carries no artwork. It is the WHOLE
+/// file at once — `showwavespic` reads it end to end — which is what makes it
+/// a portrait of the piece rather than a moment of it: the quiet passages and
+/// the loud ones are where they are, and the shape is recognisably that track.
+///
+/// Measured: 261 ms on a five-megabyte mp3, 305 ms on a hundred-megabyte
+/// 24-bit FLAC. Paid once per file and kept under a [`crate::Stamp`].
+///
+/// `ink` arrives as a string because this crate receives no token values.
+#[must_use]
+pub fn wave_args(path: &Path, target: u32, ink: &str) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+    let mut out: Vec<OsString> = Vec::new();
+    for a in ["-v", "error", "-nostdin", "-i"] {
+        out.push(OsString::from(a));
+    }
+    out.push(path.as_os_str().to_owned());
+    out.push(OsString::from("-filter_complex"));
+    // HALF THE WIDTH TALL, which is the shape a waveform is drawn in wherever
+    // it is drawn. The panel fits whatever comes back into its own box, so
+    // this decides proportion and not size.
+    out.push(OsString::from(format!(
+        "[0:a]showwavespic=s={target}x{tall}:colors={ink}[drawn]",
+        tall = (target / 2).max(1),
+    )));
+    for a in [
+        "-map",
+        "[drawn]",
+        "-frames:v",
+        "1",
+        "-f",
+        "image2",
+        "-c:v",
+        "png",
+        "-",
+    ] {
+        out.push(OsString::from(a));
+    }
+    out
 }
 
 /// pdftoppm's argument list for the first page.

@@ -171,6 +171,13 @@ pub struct Reel {
     /// — what it needs is which decoder, and that is what `motion::moving`
     /// already answered.
     pub how: Source,
+    /// What the frames are made of — the file's own picture, or one drawn from
+    /// its sound.
+    ///
+    /// It is in the reel because it decides which filter graph is built, and a
+    /// reel is what the player is asked to open. It never changes for a file,
+    /// so it never causes a respawn of its own.
+    pub show: ronoctua_inspect::motion::Show,
     /// Exactly how large a frame is to be.
     pub fit: Fit,
     /// Frames a second.
@@ -185,6 +192,19 @@ pub struct Reel {
     /// panel's own colour because the bars beside a picture of another shape
     /// should be the air the panel would have left anyway.
     pub background: String,
+    /// The waveform's ink, for a file whose picture is drawn from its sound.
+    ///
+    /// A string for the reason `background` is one: `ronoctua-inspect` receives
+    /// no token values, so whoever holds the tokens turns this one into the
+    /// notation ffmpeg reads.
+    pub wave: String,
+    /// How tall the waveform is drawn over a cover, in hundredths of the frame.
+    pub wave_height: u16,
+    /// How much of the frame's foot the controls cover, in hundredths.
+    ///
+    /// The waves sit ABOVE it: a sound's controls are always on screen, so a
+    /// strip at the frame's foot is a strip behind them.
+    pub wave_foot: u16,
     /// Where the film lives, when the file is a PHOTOGRAPH with one in it.
     ///
     /// `Some` is what makes this a motion photo, and what makes the loop start
@@ -492,15 +512,19 @@ fn play_video(reel: &Reel, out: &calloop::channel::Sender<Beat>, clock: &Clock<'
     // what the machine refused.
     let mut sound = reel.sound;
     loop {
-        let args = ronoctua_inspect::motion::stream_args(
-            &reel.path,
-            reel.inside.as_ref(),
-            reel.fit,
-            reel.fps,
-            reel.from,
-            sound.then_some(SINK),
-            &reel.background,
-        );
+        let args = ronoctua_inspect::motion::stream_args(&ronoctua_inspect::motion::Stream {
+            path: &reel.path,
+            show: reel.show,
+            inside: reel.inside.as_ref(),
+            fit: reel.fit,
+            fps: reel.fps,
+            from: reel.from,
+            sound: sound.then_some(SINK),
+            background: &reel.background,
+            wave: &reel.wave,
+            wave_height: reel.wave_height,
+            wave_foot: reel.wave_foot,
+        });
         let born = Command::new(&program)
             .args(&args)
             .stdin(Stdio::null())
