@@ -616,8 +616,27 @@ pub fn wave_args(path: &Path, target: u32, ink: &str) -> Vec<std::ffi::OsString>
 /// pdftoppm's argument list for the first page.
 ///
 /// `-f 1 -l 1` is the page range and `-singlefile` is what makes it write one
-/// image; the trailing `-` is poppler's way of saying stdout. `-scale-to` fits
-/// the longer side, so the aspect ratio stays true without arithmetic here.
+/// image. `-scale-to` fits the longer side, so the aspect ratio stays true
+/// without arithmetic here.
+///
+/// # The output goes to stdout by SAYING NOTHING, and a `-` is a filename
+///
+/// This ended in `-`, with a comment calling it "poppler's way of saying
+/// stdout". It is not. pdftoppm's last argument is the output ROOT, and given
+/// a `-` it writes a file called `-.png` in whatever directory the process
+/// happens to be in — putting **nothing at all** on stdout.
+///
+/// So the PDF preview never worked: `child_image` read an empty pipe, answered
+/// `Refusal::Failed`, and the panel said there was no preview of a file it had
+/// just rendered. Every attempt left a `-.png` behind, which is how it was
+/// found — one turned up in the repository's own root after a test run.
+///
+/// Omitting the root is what writes to stdout: measured, 36 277 bytes of PNG
+/// for the same page that was going to the file.
+///
+/// The test that was meant to guard this asserted `last() == "-"` — the code as
+/// written rather than the thing wanted, which is the shape `CLAUDE.md` names.
+/// Its replacement runs the real binary and counts what comes back.
 #[must_use]
 pub fn page_args(path: &Path, target: u32) -> Vec<std::ffi::OsString> {
     vec![
@@ -630,7 +649,6 @@ pub fn page_args(path: &Path, target: u32) -> Vec<std::ffi::OsString> {
         "-scale-to".into(),
         target.to_string().into(),
         path.as_os_str().to_owned(),
-        "-".into(),
     ]
 }
 
@@ -1202,6 +1220,64 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert!(page.contains(&"-singlefile".to_owned()));
-        assert_eq!(page.last().map(String::as_str), Some("-"));
+        // AND NOTHING AFTER THE FILE. pdftoppm's last argument is the output
+        // ROOT, so anything there is a NAME it writes to and stdout stays
+        // empty — see `page_args`. This used to assert the opposite.
+        assert_eq!(page.last().map(String::as_str), Some("/tmp/x.pdf"));
     }
+
+    /// THE PROOF, AGAINST REAL POPPLER, THAT A PAGE COMES BACK AS PIXELS.
+    ///
+    /// FAILS IF: the arguments go back to naming a file instead of writing to
+    /// the pipe. Nothing in the argument list says which of the two it is —
+    /// that is a fact about pdftoppm — so the only honest test runs it.
+    ///
+    /// It is also the test that was missing: the one there asserted the shape
+    /// of the arguments, and the arguments were wrong.
+    #[test]
+    fn a_page_arrives_as_pixels_rather_than_as_a_file() {
+        let Ok(program) = crate::tools::Tool::Pdftoppm.path() else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ronoctua-page-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        // A DOCUMENT OF OUR OWN, and the smallest one that renders: a page,
+        // no fonts, no images.
+        let pdf = dir.join("one.pdf");
+        std::fs::write(&pdf, MINIMAL_PDF).expect("write");
+
+        let args = page_args(&pdf, 128);
+        let borrowed: Vec<&std::ffi::OsStr> = args.iter().map(AsRef::as_ref).collect();
+        let out = std::process::Command::new(&program)
+            .args(&borrowed)
+            .current_dir(&dir)
+            .output()
+            .expect("pdftoppm ran");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stdout.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "{} bytes came back and they are not a PNG",
+            out.stdout.len()
+        );
+        // AND NOTHING WAS WRITTEN BESIDE THE DOCUMENT. A stray `-.png` in the
+        // working directory is how this was found in the first place.
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .expect("the scratch directory")
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n != "one.pdf")
+            .collect();
+        assert!(left.is_empty(), "it wrote {left:?} instead of using stdout");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One page, no fonts, no images — enough for poppler to render.
+    const MINIMAL_PDF: &[u8] = b"%PDF-1.4\n\
+        1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n\
+        2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n\
+        3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n\
+        trailer<</Root 1 0 R>>\n";
 }
