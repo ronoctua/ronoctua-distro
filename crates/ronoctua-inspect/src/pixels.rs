@@ -436,8 +436,7 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>, wave: &str
             if !matches!(why, Refusal::Failed) {
                 return Err(why);
             }
-            child_image(Tool::Ffmpeg, &inside_args(path, target))
-                .and_then(|png| from_raster(&png, target))
+            from_inside(path, target)
         }),
         How::Vector => from_svg_file(path, target),
         How::Frame => {
@@ -445,20 +444,17 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>, wave: &str
             child_image(Tool::Ffmpeg, &frame_args(path, target, seek_at(known)))
                 .and_then(|png| from_raster(&png, target))
         }
-        How::Inside => child_image(Tool::Ffmpeg, &inside_args(path, target))
-            .and_then(|png| from_raster(&png, target)),
+        How::Inside => from_inside(path, target),
         // AND ITS OWN FALLBACK, for the reason `How::Embedded` has one: a
         // great many sound files carry no artwork, and the answer "there is no
         // preview of this" is true and useless about a file we can draw.
-        How::Cover => child_image(Tool::Ffmpeg, &inside_args(path, target))
-            .and_then(|png| from_raster(&png, target))
-            .or_else(|why| {
-                if !matches!(why, Refusal::Failed) {
-                    return Err(why);
-                }
-                child_image(Tool::Ffmpeg, &wave_args(path, target, wave))
-                    .and_then(|png| from_raster(&png, target))
-            }),
+        How::Cover => from_inside(path, target).or_else(|why| {
+            if !matches!(why, Refusal::Failed) {
+                return Err(why);
+            }
+            child_image(Tool::Ffmpeg, &wave_args(path, target, wave))
+                .and_then(|png| from_raster(&png, target))
+        }),
         // AND ITS OWN FALLBACK: not every RAW carries a preview, and a file
         // that only claims to be one carries nothing at all. ffmpeg's dark
         // rectangle is a worse picture than the camera's JPEG and a better
@@ -467,8 +463,7 @@ pub fn at(path: &Path, mime: &str, target: u32, seconds: Option<f64>, wave: &str
             if !matches!(why, Refusal::Failed) {
                 return Err(why);
             }
-            child_image(Tool::Ffmpeg, &inside_args(path, target))
-                .and_then(|png| from_raster(&png, target))
+            from_inside(path, target)
         }),
         How::Page => child_image(Tool::Pdftoppm, &page_args(path, target))
             .and_then(|png| from_raster(&png, target)),
@@ -556,11 +551,28 @@ pub fn inside_args(path: &Path, target: u32) -> Vec<std::ffi::OsString> {
         "-nostdin".into(),
         "-i".into(),
         path.as_os_str().to_owned(),
-        "-map".into(),
-        "0:v:0".into(),
         "-frames:v".into(),
         "1".into(),
-        "-vf".into(),
+        // A COMPLEX FILTER, AND NOT `-vf`, FOR A PICTURE THAT IS A GRID.
+        //
+        // A modern HEIC is not one picture in the file: an iPhone photograph
+        // is sixty tiles of 512 by 512, each a stream of its own, and ffmpeg
+        // puts them back together by building a COMPLEX filtergraph of its
+        // own. A `-vf` cannot stand beside one — *"simple and complex
+        // filtering cannot be used together for the same stream"* — and the
+        // command dies. Written this way there is one graph and it composes.
+        //
+        // Naming `0:v:0` instead was what this used to do, and it was worse
+        // than dying: it SUCCEEDS and hands back one tile. The owner
+        // photographed a brown rectangle where a photograph should have been,
+        // and nothing anywhere failed.
+        //
+        // Measured, and it is the whole of the delay he then reported: with
+        // the scale here the tiled file takes 245 ms; without it, letting the
+        // full 4032-by-3024 image out of the pipe, 2 253 ms — of which the
+        // decode is 187 and the rest is PNG compressing twelve megapixels
+        // nobody wanted.
+        "-filter_complex".into(),
         format!("scale='min({target},iw)':-2").into(),
         "-f".into(),
         "image2".into(),
@@ -568,6 +580,11 @@ pub fn inside_args(path: &Path, target: u32) -> Vec<std::ffi::OsString> {
         "png".into(),
         "-".into(),
     ]
+}
+
+/// The picture inside a file that is not one, at the size asked for.
+fn from_inside(path: &Path, target: u32) -> Result<Rgba, Refusal> {
+    child_image(Tool::Ffmpeg, &inside_args(path, target)).and_then(|png| from_raster(&png, target))
 }
 
 /// The command line that draws a whole sound as one still waveform.
@@ -1213,7 +1230,26 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert!(!still.contains(&"-ss".to_owned()));
-        assert!(still.contains(&"0:v:0".to_owned()), "only the first video");
+        // AND NOT `0:v:0`, WHICH USED TO BE ASSERTED HERE.
+        //
+        // A modern HEIC is a grid of tiles, each its own stream, and asking for
+        // the first one hands back a tile: the owner photographed a brown
+        // rectangle where a photograph should have been. ffmpeg's own stream
+        // selection reassembles the grid — see `whole_args`.
+        assert!(
+            !still.contains(&"0:v:0".to_owned()),
+            "asking for one stream of a HEIC asks for one TILE of it"
+        );
+        assert!(!still.contains(&"-map".to_owned()), "{still:?}");
+
+        // AND THE FILTER IS THE COMPLEX KIND, because ffmpeg is already using
+        // one to put a HEIC's tiles back together and a simple one cannot
+        // stand beside it.
+        assert!(
+            still.contains(&"-filter_complex".to_owned()),
+            "a simple filter cannot meet the one that rebuilds a grid: {still:?}"
+        );
+        assert!(!still.contains(&"-vf".to_owned()), "{still:?}");
 
         let page: Vec<String> = page_args(std::path::Path::new("/tmp/x.pdf"), 256)
             .iter()
