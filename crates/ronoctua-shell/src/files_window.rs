@@ -68,13 +68,6 @@ const RIGHT_BUTTON: u32 = 0x111;
 /// shape for the same thing.
 const FIRST_OF_REGION: u16 = 1;
 
-/// The listing's own chrome inside the region: the path, then the header.
-///
-/// They are the LISTING's two lines and not the region's — every other column
-/// starts at [`FIRST_OF_REGION`], which is what stopped them from having to
-/// leave two blank lines under somebody else's path.
-const CHROME_LINES: u16 = 2;
-
 /// Opens the manager in a window.
 ///
 /// # Errors
@@ -433,7 +426,7 @@ impl FilesWindow {
     /// How many lines the listing's chrome takes — two, or none at all when a
     /// menu, a picker or a sheet is up and there are no columns to name.
     fn chrome_lines(&self) -> u16 {
-        if self.view.plain() { CHROME_LINES } else { 0 }
+        u16::try_from(self.view.chrome_lines()).unwrap_or(0)
     }
 
     /// How many lines the region has.
@@ -1165,7 +1158,11 @@ impl Geometry {
     /// The two rooms this door gives, for whatever asks about a bar.
     pub fn rooms(&self) -> crate::files::Room {
         crate::files::Room {
-            list: self.list_room(),
+            // THE REGION'S OWN HEIGHT, chrome included — the sidebar shares
+            // this number and really does show every line of it. The listing's
+            // chrome comes off inside the view, which is the only place that
+            // knows whether it is there. See `View::chrome_lines`.
+            list: self.room(),
             panel: self.panel_room(),
         }
     }
@@ -2215,7 +2212,10 @@ impl PointerHandler for FilesWindow {
             // at a time inside a room the code believed was the whole listing.
             let room = match which {
                 crate::files::Pane::Info | crate::files::Pane::Preview => self.panel_room(),
-                _ => self.list_room(),
+                // THE REGION, and the view takes the listing's chrome off —
+                // the same rule `rooms` follows, and for the same reason: the
+                // sidebar has no chrome and was losing two rows to it.
+                _ => self.room(),
             };
             // EVERY SECTION ANSWERS, the listing included: there is no
             // fallback here any more, and that is the point. What stood here
@@ -2445,7 +2445,19 @@ mod tests {
             "the chrome takes two lines"
         );
         assert_eq!(geo.panel_room(), 4, "with a strip the panels are the strip");
-        assert_eq!(geo.rooms().list, geo.list_room());
+        // AND `rooms().list` IS THE REGION, not the listing's own rows.
+        //
+        // They used to be the same number and that was the defect: the sidebar
+        // shares this room and has no chrome, so it was losing two rows to the
+        // listing's header — while the listing's own subtraction now happens
+        // in the view, which is the only place that knows whether the chrome
+        // is there at all. See `View::chrome_lines`.
+        assert_eq!(geo.rooms().list, geo.room());
+        assert_eq!(
+            geo.rooms().list - geo.list_room(),
+            2,
+            "the two differ by exactly the chrome"
+        );
         assert_eq!(geo.rooms().panel, geo.panel_room());
 
         // WITHOUT A STRIP the panels are columns, and they get the region.

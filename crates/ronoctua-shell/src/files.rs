@@ -328,6 +328,7 @@ const THEATRE_NOTHING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
 const THEATRE_ON: &str = ronoctua_i18n::key::FILES_THEATRE_ON;
 /// And given back.
 const THEATRE_OFF: &str = ronoctua_i18n::key::FILES_THEATRE_OFF;
+
 /// How far one key moves along a film, in seconds.
 ///
 /// Five, which is about a sentence of speech and a shot of picture: enough to
@@ -1828,8 +1829,26 @@ impl Section {
         // within one line of the surface is the LAST band in its column and
         // takes what is left over; one ending a whole line or more above it
         // has something underneath.
-        let band_top = top + f32::from(u16::try_from(self.top).unwrap_or(0)) * line_px;
-        self.scroll().bar(right, band_top, bottom, cell, line_px)
+        // AND THE BAND BEGINS BELOW THE CHROME, which is the listing's alone.
+        //
+        // A scrollbar measures the rows that SCROLL, and the path and the
+        // header do not: a track drawn beside them says two lines are part of
+        // a journey they take no part in. Starting the band under them makes
+        // the drawing and the arithmetic the same sentence — the thumb at
+        // offset nought sits level with the first ENTRY, and the drag has the
+        // whole track to spend on entries.
+        //
+        // It also keeps ONE rectangle: `Scroll::bar` is still the only thing
+        // that builds one — see the `one-scrollbar` check, which refuses a
+        // second thumb worked out by hand and refused this when it was written
+        // that way.
+        let above = f32::from(u16::try_from(self.top + self.above).unwrap_or(0));
+        let band_top = top + above * line_px;
+        ronoctua_design::Scroll {
+            lines: self.visible(),
+            ..self.scroll()
+        }
+        .bar(right, band_top, bottom, cell, line_px)
     }
 
     /// The sideways bar's rectangle, when this section has one.
@@ -1941,6 +1960,25 @@ impl Section {
 
     /// This section as a list that may not fit.
     #[must_use]
+    /// How many of this section's OWN rows are on screen.
+    ///
+    /// # It is not `lines`, and the difference is two
+    ///
+    /// `lines` is how tall the section is; `above` is the part of it that does
+    /// not scroll — the listing's path and header. What every question about
+    /// scrolling wants is the remainder: how many entries a person can see, so
+    /// how far the offset can go (`total - visible`) and how long the thumb is.
+    ///
+    /// Handed `lines` instead, the arithmetic stops two entries early. The
+    /// owner found it with the mouse: *"ao deslizar a scrollbar da listagem …
+    /// os dois últimos arquivos não apareceram, mas com as setas do teclado eu
+    /// consegui ir mais para baixo"*. The keys reach them because they ask a
+    /// different question — and in the footer they are right by CANCELLATION,
+    /// their total carrying the same two lines their room does.
+    pub const fn visible(&self) -> usize {
+        self.lines.saturating_sub(self.above)
+    }
+
     pub const fn scroll(&self) -> ronoctua_design::Scroll {
         ronoctua_design::Scroll {
             total: self.total,
@@ -2003,6 +2041,20 @@ impl Row {
 ///
 /// Two lines, and they belong to the LISTING's column — not to the region. Every
 /// other section starts at the region's first line.
+///
+/// # It is subtracted from every question about scrolling, and it was not
+///
+/// A region of `R` lines therefore shows `R - 2` ENTRIES, so the last offset a
+/// list of `N` can reach is `N - (R - 2)`. Handed `R`, the arithmetic stops two
+/// entries early, and that is what the owner found with the mouse: *"os dois
+/// últimos arquivos não apareceram, mas com as setas do teclado eu consegui ir
+/// mais para baixo"*.
+///
+/// The number was spelled in four places before this — a `const` in the window
+/// door, a literal twice in the footer, and `chrome.len()` inside `sections` —
+/// which is how the doors came to disagree about it. [`View::chrome_lines`] is
+/// the only reader now, because whether the chrome is THERE is a question only
+/// the view can answer.
 pub const CHROME: usize = 2;
 
 /// How many cells the eject glyph needs on a sidebar row — two, or none.
@@ -7367,6 +7419,16 @@ impl View {
         self.list_offset = to.min(self.amount().saturating_sub(1));
     }
 
+    /// How many lines of the listing are its chrome right now.
+    ///
+    /// None at all with a menu, a picker or a sheet up: there are no columns
+    /// to name, so [`View::plain`] is the whole question. Both doors and every
+    /// piece of scrolling arithmetic ask this rather than spelling the number.
+    #[must_use]
+    pub const fn chrome_lines(&self) -> usize {
+        if self.plain() { CHROME } else { 0 }
+    }
+
     /// Keeps the cursor inside the listing's visible rows.
     ///
     /// # Why it is one function and was three
@@ -7456,7 +7518,14 @@ impl View {
             // listing's. The preview joined the first half of that sentence
             // the day it began to show a file's letters.
             Pane::Info | Pane::Preview => room.panel,
-            _ => room.list,
+            // AND THE LISTING'S CHROME IS NOT A ROW THE LISTING SCROLLS.
+            //
+            // The doors hand over the REGION's height — the sidebar shares it
+            // and really does show every line of it. Only the listing has
+            // something pinned at its top, and only the view knows whether it
+            // is there. See `Section::visible`.
+            Pane::Listing => room.list.saturating_sub(self.chrome_lines()),
+            Pane::Sidebar => room.list,
         };
         let total = match pane {
             Pane::Sidebar => self.side.shown(self.hidden).len(),
@@ -7903,6 +7972,11 @@ impl View {
             // in neither of the other two.
             Pane::Listing => {
                 let total = self.amount();
+                // THE SAME SUBTRACTION THE DRAG MAKES, and for the same
+                // reason: the path and the header do not scroll. A wheel that
+                // stopped somewhere the bar did not would be two answers to
+                // one question.
+                let room = room.saturating_sub(self.chrome_lines());
                 self.list_offset = slide(self.list_offset, by, total, room);
                 true
             }
@@ -14690,6 +14764,110 @@ mod tests {
             (by2 + bh2 - surface_bottom).abs() < 1.0,
             "dragging to the end stopped at {} and the surface ends at {surface_bottom}",
             by2 + bh2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DRAGGING THE BAR TO THE END SHOWS THE LAST ENTRY.
+    ///
+    /// FAILS IF: the chrome is counted as rows the listing scrolls.
+    ///
+    /// The listing's first two lines are its path and its header, and they do
+    /// not move. A region of `R` lines therefore shows `R - 2` entries, so the
+    /// last offset is `total - (R - 2)`. Handed `R`, the arithmetic stops two
+    /// entries early — and the owner found exactly that, in the footer:
+    /// *"ao deslizar a scrollbar da listagem … os dois últimos arquivos não
+    /// apareceram, mas com as setas do teclado eu consegui ir mais para
+    /// baixo"*.
+    ///
+    /// The keyboard reached them because it asks a different question, and in
+    /// the footer it happens to be right by cancellation: its total INCLUDES
+    /// the two chrome lines, so the two errors undo each other. That is worth
+    /// naming rather than admiring.
+    ///
+    /// AND THE THUMB AND THE DRAG ARE ONE ANSWER. `offset_at` is `thumb`'s
+    /// inverse, so a thumb drawn from one number and a drop mapped through
+    /// another puts the mark somewhere the hand did not leave it — which was
+    /// true in the WINDOW even while its drag was right.
+    #[test]
+    fn dragging_the_listing_to_the_end_reaches_the_last_entry() {
+        let dir = scratch("listing-bar-end");
+        for n in 0..60 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.reread();
+        let w = 53u16;
+        let b = bundle();
+        let region = 21usize;
+        let chrome = v.chrome_rows(w, &b);
+        assert_eq!(
+            chrome.len(),
+            2,
+            "the listing's chrome is the path and the header"
+        );
+        let seen = region - chrome.len();
+        let total = v.amount();
+
+        let room = Room {
+            list: region,
+            panel: region,
+        };
+        assert!(
+            v.drag_to(Pane::Listing, Axis::Down, 1.0, w, room),
+            "the drag was refused"
+        );
+        assert_eq!(
+            v.list_offset(),
+            total - seen,
+            "dragged to the end, the last {} entries are still below the fold",
+            total - seen - v.list_offset()
+        );
+
+        // AND THE LAST ENTRY IS ON SCREEN, which is the sentence the owner
+        // wrote. Asked of the drawing rather than of the number.
+        let sections = v.sections(&chrome, region, w, &b);
+        let listing = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Listing))
+            .expect("the listing is a section");
+        let last = listing
+            .content
+            .iter()
+            .rev()
+            .find_map(|row| row.fields.iter().find(|f| f.text.contains("f59")));
+        assert!(last.is_some(), "the last file is not among the rows drawn");
+
+        // AND THE WHEEL AGREES, because it is the same arithmetic and was the
+        // same defect.
+        v.scroll_listing_to(0);
+        assert!(
+            v.wheel(Pane::Listing, 1_000, w, region),
+            "the wheel was refused"
+        );
+        assert_eq!(v.list_offset(), total - seen, "the wheel stopped short");
+
+        // AND THE THUMB IS DRAWN WHERE THE DROP LANDS. At the last offset it
+        // reaches the foot of its own band; anything else means the two
+        // answers have drifted apart again.
+        let (cell, line_px) = (12.0f32, 26.0f32);
+        let top = line_px;
+        let bottom = top + region as f32 * line_px;
+        let panes = v.panes(w);
+        let edge = f32::from(w) * cell;
+        let (x, wide) = section_px(panes, Pane::Listing, 1, w, cell, edge).expect("a listing box");
+        let sections = v.sections(&chrome, region, w, &b);
+        let listing = sections
+            .iter()
+            .find(|s| matches!(s.pane, Pane::Listing))
+            .expect("the listing is a section");
+        let (_, by, _, bh) = listing
+            .bar_box(x + wide, top, bottom, cell, line_px)
+            .expect("sixty files do not fit: there is a bar");
+        assert!(
+            (by + bh - bottom).abs() < 1.0,
+            "at the last offset the thumb ends at {} and its band at {bottom}",
+            by + bh
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -6247,14 +6247,15 @@ impl Footer {
             // it is now a field of the listing. That `.max(1)` moved INTO the
             // view, where the window door can reach it too.
             //
-            // TWO chrome lines when it is a plain listing: the path and the
-            // header. See `expansion_window`.
-            let plain = files.plain();
+            // THE CHROME COMES FROM THE VIEW, which is the one place that
+            // decides how tall it is — see `View::chrome_lines`. It used to be
+            // a literal `2` here and another one below, and the doors could
+            // drift apart from each other and from the drag.
             let _ = n;
             // THROUGH `region_len`, which adds the chrome to the LISTING and
             // not to whichever column is tallest — see the note there.
             return files
-                .region_len(if plain { 2 } else { 0 }, self.screen_columns())
+                .region_len(files.chrome_lines(), self.screen_columns())
                 .unwrap_or(n);
         }
         // The panel counts without building: `expansion()` would clone every
@@ -6466,9 +6467,8 @@ impl Footer {
             // day one of them is edited. `expansion_window` lays the SECTIONS
             // onto the lines, and asking it for the whole region is the same
             // question with no ceiling.
-            let plain = files.plain();
             let all = files
-                .region_len(if plain { 2 } else { 0 }, self.screen_columns())
+                .region_len(files.chrome_lines(), self.screen_columns())
                 .unwrap_or(0);
             return self.expansion_window(0, all);
         }
