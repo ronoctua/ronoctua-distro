@@ -20,6 +20,13 @@
 use anyhow::{Context as _, Result, bail};
 use ronoctua_protocol::{Command, Input, Text};
 
+/// The labels this buffer cuts ON PURPOSE, and why.
+///
+/// `(key prefix, the reason)`. The reason is not decoration: it is what tells
+/// the next reader whether an entry is a decision or a leftover — the same
+/// bargain `generator-flags-agree` makes with `--reflink`.
+const ON_PURPOSE: &[(&str, &str)] = &[];
+
 /// The scale heights the production host sends.
 ///
 /// The numbers are the tokens' (`typography.nix`); the ARITHMETIC is the same
@@ -74,6 +81,7 @@ struct Vision {
 
 /// Reads the display list: the header on row 0, the grid below, the focus on the last.
 fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
+    ronoctua_runtime::driven::note(list);
     // `(column, text)`: the piece with the largest column on row 0 is the counter.
     let mut header: Option<(u16, String)> = None;
     // A `BTreeMap` so it comes out in reading order: the component emits row by
@@ -1381,6 +1389,23 @@ fn main() -> Result<()> {
 
     println!("OK: the five filters of section 6.5 narrow, the state persists,");
     println!("    the click lands, search by tag works in both languages,");
+    // ---- AND EVERY LABEL FITS THE BUDGET, IN EVERY LANGUAGE ----
+    //
+    // A buffer cannot measure a sentence it does not have: it emits a KEY and
+    // the host translates (invariant 11), so what it declares is what it
+    // RESERVED. This measures every screen this run looked at, against both
+    // `.ftl` files, with the ruler the host CUTS with.
+    let measured = ronoctua_runtime::driven::every_label_fits(
+        &i18n,
+        ronoctua_runtime::driven::LANGUAGES,
+        ON_PURPOSE,
+        80,
+    )?;
+    println!(
+        "labels    {measured} measured in {} languages, all inside their budget",
+        ronoctua_runtime::driven::LANGUAGES.len()
+    );
+
     println!(
         "    the sheet opens, copies, warns, navigates and returns, and pasting the glyph finds it"
     );

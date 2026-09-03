@@ -64,6 +64,15 @@ name = "ronoctua-test-transfers"
 path = "src/bin/transfers.rs"
 
 [[bin]]
+# The seventh, for the brain's panel. The criterion only it has: it is the
+# buffer with NO width constant of its own — the widths are numbers inside four
+# `Table`s and half the keys are assembled at run time (`brain-why-{}`), so no
+# reading of the source can pair a key with a budget. The FRAME can, and that
+# is what this drives.
+name = "ronoctua-test-brain"
+path = "src/bin/brain.rs"
+
+[[bin]]
 # The sixth, for formatting a disk. The criterion only it has: TWO REFUSALS
 # that are invisible from the host, because from out there a refusal and a
 # crash both look like no plan. A device the running system needs is drawn and
@@ -78,6 +87,11 @@ wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+# THE RULER THE HOST CUTS WITH. `driven::fits` measures a label the way
+# `ronoctua_render::layout::elide_end` will cut it — by grapheme cluster — and
+# depending on the renderer for that would drag wgpu and cosmic-text into every
+# test binary. This crate is 300 KB of tables.
+unicode-segmentation = "1"
 
 [lints]
 workspace = true

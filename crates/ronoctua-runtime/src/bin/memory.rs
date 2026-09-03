@@ -25,6 +25,13 @@ use ronoctua_protocol::{
     Reading, Request, Survey, Text,
 };
 
+/// The labels this buffer cuts ON PURPOSE, and why.
+///
+/// `(key prefix, the reason)`. The reason is not decoration: it is what tells
+/// the next reader whether an entry is a decision or a leftover — the same
+/// bargain `generator-flags-agree` makes with `--reflink`.
+const ON_PURPOSE: &[(&str, &str)] = &[];
+
 /// The scale heights the production host sends.
 fn heights() -> ronoctua_protocol::Heights {
     ronoctua_protocol::Heights::from_sizes(15.0, 18.0, 20.0, 40.0, 116.0, 1.45)
@@ -148,6 +155,7 @@ impl Screen {
 /// whichever language is loaded.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
     let list = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&list);
     for columns in [46, 80, COLUMNS] {
         let at = if columns == COLUMNS {
             list.clone()
@@ -382,6 +390,22 @@ fn main() -> Result<()> {
     }
     println!("stop: points at the ROW of the last sample, and not at the pid");
 
+    // ---- AND EVERY LABEL FITS THE BUDGET, IN EVERY LANGUAGE ----
+    //
+    // A buffer cannot measure a sentence it does not have: it emits a KEY and
+    // the host translates (invariant 11), so what it declares is what it
+    // RESERVED. This measures every screen this run looked at, against both
+    // `.ftl` files, with the ruler the host CUTS with.
+    let measured = ronoctua_runtime::driven::every_label_fits(
+        &i18n,
+        ronoctua_runtime::driven::LANGUAGES,
+        ON_PURPOSE,
+        COLUMNS,
+    )?;
+    println!(
+        "labels    {measured} measured in {} languages, all inside their budget",
+        ronoctua_runtime::driven::LANGUAGES.len()
+    );
     println!("OK: the memory panel answers the host, and what is irreversible asks twice");
     Ok(())
 }

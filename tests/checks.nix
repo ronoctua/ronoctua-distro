@@ -1302,6 +1302,33 @@ let
       ${../assets/i18n}
   '';
 
+  # AND THE ONE BUFFER WITH NO WIDTH CONSTANT OF ITS OWN.
+  #
+  # # What this catches
+  #
+  # A buffer cannot measure a sentence it does not have: it emits a KEY and the
+  # host translates (invariant 11), so what it declares is what it RESERVED.
+  # Seven of the eight write that reservation down as a constant a reader can
+  # find. The brain does not: its widths are numbers inside four `Table`s
+  # (`Column::fixed("label", 16, 2)`) and half its keys are ASSEMBLED at run
+  # time — `brain-why-{}`, `brain-hold-{}`, `brain-standing-{}`, `update-{}`.
+  # Nothing that reads this repository's source can pair one with the other.
+  #
+  # The FRAME can, because `Command::Text` carries the key and its `max_width`
+  # side by side, already assembled. So this drives the panel through every
+  # shape that draws a different family of key — idle, held, refused, running
+  # with a warning, and the update's own page — and measures what came out
+  # against both `.ftl` files, with the ruler the host CUTS with.
+  #
+  # It is also the second buffer whose screen is EMPTY until the host speaks,
+  # and the `mind` is the largest record this system lowers: tasks with steps
+  # with outcomes, three levels of list. A field out of order fails here.
+  brain-driven = mkCheck "brain-driven" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-brain \
+      ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
+      ${../assets/i18n}
+  '';
+
   # AND ON THE FOURTH, which is the lightest of them: it embeds no database at
   # all, because every number it draws is pushed in at run time. The ceiling
   # here is loose on purpose — what it guards is a regression in the RUNTIME,
@@ -9008,6 +9035,7 @@ let
       lucide-instance-fast
       memory-instance-fast
       memory-driven
+      brain-driven
       transfers-instance-fast
       transfers-driven
       format-instance-fast
@@ -9259,6 +9287,7 @@ let
       lucide-instance-fast
       memory-instance-fast
       memory-driven
+      brain-driven
       transfers-instance-fast
       transfers-driven
       format-instance-fast

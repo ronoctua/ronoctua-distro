@@ -11,13 +11,22 @@ use crate::{GAP, Palette, budget::room};
 
 /// Where the value column starts, when there is room for it.
 ///
-/// **Twenty-four, because it is what fits the longest label we send.** The
+/// **Twenty-six, because it is what fits the longest label we send.** The
 /// buffer cannot measure that on its own: it sends a KEY and the host
-/// translates (invariant 11), so what it does is declare how much it reserved,
-/// and the check `browser-filters` compares both languages against this number.
+/// translates (invariant 11), so what it does is declare how much it reserved.
 /// It was sixteen once, and four labels came out as `…` at every window size,
 /// because the cut came from the budget and not from the space.
-pub const SHEET_LABEL: u16 = 24;
+///
+/// AND IT WAS TWENTY-FOUR until the measurement stopped being partial. The
+/// sentence above was true of the labels the two browsers' checks happened to
+/// open; `Absolute stroke width` is twenty-one cells and lives on a sheet
+/// neither of them reached, so it came out as `Absolute stroke w…` at every
+/// window size. Now `driven::every_label_fits` walks every screen every driver
+/// visits, in both languages, and this number is measured rather than believed.
+///
+/// The label column is this minus `GAP`, so the longest label needs
+/// `SHEET_LABEL - GAP` cells; twenty-six leaves twenty-one, which is exactly it.
+pub const SHEET_LABEL: u16 = 26;
 
 /// Where the label ends and the value begins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

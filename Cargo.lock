@@ -2732,6 +2732,7 @@ dependencies = [
  "anyhow",
  "ronoctua-protocol",
  "tracing",
+ "unicode-segmentation",
  "wasmtime",
  "wasmtime-wasi",
 ]

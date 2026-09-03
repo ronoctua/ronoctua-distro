@@ -12,6 +12,13 @@
 use anyhow::{Context as _, Result, bail};
 use ronoctua_protocol::{Command, Effect, Input, Text};
 
+/// The labels this buffer cuts ON PURPOSE, and why.
+///
+/// `(key prefix, the reason)`. The reason is not decoration: it is what tells
+/// the next reader whether an entry is a decision or a leftover — the same
+/// bargain `generator-flags-agree` makes with `--reflink`.
+const ON_PURPOSE: &[(&str, &str)] = &[];
+
 fn heights() -> ronoctua_protocol::Heights {
     ronoctua_protocol::Heights::from_sizes(15.0, 18.0, 20.0, 40.0, 116.0, 1.45)
 }
@@ -123,7 +130,10 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
 }
 
 fn screen(inst: &mut ronoctua_runtime::Instance) -> Result<Vision> {
-    read(&inst.render(COLUMNS, ROWS, heights())?)
+    let list = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&list);
+    ronoctua_runtime::driven::note(&list);
+    read(&list)
 }
 
 /// Types a query from scratch.
@@ -434,6 +444,7 @@ fn main() -> Result<()> {
     inst.event(&Input::Command("lucide-filter-clear".to_owned()))?;
     inst.event(&Input::Toggle)?;
     let list = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&list);
     let options: Vec<String> = keys_of(&list)
         .into_iter()
         .filter(|k| k.starts_with("lucide-category-"))
@@ -496,6 +507,7 @@ fn main() -> Result<()> {
     // --- the sheet ---------------------------------------------------------
     open(&mut inst, "house")?;
     let f = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&f);
     if sheet_value(&f, "lucide-sheet-name").as_deref() != Some("house") {
         bail!("the sheet does not show the name");
     }
@@ -572,6 +584,7 @@ fn main() -> Result<()> {
     // belongs to; ours is the only true preview.
     open(&mut inst, "house")?;
     let f = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&f);
     let shown =
         sheet_value(&f, "cmd-lucide-copy-character").context("the sheet has no character row")?;
     let cp = shown.chars().next().map_or(0, |c| c as u32);
@@ -640,6 +653,7 @@ fn main() -> Result<()> {
     let low = 20;
     for n in 0..ACTIONS {
         let list = inst.render(COLUMNS, low, heights())?;
+        ronoctua_runtime::driven::note(&list);
         let highlighted = list
             .commands
             .iter()
@@ -683,6 +697,7 @@ fn main() -> Result<()> {
     ];
     open(&mut inst, "house")?;
     let sheet = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&sheet);
     for (label, arrows, types_in) in EXPECTED {
         let line = label_row(&sheet, label)
             .with_context(|| format!("the sheet does not draw `{label}`"))?;
@@ -705,6 +720,7 @@ fn main() -> Result<()> {
     for n in ADJUSTMENTS..ACTIONS {
         go_down(&mut inst, if n == ADJUSTMENTS { ADJUSTMENTS } else { 1 })?;
         let l = inst.render(COLUMNS, ROWS, heights())?;
+        ronoctua_runtime::driven::note(&l);
         let in_focus = l
             .commands
             .iter()
@@ -760,6 +776,23 @@ fn main() -> Result<()> {
     }
     inst.event(&Input::Cancel)?;
     println!("OK: the preview is byte for byte the copied SVG, and follows the stroke");
+
+    // ---- AND EVERY LABEL FITS THE BUDGET, IN EVERY LANGUAGE ----
+    //
+    // A buffer cannot measure a sentence it does not have: it emits a KEY and
+    // the host translates (invariant 11), so what it declares is what it
+    // RESERVED. This measures every screen this run looked at, against both
+    // `.ftl` files, with the ruler the host CUTS with.
+    let measured = ronoctua_runtime::driven::every_label_fits(
+        &i18n,
+        ronoctua_runtime::driven::LANGUAGES,
+        ON_PURPOSE,
+        COLUMNS,
+    )?;
+    println!(
+        "labels    {measured} measured in {} languages, all inside their budget",
+        ronoctua_runtime::driven::LANGUAGES.len()
+    );
 
     println!("\nEVERY CRITERION OF THE LUCIDE ICON BROWSER PASSED");
     Ok(())

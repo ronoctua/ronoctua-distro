@@ -456,9 +456,23 @@ mod width {
     /// what it takes for the first word to arrive whole.
     pub const ERRAND: u16 = 11;
 
-    /// The percentage — `100.0%` is six cells, and the seventh is the one the
-    /// stage's word borrows when there is no total to divide by.
-    pub const PERCENT: u16 = 7;
+    /// The percentage, and the stage's WORD when there is no total to divide by.
+    ///
+    /// Twelve, and it used to be seven — `100.0%` is six cells and the seventh
+    /// was described as the one the stage's word "borrows". It does not borrow
+    /// it: five of the six stage words are longer than seven in Portuguese, and
+    /// `em andamento` came out as `em an…`, which is a preposition and an
+    /// ellipsis. Unlike the errand beside it, whose first word arrives whole
+    /// inside eleven, there is no useful prefix of a two-word phrase at seven.
+    ///
+    /// TWELVE IS THE LONGEST ONE (`em andamento`), and the number is not a
+    /// guess any more: `driven::every_label_fits` measures every stage word in
+    /// every language against this constant on every run of `transfers-driven`.
+    ///
+    /// The five extra cells come off the SUBJECT, which is the fill column and
+    /// has a floor of its own — a name gives way before a word that would
+    /// otherwise say nothing.
+    pub const PERCENT: u16 = 12;
 
     /// Two figures and the ` / ` between them: `12.3 GiB / 456.7 GiB`.
     pub const AMOUNTS: u16 = 22;

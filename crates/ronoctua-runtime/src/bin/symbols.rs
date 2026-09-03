@@ -12,6 +12,13 @@
 use anyhow::{Context as _, Result, bail};
 use ronoctua_protocol::{Command, Input, Text};
 
+/// The labels this buffer cuts ON PURPOSE, and why.
+///
+/// `(key prefix, the reason)`. The reason is not decoration: it is what tells
+/// the next reader whether an entry is a decision or a leftover — the same
+/// bargain `generator-flags-agree` makes with `--reflink`.
+const ON_PURPOSE: &[(&str, &str)] = &[];
+
 /// How many columns a single-width character occupies at icon scale.
 const ICON_COLUMNS: u16 = 2;
 
@@ -142,7 +149,9 @@ fn read(list: &ronoctua_protocol::DisplayList) -> Result<Vision> {
 }
 
 fn screen(inst: &mut ronoctua_runtime::Instance) -> Result<Vision> {
-    read(&inst.render(COLUMNS, ROWS, heights())?)
+    let list = inst.render(COLUMNS, ROWS, heights())?;
+    ronoctua_runtime::driven::note(&list);
+    read(&list)
 }
 
 /// Types a query from scratch.
@@ -1038,6 +1047,23 @@ fn main() -> Result<()> {
         bail!("`Esc` left `{left}` and not the pt-BR prefix `familia:emoji`");
     }
     println!("language  pt-BR -> `{in_portuguese}`, and Esc gives it back");
+
+    // ---- AND EVERY LABEL FITS THE BUDGET, IN EVERY LANGUAGE ----
+    //
+    // A buffer cannot measure a sentence it does not have: it emits a KEY and
+    // the host translates (invariant 11), so what it declares is what it
+    // RESERVED. This measures every screen this run looked at, against both
+    // `.ftl` files, with the ruler the host CUTS with.
+    let measured = ronoctua_runtime::driven::every_label_fits(
+        &i18n,
+        ronoctua_runtime::driven::LANGUAGES,
+        ON_PURPOSE,
+        COLUMNS,
+    )?;
+    println!(
+        "labels    {measured} measured in {} languages, all inside their budget",
+        ronoctua_runtime::driven::LANGUAGES.len()
+    );
 
     println!(
         "OK: the database has {TOTAL}, opens filtered and leaves the filter, the filters narrow,"
