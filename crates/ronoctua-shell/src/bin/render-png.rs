@@ -148,6 +148,22 @@ fn main() -> Result<()> {
     if let Err(e) = d.validate() {
         bail!("{}: the descriptor does not pass the guard: {e}", d.name);
     }
+    // THE PHRASES, exactly as the real host hands them over (`buffer.rs`).
+    //
+    // Without this every picture of a buffer that holds interface text would be
+    // a picture of the fallback — the English word — whatever `--language` was
+    // asked for. This tool exists to photograph what a person sees.
+    if !d.phrases.is_empty() {
+        let said = d
+            .phrases
+            .iter()
+            .map(|k| ronoctua_protocol::Phrase {
+                key: k.clone(),
+                text: texts.t(k),
+            })
+            .collect();
+        inst.event(&ronoctua_protocol::Input::Phrases(said))?;
+    }
     // A FIRST FRAME BEFORE ANYTHING, because the host draws one too — and a
     // component that only computes its screen lazily would otherwise be
     // photographed from a frame it never drew.

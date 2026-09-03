@@ -1226,6 +1226,41 @@ pub struct Descriptor {
     pub segments: Vec<(String, Text)>,
     /// Capabilities asked for.
     pub capabilities: Vec<Capability>,
+    /// Keys whose TEXT the buffer needs as STATE, not as drawing.
+    ///
+    /// Everything a buffer only SHOWS goes out as [`Text::Key`] and is
+    /// translated when the host draws it. This is the other case — text the
+    /// buffer holds, parses or writes back — and the host answers it with
+    /// [`Input::Phrases`] before the first frame. See [`Phrase`].
+    pub phrases: Vec<String>,
+}
+
+/// One key a buffer declared, with the text the host resolved for it.
+///
+/// # Why a buffer receives a translated string at all
+///
+/// Because [`Text::Key`] only ever reaches the PERSON: it is resolved when the
+/// host draws, and the buffer never holds what came out. That covers everything
+/// a buffer only shows, and it does not cover text the buffer also HOLDS and
+/// READS BACK.
+///
+/// The three browsers' search field is exactly that: the buffer keeps the
+/// string, parses it, and the person edits it. As [`Text::Data`] it opened
+/// `familia:emoji` in an en-GB session; as a [`Text::Key`] the buffer could not
+/// have re-read what it drew.
+///
+/// So the host hands the text over, the same way it hands a clipboard over in
+/// [`Input::Paste`]. `docs/ARCHITECTURE.md` says a buffer cannot write a phrase
+/// of UI in any language, and it still cannot: it can only echo one it was
+/// given.
+///
+/// THE FIELD ORDER IS THE WIT'S — see the note at the top of this file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Phrase {
+    /// The key, as the buffer declared it in [`Descriptor::phrases`].
+    pub key: String,
+    /// The text, in the person's language.
+    pub text: String,
 }
 
 /// The size of a text RUN, by name and never in pixels.
@@ -1951,6 +1986,15 @@ pub enum Input {
     /// Text coming from the clipboard (`Ctrl+V`), already resolved by the
     /// host: the buffer does not read the clipboard, just as it does not read a file (invariant 11).
     Paste(String),
+    /// The keys the buffer declared in [`Descriptor::phrases`], resolved.
+    ///
+    /// ALL of them at once, and before the first frame: a buffer that has to
+    /// draw with them cannot be handed them one at a time and redraw in
+    /// between. The declaration is the gate — a buffer that declared none gets
+    /// none, which is the shape a [`Capability`] gives the inputs below without
+    /// needing a capability of its own. A phrase is the translation of a key
+    /// the buffer itself named, not a reading of the machine.
+    Phrases(Vec<Phrase>),
     /// A left-button click on a cell of the buffer's grid.
     ///
     /// In **cells**, and never in pixels: a pixel is a Wayland and screen-scale

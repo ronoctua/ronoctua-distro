@@ -1056,6 +1056,9 @@ impl Guest for Component {
             // performs, and this buffer is an empty screen. It is declared
             // here, once, and the host checks it on every request.
             capabilities: vec![Capability::System],
+            // Nothing it holds is text of the interface: everything this buffer
+            // shows goes out as a key and the host translates it when it draws.
+            phrases: vec![],
         }
     }
 

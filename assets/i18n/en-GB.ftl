@@ -419,6 +419,9 @@ cmd-niri-load-config-file = Reload the config file
 group-workspace-move = move window
 group-icons = icons
 glyphs-search = Type to search for a Nerd Fonts glyph
+# The word the browser WRITES into the search field — see `unicode-prefix-*`.
+glyphs-prefix-block = block
+glyphs-prefix-tag = tag
 expansion-page = RCtrl ←→
 
 # --- The glyph card (Nerd Fonts browser) -----------------------------------
@@ -509,6 +512,15 @@ apps-empty = No applications found
 # --- The Unicode symbol browser (LEADER i u) -------------------------------
 cmd-unicode-symbols = Browse Unicode symbols
 unicode-search = Type to search for a Unicode symbol
+# The words the browser WRITES into the search field. Typed, so lower case and
+# unaccented; the parser goes on taking every language's, whichever is set.
+unicode-prefix-symbols = symbols
+unicode-prefix-family = family
+unicode-prefix-block = block
+unicode-prefix-name = name
+unicode-prefix-group = group
+unicode-prefix-subgroup = subgroup
+unicode-prefix-tone = tone
 cmd-unicode-copy-character = Character
 cmd-unicode-copy-name = Official name
 cmd-unicode-copy-hex = Hexadecimal
@@ -570,6 +582,9 @@ cmd-unicode-filter-group = Filter by group
 # === Lucide icon browser — `LEADER i l` ====================================
 cmd-lucide-icons = Browse Lucide icons
 lucide-search = Type to search for a Lucide icon
+# The words the browser WRITES into the search field — see `unicode-prefix-*`.
+lucide-prefix-category = category
+lucide-prefix-name = name
 
 cmd-lucide-copy-svg = SVG
 cmd-lucide-copy-jsx = JSX

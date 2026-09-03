@@ -83,6 +83,9 @@ impl Guest for Component {
             segments: vec![],
             // No capability: it needs neither a PTY nor pixels.
             capabilities: Vec::<Capability>::new(),
+            // Nothing it holds is text of the interface: everything this buffer
+            // shows goes out as a key and the host translates it when it draws.
+            phrases: vec![],
         }
     }
 
@@ -116,6 +119,13 @@ impl Guest for Component {
         // somebody taps `Esc` anywhere, and counting it would make the counter
         // measure the host's bookkeeping instead of the person's typing.
         if matches!(e, Input::EnterState(_)) {
+            return vec![];
+        }
+        // NOR IS A PHRASE. It arrives once, at load, carrying the words the
+        // host resolved for whoever declared any — this buffer declares none,
+        // so it should never see one. Counting it would make the counter start
+        // at one on a screen nobody has touched.
+        if matches!(e, Input::Phrases(_)) {
             return vec![];
         }
         KEYS.set(KEYS.get() + 1);

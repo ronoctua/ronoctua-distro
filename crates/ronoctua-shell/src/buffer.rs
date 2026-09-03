@@ -712,6 +712,35 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     let texts = ronoctua_i18n::Texts::from_env();
     let title = texts.t(&format!("buffer-{}", d.name));
 
+    // THE PHRASES, BEFORE THE FIRST FRAME.
+    //
+    // A key a buffer only SHOWS is resolved when this host draws it, and the
+    // buffer never holds what came out. This is the other case: text the buffer
+    // holds, parses or writes back — its search field — which as data opened
+    // `familia:emoji` in an en-GB session and as a key could not have been read
+    // back by whoever drew it. See `ronoctua_protocol::Phrase`.
+    //
+    // HERE, and not after the `Host` is built, because the render below is what
+    // `list.validate` reads: seeding afterwards would check a frame nobody sees
+    // and leave the one they do see un-seeded.
+    //
+    // Once, and never again: the language is read from the environment at
+    // start-up and nothing in this system changes it while a session runs
+    // (`surface.rs`, `texts`). A buffer that had to be told twice would need to
+    // know it had been told once.
+    if !d.phrases.is_empty() {
+        let said = d
+            .phrases
+            .iter()
+            .map(|k| ronoctua_protocol::Phrase {
+                key: k.clone(),
+                text: texts.t(k),
+            })
+            .collect();
+        instance.event(&ronoctua_protocol::Input::Phrases(said))?;
+        tracing::info!(phrases = d.phrases.len(), "phrases handed over");
+    }
+
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the COMPOSITOR, never to us. Drawing a
     // border or a title bar here would be reimplementing window layout, and
@@ -808,7 +837,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         list,
         rasterized: std::collections::HashMap::new(),
         capabilities: d.capabilities,
-        texts: ronoctua_i18n::Texts::from_env(),
+        // THE SAME BUNDLE that resolved the title and the phrases above. It
+        // used to be a second `from_env()` in the same process — two readings
+        // of one environment, which is the shape a divergence hides in.
+        texts,
         instance,
         _runtime: runtime,
     };

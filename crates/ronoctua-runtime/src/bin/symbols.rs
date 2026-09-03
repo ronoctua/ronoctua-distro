@@ -242,6 +242,12 @@ fn main() -> Result<()> {
 
     // ---- THE DESCRIPTOR: a command outside the keymap is not reachable ----
     let d = inst.init()?;
+
+    // THE PHRASES, exactly as the host hands them over at load. Without this a
+    // buffer that holds interface text would be driven against its fallback,
+    // and the screen this test reads would not be the screen anybody sees.
+    // en-GB is the canonical one; the pt-BR round trip is checked separately.
+    ronoctua_runtime::driven::hand_phrases(&mut inst, &d, &i18n, "en-GB")?;
     if d.mode != "unicode" {
         bail!("the buffer's mode is `{}`; the modeline shows that", d.mode);
     }
@@ -988,6 +994,50 @@ fn main() -> Result<()> {
     }
     inst.event(&Input::Cancel)?;
     println!("paste     `α` with `simbolos:` active -> {cp}");
+
+    // ---- AND THE FIELD IS IN THE PERSON'S LANGUAGE ----
+    //
+    // THE DEFECT THIS CATCHES, and it was on a real screen: the field is the
+    // one text this buffer both HOLDS and SHOWS, so it can be neither a key
+    // (the buffer could not read it back) nor a literal (it opened
+    // `familia:emoji` on an en-GB session). It is a phrase, and this is the
+    // round trip that proves the whole mechanism:
+    //
+    //   * seeded pt-BR, the buffer OPENS in `familia:emoji`;
+    //   * what it wrote, it can READ BACK — `Esc` drops the free term and
+    //     leaves the prefix, still in Portuguese, and the count does not move.
+    //
+    // A SECOND INSTANCE, because phrases arrive once and before the first
+    // frame — which is exactly the contract, and re-seeding a running one
+    // would be testing something the host never does.
+    let mut other = rt.open(&component)?;
+    let d_of = other.init()?;
+    ronoctua_runtime::driven::hand_phrases(&mut other, &d_of, &i18n, "pt-BR")?;
+    let opened = screen(&mut other)?;
+    let in_portuguese = opened
+        .field
+        .clone()
+        .context("the pt-BR field emitted nothing on opening")?;
+    if in_portuguese != "familia:emoji" {
+        bail!("seeded pt-BR the buffer opened with `{in_portuguese}`, not `familia:emoji`");
+    }
+    if opened.filtered != initial.filtered {
+        bail!(
+            "the pt-BR field says `{in_portuguese}` and filters {} — the en-GB one filters {}.\n\
+             The word changed and the FILTER changed with it: the buffer wrote a\n\
+             prefix it cannot read back.",
+            opened.filtered,
+            initial.filtered
+        );
+    }
+    other.event(&Input::Paste(" seta".to_owned()))?;
+    other.event(&Input::Cancel)?;
+    let after = screen(&mut other)?;
+    let left = after.field.unwrap_or_default();
+    if left != "familia:emoji" {
+        bail!("`Esc` left `{left}` and not the pt-BR prefix `familia:emoji`");
+    }
+    println!("language  pt-BR -> `{in_portuguese}`, and Esc gives it back");
 
     println!(
         "OK: the database has {TOTAL}, opens filtered and leaves the filter, the filters narrow,"

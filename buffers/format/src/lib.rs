@@ -1324,6 +1324,7 @@ impl State {
             Input::Command(_)
             | Input::Copied(_)
             | Input::Paste(_)
+            | Input::Phrases(_)
             | Input::Toggle
             | Input::Survey(_)
             | Input::Queue(_)
@@ -1357,6 +1358,9 @@ impl Guest for Component {
             // THE ONE THAT MATTERS: without it the host neither subscribes to
             // udisks nor forwards a plan, and this is an empty screen.
             capabilities: vec![Capability::Disks],
+            // Nothing it holds is text of the interface: everything this buffer
+            // shows goes out as a key and the host translates it when it draws.
+            phrases: vec![],
         }
     }
 

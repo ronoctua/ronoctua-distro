@@ -1051,6 +1051,13 @@ interface types {
         commands: list<string>,
         segments: list<segment>,
         capabilities: list<capability>,
+        // Keys whose TEXT this buffer needs as STATE, not as drawing.
+        //
+        // Anything it only shows goes out as `text::key` and is translated when
+        // the host draws it. This list is for the other case: text the buffer
+        // holds, parses or writes back — see `phrase`. The host answers with
+        // `input::phrases` before the first frame.
+        phrases: list<string>,
     }
 
     // How many CELLS of height each scale occupies.
@@ -1089,6 +1096,28 @@ interface types {
     record position {
         column: u16,
         line: u16,
+    }
+
+    // ONE key the buffer declared, with the text the host resolved for it.
+    //
+    // # Why a buffer receives a translated string at all
+    //
+    // Because `text::key` only reaches the person: it is resolved when the
+    // host DRAWS, and the buffer never holds what came out. That covers
+    // everything a buffer only shows — and it does not cover text the buffer
+    // also HOLDS and READS BACK.
+    //
+    // The three browsers' search field is that: the buffer keeps the string,
+    // parses it, and the person edits it. Written as `text::data` it opened
+    // `familia:emoji` in an en-GB session; written as a `text::key` the buffer
+    // could not have re-read what it drew.
+    //
+    // So the host hands the text over, exactly as it hands over a clipboard in
+    // `paste`. The buffer still cannot WRITE a phrase of UI in any language —
+    // it can only echo one it was given.
+    record phrase {
+        key: string,
+        text: string,
     }
 
     variant input {
@@ -1148,6 +1177,15 @@ interface types {
         // Already resolved by the host: the buffer does not read the clipboard, just as it does not read a
         // file (invariant 11). It only receives the text.
         paste(string),
+        // The keys this buffer declared in `descriptor.phrases`, resolved.
+        //
+        // ALL of them at once, and before the first frame: a buffer that has
+        // to draw with them cannot be handed them one at a time and redraw in
+        // between. The declaration is the gate — whoever declares nothing gets
+        // nothing, which is the same shape `capability` gives the inputs below
+        // without a capability of its own: a phrase is the translation of a key
+        // the buffer itself named, not a reading of the machine.
+        phrases(list<phrase>),
         // A left-button click on a cell.
         //
         // What resolves WHICH item is there is the buffer, because only it knows its
@@ -1196,6 +1234,9 @@ interface view {
         capability, command, grid-command, line-command, text-command,
         heights, context, color, descriptor, effect, input, binding, position, segment,
         text,
+        // `phrase` is reachable only from inside `input`, which is exactly the
+        // case this list exists for.
+        phrase,
         // The system ones, for the same reason as all the others: `wit-bindgen`
         // generates in this module only what it declares it uses, and a record
         // reachable only from inside a `variant` ends up out of scope.

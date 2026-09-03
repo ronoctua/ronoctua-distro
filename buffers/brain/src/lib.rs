@@ -922,6 +922,7 @@ impl State {
             | Input::Toggle
             | Input::Copied(_)
             | Input::Paste(_)
+            | Input::Phrases(_)
             | Input::Survey(_)
             | Input::Queue(_)
             | Input::Rack(_)
@@ -965,6 +966,9 @@ impl Guest for Component {
             // acts, and this buffer is an empty screen. It is declared here,
             // once, and the host checks it on every request.
             capabilities: vec![Capability::Brain],
+            // Nothing it holds is text of the interface: everything this buffer
+            // shows goes out as a key and the host translates it when it draws.
+            phrases: vec![],
         }
     }
 

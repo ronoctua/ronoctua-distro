@@ -994,6 +994,9 @@ impl Guest for Component {
             // the queue nor forwards a demand, and this buffer is an empty
             // screen with a keymap that does nothing.
             capabilities: vec![Capability::Transfers],
+            // Nothing it holds is text of the interface: everything this buffer
+            // shows goes out as a key and the host translates it when it draws.
+            phrases: vec![],
         }
     }
 

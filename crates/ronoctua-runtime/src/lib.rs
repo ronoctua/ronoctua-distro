@@ -29,6 +29,9 @@ use anyhow::{Context as _, Result};
 // from earlier versions no longer exists.
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
+/// What every driven test of a buffer needs. See the module's own head.
+pub mod driven;
+
 /// Instantiation ceiling, from section 5.2.
 ///
 /// It is not a "performance goal": it is the value the `instance-fast` check
@@ -398,6 +401,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         Input::Toggle => ("toggle", None),
         Input::Copied(ok) => ("copied", Some(Val::Bool(*ok))),
         Input::Paste(t) => ("paste", Some(Val::String(t.clone()))),
+        Input::Phrases(p) => ("phrases", Some(val_of_phrases(p))),
         Input::Click { column, line } => (
             "click",
             Some(Val::Record(vec![
@@ -663,6 +667,25 @@ fn val_of_rack(r: &ronoctua_protocol::Rack) -> wasmtime::component::Val {
 ///
 /// # The order of the fields is the WIT's order, and it is not style
 ///
+/// The keys a buffer declared, with the text the host resolved for each.
+///
+/// THE FIELD ORDER IS THE WIT'S, for the reason spelled out over
+/// `val_of_survey` below, and the shape test at the end of this file walks it.
+fn val_of_phrases(p: &[ronoctua_protocol::Phrase]) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    Val::List(
+        p.iter()
+            .map(|one| {
+                Val::Record(vec![
+                    ("key".into(), Val::String(one.key.clone())),
+                    ("text".into(), Val::String(one.text.clone())),
+                ])
+            })
+            .collect(),
+    )
+}
+
 /// `wasmtime` lowers a `Val::Record` by zipping it POSITIONALLY against the
 /// WIT's fields and only then compares the names (`values.rs`, `lower`). A field
 /// moved here without being moved there fails when the function is CALLED, with
@@ -1207,6 +1230,7 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
         states,
         keymap,
         commands: list_of_str(field("commands")),
+        phrases: list_of_str(field("phrases")),
         // Modeline segments arrive once the modeline consumes them; the
         // shape is already in the WIT so there is no protocol change later.
         segments: Vec::new(),
@@ -1383,6 +1407,35 @@ mod tests {
             }
             _ => None,
         }
+    }
+
+    /// A phrase is two strings, and the ORDER of the two is the contract.
+    ///
+    /// Swapped, every buffer would read the text as its key and the key as its
+    /// text — and it would not fail, it would draw `[family]` where the word
+    /// goes. The same reason as the shape test below, on the smallest record
+    /// this file lowers.
+    #[test]
+    fn a_phrase_has_the_wit_shape_field_by_field() {
+        let v = val_of_phrases(&[ronoctua_protocol::Phrase {
+            key: "unicode-prefix-family".to_owned(),
+            text: "familia".to_owned(),
+        }]);
+
+        let wasmtime::component::Val::List(one) = &v else {
+            panic!("a list of phrases");
+        };
+        assert_eq!(shape(&one[0]), ["key", "text"]);
+        assert_eq!(
+            field(&one[0], "key"),
+            Some(&wasmtime::component::Val::String(
+                "unicode-prefix-family".to_owned()
+            ))
+        );
+        assert_eq!(
+            field(&one[0], "text"),
+            Some(&wasmtime::component::Val::String("familia".to_owned()))
+        );
     }
 
     /// THE SHAPE IS THE CONTRACT, and nothing else checks it.

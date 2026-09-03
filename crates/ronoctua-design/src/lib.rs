@@ -123,6 +123,7 @@ pub mod bindings {
 
 pub mod budget;
 pub mod grid;
+pub mod phrases;
 // THE PIXEL RAIL IS THE HOST'S. A component counts in cells and lines and has
 // no surface; see the module's own head for why that is not an omission.
 #[cfg(feature = "guest")]
@@ -136,6 +137,7 @@ pub mod table;
 
 pub use budget::{budget, claimed, room, tall, wide};
 pub use grid::Grid;
+pub use phrases::Phrases;
 #[cfg(feature = "host")]
 pub use rails::Frame;
 pub use screen::{Ink, Run, Screen};

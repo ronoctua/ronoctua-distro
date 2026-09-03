@@ -408,6 +408,9 @@ cmd-niri-load-config-file = Recarregar o arquivo de configuração
 group-workspace-move = levar a janela
 group-icons = ícones
 glyphs-search = Digite para buscar um glifo das Nerd Fonts
+# A palavra que o navegador ESCREVE no campo de busca — ver `unicode-prefix-*`.
+glyphs-prefix-block = bloco
+glyphs-prefix-tag = etiqueta
 expansion-page = CtrlDir ←→
 
 # --- The glyph card (Nerd Fonts browser) -----------------------------------
@@ -498,6 +501,15 @@ apps-empty = Nenhum aplicativo encontrado
 # --- The Unicode symbol browser (LEADER i u) -------------------------------
 cmd-unicode-symbols = Navegar símbolos Unicode
 unicode-search = Digite para buscar um símbolo Unicode
+# As palavras que o navegador ESCREVE no campo de busca. Digitadas, então
+# minúsculas e sem acento; o analisador segue aceitando as de todos os idiomas.
+unicode-prefix-symbols = simbolos
+unicode-prefix-family = familia
+unicode-prefix-block = bloco
+unicode-prefix-name = nome
+unicode-prefix-group = grupo
+unicode-prefix-subgroup = subgrupo
+unicode-prefix-tone = tom
 cmd-unicode-copy-character = Caractere
 cmd-unicode-copy-name = Nome oficial
 cmd-unicode-copy-hex = Hexadecimal
@@ -559,6 +571,9 @@ cmd-unicode-filter-group = Filtrar pelo grupo
 # === Lucide icon browser — `LEADER i l` ====================================
 cmd-lucide-icons = Navegar ícones Lucide
 lucide-search = Digite para buscar um ícone Lucide
+# As palavras que o navegador ESCREVE no campo de busca — ver `unicode-prefix-*`.
+lucide-prefix-category = categoria
+lucide-prefix-name = nome
 
 # The COPY FORMS. The first eight are lucide.dev's tabs, in its
 # order; the rest are what it does not have and this system uses.

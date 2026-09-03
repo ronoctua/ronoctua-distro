@@ -221,6 +221,12 @@ fn main() -> Result<()> {
 
     // ---- the descriptor: a filter outside the keymap is not reachable ----
     let d = inst.init()?;
+
+    // THE PHRASES, exactly as the host hands them over at load. Without this a
+    // buffer that holds interface text would be driven against its fallback,
+    // and the screen this test reads would not be the screen anybody sees.
+    // en-GB is the canonical one; the pt-BR round trip is checked separately.
+    ronoctua_runtime::driven::hand_phrases(&mut inst, &d, &i18n, "en-GB")?;
     for id in [
         "glyphs-filter-set",
         "glyphs-filter-block",
