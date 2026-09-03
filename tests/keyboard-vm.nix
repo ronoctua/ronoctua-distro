@@ -91,7 +91,7 @@ pkgs.testers.runNixOSTest {
           # the rest of the boot, and asking too early answers "activating".
           machine.wait_for_unit("keyd.service")
 
-      with subtest("o remapeamento e o que pedimos"):
+      with subtest("the remapping is what we asked for"):
           # THE FILE KEYD READS, and not the Nix attribute.
           #
           # Between one and the other there is the NixOS module: an option name

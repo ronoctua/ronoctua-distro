@@ -106,7 +106,7 @@ pkgs.testers.runNixOSTest {
             timeout=90,
         )
 
-    with subtest("DOIS buffers X11 ficam em cgroups DISTINTOS"):
+    with subtest("TWO X11 buffers land in DISTINCT cgroups"):
         # This is the test a shared satellite does not pass.
         open_x11("bufx2", "second")
         machine.wait_until_succeeds(

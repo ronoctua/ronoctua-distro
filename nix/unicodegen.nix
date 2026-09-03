@@ -130,7 +130,7 @@ in
 # deep inside the generator, in a log nobody reads until they go looking.
 assert lib.assertMsg (fromPackage == upstreamVersion) ''
   nixpkgs' unicode-character-database is at ${fromPackage}, and the
-  nix/unicodegen.nix declara ${upstreamVersion}.
+  nix/unicodegen.nix declares ${upstreamVersion}.
 
   Raising the version changes which characters exist and what they are called. Update
   the constant deliberately and check the translation coverage afterwards.

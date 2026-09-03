@@ -534,7 +534,7 @@ MemoryHigh=10478301184
     #[test]
     fn the_profile_in_force_is_told_by_the_duration() {
         let t = parse_profiles(TABLE);
-        let tolerant = t.of(GuardMode::Tolerant).expect("tolerante");
+        let tolerant = t.of(GuardMode::Tolerant).expect("tolerant");
         assert!(matches_profile(
             "ManagedOOMMemoryPressureDurationUSec=1min\n",
             tolerant

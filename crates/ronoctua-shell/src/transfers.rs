@@ -921,7 +921,7 @@ mod tests {
         ];
         let said = segment(&weighing).expect("two running and there is no segment");
         assert!(said.ends_with('2'), "{said}");
-        assert!(!said.contains('%'), "inventou porcentagem: {said}");
+        assert!(!said.contains('%'), "it invented a percentage: {said}");
 
         // With a total, the figure. Per mille in, per cent out.
         assert_eq!(

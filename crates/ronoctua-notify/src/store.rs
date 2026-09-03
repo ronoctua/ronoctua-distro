@@ -207,14 +207,14 @@ pub fn read_history_from(dir: &Path) -> Vec<Record> {
             prune(&mut v, SystemTime::now());
             tracing::info!(
                 path = %path.display(),
-                lidas = before,
-                mantidas = v.len(),
+                read = before,
+                kept = v.len(),
                 "notification history read"
             );
             v
         }
         Err(e) => {
-            tracing::error!(path = %path.display(), error = %e, "historico ilegivel");
+            tracing::error!(path = %path.display(), error = %e, "the history is unreadable");
             Vec::new()
         }
     }
@@ -312,7 +312,7 @@ mod tests {
         // one future test away. `read_preferences` and `write_preferences`
         // found `$XDG_CONFIG_HOME` for themselves, so any test that built a
         // `Footer` would have written into somebody's real home.
-        let tree = Tree::fresh("sem-destino");
+        let tree = Tree::fresh("no-destination");
         let nowhere = Where::default();
         assert!(nowhere.preferences().rules.is_empty());
         assert!(nowhere.history().is_empty());
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn a_named_pair_writes_there_and_reads_it_back() {
-        let tree = Tree::fresh("com-destino");
+        let tree = Tree::fresh("with-destination");
         let notes = Where {
             config: Some(tree.root.join("config")),
             state: Some(tree.root.join("state")),
@@ -386,7 +386,7 @@ mod tests {
         let mut r = record(9, Duration::ZERO, now);
         r.presentation.show = Show::Hidden;
         r.presentation.level = 77;
-        r.presentation.by = Some("minha-regra".into());
+        r.presentation.by = Some("my-rule".into());
         r.read = true;
         let text = serde_json::to_string(&vec![r.clone()]).unwrap();
         let back: Vec<Record> = serde_json::from_str(&text).unwrap();

@@ -600,7 +600,7 @@
 
         fontconfig-conf = fontconfigConf.confDir;
         # The COMPLETE file, for `FONTCONFIG_FILE` — see nix/fontconfig.nix.
-        fontconfig-completo = fontconfigConf.fullConf;
+        fontconfig-full = fontconfigConf.fullConf;
         fallback-chain = fontconfigConf.chainJson;
 
         # Generated glyph layer: icons.json, glyphs.json, coverage.md.
@@ -966,7 +966,7 @@
         # It says out loud that it is not the gate. A short lane that lets one
         # believe the work is finished is worse than no short lane.
         quick = mkScriptApp "ronoctua-quick" "the checks that bring up no VM — the short loop" ''
-          echo "== o laco curto: um subconjunto escolhido =="
+          echo "== the short loop: a chosen subset =="
           # THE LIST COMES FROM `tests/quick.nix`, not from here.
           #
           # Written here it would be the only copy, and nothing could check it.
@@ -1018,7 +1018,7 @@
                 exit 1
               fi
               out=$(mktemp -d -t ronoctua-fonts-release-XXXXXX)
-              echo "empacotando em $out"
+              echo "packing into $out"
               echo
 
               # THE RELEASE NOTES ARE WRITTEN HERE, IN ENGLISH, AND NOT TYPED AT
@@ -1091,7 +1091,7 @@
         # Builds the ISO and says where it is.
         iso = mkScriptApp "ronoctua-iso" "builds the installer's ISO" ''
           out=$(nix build --no-link --print-out-paths .#iso)
-          echo "ISO gerado em:"
+          echo "the ISO came out at:"
           find "$out/iso" -name '*.iso' -printf '  %p  (%s bytes)\n'
         '';
 

@@ -81,7 +81,7 @@ FAMILIES = {
 }
 
 
-def seguro(s: str) -> str:
+def safe(s: str) -> str:
     """Strips from a value the punctuation that would break the component's parser.
 
     The buffer has no JSON parser (invariant 11): it finds the end of a value
@@ -123,7 +123,7 @@ def check_version(ucd: pathlib.Path, expected: str) -> None:
     if found_one != expected:
         print("ERROR: the Unicode Character Database version diverged.", file=sys.stderr)
         print(f"       expected (flake):  {expected}", file=sys.stderr)
-        print(f"       encontrada (UCD):  {found_one}", file=sys.stderr)
+        print(f"       found (UCD):       {found_one}", file=sys.stderr)
         print("", file=sys.stderr)
         print("       The symbol browser's database comes from here. Raising the version", file=sys.stderr)
         print("       changes which characters exist and what they are called —", file=sys.stderr)
@@ -145,7 +145,7 @@ def read_blocks(ucd: pathlib.Path) -> list[tuple[int, int, str]]:
     return not_in
 
 
-def ler_apelidos(ucd: pathlib.Path) -> dict[int, list[str]]:
+def read_aliases(ucd: pathlib.Path) -> dict[int, list[str]]:
     """The ALTERNATIVE names from `NameAliases.txt`.
 
     There are few (16 land in our database), but they are the answer to "I could have sworn
@@ -323,7 +323,7 @@ def tom_de(seq: list[int]) -> str:
 def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
     """One record per emoji, with the tags coming from the CLDR.
 
-    `seq` is what gets COPIED and `mostra` is what gets DRAWN — here the two are
+    `seq` is what gets COPIED and `shows` is what gets DRAWN — here the two are
     the whole sequence, but they part company on combining marks (where the
     drawing carries the dotted circle and the copy does not), and that is why they are
     different fields.
@@ -334,7 +334,7 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
         a_pt, a_en = annotation(pt, raw_text), annotation(en, raw_text)
         gid, g_en, g_pt = EMOJI_GROUPS.get(e["group"], ("other", "other outro", "Outro"))
 
-        name = seguro(a_en.get("name") or e["name"])
+        name = safe(a_en.get("name") or e["name"])
         # The tags: the name and the CLDR keywords in both languages, plus the
         # group's name. The phrases go in WHOLE — the buffer matches a word prefix
         # inside the tag, so `risonho` finds `rosto risonho`.
@@ -342,13 +342,13 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
         # the panel shows has to find, when typed into the search, the whole
         # family — and it is the `symbols-filters` check that ties the two together.
         tags_en = {name.lower(), g_en, "emoji"} | {
-            seguro(k).lower() for k in a_en.get("keys", [])
+            safe(k).lower() for k in a_en.get("keys", [])
         }
         tags_pt = {g_pt.lower(), "emoji"} | {
-            seguro(k).lower() for k in a_pt.get("keys", [])
+            safe(k).lower() for k in a_pt.get("keys", [])
         }
         if a_pt.get("name"):
-            tags_pt.add(seguro(a_pt["name"]).lower())
+            tags_pt.add(safe(a_pt["name"]).lower())
         # The TONE goes in as a TAG, for the same reason as the family and the group: the label
         # the panel shows has to find, when typed into the search, the whole tone.
         # The CLDR already writes "pele clara" in the name, but not in every language
@@ -373,7 +373,7 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
                 "cat": "",
                 "family": "emoji",
                 "group": gid,
-                "subgroup": seguro(e["subgroup"]),
+                "subgroup": safe(e["subgroup"]),
                 # The TONE, only when there is one. Present in every record it would mean writing
                 # "nenhum" 2,048 times in a database that is already 2.4 MB.
                 "tone": tone,
@@ -400,7 +400,7 @@ def build_index(
     ja_e_emoji: set,
 ) -> tuple[list, dict]:
     block_list = read_blocks(ucd)
-    apelidos = ler_apelidos(ucd)
+    aliases = read_aliases(ucd)
 
     no_translation: Counter = Counter()
     # Characters that did not get ONE word in Portuguese. They are the lexicon's work
@@ -436,7 +436,7 @@ def build_index(
         category = fields[2]
         family, fam_pt, fam_label = FAMILIES.get(category[0], ("other", "outro", "Outro"))
         block = block_of(cp, block_list)
-        other_names = apelidos.get(cp, [])
+        other_names = aliases.get(cp, [])
 
         # THE WIDTH COMES FROM `hmtx`, and not from the category.
         #
@@ -485,12 +485,12 @@ def build_index(
         # With a list of numbers no escaping is possible. `cp` is already the
         # truth; this list exists only for the combining marks, which
         # need the dotted circle in front.
-        mostra = [ord(DOTTED_CIRCLE), cp] if width == 0 else [cp]
+        shows = [ord(DOTTED_CIRCLE), cp] if width == 0 else [cp]
 
         lines.append(
             {
                 "cp": cp,
-                "shows": mostra,
+                "shows": shows,
                 "name": name,
                 "aliases": other_names,
                 "cat": category,
@@ -574,7 +574,7 @@ def main() -> int:
         for r in bads[:12]:
             print(f"       {r}", file=sys.stderr)
         if len(bads) > 12:
-            print(f"       … e mais {len(bads) - 12}", file=sys.stderr)
+            print(f"       … and {len(bads) - 12} more", file=sys.stderr)
         print("", file=sys.stderr)
         print("       They would show up DECOMPOSED — 👩💻 instead of 👩‍💻 — because the", file=sys.stderr)
         print("       font does not have the ligature. `cmap` does not answer that: the", file=sys.stderr)
@@ -611,11 +611,11 @@ def main() -> int:
 
     # --- coverage.md ------------------------------------------------------
     hits_without = sum(st["untranslated"].values())
-    traduzidas = sum(
+    translated = sum(
         1 for r in lines for t in r["tags_en"] if t in lexicon
     )
-    total = traduzidas + hits_without
-    coverage = 100.0 * traduzidas / total if total else 0.0
+    total = translated + hits_without
+    coverage = 100.0 * translated / total if total else 0.0
 
     raw_text = [
         "# Unicode symbol database coverage",
@@ -681,7 +681,7 @@ def main() -> int:
         for g in st["no_pt"][:12]:
             print(f"       {g}", file=sys.stderr)
         if len(st["no_pt"]) > 12:
-            print(f"       … e mais {len(st['no_pt']) - 12}", file=sys.stderr)
+            print(f"       … and {len(st['no_pt']) - 12} more", file=sys.stderr)
         print("", file=sys.stderr)
         print("       Anyone searching in Portuguese does NOT find these characters.", file=sys.stderr)
         print("       Translate their words in assets/lexicon/tags.en-pt.toml", file=sys.stderr)

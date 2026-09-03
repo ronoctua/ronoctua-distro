@@ -156,7 +156,7 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${pkgs.wl-clipboard}/bin/wl-paste --no-newline"
         ).strip()
-        print(f"area de transferencia: {pasted!r}")
+        print(f"clipboard: {pasted!r}")
         assert pasted == "${first}", (
             f"expected the oldest entry (${first}), got {pasted!r}"
         )

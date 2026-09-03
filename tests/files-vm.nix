@@ -82,7 +82,7 @@ pkgs.testers.runNixOSTest {
           for unwanted in ["wgpu", "wasmtime", "noctua-iosevka", "mesa"]:
               found = machine.succeed(f"nix-store -qR {helper} | grep -c -- '{unwanted}' || true")
               assert found.strip() == "0", (
-                  f"o ajudante privilegiado carrega {unwanted}"
+                  f"the privileged helper carries {unwanted}"
               )
           print(f"{closure} paths in the helper, and none of them is the desktop's")
 
@@ -120,7 +120,7 @@ pkgs.testers.runNixOSTest {
           assert "AUTH_SELF_KEEP" in body, body
           machine.succeed("systemctl status polkit.service > /dev/null")
 
-      with subtest("o ajudante APLICA o que lhe pedem"):
+      with subtest("the helper APPLIES what it is asked for"):
           machine.succeed("mkdir -p /var/test && install -m 0644 /dev/null /var/test/one.txt")
           machine.succeed("printf chown > /run/ronoctua-files/staged/verb")
           machine.succeed("printf /var/test/one.txt > /run/ronoctua-files/staged/path")

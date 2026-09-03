@@ -72,7 +72,7 @@ writeShellApplication {
     hotkey-overlay { skip-at-startup; }
     KDL
 
-    echo "== compositor aninhado =="
+    echo "== nested compositor =="
     niri --config "$dir/niri.kdl" > "$niri_log" 2>&1 &
     niri_proc=$!
     footer_proc=""

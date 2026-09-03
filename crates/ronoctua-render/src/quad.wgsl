@@ -1,47 +1,47 @@
-// Retangulo de cor chapada — ver `quad.rs`.
+// A flat-coloured rectangle — see `quad.rs`.
 //
-// Sem buffer de vertices e sem bind group: os quatro cantos saem do
-// `vertex_index`, e a conversao para NDC ja veio pronta da CPU. O pipeline
-// nao tem estado nenhum alem das instancias.
+// No vertex buffer and no bind group: the four corners come out of
+// `vertex_index`, and the conversion to NDC arrived ready from the CPU. The
+// pipeline has no state at all beyond the instances.
 
-struct Instancia {
-    // Canto superior esquerdo, em NDC.
+struct Instance {
+    // Top left corner, in NDC.
     @location(0) pos: vec2<f32>,
-    // Tamanho em NDC. O Y vem NEGATIVO: em NDC ele cresce para cima, e em
-    // pixel para baixo.
-    @location(1) tam: vec2<f32>,
-    @location(2) cor: vec4<f32>,
+    // Size in NDC. The Y comes NEGATIVE: in NDC it grows upwards, and in
+    // pixels it grows downwards.
+    @location(1) size: vec2<f32>,
+    @location(2) colour: vec4<f32>,
 };
 
-struct Saida {
-    @builtin(position) posicao: vec4<f32>,
-    @location(0) cor: vec4<f32>,
+struct Out {
+    @builtin(position) position: vec4<f32>,
+    @location(0) colour: vec4<f32>,
 };
 
 @vertex
-fn vs(@builtin(vertex_index) vi: u32, inst: Instancia) -> Saida {
-    // `TriangleStrip` com quatro vertices, nesta ordem:
-    //   0 = superior esquerdo   1 = inferior esquerdo
-    //   2 = superior direito    3 = inferior direito
+fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Out {
+    // `TriangleStrip` with four vertices, in this order:
+    //   0 = top left       1 = bottom left
+    //   2 = top right      3 = bottom right
     //
-    // O bit 1 diz se e da direita, o bit 0 se e de baixo. Uma tabela seria
-    // mais legivel e ocuparia registrador a toa.
-    let direita = f32(vi >> 1u);
-    let baixo = f32(vi & 1u);
+    // Bit 1 says whether it is on the right, bit 0 whether it is at the bottom.
+    // A table would read better and would occupy a register for nothing.
+    let right = f32(vi >> 1u);
+    let down = f32(vi & 1u);
 
-    var s: Saida;
-    s.posicao = vec4<f32>(
-        inst.pos.x + inst.tam.x * direita,
-        inst.pos.y + inst.tam.y * baixo,
+    var s: Out;
+    s.position = vec4<f32>(
+        inst.pos.x + inst.size.x * right,
+        inst.pos.y + inst.size.y * down,
         0.0,
         1.0,
     );
-    s.cor = inst.cor;
+    s.colour = inst.colour;
     return s;
 }
 
 @fragment
-fn fs(entrada: Saida) -> @location(0) vec4<f32> {
-    // Cor chapada. Sem gradiente, sem borda, sem raio — invariante 15.
-    return entrada.cor;
+fn fs(frag: Out) -> @location(0) vec4<f32> {
+    // Flat colour. No gradient, no border, no radius — invariant 15.
+    return frag.colour;
 }

@@ -70,7 +70,7 @@ pkgs.testers.runNixOSTest {
       machine.start()
       machine.wait_for_unit("multi-user.target")
 
-      with subtest("o servico responde ao barramento"):
+      with subtest("the service answers on the bus"):
           # D-BUS ACTIVATABLE, and not "the unit is enabled": udisks starts on
           # the first call and a unit nobody ever calls proves nothing.
           objects = machine.succeed(

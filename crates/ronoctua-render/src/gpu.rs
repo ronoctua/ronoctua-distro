@@ -134,7 +134,11 @@ impl Gpu {
         // stage here is a different optimisation candidate.
         let mut t = std::time::Instant::now();
         let step = |q: &'static str, t: &mut std::time::Instant| {
-            tracing::info!(fase = q, ms = t.elapsed().as_secs_f64() * 1000.0, "partida");
+            tracing::info!(
+                stage = q,
+                ms = t.elapsed().as_secs_f64() * 1000.0,
+                "start-up"
+            );
             *t = std::time::Instant::now();
         };
 
@@ -314,7 +318,7 @@ impl Gpu {
                 // Normal when the surface is hidden; abnormal when it
                 // repeats. The count is what separates the two cases.
                 self.skipped += 1;
-                tracing::debug!(reason = ?otherwise, skipped = self.skipped, "frame pulado");
+                tracing::debug!(reason = ?otherwise, skipped = self.skipped, "frame skipped");
                 return Ok(());
             }
             otherwise @ (wgpu::CurrentSurfaceTexture::Outdated
@@ -394,7 +398,7 @@ impl Gpu {
         tracing::trace!(
             width = self.config.width,
             height = self.config.height,
-            "frame apresentado"
+            "frame presented"
         );
         Ok(())
     }

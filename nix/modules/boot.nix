@@ -41,11 +41,11 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Assina a UKI com lanzaboote e exige Secure Boot.
+        Signs the UKI with lanzaboote and requires Secure Boot.
 
         The keys live in `/etc/secureboot`, which section 7.2 routes to
-        `/persist` — otherwise the root's wipe would erase them and the machine would not
-        mais boot.
+        `/persist` — otherwise the root's wipe would erase them and the machine would
+        no longer boot.
       '';
     };
 

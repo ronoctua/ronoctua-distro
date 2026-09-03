@@ -61,7 +61,19 @@ const BASE: &str = include_str!(env!("RONOCTUA_UNICODE_JSON"));
 /// hidden state: they would see 3.5xx of 7,529 with no clue as to why. As it
 /// stands, the filter is a filter like any other — visible,
 /// editable, and `Esc` undoes it.
-const INITIAL_FILTER: &str = "familia:emoji";
+///
+/// # And why it is written in ENGLISH
+///
+/// Because it is the one query in this buffer that NOBODY TYPED, and a buffer
+/// may not know the language (invariant 11: it does not translate, and
+/// `Context` carries no language on purpose). It used to open in
+/// `familia:emoji`, so an en-GB session opened showing a Portuguese word in a
+/// field it never asked for. Where a single language fits, invariant 18 says
+/// which one it is.
+///
+/// Typing is untouched: the parser takes `familia:` and `family:` alike, and
+/// that is the half of the search that belongs to whoever is searching.
+const INITIAL_FILTER: &str = "family:emoji";
 
 /// How many cells the search needs before the counter is worth showing.
 const MIN_SEARCH: u16 = 12;
@@ -753,7 +765,7 @@ fn translate_value(v: &str) -> String {
 /// Splits `value rest` into `(value, rest)`.
 fn one_word(s: &str) -> (String, String) {
     match s.split_once(char::is_whitespace) {
-        Some((v, livre)) => (v.to_owned(), livre.trim().to_owned()),
+        Some((v, free)) => (v.to_owned(), free.trim().to_owned()),
         None => (s.to_owned(), String::new()),
     }
 }
@@ -780,20 +792,20 @@ impl Filter {
             // (`assets/lexicon/tags.en-pt.toml`). Accepting only `family:letter`
             // would erase half a feature under the pretext of renaming.
             "familia" | "family" => {
-                let (v, livre) = one_word(&rest);
-                (Self::Family(translate_value(&v)), livre)
+                let (v, free) = one_word(&rest);
+                (Self::Family(translate_value(&v)), free)
             }
             "cat" => {
-                let (v, livre) = one_word(&rest);
-                (Self::Category(v), livre)
+                let (v, free) = one_word(&rest);
+                (Self::Category(v), free)
             }
             "grupo" | "group" => {
-                let (v, livre) = one_word(&rest);
-                (Self::Group(translate_value(&v)), livre)
+                let (v, free) = one_word(&rest);
+                (Self::Group(translate_value(&v)), free)
             }
             "tom" | "tone" => {
-                let (v, livre) = one_word(&rest);
-                (Self::Tone(translate_value(&v)), livre)
+                let (v, free) = one_word(&rest);
+                (Self::Tone(translate_value(&v)), free)
             }
             // THE FREE-TEXT ONES take the whole rest: `block:box drawing` and
             // `subgroup:cat face` have a space INSIDE the value.
@@ -809,17 +821,25 @@ impl Filter {
     }
 
     /// The prefix back, so `Esc` can rewrite the search without the free term.
+    ///
+    /// IN ENGLISH, and not in whichever word arrived. What this writes is not
+    /// the person's query, it is the buffer's own — and the buffer cannot know
+    /// the language (invariant 11). It is also what the VALUE beside it
+    /// already does: `familia:letra` is parsed into `Family("letter")` by
+    /// `translate_value` and came back out as `familia:letter`, half in each
+    /// language. One language on both sides reads better and, on an en-GB
+    /// screen, is the only one that is not simply wrong.
     fn prefix(&self) -> String {
         match self {
             Self::NoneOf => String::new(),
-            Self::Symbols => "simbolos:".to_owned(),
-            Self::Family(v) => format!("familia:{v}"),
+            Self::Symbols => "symbols:".to_owned(),
+            Self::Family(v) => format!("family:{v}"),
             Self::Category(v) => format!("cat:{v}"),
-            Self::Block(v) => format!("bloco:{v}"),
-            Self::Name(_) => "nome:".to_owned(),
-            Self::Group(v) => format!("grupo:{v}"),
-            Self::Subgroup(v) => format!("subgrupo:{v}"),
-            Self::Tone(v) => format!("tom:{v}"),
+            Self::Block(v) => format!("block:{v}"),
+            Self::Name(_) => "name:".to_owned(),
+            Self::Group(v) => format!("group:{v}"),
+            Self::Subgroup(v) => format!("subgroup:{v}"),
+            Self::Tone(v) => format!("tone:{v}"),
         }
     }
 
@@ -834,7 +854,7 @@ impl Filter {
             // what one looks for in a symbol picker.
             Self::Symbols => s.family == "simbolo" || s.family == "numero",
             // AN EXACT COMPARISON against the id, with the query's value already
-            // normalised by `familia_en`.
+            // normalised by `translate_value`.
             //
             // The first version matched against the whole `tags_pt`, and that
             // WIDENED the filter: nine records have `emoji` among their tags without
@@ -1068,13 +1088,13 @@ impl State {
     fn panel_options(&self) -> Vec<(String, String)> {
         let mut out = vec![(format!("{FAMILY_PREFIX}{FAMILY_ALL}"), String::new())];
         for f in &self.families {
-            out.push((format!("{FAMILY_PREFIX}{f}"), format!("familia:{f}")));
+            out.push((format!("{FAMILY_PREFIX}{f}"), format!("family:{f}")));
         }
         for g in &self.groups {
-            out.push((format!("{GROUP_PREFIX}{g}"), format!("grupo:{g}")));
+            out.push((format!("{GROUP_PREFIX}{g}"), format!("group:{g}")));
         }
         for t in &self.tones {
-            out.push((format!("{TONE_PREFIX}{t}"), format!("tom:{t}")));
+            out.push((format!("{TONE_PREFIX}{t}"), format!("tone:{t}")));
         }
         out
     }
@@ -1771,10 +1791,10 @@ impl State {
             // THE THREE THAT NEED A VALUE take it from the focused character:
             // "more like this one". Asking one to type the block's name would be
             // requiring one to know it by heart.
-            "unicode-filter-family" => format!("familia:{}", s?.family),
-            "unicode-filter-block" => format!("bloco:{}", s?.block.to_lowercase()),
+            "unicode-filter-family" => format!("family:{}", s?.family),
+            "unicode-filter-block" => format!("block:{}", s?.block.to_lowercase()),
             "unicode-filter-category" => format!("cat:{}", s?.cat.to_lowercase()),
-            "unicode-filter-group" => format!("grupo:{}", s?.group),
+            "unicode-filter-group" => format!("group:{}", s?.group),
             "unicode-filter-symbols" => INITIAL_FILTER.to_owned(),
             "unicode-filter-clear" => String::new(),
             _ => return None,

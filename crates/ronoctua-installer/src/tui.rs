@@ -928,7 +928,7 @@ mod tests {
         // TWELVE screens for whoever goes by cable: the fourteen questions minus
         // the offset, which is computed, and the Wi-Fi password, which is skipped
         // with no network. The asserts below are what hold those two.
-        assert_eq!(views.len(), 12, "a TUI mostrou {views:?}");
+        assert_eq!(views.len(), 12, "the TUI showed {views:?}");
         assert!(!views.contains(&Question::ResumeOffset));
         assert!(
             !views.contains(&Question::WifiPassword),
@@ -1098,7 +1098,7 @@ mod tests {
         for c in "sim".chars() {
             e.key(KeyCode::Char(c), &t);
         }
-        assert!(!e.key(KeyCode::Enter, &t), "`sim` armou a instalacao");
+        assert!(!e.key(KeyCode::Enter, &t), "`yes` armed the installation");
         assert!(e.error.is_some());
         assert_ne!(e.screen, Screen::Running);
 

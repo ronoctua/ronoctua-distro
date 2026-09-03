@@ -95,7 +95,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
     let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
     // `*name*` is Emacs's convention for a buffer that is not a file, the same
     // one the modeline already uses for `*scratch*`.
-    window.set_title("*arquivos*");
+    window.set_title("*files*");
     window.set_app_id(APP_ID);
     window.commit();
 

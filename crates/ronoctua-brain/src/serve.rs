@@ -294,7 +294,7 @@ mod tests {
         let zone: Arc<dyn crate::moment::Offset> = Arc::new(crate::moment::Fixed(0));
         Arc::new(Desk {
             shared: Arc::new(Shared::of(Prefs::default())),
-            tasks: Arc::new(Registry::of(tasks::tasks(zone)).expect("registro")),
+            tasks: Arc::new(Registry::of(tasks::tasks(zone)).expect("the registry")),
             store: Where {
                 config: Some(root.to_path_buf()),
                 state: Some(root.to_path_buf()),
@@ -457,7 +457,7 @@ mod tests {
 
         let stream = UnixStream::connect(&socket).expect("connect");
         let mut out = BufWriter::new(stream.try_clone().expect("duplicate"));
-        write_line(&mut out, &Ask::Watch).expect("pedir");
+        write_line(&mut out, &Ask::Watch).expect("ask");
         let mut input = BufReader::new(stream);
         let first: Say = read_line(&mut input)
             .expect("read")

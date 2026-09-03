@@ -48,7 +48,7 @@ fn main() -> Result<()> {
 
     manager
         .format(&target.at, &filesystem, &label, target.whole())
-        .with_context(|| format!("formatar {node} como {filesystem}"))?;
-    println!("formatado: {node} -> {filesystem} `{label}`");
+        .with_context(|| format!("format {node} as {filesystem}"))?;
+    println!("formatted: {node} -> {filesystem} `{label}`");
     Ok(())
 }

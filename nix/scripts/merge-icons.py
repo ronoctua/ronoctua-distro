@@ -299,13 +299,13 @@ def main() -> int:
     ]
     cov += [f"- `{n}`" for n in fragile[:80]]
     if len(fragile) > 80:
-        cov.append(f"- … mais {len(fragile) - 80}")
+        cov.append(f"- … {len(fragile) - 80} more")
     (doc / "coverage.md").write_text("\n".join(cov) + "\n")
 
     print(f"OK: {len(entries)} entries, {len(unique_names)} distinct names, "
           f"{len(dirs_meta)} directories")
     for s in sources:
-        print(f"      prio {s['prio']}  {s['name']:24s} {per_theme.get(s['name'], 0):6d} vencidas")
+        print(f"      prio {s['prio']}  {s['name']:24s} {per_theme.get(s['name'], 0):6d} beaten")
     return 0
 
 

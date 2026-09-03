@@ -751,7 +751,7 @@ notif-oom-orphan = Something outside your buffers was closed: { $cgroup }
 which-buffer = Focused buffer
 hint-state = State: { $state } — click cycles, Esc returns, Esc+arrows chooses
 which-state = State of the focused buffer
-cmd-exemplo-reiniciar = Restart the example
+cmd-example-restart = Restart the example
 
 ## The memory panel — LEADER s m
 

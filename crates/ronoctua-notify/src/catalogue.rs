@@ -197,7 +197,7 @@ mod tests {
         let b = Book::distro();
         assert!(!b.entries.is_empty(), "an empty catalogue");
         for e in &b.entries {
-            assert!(!e.when.is_empty(), "`{}` reconheceria tudo", e.id);
+            assert!(!e.when.is_empty(), "`{}` would recognise everything", e.id);
             assert!(!e.id.is_empty());
         }
     }
@@ -230,7 +230,7 @@ mod tests {
     fn a_stranger_gets_the_defaults_and_says_so() {
         let n = Notification::fresh_one(
             1,
-            "algum-app".into(),
+            "some-app".into(),
             None,
             "oi".into(),
             String::new(),
@@ -309,10 +309,10 @@ mod tests {
         // nobody can correct.
         let mut b = Book::distro();
         b.mine.push(Rule {
-            id: "tudo".into(),
+            id: "everything".into(),
             when: vec![],
             apply: Verdict::default(),
         });
-        assert_eq!(b.decide(&shot()).by.as_deref(), Some("tudo"));
+        assert_eq!(b.decide(&shot()).by.as_deref(), Some("everything"));
     }
 }

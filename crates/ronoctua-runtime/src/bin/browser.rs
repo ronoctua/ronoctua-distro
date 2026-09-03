@@ -963,8 +963,8 @@ fn main() -> Result<()> {
 
     // ---- the footer shows the focused glyph's TAGS ----
     clear(&mut inst)?;
-    let com_tags = read(&inst.render(80, ROWS, heights())?)?;
-    let tags = com_tags
+    let with_tags = read(&inst.render(80, ROWS, heights())?)?;
+    let tags = with_tags
         .tags
         .context("the footer did not emit the focused glyph's tags")?;
     if tags.trim().is_empty() {

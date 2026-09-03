@@ -125,7 +125,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
                             continue;
                         };
                         let reason = Reason::from_wire(&reason);
-                        tracing::info!(%cgroup, ?reason, "o oomd encerrou um cgroup");
+                        tracing::info!(%cgroup, ?reason, "oomd killed a cgroup");
                         if channel.send(Event::OomKilled { cgroup, reason }).is_err() {
                             // The loop is gone; so is the reason to listen.
                             return;

@@ -179,7 +179,7 @@ impl Grid {
         }
         if self.cursor != otherwise_one.cursor {
             out.push(format!(
-                "cursor: {:?} contra {:?}",
+                "cursor: {:?} against {:?}",
                 self.cursor, otherwise_one.cursor
             ));
         }

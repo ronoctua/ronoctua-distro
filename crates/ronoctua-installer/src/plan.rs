@@ -498,7 +498,7 @@ mod tests {
         );
         assert!(
             !s.contains("Kx9-passphrase-de-teste"),
-            "a passphrase vazou:\n{s}"
+            "the passphrase leaked:\n{s}"
         );
         assert!(s.contains("noctua-portatil"));
         assert!(s.contains("/dev/nvme0n1"));
@@ -525,7 +525,7 @@ mod tests {
         assert!(!host_nix(&r).contains("Zq7-radio-password"));
         assert!(
             !host_nix(&r).contains("home-5g"),
-            "o SSID vazou no host.nix"
+            "the SSID leaked into host.nix"
         );
 
         // AND IT IS NOT IN THE PROFILE — which is the whole change.
@@ -596,9 +596,9 @@ mod tests {
         }
 
         // And the two disappear together when there is no network.
-        let sem = answers();
+        let without = answers();
         assert!(
-            !steps(&sem, "/flake")
+            !steps(&without, "/flake")
                 .iter()
                 .any(|x| x.command.first().map(String::as_str) == Some(SEAL))
         );

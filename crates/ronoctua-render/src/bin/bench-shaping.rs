@@ -135,7 +135,7 @@ fn main() -> std::process::ExitCode {
     let cases: [Case<'_>; 4] = [
         ("upstream + Monospace", upstream_system, Family::Monospace),
         ("upstream + the exact name", upstream_system, name),
-        ("nosso    + Monospace", our_system, Family::Monospace),
+        ("ours     + Monospace", our_system, Family::Monospace),
         ("ours     + the exact name  <- production", our_system, name),
     ];
 

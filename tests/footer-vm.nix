@@ -87,7 +87,7 @@ pkgs.testers.runNixOSTest {
         except Exception:
             print("--- the footer's journal ---")
             print(machine.execute("journalctl -u footer --no-pager")[1])
-            print("--- journal do niri ---")
+            print("--- niri journal ---")
             print(machine.execute("journalctl -u niri --no-pager")[1])
             raise
 

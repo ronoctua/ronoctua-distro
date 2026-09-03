@@ -68,7 +68,7 @@ impl Guest for Component {
             // at load whoever tries to bind under a global prefix.
             keymap: vec![Binding {
                 keys: "m r".into(),
-                command: "exemplo-reiniciar".into(),
+                command: "example-restart".into(),
             }],
             // ONE STATE, which is the normal case: a counter is never doing
             // anything other than counting. Every buffer declares at least
@@ -78,7 +78,7 @@ impl Guest for Component {
                 letter: 'n',
                 tone: Tone::Standard,
             }],
-            commands: vec!["exemplo-reiniciar".into()],
+            commands: vec!["example-restart".into()],
             // Nothing in the modeline: this buffer exists to prove the boundary.
             segments: vec![],
             // No capability: it needs neither a PTY nor pixels.

@@ -63,7 +63,7 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
                         // did not update" does not tell "the compositor did not
                         // send" from "it sent and we ignored it" — which was
                         // exactly the doubt while building the VM test.
-                        tracing::debug!(?event, "evento do niri");
+                        tracing::debug!(?event, "a niri event");
                         // A send error only happens if the main loop has already
                         // died. Then the thread ends silently — there is
                         // nothing useful to log in a shell that is on its way out.
@@ -78,7 +78,7 @@ pub fn listen_to_niri(channel: Sender<Event>) -> bool {
                     Err(e) => {
                         // A malformed event does not take the stream down: that would be
                         // trading a slightly wrong modeline for none.
-                        tracing::warn!(error = %e, "evento do niri ignorado");
+                        tracing::warn!(error = %e, "a niri event ignored");
                     }
                 }
             }

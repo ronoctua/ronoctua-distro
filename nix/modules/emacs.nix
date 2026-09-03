@@ -79,7 +79,7 @@ let
       framework="''${XDG_CONFIG_HOME:-$HOME/.config}/emacs"
 
       if [ ! -d "$framework/.git" ]; then
-        echo "ronoctua: clonando o Doom em $framework"
+        echo "ronoctua: cloning Doom into $framework"
         git clone --depth 1 https://github.com/doomemacs/doomemacs "$framework"
         "$framework/bin/doom" install --no-config --no-env --no-fonts --force
       fi

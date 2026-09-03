@@ -345,13 +345,13 @@ def main() -> int:
         "This is the work queue for growing `assets/lexicon/tags.en-pt.toml`.",
         "Translate in this order, not in whatever order comes along.",
         "",
-        "| token | ocorrencias |",
+        "| token | occurrences |",
         "|---|---:|",
     ]
     for tok, n in stats["untranslated"].most_common(60):
         lines.append(f"| `{tok}` | {n} |")
     if len(stats["untranslated"]) > 60:
-        lines.append(f"| … | mais {len(stats['untranslated']) - 60} tokens |")
+        lines.append(f"| … | {len(stats['untranslated']) - 60} more tokens |")
 
     (args.out / "coverage.md").write_text("\n".join(lines) + "\n")
 

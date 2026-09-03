@@ -433,7 +433,7 @@ mod tests {
         for (i, a) in all_of().iter().enumerate() {
             for b in all_of().iter().skip(i + 1) {
                 assert_ne!(a.key, b.key, "`{}` and `{}` on the same key", a.id, b.id);
-                assert_ne!(a.id, b.id, "id repetido: {}", a.id);
+                assert_ne!(a.id, b.id, "a repeated id: {}", a.id);
             }
         }
     }

@@ -341,11 +341,11 @@ impl Text {
         let n = face.db().faces().count();
         anyhow::ensure!(
             n == FACES,
-            "o banco tem {n} faces e devia ter {FACES} (Iosevka, emoji e Lucide). \
+            "the database has {n} faces and should have {FACES} (Iosevka, emoji and Lucide). \
              One face fewer draws tofu again in place of the emoji or the \
              icons, and carrying on from here would only produce that on screen."
         );
-        tracing::debug!(faces = n, "faces embutidas carregadas");
+        tracing::debug!(faces = n, "the embedded faces are loaded");
 
         let cache = glyphon::Cache::new(device);
         let viewport = glyphon::Viewport::new(device, &cache);
@@ -535,7 +535,7 @@ impl Text {
                 spans = spans.len(),
                 shaping_ms = shaping.as_secs_f64() * 1000.0,
                 atlas_ms = t_atlas.elapsed().as_secs_f64() * 1000.0,
-                "partida: preparar"
+                "start-up: prepare"
             );
         }
 

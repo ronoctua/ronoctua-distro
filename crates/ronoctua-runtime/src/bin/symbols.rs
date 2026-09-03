@@ -41,7 +41,7 @@ const TOTAL: usize = 11614;
 const CIRCLE: char = '\u{25CC}';
 
 /// The prefix the buffer OPENS with.
-const INITIAL_FILTER: &str = "familia:emoji";
+const INITIAL_FILTER: &str = "family:emoji";
 
 /// What is seen on screen.
 struct Vision {
@@ -468,7 +468,7 @@ fn main() -> Result<()> {
     // a half-typed query must not return zero while one is typing.
     if cat_larga.filtered <= category.filtered {
         bail!(
-            "`cat:s` devolveu {} e `cat:sm` devolveu {}: o codigo esta casando exato\n\
+            "`cat:s` gave back {} and `cat:sm` gave back {}: the code is matching exactly\n\
              instead of by prefix",
             cat_larga.filtered,
             category.filtered

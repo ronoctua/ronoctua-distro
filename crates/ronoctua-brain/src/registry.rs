@@ -67,7 +67,7 @@ impl std::fmt::Display for Failure {
             Self::RepeatedStep { task, step } => write!(
                 f,
                 "`{task}` has two steps called `{step}`; switching one off \
-                 desligaria os dois"
+                 would switch both off"
             ),
         }
     }
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn the_order_is_the_same_every_time() {
-        let r = Registry::of(vec![one("zebra"), one("alpha")]).expect("registro");
+        let r = Registry::of(vec![one("zebra"), one("alpha")]).expect("the registry");
         let ids: Vec<&str> = r.all().map(crate::task::Task::id).collect();
         assert_eq!(ids, vec!["alpha", "zebra"]);
         assert_eq!(r.amount(), 2);

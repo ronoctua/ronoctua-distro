@@ -268,10 +268,10 @@ impl Server {
 /// footer goes on working without notifications, and taking everything down would trade one
 /// feature for none.
 pub fn listen(channel: Sender<Event>) -> bool {
-    let (pronto_tx, pronto_rx) = std::sync::mpsc::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
     let birth = std::thread::Builder::new()
-        .name("notificacoes".into())
+        .name("notifications".into())
         .spawn(move || {
             let server = Server {
                 channel,
@@ -290,8 +290,8 @@ pub fn listen(channel: Sender<Event>) -> bool {
                     // the moment it learns there is one, and a `None` here
                     // would look exactly like "no bus at all".
                     let _ = BUS.set(c.clone());
-                    let _ = pronto_tx.send(true);
-                    tracing::info!(name = NAME, "daemon de notificacoes no barramento");
+                    let _ = ready_tx.send(true);
+                    tracing::info!(name = NAME, "the notification daemon is on the bus");
                     // The connection has to LIVE: dropping it undoes the name's
                     // registration, and the bus starts refusing the messages with
                     // nothing here noticing. Sleeping is the way to keep the
@@ -309,7 +309,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
                         error = %e,
                         "no notification daemon (is another already on the bus?)"
                     );
-                    let _ = pronto_tx.send(false);
+                    let _ = ready_tx.send(false);
                 }
             }
         });
@@ -319,7 +319,7 @@ pub fn listen(channel: Sender<Event>) -> bool {
     }
     // It waits for the verdict: returning `true` before knowing would make the caller
     // think there is a daemon when the name was refused.
-    pronto_rx
+    ready_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap_or(false)
 }

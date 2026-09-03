@@ -261,6 +261,8 @@ mod tests {
         s.line = 0;
         s.column = s.lines[0].chars().count();
         assert!(s.key(KeyCode::Char('!'), false));
+        // pt-BR: a multibyte character is the subject — the cut has to land
+        // between characters and not between bytes.
         assert_eq!(s.lines[0], "# configuração!");
         assert!(s.key(KeyCode::Backspace, false));
         assert!(s.key(KeyCode::Backspace, false));

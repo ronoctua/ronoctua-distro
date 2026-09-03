@@ -237,9 +237,9 @@ mod tests {
 
     #[test]
     fn an_unknown_code_carries_only_its_own_token() {
-        let (p, args) = assemble("prog %z --fica", CTX).expect("there is a program");
+        let (p, args) = assemble("prog %z --stays", CTX).expect("there is a program");
         assert_eq!(p, "prog");
-        assert_eq!(args, ["--fica"], "the rest of the line survives");
+        assert_eq!(args, ["--stays"], "the rest of the line survives");
     }
 
     #[test]

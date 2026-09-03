@@ -180,11 +180,11 @@ pkgs.testers.runNixOSTest {
         )
         prior = pcr(15)
         machine.succeed(
-            f"echo -n '{PHRASE}' | systemd-cryptsetup attach medido /dev/vdb /dev/stdin "
+            f"echo -n '{PHRASE}' | systemd-cryptsetup attach measured /dev/vdb /dev/stdin "
             "headless=yes,tpm2-measure-pcr=yes"
         )
         after = pcr(15)
-        machine.succeed("systemd-cryptsetup detach medido")
+        machine.succeed("systemd-cryptsetup detach measured")
         print(f"PCR 15 before = {prior}\nPCR 15 after  = {after}")
         assert prior != after, (
             "PCR 15 did not change even with a measured UKI — the sealing does not "
@@ -214,7 +214,7 @@ pkgs.testers.runNixOSTest {
             "headless=yes,tpm2-measure-pcr=yes"
         )
         pcr_a = pcr(15)
-        print(f"PCR 15 com o volume A = {pcr_a}")
+        print(f"PCR 15 with volume A = {pcr_a}")
 
         # A secret sealed IN THAT state.
         machine.succeed(

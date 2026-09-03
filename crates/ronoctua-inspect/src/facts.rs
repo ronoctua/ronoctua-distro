@@ -1688,8 +1688,8 @@ mod tests {
             Some(Value::phrase(key::VALUE_PLACE_WITHHELD))
         );
         let joined = format!("{hidden:?}");
-        assert!(!joined.contains("51.49"), "a latitude vazou: {joined}");
-        assert!(!joined.contains("0.26"), "a longitude vazou: {joined}");
+        assert!(!joined.contains("51.49"), "the latitude leaked: {joined}");
+        assert!(!joined.contains("0.26"), "the longitude leaked: {joined}");
 
         let shown = from_exif(PIXEL, Place::Shown);
         assert_eq!(

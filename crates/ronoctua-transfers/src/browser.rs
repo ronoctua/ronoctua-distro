@@ -236,7 +236,10 @@ mod tests {
         // End of stream is `None` and NOT an error: Chrome closes the pipe when
         // the port closes, and a process that treated that as a failure would
         // fill the log every time a tab is shut.
-        assert_eq!(read_message::<Request>(&mut reading).expect("fim"), None);
+        assert_eq!(
+            read_message::<Request>(&mut reading).expect("the end"),
+            None
+        );
     }
 
     #[test]

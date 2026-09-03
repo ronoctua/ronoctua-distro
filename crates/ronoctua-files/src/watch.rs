@@ -161,7 +161,7 @@ pub struct Cancelled;
 
 impl std::fmt::Display for Cancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("cancelado")
+        f.write_str("cancelled")
     }
 }
 
@@ -840,11 +840,11 @@ mod tests {
         let root = scratch("delete-link");
         std::fs::create_dir(root.join("target")).unwrap();
         std::fs::write(root.join("target/inside"), b"x").unwrap();
-        std::os::unix::fs::symlink(root.join("target"), root.join("atalho")).unwrap();
+        std::os::unix::fs::symlink(root.join("target"), root.join("shortcut")).unwrap();
 
-        remove(&root.join("atalho"), &mut Watch::none()).unwrap();
+        remove(&root.join("shortcut"), &mut Watch::none()).unwrap();
 
-        assert!(!root.join("atalho").exists(), "o link ficou");
+        assert!(!root.join("shortcut").exists(), "the link stayed");
         assert!(
             root.join("target/inside").exists(),
             "it followed the link and deleted the target"
@@ -1027,7 +1027,7 @@ mod measured {
         // would be measuring the page cache's mood on whichever machine ran it.
         assert!(
             chunked < one_shot * 3 + std::time::Duration::from_millis(200),
-            "as mordidas custaram caro: {chunked:?} contra {one_shot:?}"
+            "the bites cost dear: {chunked:?} against {one_shot:?}"
         );
     }
 }

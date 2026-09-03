@@ -1161,8 +1161,8 @@ impl Filter {
             ("name:", Self::Name as fn(String) -> Self),
         ] {
             if let Some(rest) = search.strip_prefix(mark) {
-                let (value, livre) = one_word(rest.trim_start());
-                return (mount(value), livre);
+                let (value, free) = one_word(rest.trim_start());
+                return (mount(value), free);
             }
         }
         (Self::NoneOf, search.to_owned())
@@ -1172,8 +1172,8 @@ impl Filter {
     fn prefix(&self) -> String {
         match self {
             Self::NoneOf => String::new(),
-            Self::Category(c) => format!("categoria:{c}"),
-            Self::Name(n) => format!("nome:{n}"),
+            Self::Category(c) => format!("category:{c}"),
+            Self::Name(n) => format!("name:{n}"),
         }
     }
 
@@ -1398,7 +1398,7 @@ impl State {
     fn panel_options(&self) -> Vec<(String, String)> {
         let mut out = vec![(format!("{CATEGORY_PREFIX}{CATEGORY_ALL}"), String::new())];
         for c in &self.categories {
-            out.push((format!("{CATEGORY_PREFIX}{c}"), format!("categoria:{c}")));
+            out.push((format!("{CATEGORY_PREFIX}{c}"), format!("category:{c}")));
         }
         out
     }
@@ -2276,7 +2276,7 @@ impl State {
             // "MORE LIKE THIS": the category comes from the focused icon. Asking
             // to type its name would demand knowing it by heart, and there are 43.
             "lucide-filter-category" => {
-                format!("categoria:{}", self.chosen()?.cats.first()?)
+                format!("category:{}", self.chosen()?.cats.first()?)
             }
             "lucide-filter-clear" => String::new(),
             _ => return None,
@@ -3000,7 +3000,7 @@ mod tests {
                 assert_eq!(e.icon_at(&ctx, column, line), Some(e.top + n), "{columns}");
             }
             let search = e.search_columns(&ctx);
-            let funnel = search.field(field::FILTER).expect("o funil");
+            let funnel = search.field(field::FILTER).expect("the funnel");
             assert!(in_filter(&search, funnel.at), "{columns}");
             assert!(
                 !in_filter(&search, funnel.at.saturating_sub(1)),

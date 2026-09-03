@@ -1128,7 +1128,7 @@ mod tests {
         // partition the administrator declared at boot is one the system
         // expects, wherever it is mounted.
         let mut v = block("/dev/sdb2", "ext4");
-        v.mounted_at = vec!["/srv/dados".to_owned()];
+        v.mounted_at = vec!["/srv/data".to_owned()];
         assert_eq!(needed(&v), None);
         v.in_fstab = true;
         assert_eq!(needed(&v), Some(Needed::InFstab));

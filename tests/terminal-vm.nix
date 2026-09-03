@@ -126,7 +126,7 @@ pkgs.testers.runNixOSTest {
             timeout=30,
         )
 
-    with subtest("o terminal desenhou"):
+    with subtest("the terminal drew"):
         machine.wait_until_succeeds(
             "journalctl -u term --no-pager | grep -q 'terminal drawn on the xdg_toplevel'",
             timeout=60,
@@ -213,7 +213,7 @@ pkgs.testers.runNixOSTest {
             "the rule caught the ordinary terminal too"
         )
 
-    with subtest("o resgate abre FLUTUANTE, com identidade propria"):
+    with subtest("the rescue opens FLOATING, with an identity of its own"):
         # THE FIRST DOOR of `Ctrl+Alt+Del`. The second — the VT — is in
         # `tests/rescue-vm.nix`, where there is no compositor at all; this one
         # belongs here because it is the SAME mechanism as the monitor's, and
@@ -224,7 +224,7 @@ pkgs.testers.runNixOSTest {
         # window, because what one reads during a failure is a list with a log
         # under it.
         machine.succeed(
-            "systemd-run --unit=resgate ${xvfb.env} "
+            "systemd-run --unit=rescue ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=LANG=C.UTF-8 "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
@@ -238,7 +238,7 @@ pkgs.testers.runNixOSTest {
                 timeout=60,
             )
         except Exception:
-            print(machine.execute("journalctl -u resgate --no-pager")[1])
+            print(machine.execute("journalctl -u rescue --no-pager")[1])
             raise
         with_rescue = windows()
         assert with_rescue["br.ronoctua.rescue"]["is_floating"], (
@@ -249,7 +249,7 @@ pkgs.testers.runNixOSTest {
         machine.sleep(5)
         assert "br.ronoctua.rescue" in windows(), (
             "the rescue's window went away: the program inside it died.\n"
-            + machine.execute("journalctl -u resgate --no-pager")[1]
+            + machine.execute("journalctl -u rescue --no-pager")[1]
         )
 
         # AND THE PROGRAM STAYS UP. When the child exits the pty closes and the

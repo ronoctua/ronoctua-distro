@@ -169,7 +169,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'daemon de notificacoes no barramento'",
+            "journalctl -u footer --no-pager | grep -q 'the notification daemon is on the bus'",
             timeout=60,
         )
         # THE PAINTING, and not only the daemon: measuring the height before the

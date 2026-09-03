@@ -1283,7 +1283,7 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
             }
             "text" => {
                 let content = match field("content") {
-                    Some(Val::Variant(qual, inside)) => match (qual.as_str(), inside.as_deref()) {
+                    Some(Val::Variant(case, inside)) => match (case.as_str(), inside.as_deref()) {
                         ("key", Some(Val::String(s))) => prot::Text::key(s.clone()),
                         // The ICON arrives as an ENUM, not a string: the token's
                         // name comes from the generated enum, so a name that does

@@ -233,7 +233,7 @@ pkgs.testers.runNixOSTest {
         assert not any('id="state"' in l for l in block), (
             "a foreign window got a state: niri does not tell us what\n"
             "state `vim` is in, and writing `normal` would be asserting what\n"
-            "ninguem conferiu.\n" + "\n".join(block[:10])
+            "nobody checked.\n" + "\n".join(block[:10])
         )
 
     with subtest("closing the window gives the modeline back to the empty state"):

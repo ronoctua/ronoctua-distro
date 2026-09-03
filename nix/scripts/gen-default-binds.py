@@ -90,9 +90,9 @@ def main() -> None:
     if len(table) < FLOOR:
         sys.exit(
             f"ERROR: only {len(table)} binds extracted from niri's default config, "
-            f"esperava ao menos {FLOOR}.\n"
+            f"expected at least {FLOOR}.\n"
             "      The file's shape has probably changed. A short table "
-            "aqui\n"
+            "here\n"
             "      breaks nothing visibly: the shortcuts simply go away."
         )
 

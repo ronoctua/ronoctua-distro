@@ -450,7 +450,7 @@ mod tests {
         assert_ne!(by_content(&png), Some("image/apng"));
         let elf = [0x7F, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0];
         assert_eq!(by_content(&elf), Some("application/x-executable"));
-        assert_eq!(by_content(b"nada em especial aqui"), None);
+        assert_eq!(by_content(b"nothing special here"), None);
     }
 
     #[test]

@@ -88,7 +88,7 @@ disko.lib.testLib.makeDiskoTest {
         print(out)
         size_kib = int(out.split()[-1])
         assert 1_000_000_000 <= size_kib <= 1_200_000_000, \
-            f"ESP tem {size_kib} bytes, esperava ~1 GiB"
+            f"the ESP has {size_kib} bytes, expected ~1 GiB"
 
     with subtest("section 7.2's 7 btrfs subvolumes"):
         subs = machine.succeed("btrfs subvolume list /")
@@ -108,7 +108,7 @@ disko.lib.testLib.makeDiskoTest {
         machine.succeed("test -d /persist")
         assert "@persist" in machine.succeed("findmnt -n -o SOURCE /persist")
 
-    with subtest("swapfile e NOCOW e utilizavel (hibernacao)"):
+    with subtest("the swapfile is NOCOW and usable (hibernation)"):
         # This is NOT tested through mount options. On btrfs, `nodatacow` and
         # `compress` belong to the FILE SYSTEM, not to the subvolume: the first
         # mount wins and the rest are ignored silently. That is how this test found
@@ -122,7 +122,7 @@ disko.lib.testLib.makeDiskoTest {
         machine.succeed("test -f /swap/swapfile")
 
         attrs = machine.succeed("lsattr /swap/swapfile").split()[0]
-        print(f"atributos do swapfile: {attrs}")
+        print(f"swapfile attributes: {attrs}")
         assert "C" in attrs, (
             f"swapfile sem NOCOW (atributos: {attrs}). "
             "Without it section 7.2's hibernation does not work."

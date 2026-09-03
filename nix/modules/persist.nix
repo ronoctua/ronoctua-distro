@@ -199,7 +199,7 @@ in
             target_path="/btrfs_tmp/@old/@root-$stamp-$(date +%s)-$n"
           done
 
-          echo "ronoctua: guardando @root como $(basename "$target_path")"
+          echo "ronoctua: keeping @root as $(basename "$target_path")"
           mv /btrfs_tmp/@root "$target_path"
         fi
 
@@ -209,7 +209,7 @@ in
         if [ -d /btrfs_tmp/@old ]; then
           for old in $(find /btrfs_tmp/@old -maxdepth 1 -mindepth 1 \
                             -type d -mtime +${toString cfg.persist.keepDays}); do
-            echo "ronoctua: coletando $old"
+            echo "ronoctua: collecting $old"
             # Nested subvolume first: `delete` on the parent fails if there is a
             # child, and the message talks about "directory not empty".
             btrfs subvolume list -o "$old" \

@@ -1728,7 +1728,7 @@ mod tests {
         // TWO FRAMES: the same circle, filled and hollow. It was twelve
         // positions of a clock hand until the owner saw it — a clock says what
         // time it is, and nothing on that line is about the time.
-        assert_eq!(FRAMES.len(), 2, "o pulso tem dois quadros");
+        assert_eq!(FRAMES.len(), 2, "the pulse has two frames");
         for tick in 0..8u64 {
             assert_eq!(
                 frame_of(tick),
@@ -1742,7 +1742,7 @@ mod tests {
             assert_ne!(
                 frame_of(tick),
                 frame_of(tick + 1),
-                "dois tiques seguidos desenharam o mesmo quadro"
+                "two ticks in a row drew the same frame"
             );
         }
         assert_eq!(frame_of(0), frame_of(2), "the lap did not close in two");
@@ -1883,6 +1883,7 @@ mod tests {
         assert_eq!(readable("plain"), "plain");
         assert_eq!(readable("carriage\rreturn"), "carriagereturn");
         // And nothing is invented: text with none of that comes back whole.
+        // pt-BR: the accent is the subject — `readable` must not touch it.
         assert_eq!(readable("acentuação e ünicode"), "acentuação e ünicode");
     }
 

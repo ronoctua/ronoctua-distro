@@ -1074,11 +1074,11 @@ mod tests {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
               <rect width="8" height="4" fill="#0000ff"/>
             </svg>"##;
-        let r = from_svg(svg, 256).expect("rasterizar");
+        let r = from_svg(svg, 256).expect("rasterise");
         assert_eq!(
             (r.width, r.height),
             (256, 128),
-            "a proporcao tem de sobreviver"
+            "the aspect ratio has to survive"
         );
     }
 
@@ -1174,8 +1174,11 @@ mod tests {
         // AND AN ALIAS IS THE SAME THING: the mime table folds it, we do not.
         // `image/x-bmp` and `application/x-pdf` are real rows of that table,
         // and neither is written down in ours.
-        assert_eq!(how("image/x-bmp").expect("alias de bmp").id, "raster");
-        assert_eq!(how("application/x-pdf").expect("alias de pdf").id, "page");
+        assert_eq!(how("image/x-bmp").expect("an alias of bmp").id, "raster");
+        assert_eq!(
+            how("application/x-pdf").expect("an alias of pdf").id,
+            "page"
+        );
     }
 
     #[test]

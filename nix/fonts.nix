@@ -133,7 +133,7 @@ let
       mkdir -p noctua-iosevka
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (dir: asset: ''
-          echo "--- extraindo ${dir} ---"
+          echo "--- extracting ${dir} ---"
           tar --zstd -xf ${asset} -C noctua-iosevka
           test -d "noctua-iosevka/${dir}" || {
             echo "ERROR: ${builtins.baseNameOf asset} did not bring the '${dir}' directory." >&2

@@ -194,7 +194,7 @@ fn drive(path: &str) -> Result<()> {
             None => bail!(
                 "{}: I asked for `{going}` and the component reported nothing.\n\
                  A declared state that is not reachable from the base is a state that \
-                 o `SPC b s` oferece e ninguem entra.",
+                 `SPC b s` offers and nobody enters.",
                 d.name
             ),
         }
@@ -216,7 +216,7 @@ fn drive(path: &str) -> Result<()> {
             bail!(
                 "{}: `Esc` in `{going}` did not go back, or went back without reporting.\n\
                  The footer reads the report: without it the modeline goes on naming the screen \
-                 que ja saiu.",
+                 that has already gone.",
                 d.name
             );
         }

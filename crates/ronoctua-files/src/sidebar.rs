@@ -950,7 +950,7 @@ mod tests {
         // It is the same rule `trash::Bin` follows and states: every root is a
         // PARAMETER. A test that does not name a store must not be able to
         // find one.
-        let tree = Tree::fresh("sem-store");
+        let tree = Tree::fresh("no-store");
         let mut side = Sidebar::of(&[], None, None, Preferences::fresh(), None);
         assert!(side.store_dir().is_none());
 
@@ -974,7 +974,7 @@ mod tests {
 
     #[test]
     fn a_sidebar_with_a_store_writes_there_and_only_there() {
-        let tree = Tree::fresh("com-store");
+        let tree = Tree::fresh("with-store");
         let mut side = Sidebar::of(
             &[],
             None,
@@ -983,7 +983,7 @@ mod tests {
             Some(tree.root.clone()),
         );
         side.toggle();
-        side.save().expect("salvar");
+        side.save().expect("save");
         assert!(tree.root.join(store::FILE).exists());
         assert!(side.stamp().is_some());
         assert!(!store::read_from(&tree.root).showing);

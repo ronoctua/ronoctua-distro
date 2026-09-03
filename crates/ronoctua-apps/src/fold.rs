@@ -55,6 +55,7 @@ mod tests {
 
     #[test]
     fn the_accent_goes_and_the_case_lowers() {
+        // pt-BR: the accent IS the subject — these are what folding folds.
         assert_eq!(fold("Cálculo"), "calculo");
         assert_eq!(fold("Configurações"), "configuracoes");
         assert_eq!(fold("Área de Trabalho"), "area de trabalho");

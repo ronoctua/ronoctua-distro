@@ -1608,7 +1608,7 @@ mod tests {
                         "ok".to_owned()
                     }
                 };
-                writeln!(stream, "{reply}").expect("responder");
+                writeln!(stream, "{reply}").expect("reply");
             }
         });
 
@@ -1626,7 +1626,7 @@ mod tests {
         );
 
         super::buffer_state_at(&path, "state sheet").expect("ask for the state");
-        super::buffer_state_at(&path, "state-next").expect("girar");
+        super::buffer_state_at(&path, "state-next").expect("cycle");
         served.join().expect("the buffer's thread");
         assert_eq!(
             *asked.lock().expect("lock"),
@@ -1680,7 +1680,7 @@ mod tests {
                         "ok".to_owned()
                     }
                 };
-                writeln!(stream, "{reply}").expect("responder");
+                writeln!(stream, "{reply}").expect("reply");
             }
         });
 

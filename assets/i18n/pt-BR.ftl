@@ -751,7 +751,7 @@ notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }
 which-buffer = Buffer em foco
 hint-state = Estado: { $state } — clique gira, Esc volta, Esc+setas escolhe
 which-state = Estado do buffer em foco
-cmd-exemplo-reiniciar = Reiniciar o exemplo
+cmd-example-restart = Reiniciar o exemplo
 
 ## O painel de memoria — LEADER s m
 

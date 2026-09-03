@@ -343,6 +343,8 @@ mod tests {
             max_width: 0,
         });
         let v = spans_of(&d, &t, 80);
+        // pt-BR: the VALUE of `cmd-mx-open` in pt-BR.ftl, which is what the
+        // screen says — the key beside it is the name.
         assert_eq!(v[0].text, "Executar comando…");
         assert_eq!(v[1].text, "cmd-mx-open");
     }

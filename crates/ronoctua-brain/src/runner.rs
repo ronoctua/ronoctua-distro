@@ -182,7 +182,7 @@ impl Runner {
         let Some(task) = task else {
             return;
         };
-        tracing::info!(task = %task, "adiada");
+        tracing::info!(task = %task, "postponed");
         let record = RunRecord::of(
             &task,
             now,
@@ -428,10 +428,10 @@ impl Runner {
             }
         });
 
-        tracing::info!(task = id, rehearsal, "comecando");
+        tracing::info!(task = id, rehearsal, "starting");
         let outcome = task.run(&report);
         let ended = self.clock.now();
-        tracing::info!(task = id, ?outcome, "acabou");
+        tracing::info!(task = id, ?outcome, "finished");
 
         // A REHEARSAL IS NOT A RUN. Writing it down would push the next real
         // one a whole cadence away — the person would have "updated" the
@@ -503,7 +503,7 @@ mod tests {
 
     impl Clock for Hand {
         fn now(&self) -> Moment {
-            *self.0.lock().expect("relogio")
+            *self.0.lock().expect("the clock")
         }
     }
 
@@ -598,7 +598,7 @@ mod tests {
         let shared = Arc::new(Shared::of(Prefs::default()));
         let runner = Runner::new(
             Arc::clone(&shared),
-            Registry::of(tasks).expect("registro"),
+            Registry::of(tasks).expect("the registry"),
             Box::new(FakeMeter(pulse)),
             Box::new(Hand(Arc::new(Mutex::new(at)))),
             nowhere(),
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(
             both,
             vec![("one", '('), ("one", ')'), ("two", '('), ("two", ')')],
-            "as duas se cruzaram"
+            "the two crossed each other"
         );
         let (mind, _) = shared.snapshot();
         assert!(mind.queue.is_empty());
@@ -860,7 +860,7 @@ mod tests {
         let shared = Arc::new(Shared::of(Prefs::default()));
         let mut runner = Runner::new(
             Arc::clone(&shared),
-            Registry::of(vec![Box::new(Warned(Arc::clone(&log)))]).expect("registro"),
+            Registry::of(vec![Box::new(Warned(Arc::clone(&log)))]).expect("the registry"),
             Box::new(FakeMeter(Pulse::default())),
             Box::new(Hand(Arc::clone(&clock))),
             nowhere(),
@@ -894,7 +894,7 @@ mod tests {
         let shared = Arc::new(Shared::of(Prefs::default()));
         let mut runner = Runner::new(
             Arc::clone(&shared),
-            Registry::of(vec![Box::new(Always)]).expect("registro"),
+            Registry::of(vec![Box::new(Always)]).expect("the registry"),
             Box::new(FakeMeter(Pulse {
                 ram_used_pct: Some(99),
                 ..Pulse::default()
@@ -1015,7 +1015,7 @@ mod tests {
         }));
         let mut runner = Runner::new(
             Arc::clone(&shared),
-            Registry::of(vec![Box::new(Scheduled(zone))]).expect("registro"),
+            Registry::of(vec![Box::new(Scheduled(zone))]).expect("the registry"),
             Box::new(FakeMeter(Pulse::default())),
             // 09:00 on day 0: the night window closed, so the next one is
             // tomorrow at 02:00.

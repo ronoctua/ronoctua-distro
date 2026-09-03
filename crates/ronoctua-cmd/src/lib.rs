@@ -52,9 +52,9 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
     /// Two commands with the same id.
-    IdDuplicado(&'static str),
+    DuplicateId(&'static str),
     /// An id outside the `kebab-case` format.
-    IdMalFormado(&'static str),
+    MalformedId(&'static str),
     /// The text key is not this command's `cmd-<id>`.
     LabelDoesNotMatchId {
         /// The command's id.
@@ -67,8 +67,8 @@ pub enum Failure {
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IdDuplicado(id) => write!(f, "the command `{id}` is registered twice"),
-            Self::IdMalFormado(id) => write!(
+            Self::DuplicateId(id) => write!(f, "the command `{id}` is registered twice"),
+            Self::MalformedId(id) => write!(
                 f,
                 "command id `{id}` is outside the `kebab-case` shape \
                  (lower case, digits and hyphen, no dot and no space)"
@@ -112,7 +112,7 @@ impl Registry {
     /// not user errors — which is why they fail loudly instead of being ignored.
     pub fn register(&mut self, c: Command) -> Result<(), Failure> {
         if !valid_id(c.id) {
-            return Err(Failure::IdMalFormado(c.id));
+            return Err(Failure::MalformedId(c.id));
         }
         // THE KEY IS THE ID, with a prefix. Checking here closes the one hole
         // the compiler does not see: `key::CMD_WINDOW_UP` on a command called
@@ -128,7 +128,7 @@ impl Registry {
             });
         }
         if self.commands.contains_key(c.id) {
-            return Err(Failure::IdDuplicado(c.id));
+            return Err(Failure::DuplicateId(c.id));
         }
         self.commands.insert(c.id, c);
         Ok(())
@@ -175,8 +175,8 @@ mod tests {
     use super::*;
 
     const A: Command = Command {
-        id: "buffer-trocar",
-        label: "cmd-buffer-trocar",
+        id: "buffer-swap",
+        label: "cmd-buffer-swap",
     };
 
     #[test]
@@ -186,23 +186,23 @@ mod tests {
         // wrong command with no warning at all.
         let mut r = Registry::fresh();
         r.register(A).unwrap();
-        assert_eq!(r.register(A), Err(Failure::IdDuplicado("buffer-trocar")));
+        assert_eq!(r.register(A), Err(Failure::DuplicateId("buffer-swap")));
     }
 
     #[test]
     fn the_id_is_kebab_and_the_dot_is_gone() {
-        // THE DOT IS REJECTED, and not merely tolerated. As long as `buffer.trocar` and
-        // `buffer-trocar` were both valid, the id would stop being
+        // THE DOT IS REJECTED, and not merely tolerated. As long as `buffer.swap` and
+        // `buffer-swap` were both valid, the id would stop being
         // derivable from the text key — which is the property
         // `LabelDoesNotMatchId` depends on to exist.
         let mut r = Registry::fresh();
         for bad in [
-            "buffer.trocar",
-            "Buffer-Trocar",
-            "buffer trocar",
+            "buffer.swap",
+            "Buffer-Swap",
+            "buffer swap",
             "buffer-",
             "-x",
-            "buffer--trocar",
+            "buffer--swap",
             "",
         ] {
             assert!(

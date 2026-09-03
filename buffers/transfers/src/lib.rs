@@ -1151,7 +1151,7 @@ mod tests {
     /// identified job, and an answered measurement.
     fn every_shape() -> Vec<Job> {
         let mut running = job(1, Stage::Running, 3 << 30, 9 << 30);
-        running.subject = "/home/noctua/vídeos/uma coisa bem comprida.mkv".to_owned();
+        running.subject = "/home/noctua/videos/a really long thing here.mkv".to_owned();
         let mut unknown = job(2, Stage::Weighing, 900, 0);
         unknown.engine = Engine::Torrent;
         unknown.errand = Errand::Torrent;

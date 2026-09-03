@@ -535,7 +535,7 @@ mod tests {
             mime_types: Vec::new(),
             id: id.to_owned(),
             name: name.to_owned(),
-            description: format!("descricao de {name}"),
+            description: format!("description of {name}"),
             icon: id.to_owned(),
             categories: categories.iter().map(|c| (*c).to_owned()).collect(),
             command: (id.to_owned(), Vec::new()),
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn the_description_does_not_enter_the_search() {
         let mut l = Finder::fresh(catalogue());
-        type_in(&mut l, "descricao");
+        type_in(&mut l, "description");
         assert!(
             l.result().is_empty(),
             "it matched by description: {:?}",
@@ -677,7 +677,7 @@ mod tests {
         let glyphs: Vec<char> = c.iter().map(glyph_of).collect();
         assert!(
             glyphs.iter().all(|g| *g != super::tokens::icon::GENERIC),
-            "alguem caiu no generico: {glyphs:?}"
+            "somebody fell back to the generic one: {glyphs:?}"
         );
         // Four different categories have to give four different glyphs.
         let unique: std::collections::BTreeSet<char> = glyphs.iter().copied().collect();

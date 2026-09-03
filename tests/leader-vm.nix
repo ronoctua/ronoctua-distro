@@ -281,7 +281,7 @@ pkgs.testers.runNixOSTest {
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/whichkey.png stdout --psm 6 2>/dev/null"
         ).strip()
-        print(f"OCR da lista: {read_back!r}")
+        print(f"OCR of the list: {read_back!r}")
         # TRANSLATED TEXT, not a key. If `group-files` shows up here, the label
         # reached the screen raw and invariant 8 is broken at the last link — the
         # only one no unit test covers.
@@ -334,7 +334,7 @@ pkgs.testers.runNixOSTest {
         read_back = machine.succeed(
             "${pkgs.tesseract}/bin/tesseract /tmp/mini.png stdout --psm 7 2>/dev/null"
         ).strip()
-        print(f"OCR do minibuffer: {read_back!r}")
+        print(f"OCR of the minibuffer: {read_back!r}")
         assert "leader" in read_back.lower(), (
             f"the pending sequence is not on the minibuffer's line; OCR read {read_back!r}"
         )

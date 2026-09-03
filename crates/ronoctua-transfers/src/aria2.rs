@@ -293,7 +293,7 @@ fn carry(
                 let _ = call("aria2.forceRemove", vec![Value::String(gid.clone())]);
                 let _ = call("aria2.removeDownloadResult", vec![Value::String(gid)]);
                 progress.flush();
-                bail!("desistido");
+                bail!("given up");
             }
             Flow::Pause if !held => {
                 call("aria2.pause", vec![Value::String(gid.clone())])?;
@@ -328,7 +328,7 @@ fn carry(
             }
             "removed" => {
                 progress.flush();
-                bail!("desistido");
+                bail!("given up");
             }
             _ => {}
         }

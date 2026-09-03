@@ -35,7 +35,7 @@ const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
 fn fixture(root: &Path) -> Result<PathBuf> {
     let content = root.join("conteudo");
     std::fs::create_dir_all(&content)?;
-    for (n, name) in ["um.bin", "dois.bin"].iter().enumerate() {
+    for (n, name) in ["um.bin", "two.bin"].iter().enumerate() {
         let bytes: Vec<u8> = (0..SIZE)
             .map(|i| u8::try_from((i * 31 + n * 7) % 251).unwrap_or(0))
             .collect();

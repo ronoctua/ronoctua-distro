@@ -285,7 +285,7 @@ mod tests {
         pty.finish().unwrap();
         assert!(
             seen_at.contains("ronoctua-pty-ok"),
-            "o pty devolveu {seen_at:?}"
+            "the pty gave back {seen_at:?}"
         );
     }
 
@@ -297,7 +297,10 @@ mod tests {
         pty.write_bytes(b"echo-back\n").unwrap();
         let seen_at = read_until(&pty, "echo-back");
         pty.finish().unwrap();
-        assert!(seen_at.contains("echo-back"), "o pty devolveu {seen_at:?}");
+        assert!(
+            seen_at.contains("echo-back"),
+            "the pty gave back {seen_at:?}"
+        );
     }
 
     #[test]

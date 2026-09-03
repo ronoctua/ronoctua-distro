@@ -463,10 +463,10 @@ mweb.gvs+QQQ
 # Netscape HTTP Cookie File
 .youtube.com\tTRUE\t/\tTRUE\t2000000000\tSID\tabc
 #HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tHSID\tdef
-.youtube.com\tTRUE\t/\tTRUE\t1\tVELHO\texpirou
-.outrosite.com\tTRUE\t/\tTRUE\t2000000000\tALHEIO\tnao
-.youtube.com\tTRUE\t/premium\tTRUE\t2000000000\tSOPATH\tsim
-.youtube.com\tTRUE\t/\tFALSE\t2000000000\tSEMTLS\ttalvez
+.youtube.com\tTRUE\t/\tTRUE\t1\tOLD\texpired
+.othersite.com\tTRUE\t/\tTRUE\t2000000000\tFOREIGN\tno
+.youtube.com\tTRUE\t/premium\tTRUE\t2000000000\tPATHONLY\tyes
+.youtube.com\tTRUE\t/\tFALSE\t2000000000\tNOTLS\tmaybe
 ";
 
     #[test]
@@ -480,15 +480,15 @@ mweb.gvs+QQQ
         assert!(header.contains("HSID=def"), "{header}");
         // Expired, another site's, and a path that does not match.
         assert!(!header.contains("OLD"), "{header}");
-        assert!(!header.contains("ALHEIO"), "{header}");
-        assert!(!header.contains("SOPATH"), "{header}");
+        assert!(!header.contains("FOREIGN"), "{header}");
+        assert!(!header.contains("PATHONLY"), "{header}");
     }
 
     #[test]
     fn a_secure_cookie_never_goes_over_plain_http() {
         let over_http = header_at(JAR, "http://www.youtube.com/", 1_000_000_000).expect("header");
         assert!(!over_http.contains("SID=abc"), "{over_http}");
-        assert!(over_http.contains("SEMTLS"), "{over_http}");
+        assert!(over_http.contains("NOTLS"), "{over_http}");
     }
 
     #[test]

@@ -106,7 +106,7 @@ in
       android = lib.mkEnableOption "o SDK do Android, o Studio e o Flutter" // {
         default = true;
       };
-      androidNdk = lib.mkEnableOption "o NDK (mais alguns GB; so para codigo nativo)";
+      androidNdk = lib.mkEnableOption "the NDK (a few GB more; only for native code)";
       toolchains = lib.mkEnableOption "os compiladores: rust, go, python, node, gcc" // {
         default = true;
       };

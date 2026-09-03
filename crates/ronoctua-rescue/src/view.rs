@@ -368,7 +368,7 @@ mod tests {
         let reboot = of_section(Section::System)
             .into_iter()
             .find(|a| a.id == "reboot")
-            .expect("reiniciar");
+            .expect("restart");
         v.row = of_section(Section::System)
             .iter()
             .position(|a| a.id == "reboot")

@@ -85,7 +85,7 @@ def main() -> int:
     give_way = (prior & of_emoji) & presented
     if not give_way:
         die(
-            "nenhum codepoint a give_way — ou a Iosevka deixou de trazer emoji, ou\n"
+            "no codepoint to give_way — either the Iosevka stopped carrying emoji, or\n"
             "       reading emoji-data.txt broke. In either case, carrying on\n"
             "       from here would write a face identical to the input without saying so."
         )
@@ -118,18 +118,18 @@ def main() -> int:
     lost = (prior - written) - presented
     if lost:
         die(
-            f"{len(lost)} codepoints with TEXT presentation left the face "
-            f"primaria: {sorted(f'U+{c:04X}' for c in lost)[:8]}"
+            f"{len(lost)} codepoints with TEXT presentation left the primary "
+            f"face: {sorted(f'U+{c:04X}' for c in lost)[:8]}"
         )
 
     # And the canonical ones, by name, because an empty set also passes the test
     # above — and a bug that zeroed `presented` would take everything with it.
     for cp, name in ((0x23, "#"), (0x30, "0"), (0xA9, "(c)"), (0x2122, "(tm)")):
         if cp not in written:
-            die(f"a face primaria perdeu `{name}` (U+{cp:04X})")
+            die(f"the primary face lost `{name}` (U+{cp:04X})")
 
     print(
-        f"OK: {len(give_way)} codepoints cedidos a face de emoji; "
+        f"OK: {len(give_way)} codepoints given to the emoji face; "
         f"{len(prior & of_emoji) - len(give_way)} with text presentation stayed"
     )
     return 0

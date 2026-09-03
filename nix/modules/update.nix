@@ -166,7 +166,7 @@ in
       readOnly = true;
       internal = true;
       default = runners;
-      defaultText = "os dois roteiros, gerados de assets/updates.nix";
+      defaultText = "the two scripts, generated from assets/updates.nix";
       description = "The sequence's scripts, with the paths already resolved.";
     };
   };

@@ -1313,7 +1313,7 @@ impl Descriptor {
         for (n, s) in self.states.iter().enumerate() {
             if self.states[..n].iter().any(|o| o.id == s.id) {
                 return Err(format!(
-                    "o buffer `{}` declara `{}` duas vezes.",
+                    "the buffer `{}` declares `{}` twice.",
                     self.name, s.id
                 ));
             }
@@ -1545,7 +1545,7 @@ impl DisplayList {
             };
             if !capabilities.contains(&required) {
                 return Err(format!(
-                    "o buffer desenha {c:?} sem declarar `{required:?}`.\n\
+                    "the buffer draws {c:?} without declaring `{required:?}`.\n\
                      Every primitive with a gate is a surface every future buffer \
                      gains the right to use (section 7.6); whoever uses it asks for it \
                      in the descriptor, and the host checks before drawing."
@@ -2067,7 +2067,7 @@ mod tests {
     fn a_gated_primitive_requires_the_capability() {
         assert!(
             with_svg().validate(&[]).is_err(),
-            "desenhou vetor sem declarar `Vetor`"
+            "it drew a vector without declaring `Vector`"
         );
         assert!(
             with_svg().validate(&[Capability::Terminal]).is_err(),

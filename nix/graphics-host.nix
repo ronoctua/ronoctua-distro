@@ -102,7 +102,7 @@ in
     if [ -z "''${WAYLAND_DISPLAY:-}" ] && [ -z "''${DISPLAY:-}" ]; then
       echo "ERROR: there is no graphical session." >&2
       echo "      The nested compositor runs as a WINDOW inside your" >&2
-      echo "      sessao. Sem sessao grafica, use 'nix run .#vm'." >&2
+      echo "      session. With no graphical session, use 'nix run .#vm'." >&2
       exit 1
     fi
 

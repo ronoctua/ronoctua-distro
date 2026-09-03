@@ -332,7 +332,7 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
             where,
             "a step runs ONE thing: `package` + `program` (a store path), "
             "`unit` (a unit that already exists) or `binary` (a name on the "
-            f"pessoa). Veio: {shapes or 'nenhum'}.",
+            f"PATH). Got: {shapes or 'none'}.",
         )
 
     package = program = unit = binary = None
@@ -388,7 +388,7 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
         if binary and ("binary", binary) not in needs:
             complain(
                 where,
-                f"`binary = {binary!r}` sem `{{ binary = \"{binary}\"; }}` em "
+                f"`binary = {binary!r}` without `{{ binary = \"{binary}\"; }}` in "
                 "`needs`: without it the machine that does not have the tool gets a "
                 "fails, and the right answer is a skipped step saying why.",
             )
@@ -430,7 +430,7 @@ def check_sequence(steps: list[dict]) -> None:
                 "steps",
                 "`move-inputs` after `apply-configuration`: the new inputs "
                 "only reach the machine on the next rebuild, and the sequence would say "
-                "que atualizou.",
+                "that updated.",
             )
         for i, s in enumerate(steps):
             if s["does"] == "reclaim-space" and i < applies[0]:
@@ -781,7 +781,7 @@ def emit_runner(
         # default, and `--execute` is what makes it act — and saying them costs
         # eight lines.
         "usage() {",
-        "  printf 'uso: %s [--execute]\\n\\n' \"$(basename \"$0\")\"",
+        "  printf 'usage: %s [--execute]\\n\\n' \"$(basename \"$0\")\"",
         "  printf 'With no --execute it REHEARSES: it evaluates every precondition for real and\\n'",
         "  printf 'prints what would run, without running anything. With --execute, it runs.\\n\\n'",
         "  printf 'The rehearsal does not see what only shows up when a command runs — the\\n'",

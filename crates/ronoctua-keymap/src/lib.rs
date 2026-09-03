@@ -284,7 +284,7 @@ impl std::fmt::Display for Collision {
         match self {
             Self::Duplicate { sequence, commands } => write!(
                 f,
-                "`{sequence}` esta ligada duas vezes: `{}` e `{}`",
+                "`{sequence}` is bound twice: `{}` and `{}`",
                 commands.0, commands.1
             ),
             Self::PrefixWithCommand {

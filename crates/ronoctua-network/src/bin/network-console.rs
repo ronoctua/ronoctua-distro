@@ -95,7 +95,7 @@ fn main() -> Result<()> {
     manager
         .connect(&ssid, Some(&password), true)
         .with_context(|| format!("connect to `{ssid}`"))?;
-    tracing::info!(%ssid, "conectado pelo console");
+    tracing::info!(%ssid, "connected from the console");
     Ok(())
 }
 

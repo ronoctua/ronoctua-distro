@@ -93,7 +93,7 @@ def main() -> None:
             f"ERROR: only {len(table)} actions extracted from niri, expected at least "
             f"{FLOOR}.\n"
             "      The shape of `--help` has probably changed. A short table "
-            "aqui\n"
+            "here\n"
             "      breaks nothing visibly: the actions simply go away from the "
             "      command list."
         )

@@ -5292,7 +5292,7 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         Doing::Format(_) => Errand::Done,
         Doing::Unmount(id) => {
             let sender = sender.clone();
-            raise("desmontar", move || {
+            raise("unmount", move || {
                 let report = match ronoctua_disks::Manager::fresh().and_then(|m| m.unmount(&id)) {
                     Ok(()) => Report::Done,
                     Err(e) => Report::Refused(ronoctua_disks::refusal(&e), e.to_string()),
@@ -13095,7 +13095,7 @@ mod tests {
         // A plain `.tar` too: `extract-tar` applies to `application/x-tar`,
         // and a `.zip` is not one — the two rows exist precisely because the
         // database says the formats are unrelated.
-        std::fs::write(root.join("dois.tar"), b"").unwrap();
+        std::fs::write(root.join("two.tar"), b"").unwrap();
         std::fs::create_dir(root.join("folder")).unwrap();
         // A FRESH VIEW PER ROW, and the reason is a defect this test found:
         // running `open` on a directory ENTERS it, so every row after that one
@@ -13744,7 +13744,7 @@ mod tests {
     #[test]
     fn formatting_the_running_system_is_not_on_any_menu() {
         use ronoctua_files::sidebar::{Preferences, Row as Side, Section, Sidebar, Target};
-        let dir = scratch("side-formatar");
+        let dir = scratch("side-format");
         let mut side = Sidebar::of(&[], None, None, Preferences::fresh(), None);
         side.devices_are(vec![Side {
             id: "device:/dev/dm-0".to_owned(),
@@ -13941,7 +13941,7 @@ mod tests {
     fn a_sidebar_longer_than_the_listing_still_draws_every_row() {
         let dir = scratch("side-longer");
         std::fs::write(dir.join("one.txt"), b"x").unwrap();
-        std::fs::write(dir.join("dois.txt"), b"x").unwrap();
+        std::fs::write(dir.join("two.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 6);
         v.reread();
         let b = bundle();
@@ -13997,7 +13997,7 @@ mod tests {
             label: Some("stick".to_owned()),
             section: Section::Devices,
             mounted: Some(true),
-            at: Some(PathBuf::from("/run/media/alguem/stick")),
+            at: Some(PathBuf::from("/run/media/someone/stick")),
             quiet: false,
             system: false,
             needed: None,
@@ -14146,7 +14146,7 @@ mod tests {
                 label: Some("MJRO1812".to_owned()),
                 section: Section::Devices,
                 mounted: Some(true),
-                at: Some(PathBuf::from("/run/media/alguem/MJRO1812")),
+                at: Some(PathBuf::from("/run/media/someone/MJRO1812")),
                 quiet: false,
                 system: false,
                 needed: None,
@@ -14188,7 +14188,7 @@ mod tests {
             label: Some(id.to_owned()),
             section: Section::Devices,
             mounted: Some(mounted),
-            at: mounted.then(|| PathBuf::from("/run/media/alguem").join(id)),
+            at: mounted.then(|| PathBuf::from("/run/media/someone").join(id)),
             quiet: false,
             system: false,
             needed: None,
@@ -14197,9 +14197,9 @@ mod tests {
         };
         let mut side = Sidebar::of(&[], None, None, Preferences::fresh(), None);
         side.devices_are(vec![
-            a_row("stick-desmontado", false, true),
-            a_row("interna-montada", true, false),
-            a_row("interna-desmontada", false, false),
+            a_row("stick-unmounted", false, true),
+            a_row("internal-mounted", true, false),
+            a_row("internal-unmounted", false, false),
         ]);
         let mut v = plainly(View::at(
             &dir,
@@ -14323,7 +14323,7 @@ mod tests {
         side.devices_are(vec![Side {
             id: "device:/dev/nvme0n1p3".to_owned(),
             target: Target::Device("/block/nvme0n1p3".to_owned()),
-            label: Some("uma particao interna".to_owned()),
+            label: Some("an internal partition".to_owned()),
             section: Section::Devices,
             mounted: Some(false),
             at: None,
@@ -14380,13 +14380,13 @@ mod tests {
             Refusal::Other,
         ]
         .into_iter()
-        .map(|r| v.refusal_said(r, "seja lá o que for").key)
+        .map(|r| v.refusal_said(r, "whatever it is").key)
         .collect();
         let unique: std::collections::BTreeSet<&&str> = keys.iter().collect();
         assert_eq!(
             unique.len(),
             keys.len(),
-            "duas recusas dizem a mesma coisa: {keys:?}"
+            "two refusals say the same thing: {keys:?}"
         );
     }
 
@@ -15373,7 +15373,7 @@ mod tests {
                 .collect();
             assert!(
                 strip_leaks.is_empty(),
-                "a faixa vazou em {strip_leaks:?} com {sidebar} lugares"
+                "the strip leaked at {strip_leaks:?} with {sidebar} places"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -15735,7 +15735,7 @@ mod tests {
         for c in [Column::Perms, Column::Owner, Column::Group] {
             assert!(
                 !hidden.contains(&c),
-                "{c:?} apareceu sem ninguem pedir: {hidden:?}"
+                "{c:?} appeared without anybody asking: {hidden:?}"
             );
         }
         // AND THE KEY BRINGS THEM BACK — with their targets, which is what

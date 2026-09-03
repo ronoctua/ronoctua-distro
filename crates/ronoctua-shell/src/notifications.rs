@@ -1162,10 +1162,10 @@ mod tests {
     fn a_row_says_which_filter_caught_it() {
         let t = texts();
         let mut r = record(1, Show::Hidden, false);
-        r.presentation.by = Some("minha-regra".into());
+        r.presentation.by = Some("my-rule".into());
         let fields = record_line(&r, 0, 120, false, &t);
         let text: String = fields.iter().map(|f| f.text.as_str()).collect();
-        assert!(text.contains("minha-regra"), "{text}");
+        assert!(text.contains("my-rule"), "{text}");
     }
 
     #[test]

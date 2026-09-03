@@ -14,7 +14,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_runtime::{CEILING_MS, Runtime};
 
-/// Mede um engine, devolvendo (p50, p99).
+/// Measures one engine, giving back (p50, p99).
 fn measure(rt: &Runtime, wasm: &[u8], repeats: usize) -> Result<(f64, f64)> {
     let cwasm = rt.precompile(wasm)?;
     let component = rt.load(&cwasm)?;

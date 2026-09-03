@@ -91,7 +91,7 @@ pkgs.testers.runNixOSTest {
         # The two that would put the compositor and the footer in the candidate
         # set. `session.slice` is where they live; `/` is the root slice, whose
         # candidates include everything.
-        assert "session.slice" not in dump, f"a session.slice virou candidata:\n{dump}"
+        assert "session.slice" not in dump, f"session.slice became a candidate:\n{dump}"
         assert "\n\tPath: /\n" not in dump, f"the root became a candidate:\n{dump}"
 
     # THE STAND-IN COMES UP FIRST, and not only because the next subtest reads
@@ -265,7 +265,7 @@ pkgs.testers.runNixOSTest {
             "systemctl --user --machine=noctua@ show app.slice "
             "-p ManagedOOMMemoryPressureDurationUSec --value"
         ).strip()
-        print(f"duracao: {duration!r}")
+        print(f"duration: {duration!r}")
         assert duration in ("1min", "60s", "60000000"), duration
 
         # AND IT DID NOT TOUCH THE DISK. The transient drop-in lives in /run and

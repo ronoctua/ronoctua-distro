@@ -724,7 +724,7 @@ where
             // A BLOCKING stream: the thread exists precisely to wait here.
             let mut changes = radio.receive_last_scan_changed();
             while changes.next().is_some() {
-                tracing::debug!("o rádio terminou uma varredura");
+                tracing::debug!("the radio finished a scan");
                 on_scan();
             }
             // The stream ending means NetworkManager went away. Saying so beats

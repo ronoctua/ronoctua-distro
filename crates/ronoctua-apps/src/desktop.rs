@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn a_comment_and_a_blank_line_do_not_become_a_field() {
-        let f = "[Desktop Entry]\n# Name=Comentado\n\nName=Real\n";
+        let f = "[Desktop Entry]\n# Name=Commented\n\nName=Real\n";
         let c = fields(f);
         assert_eq!(c.len(), 1);
         assert_eq!(raw_bytes(&c, "Name"), Some("Real"));

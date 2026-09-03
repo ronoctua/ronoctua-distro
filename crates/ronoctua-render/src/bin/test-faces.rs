@@ -164,11 +164,11 @@ fn main() -> Result<()> {
     // These six are the runtime witness that that happened.
     for (name, cp) in [
         ("UP!", 0x1F199u32),
-        ("relógio", 0x1F550),
-        ("lua nova", 0x1F311),
-        ("taça de vinho", 0x1F377),
-        ("sino", 0x1F514),
-        ("coração preto", 0x1F5A4),
+        ("clock", 0x1F550),
+        ("new moon", 0x1F311),
+        ("wine glass", 0x1F377),
+        ("bell", 0x1F514),
+        ("black heart", 0x1F5A4),
     ] {
         let s = char::from_u32(cp).unwrap_or('?').to_string();
         let (family, _) = who_draws(&mut fs, &s)?;

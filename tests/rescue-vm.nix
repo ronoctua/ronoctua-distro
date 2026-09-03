@@ -41,7 +41,7 @@ pkgs.testers.runNixOSTest {
       # `fgconsole` and `chvt` — the unit uses them by store path, and the test
       # asks the same questions from the shell.
       environment.systemPackages = [ pkgs.kbd ];
-      networking.hostName = lib.mkForce "noctua-resgate";
+      networking.hostName = lib.mkForce "noctua-rescue";
       # No /persist in this VM — the same reason as the keyboard's: `base.nix`
       # points the password hash there and the test never logs in.
       users.users.${config.ronoctua.user} = {
@@ -106,7 +106,7 @@ pkgs.testers.runNixOSTest {
           who = machine.succeed(
               "systemctl show ronoctua-rescue.service -p User --value"
           ).strip()
-          assert who == user_name, f"o resgate roda como `{who}`"
+          assert who == user_name, f"the rescue runs as `{who}`"
 
       with subtest("the virtual console's screen has the sidebar"):
           # `/dev/vcs8` IS the console's text. No screenshot, no OCR, no font: if

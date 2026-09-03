@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn any_tag_answers_for_the_tag_field() {
-        let x = n("nosso", "algo", "");
+        let x = n("ours", "something", "");
         let p = Presentation::from_urgency(Urgency::Normal);
         assert!(term(Field::Tag, Test::Is("media".into())).holds(&x, &p));
         assert!(!term(Field::Tag, Test::Is("rede".into())).holds(&x, &p));

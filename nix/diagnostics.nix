@@ -52,7 +52,7 @@ writeShellApplication {
     out_text="''${1:-$(mktemp -t ronoctua-diagnostics-XXXXXX.txt)}"
     exec > >(tee "$out_text") 2>&1
 
-    echo "# diagnostics do ronoctua-distro — $(date -Is)"
+    echo "# ronoctua-distro diagnostics — $(date -Is)"
     echo
 
     runtime="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -93,7 +93,7 @@ writeShellApplication {
       echo "the snapshot is at $out_text"
       exit 0
     fi
-    echo "niri aninhado: pid $niri_pid, display $display"
+    echo "nested niri: pid $niri_pid, display $display"
     echo
 
     # ---------------------------------------------------------------
@@ -138,7 +138,7 @@ writeShellApplication {
     # ---------------------------------------------------------------
     # 3. Frozen or spinning?
     # ---------------------------------------------------------------
-    echo "## CPU em 3 s (100 ticks = 1 s)"
+    echo "## CPU over 3 s (100 ticks = 1 s)"
     for p in $niri_pid $(pgrep -f "bin/ronoctua-shell$" || true); do
       a=$(awk '{print $14+$15}' "/proc/$p/stat" 2>/dev/null || echo 0)
       echo "$p $a"
@@ -197,9 +197,9 @@ writeShellApplication {
       # sequence begins. What is never legitimate here is `logo`.
       if printf '%s' "$last_line" | grep -q "logo.*true"; then
         echo
-        echo "  >>> SUPER PRESO. No aninhado nada segura Super legitimamente:"
+        echo "  >>> SUPER IS LATCHED. Nothing in the nested loop holds Super legitimately:"
         echo "      it got latched when the HOST's compositor captured a"
-        echo "      atalho 'Super+…' e a soltura nunca chegou aqui."
+        echo "      'Super+…' shortcut, and the release never arrived here."
         echo "      Effect: 'Ctrl+Alt+Space' no longer matches (the mask has one bit"
         echo "      too many) and the whole keyboard stops."
       fi

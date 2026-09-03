@@ -117,7 +117,7 @@ writeShellApplication {
           ok=1
           break
         fi
-        echo "   retomando em $(stat -c%s "$file" 2>/dev/null || echo 0) bytes"
+        echo "   resuming at $(stat -c%s "$file" 2>/dev/null || echo 0) bytes"
       done
 
       if [ "$ok" != 1 ]; then
@@ -130,11 +130,11 @@ writeShellApplication {
       nix-store --add-fixed sha256 "$file" >/dev/null
       rm -f "$file"
       fetched=$((fetched + 1))
-      echo "   no store"
+      echo "   in the store"
     done <<'TABLE'
     ${table}
     TABLE
 
-    echo "prefetch: $fetched baixados, $already ja estavam no store"
+    echo "prefetch: $fetched downloaded, $already were already in the store"
   '';
 }

@@ -410,7 +410,7 @@ mod tests {
         let anchored = f.width - f.cell() + f.cell();
         assert!(
             (anchored - f.width).abs() < f32::EPSILON,
-            "ancorado na borda terminou em {anchored} e a borda e {}",
+            "anchored to the edge ended at {anchored} and the edge is {}",
             f.width
         );
         assert!(

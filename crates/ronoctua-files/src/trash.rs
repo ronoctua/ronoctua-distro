@@ -271,7 +271,7 @@ mod tests {
     fn a_path_survives_the_round_trip_through_the_encoding() {
         for original in [
             "/home/person/a file.txt",
-            "/home/pessoa/acentuação.md",
+            "/home/person/acentuação.md",
             "/home/person/100% mine#1.txt",
             "/home/pessoa/simples",
         ] {

@@ -279,11 +279,11 @@ def main() -> int:
             print(f"      {n:3d}x  {fam}")
         print(f"  PostScript names:                {len(ps_names)} distinct  [OK]")
     else:
-        dry_note = " [dry-run: nada escrito]" if args.dry_run else ""
-        print(f"{args.directory.name}: {len(rows)} faces normalizadas em {args.family!r}{dry_note}")
+        dry_note = " [dry-run: nothing written]" if args.dry_run else ""
+        print(f"{args.directory.name}: {len(rows)} faces normalised into {args.family!r}{dry_note}")
         print(f"  source typographic families:     {len(by_family)}")
         print(f"  faces that diverged from the canonical one: {changed}")
-        print(f"  faces efetivamente reescritas:   {written}")
+        print(f"  faces actually rewritten:        {written}")
         print(f"  (family, subfamily) pairs:       {len(pairs)} distinct  [OK]")
         print(f"  PostScript names:                {len(ps_names)} distinct  [OK]")
 

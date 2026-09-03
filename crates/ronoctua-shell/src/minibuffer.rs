@@ -671,7 +671,7 @@ mod tests {
         let r = registry();
         let mut m = Minibuffer::default();
         m.open(&r);
-        let expected = m.chosen().expect("ha candidato").id.clone();
+        let expected = m.chosen().expect("there is a candidate").id.clone();
         assert_eq!(m.key(t(Sym::Enter), &r), Action::Run(expected));
         assert!(!m.active(), "confirming has to close");
     }

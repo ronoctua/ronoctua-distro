@@ -101,7 +101,7 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
-def seguro(s: str) -> str:
+def safe(s: str) -> str:
     """Strips from a value the punctuation that would break the component's parser.
 
     It removes rather than escapes: the component's parser does not understand escaping, and one
@@ -141,7 +141,7 @@ def ler_svg(path: pathlib.Path) -> list[tuple[str, list[tuple[str, str]]]]:
                 continue
             if key not in ELEMENTS[element]:
                 die(
-                    f"{path.name}: attribute `{key}` inesperado em "
+                    f"{path.name}: an unexpected attribute `{key}` in "
                     f"<{element}>.\n"
                     f"       The accepted ones are {list(ELEMENTS[element])}."
                 )
@@ -177,10 +177,10 @@ def check_separators(nodes, name: str) -> None:
             for c in (BETWEEN_NODES, BETWEEN_ATTRIBUTES, BETWEEN_KEY_AND_VALUE, *FORBIDDEN):
                 if c in value:
                     die(
-                        f"{name}: o attribute `{key}` de <{element}> contem "
+                        f"{name}: the attribute `{key}` of <{element}> contains "
                         f"`{c}`, which is a separator of the encoding.\n"
                         "       The component would cut the value there, and the copy "
-                        "sairia truncada em silencio."
+                        "would come out truncated, in silence."
                     )
 
 
@@ -388,20 +388,20 @@ def main() -> int:
 
     for i, name in enumerate(name_list):
         meta = json.loads((args.icons / f"{name}.json").read_text(encoding="utf-8"))
-        cats = [seguro(c) for c in meta.get("categories", [])]
+        cats = [safe(c) for c in meta.get("categories", [])]
         categories.update(cats)
         # THE ALIAS IS A NAME, and not a tag: whoever searches for `home` wants the little house, and
         # Lucide calls that an alias with a deprecation warning. It enters the
         # search with the same weight as the name (see `word_score` in the buffer).
-        apelidos = []
+        aliases_of = []
         for alias in meta.get("aliases", []):
-            apelidos.append(seguro(alias["name"] if isinstance(alias, dict) else alias))
-        total_aliases += len(apelidos)
+            aliases_of.append(safe(alias["name"] if isinstance(alias, dict) else alias))
+        total_aliases += len(aliases_of)
 
         # An icon's VOCABULARY: the words of the name, of the aliases, of
         # the categories and the tags Lucide wrote.
         tokens = list(words_of(name))
-        for a in apelidos:
+        for a in aliases_of:
             tokens += words_of(a)
         for c in cats:
             tokens += words_of(c)
@@ -414,7 +414,7 @@ def main() -> int:
             without_pt.append(name)
         search_terms = search_forms(tags_pt)
 
-        registro = {
+        record = {
             "name": name,
             # WHAT THE SCREEN DRAWS — the remapped face's codepoint.
             "cp": base + i,
@@ -424,13 +424,13 @@ def main() -> int:
             "cats": cats,
             "nodes": codificar(nodes_by_name[name]),
         }
-        if apelidos:
-            registro["aliases"] = apelidos
-        registro["tags_en"] = sorted(tags_en)
-        registro["tags_pt"] = sorted(tags_pt)
+        if aliases_of:
+            record["aliases"] = aliases_of
+        record["tags_en"] = sorted(tags_en)
+        record["tags_pt"] = sorted(tags_pt)
         if search_terms:
-            registro["search"] = sorted(search_terms)
-        records.append(registro)
+            record["search"] = sorted(search_terms)
+        records.append(record)
 
     (args.out / "lucide.json").write_text(
         json.dumps(records, ensure_ascii=False, separators=(",", ":")),
@@ -498,7 +498,7 @@ def main() -> int:
         for name in without_pt[:12]:
             print(f"       {name}", file=sys.stderr)
         if len(without_pt) > 12:
-            print(f"       … e mais {len(without_pt) - 12}", file=sys.stderr)
+            print(f"       … and {len(without_pt) - 12} more", file=sys.stderr)
         print("       Anyone searching in Portuguese does NOT find these icons.", file=sys.stderr)
         print("       The queue, by frequency, is in coverage.md.", file=sys.stderr)
         sys.exit(1)

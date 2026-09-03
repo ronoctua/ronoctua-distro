@@ -77,34 +77,34 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
 
-    with subtest("prepara o disco: btrfs com @root e @persist"):
+    with subtest("prepare the disk: btrfs with @root and @persist"):
         machine.succeed("mkfs.btrfs -f /dev/vdb")
         machine.succeed("mkdir -p /mnt && mount /dev/vdb /mnt")
         machine.succeed("btrfs subvolume create /mnt/@root")
         machine.succeed("btrfs subvolume create /mnt/@persist")
         machine.succeed("umount /mnt")
 
-    with subtest("escreve em @root e em @persist"):
+    with subtest("write into @root and into @persist"):
         machine.succeed("mkdir -p /mnt && mount -o subvol=@root /dev/vdb /mnt")
         machine.succeed("echo efemero > /mnt/some-no-wipe")
         machine.succeed("umount /mnt")
 
         machine.succeed("mount -o subvol=@persist /dev/vdb /mnt")
-        machine.succeed("echo guardado > /mnt/sobrevive")
+        machine.succeed("echo kept > /mnt/survives")
         machine.succeed("umount /mnt")
 
-    with subtest("o wipe renova @root"):
+    with subtest("the wipe renews @root"):
         machine.succeed("systemctl start ronoctua-wipe-simulated")
         print(machine.succeed("journalctl -u ronoctua-wipe-simulated --no-pager"))
 
-    with subtest("o que estava em / SUMIU"):
+    with subtest("what was in / IS GONE"):
         machine.succeed("mount -o subvol=@root /dev/vdb /mnt")
         machine.fail("test -e /mnt/some-no-wipe")
         machine.succeed("umount /mnt")
 
     with subtest("what was in /persist STAYED"):
         machine.succeed("mount -o subvol=@persist /dev/vdb /mnt")
-        assert machine.succeed("cat /mnt/sobrevive").strip() == "guardado"
+        assert machine.succeed("cat /mnt/survives").strip() == "kept"
         machine.succeed("umount /mnt")
 
     with subtest("the old @root is still recoverable"):
@@ -128,7 +128,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("systemctl restart ronoctua-wipe-simulated")
         machine.succeed("mount /dev/vdb /mnt")
         n = int(machine.succeed("ls /mnt/@old | wc -l").strip())
-        assert n == 2, f"esperava 2 @root guardados, ha {n}"
+        assert n == 2, f"expected 2 @root kept, there are {n}"
         machine.succeed("umount /mnt")
   '';
 }

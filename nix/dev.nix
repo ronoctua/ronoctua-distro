@@ -268,7 +268,7 @@ let
       echo "  Alt+<key>           a chord (HELD: the Alt alone, without the Space)"
       echo "  Ctrl+Alt+L          an alternative leader, if the one above fails"
       echo "  Ctrl+Shift+L        restores the keyboard"
-      echo "  Ctrl+Alt+Esc        monitor de processos (flutuante)"
+      echo "  Ctrl+Alt+Esc        process monitor (floating)"
       echo "  Ctrl+Alt+Space q q  quit"
       echo
       echo "config: $cfg"
@@ -500,7 +500,7 @@ let
               # two would diverge on the day one of them gained a step.
               name=''${changed#*/buffers/}
               name=''${name%%/*}
-              echo "  compilando o buffer $name…"
+              echo "  compiling the buffer $name…"
               # `stderr` stays on the terminal on purpose: it is where nix puts
               # its progress AND its errors, and this is a loop someone is
               # watching. `stdout` is the store path, alone.
@@ -528,7 +528,7 @@ let
               fi
               ;;
             *)
-              echo "  compilando…"
+              echo "  compiling…"
               # THE QUEUE'S DAEMON COMES ALONG, and leaving it out was a silent
               # trap waiting to be sprung.
               #

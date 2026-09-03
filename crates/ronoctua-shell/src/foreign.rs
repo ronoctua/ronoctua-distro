@@ -228,7 +228,7 @@ pub fn launch(scope: &str, direct: &[String], cmd: &[String]) -> Launch {
             };
         }
         Ok(st) => format!("systemd-run exited with {st}"),
-        Err(e) => format!("sem systemd-run: {e}"),
+        Err(e) => format!("no systemd-run: {e}"),
     };
 
     // It DEGRADES, and does not give up. See `Launch::Orphan`.
@@ -353,7 +353,7 @@ pub fn satellite_of(display: u8, program: &str, args: &[String]) -> Result<()> {
     // would make Xwayland a dependency of everything.
     let mut satellite = match wait_for_satellite(display, &target) {
         Ok(s) => {
-            tracing::info!(display = target, program, "satellite pronto");
+            tracing::info!(display = target, program, "satellite ready");
             Some(s)
         }
         Err(e) => {

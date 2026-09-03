@@ -226,7 +226,7 @@ fn keep(
     });
     if settled && !w.settled {
         w.settled = true;
-        tracing::info!(id = w.id, hash = %w.hash, "torrent completo; continua semeando");
+        tracing::info!(id = w.id, hash = %w.hash, "the torrent is complete; still seeding");
     }
     true
 }

@@ -387,7 +387,7 @@ mod tests {
         );
         assert!(
             !s.contains(&r.passphrase),
-            "a passphrase vazou para o host.nix"
+            "the passphrase leaked into host.nix"
         );
     }
 

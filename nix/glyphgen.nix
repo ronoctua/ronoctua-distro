@@ -106,7 +106,7 @@ let
               echo "" >&2
               echo "ERROR: the generator ACCEPTED an icon token that does not exist." >&2
               echo "      Section 6.3's guard is not working, and a" >&2
-              echo "      codepoint errado passaria despercebido." >&2
+              echo "      wrong codepoint would go unnoticed." >&2
               exit 1
             fi
             grep -q "icon tokens that do not resolve" $out/out_text.txt \

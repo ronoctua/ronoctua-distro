@@ -225,7 +225,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("pgrep -f '${sleepPattern}' >/dev/null")
         print("the footer answered with the application still open")
 
-    with subtest("o que subimos, encerramos"):
+    with subtest("what we start, we stop"):
         machine.succeed("pkill -f '${sleepPattern}' || true")
   '';
 }

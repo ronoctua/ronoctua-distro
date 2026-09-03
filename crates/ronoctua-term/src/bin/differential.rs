@@ -82,12 +82,12 @@ fn main() -> Result<()> {
         bail!("no `.vt` case in {}", corpus.display());
     }
 
-    let n_motores = engines().len();
-    println!("{} cases, {n_motores} engine(s)", cases.len());
-    if n_motores < 2 {
+    let n_engines = engines().len();
+    println!("{} cases, {n_engines} engine(s)", cases.len());
+    if n_engines < 2 {
         println!(
             "GOLDEN-FILE MODE: there is only one engine, so this catches a regression, not\n\
-             divergencia de interpretacao. Ver o risco R1 no ARCHITECTURE.md."
+             a divergence of interpretation. See risk R1 in ARCHITECTURE.md."
         );
     }
 
@@ -147,7 +147,7 @@ fn main() -> Result<()> {
 
     if write_out {
         println!(
-            "OK: {} goldens gravados em {}",
+            "OK: {} goldens written into {}",
             cases.len(),
             golden.display()
         );

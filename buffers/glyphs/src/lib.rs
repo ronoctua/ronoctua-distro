@@ -902,10 +902,10 @@ impl State {
     /// wants `md:folder`, and not to start over. Switching sets switches the
     /// PREFIX, and the rest of the query is theirs.
     fn apply_set(&mut self, n: usize) {
-        let (_, livre) = Filter::split_filter(&self.search.trim().to_lowercase());
+        let (_, free) = Filter::split_filter(&self.search.trim().to_lowercase());
         self.search = match n.checked_sub(1).and_then(|i| self.sets.get(i)) {
-            Some(c) => format!("{c}:{livre}"),
-            None => livre,
+            Some(c) => format!("{c}:{free}"),
+            None => free,
         };
         self.filter_now();
     }
@@ -1643,7 +1643,7 @@ impl State {
             // a single glyph.
             "glyphs-filter-block" => {
                 let hex = format!("{:x}", g?.ch as u32);
-                format!("bloco:{}", &hex[..hex.len().min(2)])
+                format!("block:{}", &hex[..hex.len().min(2)])
             }
             "glyphs-filter-tag" => "tag:".to_owned(),
             "glyphs-filter-token" => "token:".to_owned(),
@@ -1698,9 +1698,9 @@ fn load_db() -> Vec<Glyph> {
             let p = object.find(&mark)? + mark.len();
             let rest = &object[p..];
             let rest = rest.trim_start();
-            if let Some(sem) = rest.strip_prefix('"') {
-                let end = sem.find('"')?;
-                Some(sem[..end].to_owned())
+            if let Some(inside) = rest.strip_prefix('"') {
+                let end = inside.find('"')?;
+                Some(inside[..end].to_owned())
             } else {
                 let end = rest.find([',', '}']).unwrap_or(rest.len());
                 Some(rest[..end].trim().to_owned())

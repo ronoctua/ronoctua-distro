@@ -916,7 +916,7 @@ mod tests {
         for bad in [
             "noctua-",
             "noctua-MAIUSCULA",
-            "noctua-com espaco",
+            "noctua-with space",
             "noctua-x_y",
         ] {
             assert!(
@@ -930,9 +930,9 @@ mod tests {
     fn the_passphrase_counts_characters_and_not_bytes() {
         // Twelve accented characters exceed 12 bytes. Refusing by bytes
         // would punish whoever writes the phrase in their own language.
-        let doze_acentuados = "ãçãoçãoçãoç";
-        assert_eq!(doze_acentuados.chars().count(), 11);
-        assert!(validate_it(Question::Passphrase, doze_acentuados, LANGUAGES, LAYOUTS).is_err());
+        let twelve_accented = "ãçãoçãoçãoç";
+        assert_eq!(twelve_accented.chars().count(), 11);
+        assert!(validate_it(Question::Passphrase, twelve_accented, LANGUAGES, LAYOUTS).is_err());
 
         let thirteen = "ãçãoçãoçãoçã";
         assert_eq!(thirteen.chars().count(), 12);

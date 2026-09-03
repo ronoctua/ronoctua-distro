@@ -111,8 +111,8 @@ impl Agent {
             ));
         }
 
-        let ssid =
-            ssid_of(&connection).ok_or_else(|| Failure::NotSupported("conexão sem SSID".into()))?;
+        let ssid = ssid_of(&connection)
+            .ok_or_else(|| Failure::NotSupported("a connection with no SSID".into()))?;
 
         let password = secret::open(&ssid).map_err(|e| {
             // The reason goes to the daemon's log, and NOT to the bus: the

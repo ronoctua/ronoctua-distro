@@ -625,7 +625,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
 fn paste_text() -> Result<String> {
     let path = option_env!("RONOCTUA_WL_PASTE").context(
         "RONOCTUA_WL_PASTE was not set at build time.\n\
-         It comes from `nix/rust.nix`; without it there is no como colar.",
+         It comes from `nix/rust.nix`; without it there is no way to paste.",
     )?;
 
     let mut cmd = std::process::Command::new(path);
@@ -1071,7 +1071,7 @@ fn run_format(
 
     match manager.format(device, filesystem, label, whole) {
         Ok(()) => {
-            tracing::info!(device, filesystem, whole, "formatado");
+            tracing::info!(device, filesystem, whole, "formatted");
             Verdict::Done
         }
         Err(e) => {
@@ -1151,7 +1151,7 @@ fn publish_keymap(
             return None;
         }
     };
-    tracing::info!(path = %path.display(), bindings = keymap.len(), "keymap publicado");
+    tracing::info!(path = %path.display(), bindings = keymap.len(), "keymap published");
 
     let answer = keymap
         .iter()
@@ -1703,7 +1703,7 @@ impl Host {
                 ronoctua_protocol::Effect::Copy(t) => {
                     let ok = match copy_to_clipboard(&t) {
                         Ok(()) => {
-                            tracing::info!(bytes = t.len(), "copiado");
+                            tracing::info!(bytes = t.len(), "copied");
                             true
                         }
                         // LOUD, and not a `debug`. This here WAS a
@@ -1825,7 +1825,7 @@ impl Host {
                     let ok = match &self.file {
                         Some(path) => match std::fs::write(path, &text) {
                             Ok(()) => {
-                                tracing::info!(bytes = text.len(), path = %path.display(), "salvo");
+                                tracing::info!(bytes = text.len(), path = %path.display(), "saved");
                                 true
                             }
                             // LOUD, for the same reason as `Copy`: saving in
@@ -1966,7 +1966,7 @@ impl Host {
             R::SweepJobs => Self::tell_queue(&ronoctua_transfers::Ask::Sweep),
             R::SweepStore | R::SweepGenerations | R::SweepJournal => {
                 match ronoctua_memory::scan::sweep(demand.what) {
-                    Ok(()) => tracing::info!(what = ?demand.what, "faxina concluida"),
+                    Ok(()) => tracing::info!(what = ?demand.what, "the sweep is done"),
                     Err(e) => tracing::error!(error = %e, what = ?demand.what, "the sweep FAILED"),
                 }
                 // The freed space only shows up on the next scan; the readings
@@ -2377,7 +2377,7 @@ impl Host {
         };
         let places = s.places.clone();
         match ronoctua_memory::scan::stop(&places, &who) {
-            Ok(()) => tracing::info!(name = %who.name, "encerrado"),
+            Ok(()) => tracing::info!(name = %who.name, "stopped"),
             // The refusal is the point of the message: the panel does not touch
             // what is outside `app.slice`, and saying so is how the person
             // learns the boundary instead of thinking the key is broken.

@@ -3522,7 +3522,7 @@ impl Footer {
             self.echo_message(m);
             return;
         };
-        tracing::info!(file = %file.display(), "abrindo no emacs");
+        tracing::info!(file = %file.display(), "opening in emacs");
         self.open_foreign(
             &client,
             &["-c".to_owned(), file.to_string_lossy().into_owned()],
@@ -3650,7 +3650,7 @@ impl Footer {
             }
             "notif-read-all" => {
                 let n = self.notifications.mark_all_read();
-                tracing::info!(marked = n, "notificacoes marcadas como lidas");
+                tracing::info!(marked = n, "notifications marked as read");
                 self.after_the_queue_moved();
             }
             // THE THREE THAT ACT ON THE MANAGER'S FOCUSED ROW.
@@ -3696,7 +3696,7 @@ impl Footer {
                 };
                 match crate::buffer::copy_to_clipboard(&text) {
                     Ok(()) => {
-                        tracing::info!(bytes = text.len(), "recopiado do historico");
+                        tracing::info!(bytes = text.len(), "recopied from the history");
                         self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPIED));
                     }
                     Err(err) => {
@@ -5352,7 +5352,7 @@ impl Footer {
         // `enter` that comes next zeroes the inheritance, and the following
         // announcement captures it.
         self.inheritance.on_sequence_start(self.mods);
-        tracing::info!(inputs = self.inputs.len(), "leader ativa");
+        tracing::info!(inputs = self.inputs.len(), "leader active");
         self.apply_geometry(KeyboardInteractivity::Exclusive);
         // AND IT PAINTS. Asking for the size is not enough: whoever paints is the
         // `configure` coming back, and the compositor only sends it when the
@@ -5461,17 +5461,17 @@ impl Footer {
 
     /// Answers the question "remember this network?".
     ///
-    /// `sim` reconnects with `psk-flags=1` and seals the password in the TPM;
+    /// `yes` reconnects with `psk-flags=1` and seals the password in the TPM;
     /// any other answer leaves it as it is — `psk-flags=2`, nothing on disk.
     ///
     /// The `(ssid, password)` pair comes out of the state with `take()`
     /// **before** anything can fail: a password left behind after an error
     /// would be a password in memory with no owner and no deadline.
-    fn answer_remember(&mut self, sim: bool) {
+    fn answer_remember(&mut self, yes: bool) {
         let Some((ssid, password)) = self.network_remember.take() else {
             return;
         };
-        let m = if sim {
+        let m = if yes {
             match self
                 .network
                 .as_mut()
@@ -5794,7 +5794,7 @@ impl Footer {
     fn close_leader(&mut self) {
         self.leader.finish();
         self.inputs.clear();
-        tracing::info!("leader encerrada");
+        tracing::info!("leader closed");
         // IT GIVES THE KEYBOARD BACK ONLY IF NOBODY ELSE WANTS IT.
         //
         // The sequence that OPENS the `M-x` ends here: running the command
@@ -10420,7 +10420,7 @@ mod tests {
         let mut h = Inheritance::default();
         h.on_announcement(ctrl);
         let m = h.discount(both);
-        assert!(!m.ctrl, "o Ctrl herdado sai");
+        assert!(!m.ctrl, "the inherited Ctrl goes");
         assert!(m.alt, "an Alt pressed afterwards STAYS");
     }
 
@@ -10543,7 +10543,7 @@ mod tests {
             assert!(
                 px <= limit,
                 "at {height} px of screen the footer takes {px} px, more than the \
-                 {limit} px que o token permite"
+                 {limit} px the token allows"
             );
             assert!(lines >= 1, "an expansion of zero lines at {height} px");
         }

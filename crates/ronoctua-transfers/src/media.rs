@@ -287,7 +287,7 @@ fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>
                 let _ = child.wait();
                 progress.flush();
                 sweep_parts(into, &before);
-                bail!("desistido");
+                bail!("given up");
             }
             Flow::Pause if !held => {
                 signal(pid, rustix::process::Signal::STOP);
@@ -538,7 +538,7 @@ mod tests {
         std::fs::write(&mine, b"y").expect("write");
         std::fs::write(dir.join("mine.mkv.ytdl"), b"z").expect("write");
         // And something that is not a partial file at all.
-        let done = dir.join("pronto.mkv");
+        let done = dir.join("done.mkv");
         std::fs::write(&done, b"w").expect("write");
 
         sweep_parts(&dir, &before);

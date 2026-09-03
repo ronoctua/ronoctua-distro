@@ -355,7 +355,7 @@ fn main() -> Result<()> {
                 "cell {n} drew U+{:04X}, outside the remapped range \
                  U+{:04X}..U+{:04X}.\n\
                  Lucide's source range collides with 634 Nerd \
-                 Fonts na Iosevka, e a face primaria vence o fallback: estes \
+                 Fonts ones in the Iosevka, and the primary face wins the fallback: these \
                  icons would come out drawn as ANOTHER symbol.",
                 c as u32,
                 RANGE.start(),
