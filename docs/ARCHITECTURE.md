@@ -1155,6 +1155,22 @@ de arraste em vez de clicar no item que está atrás — a barra fica justamente
 direita das linhas, e quem quer arrastar não quer rodar nada. É o pior tipo de surpresa: a pessoa
 queria olhar e o sistema fez.
 
+**Foco e ponteiro são DUAS faixas, e dois tokens.** O foco — o que o `Enter` vai rodar — leva o
+`surface.selection`; a linha sob o ponteiro leva o `surface.hover`, mais fraco. Antes era uma cor só,
+gasta no ponteiro, e o foco se distinguia pela COR DO TEXTO. Isso não vale no gerenciador: a cor
+alcança UM campo de sete (o nome, por `files::colour_of`), uma pasta já é dessa cor, e as linhas do
+menu não têm acento nenhum — ali o cursor era invisível. O dono reportou da tela, nas duas portas.
+A objeção que a regra antiga fazia continua respondida: com dois tons, duas linhas acesas ainda dizem
+qual é qual; e quando são a mesma linha só o foco é desenhado, porque pintar o tom fraco por cima do
+forte apagaria justamente a linha em que se está. Medido na tela: fundo 18, hover 34, foco 56.
+
+**A faixa pergunta a LINHA, o acento pergunta o CAMPO.** São duas profundidades de uma resolução só
+(`View::band_row` e `View::hit`, com `at_point` embaixo das duas). A faixa diz em que linha de uma
+lista o ponteiro está, e uma linha está na tela quer o ponteiro esteja sobre uma palavra dela ou não
+— a coluna do nome é `Width::Fill`, então numa janela larga a maior parte de uma linha pertence a um
+campo que cobre só as letras do arquivo. A janela perguntava a profunda para a faixa e por isso não
+acendia nada nesse espaço; o rodapé nunca teve o defeito porque sempre perguntou a linha.
+
 **Clicar numa linha é apertar a tecla dela.** Num grupo, desce um nível; num comando, executa. As
 duas coisas saem de graça da mesma definição, e o que se ganha é não haver um segundo caminho: nada
 fica alcançável só pelo mouse, e o que o mouse faz é sempre algo que o teclado também faz. No
@@ -1166,10 +1182,20 @@ conteúdo, e misturá-los dá o pior dos dois — barra que salta e contador que
 
 | | rola | pagina |
 |---|---|---|
-| quem | manual, localizador, histórico | lista de atalhos |
+| quem | manual, localizador, histórico, **gerenciador — menu e ficha inclusive** | lista de atalhos |
 | barra de rolagem | sim | não |
 | contador `1/2` | não | sim, com a tecla que vira |
 | arranjo | uma coluna, lista | colunas lado a lado |
+
+**O menu do gerenciador é uma SEÇÃO, e por isso tem barra.** Ele rola — só a lista de atalhos pagina
+—, mas passava ao lado das seções: cada porta carregava as linhas do modal por fora
+(`expansion_window` no rodapé, uma seção falsa de `total == lines` na janela), e o que uma lista fora
+das seções não ganha é barra, entalhe para arrastar, roda que para onde a barra para, faixa de hover
+e faixa de foco. Eram cinco coisas que já existiam e nenhuma alcançava um menu de dezessete linhas
+numa região de doze: cortado, sem nada dizendo, e sem como chegar no resto. Agora
+`View::sections_of` o constrói como a seção da LISTAGEM — mesma coluna, mesma largura, `above` zero —
+e ele tem offset próprio (`modal_offset`), porque a posição da listagem tem de sobreviver a um menu
+abrir e fechar por cima dela.
 
 Um manual é texto mais longo que a tela: ele rola, e o que diz onde você está é a barra — "página 2
 de 5" não responde isso. Uma lista de atalhos é o contrário: mostra **o que cabe** e o resto é outra

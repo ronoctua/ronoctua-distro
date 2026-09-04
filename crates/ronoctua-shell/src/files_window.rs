@@ -254,9 +254,11 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         dragging: None,
         detents: 0.0,
         cell_under_pointer: None,
+        line_under_pointer: None,
         owed: false,
         message: None,
-        repeat: handle.clone(),
+        said: 0,
+        handle: handle.clone(),
         spinning: None,
         notice,
     };
@@ -354,6 +356,11 @@ struct FilesWindow {
     /// working in one door and in neither section of the other.
     detents: f64,
     cell_under_pointer: Option<u16>,
+    /// Which LINE of the region the pointer is over.
+    ///
+    /// Kept beside the cell and beside the resolved target, because the band
+    /// wants a shallower answer than the target is: see `files::View::band_row`.
+    line_under_pointer: Option<usize>,
     /// A frame is OWED, and will be drawn when the event queue empties.
     ///
     /// # Why not paint where the change happens
@@ -371,12 +378,21 @@ struct FilesWindow {
     /// last event — which is what every other program does.
     owed: bool,
     message: Option<String>,
-    /// The loop, so a keyboard can be made that REPEATS.
+    /// Which message is on screen, counted.
     ///
-    /// SCTK only generates repeat events for a keyboard created with
-    /// `get_keyboard_with_repeat`, and that one wants a `LoopHandle` — which is
-    /// why this is carried rather than reached for. See `new_capability`.
-    repeat: calloop::LoopHandle<'static, Self>,
+    /// A one-shot timer is armed for each one and fires three seconds later;
+    /// by then the message it was armed for may have been replaced or cleared,
+    /// and a timer that wiped whatever it found would take the NEW one down
+    /// early. It clears only its own.
+    said: u64,
+    /// The loop, for the two things that need one.
+    ///
+    /// A keyboard that REPEATS: SCTK only generates repeat events for one made
+    /// with `get_keyboard_with_repeat`, and that wants a `LoopHandle` — which
+    /// is why this is carried rather than reached for (see `new_capability`).
+    ///
+    /// And the message line's expiry: see [`FilesWindow::say`].
+    handle: calloop::LoopHandle<'static, Self>,
     /// The thread that draws a shape at the angle it is being looked at.
     turning: Option<crate::stage::Stage>,
     /// Where the pointer was when it last moved a shape.
@@ -521,7 +537,8 @@ impl FilesWindow {
                 return;
             }
             Step::Say(e) => {
-                self.message = Some(self.texts.t_with(e.key, &e.borrowed()));
+                let m = self.texts.t_with(e.key, &e.borrowed());
+                self.say(m);
             }
             Step::Do(doing) => {
                 // THE FOUR THAT SPAWN are the door's business; everything else
@@ -551,10 +568,11 @@ impl FilesWindow {
                                 crate::apps::command_for(&entry, std::path::Path::new(""));
                             self.spawn(&program, &args, entry.working_directory.as_deref());
                         } else {
-                            self.message = Some(self.texts.t_with(
+                            let m = self.texts.t_with(
                                 ronoctua_i18n::key::FILES_SIDEBAR_GONE,
                                 &[("name", which.as_str())],
-                            ));
+                            );
+                            self.say(m);
                         }
                         self.ask_paint();
                         return;
@@ -568,7 +586,8 @@ impl FilesWindow {
                         {
                             self.spawn(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
                         } else {
-                            self.message = Some(self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER));
+                            let m = self.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
+                            self.say(m);
                         }
                         self.ask_paint();
                         return;
@@ -591,11 +610,12 @@ impl FilesWindow {
                     }
                     Doing::Copy(text) => {
                         let ok = crate::buffer::copy_to_clipboard(&text).is_ok();
-                        self.message = Some(self.texts.t(if ok {
+                        let m = self.texts.t(if ok {
                             ronoctua_i18n::key::FILES_COPIED
                         } else {
                             ronoctua_i18n::key::FILES_NOT_COPIED
-                        }));
+                        });
+                        self.say(m);
                         self.ask_paint();
                         return;
                     }
@@ -607,7 +627,8 @@ impl FilesWindow {
                         match crate::files::carry_out(other, &self.sender, &clip) {
                             Errand::Done => self.view.reread(),
                             Errand::Say(e) => {
-                                self.message = Some(self.texts.t_with(e.key, &e.borrowed()));
+                                let m = self.texts.t_with(e.key, &e.borrowed());
+                                self.say(m);
                             }
                         }
                     }
@@ -636,10 +657,11 @@ impl FilesWindow {
     fn open_the_file(&mut self, path: &std::path::Path) {
         let of_type = ronoctua_files::mime::of_path(path, ronoctua_files::Kind::File, true);
         let Some(entry) = crate::apps::opens(&self.catalogue, of_type).cloned() else {
-            self.message = Some(self.texts.t_with(
+            let m = self.texts.t_with(
                 ronoctua_i18n::key::FILES_NOTHING_OPENS,
                 &[("type", of_type)],
-            ));
+            );
+            self.say(m);
             return;
         };
         let (program, args) = crate::apps::command_for(&entry, path);
@@ -653,7 +675,8 @@ impl FilesWindow {
             option_env!("RONOCTUA_PKEXEC"),
             option_env!("RONOCTUA_RESCUE_SHELL"),
         ) else {
-            self.message = Some(self.texts.t(ronoctua_i18n::key::FILES_NO_PKEXEC));
+            let m = self.texts.t(ronoctua_i18n::key::FILES_NO_PKEXEC);
+            self.say(m);
             return;
         };
         self.spawn(
@@ -700,13 +723,14 @@ impl FilesWindow {
         match report {
             crate::files::Report::Done => self.view.reread(),
             crate::files::Report::Measured(name, bytes) => self.view.measured(&name, bytes),
-            crate::files::Report::Failed(why) => self.message = Some(why),
+            crate::files::Report::Failed(why) => self.say(why),
             crate::files::Report::Refused(which, why) => {
                 if matches!(which, ronoctua_disks::Refusal::AlreadyMounted) {
                     self.view.reread();
                 } else {
                     let e = self.view.refusal_said(which, &why);
-                    self.message = Some(self.texts.t_with(e.key, &e.borrowed()));
+                    let m = self.texts.t_with(e.key, &e.borrowed());
+                    self.say(m);
                 }
             }
             crate::files::Report::Mounted(at) => self.view.mounted(&at),
@@ -837,6 +861,39 @@ impl FilesWindow {
         // LINE 0 BELONGS TO NO COLUMN: it is the one line above the region.
         let k = line.checked_sub(FIRST_OF_REGION)?;
         Some((usize::from(k), cell))
+    }
+
+    /// Points everything the frame reads at `(x, y)`.
+    ///
+    /// ONE function, and it was written out three times — on the motion, on
+    /// each of the two presses. Four numbers had to be set together and the day
+    /// one of them was added is the day two of the three would have been left
+    /// without it.
+    fn aim(&mut self, x: f64, y: f64) {
+        self.under_pointer = self.target_at(x, y);
+        let at = self.line_and_cell(x, y);
+        self.cell_under_pointer = at.map(|(_, c)| c);
+        self.line_under_pointer = at.map(|(l, _)| l);
+        // AND WHICH SECTION, which is what decides the film's two buttons are
+        // drawn: they appear under the pointer, and their CELLS are reserved
+        // either way so nothing moves.
+        //
+        // ASKED OF `band_row`, which does not need a FIELD — the shallow half
+        // of the resolution. Through the target it went `None` every time the
+        // pointer crossed the space to the right of a short filename, and the
+        // film's controls blinked out with it.
+        let pane = self
+            .line_under_pointer
+            .and_then(|line| {
+                self.view.band_row(
+                    self.columns,
+                    self.room(),
+                    line,
+                    self.cell_under_pointer.unwrap_or(0),
+                )
+            })
+            .map(|(pane, _)| pane);
+        self.view.pointing(pane);
     }
 
     /// What is under a point, asked of the view.
@@ -996,6 +1053,7 @@ impl FilesWindow {
             geo,
             message: self.message.clone(),
             cell_under_pointer: self.cell_under_pointer,
+            line_under_pointer: self.line_under_pointer,
             under_pointer: self.under_pointer.as_ref(),
             view: &mut self.view,
             texts: &self.texts,
@@ -1250,6 +1308,8 @@ pub(crate) struct Scene<'a> {
     pub message: Option<String>,
     /// Which cell of the region the pointer is over.
     pub cell_under_pointer: Option<u16>,
+    /// Which line of the region the pointer is over.
+    pub line_under_pointer: Option<usize>,
     /// What the pointer is resting on, already resolved by `View::hit`.
     pub under_pointer: Option<&'a crate::files::Target>,
 }
@@ -1368,31 +1428,19 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // there — so a section's length, its offset and its top reach no other
     // section, by construction rather than by care.
     // A MODAL VIEW IS ONE LIST — the menu, the picker and the detail sheet
-    // cover the listing, so there are no columns to lay out. See
-    // `files::View::modal_rows`.
-    let sections = if s.view.plain() {
-        s.view
-            .sections(&chrome, s.geo.room(), s.geo.columns, s.texts)
-    } else {
-        vec![crate::files::Section {
-            // A fixture's one section, and nothing in it reads sideways.
-            across: None,
-            pane: crate::files::Pane::Listing,
-            from: 0,
-            to: s.geo.columns,
-            top: 0,
-            lines: s.geo.room(),
-            offset: s.view.list_offset(),
-            total: s.geo.room(),
-            above: 0,
-            time: None,
-            transport: None,
-            clock: 0,
-            content: s
-                .view
-                .modal_rows(s.view.list_offset(), s.geo.room(), s.geo.columns, s.texts),
-        }]
-    };
+    // cover the listing, so there are no columns to lay out. It is a `Section`
+    // like the other four now, built by `View::sections_of`.
+    //
+    // This door used to assemble a FIXTURE for it here, with `total` set to the
+    // room so `Scroll::cut()` could never be true — a section that by
+    // construction had no bar, over a list that is routinely longer than the
+    // window. And the fixture was only half the door: `bar_at_point` asked
+    // `view.sections(...)` unconditionally, so while a menu was up the pointer
+    // could grab a bar this frame had never drawn and start dragging the
+    // listing behind it. One question, one answer.
+    let sections = s
+        .view
+        .sections(&chrome, s.geo.room(), s.geo.columns, s.texts);
     // WHERE THE SIDEBAR ENDS, asked once for the whole frame. It is what
     // the rule is drawn at and what decides which half the hover band
     // covers; asking twice would be two answers on the day one of them was
@@ -1417,17 +1465,80 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // THE BAND, once per line that the pointer is on — and it is the
     // POINTER's section that decides which line, so a band never lights a
     // row of a list the pointer is not over.
-    if let Some(t) = s.under_pointer.as_ref()
-        && s.view.band_belongs_at(
-            s.cell_under_pointer.unwrap_or(0),
-            s.geo.columns,
-            t.pane == crate::files::Pane::Preview || t.pane == crate::files::Pane::Info,
-        )
-        && let Some(sec) = sections.iter().find(|s| s.pane == t.pane)
-        && let Some(line) = sec.line_of(t.row)
-    {
+    // WHERE THE KEYBOARD IS, by the STRONGER of the two bands.
+    //
+    // It had none. `files::Row::focused` was written at seven sites in the view
+    // and read at none outside the tests, so the whole signal was
+    // `files::colour_of` accenting the file's NAME — one field of seven, the
+    // same colour a folder already has, and in the action menu nothing at all.
+    // The owner reported it from the screen: *"ao trocar de item com as setas
+    // nenhuma alteração/indicador visual é feita"*.
+    //
+    // The line comes from `View::focus_line`, which resolves it through the
+    // same `Section::line_of` the pointer's band uses — a row is not a line,
+    // and two conversions would put one row in two places. The cell comes from
+    // the PANE that has the keyboard, never from the pointer: `band_of` picks
+    // its side of the sidebar's rule from a cell, and a focus band placed by
+    // the mouse would change sides when the hand moved.
+    let focus_at = s.view.focus_line(s.geo.columns, s.geo.room());
+    if let Some((pane, line)) = focus_at {
         #[allow(clippy::cast_possible_truncation)]
         let y = FIRST_OF_REGION + line as u16;
+        let cell = tokens::metrics::cell_width(size);
+        let at_cell = match pane {
+            crate::files::Pane::Sidebar => 0,
+            _ => s.view.split(s.geo.columns),
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let (at, wide) = crate::files::band_of(
+            panes_now,
+            margin,
+            s.geo.columns,
+            Some(at_cell),
+            cell,
+            s.geo.metric.width,
+        );
+        quads.push(ronoctua_render::quad::Quad {
+            x: at,
+            y: f32::from(y) * line_px,
+            width: wide,
+            height: line_px,
+            color: tokens::color::SURFACE_SELECTION,
+        });
+    }
+    // WHERE THE POINTER IS, and the question is which LINE — never which field.
+    //
+    // This asked `View::hit`, which ends in `field_at(cell)?`, and a field
+    // covers the width of its own TEXT. The listing's name column is
+    // `Width::Fill`, so on a wide window most of a row belongs to a field that
+    // covers only the filename's letters and the rest of the row resolved to
+    // nothing at all: *"as vezes o item é destacado, as vezes não, e muitos
+    // nunca são destacado"*. The footer never had it — its band asks the line —
+    // and `View::band_row` is that rule for both doors.
+    //
+    // The FIELD's own accent (below) still needs the deep answer, and that is
+    // right: it says which word the click would reach, and over dead space it
+    // reaches none.
+    let hover_at = s.line_under_pointer.and_then(|line| {
+        let cell = s.cell_under_pointer.unwrap_or(0);
+        let (pane, at) = s.view.band_row(s.geo.columns, s.geo.room(), line, cell)?;
+        s.view
+            .band_belongs_at(
+                cell,
+                s.geo.columns,
+                pane == crate::files::Pane::Preview || pane == crate::files::Pane::Info,
+            )
+            .then_some((pane, at))
+    });
+    if let Some((pane, at)) = hover_at
+        && let Some(sec) = sections.iter().find(|s| s.pane == pane)
+        // ONE BAND WHERE IT IS ONE ROW. The weaker colour painted over the
+        // stronger would dim the very row one is standing on, which is the
+        // opposite of what either band is for. Same rule in the footer.
+        && focus_at != Some((pane, at))
+    {
+        #[allow(clippy::cast_possible_truncation)]
+        let y = FIRST_OF_REGION + at as u16;
         let cell = tokens::metrics::cell_width(size);
         // THE SECTION'S OWN EDGES, in pixels.
         //
@@ -1437,11 +1548,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // where it begins and ends, so it is asked — and a band lights the
         // column the pointer is in, never the one beside it.
         #[allow(clippy::cast_precision_loss)]
-        let (at, wide) = match t.pane {
+        let (at, wide) = match pane {
             crate::files::Pane::Preview | crate::files::Pane::Info if sec.top > 0 => {
                 crate::files::panel_px(
                     panes_now,
-                    if matches!(t.pane, crate::files::Pane::Preview) {
+                    if matches!(pane, crate::files::Pane::Preview) {
                         crate::files::Panel::Preview
                     } else {
                         crate::files::Panel::Info
@@ -1467,17 +1578,19 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             y: f32::from(y) * line_px,
             width: wide,
             height: line_px,
-            color: tokens::color::SURFACE_SELECTION,
+            // THE WEAKER OF THE TWO. Two rows, two colours, and which is
+            // which is legible; one row, and only the focus is drawn.
+            color: tokens::color::SURFACE_HOVER,
         });
     }
     for sec in &sections {
         for (i, line) in sec.content.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
             let y = FIRST_OF_REGION + (sec.top + i) as u16;
-            let lit = s
-                .under_pointer
-                .as_ref()
-                .is_some_and(|t| t.pane == sec.pane && sec.line_of(t.row) == Some(sec.top + i));
+            // THE SAME ROW THE BAND LIT, and not a second opinion about it:
+            // through the target, the accent and the band disagreed over every
+            // cell that belongs to no field.
+            let lit = hover_at == Some((sec.pane, sec.top + i));
             for f in &line.fields {
                 // THE FIELD UNDER THE POINTER LIGHTS UP, so the sentence on
                 // the line above has a visible subject. A colour and not a
@@ -1851,7 +1964,7 @@ impl SeatHandler for FilesWindow {
                 qh,
                 &seat,
                 None,
-                self.repeat.clone(),
+                self.handle.clone(),
                 Box::new(|state: &mut Self, _, event| state.typed(event)),
             ) {
                 Ok(k) => self.keyboard = Some(k),
@@ -1977,7 +2090,7 @@ impl PointerHandler for FilesWindow {
     ) {
         let before = (self.under_pointer.clone(), self.cell_under_pointer);
         let mut left = None;
-        let mut right = None;
+        let mut right = false;
         // BOTH COORDINATES: a bar going across is dragged by `x`.
         let mut dragged: Option<(f64, f64)> = None;
         let mut spun = false;
@@ -2010,31 +2123,16 @@ impl PointerHandler for FilesWindow {
                             spun = true;
                         }
                     }
-                    self.under_pointer = self.target_at(e.position.0, e.position.1);
-                    self.cell_under_pointer = self
-                        .line_and_cell(e.position.0, e.position.1)
-                        .map(|(_, c)| c);
-                    // AND WHICH SECTION, which is what decides the film's two
-                    // buttons are drawn: they appear under the pointer, and
-                    // their CELLS are reserved either way so nothing moves.
-                    self.view
-                        .pointing(self.under_pointer.as_ref().map(|t| t.pane));
+                    self.aim(e.position.0, e.position.1);
                 }
                 PointerEventKind::Leave { .. } => {
                     self.under_pointer = None;
                     self.cell_under_pointer = None;
+                    self.line_under_pointer = None;
                     self.view.pointing(None);
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    self.under_pointer = self.target_at(e.position.0, e.position.1);
-                    self.cell_under_pointer = self
-                        .line_and_cell(e.position.0, e.position.1)
-                        .map(|(_, c)| c);
-                    // AND WHICH SECTION, which is what decides the film's two
-                    // buttons are drawn: they appear under the pointer, and
-                    // their CELLS are reserved either way so nothing moves.
-                    self.view
-                        .pointing(self.under_pointer.as_ref().map(|t| t.pane));
+                    self.aim(e.position.0, e.position.1);
                     // A BAR TAKES THE PRESS, and the row does not get it: the
                     // thumb is a control, not a line of the list under it.
                     self.dragging = self.bar_at_point(e.position.0, e.position.1);
@@ -2071,16 +2169,12 @@ impl PointerHandler for FilesWindow {
                 // region, has no surface of its own and does not float — see the
                 // note in `surface.rs`, where the same decision is written out.
                 PointerEventKind::Press { button, .. } if button == RIGHT_BUTTON => {
-                    self.under_pointer = self.target_at(e.position.0, e.position.1);
-                    self.cell_under_pointer = self
-                        .line_and_cell(e.position.0, e.position.1)
-                        .map(|(_, c)| c);
-                    // AND WHICH SECTION, which is what decides the film's two
-                    // buttons are drawn: they appear under the pointer, and
-                    // their CELLS are reserved either way so nothing moves.
-                    self.view
-                        .pointing(self.under_pointer.as_ref().map(|t| t.pane));
-                    right = self.under_pointer.as_ref().map(|t| t.row);
+                    self.aim(e.position.0, e.position.1);
+                    // THE PRESS ITSELF, and not the row it landed on: the
+                    // subject is `under_pointer`, which was just resolved, and
+                    // `None` there is an answer too — an empty directory has no
+                    // field anywhere and still has a menu.
+                    right = true;
                 }
                 PointerEventKind::Axis {
                     vertical,
@@ -2177,8 +2271,8 @@ impl PointerHandler for FilesWindow {
                 return;
             }
         }
-        if let Some(row) = right {
-            self.open_menu(row);
+        if right {
+            self.open_menu();
             return;
         }
         if let Some(row) = left {
@@ -2236,6 +2330,56 @@ impl PointerHandler for FilesWindow {
 }
 
 impl FilesWindow {
+    /// Puts a sentence on the message line, and takes it off again.
+    ///
+    /// **THE ONE PLACE**, and there were nine. Nine assignments meant nine
+    /// chances to forget whatever a message needs, and one of them was already
+    /// forgotten by all nine: the message never went away. The owner found it
+    /// with `copy the path` — *"no filemanager versão janela, esse texto não
+    /// desapareceu"* — where the footer's `copied` fades after three seconds
+    /// and this door's stayed for the rest of the session.
+    ///
+    /// # Why a one-shot timer, and not a clock
+    ///
+    /// Because this window has no tick, deliberately: with several of them
+    /// open, a timer would be one wake-up per second per window for ever, and
+    /// the directory is watched by inotify precisely so that nothing has to
+    /// wake at rest (see the `Notice` above). A one-shot keeps that property
+    /// exactly — a window with nothing to say wakes not once — and pays for the
+    /// three seconds after a message, which is the only time there is anything
+    /// to do.
+    ///
+    /// The same three seconds as the footer, from the same constant: a message
+    /// that lingered here and not there would be two answers to "how long is a
+    /// message on screen".
+    fn say(&mut self, text: String) {
+        tracing::info!(echo = %text, "message line");
+        self.message = Some(text);
+        self.said = self.said.wrapping_add(1);
+        let mine = self.said;
+        let armed = self.handle.insert_source(
+            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(
+                crate::surface::ECHO_SECONDS,
+            )),
+            move |_, (), state: &mut Self| {
+                // ONLY ITS OWN. Between arming and firing the line may have
+                // been replaced or cleared by a key; wiping whatever is there
+                // would take a newer sentence down early.
+                if state.said == mine {
+                    state.message = None;
+                    state.ask_paint();
+                }
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            // NOT SILENT, and the message STAYS. A line that outstays its
+            // welcome is a smaller failure than one that vanishes because a
+            // timer could not be hung, and the log says which happened.
+            tracing::warn!(error = %e, "no timer for the message line; it will stay");
+        }
+    }
+
     /// A left click, on whatever cell it landed on.
     fn click(&mut self, target: &crate::files::Target) {
         // A CLICK CLEARS THE LAST MESSAGE, like a key does. This window has no
@@ -2255,18 +2399,15 @@ impl FilesWindow {
     }
 
     /// A right click: focus that row, then open the action menu.
-    fn open_menu(&mut self, row: usize) {
+    ///
+    /// THROUGH THE VIEW'S ONE DECISION — see `files::View::menu_at`. What the
+    /// pointer is over was already resolved on the press; handing the row over
+    /// and letting the view resolve it a second time is what made the parameter
+    /// mean two things at once.
+    fn open_menu(&mut self) {
         self.message = None;
-        // The header has no menu: right-clicking a column name is not a
-        // gesture about any file.
-        if row == usize::MAX {
-            return;
-        }
-        // ROW AND CELL, through the view's one decision — see
-        // `files::View::menu_at`. This door had the same defect as the footer:
-        // it kept the row and threw the cell away.
-        let cell = self.cell_under_pointer.unwrap_or(0);
-        let step = self.view.menu_at(row, cell, self.columns, self.room());
+        let target = self.under_pointer.clone();
+        let step = self.view.menu_at(target.as_ref());
         self.apply(step);
     }
 }
@@ -2613,6 +2754,7 @@ mod tests {
                 texts: &texts,
                 message: None,
                 cell_under_pointer: None,
+                line_under_pointer: None,
                 under_pointer: None,
             });
             assert!(!painted.spans.is_empty(), "{w}x{h}: nothing was drawn");

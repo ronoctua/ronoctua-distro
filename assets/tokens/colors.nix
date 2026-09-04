@@ -27,9 +27,29 @@
     # The buffers' background. Distinct from `base` so the window stands out from
     # the void with no border at all.
     buffer = "0x161616FF";
-    # The background of the focused row inside an expanded list (4.3). It is a
-    # change of colour, not an outline and not a box.
-    selection = "0x2A2A2AFF";
+    # THE FOCUSED ROW of an expanded list (4.3) — what `Enter` is going to run.
+    # A change of colour, not an outline and not a box (invariant 15).
+    #
+    # It said this from the first day and, for the file manager, it was not
+    # true: both doors spent it on the row under the POINTER and left the
+    # keyboard's row with nothing but the name in `state.accent`. The owner
+    # found it from the screen — *"ao trocar de item com as setas nenhuma
+    # alteração/indicador visual é feita"* — and in the action menu, whose rows
+    # carry no accent at all, the cursor was invisible outright.
+    #
+    # STRONGER THAN IT WAS, and measured on screen against `hover` below rather
+    # than picked: at `0x2A2A2A` it was byte for byte the value of
+    # `rule.default`, a band as dark as the hairline drawn beside it.
+    selection = "0x383838FF";
+    # THE ROW UNDER THE POINTER, which is a different question with a different
+    # answer — "this is what the click would reach", not "this is chosen".
+    #
+    # Weaker than the focus on purpose, and that is the whole reason it is a
+    # second token: with one colour for both, a pointer resting away from the
+    # cursor left two rows equally lit and the question "which one is selected?"
+    # unanswered. The owner chose the split: *"foco fica com o fundo; hover
+    # ganha um tom mais fraco"*.
+    hover = "0x222222FF";
 
     # THE ONE SURFACE WITH AN ALPHA, and it is the film's controls.
     #

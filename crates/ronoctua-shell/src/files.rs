@@ -2660,6 +2660,25 @@ pub struct View {
     /// no redraw between the two showed up one frame late, which is what a
     /// touchpad sends dozens of times a second.
     list_offset: usize,
+    /// The first row of the MODAL list that is on screen.
+    ///
+    /// # Why the modal needs an offset of its own
+    ///
+    /// Because it is not the listing, and it was scrolling by the listing's
+    /// numbers. The menu, the picker and the detail sheet COVER the listing —
+    /// they are drawn in its column, with its width — but their length is
+    /// their own: a menu of seventeen rows over a directory of two was clamped
+    /// against the two, and a menu over a directory of two thousand let the
+    /// wheel run a thousand rows past its own end.
+    ///
+    /// It also has to be a second number and not a borrowed one: the listing's
+    /// position has to survive a menu being opened and closed on top of it, or
+    /// every right-click would send the directory back to the top.
+    ///
+    /// [`View::follow`] is what keeps it honest: it zeroes this whenever
+    /// nothing modal is up, so a stale offset from the last menu cannot open
+    /// the next one half way down.
+    modal_offset: usize,
     /// When the sidebar's file was last read, for "has somebody changed it".
     side_stamp: Option<std::time::SystemTime>,
     /// Whether the PREVIEW panel is asked for.
@@ -3013,6 +3032,7 @@ impl View {
             side_cursor: 0,
             side_offset: 0,
             list_offset: 0,
+            modal_offset: 0,
             side_stamp: side.stamp(),
             side,
             where_: where_.to_path_buf(),
@@ -3099,12 +3119,22 @@ impl View {
     }
 
     /// Where the cursor is, among the shown rows.
+    ///
+    /// **ONLY THE TESTS ASK**, and that is new. The footer used to take this
+    /// number and add a header to it to find out where to scroll the region;
+    /// what it wanted was the VISUAL line, and with a menu up this is the wrong
+    /// list's cursor. [`View::visual_cursor`] is the question both doors ask.
+    #[cfg(test)]
     #[must_use]
     pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
     /// Whether the action menu is open.
+    ///
+    /// ONLY THE TESTS ASK. What a door needs to know is whether anything modal
+    /// is up — [`View::plain`] — and never which of the three it is.
+    #[cfg(test)]
     #[must_use]
     pub const fn menu_open(&self) -> bool {
         self.menu.is_some()
@@ -3113,7 +3143,9 @@ impl View {
     /// Whether the detail sheet or a question is on screen.
     ///
     /// Both replace the listing, so the header — which names the listing's
-    /// columns — must not be drawn over them.
+    /// columns — must not be drawn over them. ONLY THE TESTS ASK, for the
+    /// reason [`View::menu_open`] gives.
+    #[cfg(test)]
     #[must_use]
     pub const fn showing_detail(&self) -> bool {
         self.detail.is_some() || self.picking.is_some()
@@ -3378,10 +3410,7 @@ impl View {
         width: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        if !self.plain() {
-            return self.modal_rows(skip, take, width, texts);
-        }
-        self.list_offset = skip;
+        self.scroll_listing_to(skip);
         let sections = self.sections(chrome, take, width, texts);
         let region: Vec<&Section> = sections.iter().filter(|s| s.top == 0).collect();
         let lines = region.iter().map(|s| s.content.len()).max().unwrap_or(0);
@@ -3484,10 +3513,10 @@ impl View {
 
     /// Which pane has the keyboard.
     ///
-    /// Only the tests ask: the drawing colours the focused field as it walks,
-    /// and asking would be the same list traversed twice. It is here because
-    /// `menu_at` has to be provable — it decides which menu opens, and the
-    /// pane is the half of that decision nothing on screen spells out.
+    /// Only the tests ask, and the drawing does not: what a band needs is the
+    /// pane AND the row, and [`View::focused_here`] answers both at once. It is
+    /// here because `menu_at` has to be provable — it decides which menu opens,
+    /// and the pane is the half of that decision nothing on screen spells out.
     #[cfg(test)]
     const fn pane(&self) -> Pane {
         self.pane
@@ -4761,7 +4790,11 @@ impl View {
             .group(entry.gid)
             .map_or_else(|| entry.gid.to_string(), ToOwned::to_owned);
         let marked = self.marks.contains(&entry.name);
-        let focused = n == self.cursor;
+        // AND ONLY WHILE THE LISTING HAS THE KEYBOARD, which is the test the
+        // sidebar has always made (`side_fields`) and this one never did. With
+        // the focus in the sidebar both lists accented a row, and two accented
+        // rows say the cursor is in two places.
+        let focused = matches!(self.pane, Pane::Listing) && n == self.cursor;
         let mut fields = Vec::new();
 
         // THE MARK, IN THE GUTTER. A glyph and not a colour, because the colour
@@ -5840,6 +5873,64 @@ fn colour_of(entry: &Entry, focused: bool) -> Color {
     }
 }
 
+/// Which SECTION a point is in, and which of its lines.
+///
+/// # Why it is separate from the field
+///
+/// Because they are two DEPTHS of one question, and the shallow one is what a
+/// BAND needs. A band says which row of a list the pointer is on, and a row is
+/// on screen whether or not the pointer happens to be over one of its words —
+/// the listing's name column is `Width::Fill`, so most of a row's width belongs
+/// to a field that covers only the filename's own letters.
+///
+/// The window door asked the deep question for its band and so had no band over
+/// any of that space: *"as vezes o item é destacado, as vezes não, e muitos
+/// nunca são destacado"*. The footer never had the defect because its band asks
+/// the LINE. This is that rule, written once, for both.
+///
+/// # The leftover belongs to the last line
+///
+/// A surface is not a whole number of lines, so the strip of pixels under the
+/// last whole one turns into a line index ONE PAST the section — and answered
+/// nothing. The owner found it with the pointer: *"nem o hover do mouse
+/// funciona nesse espaço"*, on the very strip the film's controls are painted
+/// across.
+fn at_point(sections: &[Section], line: usize, cell: u16) -> Option<(&Section, usize)> {
+    let sec = sections.iter().find(|s| s.holds(line, cell)).or_else(|| {
+        sections
+            .iter()
+            .find(|s| line == s.top + s.lines && cell >= s.from && cell < s.to)
+    })?;
+    let inside = (line - sec.top).min(sec.lines.saturating_sub(1));
+    Some((sec, inside))
+}
+
+/// Where a list has to start so that `cursor` stays on screen, with a margin.
+///
+/// # Why it is a free function
+///
+/// Because [`View::follow`] does this twice — once for the listing and once for
+/// the modal drawn over it — and the two have to agree. Written out in both
+/// arms it would be the same six lines with two chances of a different answer,
+/// which is the shape of every defect this file records.
+///
+/// `MARGIN` is one row of context past the cursor: scrolling only when the
+/// cursor touches the edge shows the next line only after you have reached it.
+fn follow_within(offset: usize, cursor: usize, total: usize, room: usize) -> usize {
+    /// How many rows of context stay visible past the cursor.
+    const MARGIN: usize = 1;
+    let last = total.saturating_sub(room);
+    let cursor = cursor.min(total.saturating_sub(1));
+    let moved = if cursor < offset.saturating_add(MARGIN) {
+        cursor.saturating_sub(MARGIN)
+    } else if cursor + MARGIN >= offset.saturating_add(room) {
+        cursor + MARGIN + 1 - room
+    } else {
+        offset
+    };
+    moved.min(last)
+}
+
 /// A size, already assembled.
 ///
 /// Assembled here rather than through the bundle because a listing draws two
@@ -6577,6 +6668,7 @@ impl View {
                 .unwrap_or_default(),
             _ => String::new(),
         };
+        self.modal_starts();
         self.picking = Some(Picker {
             asking,
             choices,
@@ -6922,31 +7014,163 @@ impl View {
         }
     }
 
-    /// The picker, the detail sheet and the menu, which are not columns at all.
+    /// The picker, the detail sheet and the menu, WHOLE.
     ///
     /// Each is MODAL: it covers the listing, and covering a question half way
-    /// is worse than covering it. So none of them gets a sidebar or a panel,
-    /// and none of them is a [`Section`] — they are ONE list, and the doors
-    /// draw them as one. `View::plain` is what says which of the two a door is
-    /// looking at.
-    pub fn modal_rows(
-        &self,
-        skip: usize,
-        take: usize,
-        width: u16,
-        texts: &ronoctua_i18n::Texts,
-    ) -> Vec<Row> {
-        let cut = |v: Vec<Row>| v.into_iter().skip(skip).take(take).collect();
+    /// is worse than covering it. So none of them gets a sidebar or a panel —
+    /// they are ONE list, in the listing's column, and `View::plain` is what
+    /// says which of the two is on screen.
+    ///
+    /// They are a [`Section`] now, built by [`View::sections_of`] like the other
+    /// four. They used to be a list each door carried past the sections, and
+    /// what a list outside the sections does not get is a scrollbar, a thumb to
+    /// drag, a wheel that stops where the bar does, or a hover band.
+    ///
+    /// This is the only way the list's LENGTH can be had.
+    ///
+    /// [`View::row_count`] answers `None` for these three precisely because
+    /// counting them means building them — and they are a dozen rows by
+    /// construction, so building them is cheap. What is NOT acceptable is a
+    /// door left with no number at all: see [`View::modal_len`].
+    fn modal_all(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
         if let Some(picker) = &self.picking {
-            return cut(picker_rows(picker, width, texts));
+            return picker_rows(picker, width, texts);
         }
         if let Some(name) = &self.detail {
-            return cut(self.detail_rows(name, width));
+            return self.detail_rows(name, width);
         }
         if let Some(chosen) = self.menu {
-            return cut(self.menu_rows(chosen, width, texts));
+            return self.menu_rows(chosen, width, texts);
         }
         Vec::new()
+    }
+
+    /// How many lines the modal list has — `None` when nothing modal is up.
+    ///
+    /// # Why the footer needed this and did not have it
+    ///
+    /// Because a modal covers the listing, the region's height is the modal's,
+    /// and `row_count`/`region_len` both answer `None` there. The footer read
+    /// that `None` as "ask the whole expansion instead" and the whole expansion
+    /// is, for an open manager, the window it had just failed to build:
+    /// `expansion_window` → `expansion` → `expansion_window`, with nothing
+    /// between them that could differ. The shell died of a stack overflow the
+    /// moment the menu, the picker or the detail sheet came up in that door.
+    #[must_use]
+    pub fn modal_len(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Option<usize> {
+        (!self.plain()).then(|| self.modal_all(width, texts).len())
+    }
+
+    /// How many rows the modal has — nought when nothing modal is up.
+    ///
+    /// The width comes from [`View::drawn_at`], which is what every painter and
+    /// every hit test has already set. A count does not depend on it — eliding
+    /// a label shortens the string, never the list — but `modal_all` builds
+    /// finished rows and a builder needs one.
+    fn modal_total(&self) -> usize {
+        if self.plain() {
+            return 0;
+        }
+        self.modal_all(self.drawn_at.get(), &self.texts.clone())
+            .len()
+    }
+
+    /// Which row of the modal the keyboard is on — `None` when it has no
+    /// cursor.
+    ///
+    /// The detail sheet is the one that answers `None`, and that is not an
+    /// omission: it is READ, not walked. Nothing in it can be pressed, so
+    /// nothing in it is selected.
+    ///
+    /// # Why it asks the ROWS and not `self.menu`
+    ///
+    /// Because `self.menu` counts ACTIONS and the list has rows that are not
+    /// actions: the menu's first line names the file it is about, and the
+    /// picker's first line is the question. Read as an index into the list,
+    /// `chosen` is off by however many of those there are — which put the band
+    /// on the title, photographed on the first try.
+    ///
+    /// [`Row::focused`] is the field that already carries this, written at
+    /// every list that has a cursor. Until now nothing outside the tests read
+    /// it; this is what makes it load-bearing.
+    fn modal_cursor(&self) -> Option<usize> {
+        self.modal_all(self.drawn_at.get(), &self.texts)
+            .iter()
+            .position(|r| r.focused)
+    }
+
+    /// How many rows the LISTING's column is scrolling right now.
+    ///
+    /// **The directory, or the modal drawn over it.** Every place that scrolls
+    /// that column asks this — the wheel, the drag, the bar, the section — so
+    /// the four cannot pick different totals, which is exactly what they did:
+    /// a menu clamped against the number of files behind it.
+    #[must_use]
+    pub fn listing_total(&self) -> usize {
+        if self.plain() {
+            self.amount()
+        } else {
+            self.modal_total()
+        }
+    }
+
+    /// Which row of which pane the keyboard is on.
+    ///
+    /// `None` where there is no row to be on: a preview is a picture and the
+    /// facts are read, so neither has a line the `Enter` would run — and the
+    /// detail sheet is read too.
+    #[must_use]
+    pub fn focused_here(&self) -> Option<(Pane, usize)> {
+        if !self.plain() {
+            // A MODAL IS DRAWN IN THE LISTING'S COLUMN, whichever pane the
+            // keyboard was in when it opened — see `View::sections_of`.
+            return self.modal_cursor().map(|row| (Pane::Listing, row));
+        }
+        match self.pane {
+            Pane::Sidebar => Some((Pane::Sidebar, self.side_cursor)),
+            Pane::Listing => Some((Pane::Listing, self.cursor)),
+            Pane::Preview | Pane::Info => None,
+        }
+    }
+
+    /// Which LINE of the region the keyboard is on, and in which pane.
+    ///
+    /// # Why it goes through the sections
+    ///
+    /// Because a row is not a line, and the conversion is different for every
+    /// column: the listing's chrome sits above its rows, the sidebar scrolls by
+    /// a number of its own, and a modal has neither. [`Section::line_of`] is
+    /// where that arithmetic already lives — it is what the pointer's band uses
+    /// — so the focus band asks it too, and the two bands cannot land on
+    /// different lines for the same row.
+    ///
+    /// `None` when the focused row is scrolled out of sight, which is exactly
+    /// when no band should be drawn.
+    #[must_use]
+    pub fn focus_line(&self, width: u16, room: usize) -> Option<(Pane, usize)> {
+        let (pane, row) = self.focused_here()?;
+        let chrome = self.chrome_rows(width, &self.texts);
+        let sec = self
+            .sections_of(&chrome, room, width, &self.texts, Some(pane))
+            .into_iter()
+            .find(|s| s.pane == pane)?;
+        sec.line_of(row).map(|line| (pane, line))
+    }
+
+    /// Which LINE of the listing's column the keyboard is on, counted the way
+    /// the region draws it — the chrome included.
+    ///
+    /// It is the VISUAL position and not the row: the footer scrolls the region
+    /// to it, and the region's first line is the path, not the first file. The
+    /// door used to work this out itself (`v.cursor() + header`) and got the
+    /// modal wrong, because with a menu up the cursor it added the header to
+    /// was still the listing's.
+    #[must_use]
+    pub fn visual_cursor(&self) -> Option<usize> {
+        if self.plain() {
+            return Some(self.cursor + self.chrome_lines());
+        }
+        self.modal_cursor()
     }
 
     /// The LISTING's own chrome: the path, then the header.
@@ -7018,6 +7242,50 @@ impl View {
         let panes = self.panes(width);
         let mut out = Vec::with_capacity(4);
         let side = self.side.shown(self.hidden);
+
+        // A MODAL IS A SECTION, and it is the LISTING's.
+        //
+        // The menu, the picker and the detail sheet are drawn in the listing's
+        // column, over the listing, with the listing's width. Making them one
+        // more `Section` is what gives them — with no code of their own — a
+        // scrollbar, a thumb that can be dragged, a wheel that stops where the
+        // bar does, a hover band, a focus band and a hit test. Every one of
+        // those already existed and not one reached a menu, because a menu was
+        // a list each door carried past the sections.
+        //
+        // FIRST OF ALL, and that is not tidiness: `take` is clamped below
+        // against `most`, which counts the DIRECTORY. A menu of seventeen rows
+        // over a folder of three would be given three lines.
+        //
+        // `above` is nought: the path and the header are the LISTING's chrome,
+        // and a modal covers them too (`View::chrome_rows` gives none while one
+        // is up). And nothing else is in the region — `View::panes` hands a
+        // modal `Panes::default()`, so the blocks below would build nothing
+        // anyway.
+        if !self.plain() {
+            if only.is_some_and(|o| o != Pane::Listing) {
+                return out;
+            }
+            let all = self.modal_all(width, texts);
+            let room = take.min(all.len().max(1));
+            let first = self.modal_offset.min(all.len().saturating_sub(1));
+            out.push(Section {
+                pane: Pane::Listing,
+                across: None,
+                time: None,
+                transport: None,
+                clock: 0,
+                from: 0,
+                to: width,
+                top: 0,
+                lines: room,
+                offset: first,
+                total: all.len(),
+                above: 0,
+                content: all.into_iter().skip(first).take(room).collect(),
+            });
+            return out;
+        }
 
         // `take` IS "AT MOST", AND NEVER "EXACTLY".
         //
@@ -7375,12 +7643,7 @@ impl View {
         // film's controls are painted across. The band already takes that
         // residue (see `transport_band`); this is the same decision for the
         // pointer, so what is drawn there is what answers there.
-        let sec = sections.iter().find(|s| s.holds(line, cell)).or_else(|| {
-            sections
-                .iter()
-                .find(|s| line == s.top + s.lines && cell >= s.from && cell < s.to)
-        })?;
-        let inside = (line - sec.top).min(sec.lines.saturating_sub(1));
+        let (sec, inside) = at_point(&sections, line, cell)?;
         let f = sec.content.get(inside)?.field_at(cell)?;
         // WHICH ROW OF ITS OWN LIST. The listing's chrome is not one of them —
         // `usize::MAX` is what both doors already spell for the header — and
@@ -7398,25 +7661,69 @@ impl View {
         })
     }
 
-    /// The listing's first visible row.
+    /// Which ROW of which pane a point is on, with no field needed.
+    ///
+    /// [`View::hit`] is this plus the field under the cell; see [`at_point`] for
+    /// why the two depths exist and which one a band wants. `None` means the
+    /// point is on no list at all — past the end of a short listing, on a blank
+    /// line of the sidebar, or outside every column.
+    #[must_use]
+    pub fn band_row(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+    ) -> Option<(Pane, usize)> {
+        let chrome = self.chrome_rows(width, &self.texts);
+        let panes = self.panes(width);
+        let in_strip = panes.strip > 0 && line >= room;
+        let which = panes.section_at(cell, width, in_strip);
+        let sections = self.sections_of(&chrome, room, width, &self.texts, Some(which));
+        let (sec, inside) = at_point(&sections, line, cell)?;
+        // A LINE WITH NOTHING ON IT IS NOT A ROW. Past the last entry the
+        // listing pads with empty rows and the sidebar with its gaps; lighting
+        // those would promise a click on nothing.
+        if sec.content.get(inside).is_none_or(|r| r.fields.is_empty()) {
+            return None;
+        }
+        Some((sec.pane, sec.top + inside))
+    }
+
+    /// The listing's column's first visible row.
     ///
     /// A reader and not a setter: the doors used to push their own copy in
     /// before every question, which is the arrangement that let the two of them
     /// disagree. What moves this number is the wheel, the drag and
     /// [`View::follow`] — all of them here.
+    ///
+    /// **The modal's, when one is up.** A menu drawn over the listing is drawn
+    /// in the listing's column and scrolls in it, and every caller of this asks
+    /// the same question — where does this column start? Answering with the
+    /// directory's position while the menu was on screen is what left the
+    /// modal unable to scroll at all.
     #[must_use]
     pub const fn list_offset(&self) -> usize {
-        self.list_offset
+        if self.plain() {
+            self.list_offset
+        } else {
+            self.modal_offset
+        }
     }
 
-    /// Puts the listing's first visible row at `to`, clamped to what exists.
+    /// Puts that column's first visible row at `to`, clamped to what exists.
     ///
     /// The doors' page keys and their scrollbar drag land here. Clamped ON THE
     /// WAY IN, so there is no way to hold an offset past the end — the state
     /// that used to produce a region drawn empty after a filter narrowed the
     /// list under it.
     pub fn scroll_listing_to(&mut self, to: usize) {
-        self.list_offset = to.min(self.amount().saturating_sub(1));
+        let last = self.listing_total().saturating_sub(1);
+        if self.plain() {
+            self.list_offset = to.min(last);
+        } else {
+            self.modal_offset = to.min(last);
+        }
     }
 
     /// How many lines of the listing are its chrome right now.
@@ -7440,18 +7747,33 @@ impl View {
     /// entries of a directory were unreachable there.
     ///
     /// `room` is what the LISTING has, chrome already taken off.
+    ///
+    /// **And the modal's cursor when one is up**, for the reason
+    /// [`View::list_offset`] gives: the menu is drawn in that column, so it is
+    /// the menu that has to stay on screen. Without this the chosen row walked
+    /// off the bottom of a seventeen-row menu in a region of twelve, and the
+    /// only thing that moved was a listing nobody could see.
+    ///
+    /// What it does NOT do is reset the modal's offset — that belongs to the
+    /// moment a modal OPENS, and it is [`View::modal_starts`]. This door is not
+    /// the only one that follows a cursor (the footer has arithmetic of its own
+    /// for the eight views that keep no offset), so a reset here would be a
+    /// reset that one door performs and the other does not.
     pub fn follow(&mut self, room: usize) {
-        /// How many rows of context stay visible past the cursor.
-        const MARGIN: usize = 1;
-        let total = self.amount();
-        let last = total.saturating_sub(room);
-        let cursor = self.cursor.min(total.saturating_sub(1));
-        if cursor < self.list_offset.saturating_add(MARGIN) {
-            self.list_offset = cursor.saturating_sub(MARGIN);
-        } else if cursor + MARGIN >= self.list_offset.saturating_add(room) {
-            self.list_offset = cursor + MARGIN + 1 - room;
+        if self.plain() {
+            let total = self.amount();
+            self.list_offset = follow_within(self.list_offset, self.cursor, total, room);
+            return;
         }
-        self.list_offset = self.list_offset.min(last);
+        let total = self.modal_total();
+        // NO CURSOR IS NOT NO SCROLL. The detail sheet is read rather than
+        // walked, so there is nothing to follow — but it can still be longer
+        // than the region, and an offset past its end would draw it empty.
+        let Some(cursor) = self.modal_cursor() else {
+            self.modal_offset = self.modal_offset.min(total.saturating_sub(room));
+            return;
+        };
+        self.modal_offset = follow_within(self.modal_offset, cursor, total, room);
     }
 
     /// Puts a section's first visible row where the pointer is, dragging its
@@ -7530,7 +7852,9 @@ impl View {
         let total = match pane {
             Pane::Sidebar => self.side.shown(self.hidden).len(),
             Pane::Info => self.sheet().len(),
-            Pane::Listing => self.amount(),
+            // THE COLUMN'S OWN TOTAL — the modal's when one is up, the same
+            // number its bar was drawn from. See `View::listing_total`.
+            Pane::Listing => self.listing_total(),
             // A PICTURE STILL DOES NOT SCROLL, and there is no branch for it:
             // `preview_total` is 1, so `last` is nought and the drag lands
             // where it started. The rule survives as arithmetic.
@@ -7559,7 +7883,7 @@ impl View {
         let to = bar.offset_at(at, 1.0, 0.0);
         match pane {
             Pane::Sidebar => self.side_offset = to,
-            Pane::Listing => self.list_offset = to,
+            Pane::Listing => self.scroll_listing_to(to),
             Pane::Preview => self.preview_offset = to,
             Pane::Info => self.info_offset = to,
         }
@@ -7971,13 +8295,19 @@ impl View {
             // the listing in the footer and over the facts in the window, and
             // in neither of the other two.
             Pane::Listing => {
-                let total = self.amount();
+                // THROUGH THE COLUMN'S OWN TOTAL, which is the modal's when one
+                // is up — see `View::listing_total`. It used to be `amount()`
+                // flat, so the wheel over a menu was clamped against the number
+                // of FILES behind it: nothing at all in a short directory, and
+                // a thousand rows of nowhere in a long one.
+                let total = self.listing_total();
                 // THE SAME SUBTRACTION THE DRAG MAKES, and for the same
                 // reason: the path and the header do not scroll. A wheel that
                 // stopped somewhere the bar did not would be two answers to
-                // one question.
+                // one question. (`chrome_lines` is nought with a modal up, so
+                // the modal gets the whole region — which is what it covers.)
                 let room = room.saturating_sub(self.chrome_lines());
-                self.list_offset = slide(self.list_offset, by, total, room);
+                self.scroll_listing_to(slide(self.list_offset(), by, total, room));
                 true
             }
             // AND THE PREVIEW SCROLLS, now that there is something in it to
@@ -8210,6 +8540,7 @@ impl View {
                 args: Vec::new(),
             });
         }
+        self.modal_starts();
         self.picking = Some(Picker {
             asking: Asking::Sidebar,
             choices: hidden
@@ -8223,7 +8554,7 @@ impl View {
         Step::Changed
     }
 
-    /// What the SECONDARY button opens on this line and this cell.
+    /// What the SECONDARY button opens on the [`Target`] under the pointer.
     ///
     /// **The one place that decides**, because the two doors used to decide it
     /// separately and both got it the same way wrong: they resolved the target
@@ -8234,41 +8565,87 @@ impl View {
     /// The primary button never had the defect because it goes through
     /// `Row::field_at` and acts on the `Hit` it finds. This does the same, and
     /// now both buttons answer one question: what is under the pointer?
-    pub fn menu_at(&mut self, line: usize, cell: u16, width: u16, room: usize) -> Step {
-        // THROUGH `View::hit`, the same resolution the primary button uses.
-        // It reads the SECTIONS, so a right-click lands in the column it is
-        // over rather than on whatever the flattened line happened to hold.
-        //
-        // `room` is the door's, because a section's extent depends on it — the
-        // strip begins where the region ends, and a menu opened without it
-        // would resolve against a region one line tall.
-        let hit = self
-            .hit(width, room, line, cell, &self.texts.clone())
-            .map(|t| t.hit);
-        match hit {
-            // A SIDEBAR CELL OPENS THE SIDEBAR'S MENU. The eject glyph counts:
-            // right-clicking a target is asking what else that row can do.
-            Some(Hit::Sidebar(n) | Hit::Eject(n)) => {
-                self.pane = Pane::Sidebar;
-                self.side_cursor = n;
-                self.open_menu()
-            }
-            // ANY LISTING CELL, and the empty directory — which has no field
-            // anywhere and still has a menu, about the directory itself.
-            _ => {
-                self.pane = Pane::Listing;
-                if matches!(self.focus_row(line), Step::Nothing) && !self.is_empty() {
+    ///
+    /// # Why it takes the target and no longer a line
+    ///
+    /// Because the number it used to take meant TWO things, and one door read
+    /// each. `View::hit` wanted a LINE ON SCREEN; `focus_row` wanted a ROW OF
+    /// THE LISTING. The window handed it a row, so `hit` looked at whatever
+    /// line happened to carry that number — harmless while the listing was at
+    /// the top, and wrong the moment the sidebar was scrolled. The footer
+    /// reached this only for an EMPTY directory, and with a zero it had made up
+    /// rather than resolved — see `Footer::open_files_menu`.
+    ///
+    /// A resolved target has no such ambiguity: the section is decided, the row
+    /// is that section's own, and the field is the one that was pressed. And
+    /// `None` is a real answer — the empty directory has no field anywhere and
+    /// still has a menu, about the directory itself.
+    pub fn menu_at(&mut self, target: Option<&Target>) -> Step {
+        // NOT WHILE SOMETHING MODAL IS UP. The menu, the picker and the detail
+        // sheet are drawn OVER the listing, and `View::panes` gives them no
+        // sections of their own — so a point resolves against the listing
+        // UNDERNEATH them. A second press would focus a file nobody can see and
+        // reopen the menu about it.
+        if !self.plain() {
+            return Step::Nothing;
+        }
+        // A SIDEBAR CELL OPENS THE SIDEBAR'S MENU. The eject glyph counts:
+        // right-clicking a target is asking what else that row can do.
+        if let Some(Hit::Sidebar(n) | Hit::Eject(n)) = target.map(|t| &t.hit) {
+            self.pane = Pane::Sidebar;
+            self.side_cursor = *n;
+            return self.open_menu();
+        }
+        // THE LISTING'S CHROME IS NOT ABOUT A FILE. The path line and the
+        // column headers are `usize::MAX`, which is how both doors already
+        // spell "this row is not an entry".
+        if target.is_some_and(|t| t.pane == Pane::Listing && t.row == usize::MAX) {
+            return Step::Nothing;
+        }
+        // EVERYTHING ELSE IS THE LISTING'S MENU, and the pane goes with it:
+        // the menu acts where the cursor is, so the cursor has to be there.
+        self.pane = Pane::Listing;
+        match target {
+            // A LISTING ROW: focus it first. Right-clicking a row people have
+            // not moved to is the common case, and a menu that acted on the
+            // cursor's row instead would act on something else entirely.
+            Some(t) if t.pane == Pane::Listing => {
+                if matches!(self.focus_row(t.row), Step::Nothing) {
                     return Step::Nothing;
                 }
                 self.open_menu()
             }
+            // THE PREVIEW AND THE FACTS SHOW THE CURSOR'S FILE, so the menu is
+            // about that file and the cursor does NOT move. Resolving their row
+            // against the listing is what the old signature invited, and it
+            // moved the cursor to a fact's index.
+            Some(_) => self.open_menu(),
+            // NO FIELD ANYWHERE: only the empty directory has a menu, and it is
+            // about the directory. Anywhere else, a press on blank space is a
+            // press on nothing.
+            None if self.is_empty() => self.open_menu(),
+            None => Step::Nothing,
         }
     }
 
     /// Opens the menu for whichever pane has the cursor.
     fn open_menu(&mut self) -> Step {
+        self.modal_starts();
         self.menu = Some(0);
         Step::Changed
+    }
+
+    /// A modal is about to come up, so its list starts at the top.
+    ///
+    /// [`View::modal_offset`] is shared by the three of them — they are never
+    /// on screen together — and it is the moment one OPENS that a leftover from
+    /// the last one would show: a menu of five rows opened where a sheet of
+    /// forty had been scrolled to reads as a menu with nothing in it.
+    ///
+    /// It is not the closing that matters. Nothing draws the modal's offset
+    /// while no modal is up, and `scroll_listing_to` clamps whatever is there.
+    const fn modal_starts(&mut self) {
+        self.modal_offset = 0;
     }
 
     /// The sidebar row the cursor is on, cloned so the borrow ends here.
@@ -8663,6 +9040,7 @@ impl View {
         let Some(name) = self.focused().map(|e| e.name.clone()) else {
             return Step::Nothing;
         };
+        self.modal_starts();
         self.detail = Some(name);
         Step::Changed
     }
@@ -13808,19 +14186,383 @@ mod tests {
         let split = v.split(120);
         assert!(split > 0);
 
+        // THROUGH `hit`, WHICH IS WHAT THE DOORS DO. `menu_at` takes the
+        // resolved target now: the number it used to take was read as a LINE by
+        // `hit` and as a ROW OF THE LISTING by `focus_row`, and each door
+        // handed it a different one of the two.
+        let b = bundle();
+
         // A cell inside the sidebar.
-        v.menu_at(1, SIDE_GUTTER, 120, 12);
+        let t = v.hit(120, 12, 1, SIDE_GUTTER, &b);
+        v.menu_at(t.as_ref());
         assert!(v.menu_open());
         assert!(
             matches!(v.pane(), Pane::Sidebar),
             "the menu went to the wrong panel"
         );
-        v.key(of_view("C-m"));
+        // `Esc` CLOSES IT, and `C-m` would only open it again. It matters here
+        // for a reason that is not cosmetic: with something modal on screen the
+        // secondary button does nothing at all, because the point would resolve
+        // against the listing drawn UNDERNEATH the menu.
+        v.key(of_view("ESC"));
+        assert!(!v.menu_open());
 
-        // And a cell inside the listing.
-        v.menu_at(1, split + RULE + GUTTER + 1, 120, 12);
+        // And a cell inside the listing — line 2, because the listing's first
+        // two lines are its chrome.
+        let cell = split + RULE + GUTTER + 1;
+        let t = v.hit(120, 12, 2, cell, &b);
+        v.menu_at(t.as_ref());
         assert!(v.menu_open());
         assert!(matches!(v.pane(), Pane::Listing));
+        assert_eq!(v.cursor(), 0, "the menu was not about the row pressed");
+        v.key(of_view("ESC"));
+        assert!(!v.menu_open());
+
+        // AND THE CHROME HAS NONE. The path line and the column headers are
+        // not about a file, and a menu of file actions over them would act on
+        // whatever the cursor happened to be on.
+        for line in [0, 1] {
+            let t = v.hit(120, 12, line, cell, &b);
+            v.menu_at(t.as_ref());
+            assert!(!v.menu_open(), "line {line} of the chrome opened a menu");
+        }
+    }
+
+    #[test]
+    fn a_modal_list_still_answers_how_many_lines_it_wants() {
+        // THE FOOTER HAD NO NUMBER HERE, and read the missing one as "ask the
+        // whole expansion instead" — which, with the manager open, is the
+        // window it had just failed to build: `expansion_window` →
+        // `expansion` → `expansion_window`, with nothing between them that
+        // could differ. The shell died of a stack overflow the moment the menu,
+        // the picker or the detail sheet came up in that door.
+        let dir = scratch("modal-conta");
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        let b = bundle();
+
+        assert!(v.plain());
+        assert_eq!(v.modal_len(120, &b), None, "a plain listing is not modal");
+        assert!(v.row_count(120).is_some());
+
+        v.key(of_view("C-m"));
+        assert!(v.menu_open() && !v.plain());
+        // THE TWO THAT COUNT THE LISTING GO QUIET, on purpose: a modal covers
+        // it, so its height is no longer the region's.
+        assert_eq!(v.row_count(120), None);
+        assert_eq!(v.region_len(v.chrome_lines(), 120), None);
+        // AND THIS ONE ANSWERS, with exactly the rows the door will draw.
+        let n = v.modal_len(120, &b).expect("the open menu wants no lines");
+        assert!(n > 0);
+        assert_eq!(n, v.modal_all(120, &b).len());
+    }
+
+    /// Opens the listing's menu on a directory of three files.
+    ///
+    /// Three files on purpose: the menu is longer than the region and the
+    /// DIRECTORY is much shorter than it, which is the arrangement that told
+    /// the three offsets apart. Clamped against the files, the menu could not
+    /// move at all.
+    fn menu_over_three_files(name: &str) -> (View, ronoctua_i18n::Texts) {
+        let dir = scratch(name);
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        v.key(of_view("C-m"));
+        assert!(v.menu_open() && !v.plain());
+        (v, bundle())
+    }
+
+    /// The region both doors give the manager: twelve lines.
+    const ROOM: usize = 12;
+
+    #[test]
+    fn a_menu_taller_than_the_region_is_a_section_with_a_bar_of_its_own() {
+        // THE DEFECT THIS CATCHES: a modal drawn past the sections. It had no
+        // bar in either door — the footer suppressed the region's bar for the
+        // whole manager and the window built a fixture whose `total` was its
+        // own height — so seventeen rows of menu were cut at twelve with
+        // nothing on screen saying so and no way to reach the rest.
+        let (v, b) = menu_over_three_files("menu-barra");
+        let secs = v.sections(&[], ROOM, 120, &b);
+        assert_eq!(
+            secs.len(),
+            1,
+            "a modal covers the region and is one section"
+        );
+        let sec = &secs[0];
+        assert!(matches!(sec.pane, Pane::Listing));
+        assert_eq!(sec.above, 0, "a modal covers the listing's chrome too");
+        // THE MENU'S OWN TOTAL, and not the three files behind it.
+        assert_eq!(sec.total, v.modal_all(120, &b).len());
+        assert!(
+            sec.total > ROOM,
+            "the menu fits in {ROOM} lines, so this proves nothing"
+        );
+        assert!(
+            sec.scroll().cut(),
+            "a menu longer than the region got no bar"
+        );
+        assert!(
+            sec.bar_box(120.0, 0.0, 320.0, 10.0, 26.5).is_some(),
+            "the bar has no rectangle"
+        );
+    }
+
+    #[test]
+    fn the_wheel_over_a_menu_moves_the_menu_and_stops_at_its_own_end() {
+        // THE DEFECT THIS CATCHES: `View::wheel` clamping the listing's column
+        // against `amount()` — the DIRECTORY — while a menu was drawn in it.
+        // Over three files the wheel could not move a seventeen-row menu at
+        // all; over three thousand it would have run a thousand rows past the
+        // menu's end.
+        let (mut v, b) = menu_over_three_files("menu-roda");
+        let total = v.modal_all(120, &b).len();
+        assert_eq!(v.list_offset(), 0);
+        assert!(v.wheel(Pane::Listing, 3, 120, ROOM));
+        assert!(v.list_offset() > 0, "the wheel did not move the menu");
+        for _ in 0..20 {
+            v.wheel(Pane::Listing, 3, 120, ROOM);
+        }
+        assert_eq!(
+            v.list_offset(),
+            total - ROOM,
+            "the menu ran past its own end"
+        );
+        // AND THE THUMB DRAGS THE SAME LIST. `View::drag_to` took `amount()`
+        // too, so the menu's own bar would have moved the wrong number.
+        assert!(v.drag_to(
+            Pane::Listing,
+            Axis::Down,
+            0.0,
+            120,
+            Room {
+                list: ROOM,
+                panel: 0
+            }
+        ));
+        assert_eq!(
+            v.list_offset(),
+            0,
+            "dragging to the top left the menu below"
+        );
+        // AND THE LISTING BEHIND IT DID NOT MOVE. The two offsets are two
+        // numbers on purpose: a right-click that sent the directory back to
+        // the top would be a gesture with a side effect nobody asked for.
+        v.key(of_view("ESC"));
+        assert!(v.plain());
+        assert_eq!(v.list_offset(), 0, "scrolling the menu scrolled the files");
+    }
+
+    #[test]
+    fn the_menu_scrolls_to_keep_the_chosen_row_on_screen() {
+        // THE DEFECT THIS CATCHES: the region following the LISTING's cursor
+        // while a menu was up. Holding the arrow walked the choice off the
+        // bottom of the menu and the only thing that moved was a listing
+        // nobody could see.
+        let (mut v, b) = menu_over_three_files("menu-segue");
+        let total = v.modal_all(120, &b).len();
+        let down = Key {
+            mods: ronoctua_keymap::Mods::default(),
+            sym: Sym::Down,
+        };
+        for _ in 0..total {
+            v.key(down);
+            v.follow(ROOM);
+            let seen = v.visual_cursor().expect("an open menu has a cursor");
+            assert!(
+                seen >= v.list_offset() && seen < v.list_offset() + ROOM,
+                "row {seen} is outside the {ROOM} lines from {}",
+                v.list_offset()
+            );
+        }
+        // AND OPENING THE NEXT ONE STARTS AT THE TOP — see `View::modal_starts`.
+        assert!(v.list_offset() > 0);
+        v.key(of_view("ESC"));
+        v.key(of_view("C-m"));
+        assert_eq!(
+            v.list_offset(),
+            0,
+            "the new menu opened where the last ended"
+        );
+    }
+
+    #[test]
+    fn the_focus_band_lands_on_the_chosen_row_and_not_on_the_title() {
+        // THE DEFECT THIS CATCHES, photographed on the first try: the menu's
+        // first line NAMES the file it is about, so `self.menu` — which counts
+        // actions — is not an index into the list. Read as one, the band sat on
+        // the title while `RET : open` was what `Enter` would run.
+        let (v, b) = menu_over_three_files("menu-foco");
+        let rows = v.modal_all(120, &b);
+        let focused = rows
+            .iter()
+            .position(|r| r.focused)
+            .expect("an open menu has a focused row");
+        assert_eq!(focused, 1, "the menu's first line is its title");
+        assert!(!rows[0].focused, "the title is not a choice");
+        // AND THE BAND IS DRAWN ON THAT LINE. `line_of` is the conversion, and
+        // it is the pointer's band's too.
+        assert_eq!(v.focus_line(120, ROOM), Some((Pane::Listing, focused)));
+    }
+
+    #[test]
+    fn only_the_pane_with_the_keyboard_shows_a_cursor() {
+        // THE DEFECT THIS CATCHES: `row_of` accented the focused file whatever
+        // pane had the keyboard, while `side_fields` has always checked. With
+        // the focus in the sidebar both lists lit a row, and two lit rows say
+        // the cursor is in two places.
+        let dir = scratch("foco-painel");
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("f{n}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        let b = bundle();
+        assert_eq!(v.focused_here(), Some((Pane::Listing, 0)));
+        // COUNTED ON THE LISTING'S NAMES ALONE. `state.accent` is spent on
+        // five other things in this view — the mark glyph, the menu's key
+        // column, the sorting header, the query — and a count over the whole
+        // frame would move for reasons that are not the cursor.
+        let accented_names = |v: &mut View| {
+            v.drawn(120, &b)
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .filter(|f| matches!(f.hit, Hit::Name(_)))
+                .filter(|f| f.color == ronoctua_tokens::color::STATE_ACCENT)
+                .count()
+        };
+        assert_eq!(accented_names(&mut v), 1, "the listing has the keyboard");
+        // `C-o` crosses into the sidebar.
+        v.key(of_view("C-o"));
+        assert!(matches!(v.pane(), Pane::Sidebar));
+        assert!(matches!(v.focused_here(), Some((Pane::Sidebar, _))));
+        assert_eq!(
+            accented_names(&mut v),
+            0,
+            "the listing kept a cursor the keyboard had left"
+        );
+    }
+
+    #[test]
+    fn a_focus_scrolled_out_of_sight_gets_no_band() {
+        // A BAND IS A RECTANGLE ON A LINE, and a row that is not on screen has
+        // no line. `Section::line_of` is what answers, and it is the same
+        // function the pointer's band goes through.
+        let dir = scratch("foco-fora");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        assert!(v.focus_line(120, ROOM).is_some(), "row nought is on screen");
+        // The wheel moves the listing and leaves the cursor where it was.
+        v.wheel(Pane::Listing, 20, 120, ROOM);
+        assert!(v.list_offset() > 0);
+        assert_eq!(
+            v.focus_line(120, ROOM),
+            None,
+            "a band was drawn for a row nobody can see"
+        );
+    }
+
+    #[test]
+    fn the_band_answers_where_no_field_does() {
+        // THE DEFECT THIS CATCHES: the window door asked `View::hit` for its
+        // hover band, and `hit` ends in `field_at(cell)?`. A field covers the
+        // width of its own TEXT, and the name column is `Width::Fill` — so on a
+        // wide window most of a row belongs to a field covering only the
+        // filename's letters, and the rest answered nothing. *"As vezes o item
+        // é destacado, as vezes não, e muitos nunca são destacado."*
+        let dir = scratch("faixa-vazio");
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        let b = bundle();
+        let split = v.split(120);
+        let first = split + RULE + GUTTER + 1;
+        // Line 2 is the first entry: the chrome is the path and the header.
+        assert!(
+            v.hit(120, ROOM, 2, first, &b).is_some(),
+            "the name itself has a field"
+        );
+        assert_eq!(v.band_row(120, ROOM, 2, first), Some((Pane::Listing, 2)));
+        // AND A CELL FAR PAST THE END OF `a.txt`, still inside its column.
+        let empty = first + 30;
+        assert!(
+            v.hit(120, ROOM, 2, empty, &b).is_none(),
+            "cell {empty} was covered by a field, so this proves nothing"
+        );
+        assert_eq!(
+            v.band_row(120, ROOM, 2, empty),
+            Some((Pane::Listing, 2)),
+            "the row under the pointer answered nothing"
+        );
+        // AND A LINE PAST THE LAST ENTRY IS NOT A ROW. Lighting it would
+        // promise a click on nothing.
+        assert_eq!(v.band_row(120, ROOM, 8, first), None);
+    }
+
+    #[test]
+    fn clicking_a_menu_row_runs_it() {
+        // NOTHING REACHABLE ONLY BY THE KEYBOARD. The menu draws the key beside
+        // every row, and pressing the row has to be pressing the key — that is
+        // the rule the whole footer keeps.
+        //
+        // It could not be kept while the modal was drawn past the sections:
+        // `View::hit` resolved a point against the LISTING behind the menu, so
+        // a click on `copy the path` either did nothing or acted on a file
+        // nobody could see.
+        let (mut v, b) = menu_over_three_files("menu-clique");
+        let rows = v.modal_all(120, &b);
+        let (line, want) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(n, r)| {
+                r.fields.iter().find_map(|f| match &f.hit {
+                    Hit::Menu(id) if *id == "copy-path" => Some((n, f.hit.clone())),
+                    _ => None,
+                })
+            })
+            .expect("the menu offers `copy the path`");
+        // THROUGH THE POINT, as the door does: the cell of the label, on that
+        // line of the region.
+        let cell = rows[line]
+            .fields
+            .iter()
+            .find(|f| f.hit == want)
+            .map(|f| f.at + 1)
+            .unwrap();
+        let target = v
+            .hit(120, ROOM, line, cell, &b)
+            .expect("the row has a field");
+        assert_eq!(target.hit, want, "the point resolved to another row");
+        assert!(
+            matches!(v.click(target.row, &target.hit), Step::Do(Doing::Copy(_))),
+            "clicking `copy the path` did not copy it"
+        );
+    }
+
+    #[test]
+    fn an_empty_directory_still_has_a_menu_and_it_is_about_the_directory() {
+        // THE POINTER FINDS NO FIELD, and that is not a failure: the "nothing
+        // here" line carries none. Answering nothing was reported once as the
+        // right button being dead.
+        let dir = scratch("menu-vazio");
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        assert!(v.is_empty());
+        let b = bundle();
+        let cell = v.split(120) + RULE + GUTTER + 1;
+        let t = v.hit(120, 12, 4, cell, &b);
+        assert!(t.is_none(), "an empty listing answered a field");
+        v.menu_at(t.as_ref());
+        assert!(v.menu_open(), "the empty directory got no menu");
     }
 
     #[test]

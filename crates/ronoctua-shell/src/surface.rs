@@ -753,6 +753,16 @@ struct ExpansionRow {
     foot: bool,
 }
 
+/// How long a message stays on screen — BOTH doors.
+///
+/// Three seconds: time to read a short line without it becoming permanent
+/// noise. In this door the one-second timer that expires a notification wipes
+/// it too, so there is no second clock; the window door has no clock at all and
+/// arms a one-shot per message (see `FilesWindow::say`). Two mechanisms, and
+/// they have to agree about the number or "how long is a message on screen"
+/// would have two answers.
+pub(crate) const ECHO_SECONDS: u64 = 3;
+
 /// What a click on a line of the expansion does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Click {
@@ -775,14 +785,19 @@ enum Click {
     /// No index: which crumb comes from the cell, exactly as the header's
     /// columns do. The row alone would say "the path", which is not a place.
     FilesPath,
-    /// A cell of line `n` of the file manager.
+    /// A cell of the file manager's listing.
     ///
-    /// The row alone is not enough here, and that is the whole difference from
-    /// the other variants: a listing row has seven columns and ten of its cells
-    /// are separate permission bits. WHICH cell comes from
-    /// `Footer::cell_under_pointer`, recorded by the same press — see
-    /// `pointer_frame`.
-    Files(usize),
+    /// No index, and it USED to carry one. The row alone is not enough here —
+    /// a listing row has seven columns and ten of its cells are separate
+    /// permission bits — so both buttons resolve the point through
+    /// `files::View::hit` and this variant only says WHOSE line it is.
+    ///
+    /// The index that was here could not be trusted, and one reader believed
+    /// it: `Footer::visible_row` asks for a window of ONE line, and a
+    /// one-line window of the manager is its chrome, so the number it carried
+    /// described the path line no matter which file was under the pointer.
+    /// Nothing reads it now, and nothing can.
+    Files,
     /// A cell of the manager's bottom STRIP — the two panels, side by side.
     ///
     /// No index, for the reason `FilesPath` has none: the strip is not part of
@@ -2986,8 +3001,8 @@ impl PointerHandler for Footer {
         );
         let segment_before = self.segment_under_pointer;
         let mut clicked = None;
-        let mut menu_at = None;
-        // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicked` and `menu_at`
+        let mut menu = false;
+        // THE MODELINE'S OWN TWO CLICKS, kept apart from `clicked` and `menu`
         // above: those two are about a ROW of the expanded region, and the
         // modeline has no rows. Folding them together is how the right button
         // came to act one line off once already.
@@ -3101,39 +3116,26 @@ impl PointerHandler for Footer {
                         segment_prev = Some(id);
                         continue;
                     }
-                    // THE LINE ON SCREEN IS NOT THE ROW OF THE LISTING, and
-                    // this is where that was being confused.
+                    // AND THAT IS ALL THE PRESS DECIDES. What it is over is
+                    // `files_target()`'s answer, asked once at dispatch — the
+                    // same question the left button asks.
                     //
-                    // `row_at` answers which VISIBLE line the pointer is on.
-                    // The left button never cared: it goes through the
-                    // `ExpansionRow`, which carries the absolute index. The
-                    // right button passed the visible number straight through
-                    // as if it were an entry — so with a header on line zero it
-                    // acted one row down, and with the path line above that,
-                    // two. Right-clicking the first file opened the third.
+                    // IT USED TO ASK THE `ExpansionRow` INSTEAD, and that is
+                    // why the owner reported the button as dead in this door
+                    // while it worked in the window. `visible_row(i)` builds
+                    // ONE line — `expansion_window(offset + i, 1)` — and with
+                    // the manager open a window of one line is the listing's
+                    // chrome: every line on screen answered `Click::FilesPath`,
+                    // whichever file was on it. The match here wanted
+                    // `Click::Files(n)`, never saw one, and fell through to
+                    // `None`. The left button never noticed because it throws
+                    // the payload away and re-resolves through
+                    // `files::View::hit`; this one read the number.
                     //
-                    // Same path as the left button now: ask the row what it is.
-                    menu_at = self.row_under_pointer.and_then(|line| {
-                        match self.visible_row(line).and_then(|r| r.click) {
-                            // `usize::MAX` is the header, and the path line has
-                            // its own variant. Neither is about a file, so
-                            // neither has a menu.
-                            Some(Click::Files(n)) if n != usize::MAX => Some(n),
-                            // AN EMPTY LISTING STILL HAS A MENU, about the
-                            // directory itself — the "nothing here" line
-                            // carries no click, and answering nothing there was
-                            // reported as the right button not working. See
-                            // `files::View::menu_subject`.
-                            _ if self
-                                .files
-                                .as_ref()
-                                .is_some_and(crate::files::View::is_empty) =>
-                            {
-                                Some(0)
-                            }
-                            _ => None,
-                        }
-                    });
+                    // The only case that survived was the empty directory,
+                    // which had a guard of its own — so the button worked on
+                    // the one listing with nothing to act on.
+                    menu = true;
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     self.row_under_pointer = self.row_at(e.position.0, e.position.1);
@@ -3268,8 +3270,8 @@ impl PointerHandler for Footer {
         // THE RIGHT BUTTON FIRST: with both pressed in one frame, opening the
         // menu is the safer of the two — a left click on a listing can run
         // something.
-        if let Some(row) = menu_at {
-            self.open_files_menu(row);
+        if menu {
+            self.open_files_menu();
             return;
         }
         // A SHAPE TURNED, which is neither a drag along a track nor a click:
@@ -5713,13 +5715,6 @@ impl Footer {
         self.after_the_queue_moved();
     }
 
-    /// How long a message from the echo area stays on screen.
-    ///
-    /// Three seconds: time to read a short line without it becoming permanent
-    /// noise. The one-second timer that expires a notification also wipes it —
-    /// there is no second clock.
-    const ECHO_SECONDS: u64 = 3;
-
     /// Puts a message in the echo area.
     /// Puts whatever was last copied into the queue.
     ///
@@ -5784,7 +5779,7 @@ impl Footer {
         tracing::info!(echo = %text, "echo area");
         self.echo = Some((
             text,
-            std::time::Instant::now() + std::time::Duration::from_secs(Self::ECHO_SECONDS),
+            std::time::Instant::now() + std::time::Duration::from_secs(ECHO_SECONDS),
         ));
     }
 
@@ -6248,24 +6243,34 @@ impl Footer {
     ///
     /// The strip's own count is [`Footer::files_strip`].
     fn expansion_len(&self) -> usize {
-        if let Some(files) = &self.files
-            && let Some(n) = files.row_count(self.screen_columns())
-        {
-            // NO `n == 0` CASE ANY MORE: `row_count` answers at least one,
-            // because "nothing here" is a sentence that has to be somewhere and
-            // it is now a field of the listing. That `.max(1)` moved INTO the
-            // view, where the window door can reach it too.
+        if let Some(files) = &self.files {
+            // THE MODAL LIST IS THE REGION, when one is up. The menu, the
+            // picker and the detail sheet COVER the listing, so the height is
+            // theirs and neither `row_count` nor `region_len` will answer —
+            // both say `None` there, on purpose.
+            //
+            // Falling through to the bottom of this function with that `None`
+            // is what killed the shell: `expansion()` with the manager open
+            // asks `expansion_window`, which asked `expansion` back. See
+            // `files::View::modal_len`.
+            if let Some(n) = files.modal_len(self.screen_columns(), &self.texts) {
+                return n.max(1);
+            }
+            // NO `n == 0` CASE: `row_count` answers at least one, because
+            // "nothing here" is a sentence that has to be somewhere and it is
+            // now a field of the listing. That `.max(1)` moved INTO the view,
+            // where the window door can reach it too.
             //
             // THE CHROME COMES FROM THE VIEW, which is the one place that
             // decides how tall it is — see `View::chrome_lines`. It used to be
             // a literal `2` here and another one below, and the doors could
             // drift apart from each other and from the drag.
-            let _ = n;
+            //
             // THROUGH `region_len`, which adds the chrome to the LISTING and
             // not to whichever column is tallest — see the note there.
             return files
                 .region_len(files.chrome_lines(), self.screen_columns())
-                .unwrap_or(n);
+                .unwrap_or(1);
         }
         // The panel counts without building: `expansion()` would clone every
         // job to answer "how many", and this runs on every pointer motion —
@@ -6354,7 +6359,7 @@ impl Footer {
                 ..ExpansionRow::empty_one()
             },
             ExpansionRow {
-                click: Some(Click::Files(usize::MAX)),
+                click: Some(Click::Files),
                 fields: files.header(width, &self.texts).fields,
                 foot: false,
                 ..ExpansionRow::empty_one()
@@ -6371,12 +6376,17 @@ impl Footer {
             // Every other view's list is short: build it and cut it.
             return self.expansion().into_iter().skip(skip).take(take).collect();
         };
-        let Some(total) = files.row_count(self.screen_columns()) else {
-            return self.expansion().into_iter().skip(skip).take(take).collect();
-        };
-        if total == 0 {
-            return self.expansion().into_iter().skip(skip).take(take).collect();
-        }
+        // AND THE MANAGER IS BUILT HERE, WHATEVER STATE IT IS IN — the modal
+        // branch below is a few lines down, and it is the whole reason this
+        // function knows about `plain`.
+        //
+        // There used to be two guards above it, both asking `row_count` and
+        // both handing the manager back to `expansion()` when it said `None`.
+        // `expansion()` with the manager open asks THIS function, so the pair
+        // was an unconditional infinite recursion — and `row_count` says `None`
+        // for exactly the three states the modal branch exists to draw. The
+        // footer's file manager died of a stack overflow the moment `C-m`, the
+        // right button or a permission question opened one of them.
         let width = self.screen_columns();
         let plain = files.plain();
         // THE HEADER IS LINE ZERO, so it belongs to the window only when the
@@ -6404,23 +6414,17 @@ impl Footer {
         // deciding another's line: a column's length, its offset and its top
         // stay inside it, and the only thing they share is the `y` they are
         // drawn at.
-        // A MODAL VIEW IS ONE LIST, and not four columns: the menu, the picker
-        // and the detail sheet cover the listing. See `View::modal_rows`.
-        if !plain {
-            return files
-                .modal_rows(skip, take, width, &self.texts)
-                .into_iter()
-                .enumerate()
-                .map(|(n, r)| ExpansionRow {
-                    click: (!r.fields.is_empty()).then_some(Click::Files(skip + n)),
-                    fields: r.fields,
-                    foot: false,
-                    ..ExpansionRow::empty_one()
-                })
-                .collect();
-        }
+        // A MODAL VIEW IS ONE LIST, and not four columns — and it comes down
+        // the SAME path as the other four now.
+        //
+        // It used to have a branch of its own here, carrying `modal_rows`
+        // straight past the sections. That branch is what left the menu, the
+        // picker and the detail sheet without a scrollbar, without a thumb to
+        // drag, without a wheel that stopped where the bar did and without a
+        // hover band: all four of those are `Section`'s, and a list that never
+        // became a section had none of them. `View::sections_of` builds the
+        // modal as the LISTING's section now — see the note there.
         let chrome = self.files_chrome(files, width, plain);
-        let chrome_count = chrome.len();
         let bare: Vec<crate::files::Row> = chrome
             .iter()
             .map(|r| crate::files::Row {
@@ -6453,10 +6457,11 @@ impl Footer {
                     // THE CHROME'S OWN CLICK on its own lines — the path opens
                     // the parent and the header sorts — and the listing's
                     // below them.
-                    click: clicks.get(n).copied().flatten().or_else(|| {
-                        listing_has_something
-                            .then_some(Click::Files(skip + n.saturating_sub(chrome_count)))
-                    }),
+                    click: clicks
+                        .get(n)
+                        .copied()
+                        .flatten()
+                        .or_else(|| listing_has_something.then_some(Click::Files)),
                     fields,
                     ..ExpansionRow::empty_one()
                 }
@@ -6468,7 +6473,7 @@ impl Footer {
         // THE FILE MANAGER FIRST, matching `view()`'s own order — the one place
         // the precedence is written. A branch here that disagreed with that
         // function is exactly the divergence `ViewState` exists to prevent.
-        if let Some(files) = &self.files {
+        if self.files.is_some() {
             // THROUGH THE SAME BUILDER THE DRAWING USES.
             //
             // This branch had a second copy of it — chrome chained in front of
@@ -6476,10 +6481,12 @@ impl Footer {
             // day one of them is edited. `expansion_window` lays the SECTIONS
             // onto the lines, and asking it for the whole region is the same
             // question with no ceiling.
-            let all = files
-                .region_len(files.chrome_lines(), self.screen_columns())
-                .unwrap_or(0);
-            return self.expansion_window(0, all);
+            //
+            // AND THE HEIGHT COMES FROM `expansion_len`, which is the one place
+            // the manager's is decided — modal list included. This asked
+            // `region_len` on its own and took `0` for its `None`, so anything
+            // modal asked for a region of no lines.
+            return self.expansion_window(0, self.expansion_len());
         }
         // THE TRANSFER PANEL. One row per job, drawn by `transfers::View` with
         // the file manager's own `Row` and `Field` — see that module for why it
@@ -7479,21 +7486,17 @@ impl Footer {
     /// right-clicking a row people have not moved to is the common case, and a
     /// menu that acted on the cursor's row instead would act on something else
     /// entirely.
-    fn open_files_menu(&mut self, row: usize) {
-        // ROW AND CELL, and the cell is the half that was missing: without it
-        // a right-click in the sidebar's cells opened the listing's menu about
-        // whatever file shared the line. `View::menu_at` is the one place that
-        // decides, so both doors ask the same question.
-        let width = self.screen_columns();
-        let cell = self.cell_under_pointer.unwrap_or(0);
-        // THE REGION'S HEIGHT, because a section's extent depends on it.
-        let room = self.grid().lines;
+    ///
+    /// THE SAME RESOLUTION THE LEFT BUTTON USES, and the same one the window
+    /// door uses: `files_target()`, which is `files::View::hit`. `None` is an
+    /// answer and not a failure — the empty directory has no field anywhere and
+    /// still has a menu, about the directory itself.
+    fn open_files_menu(&mut self) {
+        let target = self.files_target();
         let step = self
             .files
             .as_mut()
-            .map_or(crate::files::Step::Nothing, |v| {
-                v.menu_at(row, cell, width, room)
-            });
+            .map_or(crate::files::Step::Nothing, |v| v.menu_at(target.as_ref()));
         self.apply_files_step(step);
     }
 
@@ -7847,6 +7850,20 @@ impl Footer {
     /// `row_at` counts from the top of the region and does not know where the
     /// list stops — and a strip that answered `None` here would be a preview
     /// one cannot click, which is the mouse reaching less than the keyboard.
+    ///
+    /// # WITH THE MANAGER OPEN, ONLY THE `Click` IS TRUE, AND ONLY AS A LABEL
+    ///
+    /// A window of ONE line of a plain listing is the listing's CHROME — the
+    /// columns are laid onto the region's lines, and one line of region is line
+    /// zero of every column. So the fields that come back here are the path
+    /// line's, whatever `i` says, and the row is the manager's only in the
+    /// sense that it says so.
+    ///
+    /// That is enough for the one thing this is asked for: `click_at` treats
+    /// the three `Files*` variants alike and resolves the point again through
+    /// `files::View::hit`. It is NOT enough for anything that reads a number
+    /// out of the answer, and the secondary button did exactly that until the
+    /// owner reported it dead in this door — see `Click::Files`.
     fn visible_row(&self, i: usize) -> Option<ExpansionRow> {
         let lines = self.grid().lines;
         if self.files_strip() > 0 && i >= lines {
@@ -7919,7 +7936,7 @@ impl Footer {
             // are one now: `files::View::hit` says the section, the row inside
             // it and the field, and this door presses the key that goes with
             // it. Nothing here decides anything the keyboard cannot reach.
-            Some(Click::FilesPath | Click::Files(_) | Click::FilesStrip) => {
+            Some(Click::FilesPath | Click::Files | Click::FilesStrip) => {
                 let Some(target) = self.files_target() else {
                     return;
                 };
@@ -8064,14 +8081,16 @@ impl Footer {
             // `scrolloff` the locator uses. A listing that does not follow its
             // own cursor is a listing where holding `j` walks off the bottom.
             //
-            // PLUS THE HEADER, when it is drawn: this is the VISUAL position,
-            // and the header occupies the first line of the region. Without the
-            // offset the scrolling aims one row above the focused one — the
-            // same adjustment the network view makes for its question.
-            ViewState::Files => self.files.as_ref().map(|v| {
-                let header = usize::from(!v.menu_open() && !v.showing_detail());
-                v.cursor() + header
-            }),
+            // ASKED OF THE VIEW, because the answer is the VISUAL position and
+            // the view is what knows which list is on screen. This door used to
+            // work it out itself — the listing's cursor plus a header it tested
+            // for — and with a menu up that is the wrong cursor entirely: the
+            // region followed a listing nobody could see while the chosen row
+            // walked off the bottom of a seventeen-row menu.
+            ViewState::Files => self
+                .files
+                .as_ref()
+                .and_then(crate::files::View::visual_cursor),
             // The transfer panel's, for the same reason and with no adjustment:
             // it draws no chrome above the list, so its row IS its visual line.
             ViewState::Transfers => self
@@ -8712,16 +8731,27 @@ impl Footer {
                     &self.texts,
                 ))
             });
-        // WHERE THE POINTER IS, marked by a BACKGROUND.
+        // WHERE THE POINTER IS, marked by a BACKGROUND — and, since the owner
+        // reported it from the screen, where the FOCUS is by another.
         //
-        // # Why the pointer gets a background and the focus does not
+        // # Why they are two backgrounds now, and were one
         //
-        // Because the two are different things and need different signals. The
-        // focus — what the `Enter` is going to run — is told apart by the text's
-        // COLOR, and it has been so since the `M-x` (invariant 15: never by a
-        // box or an outline). Giving both a background would leave the question
-        // "which one is selected?" unanswered at the moment the pointer rests
-        // over another line.
+        // This said that the focus needs no background because it is told apart
+        // by the text's COLOUR, and that giving both one would leave "which is
+        // selected?" unanswered while the pointer rested elsewhere. The first
+        // half was not true of the manager: the colour reaches ONE field of
+        // seven (the name, through `files::colour_of`), a folder is already
+        // that colour, and the action menu's rows carry no accent at all — so
+        // in the menu the cursor was invisible outright. *"Ao trocar de item
+        // com as setas nenhuma alteração/indicador visual é feita"*, in both
+        // doors.
+        //
+        // The second half was a real objection and it is answered rather than
+        // dropped: the two bands are two TOKENS, `surface.selection` for the
+        // focus and the weaker `surface.hover` for the pointer, so two lit rows
+        // still say which is which. And when they are the same row only the
+        // focus is drawn — the stronger statement of the two, and painting the
+        // weaker over it would dim the very row one is standing on.
         //
         // # Only what is CLICKABLE
         //
@@ -8747,11 +8777,46 @@ impl Footer {
                 .is_some_and(|line| line >= self.grid().lines);
             !v.band_belongs_at(self.cell_under_pointer.unwrap_or(0), columns, in_strip)
         });
+        // WHERE THE KEYBOARD IS, in the manager and nowhere else.
+        //
+        // The seven other views of this region have a focus one can see: the
+        // finder and the application list accent the focused item's own text,
+        // and the manual has no focused item at all. The manager is the one
+        // where the signal did not survive — one field of seven in the listing,
+        // nothing whatsoever in the menu — and it is the one the owner
+        // reported. Widening this to lists nobody complained about would be
+        // repainting seven things to fix one.
+        //
+        // THE LINE COMES FROM THE SECTIONS — see `files::View::focus_line`. A
+        // row is not a line, and the two bands have to agree about the
+        // conversion or the same row would light in two places.
+        //
+        // AND THE CELL COMES FROM THE PANE THAT HAS THE KEYBOARD, not from the
+        // pointer: `band_of` decides which side of the sidebar's rule to light
+        // from a cell, and the cell it is normally given is where the mouse is.
+        // A focus band placed that way would jump sides when the hand moved.
+        let focused_band = self.files.as_ref().and_then(|v| {
+            let columns = self.screen_columns();
+            let (pane, line) = v.focus_line(columns, grid.lines)?;
+            let cell = match pane {
+                crate::files::Pane::Sidebar => 0,
+                _ => v.split(columns),
+            };
+            Some((cell, line))
+        });
+        let focus_cell = focused_band.map(|(cell, _)| cell);
+        let focused_row = focused_band
+            .filter(|(_, line)| visible.get(*line).is_some_and(|l| l.click.is_some()))
+            .map(|(_, line)| place_of(line));
         let under_the_pointer = self
             .row_under_pointer
             .filter(|_| !over_a_picture)
             .filter(|i| visible.get(*i).is_some_and(|l| l.click.is_some()))
-            .map(place_of);
+            .map(place_of)
+            // ONE BAND WHERE IT IS ONE ROW. Painting the weaker colour over the
+            // stronger would dim the very row one is standing on, which is the
+            // opposite of what either band is for.
+            .filter(|p| Some(*p) != focused_row);
         // Does the footer have the keyboard? It is what decides whether the
         // accent stays on the window (the compositor's border) or comes to the
         // buffer's name.
@@ -9483,6 +9548,33 @@ impl Footer {
             // It is a change of background color, and not a box: no border, no
             // radius, no shadow (invariant 15). It goes BEFORE the scrollbar in
             // the list of quads, so the bar stays on top of it.
+            // THE FOCUS FIRST, and the pointer over it: they are never the
+            // same row (`under_the_pointer` filters it out), so the order only
+            // decides which is drawn under the scrollbar — and both are.
+            if let Some((base, grid_y)) = focused_row {
+                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                #[allow(clippy::cast_precision_loss)]
+                let (band_at, band_wide) = self.files.as_ref().map_or_else(
+                    || (f32::from(base) * cell, f32::from(grid.width) * cell),
+                    |v| {
+                        crate::files::band_of(
+                            v.panes(columns),
+                            crate::chrome::FIELDS_LEAD,
+                            grid.width,
+                            focus_cell,
+                            cell,
+                            width as f32,
+                        )
+                    },
+                );
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: band_at,
+                    y: f32::from(first_of_expansion + grid_y) * line_height,
+                    width: band_wide,
+                    height: line_height,
+                    color: tokens::color::SURFACE_SELECTION,
+                });
+            }
             if let Some((base, grid_y)) = under_the_pointer {
                 let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
                 // AND IT STOPS AT THE SIDEBAR'S EDGE.
@@ -9527,7 +9619,7 @@ impl Footer {
                     // would light the three neighboring lines together.
                     width: band_wide,
                     height: line_height,
-                    color: tokens::color::SURFACE_SELECTION,
+                    color: tokens::color::SURFACE_HOVER,
                 });
             }
 

@@ -1267,16 +1267,29 @@ impl UpdateWindow {
             let row = self.step_offset + n;
             #[allow(clippy::cast_possible_truncation)]
             let y = FIRST_OF_STEPS + n as u16;
-            // THE CURSOR AND THE POINTER GET THE SAME BAND, and it is a flat
-            // quad with no border and no radius — invariant 15.
-            if row == self.cursor || self.row_under_pointer == Some(row) {
+            // THE CURSOR AND THE POINTER GET DIFFERENT BANDS, and each is a
+            // flat quad with no border and no radius — invariant 15.
+            //
+            // They shared one colour, so a pointer resting away from the cursor
+            // lit two rows identically and neither said "this is the one the
+            // `Enter` runs". The file manager was reported for exactly that and
+            // the split is the owner's: the focus keeps `surface.selection` and
+            // the pointer takes the weaker `surface.hover`.
+            let band = if row == self.cursor {
+                Some(tokens::color::SURFACE_SELECTION)
+            } else if self.row_under_pointer == Some(row) {
+                Some(tokens::color::SURFACE_HOVER)
+            } else {
+                None
+            };
+            if let Some(color) = band {
                 quads.push(ronoctua_render::quad::Quad {
                     x: 0.0,
                     y: f32::from(y) * line_px,
                     #[allow(clippy::cast_precision_loss)]
                     width: self.width as f32,
                     height: line_px,
-                    color: tokens::color::SURFACE_SELECTION,
+                    color,
                 });
             }
             let (verdict, seconds) = self.verdicts.of_step(step.id);
