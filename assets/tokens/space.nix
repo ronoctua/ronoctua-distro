@@ -24,6 +24,30 @@
     # start to look like a margin.
     edgeLeft = 1;
     edgeRight = 1;
+    # THE MOST LINES THE OPENED LINE MAY TAKE, under the line itself.
+    #
+    # The minibuffer's line holds one line of text and what does not fit is
+    # cut. Opened, it shows the rest, and it is the size of what is in it —
+    # up to this. Past it the text SCROLLS, which is what the bar is for.
+    #
+    # IT WAS A FIXED HEIGHT, and the argument for that is worth keeping
+    # because it is the argument this number now overrides. The footer's
+    # height is the same on every output (`Footer::apply_geometry`), so a
+    # height that follows the wrap follows the WIDTH: moving the focus between
+    # monitors of different widths reflows the buffers on one of them. It is
+    # the same reason `band.rows` counts the notification's BODY and ACTIONS
+    # rather than wrapping its summary.
+    #
+    # The owner saw the fixed height on screen — a short sentence opening into
+    # a drawer with four empty rows — and chose the other trade. The cost is
+    # real, bounded by this number, and paid only while a drawer is open,
+    # which is a state somebody entered on purpose and leaves with one key.
+    #
+    # Six: a hint line is three or four wrapped rows on a normal screen, so
+    # the ceiling is rarely reached and the bar is rarely needed; and the
+    # fixed part of the footer stays under the expansion's own budget, which
+    # counts these lines (`expansion_ceiling`).
+    foldLines = 6;
   };
 
   # The FILE MANAGER's table, in cells.

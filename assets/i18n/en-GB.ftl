@@ -423,6 +423,19 @@ glyphs-search = Type to search for a Nerd Fonts glyph
 glyphs-prefix-block = block
 glyphs-prefix-tag = tag
 expansion-page = RCtrl ←→
+# THE KEYS THAT WALK THE LINE ONCE IT IS OPEN, and the sentence that teaches
+# them. They are a chord of the RIGHT Ctrl, which is the one family no view
+# sees — so they are in no registry and in no manual, and this sentence is the
+# only thing on screen that says they exist. It is the lesson `C-o` cost this
+# project, and the reason it is APPENDED to the hint rather than standing on
+# its own: a key taught on a line nobody has opened teaches nothing.
+#
+# The notation is a value and not a `key_that_runs`, exactly as
+# `expansion-page` is: a right-Ctrl chord is not a command of the registry, so
+# there is no table to read it back out of, and the two words in it are
+# translated.
+minibuffer-fold-keys = RCtrl ↑↓
+minibuffer-fold-hint = · { $keys } move through the rest of this line
 
 # --- The glyph card (Nerd Fonts browser) -----------------------------------
 glyphs-sheet-codepoint = Codepoint

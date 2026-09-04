@@ -170,6 +170,20 @@
   adjust = "cod-arrow_both";
   prompt = "cod-chevron_right";
   ellipsis = "cod-ellipsis";
+  # THE LINE THAT DOES NOT FIT, and the way to see the rest of it.
+  #
+  # The minibuffer's line is one line, and a message longer than the screen
+  # used to be cut with nothing to do about it. These two are the control on
+  # its right edge: `expand` while the line is folded, `collapse` while it is
+  # open. Two tokens and not one turned upside down, because a glyph is a
+  # DRAWING and the font is where a drawing comes from — rotating one in the
+  # renderer would be a second way of making a picture.
+  #
+  # Chevrons and not a triangle: `selection` is the filled triangle and it
+  # already means "this row is marked", and the pair has to read as a
+  # direction rather than as a state.
+  expand = "cod-chevron_down";
+  collapse = "cod-chevron_up";
   list = "cod-list_unordered";
   history = "cod-history";
 

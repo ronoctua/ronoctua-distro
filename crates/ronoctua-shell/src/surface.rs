@@ -280,6 +280,45 @@ struct Footer {
     /// What the brain line's control under the pointer says, for the message
     /// line.
     brain_hint: Option<String>,
+    /// Whether the minibuffer's line is OPEN, and how far it is scrolled.
+    ///
+    /// The line holds one line and cuts the rest; opened, it shows the rest
+    /// over a constant number of lines, with a bar. See [`crate::fold`].
+    ///
+    /// It lives here and not on `files::View` because the line is not the
+    /// manager's: it carries an echo, what the pointer is on, and what is
+    /// being typed into `M-x` just as readily.
+    fold: crate::fold::Fold,
+    /// Where the control that opens it was drawn, in cells of the minibuffer's
+    /// line, or `None` when there is none.
+    ///
+    /// Remembered and not recomputed, for the reason `band_placed` is: what
+    /// the pointer clicks has to be what was DRAWN.
+    fold_control: Option<u16>,
+    /// The opened band's scroll, as it was last DRAWN.
+    ///
+    /// Kept for the same reason `fold_control` is: the bar the pointer grabs
+    /// has to be the bar that was painted, and the wrap depends on a width
+    /// only the painter knows.
+    fold_scroll: ronoctua_design::Scroll,
+    /// Whether the opened line's bar is being dragged.
+    dragging_fold: bool,
+    /// How many rows the line's text came to at the last width it was DRAWN at.
+    ///
+    /// The height follows the content now, and the content is only known
+    /// where the line is laid out — but the height is asked for BEFORE the
+    /// frame, by whoever tells the compositor how tall the surface is. So the
+    /// drawing writes this down and the geometry reads it, which is one frame
+    /// old exactly when the text or the width has just changed. `draw_and_paint`
+    /// notices that and goes round once more; the alternative was working the
+    /// line's six sources out twice per frame.
+    fold_wrapped: usize,
+    /// The opened line's height as the compositor was last TOLD it.
+    ///
+    /// The guard on the settling pass above: without it the comparison would
+    /// be against a number that had already been updated, and the extra frame
+    /// would never happen.
+    fold_applied: u16,
     /// How the leader shows up on screen — see [`crate::leader`].
     leader_label: String,
     /// The echo area: the shell's last message and when it expires.
@@ -1521,6 +1560,17 @@ pub fn run() -> Result<()> {
         brain: None,
         brain_placed: None,
         brain_hint: None,
+        fold: crate::fold::Fold::default(),
+        fold_control: None,
+        dragging_fold: false,
+        fold_wrapped: 0,
+        fold_applied: 0,
+        fold_scroll: ronoctua_design::Scroll {
+            total: 0,
+            lines: 0,
+            offset: 0,
+            top: 0,
+        },
         band_hint: None,
         leader_label: crate::leader(),
         echo: None,
@@ -2968,6 +3018,10 @@ impl PointerHandler for Footer {
         // between the minibuffer and the list, and everything below asks the
         // row what it is.
         let mut brain_hit = None;
+        let mut fold_toggle = false;
+        let mut wheel_at: Option<f64> = None;
+        let mut dragging_fold = false;
+        let mut fold_hit = false;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -3117,8 +3171,29 @@ impl PointerHandler for Footer {
                         brain_hit = Some(hit);
                         continue;
                     }
+                    // AND THE MINIBUFFER'S OWN CONTROL, on the line between the
+                    // two. No two of these can be under the pointer at once —
+                    // each is a different `y` — so the order here is the
+                    // screen's and not a precedence.
+                    if self.fold_at(e.position.0, e.position.1) {
+                        fold_toggle = true;
+                        continue;
+                    }
+                    if self.on_fold_thumb(e.position.0, e.position.1) {
+                        dragging_fold = true;
+                        self.fold_drag_to(e.position.1);
+                        continue;
+                    }
                     if let Some(id) = self.segment_at(e.position.0, e.position.1) {
                         segment_next = Some(id);
+                        continue;
+                    }
+                    // AND THE CONTROL THAT OPENS THE MINIBUFFER'S LINE, for
+                    // the same reason as the two above: it is on a line that
+                    // has no `ExpansionRow` behind it, and everything below
+                    // here asks the row what it is.
+                    if self.fold_at(e.position.0, e.position.1) {
+                        fold_hit = true;
                         continue;
                     }
                     // ON THE BAR, IT IS NOT A CLICK ON AN ITEM.
@@ -3159,6 +3234,7 @@ impl PointerHandler for Footer {
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = false;
                     self.dragging_section = None;
+                    self.dragging_fold = false;
                     self.spinning = None;
                 }
                 // THE WHEEL AND THE TOUCHPAD GESTURE.
@@ -3187,6 +3263,10 @@ impl PointerHandler for Footer {
                     // nothing.
                     self.detents +=
                         axis_detents(&vertical, line_px) + axis_detents(&horizontal, line_px);
+                    // WHERE THE WHEEL WAS, because the opened line is drawn
+                    // above the region and `row_under_pointer` answers `None`
+                    // up there — see `pointer_on_fold`.
+                    wheel_at = Some(e.position.1);
                 }
                 _ => {}
             }
@@ -3202,6 +3282,17 @@ impl PointerHandler for Footer {
 
         // AND THE BRAIN'S, on the same footing: it is decided by the `y` too,
         // so no two of these can be true for one press.
+        if fold_hit {
+            self.fold.toggle();
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+        if dragging_fold {
+            self.dragging_fold = true;
+        }
+        if fold_toggle {
+            self.toggle_fold();
+        }
         if let Some(hit) = brain_hit {
             self.brain_clicked(hit);
             return;
@@ -3253,6 +3344,18 @@ impl PointerHandler for Footer {
                 Navigation::Page => 1,
                 Navigation::Scroll => LINES_PER_DETENT as i32,
             };
+            // THE OPENED LINE TAKES IT FIRST, when the pointer is on it.
+            //
+            // It sits ABOVE the region, so nothing below here would ever be
+            // asked about it: `row_at` counts from the region's first line and
+            // answers `None` up there. A bar with no wheel is half a control
+            // in this footer — the manager's wheel-per-section was a whole
+            // piece of work for exactly that reason.
+            if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(y)) {
+                self.scroll_fold(whole.saturating_mul(LINES_PER_DETENT as i32));
+                self.owes_paint = true;
+                return;
+            }
             // THE SECTION UNDER THE POINTER TAKES IT FIRST.
             //
             // Only the listing's offset is the footer's — it is the one the
@@ -4924,6 +5027,22 @@ impl Footer {
         self.look_again();
         self.draw();
         self.paint();
+        // AND ONCE MORE IF THE OPENED LINE CHANGED SIZE.
+        //
+        // The height is asked for before the frame and the wrap is only known
+        // inside it, so the first pass after the text or the width changed
+        // drew at the old height. One more round settles it; the guard is the
+        // number itself, so a line that did not change costs a comparison and
+        // there is no loop to run away.
+        let settled = self.fold_rows();
+        if self.fold.open && settled != self.fold_applied {
+            self.fold_applied = settled;
+            self.apply_geometry(self.interactivity());
+            self.draw();
+            self.paint();
+        } else {
+            self.fold_applied = settled;
+        }
     }
 
     /// Asks the inspector about the file under the manager's cursor.
@@ -4994,6 +5113,20 @@ impl Footer {
             return;
         };
 
+        // AND `Esc` CLOSES THE OPENED LINE FIRST.
+        //
+        // It is above every view because that is what the key means here: the
+        // drawer is the outermost thing on screen that a person opened, so it
+        // is the first thing the outermost gesture should shut. A view's own
+        // `Esc` ladder is one step behind it and untouched — the drawer is
+        // only ever open because somebody opened it, and the second `Esc` does
+        // what the first one used to.
+        if matches!(key.sym, ronoctua_keymap::Sym::Esc) && self.fold.close() {
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+            return;
+        }
+
         // WITH THE CtrlRight HELD, THE KEY DOES NOT ENTER THE SEQUENCE.
         //
         // That is the request: a combination key that does NOT add itself to the
@@ -5001,6 +5134,21 @@ impl Footer {
         // spending a letter of the keymap. Paging with `←`/`→` would cost two
         // letters that could never be a command again.
         if self.right_ctrl {
+            // AND THE SAME FAMILY OPENS THE LINE, on the axis it is free on.
+            //
+            // The paging pair is `←`/`→`; `↓`/`↑` were unspoken, and they are
+            // the right pair for this: the drawer opens DOWNWARD, which is the
+            // direction the control's own glyph points.
+            //
+            // The right `Ctrl` is the one family that is free in every view by
+            // construction — it never enters the leader's sequence and no view
+            // sees it — and this line belongs to every view, so it is the only
+            // place a key for it could live without colliding with one of them.
+            if self.fold_key(key.sym) {
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+                return;
+            }
             if self.navigate(key.sym) {
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
                 self.draw_and_paint();
@@ -5876,6 +6024,23 @@ impl Footer {
         self.band_rows() + 1
     }
 
+    /// How many lines the OPENED minibuffer line takes. `0` while it is folded.
+    ///
+    /// A constant while it is open — see `crate::fold`'s header for why it may
+    /// not follow the width.
+    fn fold_rows(&self) -> u16 {
+        crate::fold::rows(self.fold, self.fold_wrapped)
+    }
+
+    /// The first line of the opened band, when it is open.
+    ///
+    /// Directly under the minibuffer, because it is the minibuffer's own line
+    /// continuing: a drawer that opened somewhere else would be a second thing
+    /// on screen rather than the same one, longer.
+    fn fold_line_at(&self) -> u16 {
+        self.band_rows() + FOOTER_LINES
+    }
+
     /// Which line of the surface the brain's is on, when it is on one.
     ///
     /// GLUED UNDER THE MINIBUFFER, and not the last line of the surface. Three
@@ -5886,7 +6051,7 @@ impl Footer {
     /// which is exactly the defect [`Self::first_of_expansion`] exists to
     /// remove.
     fn brain_line_at(&self) -> u16 {
-        self.band_rows() + FOOTER_LINES
+        self.band_rows() + FOOTER_LINES + self.fold_rows()
     }
 
     /// The first line of the expanded region.
@@ -5896,7 +6061,7 @@ impl Footer {
     /// the same thing, and the one that gets it wrong is the one nobody looks
     /// at: the cursor describes the line above.
     fn first_of_expansion(&self) -> u16 {
-        self.band_rows() + FOOTER_LINES + self.brain_rows()
+        self.band_rows() + FOOTER_LINES + self.fold_rows() + self.brain_rows()
     }
 
     /// The height wanted right now, in px.
@@ -5916,8 +6081,9 @@ impl Footer {
         //
         // The band is added and not ordered against them: it is not a use of
         // the expanded region, it is a region of its own, above the pair.
-        let lines = u32::from(FOOTER_LINES + self.band_rows() + self.brain_rows())
-            + u32::try_from(self.expansion_rows()).unwrap_or(0);
+        let lines =
+            u32::from(FOOTER_LINES + self.band_rows() + self.fold_rows() + self.brain_rows())
+                + u32::try_from(self.expansion_rows()).unwrap_or(0);
         (tokens::metrics::line_height(tokens::font::SIZE_BASE) * lines as f32).ceil() as u32
     }
 
@@ -5958,7 +6124,14 @@ impl Footer {
         // lines of band are not counted against the ceiling. Whether it should
         // join is a separate question — the band is transient in a way these
         // are not — and it is flagged rather than folded in silently.
-        expansion_ceiling(smaller, usize::from(FOOTER_LINES + self.brain_rows()))
+        // AND THE OPENED LINE IS FIXED TOO while it is open: it is a constant
+        // number of rows the footer is spending, exactly as the brain's line
+        // is, and leaving it out would let the two together walk past the
+        // budget without either being blamed.
+        expansion_ceiling(
+            smaller,
+            usize::from(FOOTER_LINES + self.fold_rows() + self.brain_rows()),
+        )
     }
 
     /// How the expanded region is navigated right now.
@@ -6905,6 +7078,156 @@ impl Footer {
             self.first_of_expansion(),
             column,
         ))
+    }
+
+    /// The opened line's own keys, on the right `Ctrl`. `false` for anything
+    /// else, so the caller falls through to paging.
+    ///
+    /// One pair, and it reads as one gesture: down opens it and then walks
+    /// down it; up walks back and, at the top, shuts it. A separate key to
+    /// close would be a third thing to know for a drawer with one state.
+    fn fold_key(&mut self, sym: ronoctua_keymap::Sym) -> bool {
+        use ronoctua_keymap::Sym;
+        match sym {
+            Sym::Down => {
+                if self.fold.open {
+                    self.scroll_fold(1);
+                } else {
+                    self.fold.toggle();
+                }
+                true
+            }
+            Sym::Up if self.fold.open => {
+                if self.fold.offset == 0 {
+                    self.fold.close();
+                } else {
+                    self.scroll_fold(-1);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Walks the opened line by `by` wrapped lines, stopping at its end.
+    ///
+    /// The stop comes from the `Scroll` that was DRAWN, which is the only
+    /// thing that knows how many lines the text wrapped to at this width.
+    fn scroll_fold(&mut self, by: i32) {
+        let last = self
+            .fold_scroll
+            .total
+            .saturating_sub(self.fold_scroll.lines);
+        let next = i64::try_from(self.fold.offset).unwrap_or(0) + i64::from(by);
+        self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
+    }
+
+    /// Is the pointer inside the opened line's band?
+    ///
+    /// The band is the minibuffer's own line and the rows under it, which is
+    /// the whole of what the drawer draws — a wheel on the summary row is a
+    /// wheel on the drawer, because they are one thing.
+    fn pointer_on_fold(&self, y: f64) -> bool {
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let Some(line) = f.line_at(y as f32) else {
+            return false;
+        };
+        line >= self.minibuffer_line() && line < self.minibuffer_line() + 1 + self.fold_rows()
+    }
+
+    /// Is the pointer on the control that opens the line?
+    ///
+    /// It asks the cell that was DRAWN (`fold_control`) rather than working
+    /// the position out again — the same rule `band_placed` follows, and for
+    /// the same reason: what the pointer hits has to be what the eye saw.
+    fn fold_at(&self, x: f64, y: f64) -> bool {
+        let Some(at) = self.fold_control else {
+            return false;
+        };
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(self.minibuffer_line()) {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let cell = f.column_at(x as f32);
+        // THE AIR BESIDE THE GLYPH IS PART OF THE TARGET. One cell is 10,8 px
+        // and a chevron does not fill it; a target the size of the ink is a
+        // target one has to aim at.
+        cell + 1 >= at
+    }
+
+    /// The opened line's bar as a rectangle to PRESS, or `None`.
+    ///
+    /// Separate from the drawn thumb for the reason `region_track` is: the
+    /// track is where a drag may begin, and it is the whole band's height
+    /// rather than the handle's.
+    fn fold_track(&self, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
+        if !self.fold.open || !self.fold_scroll.cut() {
+            return None;
+        }
+        let f = crate::chrome::Frame::of(width, height, self.fold_line_at());
+        let top = f.y_of(self.fold_line_at());
+        let tall = f.line() * f32::from(self.fold_rows());
+        Some((f.width - f.cell(), top, f.cell(), tall))
+    }
+
+    /// Is the pointer on that track?
+    fn on_fold_thumb(&self, x: f64, y: f64) -> bool {
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        let Some((bx, by, bw, bh)) = self.fold_track(f.width, f.height) else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let (px, py) = (x as f32, y as f32);
+        px >= bx && px < bx + bw && py >= by && py < by + bh
+    }
+
+    /// Drags the opened line to where the pointer is.
+    ///
+    /// `Scroll::offset_at` is the inverse of the same call that drew the
+    /// thumb — which is what stops the handle and the content disagreeing.
+    fn fold_drag_to(&mut self, y: f64) {
+        let Some(f) = self.metric() else { return };
+        let Some((_, top, _, tall)) = self.fold_track(f.width, f.height) else {
+            return;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let at = y as f32 - top;
+        self.fold.offset = self.fold_scroll.offset_at(at, tall, f.line());
+        self.draw_and_paint();
+    }
+
+    /// Opens the minibuffer's line, or closes it.
+    fn toggle_fold(&mut self) {
+        self.fold.toggle();
+        // THE HEIGHT CHANGED, so the compositor has to be told before the
+        // frame is drawn — the surface is what the drawing is clipped to.
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// The opened line's bar, when its text went past the band.
+    ///
+    /// The track is the band's own lines, and the column is the surface's last
+    /// cell — the same edge the region's bar uses, one band higher. `None`
+    /// while the line is folded, and while everything fits.
+    fn fold_bar(&self, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
+        if !self.fold.open || !self.fold_scroll.cut() {
+            return None;
+        }
+        let f = crate::chrome::Frame::of(width, height, self.fold_line_at());
+        let top = f.y_of(self.fold_line_at());
+        let bottom = top + f.line() * f32::from(self.fold_rows());
+        self.fold_scroll
+            .bar(f.width, top, bottom, f.cell(), f.line())
     }
 
     /// The generic bar's THUMB, as a rectangle.
@@ -8976,30 +9299,78 @@ impl Footer {
             // than the screen simply ran off it with nothing — not even an `…`
             // — saying it had been cut. One line, one ruler.
             let taken = indicator.as_ref().map_or(0, |i| layout::width(i) + 1);
-            let mini_room = columns
+            // AND THE CONTROL THAT OPENS THE LINE takes its cells before the
+            // text is measured, exactly as the sidebar's eject glyph does. A
+            // control drawn over text that was measured without it is a
+            // control that covers a word.
+            //
+            // It is offered when the line would be CUT, and also whenever it
+            // is already open — otherwise the one gesture that closes it
+            // disappears the moment the content happens to fit.
+            let held = self.fold;
+            let held_pieces = hint();
+            // THE LINE AS PIECES, whatever is on it.
+            //
+            // The hint arrives in two registers already; the other five are
+            // one run of prose. One representation is what lets the drawer be
+            // drawn by the same painter as the line, so a key is the same
+            // colour three rows down as it is on the first.
+            let line_pieces: Vec<crate::chrome::Piece> = if let Some(h) = &held_pieces {
+                let mut out = h.clone();
+                // AND THE KEYS THAT WALK IT, once it is open. Only then: on a
+                // folded line they would name a gesture that does nothing.
+                // Appended to the hint and not on a line of its own, because
+                // this line is where this system teaches a key that is in no
+                // registry — see `fold::teaching`.
+                if held.open {
+                    out.extend(crate::fold::teaching(&self.texts));
+                }
+                out
+            } else {
+                let text = if let Some(e) = &echo {
+                    e.clone()
+                } else if let Some(d) = &sob_o_cursor {
+                    d.clone()
+                } else if let Some(p) = &prompt_mx {
+                    p.clone()
+                } else if let Some(p) = &pending {
+                    p.clone()
+                } else {
+                    mini_repouso.clone()
+                };
+                vec![crate::chrome::Piece { text, key: false }]
+            };
+            let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
+            let plain_room = columns
                 .saturating_sub(tokens::space::MODELINE_EDGELEFT)
                 .saturating_sub(taken);
+            let opens = held.open
+                || crate::fold::wanted(&line_text, plain_room.saturating_sub(crate::fold::WIDTH));
+            let mini_room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
             let (mini, mini_color) = if let Some(e) = &echo {
                 (e.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(d) = &sob_o_cursor {
                 (d.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(p) = &prompt_mx {
                 (p.clone(), tokens::color::TEXT_SUBTLE_STRONG)
-            } else if let Some(h) = hint() {
-                spans.extend(crate::chrome::hint_spans(
-                    &h,
-                    ronoctua_render::Size::Grid,
-                    tokens::space::MODELINE_EDGELEFT,
-                    mini_line,
-                    mini_room,
-                ));
+            } else if let Some(h) = &held_pieces {
+                if !held.open {
+                    spans.extend(crate::chrome::hint_spans(
+                        h,
+                        ronoctua_render::Size::Grid,
+                        tokens::space::MODELINE_EDGELEFT,
+                        mini_line,
+                        mini_room,
+                    ));
+                }
                 (String::new(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(p) = &pending {
                 (p.clone(), tokens::color::STATE_ACCENT)
             } else {
                 (mini_repouso.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             };
-            if !mini.is_empty() {
+            // WHILE IT IS OPEN the drawer draws this line too, from the wrap.
+            if !mini.is_empty() && !held.open {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Grid,
                     text: layout::elide_end(&mini, mini_room),
@@ -9009,6 +9380,85 @@ impl Footer {
                     edge: false,
                     foot: false,
                 });
+            }
+
+            // THE CONTROL, flush against the right edge. No box and no border
+            // (invariant 15): it is a glyph on the line that already exists,
+            // the same arrangement as the page counter beside it and as the
+            // sidebar's eject.
+            // AND THE MANAGER IS TOLD, so `Tab` may land there and may not
+            // land there when there is nothing to land on.
+            self.fold_control = opens.then_some(columns.saturating_sub(1));
+            if let Some(at) = self.fold_control {
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::OnTheCell(tokens::font::SIZE_ICON),
+                    text: if held.open {
+                        tokens::icon::COLLAPSE.to_string()
+                    } else {
+                        tokens::icon::EXPAND.to_string()
+                    },
+                    column: at,
+                    line: mini_line,
+                    color: if held.open {
+                        tokens::color::TEXT_SUBTLE_STRONG
+                    } else {
+                        tokens::color::TEXT_SUBTLE_DEFAULT
+                    },
+                    edge: false,
+                    foot: false,
+                });
+            }
+
+            // AND THE REST OF THE LINE, under it, when it is open.
+            //
+            // The band is a constant number of lines and the text scrolls
+            // inside it — see `crate::fold`. The bar is asked of `Scroll` like
+            // every other bar in this system, and it only appears when the
+            // wrap actually went past the band.
+            // HOW TALL THE LINE WOULD BE, written down for the geometry — see
+            // `fold_wrapped`. Measured whenever there is a control, open or
+            // not, because opening has to know the answer before it draws.
+            self.fold_wrapped = if opens {
+                crate::fold::wrap_pieces(&line_pieces, mini_room).len()
+            } else {
+                0
+            };
+            if held.open {
+                let (showing, scroll) = crate::fold::opened(&line_pieces, mini_room, held);
+                // THE FIRST ROW GOES ON THE MINIBUFFER'S OWN LINE, replacing
+                // the elided summary: the drawer is the sentence continuing,
+                // not a second copy of its first words.
+                let first = self.minibuffer_line();
+                for (n, row) in showing.into_iter().enumerate() {
+                    let line = first + u16::try_from(n).unwrap_or(0);
+                    if held_pieces.is_some() {
+                        spans.extend(crate::chrome::hint_spans(
+                            &row,
+                            ronoctua_render::Size::Grid,
+                            tokens::space::MODELINE_EDGELEFT,
+                            line,
+                            mini_room,
+                        ));
+                    } else {
+                        spans.push(ronoctua_render::Span {
+                            size: ronoctua_render::Size::Grid,
+                            text: row.into_iter().map(|p| p.text).collect(),
+                            column: tokens::space::MODELINE_EDGELEFT,
+                            line,
+                            color: mini_color,
+                            edge: false,
+                            foot: false,
+                        });
+                    }
+                }
+                self.fold_scroll = scroll;
+            } else {
+                self.fold_scroll = ronoctua_design::Scroll {
+                    total: 0,
+                    lines: 0,
+                    offset: 0,
+                    top: 0,
+                };
             }
 
             // THE PAGE INDICATOR, flush against the right edge of the minibuffer's
@@ -9789,6 +10239,24 @@ impl Footer {
                         color: tokens::color::RULE_STRONG,
                     });
                 }
+            }
+
+            // AND THE OPENED LINE'S OWN BAR, in its own band.
+            //
+            // A SECOND bar on screen, and it is not what `one-scrollbar`
+            // exists to catch: that is about two bars for ONE list, or a thumb
+            // somebody worked out by hand. These are two lists in two bands,
+            // each saying where its own is, and both ask `Scroll::bar` for the
+            // rectangle.
+            #[allow(clippy::cast_precision_loss)]
+            if let Some((bx, by, bw, bh)) = self.fold_bar(width as f32, bottom) {
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: bx,
+                    y: by,
+                    width: bw,
+                    height: bh,
+                    color: tokens::color::RULE_STRONG,
+                });
             }
 
             let Some(screen) = self.screens.get_mut(index) else {

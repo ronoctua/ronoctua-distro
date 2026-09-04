@@ -53,6 +53,7 @@ mod daemon;
 mod disks;
 mod files;
 mod files_window;
+mod fold;
 mod foreign;
 mod keyboard;
 mod leader;

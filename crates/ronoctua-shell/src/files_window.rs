@@ -68,6 +68,19 @@ const RIGHT_BUTTON: u32 = 0x111;
 /// shape for the same thing.
 const FIRST_OF_REGION: u16 = 1;
 
+impl FilesWindow {
+    /// The region's first line, WITH the opened line's band counted in.
+    ///
+    /// It used to be the constant above and nothing else. The minibuffer's
+    /// line can now be opened into several (see [`crate::fold`]), and every
+    /// one of them is a line the listing does not get — so the number moved
+    /// from a `const` to a question, and `chrome::Frame` carries the answer
+    /// for everything downstream of it.
+    fn first_of_region(&self) -> u16 {
+        FIRST_OF_REGION + crate::fold::rows(self.fold, self.fold_wrapped)
+    }
+}
+
 /// Opens the manager in a window.
 ///
 /// # Errors
@@ -258,6 +271,16 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         owed: false,
         message: None,
         said: 0,
+        fold: crate::fold::Fold::default(),
+        fold_control: None,
+        fold_scroll: ronoctua_design::Scroll {
+            total: 0,
+            lines: 0,
+            offset: 0,
+            top: 0,
+        },
+        fold_wrapped: 0,
+        fold_applied: 0,
         handle: handle.clone(),
         spinning: None,
         notice,
@@ -385,6 +408,25 @@ struct FilesWindow {
     /// and a timer that wiped whatever it found would take the NEW one down
     /// early. It clears only its own.
     said: u64,
+    /// Whether line 0 is OPEN, and how far it is scrolled. See [`crate::fold`].
+    ///
+    /// The same state the footer keeps for the same line — this door's line 0
+    /// and that one's minibuffer are the one line, seen through two doors.
+    fold: crate::fold::Fold,
+    /// Where the control that opens it was drawn, in cells of line 0.
+    fold_control: Option<u16>,
+    /// The opened band's scroll, as it was last DRAWN.
+    fold_scroll: ronoctua_design::Scroll,
+    /// How many rows line 0's text came to at the width it was DRAWN at.
+    ///
+    /// The height follows the content, and the content is only known where
+    /// the line is laid out — but `first_of_region` is asked BEFORE the frame.
+    /// So the drawing writes this down and the geometry reads it, one frame
+    /// behind exactly when the text or the width has just changed; `draw`
+    /// notices and goes round once more.
+    fold_wrapped: usize,
+    /// Line 0's height as the last frame was laid out for.
+    fold_applied: u16,
     /// The loop, for the two things that need one.
     ///
     /// A keyboard that REPEATS: SCTK only generates repeat events for one made
@@ -796,11 +838,52 @@ impl FilesWindow {
         let Some(t) = key_of(&event, self.mods) else {
             return;
         };
+        // `Esc` CLOSES THE OPENED LINE FIRST, exactly as it does in the other
+        // door: the drawer is the outermost thing a person opened, so it is
+        // the first thing the outermost gesture shuts. The view's own `Esc`
+        // ladder is one step behind and untouched.
+        if matches!(t.sym, ronoctua_keymap::Sym::Esc) && self.fold.close() {
+            self.ask_paint();
+            return;
+        }
         // A key clears the last message: it answered something that is no
         // longer what is being done.
         self.message = None;
         let step = self.view.key(t);
         self.apply(step);
+    }
+
+    /// Is the pointer inside the opened line's band?
+    ///
+    /// Line 0 and the rows under it — they are one thing, so a wheel on the
+    /// summary row is a wheel on the drawer.
+    fn pointer_on_fold(&self, y: f64) -> bool {
+        let f = self.metric();
+        #[allow(clippy::cast_possible_truncation)]
+        let Some(line) = f.line_at(y as f32) else {
+            return false;
+        };
+        line < self.first_of_region()
+    }
+
+    /// Is the pointer on the control that opens line 0?
+    ///
+    /// It asks the cell that was DRAWN, for the reason the footer's twin
+    /// gives: what the pointer hits has to be what the eye saw.
+    fn fold_at(&self, x: f64, y: f64) -> bool {
+        let Some(at) = self.fold_control else {
+            return false;
+        };
+        let f = self.metric();
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(0) {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let cell = f.column_at(x as f32);
+        // The air beside the glyph is part of the target — a target the size
+        // of the ink is a target one has to aim at.
+        cell + 1 >= at
     }
 
     /// Columns and rows from the size in pixels.
@@ -815,7 +898,11 @@ impl FilesWindow {
     /// second home for them.
     #[allow(clippy::cast_precision_loss)]
     fn metric(&self) -> crate::chrome::Frame {
-        crate::chrome::Frame::of(self.width as f32, self.height as f32, FIRST_OF_REGION)
+        crate::chrome::Frame::of(
+            self.width as f32,
+            self.height as f32,
+            self.first_of_region(),
+        )
     }
 
     fn recount(&mut self) {
@@ -854,7 +941,7 @@ impl FilesWindow {
         let margin = f64::from(f.x_of(CONTENT_MARGIN));
         let cell = f.column_at((x - margin).max(0.0) as f32);
         // LINE 0 BELONGS TO NO COLUMN: it is the one line above the region.
-        let k = line.checked_sub(FIRST_OF_REGION)?;
+        let k = line.checked_sub(self.first_of_region())?;
         Some((usize::from(k), cell))
     }
 
@@ -1013,8 +1100,28 @@ impl FilesWindow {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let painted = frame(&mut self.scene());
+        // THE DRAWING ANSWERS TWO THINGS BACK: where it put the control that
+        // opens the line, and how far the wrapped text ran. Both depend on a
+        // width that only the drawing knows, and both are what the pointer
+        // asks about afterwards — kept, and not worked out a second time.
+        let mut scene = self.scene();
+        let painted = frame(&mut scene);
+        let (control, scroll, wrapped) =
+            (scene.fold_control, scene.fold_scroll, scene.fold_wrapped);
+        self.fold_control = control;
+        self.fold_scroll = scroll;
+        self.fold_wrapped = wrapped;
         self.present(painted);
+        // AND ONCE MORE IF LINE 0 CHANGED SIZE: the region's first line is
+        // asked for before the frame, and the wrap is only known inside it.
+        // The guard is the number itself, so nothing loops.
+        let settled = crate::fold::rows(self.fold, self.fold_wrapped);
+        if self.fold.open && settled != self.fold_applied {
+            self.fold_applied = settled;
+            self.ask_paint();
+        } else {
+            self.fold_applied = settled;
+        }
     }
 
     /// The window's arithmetic, as a value.
@@ -1051,6 +1158,10 @@ impl FilesWindow {
             cell_under_pointer: self.cell_under_pointer,
             line_under_pointer: self.line_under_pointer,
             under_pointer: self.under_pointer.as_ref(),
+            fold: self.fold,
+            fold_control: None,
+            fold_scroll: self.fold_scroll,
+            fold_wrapped: self.fold_wrapped,
             view: &mut self.view,
             texts: &self.texts,
         }
@@ -1191,7 +1302,7 @@ impl Geometry {
             self.metric
                 .lines()
                 .max(1)
-                .saturating_sub(FIRST_OF_REGION + self.strip),
+                .saturating_sub(self.metric.first + self.strip),
         )
     }
 
@@ -1225,7 +1336,7 @@ impl Geometry {
     /// under it, and the surface's own bottom when there is not.
     pub fn list_bottom(&self, line_px: f32) -> f32 {
         if self.strip > 0 {
-            f32::from(FIRST_OF_REGION + u16::try_from(self.room()).unwrap_or(0)) * line_px
+            f32::from(self.metric.first + u16::try_from(self.room()).unwrap_or(0)) * line_px
         } else {
             self.metric.bottom()
         }
@@ -1241,7 +1352,7 @@ impl Geometry {
         line_px: f32,
     ) -> Vec<crate::files::Bar> {
         let edge = self.metric.width;
-        let top = self.metric.y_of(FIRST_OF_REGION);
+        let top = self.metric.y_of(self.metric.first);
         // WHERE THE SURFACE ENDS, and not where the last whole line does. See
         // `files::Section::bar_box`: the residue is the difference, and only
         // the last band in a column may take it.
@@ -1308,6 +1419,19 @@ pub(crate) struct Scene<'a> {
     pub line_under_pointer: Option<usize>,
     /// What the pointer is resting on, already resolved by `View::hit`.
     pub under_pointer: Option<&'a crate::files::Target>,
+    /// Whether line 0 is open, and how far it is scrolled.
+    pub fold: crate::fold::Fold,
+    /// Where the control that opens it was drawn — written by the drawing,
+    /// read by the pointer. Out and not in, for the reason `fold_scroll` is.
+    pub fold_control: Option<u16>,
+    /// The opened band's scroll, as DRAWN.
+    ///
+    /// It travels out of the frame and not into it: the wrap depends on a
+    /// width only the drawing knows, and the bar the pointer grabs has to be
+    /// the bar the eye saw.
+    pub fold_scroll: ronoctua_design::Scroll,
+    /// How many rows the line's text came to — out, for the same reason.
+    pub fold_wrapped: usize,
 }
 
 /// One frame, as spans and rectangles. No Wayland, no wgpu, no `self`.
@@ -1377,11 +1501,84 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         .cursor_explains()
         .map(|e| s.texts.t_with(e.key, &e.borrowed()));
     let second = s.message.clone().or(does).or(explained);
+    // THE LINE AS PIECES, whatever is on it — the same representation the
+    // footer's minibuffer uses, and for the same reason: the drawer is drawn
+    // by the painter that drew the line, so a key is the same colour three
+    // rows down as it is on the first.
+    let hinting = second.is_none() && !s.view.filtering();
+    let line_pieces: Vec<crate::chrome::Piece> = if hinting {
+        let mut out = crate::files::hint_of(s.texts, s.view.split(s.geo.columns) > 0);
+        // AND THE KEYS THAT WALK IT, once it is open — see `fold::teaching`.
+        if s.fold.open {
+            out.extend(crate::fold::teaching(s.texts));
+        }
+        out
+    } else {
+        vec![crate::chrome::Piece {
+            text: second.clone().unwrap_or_default(),
+            key: false,
+        }]
+    };
+    let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
     // THE ROOM IS WHAT IS LEFT AFTER THE MARGIN, and it used to be the whole
     // width: the line starts `margin` cells in, so eliding at `columns` let it
     // run that many cells past the edge before anything cut it.
-    let room = s.geo.columns.saturating_sub(margin);
-    if let Some(text) = second {
+    let plain_room = s.geo.columns.saturating_sub(margin);
+    let opens = s.fold.open
+        || crate::fold::wanted(&line_text, plain_room.saturating_sub(crate::fold::WIDTH));
+    let room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
+    // HOW TALL THE LINE WOULD BE, written down for the geometry — see
+    // `fold_wrapped`. Measured whenever there is a control, open or not,
+    // because opening has to know the answer before it draws.
+    s.fold_wrapped = if opens {
+        crate::fold::wrap_pieces(&line_pieces, room).len()
+    } else {
+        0
+    };
+    if s.fold.open {
+        // OPENED, the line is its own first row and the rest follow under it.
+        let (showing, scroll) = crate::fold::opened(&line_pieces, room, s.fold);
+        for (n, row) in showing.into_iter().enumerate() {
+            let at = u16::try_from(n).unwrap_or(0);
+            if hinting {
+                spans.extend(crate::chrome::hint_spans(
+                    &row,
+                    ronoctua_render::Size::Px(size),
+                    margin,
+                    at,
+                    room,
+                ));
+            } else {
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::Px(size),
+                    text: row.into_iter().map(|p| p.text).collect(),
+                    column: margin,
+                    line: at,
+                    color: tokens::color::TEXT_SUBTLE_STRONG,
+                    edge: false,
+                    foot: false,
+                });
+            }
+        }
+        // AND ITS BAR, when the wrap ran past the band. One rectangle, from
+        // `Scroll` — the same call every other bar in this system makes.
+        if scroll.cut() {
+            let f = s.geo.metric;
+            let top = f.y_of(0);
+            let bottom =
+                top + f.line() * f32::from(u16::try_from(scroll.lines).unwrap_or(u16::MAX));
+            if let Some((bx, by, bw, bh)) = scroll.bar(f.width, top, bottom, f.cell(), f.line()) {
+                quads.push(ronoctua_render::quad::Quad {
+                    x: bx,
+                    y: by,
+                    width: bw,
+                    height: bh,
+                    color: tokens::color::RULE_STRONG,
+                });
+            }
+        }
+        s.fold_scroll = scroll;
+    } else if let Some(text) = second {
         spans.push(ronoctua_render::Span {
             size: ronoctua_render::Size::Px(size),
             text: ronoctua_render::layout::elide_end(&text, room),
@@ -1394,7 +1591,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             edge: false,
             foot: false,
         });
-    } else if !s.view.filtering() {
+    } else if hinting {
         // WITH NOTHING TYPED AND NOTHING TO SAY, the hint. Typing is not a
         // key and so has no line in the manual; without this the one
         // gesture the list is built around is the one thing nothing on
@@ -1406,12 +1603,35 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // — which is exactly what they were doing when the owner photographed
         // them side by side.
         spans.extend(crate::chrome::hint_spans(
-            &crate::files::hint_of(s.texts, s.view.split(s.geo.columns) > 0),
+            &line_pieces,
             ronoctua_render::Size::Px(size),
             margin,
             0,
             room,
         ));
+    }
+
+    // THE CONTROL THAT OPENS THE LINE, flush against the right edge. No box
+    // and no border (invariant 15): a glyph on the line that already exists.
+    s.fold_control = opens.then_some(s.geo.columns.saturating_sub(1) + margin);
+    if let Some(at) = s.fold_control {
+        spans.push(ronoctua_render::Span {
+            size: ronoctua_render::Size::OnTheCell(tokens::font::SIZE_ICON),
+            text: if s.fold.open {
+                tokens::icon::COLLAPSE.to_string()
+            } else {
+                tokens::icon::EXPAND.to_string()
+            },
+            column: at,
+            line: 0,
+            color: if s.fold.open {
+                tokens::color::TEXT_SUBTLE_STRONG
+            } else {
+                tokens::color::TEXT_SUBTLE_DEFAULT
+            },
+            edge: false,
+            foot: false,
+        });
     }
 
     // THE HEADER, on the line above the listing. It names the columns and
@@ -1466,7 +1686,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // the sidebar's.
         quads.push(crate::chrome::divider(
             crate::files::rule_x(split, margin, cell),
-            s.geo.metric.y_of(FIRST_OF_REGION),
+            s.geo.metric.y_of(s.geo.metric.first),
             s.geo.list_bottom(line_px),
         ));
     }
@@ -1491,7 +1711,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     let focus_at = s.view.focus_line(s.geo.columns, s.geo.room());
     if let Some((pane, line)) = focus_at {
         #[allow(clippy::cast_possible_truncation)]
-        let y = FIRST_OF_REGION + line as u16;
+        let y = s.geo.metric.first + line as u16;
         let cell = tokens::metrics::cell_width(size);
         let at_cell = match pane {
             crate::files::Pane::Sidebar => 0,
@@ -1546,7 +1766,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         && focus_at != Some((pane, at))
     {
         #[allow(clippy::cast_possible_truncation)]
-        let y = FIRST_OF_REGION + at as u16;
+        let y = s.geo.metric.first + at as u16;
         let cell = tokens::metrics::cell_width(size);
         // THE SECTION'S OWN EDGES, in pixels.
         //
@@ -1594,7 +1814,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     for sec in &sections {
         for (i, line) in sec.content.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
-            let y = FIRST_OF_REGION + (sec.top + i) as u16;
+            let y = s.geo.metric.first + (sec.top + i) as u16;
             // THE SAME ROW THE BAND LIT, and not a second opinion about it:
             // through the target, the accent and the band disagreed over every
             // cell that belongs to no field.
@@ -1631,14 +1851,14 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // project has.
     let panes = panes_now;
     let cell = tokens::metrics::cell_width(size);
-    let strip_top = FIRST_OF_REGION + u16::try_from(s.geo.room()).unwrap_or(0);
+    let strip_top = s.geo.metric.first + u16::try_from(s.geo.room()).unwrap_or(0);
     if panes.right > 0 || panes.strip > 0 {
         // WHERE THEY START AND WHERE THEY STOP, and the stop is the
         // SURFACE'S — never a count of lines times a fractional line
         // height, which is what left every one of them short of the edge.
         let (rule_from, rule_to) = if panes.right > 0 {
             (
-                s.geo.metric.y_of(FIRST_OF_REGION),
+                s.geo.metric.y_of(s.geo.metric.first),
                 s.geo.list_bottom(line_px),
             )
         } else {
@@ -1715,8 +1935,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // and a half too high. `files::panel_band` is the one place that
         // arithmetic lives, and the footer had it wrong. ONLY THE TOP is wanted
         // here: where the box ENDS is the surface's business.
-        let (top, _) =
-            crate::files::panel_band(FIRST_OF_REGION, strip_top - FIRST_OF_REGION, panes.strip);
+        let (top, _) = crate::files::panel_band(
+            s.geo.metric.first,
+            strip_top - s.geo.metric.first,
+            panes.strip,
+        );
         #[allow(clippy::cast_precision_loss)]
         let (box_x, box_wide) = crate::files::panel_px(
             panes,
@@ -2102,6 +2325,7 @@ impl PointerHandler for FilesWindow {
         // BOTH COORDINATES: a bar going across is dragged by `x`.
         let mut dragged: Option<(f64, f64)> = None;
         let mut spun = false;
+        let mut wheel_at: Option<f64> = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -2141,6 +2365,14 @@ impl PointerHandler for FilesWindow {
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     self.aim(e.position.0, e.position.1);
+                    // THE LINE'S OWN CONTROL FIRST: it sits on line 0, which
+                    // belongs to no section, so nothing below here would ever
+                    // resolve it.
+                    if self.fold_at(e.position.0, e.position.1) {
+                        self.fold.toggle();
+                        self.ask_paint();
+                        continue;
+                    }
                     // A BAR TAKES THE PRESS, and the row does not get it: the
                     // thumb is a control, not a line of the list under it.
                     self.dragging = self.bar_at_point(e.position.0, e.position.1);
@@ -2199,6 +2431,9 @@ impl PointerHandler for FilesWindow {
                     let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
                     self.detents += crate::surface::axis_detents(&vertical, line_px)
                         + crate::surface::axis_detents(&horizontal, line_px);
+                    // WHERE THE WHEEL WAS: line 0 belongs to no section, so
+                    // the resolved target cannot answer for it.
+                    wheel_at = Some(e.position.1);
                 }
                 _ => {}
             }
@@ -2266,7 +2501,7 @@ impl PointerHandler for FilesWindow {
                 }
             } else {
                 #[allow(clippy::cast_precision_loss)]
-                let top = f64::from(FIRST_OF_REGION) * line_px + top_line as f64 * line_px;
+                let top = f64::from(self.first_of_region()) * line_px + top_line as f64 * line_px;
                 #[allow(clippy::cast_precision_loss)]
                 let tall = (line_px * lines as f64).max(1.0);
                 (py - top) / tall
@@ -2297,6 +2532,22 @@ impl PointerHandler for FilesWindow {
                 self.detents -= whole as f64;
             }
             let by = whole * crate::surface::LINES_PER_DETENT as i64;
+            // THE OPENED LINE TAKES IT FIRST, when the pointer is on it.
+            //
+            // Line 0 and the rows under it belong to no section, so nothing
+            // below here would ever be asked about them — `under_pointer` is
+            // resolved out of `View::hit`, which only knows the region. A bar
+            // with no wheel is half a control.
+            if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(y)) {
+                let last = self
+                    .fold_scroll
+                    .total
+                    .saturating_sub(self.fold_scroll.lines);
+                let next = i64::try_from(self.fold.offset).unwrap_or(0) + by;
+                self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
+                self.ask_paint();
+                return;
+            }
             // THE SECTION UNDER THE POINTER TAKES IT FIRST, and the target is
             // what says which — it is the thing that resolved the point. Asking
             // `section_at` again here was a second answer to a question already
@@ -2759,6 +3010,15 @@ mod tests {
                 cell_under_pointer: None,
                 line_under_pointer: None,
                 under_pointer: None,
+                fold: crate::fold::Fold::default(),
+                fold_control: None,
+                fold_wrapped: 0,
+                fold_scroll: ronoctua_design::Scroll {
+                    total: 0,
+                    lines: 0,
+                    offset: 0,
+                    top: 0,
+                },
             });
             assert!(!painted.spans.is_empty(), "{w}x{h}: nothing was drawn");
             for q in &painted.quads {

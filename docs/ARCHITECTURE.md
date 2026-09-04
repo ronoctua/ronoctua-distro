@@ -1194,6 +1194,44 @@ está dito onde eles moram: o vão entre `text.secondary` e `text.dim` vale 2,46
 degraus da própria rampa valem 2,2–2,5×, então dois degraus novos lá dentro são necessariamente mais
 finos que qualquer um — 1,34× entre si. É aritmética, não gosto.
 
+**A linha do minibuffer ABRE, e a altura aberta é uma CONSTANTE.** Ela mostra uma linha e corta o
+resto; o dono pediu para ver o resto, e a ideia foi dele: um controle na borda direita quando o
+conteúdo não cabe, e ao acioná-lo a linha vira várias, com barra quando ainda sobra. O controle é um
+chevron — `icon.expand` fechado, `icon.collapse` aberto —, sem caixa e sem borda (invariante 15), e
+ele recua o texto antes de a medida ser tirada, como o glifo de ejetar da barra lateral já faz.
+
+**A altura aberta segue o CONTEÚDO, com teto, e isso foi uma escolha contra uma regra.** A altura do
+rodapé é a mesma em todo output (`Footer::apply_geometry`), então uma quebra que dê duas linhas no
+laptop e uma no monitor faz todo buffer refluir ao mover o foco de tela, sem nada ter mudado neles —
+é o argumento que o `band::rows` faz sobre a notificação, e é por isso que os renques extras da faixa
+são o CORPO e as AÇÕES, estrutura e não quebra.
+
+A primeira versão obedeceu a regra: altura constante, texto rolando dentro. O dono viu na tela — uma
+frase curta abrindo numa gaveta com quatro renques vazios — e escolheu a outra troca. Aberta, a
+gaveta tem o tamanho do que há nela, até `modeline.foldLines`; passando disso, **rola**, e é esse o
+emprego da barra. O preço está dito: é pago só enquanto uma gaveta está ABERTA, que é um estado em
+que alguém entrou de propósito e de que sai com uma tecla, e nunca passa do teto.
+
+**E a altura é perguntada ANTES do quadro.** Quem diz ao compositor quanto a superfície mede roda
+antes do pintor, e a quebra só é conhecida dentro dele. Então o desenho anota quantos renques deu
+(`fold_wrapped`) e a geometria lê essa anotação — atrasada de um quadro exatamente quando o texto ou
+a largura acabou de mudar. O `draw_and_paint` compara e dá mais uma volta quando o número mexeu; a
+guarda é o próprio número, então nada entra em laço.
+
+**E os renques abertos entram no termo FIXO do teto.** Medido na tela: com o teto de 40% já no
+limite, abrir a linha não empurrou o desktop — a região expandida é que cedeu as linhas. Deixá-los de
+fora seria o rodapé passar do orçamento sem que nada fosse culpado.
+
+**A gaveta é a linha CONTINUANDO, não uma segunda cópia dela.** O primeiro renque da quebra ocupa a
+própria linha do minibuffer, no lugar da versão elidida; os outros seguem abaixo. Desenhada como
+faixa sob um resumo intacto, as primeiras oito palavras apareciam duas vezes.
+
+**E ela quebra TRECHOS, não uma string.** A linha é dois registros — a notação de uma tecla e a prosa
+em volta — e quem sabe as cores é o `chrome::hint_spans`. Quebrando o texto juntado, a gaveta voltaria
+como um único cinza, e a mesma frase seria desenhada de um jeito na primeira linha e de outro três
+linhas abaixo. O espaço de junção fica no trecho ANTERIOR: com ele à frente do seguinte, `C-m` seria
+` C-m` e a corrida pintada como tecla começaria uma célula cedo.
+
 **Clicar numa linha é apertar a tecla dela.** Num grupo, desce um nível; num comando, executa. As
 duas coisas saem de graça da mesma definição, e o que se ganha é não haver um segundo caminho: nada
 fica alcançável só pelo mouse, e o que o mouse faz é sempre algo que o teclado também faz. No
