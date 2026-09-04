@@ -1240,6 +1240,84 @@ mostra um eco ou o prompt do `M-x` com a mesma facilidade. Quem diz se o control
 `panes_on` é que um painel que não é desenhado não pode ser alcançável. `Enter` alterna, as setas
 andam na gaveta, e o foco se vê no próprio glifo: um glifo não tem linha para receber faixa.
 
+**A linha de dicas do gerenciador é GERADA da tabela de teclas, e isso conserta um defeito de
+espécie.** Ela ensinava onze das quarenta ações, escolhidas à mão em quatro frases; `C-w` — a tecla
+que dá a região inteira à prévia — não estava entre elas, e o dono reportou como atalho faltando.
+Marcar, ordenar, a playlist e o transporte do filme também não estavam. Nenhuma das quatro frases
+estava errada: eram uma SEGUNDA lista, mantida à mão ao lado da primeira, e uma segunda lista é uma
+lista que fica para trás.
+
+**E as quarenta frases já existiam.** Todo id de `OF_THE_VIEW` tem valor nos dois `.ftl` desde que a
+tabela existe, porque o `files-actions-have-text` exige um para todo literal `files-…` do arquivo —
+e `files::OF_THE_VIEW` não entra no `leader::reachable`, então nenhuma delas estava no `M-x` nem no
+manual. Quarenta frases traduzidas que nenhuma tela lia. `View::hint` as lê, na ordem da tabela, uma
+notação por ação — a PRIMEIRA, o que faz da ordem da tabela uma decisão de ensino.
+
+**O separador é do código, e por isso a regra é estrutural.** *"Cada atalho separado pelo ponto, e o
+atalho sempre antes do texto"* é uma propriedade da LINHA, não da frase: um `·` dentro de um valor
+`.ftl` não pode ser contado nem receber cor. Ele é `chrome::Piece::separator`, sai de
+`mark.separator` (invariante 9 alcança o codepoint) e "um atalho entre dois pontos" passa a ser
+consequência do laço em vez de convenção que dois idiomas têm de lembrar.
+
+**E uma tecla é desenhada em DUAS corridas, para que nenhuma ligadura atravesse o modificador.**
+`C->` saiu na tela como `C-→`. A face liga `->` — é para isso que a feature existe, e numa linha de
+código está certa —, mas aqui ela transforma uma notação em OUTRA tecla, e ainda por cima numa que
+este sistema proíbe: seta com `Ctrl` é o acorde de paginar do rodapé, tomado antes de a vista ver.
+A linha existe para ensinar quarenta teclas e estava ensinando uma que não existe. Era invisível até
+a linha passar a mostrar a tabela inteira — `C->` está ligado desde que a tabela existe e não era
+desenhado em lugar nenhum. O `cosmic-text` molda uma corrida por vez e não expõe como desligar uma
+feature, então o conserto é as duas letras não estarem na mesma corrida; como cada glifo da dica tem
+uma célula e a posição é aritmética deste módulo, duas corridas caem exatamente onde uma caía. Vale
+para TODA tecla e não só para o `>`: quais pares uma face liga é assunto da face.
+
+**São QUATRO registros de cor, e o quarto é uma tecla que muda de sentido.** `S-<setas>` eram o giro
+da peça 3D e o dono as quis para abrir e subir. Em vez de mudar o giro para uma tecla arbitrária —
+`M-` é do compositor, letra nua é letra da busca, e seta com o `Ctrl` DIREITO é paginar numa porta e
+nada na outra —, ele escolheu o contrário: *"faça com que o Shift+Setas mude a funcionalidade de
+acordo com a seção que está em foco"*. `View::strong_meaning` resolve cada uma para o id de uma ação
+REAL antes do `match` da tabela; a seção responde por uma direção quando tem o que dizer sobre ela,
+e senão a LISTAGEM responde — nenhuma das quatro é morta em seção nenhuma, que é o que o
+`every_view_key_in_the_table_actually_does_something` cobra. Na linha elas levam a frase da ação
+resolvida e `text.subtle.alternate`, porque uma tecla cujo sentido anda debaixo do leitor tem de
+dizer isso.
+
+**O `C-o` saiu, e a lição dele é o motivo de tudo acima.** Era um segundo caminho para uma seção que
+o anel do `Tab` já alcança, e o dono pediu um só. Era também a tecla que este arquivo guardava como
+lição: implementada, funcionando, e nomeada em lugar nenhum — *"o que é o mesmo que não ter"*. A
+lição sobreviveu à tecla.
+
+**As setas ←/→ passaram a andar entre as seções, e o `TAB` continua ligado.** O dono pediu nessas
+palavras, e `TAB`/`S-TAB` ficam ligados fora da lista: quem chega de qualquer outro programa aperta
+`TAB` primeiro, e o gerenciador de notificações diz `TAB pane` a uma sala de distância — dois
+gerenciadores do mesmo shell discordando do `TAB` é a divergência que as duas portas existem para
+impedir, um nível acima.
+
+**A prévia e os fatos ganharam CURSOR e TÍTULO, e a listagem guarda a marca.** Com o `Tab` num
+painel nada mudava na tela, e o renque que os painéis DESCREVIAM perdia a marca ao mesmo tempo —
+dois mecanismos certos (`focused_here` responde pela seção com o teclado; `colour_of` só acentua com
+`Pane::Listing`) que juntos deixavam os painéis falando de um arquivo que nada apontava. Agora: a
+playlist e os fatos têm cursor próprio, com a vista rolando atrás dele; cada painel tem um TÍTULO de
+uma linha, aceso em `state.accent` quando tem o teclado — é a única marca que serve para uma foto ou
+um filme, que não têm renque para acender, e custa uma linha do painel; e o renque da listagem fica
+com uma faixa mais quieta (`surface.hover`, que já quer dizer "esta linha, sem o teclado"). Uma
+acesa e uma apagada nunca são lidas como dois cursores.
+
+**E a faixa de um painel sai do NOME da seção, nunca de uma célula.** `band_of` resolve célula →
+seção, e com os painéis EMBAIXO da listagem as mesmas células pertencem às duas: a faixa do foco
+saía com a largura da lista acima do fato em que o cursor estava. Fotografado na primeira tentativa.
+`files::band_for` responde onde uma seção NOMEADA está; uma célula não pode responder, porque a
+pergunta não é "o que há nesta célula".
+
+**A pasta `..` é o primeiro renque, e é o único a que nada pode ser feito.** `read_dir` nunca a
+devolve — é propriedade da syscall —, então ela é posta DEPOIS da ordenação: não é um dos nomes
+sendo ordenados, é a saída, e uma saída que fosse para o meio da lista ao ordenar por tamanho seria
+uma saída que se procura. Na raiz não há renque, porque não há para onde ir. `Entry::hidden` a
+excepciona (começa por ponto e não é oculta: esconder a saída com `C-h` a tiraria de quem apertou),
+o cursor abre PASSANDO por ela, e ela carrega o modo, o dono e a data reais do pai — por isso
+**toda célula dela responde a saída**: um bit de permissão clicável ali mudaria a pasta em que se
+está, a partir de um renque que diz "voltar". Marcar, medir e o menu a recusam do mesmo jeito, e
+`focused_path` resolve o pai em vez de devolver um caminho com `..` dentro.
+
 **Clicar numa linha é apertar a tecla dela.** Num grupo, desce um nível; num comando, executa. As
 duas coisas saem de graça da mesma definição, e o que se ganha é não haver um segundo caminho: nada
 fica alcançável só pelo mouse, e o que o mouse faz é sempre algo que o teclado também faz. No

@@ -426,9 +426,12 @@ expansion-page = RCtrl ←→
 # THE KEYS THAT WALK THE LINE ONCE IT IS OPEN, and the sentence that teaches
 # them. They are a chord of the RIGHT Ctrl, which is the one family no view
 # sees — so they are in no registry and in no manual, and this sentence is the
-# only thing on screen that says they exist. It is the lesson `C-o` cost this
-# project, and the reason it is APPENDED to the hint rather than standing on
-# its own: a key taught on a line nobody has opened teaches nothing.
+# only thing on screen that says they exist. It is the lesson the file
+# manager's `C-o` cost this project — implemented, working, and named nowhere,
+# which is the same as not having it; the key is gone now and the lesson is
+# why that view's hint line is generated out of its key table. And it is the
+# reason this sentence is APPENDED to the hint rather than standing on its own:
+# a key taught on a line nobody has opened teaches nothing.
 #
 # The notation is a value and not a `key_that_runs`, exactly as
 # `expansion-page` is: a right-Ctrl chord is not a command of the registry, so
@@ -1078,16 +1081,24 @@ files-trash = move to the trash
 files-delete = delete for good
 files-shred = delete by overwriting
 
-# The view's own keys — navigation and marking. They live in a table
-# (`OF_THE_VIEW`) rather than inside a `match`, because the list is what the
-# manual and the check read: a key that only exists in a `match` arm is a key
-# nothing can enumerate.
+# THE VIEW'S OWN KEYS, and every one of these sentences is now ON SCREEN.
+#
+# They live in a table (`OF_THE_VIEW`) rather than inside a `match`, because
+# the list is what the check reads: a key that only exists in a `match` arm is
+# a key nothing can enumerate. For a long time that was the only reader —
+# `files::OF_THE_VIEW` is in no registry, so none of these was in `M-x` or in
+# the manual, and forty translated sentences were carried by both languages and
+# drawn by nothing. `View::hint` reads them, in the table's order.
+#
+# SO THEY ARE SHORT AND THEY CARRY NO COMMA. The owner's rule for that line —
+# one shortcut between any two separators, the key first, and the words after
+# it brief. A comma inside one of these reads on screen as the end of the
+# chunk, which is what the separator is for.
 files-down = down
 files-up = up
-files-enter = open, or enter the directory
+files-enter = open
 files-parent = up one directory
-files-hint = type to filter · { $key } opens the action menu · { $preview } preview · { $info } information
-files-hint-sidebar = type to filter · { $key } opens the menu · { $side } goes to the sidebar · { $preview } preview · { $info } information
+files-hint = type to filter
 # The panels. `no-room` is what the toggle says when it turns one on at a width
 # that cannot hold it: the state flips anyway and the screen says why, which is
 # the shape `files-sidebar-only` already has. `says` is one fact in full on the
@@ -1095,19 +1106,6 @@ files-hint-sidebar = type to filter · { $key } opens the menu · { $side } goes
 # characters, so the row that had to be cut is the row somebody wants to read.
 files-panel-no-room = there is no room for the panel at this width — it needs { $cells } columns
 files-fact-says = { $label }: { $value }
-# THE SECOND HALF OF THE HINT LINE, appended to whichever of the two above is
-# on screen. Two keys that are in no registry and no manual, so this line is
-# the only thing that says they exist — the lesson `C-o` already cost. The
-# separator lives here and not in the Rust: a `·` written in the code would be
-# a visual literal, which is what invariant 9 is about.
-files-hint-more = · { $columns } shows permissions, owner and group · { $facts } scrolls the facts
-# THE THIRD SENTENCE OF THE HINT LINE — the four sections and the two keys
-# that walk them. Its own line and not a longer `files-hint-more` for the same
-# reason that one is not a longer `files-hint`: the halves are about different
-# things. BOTH keys are named, because somebody told only about the way forward
-# has to guess that there is a way back.
-files-hint-panes = · { $next } goes to the next section, { $back } to the one before
-files-hint-preview = · in the preview, { $page } turns the page and { $left } { $right } move the line sideways
 # WHAT THE PREVIEW SAYS WHEN THERE IS NO PICTURE. Not a refusal — those come
 # from `ronoctua-inspect` and win when there is one — but the answer for a
 # directory, a broken link, and a file nothing has been asked about. It used to
@@ -1133,8 +1131,8 @@ files-entry-refused = this name cannot be a path: { $path }
 files-list-nothing = there is nothing on this list that can be played from here
 files-list-at-start = this is the first of the list
 files-list-at-end = this is the last of the list
-files-playlist-previous = go to the entry before this one
-files-playlist-next = go to the entry after this one
+files-playlist-previous = previous track
+files-playlist-next = next track
 files-no-sound = this machine has no sound to play it through — the picture goes on without it
 files-film-stuck = nothing has come out of it for { $seconds } s — it was stopped
 files-film-seek = go to { $at } of { $total }
@@ -1155,18 +1153,18 @@ files-ask-group = Change the GROUP to which?
 files-ask-mode = Change the PERMISSIONS to which set?
 files-ask-format = Compress in which format?
 files-ask-name = Rename to:
-files-hidden = show or hide the hidden ones
-files-sort = change the sort
+files-hidden = hidden files
+files-sort = sort order
 files-sort-reverse = reverse the order
-files-mark = mark, and move on
-files-mark-all = mark everything in sight
+files-mark = mark
+files-mark-all = mark everything
 files-unmark-all = unmark everything
-files-first = go to the first
-files-last = go to the last
+files-first = the first
+files-last = the last
 files-menu = action menu
-files-measure = measure the directory, or examine the file
-files-pane-next = go to the next section
-files-pane-previous = go back to the section before
+files-measure = measure
+files-pane-next = next section
+files-pane-previous = section before
 
 files-type-is = { $named }
 files-type-disagrees = the name says { $named }, the content says { $found }
@@ -1182,37 +1180,37 @@ files-nothing-here = this directory is empty
 #
 # The first five are ids of `OF_THE_VIEW` and of `menu.rs`;
 # `files-actions-have-text` derives them from the id on its own.
-files-preview = show or hide the preview
-files-facts = show or hide the facts
-files-facts-scroll = turn to the next page of facts
-files-columns = show or hide the permissions, the owner and the group
-files-sidebar = hide or show the sidebar
+files-preview = preview
+files-facts = information
+files-facts-scroll = page the information
+files-columns = permissions and owner
+files-sidebar = sidebar
 files-sidebar-focus = go to the sidebar, and back
 # THE PREVIEW'S OWN KEYS, and the reason they are here rather than derived from
 # `menu.rs` is `leader::OF_CLIPBOARD_VIEW`'s: a key that exists only inside a
 # `match` arm is a key nothing can enumerate. These are what `LEADER :` lists,
 # so each one is written as the thing it DOES and not as the key it is on.
-files-preview-scroll = turn to the next page of the preview
-files-preview-left = move the preview a column to the left
-files-preview-right = move the preview a column to the right
+files-preview-scroll = page the preview
+files-preview-left = preview left
+files-preview-right = preview right
 # The film's transport. `files-play` is one key for both, because that is what
 # it is: pressing it while it plays is what pauses it.
-files-play = play it, or pause it
-files-rewind = go back
-files-forward = go forward
-files-sound = turn the sound on or off
-files-theatre = give the preview the whole region, and take it back
+files-play = play or pause
+files-rewind = rewind
+files-forward = forward
+files-sound = sound
+files-theatre = the whole region
 # The shape's. `files-turn-left` is the hand's direction and not an axis — see
 # `View::spin`, which is where that convention is written down.
-files-turn-left = turn the shape to the left
-files-turn-right = turn the shape to the right
-files-turn-up = turn the shape upwards
-files-turn-down = turn the shape downwards
-files-zoom-in = look closer at the shape
-files-zoom-out = look further from the shape
-files-reframe = put the shape back the way it was
-files-eject = unmount the device
-files-unpin = take it off the sidebar
+files-turn-left = turn left
+files-turn-right = turn right
+files-turn-up = turn up
+files-turn-down = turn down
+files-zoom-in = zoom in
+files-zoom-out = zoom out
+files-reframe = reframe
+files-eject = unmount
+files-unpin = unpin
 files-pin = put on the sidebar
 files-unhide = bring back a hidden sidebar row
 files-sidebar-hidden-ask = Bring which one back?

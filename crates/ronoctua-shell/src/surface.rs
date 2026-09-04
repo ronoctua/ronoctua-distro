@@ -8823,22 +8823,20 @@ impl Footer {
         // path itself is showing it.
         //
         // A CLOSURE, and not a value, because it is the LAST arm of the
-        // precedence and building it costs four sentences out of the localiser
-        // plus the key table for each of eleven notations. Computed eagerly it
-        // would be paid on every frame in which an echo, a description or a
-        // prompt is on the line — which is every frame where anything is
-        // happening — for a string nobody draws.
+        // precedence and building it costs one sentence out of the localiser
+        // for every one of the manager's forty keys. Computed eagerly it would
+        // be paid on every frame in which an echo, a description or a prompt is
+        // on the line — which is every frame where anything is happening — for
+        // a string nobody draws.
         //
-        // The width comes out HERE and not inside: `screen_columns` borrows the
-        // whole of `self`, and the closure has to capture only the three
-        // fields it reads or it holds the surface for the rest of the frame.
-        let screen_columns = self.screen_columns();
+        // It captures only the three fields it reads, or it would hold the
+        // whole surface borrowed for the rest of the frame.
         let (files, transfers, texts) = (&self.files, &self.transfers, &self.texts);
         let hint = move || {
             files
                 .as_ref()
                 .filter(|v| v.plain() && !v.filtering())
-                .map(|v| crate::files::hint_of(texts, v.split(screen_columns) > 0))
+                .map(|v| v.hint(texts))
                 // AND THE TRANSFER PANEL'S, for the same reason: its keys are
                 // chords that nothing on the row spells out, and a panel whose
                 // only way to find `C-c` is the manual is a panel where nobody
@@ -9085,23 +9083,29 @@ impl Footer {
         // row is not a line, and the two bands have to agree about the
         // conversion or the same row would light in two places.
         //
-        // AND THE CELL COMES FROM THE PANE THAT HAS THE KEYBOARD, not from the
-        // pointer: `band_of` decides which side of the sidebar's rule to light
-        // from a cell, and the cell it is normally given is where the mouse is.
-        // A focus band placed that way would jump sides when the hand moved.
+        // AND THE RECTANGLE COMES FROM THE PANE THAT HAS THE KEYBOARD, never
+        // from a cell: `files::band_for` answers where a NAMED section is, and
+        // a cell cannot — with the panels below the listing the same cells
+        // belong to both, and the focus band ran the width of the list above
+        // the fact it was on.
         let focused_band = self.files.as_ref().and_then(|v| {
             let columns = self.screen_columns();
             let (pane, line) = v.focus_line(columns, grid.lines)?;
-            let cell = match pane {
-                crate::files::Pane::Sidebar => 0,
-                _ => v.split(columns),
-            };
-            Some((cell, line))
+            Some((pane, line))
         });
-        let focus_cell = focused_band.map(|(cell, _)| cell);
+        let focus_pane = focused_band.map(|(pane, _)| pane);
         let focused_row = focused_band
             .filter(|(_, line)| visible.get(*line).is_some_and(|l| l.click.is_some()))
             .map(|(_, line)| place_of(line));
+        // AND THE LISTING'S ROW KEEPS A QUIETER BAND while the keyboard is in
+        // another section, because the panels are about that row and nothing
+        // else on screen said so. See `View::resting_line`.
+        let resting_row = self
+            .files
+            .as_ref()
+            .and_then(|v| v.resting_line(self.screen_columns(), grid.lines))
+            .filter(|line| visible.get(*line).is_some_and(|l| l.click.is_some()))
+            .map(place_of);
         let under_the_pointer = self
             .row_under_pointer
             .filter(|_| !over_a_picture)
@@ -9348,7 +9352,7 @@ impl Footer {
                 } else {
                     mini_repouso.clone()
                 };
-                vec![crate::chrome::Piece { text, key: false }]
+                vec![crate::chrome::Piece::prose(text)]
             };
             let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
             let plain_room = columns
@@ -10034,11 +10038,11 @@ impl Footer {
                 let (band_at, band_wide) = self.files.as_ref().map_or_else(
                     || (f32::from(base) * cell, f32::from(grid.width) * cell),
                     |v| {
-                        crate::files::band_of(
+                        crate::files::band_for(
                             v.panes(columns),
+                            focus_pane.unwrap_or(crate::files::Pane::Listing),
                             crate::chrome::FIELDS_LEAD,
                             grid.width,
-                            focus_cell,
                             cell,
                             width as f32,
                         )
@@ -10050,6 +10054,30 @@ impl Footer {
                     width: band_wide,
                     height: line_height,
                     color: tokens::color::SURFACE_SELECTION,
+                });
+            }
+            if let Some((base, grid_y)) = resting_row {
+                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                #[allow(clippy::cast_precision_loss)]
+                let (band_at, band_wide) = self.files.as_ref().map_or_else(
+                    || (f32::from(base) * cell, f32::from(grid.width) * cell),
+                    |v| {
+                        crate::files::band_for(
+                            v.panes(columns),
+                            crate::files::Pane::Listing,
+                            crate::chrome::FIELDS_LEAD,
+                            grid.width,
+                            cell,
+                            width as f32,
+                        )
+                    },
+                );
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: band_at,
+                    y: f32::from(first_of_expansion + grid_y) * line_height,
+                    width: band_wide,
+                    height: line_height,
+                    color: tokens::color::SURFACE_HOVER,
                 });
             }
             if let Some((base, grid_y)) = under_the_pointer {

@@ -150,10 +150,38 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// The name of the row that goes back up, and the only name this crate
+    /// reserves.
+    pub const PARENT: &'static str = "..";
+
     /// Hidden by the only rule Unix has: the name starts with a dot.
+    ///
+    /// **Except the way out.** `..` starts with a dot and is not a hidden
+    /// file: it is not a file at all, it is the row that goes up. Hiding it
+    /// with `C-h` would take the way back out of the listing for exactly the
+    /// people who turned the hidden files off.
     #[must_use]
     pub fn hidden(&self) -> bool {
-        self.name.starts_with('.')
+        !self.is_parent() && self.name.starts_with('.')
+    }
+
+    /// Is this the row that goes back up a level?
+    ///
+    /// # Why it is a row and not a key
+    ///
+    /// It is BOTH — `C-b` and the breadcrumbs have always gone up. The owner
+    /// asked for the row as well (*"crie a pasta `..` para retornar no path"*),
+    /// and the row is the one of the three a person finds without being told.
+    ///
+    /// It is also the one entry in a listing that nothing may be DONE to:
+    /// renaming, deleting, copying or measuring `..` would act on the
+    /// directory one is standing in, under a name that says otherwise. The
+    /// shell refuses it at the four places that could act — `View::row_of`
+    /// gives the whole row one target, `menu_subject` hands the menu the
+    /// FOLDER instead, and marking and measuring say no.
+    #[must_use]
+    pub fn is_parent(&self) -> bool {
+        self.name == Self::PARENT
     }
 
     /// Executable by somebody — any of the three `x` bits.

@@ -415,9 +415,12 @@ expansion-page = CtrlDir ←→
 # THE KEYS THAT WALK THE LINE ONCE IT IS OPEN, and the sentence that teaches
 # them. They are a chord of the RIGHT Ctrl, which is the one family no view
 # sees — so they are in no registry and in no manual, and this sentence is the
-# only thing on screen that says they exist. It is the lesson `C-o` cost this
-# project, and the reason it is APPENDED to the hint rather than standing on
-# its own: a key taught on a line nobody has opened teaches nothing.
+# only thing on screen that says they exist. It is the lesson the file
+# manager's `C-o` cost this project — implemented, working, and named nowhere,
+# which is the same as not having it; the key is gone now and the lesson is
+# why that view's hint line is generated out of its key table. And it is the
+# reason this sentence is APPENDED to the hint rather than standing on its own:
+# a key taught on a line nobody has opened teaches nothing.
 #
 # The notation is a value and not a `key_that_runs`, exactly as
 # `expansion-page` is: a right-Ctrl chord is not a command of the registry, so
@@ -1076,16 +1079,24 @@ files-trash = mover para a lixeira
 files-delete = apagar de vez
 files-shred = apagar sobrescrevendo
 
-# As teclas da própria vista — navegação e marcação. Elas vivem numa tabela
-# (`OF_THE_VIEW`) e não dentro de um `match`, porque a lista é o que o manual e
-# o check leem: tecla que só existe num braço de `match` é tecla que nada
-# consegue enumerar.
+# THE VIEW'S OWN KEYS, and every one of these sentences is now ON SCREEN.
+#
+# They live in a table (`OF_THE_VIEW`) rather than inside a `match`, because
+# the list is what the check reads: a key that only exists in a `match` arm is
+# a key nothing can enumerate. For a long time that was the only reader —
+# `files::OF_THE_VIEW` is in no registry, so none of these was in `M-x` or in
+# the manual, and forty translated sentences were carried by both languages and
+# drawn by nothing. `View::hint` reads them, in the table's order.
+#
+# SO THEY ARE SHORT AND THEY CARRY NO COMMA. The owner's rule for that line —
+# one shortcut between any two separators, the key first, and the words after
+# it brief. A comma inside one of these reads on screen as the end of the
+# chunk, which is what the separator is for.
 files-down = descer
 files-up = subir
-files-enter = abrir, ou entrar na pasta
+files-enter = abrir
 files-parent = subir uma pasta
-files-hint = digite para filtrar · { $key } abre o menu de ações · { $preview } prévia · { $info } informações
-files-hint-sidebar = digite para filtrar · { $key } abre o menu · { $side } vai para a barra · { $preview } prévia · { $info } informações
+files-hint = digite para filtrar
 # The panels. `no-room` is what the toggle says when it turns one on at a width
 # that cannot hold it: the state flips anyway and the screen says why, which is
 # the shape `files-sidebar-only` already has. `says` is one fact in full on the
@@ -1093,19 +1104,6 @@ files-hint-sidebar = digite para filtrar · { $key } abre o menu · { $side } va
 # characters, so the row that had to be cut is the row somebody wants to read.
 files-panel-no-room = não há espaço para o painel nesta largura — ele precisa de { $cells } colunas
 files-fact-says = { $label }: { $value }
-# THE SECOND HALF OF THE HINT LINE, appended to whichever of the two above is
-# on screen. Two keys that are in no registry and no manual, so this line is
-# the only thing that says they exist — the lesson `C-o` already cost. The
-# separator lives here and not in the Rust: a `·` written in the code would be
-# a visual literal, which is what invariant 9 is about.
-files-hint-more = · { $columns } mostra permissões, dono e grupo · { $facts } rola os fatos
-# THE THIRD SENTENCE OF THE HINT LINE — the four sections and the two keys
-# that walk them. Its own line and not a longer `files-hint-more` for the same
-# reason that one is not a longer `files-hint`: the halves are about different
-# things. BOTH keys are named, because somebody told only about the way forward
-# has to guess that there is a way back.
-files-hint-panes = · { $next } vai para a próxima seção, { $back } para a anterior
-files-hint-preview = · na prévia, { $page } vira a página e { $left } { $right } movem a linha para os lados
 # WHAT THE PREVIEW SAYS WHEN THERE IS NO PICTURE. Not a refusal — those come
 # from `ronoctua-inspect` and win when there is one — but the answer for a
 # directory, a broken link, and a file nothing has been asked about. It used to
@@ -1131,8 +1129,8 @@ files-entry-refused = este nome não pode ser um caminho: { $path }
 files-list-nothing = não há nesta lista nada que se possa tocar daqui
 files-list-at-start = esta é a primeira da lista
 files-list-at-end = esta é a última da lista
-files-playlist-previous = ir para a entrada anterior
-files-playlist-next = ir para a entrada seguinte
+files-playlist-previous = faixa anterior
+files-playlist-next = próxima faixa
 files-no-sound = esta máquina não tem som para tocá-lo — a imagem segue sem ele
 files-film-stuck = nada saiu dele por { $seconds } s — foi parado
 files-film-seek = ir para { $at } de { $total }
@@ -1153,18 +1151,18 @@ files-ask-group = Trocar o GRUPO para qual?
 files-ask-mode = Trocar as PERMISSÕES para qual conjunto?
 files-ask-format = Comprimir em qual formato?
 files-ask-name = Renomear para:
-files-hidden = mostrar ou esconder os ocultos
-files-sort = trocar a ordenação
+files-hidden = ocultos
+files-sort = ordenação
 files-sort-reverse = inverter a ordem
-files-mark = marcar, e seguir para o próximo
-files-mark-all = marcar tudo o que está à vista
+files-mark = marcar
+files-mark-all = marcar tudo
 files-unmark-all = desmarcar tudo
-files-first = ir para o primeiro
-files-last = ir para o último
+files-first = o primeiro
+files-last = o último
 files-menu = menu de ações
-files-measure = medir a pasta, ou examinar o arquivo
-files-pane-next = ir para a próxima seção
-files-pane-previous = voltar para a seção anterior
+files-measure = medir
+files-pane-next = próxima seção
+files-pane-previous = seção anterior
 
 files-type-is = { $named }
 files-type-disagrees = o nome diz { $named }, o conteúdo diz { $found }
@@ -1180,37 +1178,37 @@ files-nothing-here = esta pasta está vazia
 #
 # As cinco primeiras sao ids de `OF_THE_VIEW` e de `menu.rs`; o
 # `files-actions-have-text` as cobra a partir do id, sozinho.
-files-preview = mostrar ou esconder a prévia
-files-facts = mostrar ou esconder os fatos
-files-facts-scroll = virar para a proxima pagina de fatos
-files-columns = mostrar ou esconder as permissoes, o dono e o grupo
-files-sidebar = esconder ou mostrar a barra lateral
+files-preview = prévia
+files-facts = informações
+files-facts-scroll = página das informações
+files-columns = permissões e dono
+files-sidebar = barra lateral
 files-sidebar-focus = ir para a barra lateral, e voltar
 # AS TECLAS DA PRÓPRIA PRÉVIA, e a razão de estarem aqui em vez de saírem do
 # `menu.rs` é a do `leader::OF_CLIPBOARD_VIEW`: chave que só existe dentro de um
 # braço de `match` é chave que nada consegue enumerar. São estas que o
 # `LEADER :` lista, então cada uma diz o que FAZ, não em que tecla está.
-files-preview-scroll = virar para a próxima página da prévia
-files-preview-left = mover a prévia uma coluna para a esquerda
-files-preview-right = mover a prévia uma coluna para a direita
+files-preview-scroll = página da prévia
+files-preview-left = prévia para a esquerda
+files-preview-right = prévia para a direita
 # O transporte do filme. `files-play` é uma tecla para os dois porque é isso
 # que ela é: apertar com o filme rodando é o que pausa.
-files-play = tocar, ou pausar
+files-play = tocar ou pausar
 files-rewind = voltar
 files-forward = avançar
-files-sound = ligar ou desligar o som
-files-theatre = dar a região inteira à prévia, e devolver
+files-sound = som
+files-theatre = a região inteira
 # As da peça. `files-turn-left` é a direção da MÃO e não um eixo — veja o
 # `View::spin`, que é onde essa convenção está escrita.
-files-turn-left = girar a peça para a esquerda
-files-turn-right = girar a peça para a direita
-files-turn-up = girar a peça para cima
-files-turn-down = girar a peça para baixo
-files-zoom-in = olhar a peça mais de perto
-files-zoom-out = olhar a peça de mais longe
-files-reframe = pôr a peça de volta como estava
-files-eject = desmontar o dispositivo
-files-unpin = tirar da barra lateral
+files-turn-left = girar à esquerda
+files-turn-right = girar à direita
+files-turn-up = girar para cima
+files-turn-down = girar para baixo
+files-zoom-in = aproximar
+files-zoom-out = afastar
+files-reframe = reenquadrar
+files-eject = desmontar
+files-unpin = tirar da barra
 files-pin = pôr na barra lateral
 files-unhide = trazer de volta uma linha oculta da barra
 files-sidebar-hidden-ask = Trazer qual de volta?

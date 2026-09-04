@@ -308,37 +308,156 @@ pub fn divider(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::quad
 // THE HINT LINE — one sentence, two registers, one decision
 // ---------------------------------------------------------------------------
 
-/// One run of a hint line: the text, and whether it is a KEY.
+/// What a run of a hint line IS, which is the same as what colour it is.
 ///
-/// A hint reads "type to filter · C-m opens the action menu", and the two
-/// halves of that answer different questions: the key is what the eye hunts
-/// for, the prose is what it means. They are one sentence because the ORDER is
-/// the language's, so the split cannot happen in Rust — it comes back from the
-/// localiser, which is the only thing that knows where it put the argument
-/// (`ronoctua_i18n::Marked`).
+/// Four and not two, and every one of them was asked for from the screen.
+/// `Key` and `Prose` are the original pair — what the eye hunts for and what
+/// it means. `Separator` is the dot between one shortcut and the next: the
+/// owner asked for it to differ from both, and punctuation drawn in the tone
+/// of the words it separates is read as a word. `Alternate` is a key whose
+/// MEANING follows the section that has the keyboard — *"faça com que esses
+/// atalhos que mudam de acordo com a seção em foco tenham cores diferentes dos
+/// demais atalhos listados"*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Register {
+    /// A key notation that means the same thing wherever one is.
+    Key,
+    /// A key notation whose meaning is the focused section's, and which
+    /// therefore changes under the reader without the reader pressing anything.
+    Alternate,
+    /// The words around a key.
+    Prose,
+    /// The mark between one shortcut and the next.
+    Separator,
+}
+
+impl Register {
+    /// The one place that says what colour a run of a hint is.
+    #[must_use]
+    pub const fn color(self) -> ronoctua_tokens::Color {
+        match self {
+            Self::Key => tokens::color::TEXT_SUBTLE_STRONG,
+            Self::Alternate => tokens::color::TEXT_SUBTLE_ALTERNATE,
+            Self::Prose => tokens::color::TEXT_SUBTLE_DEFAULT,
+            Self::Separator => tokens::color::TEXT_SUBTLE_FAINT,
+        }
+    }
+}
+
+/// One run of a hint line: the text, and which register it belongs to.
+///
+/// A hint reads "type to filter · C-m action menu", and the parts of that
+/// answer different questions: the key is what the eye hunts for, the prose is
+/// what it means, the dot is neither. Where a sentence is one `.ftl` value the
+/// split cannot happen in Rust — the ORDER is the language's, and what comes
+/// back from the localiser is the only thing that knows where it put the
+/// argument (`ronoctua_i18n::Marked`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
     /// The run, exactly as it reads.
     pub text: String,
-    /// Is this run a key notation?
-    pub key: bool,
+    /// Which of the four registers it is drawn in.
+    pub register: Register,
 }
 
 impl Piece {
-    /// Appends one sentence to a hint line that is being built.
+    /// A run of prose.
+    #[must_use]
+    pub fn prose(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            register: Register::Prose,
+        }
+    }
+
+    /// A key notation, fixed or following the focused section.
+    #[must_use]
+    pub fn key(text: impl Into<String>, alternate: bool) -> Self {
+        Self {
+            text: text.into(),
+            register: if alternate {
+                Register::Alternate
+            } else {
+                Register::Key
+            },
+        }
+    }
+
+    /// The mark between one shortcut and the next, with its air on both sides.
     ///
-    /// # Why the sentences are separate, and why the seam is here
+    /// # Why the spaces travel with the dot
     ///
-    /// A hint is written as several `.ftl` values — what is always there, what
-    /// one asks for, the sections, the preview — because the halves are about
-    /// different things and each was added on a different day. They are joined
-    /// by a single SPACE, and the `·` between them lives inside the value: a
-    /// separator written in Rust would be a visual literal, which is what
-    /// invariant 9 is about.
+    /// Because they are the dot's air and nobody else's. Written into the
+    /// neighbouring runs they would be drawn in the neighbour's colour, which
+    /// costs nothing today and would be a bug the first time a register grows
+    /// a background. And they are what keeps `·` off the words: the owner's
+    /// own photograph of the seam that lost its space says `facts· TAB`.
+    #[must_use]
+    pub fn separator() -> Self {
+        Self {
+            text: format!(" {} ", tokens::mark::SEPARATOR),
+            register: Register::Separator,
+        }
+    }
+}
+
+/// How a key is DRAWN, as against how it is written down.
+///
+/// # Why this is not `Key::notation`
+///
+/// Because they answer different questions and only one of them is read by a
+/// person. `notation` is the wire form: `<down>`, `S-<left>` — round-trippable
+/// through `Key::parse`, which is what a table and a `.ftl` need. On screen it
+/// is six cells of markup, and a line that teaches forty-one keys would spend
+/// twenty-four of them drawing angle brackets.
+///
+/// So the arrows are drawn as arrows, out of `mark::ARROW_*`, and everything
+/// else keeps the notation it already had. One place, for the reason
+/// `syntax_color` gives one module down: two places would answer differently
+/// and the difference would be a shortcut printed one way in the hint and
+/// another in the manual.
+///
+/// See [`split_at_the_modifier`] for the other half of "how a key is drawn":
+/// the shaper's ligatures, which turned one of these into a key that does not
+/// exist.
+#[must_use]
+pub fn key_text(t: &ronoctua_keymap::Key) -> String {
+    use ronoctua_keymap::Sym;
+    let arrow = match t.sym {
+        Sym::Left => Some(tokens::mark::ARROW_LEFT),
+        Sym::Right => Some(tokens::mark::ARROW_RIGHT),
+        Sym::Up => Some(tokens::mark::ARROW_UP),
+        Sym::Down => Some(tokens::mark::ARROW_DOWN),
+        _ => None,
+    };
+    let Some(a) = arrow else {
+        return t.notation();
+    };
+    // THE MODIFIERS STAY AS THEY ARE WRITTEN. `S-` is two cells and is the
+    // same two cells everywhere else in the system; only the SYMBOL was
+    // markup, and only the symbol changes. The four are the only syms
+    // `notation` writes inside angle brackets, so the last `<` is the seam —
+    // and cutting at a MEASURED position rather than a remembered length is
+    // what keeps `<up>` (four bytes) and `<right>` (seven) from needing to be
+    // listed here a second time.
+    let mut out = t.notation();
+    let Some(at) = out.rfind('<') else {
+        return out;
+    };
+    out.truncate(at);
+    out.push(a);
+    out
+}
+
+impl Piece {
+    /// Appends one localised sentence to a hint line that is being built.
     ///
-    /// That join used to be written at each call site, and one of the three
-    /// was missing its space — the owner's photograph shows `scrolls the
-    /// facts· TAB goes to`. One seam, one place.
+    /// # Where this is still used, now that the manager's line is a table
+    ///
+    /// In every line that is a SENTENCE with a key inside it — the drawer's
+    /// own teaching line, and whatever else grows one. The file manager's hint
+    /// stopped being a sentence: it is one shortcut per chunk, in the order of
+    /// the key table, and there the separator and the order are the code's.
     ///
     /// # What makes a run a key
     ///
@@ -349,21 +468,75 @@ impl Piece {
     /// passed in. A value that grows a numeric argument corrects itself.
     pub fn extend(out: &mut Vec<Self>, m: &ronoctua_i18n::Marked, notations: &[&str]) {
         if !out.is_empty() {
-            out.push(Self {
-                text: " ".to_owned(),
-                key: false,
-            });
+            out.push(Self::prose(" "));
         }
         for (text, arg) in m.pieces() {
             if text.is_empty() {
                 continue;
             }
-            out.push(Self {
-                text: text.to_owned(),
-                key: arg && notations.contains(&text),
+            let key = arg && notations.contains(&text);
+            out.push(if key {
+                Self::key(text, false)
+            } else {
+                Self::prose(text)
             });
         }
     }
+}
+
+/// Where a key notation is CUT so a ligature cannot cross the modifier.
+///
+/// # The defect, photographed
+///
+/// `C->` came out on screen as `C-→`. The face ligates `->` — that is what the
+/// feature is for, and in a line of code it is right — but here it turns a
+/// notation into a DIFFERENT key, and worse into one this system forbids: an
+/// arrow held with `Ctrl` is the footer's paging chord, taken before the view
+/// ever sees it. The line exists to teach forty keys, and it was teaching one
+/// that does not exist.
+///
+/// It was invisible until the line began to show the whole table — `C->` had
+/// been bound for as long as the table has and drawn nowhere.
+///
+/// # Why the cut, and not a different key
+///
+/// Because the key is not wrong, the DRAWING is. `cosmic-text` shapes a run at
+/// a time and exposes no way to switch a feature off, so the fix is to stop
+/// the two characters being in one run: a hint's every glyph is one cell wide
+/// and placed by this module's own arithmetic, so two runs land exactly where
+/// one did.
+///
+/// And it is done for EVERY key rather than for `>`: which pairs a face
+/// ligates is the face's business and changes when a face does. `C-` `>` and
+/// `C-` `[` shape identically once they are apart.
+fn split_at_the_modifier(text: &str) -> Option<(&str, &str)> {
+    // THE MODIFIERS ARE EATEN FROM THE FRONT, and the rest is the symbol.
+    //
+    // Not `rfind('-')`, which is the same answer for every notation in the
+    // table except one: `C--` is the film's rewind, and the LAST hyphen there
+    // is the symbol itself — cutting after it leaves nothing on the right and
+    // the two hyphens stay in one run. That is harmless against this face,
+    // which does not ligate `--`, and "harmless against this face" is not a
+    // rule. `Key::notation` builds the prefix out of exactly these four, so
+    // reading them back is the same arithmetic in reverse.
+    //
+    // By `strip_prefix` and never by slicing: `key_text` has already replaced
+    // an arrow's symbol with a multi-byte character, and `&text[at..at + 2]`
+    // on `S-←` would cut a codepoint in half.
+    let mut rest = text;
+    let mut at = 0;
+    while let Some(next) = rest
+        .strip_prefix("C-")
+        .or_else(|| rest.strip_prefix("M-"))
+        .or_else(|| rest.strip_prefix("S-"))
+        .or_else(|| rest.strip_prefix("s-"))
+    {
+        at += 2;
+        rest = next;
+    }
+    // A CUT THAT LEAVES NOTHING IS NOT A CUT: `RET` has no modifier, and a
+    // notation that is nothing BUT modifiers has no symbol to separate.
+    (at > 0 && !rest.is_empty()).then(|| text.split_at(at))
 }
 
 /// Draws a hint line, and is the ONLY place that says what colour one is.
@@ -401,34 +574,44 @@ pub fn hint_spans(
         if left == 0 {
             break;
         }
-        // `layout::width`, which is the ruler the rest of both doors position
-        // by: it counts CLUSTERS. An emoji advances more than one cell and
-        // this would place the next piece early — but every other span on the
-        // line is placed the same way, and a hint that used a second ruler
-        // would be the only thing on screen that did. No hint value contains
-        // an emoji; if one ever does, the fix belongs to the grid.
-        let width = ronoctua_render::layout::width(&p.text);
-        let text = if width <= left {
-            p.text.clone()
-        } else {
-            ronoctua_render::layout::elide_end(&p.text, left)
+        // A KEY IS DRAWN IN TWO RUNS, so that no ligature can cross its
+        // modifier — see `split_at_the_modifier`. Prose is one run: a sentence
+        // is what the shaper is FOR.
+        let runs: Vec<&str> = match p.register {
+            Register::Key | Register::Alternate => split_at_the_modifier(&p.text)
+                .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b]),
+            Register::Prose | Register::Separator => vec![p.text.as_str()],
         };
-        let drawn = ronoctua_render::layout::width(&text);
-        out.push(ronoctua_render::Span {
-            size,
-            text,
-            column: at,
-            line,
-            color: if p.key {
-                tokens::color::TEXT_SUBTLE_STRONG
+        for run in runs {
+            if left == 0 {
+                break;
+            }
+            // `layout::width`, which is the ruler the rest of both doors
+            // position by: it counts CLUSTERS. An emoji advances more than one
+            // cell and this would place the next run early — but every other
+            // span on the line is placed the same way, and a hint that used a
+            // second ruler would be the only thing on screen that did. No hint
+            // value contains an emoji; if one ever does, the fix belongs to the
+            // grid.
+            let width = ronoctua_render::layout::width(run);
+            let text = if width <= left {
+                run.to_owned()
             } else {
-                tokens::color::TEXT_SUBTLE_DEFAULT
-            },
-            edge: false,
-            foot: false,
-        });
-        at = at.saturating_add(drawn);
-        left = left.saturating_sub(drawn);
+                ronoctua_render::layout::elide_end(run, left)
+            };
+            let drawn = ronoctua_render::layout::width(&text);
+            out.push(ronoctua_render::Span {
+                size,
+                text,
+                column: at,
+                line,
+                color: p.register.color(),
+                edge: false,
+                foot: false,
+            });
+            at = at.saturating_add(drawn);
+            left = left.saturating_sub(drawn);
+        }
     }
     out
 }
@@ -481,13 +664,17 @@ pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{FIELDS_LEAD, Frame, INSET, Piece, cell_width, content_left_px, hint_spans};
+    use super::{
+        FIELDS_LEAD, Frame, INSET, Piece, Register, cell_width, content_left_px, hint_spans,
+        key_text, split_at_the_modifier,
+    };
     use ronoctua_tokens as tokens;
 
     fn piece(text: &str, key: bool) -> Piece {
-        Piece {
-            text: text.to_owned(),
-            key,
+        if key {
+            Piece::key(text, false)
+        } else {
+            Piece::prose(text)
         }
     }
 
@@ -498,9 +685,12 @@ mod tests {
         // tones the listing under it is drawn in.
         let line = [piece("type to filter · ", false), piece("C-m", true)];
         let spans = hint_spans(&line, ronoctua_render::Size::Grid, 2, 0, 80);
-        assert_eq!(spans.len(), 2);
+        // THREE SPANS FOR TWO PIECES: the key is drawn in two runs, both in
+        // the key's colour — see `split_at_the_modifier`.
+        assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].color, tokens::color::TEXT_SUBTLE_DEFAULT);
         assert_eq!(spans[1].color, tokens::color::TEXT_SUBTLE_STRONG);
+        assert_eq!(spans[2].color, tokens::color::TEXT_SUBTLE_STRONG);
         assert_ne!(spans[0].color, spans[1].color);
         for s in &spans {
             for content in [
@@ -511,6 +701,54 @@ mod tests {
                 assert_ne!(s.color, content, "the hint is wearing a content colour");
             }
         }
+    }
+
+    #[test]
+    fn no_ligature_crosses_a_keys_modifier() {
+        // THE DEFECT, PHOTOGRAPHED: `C->` came out on screen as `C-→`. The
+        // face ligates `->` — right in a line of code — and here it turned a
+        // notation into a key this system FORBIDS, since an arrow held with
+        // `Ctrl` is the footer's paging chord and never reaches the view. It
+        // was invisible until the hint began to teach the whole key table.
+        //
+        // The shaper works a RUN at a time, so what this asserts is that the
+        // two characters are never in one run.
+        for notation in [
+            "C->", "C-<", "C--", "C-=", "S-TAB", "C-SPC", "RET", "S-<left>",
+        ] {
+            let t = ronoctua_keymap::Key::parse(notation).expect("a notation");
+            let drawn = key_text(&t);
+            let line = [Piece::key(drawn.clone(), false)];
+            let spans = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, 40);
+            // AGAINST THE DRAWN FORM and not against the notation: `S-<left>`
+            // is drawn `S-←`, which is `key_text`'s other half.
+            let rebuilt: String = spans.iter().map(|s| s.text.as_str()).collect();
+            assert_eq!(rebuilt, drawn, "the key did not survive the cut");
+            for s in &spans {
+                assert!(
+                    !s.text.contains("->"),
+                    "`{notation}` still has `->` inside one run: {:?}",
+                    s.text
+                );
+            }
+        }
+        // AND A KEY WITH NO MODIFIER IS ONE RUN, because there is nothing for a
+        // ligature to cross.
+        assert!(split_at_the_modifier("RET").is_none());
+        assert!(split_at_the_modifier("-").is_none());
+        assert!(split_at_the_modifier("C-").is_none());
+        // THE SYMBOL CAN BE A HYPHEN, and it is: `C--` is the film's rewind.
+        // Read from the RIGHT this one comes back whole, which is the cut that
+        // does nothing — harmless against a face that does not ligate `--`,
+        // and harmlessness is not a rule.
+        assert_eq!(split_at_the_modifier("C--"), Some(("C-", "-")));
+        assert_eq!(split_at_the_modifier("S-TAB"), Some(("S-", "TAB")));
+        // AND AN ARROW IS MULTI-BYTE, which is why nothing here slices.
+        let arrow = format!("S-{}", ronoctua_tokens::mark::ARROW_LEFT);
+        assert_eq!(
+            split_at_the_modifier(&arrow).map(|(a, _)| a.to_owned()),
+            Some("S-".to_owned())
+        );
     }
 
     #[test]
@@ -525,9 +763,13 @@ mod tests {
             piece(" opens the menu", false),
         ];
         let spans = hint_spans(&line, ronoctua_render::Size::Grid, 2, 0, 80);
+        // FOUR SPANS FOR THREE PIECES: a key is drawn in two runs so that no
+        // ligature can cross its modifier — see `split_at_the_modifier`.
+        assert_eq!(spans.len(), 4);
         assert_eq!(spans[0].column, 2);
         assert_eq!(spans[1].column, 2 + 17);
-        assert_eq!(spans[2].column, 2 + 17 + 3);
+        assert_eq!(spans[2].column, 2 + 17 + 2);
+        assert_eq!(spans[3].column, 2 + 17 + 3);
         // And the line they draw is the sentence, in order.
         let rebuilt: String = spans.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(rebuilt, "type to filter · C-m opens the menu");
@@ -568,24 +810,25 @@ mod tests {
         // The join used to be written at each call site and one of the three
         // was missing its space: the owner's photograph reads `scrolls the
         // facts· TAB goes to`.
+        // The manager's own hint no longer goes through here — it is one
+        // shortcut per chunk now, and the seam is `Piece::separator`. What is
+        // still assembled this way is every line that is a SENTENCE with a key
+        // inside it, and those are the two used here.
         let t = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
         let mut out = Vec::new();
-        let a = t.t_marked(
-            ronoctua_i18n::key::FILES_HINT_MORE,
-            &[("columns", "C-d"), ("facts", "C-.")],
-        );
+        let a = t.t_marked(ronoctua_i18n::key::FILES_SIDEBAR_ONLY, &[("key", "C-l")]);
         let b = t.t_marked(
-            ronoctua_i18n::key::FILES_HINT_PANES,
-            &[("next", "TAB"), ("back", "S-TAB")],
+            ronoctua_i18n::key::MINIBUFFER_FOLD_HINT,
+            &[("keys", "RCtrl")],
         );
-        Piece::extend(&mut out, &a, &["C-d", "C-."]);
+        Piece::extend(&mut out, &a, &["C-l"]);
         let seam = out.len();
-        Piece::extend(&mut out, &b, &["TAB", "S-TAB"]);
+        Piece::extend(&mut out, &b, &["RCtrl"]);
         assert_eq!(out[seam].text, " ");
         let line: String = out.iter().map(|p| p.text.as_str()).collect();
         assert!(!line.contains("·  "), "two spaces at a seam: {line}");
         assert!(
-            !line.contains("s·"),
+            !line.contains("e·"),
             "a seam with no space before the separator: {line}"
         );
     }
@@ -600,7 +843,11 @@ mod tests {
         let m = t.t_marked(ronoctua_i18n::key::FILES_PANEL_NO_ROOM, &[("cells", "24")]);
         let mut out = Vec::new();
         Piece::extend(&mut out, &m, &["C-m", "C-v"]);
-        assert!(out.iter().all(|p| !p.key), "a number came out as a key");
+        assert!(
+            out.iter()
+                .all(|p| !matches!(p.register, Register::Key | Register::Alternate)),
+            "a number came out as a key"
+        );
         assert!(out.iter().any(|p| p.text.contains("24")));
     }
 

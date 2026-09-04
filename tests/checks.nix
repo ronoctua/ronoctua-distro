@@ -4455,8 +4455,25 @@ let
         # `"files-does-"` — a test asserting that the technical explanation
         # comes from the right table — and grepping it as a key sent this check
         # looking for a translation of the empty string.
+        #
+        # AND `files-strong-*` IS NOT A KEY EITHER, because it never reaches a
+        # screen: those four are the shifted arrows, and `View::strong_meaning`
+        # turns each of them into the id of a REAL action — whose sentence is
+        # what the hint line then shows — before the table's `match` sees it.
+        # A translation for them would be four sentences in two languages that
+        # nothing can ever draw, which is the state this whole line of work
+        # existed to get out of.
+        #
+        # THE EXEMPTION IS ONLY VALID WHILE THE RESOLVER IS, so it is checked
+        # rather than trusted: delete `strong_meaning` and the four ids are
+        # demanded again, loudly, on the next build.
+        grep -q 'fn strong_meaning' ${../crates/ronoctua-shell/src}/files.rs || {
+          echo "ERROR: files.rs no longer resolves the shifted arrows, so" >&2
+          echo "       files-strong-* would reach the screen with no name." >&2
+          failed=1
+        }
         view=$(grep -ohE '"files-[a-z0-9-]+"' ${../crates/ronoctua-shell/src}/files.rs \
-          | tr -d '"' | grep -vE -- '-$' | sort -u)
+          | tr -d '"' | grep -vE -- '-$' | grep -vE '^files-strong-' | sort -u)
         for k in $view; do
           for language in ${lib.concatStringsSep " " languages}; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {

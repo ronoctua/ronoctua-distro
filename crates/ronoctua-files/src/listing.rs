@@ -102,6 +102,22 @@ pub fn read_dir_at(dir: &Path, sort: Sort) -> Result<Vec<Entry>> {
         })
         .collect();
     sort_entries(&mut out, sort);
+    // AND THE WAY BACK IS THE FIRST ROW, whatever the sort says.
+    //
+    // `read_dir` never yields `.` or `..` — that is a property of the syscall,
+    // not an accident — so it is put here, and AFTER the sort: it is not one
+    // of the names being ordered. It is the way out of the directory, and a
+    // way out that moved to the middle of the list when somebody sorted by
+    // size would be a way out one has to look for.
+    //
+    // At the root there is nowhere to go, so there is no row. A row that did
+    // nothing would be the one thing in this listing that lies.
+    if let Some(up) = dir
+        .parent()
+        .and_then(|p| Entry::of_path(Entry::PARENT.to_owned(), p))
+    {
+        out.insert(0, up);
+    }
     Ok(out)
 }
 

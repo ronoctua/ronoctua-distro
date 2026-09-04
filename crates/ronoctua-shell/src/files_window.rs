@@ -1521,17 +1521,16 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // rows down as it is on the first.
     let hinting = second.is_none() && !s.view.filtering();
     let line_pieces: Vec<crate::chrome::Piece> = if hinting {
-        let mut out = crate::files::hint_of(s.texts, s.view.split(s.geo.columns) > 0);
+        let mut out = s.view.hint(s.texts);
         // AND THE KEYS THAT WALK IT, once it is open — see `fold::teaching`.
         if s.fold.open {
             out.extend(crate::fold::teaching(s.texts));
         }
         out
     } else {
-        vec![crate::chrome::Piece {
-            text: second.clone().unwrap_or_default(),
-            key: false,
-        }]
+        vec![crate::chrome::Piece::prose(
+            second.clone().unwrap_or_default(),
+        )]
     };
     let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
     // THE ROOM IS WHAT IS LEFT AFTER THE MARGIN, and it used to be the whole
@@ -1735,16 +1734,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         #[allow(clippy::cast_possible_truncation)]
         let y = s.geo.metric.first + line as u16;
         let cell = tokens::metrics::cell_width(size);
-        let at_cell = match pane {
-            crate::files::Pane::Sidebar => 0,
-            _ => s.view.split(s.geo.columns),
-        };
         #[allow(clippy::cast_precision_loss)]
-        let (at, wide) = crate::files::band_of(
+        let (at, wide) = crate::files::band_for(
             panes_now,
+            pane,
             margin,
             s.geo.columns,
-            Some(at_cell),
             cell,
             s.geo.metric.width,
         );
@@ -1754,6 +1749,30 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             width: wide,
             height: line_px,
             color: tokens::color::SURFACE_SELECTION,
+        });
+    }
+    // AND THE LISTING KEEPS A QUIETER ONE while the keyboard is away, because
+    // the panels are about that row and nothing else on screen said so. See
+    // `View::resting_line`.
+    let resting = s.view.resting_line(s.geo.columns, s.geo.room());
+    if let Some(line) = resting {
+        let y = s.geo.metric.first + line as u16;
+        let cell = tokens::metrics::cell_width(size);
+        #[allow(clippy::cast_precision_loss)]
+        let (at, wide) = crate::files::band_for(
+            panes_now,
+            crate::files::Pane::Listing,
+            margin,
+            s.geo.columns,
+            cell,
+            s.geo.metric.width,
+        );
+        quads.push(ronoctua_render::quad::Quad {
+            x: at,
+            y: f32::from(y) * line_px,
+            width: wide,
+            height: line_px,
+            color: tokens::color::SURFACE_HOVER,
         });
     }
     // WHERE THE POINTER IS, and the question is which LINE — never which field.

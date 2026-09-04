@@ -145,10 +145,12 @@ const CEILING: usize = 512;
 ///
 /// # Why it wraps pieces and not a string
 ///
-/// Because the line is two registers — a key notation and the prose around it
-/// — and `chrome::hint_spans` is what knows their colours. Wrapping the joined
-/// text would give the drawer back as one grey run, so the same sentence would
-/// be drawn one way on the first line and another way three lines below it.
+/// Because the line is four registers — a fixed key, a key that follows the
+/// focused section, the prose around them and the mark between one shortcut
+/// and the next — and `chrome::hint_spans` is what knows their colours.
+/// Wrapping the joined text would give the drawer back as one grey run, so the
+/// same sentence would be drawn one way on the first line and another way
+/// three lines below it.
 ///
 /// Spacing is rebuilt as single spaces, exactly as
 /// [`ronoctua_render::layout::wrap`] does with a plain text: a wrap is already
@@ -157,16 +159,16 @@ const CEILING: usize = 512;
 pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate::chrome::Piece>> {
     let room = usize::from(width.max(1));
     // ONE FLAT LIST OF WORDS, each remembering which register it came from.
-    let mut words: Vec<(String, bool)> = Vec::new();
+    let mut words: Vec<(String, crate::chrome::Register)> = Vec::new();
     for p in pieces {
         for w in p.text.split_whitespace() {
-            words.push((w.to_owned(), p.key));
+            words.push((w.to_owned(), p.register));
         }
     }
-    let mut out: Vec<Vec<(String, bool)>> = Vec::new();
-    let mut line: Vec<(String, bool)> = Vec::new();
+    let mut out: Vec<Vec<(String, crate::chrome::Register)>> = Vec::new();
+    let mut line: Vec<(String, crate::chrome::Register)> = Vec::new();
     let mut used = 0_usize;
-    for (word, key) in words {
+    for (word, register) in words {
         let w = usize::from(ronoctua_render::layout::width(&word));
         if w > room && line.is_empty() {
             // A WORD WIDER THAN THE LINE — a path, which is what this line
@@ -174,9 +176,9 @@ pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate
             let mut rest: Vec<&str> = ronoctua_render::layout::cells_of(&word).collect();
             while rest.len() > room && out.len() < CEILING {
                 let piece: String = rest.drain(..room).collect();
-                out.push(vec![(piece, key)]);
+                out.push(vec![(piece, register)]);
             }
-            line.push((rest.into_iter().collect::<String>(), key));
+            line.push((rest.into_iter().collect::<String>(), register));
             used = usize::from(ronoctua_render::layout::width(&line[0].0));
             continue;
         }
@@ -193,7 +195,7 @@ pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate
             }
         }
         used += if line.is_empty() { w } else { w + 1 };
-        line.push((word, key));
+        line.push((word, register));
     }
     if !line.is_empty() {
         out.push(line);
@@ -209,21 +211,27 @@ pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate
 }
 
 /// Turns the wrapped words back into pieces, one row at a time.
-fn rebuild(rows: Vec<Vec<(String, bool)>>) -> Vec<Vec<crate::chrome::Piece>> {
+fn rebuild(rows: Vec<Vec<(String, crate::chrome::Register)>>) -> Vec<Vec<crate::chrome::Piece>> {
     rows.into_iter()
         .map(|words| {
             let mut row: Vec<crate::chrome::Piece> = Vec::new();
-            for (word, key) in words {
+            for (word, register) in words {
                 match row.last_mut() {
-                    Some(last) if last.key == key => {
+                    Some(last) if last.register == register => {
                         last.text.push(' ');
                         last.text.push_str(&word);
                     }
                     Some(last) => {
                         last.text.push(' ');
-                        row.push(crate::chrome::Piece { text: word, key });
+                        row.push(crate::chrome::Piece {
+                            text: word,
+                            register,
+                        });
                     }
-                    None => row.push(crate::chrome::Piece { text: word, key }),
+                    None => row.push(crate::chrome::Piece {
+                        text: word,
+                        register,
+                    }),
                 }
             }
             row
@@ -308,10 +316,7 @@ mod tests {
     use super::*;
 
     fn prose(text: &str) -> Vec<crate::chrome::Piece> {
-        vec![crate::chrome::Piece {
-            text: text.to_owned(),
-            key: false,
-        }]
+        vec![crate::chrome::Piece::prose(text)]
     }
 
     #[test]
@@ -427,24 +432,15 @@ mod tests {
         // same painter as the line above it, so `C-m` is the same colour on
         // both.
         let line = vec![
-            crate::chrome::Piece {
-                text: "type to filter \u{b7} ".to_owned(),
-                key: false,
-            },
-            crate::chrome::Piece {
-                text: "C-m".to_owned(),
-                key: true,
-            },
-            crate::chrome::Piece {
-                text: " opens the action menu".to_owned(),
-                key: false,
-            },
+            crate::chrome::Piece::prose("type to filter \u{b7} "),
+            crate::chrome::Piece::key("C-m", false),
+            crate::chrome::Piece::prose(" opens the action menu"),
         ];
         let out = wrap_pieces(&line, 12);
         let keys: Vec<&str> = out
             .iter()
             .flatten()
-            .filter(|p| p.key)
+            .filter(|p| matches!(p.register, crate::chrome::Register::Key))
             .map(|p| p.text.as_str())
             .collect();
         assert_eq!(keys, vec!["C-m"], "the key was lost or split");
