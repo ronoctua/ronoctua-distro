@@ -55,16 +55,20 @@ pub const fn tall(heights: &Heights, scale: Scale) -> u16 {
 
 /// How many cells WIDE a piece of literal data is, at the body's size.
 ///
-/// Counted in `char`s, which is what `DisplayList::columns_of` charges — and
-/// the two have to agree exactly. A buffer that positioned the next field from
-/// a different count would be laying out against a number the host does not
-/// use, which is a class of defect that only shows on somebody else's screen.
+/// One line, and it forwards on purpose: this is the SAME function
+/// `DisplayList::columns_of` charges and the same one the host cuts with, and
+/// they have to agree exactly. A buffer that positioned the next field from a
+/// different count would be laying out against a number the host does not use,
+/// which is a class of defect that only shows on somebody else's screen — and
+/// it stayed possible for as long as the two were written out separately.
 ///
-/// (This is a count, not a cut. The cluster rule is about cutting, and cutting
-/// is the host's — see this module's header.)
+/// It counts clusters, so it is a count of THINGS and not an advance. A datum
+/// whose glyph is wider than its cell — an emoji, a long arrow — is budgeted
+/// from the width the database measured, never from here; see
+/// [`ronoctua_protocol::cells`].
 #[must_use]
 pub fn wide(text: &str) -> u16 {
-    u16::try_from(text.chars().count()).unwrap_or(u16::MAX)
+    ronoctua_protocol::cells(text)
 }
 
 /// How many cells a run actually claims, budget and scale included.

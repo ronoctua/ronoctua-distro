@@ -369,7 +369,7 @@ mod tests {
                 2,
                 columns,
             );
-            let width = u16::try_from(clipped.chars().count()).unwrap_or(u16::MAX);
+            let width = ronoctua_render::layout::width(&clipped);
             assert!(
                 width <= budget,
                 "at {columns} columns the text went past its budget: \
@@ -382,6 +382,23 @@ mod tests {
         }
     }
 
+    /// The budget is in CELLS, and a cell is a cluster.
+    ///
+    /// Every other test here uses Latin-1, where a character and a cluster are
+    /// the same thing — so all of them passed just as happily when this file
+    /// measured with `chars()`. The couple is six codepoints and one cell: it
+    /// fits in a budget of one, and cutting it by codepoint would not shorten
+    /// it but redraw it as two different emoji.
+    #[test]
+    fn a_cluster_is_one_cell_however_many_codepoints_it_has() {
+        let couple = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}";
+        assert_eq!(couple.chars().count(), 6, "six codepoints");
+        assert_eq!(ronoctua_render::layout::width(couple), 1, "one cell");
+        assert_eq!(elide_to_budget(couple, 4, 0, 80), couple);
+        assert_eq!(elide_to_budget(couple, 1, 0, 80), couple);
+        assert!(!elide_to_budget(couple, 1, 0, 80).contains('\u{2026}'));
+    }
+
     #[test]
     fn a_zero_budget_means_up_to_the_edge() {
         // `0` is "no budget of its own" — the common case, for whoever is the only
@@ -389,7 +406,7 @@ mod tests {
         let s = "x".repeat(100);
         let clipped = elide_to_budget(&s, 0, 5, 20);
         assert_eq!(
-            clipped.chars().count(),
+            ronoctua_render::layout::width(&clipped),
             15,
             "it should reach the edge, and stopped"
         );
@@ -400,7 +417,10 @@ mod tests {
         // A run starting at column 70 of an 80-wide screen has ten
         // cells, and not eighty. Ignoring the column is like having no edge.
         let s = "y".repeat(50);
-        assert_eq!(elide_to_budget(&s, 0, 70, 80).chars().count(), 10);
+        assert_eq!(
+            ronoctua_render::layout::width(&elide_to_budget(&s, 0, 70, 80)),
+            10
+        );
         // And at the exact edge, nothing is left — without panicking.
         assert!(elide_to_budget(&s, 0, 80, 80).is_empty());
         assert!(elide_to_budget(&s, 0, 90, 80).is_empty());

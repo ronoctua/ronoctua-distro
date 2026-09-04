@@ -33,6 +33,45 @@ use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// The clusters of a piece of literal text, one per cell.
+///
+/// **The one ruler.** It counts grapheme CLUSTERS, and it lives here — in the
+/// crate both sides compile — because the buffer reserves with it
+/// (`ronoctua_design::budget::wide`), the host confers with it
+/// ([`DisplayList::columns_of`]) and the host cuts with it
+/// (`ronoctua_render::layout::elide_end`, which walks the same clusters). Three
+/// jobs, one definition; before this there were six functions and they
+/// disagreed.
+///
+/// # Why clusters and not `char`s
+///
+/// Because a cluster is what the renderer draws as ONE thing. `👩‍❤️‍👨` is six
+/// codepoints and one glyph; `◌́` is two and one; a flag is two and one. Counting
+/// codepoints made a buffer reserve six cells for something drawn in two, and
+/// made the cut produce ANOTHER drawing rather than a shorter one — with a
+/// budget of 4 cells the couple became `👩‍❤` + `…`, which reshapes as two emoji.
+///
+/// # What it is NOT
+///
+/// It is a count of things, not an advance. An emoji cluster advances
+/// `1.245 em` against the cell's `0.600`, so it covers TWO cells while counting
+/// as one. Nothing here can know that — the answer is in the font, and what
+/// reads the font is the database generator, which writes `width: 2` beside the
+/// character. A buffer that draws such a datum budgets from that field
+/// (`Symbol::ink`), never from this function. The two are different questions
+/// and this crate only answers the first.
+pub fn cells_of(text: &str) -> impl Iterator<Item = &str> {
+    unicode_segmentation::UnicodeSegmentation::graphemes(text, true)
+}
+
+/// How many cells a piece of literal text occupies, at the body's size.
+///
+/// [`cells_of`] carries the reasoning; this is its count.
+#[must_use]
+pub fn cells(text: &str) -> u16 {
+    u16::try_from(cells_of(text).count()).unwrap_or(u16::MAX)
+}
+
 /// A colour token, **by name**.
 ///
 /// Never a value. Invariant 9 puts the colours in the tokens and 11 forbids the
@@ -1658,8 +1697,7 @@ impl DisplayList {
                 let wide = match text {
                     // NOTHING IS KNOWN about a key until the host looks it up.
                     Text::Key(_) => budget,
-                    Text::Data(t) => u16::try_from(t.chars().count())
-                        .unwrap_or(u16::MAX)
+                    Text::Data(t) => cells(t)
                         .saturating_mul(heights.of(*scale).max(1))
                         .min(budget),
                     Text::Icon(_) => heights.of(*scale).max(1).min(budget),
@@ -1667,14 +1705,9 @@ impl DisplayList {
                 (*column, wide)
             }
             Command::Rule { .. } | Command::Selection { .. } => (0, columns),
-            Command::Grid { column, lines, .. } => (
-                *column,
-                lines
-                    .iter()
-                    .map(|l| u16::try_from(l.chars().count()).unwrap_or(u16::MAX))
-                    .max()
-                    .unwrap_or(0),
-            ),
+            Command::Grid { column, lines, .. } => {
+                (*column, lines.iter().map(|l| cells(l)).max().unwrap_or(0))
+            }
             Command::Svg {
                 column,
                 columns: wide,

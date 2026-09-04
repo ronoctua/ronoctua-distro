@@ -7,12 +7,22 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# ZERO dependencies, and `alloc` instead of `std` where possible.
+# ONE dependency, and `alloc` instead of `std` where possible.
 #
 # This crate crosses the boundary: it is compiled both on the host and inside
-# the `wasm32-wasip2` components (invariant 12). Any dependency here
-# would have to work on both sides.
+# the `wasm32-wasip2` components (invariant 12), so a dependency here has to
+# work on both sides. It carried none at all until the cell ruler moved in;
+# `cells` is the reason, and the reason is that a ruler with two definitions is
+# two rulers.
 [dependencies]
+# THE ONE RULER, and the only dependency this crate has ever taken.
+#
+# `default-features = false` keeps it `no_std`, which is what lets it cross into
+# the components. It is here and not in `ronoctua-design` because `columns_of`
+# is here: the buffer reserves with `budget::wide` and the host confers with
+# `columns_of`, and the two have to be the SAME function or they are two rulers
+# again.
+unicode-segmentation = { version = "1", default-features = false }
 
 [lints]
 workspace = true

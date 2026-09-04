@@ -911,16 +911,19 @@ fn runs_of(text: &str, highlights: &[usize]) -> Vec<(String, u16, bool)> {
         };
     }
     let mut out: Vec<(String, u16, bool)> = Vec::new();
-    for (i, c) in text.chars().enumerate() {
+    for (i, c) in layout::cells_of(text).enumerate() {
         let matched = highlights.contains(&i);
         match out.last_mut() {
             // Joins the previous run when the color does not change.
-            Some((s, _, previous)) if *previous == matched => s.push(c),
-            // ONE CELL PER CHARACTER, the way `layout::width` counts — and not
-            // by the Unicode width. The two rulers have to be the SAME: with one
-            // counting two for an ideograph and the other one, the highlight
-            // would come out offset from the text it was supposed to light.
-            _ => out.push((c.to_string(), u16::try_from(i).unwrap_or(u16::MAX), matched)),
+            Some((s, _, previous)) if *previous == matched => s.push_str(c),
+            // ONE CELL PER CLUSTER, which is what `layout::width` counts and
+            // what `elide_end` walks. The two rulers have to be the SAME: this
+            // used to say "one cell per character" and to iterate `chars()`,
+            // and the claim was simply false — a combining accent is two
+            // characters and one cell, so the highlight walked ahead of the
+            // text it was supposed to light. `match_up` hands over cluster
+            // indices for the same reason.
+            _ => out.push((c.to_owned(), u16::try_from(i).unwrap_or(u16::MAX), matched)),
         }
     }
     out
@@ -967,18 +970,21 @@ fn wrap_text(text: &str, width: u16, ceiling: usize) -> Vec<String> {
     for raw in text.lines() {
         let mut line = String::new();
         for word in raw.split_whitespace() {
-            if line.is_empty() && word.chars().count() > width {
+            if line.is_empty() && usize::from(layout::width(word)) > width {
                 // WORD LONGER THAN THE LINE: split it into pieces the size of the
-                // line. `chars`, and not bytes: cutting a UTF-8 sequence in half
-                // would produce garbage on screen.
-                let mut rest: Vec<char> = word.chars().collect();
+                // line. By CLUSTER, and not by character: this is a cut, and a
+                // cut between the two halves of an emoji sequence does not
+                // shorten the word, it draws a different one — the same fault
+                // `elide_end` exists to avoid.
+                let mut rest: Vec<&str> = layout::cells_of(word).collect();
                 while rest.len() > width && out.len() < ceiling {
                     out.push(rest.drain(..width).collect());
                 }
                 line = rest.into_iter().collect();
                 continue;
             }
-            let fits = line.chars().count() + 1 + word.chars().count() <= width;
+            let fits =
+                usize::from(layout::width(&line)) + 1 + usize::from(layout::width(word)) <= width;
             if line.is_empty() {
                 line.push_str(word);
             } else if fits {
@@ -1045,10 +1051,13 @@ fn highlight_line(
             text: text.to_owned(),
             line: y,
             // THE COLUMN IS IN CELLS, and the range's offset is in BYTES.
-            // Counting characters is what matches the two: an accent takes two
-            // bytes and one cell, and adding bytes would misalign the whole line
-            // from the first one on.
-            column: column + u16::try_from(line[..kdl_of].chars().count()).unwrap_or(0),
+            // What matches the two is counting CLUSTERS — the ruler the rest of
+            // the drawing uses. Counting characters was nearly right and wrong
+            // in the same place as everywhere else: an accent takes two bytes
+            // and one cell, but a COMBINING accent takes two characters and one
+            // cell, and adding either bytes or characters misaligns the whole
+            // line from the first one on.
+            column: column + layout::width(&line[..kdl_of]),
             color,
             edge: false,
             foot: false,
@@ -10910,7 +10919,7 @@ mod tests {
             vec![("wi".to_owned(), 0, true), ("ndow".to_owned(), 2, false)]
         );
 
-        // The columns are the character's INDEX: one cell each, the same ruler as
+        // The columns are the CLUSTER's index: one cell each, the same ruler as
         // `layout::width`. With two rulers, the highlight would come out offset
         // from the text it lights.
         let c = runs_of("abcde", &[1, 3]);

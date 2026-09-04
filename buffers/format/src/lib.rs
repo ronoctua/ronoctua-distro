@@ -1570,6 +1570,10 @@ mod tests {
                     };
                     // The host's own accounting: a key claims its whole budget,
                     // data claims its length, a glyph claims its scale in cells.
+                    // The length comes from `wide`, which IS the function the
+                    // host charges with — one definition, both sides. Writing
+                    // the count out again here is how a test comes to agree
+                    // with itself and with nothing else.
                     let budget = if t.max_width == 0 {
                         columns.saturating_sub(t.column)
                     } else {
@@ -1577,9 +1581,7 @@ mod tests {
                     };
                     let wide = match &t.content {
                         Text::Key(_) => budget,
-                        Text::Data(x) => u16::try_from(x.chars().count())
-                            .unwrap_or(u16::MAX)
-                            .min(budget),
+                        Text::Data(x) => wide(x).min(budget),
                         Text::Icon(_) => budget.min(1),
                     };
                     assert!(

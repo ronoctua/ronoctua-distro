@@ -156,11 +156,15 @@ impl Minibuffer {
         // saying which workspace. Repeating `M-x` would make it look as if the choice
         // had not taken.
         match self.asking_for.as_deref() {
-            // ONE DOT PER CHARACTER, and not a fixed number: the length
-            // that appears is what was typed, otherwise one cannot see that the
-            // key took.
+            // ONE DOT PER CELL, and not a fixed number: the length that appears
+            // is what was typed, otherwise one cannot see that the key took. By
+            // cluster, because the dots stand in for the typing on a screen and
+            // an accented letter is one thing typed and one cell wide.
             Some(id) if self.secret => {
-                format!("{id}: {}", "•".repeat(self.query.chars().count()))
+                format!(
+                    "{id}: {}",
+                    "•".repeat(usize::from(ronoctua_render::layout::width(&self.query)))
+                )
             }
             Some(id) => format!("{id}: {}", self.query),
             // `M-x ` and the typed text. The prefix does NOT go through i18n: it is
@@ -537,8 +541,14 @@ pub fn match_up(query: &str, id: &str) -> Option<(u8, Vec<usize>)> {
     if query.is_empty() {
         return Some((0, Vec::new()));
     }
-    let lowercase: Vec<char> = id.to_lowercase().chars().collect();
-    let target: Vec<char> = query.chars().collect();
+    // BY CLUSTER, because the positions this returns are CELL columns:
+    // `surface::runs_of` uses them to place the highlight, and it walks the
+    // same clusters. Every id here is kebab-case ASCII (invariant 18), so the
+    // two counts coincide today — the point is that they now coincide by
+    // construction and not by luck.
+    let folded = id.to_lowercase();
+    let lowercase: Vec<&str> = ronoctua_render::layout::cells_of(&folded).collect();
+    let target: Vec<&str> = ronoctua_render::layout::cells_of(query).collect();
 
     // CONTIGUOUS first: `buffer` inside `buffer-close` lights all six
     // together, and not six scattered letters that happen to be in order.
@@ -566,7 +576,10 @@ pub fn match_up(query: &str, id: &str) -> Option<(u8, Vec<usize>)> {
 }
 
 /// Where `target` appears whole inside `text`, if it appears.
-fn adjacent_window(text: &[char], target: &[char]) -> Option<usize> {
+///
+/// Over CLUSTERS, which is what the caller counts in — the index it gives back
+/// is a cell column, and `surface::runs_of` lights the cell.
+fn adjacent_window(text: &[&str], target: &[&str]) -> Option<usize> {
     if target.len() > text.len() {
         return None;
     }

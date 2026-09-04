@@ -117,6 +117,16 @@ fn units(s: &str) -> impl Iterator<Item = &str> {
     unicode_segmentation::UnicodeSegmentation::graphemes(s, true)
 }
 
+/// The clusters of a text, one per cell.
+///
+/// The public face of [`units`], for the two places outside this module that
+/// have to walk cells rather than count them: the highlight runs and the word
+/// wrap. Both used to walk `chars()` and both were wrong in the same way —
+/// see `surface::runs_of`.
+pub fn cells_of(s: &str) -> impl Iterator<Item = &str> {
+    units(s)
+}
+
 /// Width in cells. It counts CLUSTERS, not bytes and not codepoints.
 ///
 /// It holds because the font is genuinely monospaced: every cluster takes one

@@ -360,15 +360,18 @@ impl<P: Palette> Screen<P> {
         piece: &str,
         role: Option<ronoctua_syntax::Role>,
     ) -> u16 {
-        // CHARACTERS AND NOT BYTES. A cell holds one character, and an accent
-        // is two bytes: charging bytes would put every run after the first
-        // accented one to the right of where it is drawn.
-        let wide = u16::try_from(piece.chars().count()).unwrap_or(u16::MAX);
+        // CLUSTERS, AND NOT BYTES OR CHARACTERS. A cell holds one cluster: an
+        // accent is two bytes, and a COMBINING accent is two characters —
+        // charging either would put every run after the first one to the right
+        // of where it is drawn. And this both measures and CUTS, so it has to
+        // be the ruler the rest of the system cuts with; the version that took
+        // `chars` could split an emoji sequence and draw a different emoji.
+        let wide = ronoctua_protocol::cells(piece);
         if wide == 0 || cell >= room {
             return cell.saturating_add(wide);
         }
         let take = usize::from(room - cell);
-        let shown: alloc::string::String = piece.chars().take(take).collect();
+        let shown: alloc::string::String = ronoctua_protocol::cells_of(piece).take(take).collect();
         self.parts.push(Part::Coded {
             line,
             column: column.saturating_add(cell),
