@@ -2139,6 +2139,84 @@ let
     END
   '';
 
+  # THE MANAGER'S ROWS ARE BUILT WHERE THEY ARE ASKED FOR, and never handed
+  # back to the caller that asked.
+  #
+  # `Footer::expansion_window` builds one page of the expanded region.
+  # `Footer::expansion` builds the whole of it — and, with the file manager
+  # open, it does so by calling `expansion_window`. So `expansion_window` may
+  # call `expansion` in EXACTLY one place: the branch it takes when there is no
+  # manager, where `expansion` will not come back.
+  #
+  # It had two more. Both asked `View::row_count`, both handed the manager back
+  # to `expansion()` when it answered `None` — and `row_count` answers `None`
+  # for precisely the three states (menu, question, sheet) that the modal branch
+  # further down exists to draw. The pair was an unconditional infinite
+  # recursion: the shell died of a stack overflow the moment the right button,
+  # `C-m` or a permission question opened one of them, with no diagnostic beyond
+  # "fatal runtime error: stack overflow".
+  #
+  # WHAT IT COSTS AND WHAT IT DOES NOT COVER. It reads one function of one file
+  # and runs in milliseconds. It catches THIS pair and no other: a different two
+  # functions calling each other would pass it untouched, and there is no check
+  # in this file that would catch that one. What makes it worth having anyway is
+  # that these two are load-bearing — every line the footer draws goes through
+  # them — and that the failure they produce names neither of them.
+  manager-builds-its-own-rows = mkCheck "manager-builds-its-own-rows" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import re, sys
+
+    src = open("${self}/crates/ronoctua-shell/src/surface.rs", encoding="utf-8").read()
+
+    # The function, from its signature to the first line that is back at
+    # `impl`-level indentation — the shape every other reader in this file uses.
+    body = re.search(
+        r"\n    fn expansion_window\(&self[^\n]*\n(.*?)\n    \}\n",
+        src,
+        re.S,
+    )
+    if not body:
+        sys.exit("ERROR: `expansion_window` went away or changed shape")
+    body = body.group(1)
+
+    calls = [n for n, line in enumerate(body.splitlines(), 1) if "self.expansion()" in line]
+    if not calls:
+        sys.exit(
+            "ERROR: `expansion_window` no longer calls `expansion` at all.\n"
+            "       The views that are NOT the manager are built by `expansion`\n"
+            "       and cut here; if that changed, this check proves nothing and\n"
+            "       should be rewritten rather than deleted."
+        )
+    if len(calls) > 1:
+        print(
+            f"ERROR: `expansion_window` calls `self.expansion()` {len(calls)} times,"
+            " on lines " + ", ".join(str(n) for n in calls) + ".",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+        print("       With the manager open, `expansion` calls THIS function back.", file=sys.stderr)
+        print("       The one call that is safe is the `let ... else` for a door with", file=sys.stderr)
+        print("       no manager; every other one is a loop with no exit, and the", file=sys.stderr)
+        print("       symptom is `fatal runtime error: stack overflow` naming neither.", file=sys.stderr)
+        raise SystemExit(1)
+
+    # AND IT IS THE ONE IN THE `else`. A single call in the wrong place is the
+    # same defect with a smaller number.
+    guard = re.search(r"let Some\(files\) = &self\.files else \{(.*?)\n        \};", body, re.S)
+    if not guard:
+        sys.exit("ERROR: the `let Some(files) = &self.files else` guard is gone")
+    if "self.expansion()" not in guard.group(1):
+        sys.exit(
+            "ERROR: the only call to `expansion` is outside the `else` that runs\n"
+            "       when there is no manager — which is the one place it cannot\n"
+            "       come back. See the note above this check."
+        )
+
+    print("OK: the manager's rows are built here, and `expansion` is only asked")
+    print("    for the views that are not the manager")
+    PY
+  '';
+
   # A COUNT IS NOT AN ADVANCE, AND ONLY THE DATABASE KNOWS THE DIFFERENCE.
   #
   # After the unification there are exactly TWO rulers left, and they answer two
@@ -9171,6 +9249,7 @@ let
       one-frame-model
       one-pixel-rail
       one-scrollbar
+      manager-builds-its-own-rows
       inspect-keys-exist
       update-has-one-list
       update-names-agree
@@ -9698,6 +9777,7 @@ let
       one-frame-model
       one-pixel-rail
       one-scrollbar
+      manager-builds-its-own-rows
       inspect-keys-exist
       update-has-one-list
       update-names-agree
