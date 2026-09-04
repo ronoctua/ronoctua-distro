@@ -198,6 +198,24 @@ def main() -> int:
     A(f"    pub const LINE_HEIGHT: f32 = {float(typo['lineHeight'])};")
     A("}")
     A("")
+    # TYPOGRAPHIC MARKS. A `char` and not a `&str`: every one of these is a
+    # single character the host punctuates with, and a `char` is what refuses
+    # the day somebody writes a word here. Host only, like `font` above — no
+    # WIT enum, because invariant 11 does not let a value cross to a buffer.
+    A("/// Marks the host punctuates with. Not icons: these are ordinary")
+    A("/// characters of the text face, not Nerd Fonts glyph names.")
+    A("pub mod mark {")
+    for k, v in sorted(typo.get("marks", {}).items()):
+        # ONE CHARACTER, and the type is what says so. A mark that grew into a
+        # word would place as one cell and draw as several, which is the class
+        # of defect `ink-is-not-a-count` exists for one layer down.
+        if len(v) != 1:
+            raise SystemExit(f"a mark is one character, and `{k}` is {v!r}")
+        escaped = v.replace("\\", "\\\\").replace("'", "\\'")
+        A(f"    /// `mark.{k}`")
+        A(f"    pub const {ident(k)}: char = '{escaped}';")
+    A("}")
+    A("")
 
     # --- spacing -----------------------------------------------------------
     A("/// Spacing, in CELLS — not in pixels.")

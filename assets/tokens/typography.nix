@@ -78,6 +78,49 @@
     xxlarge = 104.4;
   };
 
+  # TYPOGRAPHIC MARKS the host punctuates WITH, rather than draws as content.
+  #
+  # A mark here is not an icon: `assets/tokens/icons.nix` maps a token to a
+  # NERD FONTS GLYPH NAME, resolved against the pinned `glyphnames.json`, and
+  # `·` is not in that catalogue — it is U+00B7, an ordinary character of the
+  # text face. It is a token all the same, because invariant 9 reaches the
+  # codepoint, and because this one now carries a COLOUR of its own.
+  #
+  # `separator` is the dot between one shortcut and the next on the hint line.
+  # It used to live inside the `.ftl` values, and the argument for that was
+  # written down: a `·` typed in Rust would be a visual literal. What the
+  # argument missed is that a separator inside a sentence cannot be given a
+  # colour of its own, and cannot be counted — the owner asked for exactly two
+  # things the value could not provide: one shortcut between any two dots, and
+  # a third tone for the dot itself. Both are properties of the LINE, not of
+  # the sentence, so the dot moved out to where the line is assembled and the
+  # rule became structural instead of a convention two languages had to
+  # remember.
+  #
+  # Host only. It reaches no WIT enum and no buffer: invariant 11 does not let
+  # a token's value cross that boundary, the same as `family.mono` above.
+  marks = {
+    separator = "·";
+    # THE FOUR ARROWS, as a key is DRAWN rather than as it is written down.
+    #
+    # `ronoctua_keymap::Key::notation` answers `<down>`, and it is right to:
+    # that is the wire form, the one `Key::parse` reads back, and it has to
+    # survive a round trip through a table and a `.ftl`. It is six cells of
+    # markup on a screen, and on a hint line that now teaches forty-one keys
+    # the four arrows would spend twenty-four cells saying what four glyphs say.
+    #
+    # Single-advance characters (U+2190..2193), not the long forms — those are
+    # among the twenty-three double-advance ones the glyph browser measured, and
+    # a key drawn two cells wide would place the next piece early.
+    #
+    # The map from a key to its drawing lives in `chrome::key_text`, one place,
+    # the same arrangement as `chrome::syntax_color` and `chrome::hint_spans`.
+    "arrow-left" = "←";
+    "arrow-right" = "→";
+    "arrow-up" = "↑";
+    "arrow-down" = "↓";
+  };
+
   # -------------------------------------------------------------------
   # THE CONSTANT THAT HOLDS UP THE FOOTER'S LAYOUT
   # -------------------------------------------------------------------

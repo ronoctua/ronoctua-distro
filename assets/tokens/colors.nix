@@ -40,7 +40,32 @@
     # STRONGER THAN IT WAS, and measured on screen against `hover` below rather
     # than picked: at `0x2A2A2A` it was byte for byte the value of
     # `rule.default`, a band as dark as the hairline drawn beside it.
-    selection = "0x383838FF";
+    #
+    # AND THEN IT LEFT THE GREYS ALTOGETHER, because there is no seat for it
+    # there. The owner reported the band and the scrollbar as "the same colour,
+    # or nearly", and the measurement agrees to an embarrassing degree: at
+    # `0x383838` this sat CIEDE2000 1.63 from `rule.strong`, which is the
+    # thumb — below the 2.3 that two colours have to differ by before anybody
+    # can tell them apart at all. Aligned on the same row they were one shape.
+    #
+    # A darker grey does not fix it. The scale is FULL between L*5.5 and L*25.8
+    # — chrome, hover, rule.default, modeline.background, this, rule.strong —
+    # and a search of every neutral in that band came back with nothing further
+    # than 4.8 from the thumb and 1.3 from `rule.default`. Six greys is what
+    # this palette has room for; a seventh cannot be told from its neighbours.
+    #
+    # So the band takes the hue that ALREADY means "the keyboard is here": the
+    # focused row's name is drawn in `state.accent`, and this is that family as
+    # a GROUND. L*16.4 C25.2 h300. Measured against everything it can appear
+    # beside: thumb 18.52 (was 1.63), hover 17.45, chrome 18.66, rule.default
+    # 17.33, brain.background 11.96 — and that last one is the closest thing on
+    # the whole screen to it.
+    #
+    # It is also darker, which is the second half of the same report: the
+    # `modified` column is `text.dim`, and `text.dim` on `0x383838` measured
+    # 2.06:1. On this it is not drawn at all — see `View::row_of`, where a
+    # banded row lifts its dim fields to `text.secondary`, 5.32:1 here.
+    selection = "0x282448FF";
     # THE ROW UNDER THE POINTER, which is a different question with a different
     # answer — "this is what the click would reach", not "this is chosen".
     #
@@ -180,9 +205,35 @@
     # splits it, so that spelling would reach the WIT as `text-subtlestrong`.
     # It is the same reason `modeline.state` is nested, argued where that one
     # lives.
+    #
+    # AND THEN TWO MORE, because the line grew two more things to say.
+    #
+    # `faint` is the SEPARATOR — the `·` between one shortcut and the next. It
+    # is a third register and not a decoration: the owner asked for the dot to
+    # differ from both the key and the prose, and punctuation that is the same
+    # tone as the words it separates is read as a word. A third step of this
+    # same ramp, one below the prose: 11.9 from `default`, 30.7 from `strong`.
+    # The step is shorter than the 17.7 above it on purpose — a separator only
+    # has to be TOLD APART, it does not carry a register of meaning, and a dot
+    # as loud as the prose competes with what it separates.
+    #
+    # `alternate` is a key whose MEANING changes with the section that has the
+    # keyboard — `S-<arrow>` in the file manager turns a shape in the preview
+    # and opens a directory in the listing. It is a key, so it is drawn at the
+    # key's weight (L*59.5 against 62.1) and at the key's discretion (chroma
+    # 13.1 against 9.8); it is a DIFFERENT KIND of key, so it takes a different
+    # hue: 183 against 321. That is the whole allocation, and it is the one
+    # thing this palette has been consistent about — hue says "another kind of
+    # thing", luminance says "another importance". Measured: 24.4 from
+    # `strong`, 28.8 from `default`, and its nearest neighbour among all fifty
+    # other tokens is 17.8. Teal because it is the seat nobody had taken: the
+    # content ramp is warm (h 89), the accent and the brain are blue-violet
+    # (272-281), the group and this register are purple (306-321).
     subtle = {
       strong = "0x9F92A1FF";
       default = "0x706473FF";
+      faint = "0x564250FF";
+      alternate = "0x749690FF";
     };
   };
 
