@@ -26,12 +26,22 @@ use ronoctua_tokens as tokens;
 /// than one cell, and what spaces it is whatever draws.
 const fn scale_in_px(scale: ronoctua_protocol::Scale) -> f32 {
     match scale {
-        // `SIZE_SMALL` is the token that already existed for "smaller than the body" — the
-        // system's footer uses `SIZE_BASE`, and the buffer's body, `SIZE_LARGE`.
+        // `SIZE_SMALL` is the token that already existed for "smaller than the
+        // body". Everything else the host draws — the footer, its windows and
+        // a buffer's body — is `SIZE_BASE`.
         ronoctua_protocol::Scale::Small => tokens::font::SIZE_SMALL,
         // THE SYSTEM'S SIZE — the same the footer and the minibuffer use.
         ronoctua_protocol::Scale::Base => tokens::font::SIZE_BASE,
-        ronoctua_protocol::Scale::Normal => tokens::font::SIZE_LARGE,
+        // AND THE BUFFER'S BODY, which is the same size as of the day the
+        // owner asked for one measure across the system.
+        //
+        // The two arms now give the same pixel, and both names stay. `base` in
+        // the WIT means "whatever is INTERFACE inside a buffer, not its
+        // content" and `normal` means the content — two questions that
+        // happened to arrive at one answer, not one question asked twice.
+        // Collapsing them is a change to the WIT, which rebuilds every buffer,
+        // and nothing asked for it.
+        ronoctua_protocol::Scale::Normal => tokens::font::SIZE_BASE,
         ronoctua_protocol::Scale::Large => tokens::font::SIZE_XLARGE,
         ronoctua_protocol::Scale::Huge => tokens::font::SIZE_XXLARGE,
     }
@@ -231,8 +241,8 @@ fn spans_from(
 #[must_use]
 pub fn cell() -> (f32, f32) {
     (
-        tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM,
-        tokens::font::SIZE_LARGE * tokens::font::LINE_HEIGHT,
+        tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM,
+        tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT,
     )
 }
 

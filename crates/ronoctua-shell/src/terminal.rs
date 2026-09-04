@@ -293,8 +293,8 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
 /// one arithmetic; this was the one that disagreed.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn cells_that_fit(width: u32, height: u32) -> (u16, u16) {
-    let cell_width_px = tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM;
-    let cell_height_px = tokens::font::SIZE_LARGE * tokens::font::LINE_HEIGHT;
+    let cell_width_px = tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM;
+    let cell_height_px = tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT;
     let columns = ((width as f32 / cell_width_px) as u32)
         .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
         .clamp(1, u32::from(u16::MAX)) as u16;
@@ -445,10 +445,10 @@ impl TerminalWindow {
                 &g.device,
                 &g.queue,
                 g.config.format,
-                // SIZE_LARGE and not SIZE_BASE: the footer is peripheral
-                // reference, the buffer is what is read. Having both at the same
-                // body made the content look like a footnote.
-                tokens::font::SIZE_LARGE,
+                // THE SYSTEM'S ONE SIZE — see `chrome::SIZE`. It used to be
+                // `SIZE_LARGE`, until the owner asked for the footer's measure
+                // everywhere.
+                tokens::font::SIZE_BASE,
             ) {
                 Ok(t) => {
                     self.text = Some(t);
@@ -806,8 +806,8 @@ mod tests {
         // The assertion is the INVERSE of what `render-png` does to work out a
         // window's size from a cell count, which is what makes the two agree by
         // construction instead of by coincidence.
-        let cell_w = tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM;
-        let cell_h = tokens::font::SIZE_LARGE * tokens::font::LINE_HEIGHT;
+        let cell_w = tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM;
+        let cell_h = tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT;
         for width in [200_u32, 640, 800, 1280, 1920, 3840] {
             for height in [200_u32, 600, 1080] {
                 let (columns, lines) = super::cells_that_fit(width, height);

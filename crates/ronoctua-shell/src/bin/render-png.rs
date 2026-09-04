@@ -123,7 +123,7 @@ fn heights() -> ronoctua_protocol::Heights {
     ronoctua_protocol::Heights::from_sizes(
         tokens::font::SIZE_SMALL,
         tokens::font::SIZE_BASE,
-        tokens::font::SIZE_LARGE,
+        tokens::font::SIZE_BASE,
         tokens::font::SIZE_XLARGE,
         tokens::font::SIZE_XXLARGE,
         tokens::font::LINE_HEIGHT,
@@ -198,7 +198,7 @@ fn main() -> Result<()> {
         &gpu.device,
         &gpu.queue,
         ronoctua_render::offscreen::FORMAT,
-        tokens::font::SIZE_LARGE,
+        tokens::font::SIZE_BASE,
     )?;
     let mut quads =
         ronoctua_render::quad::Quads::new(&gpu.device, ronoctua_render::offscreen::FORMAT)?;

@@ -326,7 +326,7 @@ impl NotificationsWindow {
 
     /// Columns and rows from the size in pixels.
     fn recount(&mut self) {
-        let size = tokens::font::SIZE_LARGE;
+        let size = tokens::font::SIZE_BASE;
         let cell = tokens::metrics::cell_width(size);
         let line = tokens::metrics::line_height(size);
         let usable = (self.width as f32) - 2.0 * cell * f32::from(CONTENT_MARGIN);
@@ -366,7 +366,7 @@ impl NotificationsWindow {
             &g.device,
             &g.queue,
             g.config.format,
-            tokens::font::SIZE_LARGE,
+            tokens::font::SIZE_BASE,
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
@@ -402,7 +402,7 @@ impl NotificationsWindow {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let size = tokens::font::SIZE_LARGE;
+        let size = tokens::font::SIZE_BASE;
         let margin = CONTENT_MARGIN;
         // THE LISTS ARE BUILT AND DROPPED before `follow` moves the offset:
         // they borrow the records, and the scroll is a write.
@@ -534,7 +534,7 @@ impl NotificationsWindow {
     /// it, and counting from the window's edge would put every target one
     /// margin to the right of where it is drawn.
     fn cell_at(&self, x: f64) -> Option<u16> {
-        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_LARGE));
+        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
         if cell <= 0.0 || x < 0.0 {
             return None;
         }
@@ -545,7 +545,7 @@ impl NotificationsWindow {
 
     /// Which drawn row is at height `y`.
     fn row_at(&self, y: f64) -> Option<usize> {
-        let line = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
+        let line = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
         if line <= 0.0 || y < 0.0 {
             return None;
         }
@@ -785,7 +785,7 @@ impl PointerHandler for NotificationsWindow {
             return;
         }
         if wheel.abs() >= 1.0 {
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
+            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
             #[allow(clippy::cast_possible_truncation)]
             let by = (wheel / line_px.max(1.0)) as i64 * 3;
             let rows = {

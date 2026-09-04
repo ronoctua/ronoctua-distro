@@ -12,9 +12,9 @@
 //! right about. The footer's expanded region indented its field rows by
 //! `space.files.gutter` — one cell, which is the MARK's cell and not a margin
 //! at all — while both own-window doors added `space.content.inset` minus that
-//! same gutter on top. One cell against two, and the two doors do not even have
-//! the same cell: the footer draws at `font.size.base` and a window at
-//! `font.size.large`. Ten point eight pixels against twenty-four.
+//! same gutter on top. One cell against two — and at the time the two doors
+//! did not even have the same cell: the footer drew at `font.size.base` and a
+//! window at `font.size.large`, ten point eight pixels against twelve.
 //!
 //! # The rule, in one sentence
 //!
@@ -40,11 +40,16 @@
 //!
 //! # What is left over, and why it is nothing
 //!
-//! Two cells of `font.size.base` are 21,6 px; two cells of `font.size.large`
-//! are 24,0 px. A fifth of a cell. That residue belongs to the GRID and not to
-//! the layout — the two doors draw text at different sizes on purpose — and
-//! [`tests::both_doors_put_content_in_the_same_place`] is what keeps it inside
-//! one cell instead of growing back into a factor of two.
+//! Nothing is left over, and a fifth of a cell used to be: two cells of
+//! `font.size.base` are 21,6 px and two of `font.size.large` were 24,0 px.
+//! That residue belonged to the GRID and not to the layout, because the two
+//! doors drew text at different sizes on purpose, and the test kept it inside
+//! one cell so it could not grow back into a factor of two.
+//!
+//! The owner has since asked for ONE size across the system — see [`SIZE`] —
+//! so the residue is zero and
+//! [`tests::both_doors_put_content_in_the_same_place`] says so exactly, with
+//! no tolerance at all.
 
 use ronoctua_tokens as tokens;
 
@@ -68,58 +73,50 @@ pub const INSET: u16 = tokens::space::CONTENT_INSET;
 /// did it at all, which is exactly the defect. One constant, three readers.
 pub const FIELDS_LEAD: u16 = INSET.saturating_sub(tokens::space::FILES_GUTTER);
 
-/// Which door a surface is.
+/// The size everything this shell draws is drawn at.
 ///
-/// The two differ in ONE thing — the size the grid is drawn at — and this enum
-/// exists so a test can say that and nothing else can quietly add a second
-/// difference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Door {
-    /// The footer's expanded region, drawn at `font.size.base`.
-    Footer,
-    /// An `xdg_toplevel` of ours, drawn at `font.size.large`.
-    Window,
+/// # Why there is one of these
+///
+/// There were two. The footer drew at `font.size.base` and every window of
+/// ours at `font.size.large`, and a `Door` enum existed so that a test could
+/// say the doors differed in that one thing and nothing could quietly add a
+/// second difference. The difference itself was deliberate — "the footer is
+/// peripheral reference, the buffer is what one reads".
+///
+/// The owner photographed the file manager's two doors side by side and asked
+/// for the footer's size everywhere, buffers included: it is the one he reads
+/// all day, and a system whose two halves are 10% apart looks assembled out of
+/// parts of different origins. So the enum had nothing left to name and went,
+/// and this is what replaced it — which is smaller than the enum was, and is
+/// the point.
+pub const SIZE: f32 = tokens::font::SIZE_BASE;
+
+/// How wide a cell is, in pixels.
+///
+/// Every hit test on every surface comes through here or through
+/// [`Frame::cell`]. One answer, so a site that reached for a font size
+/// directly would be a second grid nobody named.
+#[must_use]
+pub fn cell_width() -> f32 {
+    tokens::metrics::cell_width(SIZE)
 }
 
-impl Door {
-    /// The size the door's grid is drawn at.
-    #[must_use]
-    pub const fn size(self) -> f32 {
-        match self {
-            Self::Footer => tokens::font::SIZE_BASE,
-            Self::Window => tokens::font::SIZE_LARGE,
-        }
-    }
-
-    /// How wide this door's cell is, in pixels.
-    ///
-    /// Every hit test on both doors comes through here. It is the one thing
-    /// that genuinely differs between them, and having it behind the enum is
-    /// what stops a third answer appearing: a site that reached for
-    /// `font.size.base` directly would be a door nobody named.
-    #[must_use]
-    pub fn cell_width(self) -> f32 {
-        tokens::metrics::cell_width(self.size())
-    }
-
-    /// How many pixels from the surface's left edge a row of fields begins.
-    ///
-    /// # Why this is behind `cfg(test)`
-    ///
-    /// Because nothing in the drawing needs it, and that is the point rather
-    /// than an omission. The layout is integer arithmetic over the CELL — the
-    /// whole footer's one-frame budget is bought with that — so production
-    /// counts cells and never pixels.
-    ///
-    /// The pixel value exists for exactly one question, and it is the question
-    /// this module was written to answer: the two doors draw at different font
-    /// sizes on purpose, so "the same number of cells" does not by itself mean
-    /// "the same distance". Only a test asks that, and only in pixels.
-    #[cfg(test)]
-    #[must_use]
-    pub fn content_left_px(self) -> f32 {
-        f32::from(FIELDS_LEAD + tokens::space::FILES_GUTTER) * self.cell_width()
-    }
+/// How many pixels from the surface's left edge a row of fields begins.
+///
+/// # Why this is behind `cfg(test)`
+///
+/// Because nothing in the drawing needs it, and that is the point rather than
+/// an omission. The layout is integer arithmetic over the CELL — the whole
+/// footer's one-frame budget is bought with that — so production counts cells
+/// and never pixels.
+///
+/// The pixel value exists for exactly one question: whether the surfaces put
+/// content in the same place. With one size that is now arithmetic rather than
+/// a measurement, and the test that asks it says so.
+#[cfg(test)]
+#[must_use]
+pub fn content_left_px() -> f32 {
+    f32::from(FIELDS_LEAD + tokens::space::FILES_GUTTER) * cell_width()
 }
 
 // ---------------------------------------------------------------------------
@@ -149,8 +146,6 @@ impl Door {
 /// convention that each site has to keep.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Frame {
-    /// Which door — the only thing that genuinely differs between them.
-    pub door: Door,
     /// The surface, in pixels. Never a count of anything.
     pub width: f32,
     /// The surface's height, in pixels. This is the number the compositor gave
@@ -161,11 +156,10 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// A door's frame at this surface.
+    /// A frame at this surface.
     #[must_use]
-    pub const fn of(door: Door, width: f32, height: f32, first: u16) -> Self {
+    pub const fn of(width: f32, height: f32, first: u16) -> Self {
         Self {
-            door,
             width,
             height,
             first,
@@ -182,14 +176,13 @@ impl Frame {
     /// beside its callers — which is the shape every defect in this file
     /// started as.
     ///
-    /// What stays on this side is the only thing that genuinely differs: which
-    /// DOOR, and therefore what a cell and a line measure. `ronoctua-design`
-    /// takes those two as values because it has no tokens and may not have any
-    /// (invariant 11).
+    /// What stays on this side is what a cell and a line MEASURE.
+    /// `ronoctua-design` takes those two as values because it has no tokens
+    /// and may not have any (invariant 11).
     fn rail(self) -> ronoctua_design::rails::Frame {
         ronoctua_design::rails::Frame::of(
-            self.door.cell_width(),
-            tokens::metrics::line_height(self.door.size()),
+            cell_width(),
+            tokens::metrics::line_height(SIZE),
             self.width,
             self.height,
             self.first,
@@ -359,7 +352,7 @@ pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{Door, FIELDS_LEAD, Frame, INSET};
+    use super::{FIELDS_LEAD, Frame, INSET, cell_width, content_left_px};
     use ronoctua_tokens as tokens;
 
     #[test]
@@ -374,23 +367,21 @@ mod tests {
         // Nameless, it became a strip of blank pixels under the manager's facts
         // panel that grew and shrank as the window was resized — the owner
         // photographed it three times before it had a name.
-        for door in [Door::Footer, Door::Window] {
-            for width in [640.0_f32, 800.0, 1280.0, 1366.0, 1920.0] {
-                for height in [200.0_f32, 747.0, 800.0, 1080.0, 1200.5] {
-                    let f = Frame::of(door, width, height, 1);
-                    let over_x = f.width - f.x_of(f.columns());
-                    let over_y = f.height - f.y_of(f.lines());
-                    assert!(
-                        over_x >= 0.0 && over_x < f.cell(),
-                        "{door:?} {width}x{height}: horizontal residue of {over_x} in a cell of {}",
-                        f.cell()
-                    );
-                    assert!(
-                        over_y >= 0.0 && over_y < f.line(),
-                        "{door:?} {width}x{height}: vertical residue of {over_y} in a line of {}",
-                        f.line()
-                    );
-                }
+        for width in [640.0_f32, 800.0, 1280.0, 1366.0, 1920.0] {
+            for height in [200.0_f32, 747.0, 800.0, 1080.0, 1200.5] {
+                let f = Frame::of(width, height, 1);
+                let over_x = f.width - f.x_of(f.columns());
+                let over_y = f.height - f.y_of(f.lines());
+                assert!(
+                    over_x >= 0.0 && over_x < f.cell(),
+                    "{width}x{height}: horizontal residue of {over_x} in a cell of {}",
+                    f.cell()
+                );
+                assert!(
+                    over_y >= 0.0 && over_y < f.line(),
+                    "{width}x{height}: vertical residue of {over_y} in a line of {}",
+                    f.line()
+                );
             }
         }
     }
@@ -402,7 +393,7 @@ mod tests {
         // FROM the border lands on it exactly. Both are legitimate — one is for
         // text read left to right, the other for anything that must sit against
         // the edge — and the defect was never having said which is which.
-        let f = Frame::of(Door::Window, 1366.0, 768.0, 1);
+        let f = Frame::of(1366.0, 768.0, 1);
         // THE LAST VALID CELL is `columns() - 1`; `columns()` is one past it,
         // which is the off-by-one this very assertion caught while being
         // written.
@@ -434,7 +425,7 @@ mod tests {
         // a click lands on one thing while the screen shows another. The design
         // crate's `Grid::at`/`index_at` carry this lesson for the buffers; this
         // is the same law for the host.
-        let f = Frame::of(Door::Footer, 1280.0, 800.0, 2);
+        let f = Frame::of(1280.0, 800.0, 2);
         for column in 0..f.columns() {
             assert_eq!(f.column_at(f.x_of(column)), column, "column {column}");
             // AND ANYWHERE INSIDE THE CELL, not only at its first pixel.
@@ -453,23 +444,30 @@ mod tests {
         // cell in and the window drew the same row two cells in — 10,8 px
         // against 24,0 px, a factor of 2,2, for one table.
         //
-        // In CELLS the two must be identical; that is the standard. In pixels
-        // they may differ by less than one footer cell, because the two doors
-        // draw at different font sizes on purpose and a cell is not a fixed
-        // distance. Asserting cells alone would miss a door that started
-        // drawing at a third size; asserting pixels alone would forbid the two
-        // sizes the design actually wants.
+        // It used to allow a difference of up to one footer cell, because the
+        // doors drew at two font sizes on purpose. They draw at one now, so
+        // the tolerance is gone and the two are the SAME NUMBER — which is a
+        // stronger statement than the one this test was written to make.
         let cells = FIELDS_LEAD + tokens::space::FILES_GUTTER;
         assert_eq!(cells, INSET, "the sum has to be the inset, in both places");
 
-        let footer = Door::Footer.content_left_px();
-        let window = Door::Window.content_left_px();
-        let one_cell = tokens::metrics::cell_width(Door::Footer.size());
+        // AND IN PIXELS THEY ARE NOW THE SAME NUMBER, which the old form of
+        // this test could not say: a cell was a different distance in each
+        // door, so it allowed a difference of up to one footer cell. Two
+        // surfaces of very different shapes, one column, one pixel.
+        let footer = Frame::of(1920.0, 53.0, 0);
+        let window = Frame::of(900.0, 700.0, 0);
         assert!(
-            (footer - window).abs() < one_cell,
-            "as duas portas comecam em {footer} px e {window} px — \
-                 more than one cell of difference"
+            (footer.x_of(INSET) - window.x_of(INSET)).abs() < f32::EPSILON,
+            "content begins at {} px in one surface and {} px in the other",
+            footer.x_of(INSET),
+            window.x_of(INSET)
         );
+        assert!((footer.cell() - window.cell()).abs() < f32::EPSILON);
+        // And the two ways of arriving at that pixel agree, which is what
+        // stops a third one being written beside them.
+        assert!((footer.x_of(INSET) - content_left_px()).abs() < f32::EPSILON);
+        assert!((cell_width() - footer.cell()).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -1048,8 +1048,8 @@ impl UpdateWindow {
     /// Integer arithmetic, without measuring text: the cell is exactly 0.600 ×
     /// the font size, including in the Nerd Fonts.
     fn recount(&mut self) {
-        let cell = tokens::font::SIZE_LARGE * tokens::font::CELL_WIDTH_EM;
-        let line = tokens::metrics::line_height(tokens::font::SIZE_LARGE);
+        let cell = tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM;
+        let line = tokens::metrics::line_height(tokens::font::SIZE_BASE);
         #[allow(clippy::cast_precision_loss)]
         let width = self.width as f32 - 2.0 * cell * f32::from(CONTENT_MARGIN);
         #[allow(clippy::cast_precision_loss)]
@@ -1074,7 +1074,7 @@ impl UpdateWindow {
 
     /// Which step row a pointer position lands on, if any.
     fn at(&self, x: f64, y: f64) -> Option<usize> {
-        let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
+        let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
         if line_px <= 0.0 || x < 0.0 || y < 0.0 {
             return None;
         }
@@ -1164,13 +1164,14 @@ impl UpdateWindow {
             tracing::error!("no usable GPU; the window will not draw");
             return;
         };
-        // SIZE_LARGE and not SIZE_BASE, for the reason the buffer host gives:
-        // the footer is peripheral reference and this is what one reads.
+        // THE SYSTEM'S ONE SIZE — see `chrome::SIZE`. It used to be
+        // `SIZE_LARGE`, on the argument that the footer is peripheral
+        // reference and this is what one reads.
         match ronoctua_render::Text::new(
             &g.device,
             &g.queue,
             g.config.format,
-            tokens::font::SIZE_LARGE,
+            tokens::font::SIZE_BASE,
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
@@ -1205,7 +1206,7 @@ impl UpdateWindow {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let size = tokens::font::SIZE_LARGE;
+        let size = tokens::font::SIZE_BASE;
         let line_px = tokens::metrics::line_height(size);
         let margin = CONTENT_MARGIN;
         let mut spans: Vec<ronoctua_render::Span> = Vec::new();
@@ -1610,7 +1611,7 @@ impl PointerHandler for UpdateWindow {
             }
         }
         if wheel.abs() >= 1.0 {
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
+            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
             #[allow(clippy::cast_possible_truncation)]
             let by = (wheel / line_px.max(1.0)) as i64 * 3;
             if over_the_steps {

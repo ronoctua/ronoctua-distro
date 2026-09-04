@@ -454,15 +454,18 @@ impl<P: Palette> Screen<P> {
     ///
     /// # The air, in pixels, because that is the only way to show it is equal
     ///
-    /// The cell is `font.size.large × font.lineHeight = 20 × 1.45 = 29.0 px`.
-    /// The font's box is `1.25 em = 25 px` (ascender 0.965 + descender 0.285),
-    /// so every run already carries `(29.0 − 25.0) / 2 = 2.0 px` of slack above
-    /// its ink and 2.0 below it. Then:
+    /// The cell is `font.size.base × font.lineHeight = 18 × 1.45 = 26.1 px`.
+    /// The font's box is `1.25 em = 22.5 px` (ascender 0.965 + descender
+    /// 0.285), so every run already carries `(26.1 − 22.5) / 2 = 1.8 px` of
+    /// slack above its ink and 1.8 below it. Then:
     ///
     /// - above the title's ink: one empty cell plus the title's own top slack —
-    ///   `29.0 + 2.0 = 31.0 px`;
+    ///   `26.1 + 1.8 = 27.9 px`;
     /// - below it, down to the first content ink: the title's bottom slack plus
-    ///   one empty cell — `2.0 + 29.0 = 31.0 px`.
+    ///   one empty cell — `1.8 + 26.1 = 27.9 px`.
+    ///
+    /// The numbers were 29.0 and 31.0 while a buffer's body was 20 px; the
+    /// EQUALITY is the point and it does not depend on the size.
     ///
     /// Two equal gaps, each exactly one line height plus the line box's own
     /// slack. That is what the owner asked for, and it is why the air is not

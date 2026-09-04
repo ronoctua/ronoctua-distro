@@ -530,14 +530,14 @@ TERMO, e o `KEY` do gerador exclui termos de propósito — então `-language` n
 de texto nenhuma **por construção**.
 
 Discretas por construção, e não por ajuste: `TextDim` é a cor de menor prioridade da paleta, e
-`Scale::Small` é o token `font.size.small` (15 px) contra os 20 px do corpo do buffer. **O nome
+`Scale::Small` é o token `font.size.small` (15 px) contra os 18 px do corpo do buffer. **O nome
 nunca cede espaço** — quem procura pelo nome está lendo o nome; abaixo de doze células livres as tags
 não são emitidas, porque ali não se mostra uma palavra, mostra-se um toco elidido que ocupa a linha
 para não dizer nada.
 
 #### Três papéis, três corpos — e uma célula de distância entre tudo
 
-O navegador tinha um corpo só para quase tudo (`Scale::Normal`, 20 px): o convite da busca, o
+O navegador tinha um corpo só para quase tudo (`Scale::Normal`, 18 px — 20 px na época): o convite da busca, o
 contador, a lupa. O resultado é uma tela sem hierarquia, onde o que se lê de relance tem o mesmo peso
 do que se lê com atenção, e onde um ícone — que é um **desenho** — sai com o corpo de uma letra e
 fica fino ao lado dela.
@@ -574,7 +574,7 @@ na caixa.
 
 O mesmo vale para o vão da grade, que o dono pediu igual em todas as direções. Ele **não** é ajustável
 nas duas: na vertical é o que sobra da caixa (`1,45 − 0,60 = 0,85 em`, a 40 px dá **34 px**) e não há
-como encurtar sem sobrepor; na horizontal ele anda de doze em doze pixels (`0,600 × 20`). Três
+como encurtar sem sobrepor; na horizontal ele anda de 10,8 em 10,8 pixels (`0,600 × 18`). Três
 colunas dão **36 px** — dois de diferença, o mais perto que a grade de células permite. Duas colunas
 dariam 24 px, dez a menos, mas caberiam mais ícones por linha: é uma troca entre densidade e
 regularidade, e o passo é uma constante só (`HORIZONTAL_GAP`).
@@ -924,9 +924,9 @@ linha + 2   AR
 linha + 3   primeira linha de conteúdo   <- o que heading() devolve
 ```
 
-A célula é 20 × 1,45 = **29,0 px**, e a caixa da fonte é 1,25 em = 25 px — então toda run já carrega
-**2,0 px** de folga acima e abaixo da tinta. Ar acima do título: 29,0 + 2,0 = **31,0 px**. Abaixo:
-2,0 + 29,0 = **31,0 px**. Dois vãos iguais, cada um exatamente *uma altura de linha mais a folga da
+A célula é 18 × 1,45 = **26,1 px**, e a caixa da fonte é 1,25 em = 22,5 px — então toda run já carrega
+**1,8 px** de folga acima e abaixo da tinta. Ar acima do título: 26,1 + 1,8 = **27,9 px**. Abaixo:
+1,8 + 26,1 = **27,9 px**. Dois vãos iguais, cada um exatamente *uma altura de linha mais a folga da
 própria caixa* — que é, ao pé da letra, o "ar proporcional em cima e em baixo até a altura da linha"
 que foi pedido. E três células em vez das quatro que a versão com régua custaria: uma janela que
 precisa caber uma lista de discos agradece.
@@ -1002,9 +1002,10 @@ margem".
 
 Uma linha que já traz a própria calha paga a DIFERENÇA, e isso é `chrome::FIELDS_LEAD`. As duas
 janelas tinham descoberto essa subtração cada uma por si e escrito um comentário explicando; o
-rodapé era o terceiro lugar e simplesmente não tinha nenhum. Sobra: duas células de `size.base` são
-21,6 px contra 24,0 px de `size.large` — um quinto de célula, que é da GRADE e não do layout, e o
-teste cobra que fique dentro de uma célula em vez de voltar a ser um fator de dois.
+rodapé era o terceiro lugar e simplesmente não tinha nenhum. Sobra: nenhuma. Duas células de
+`size.base` são 21,6 px, e eram 24,0 px de `size.large` na janela — um quinto de célula, que era da
+GRADE e não do layout. Desde que o sistema passou a ter uma medida só, o teste cobra o MESMO pixel,
+sem folga.
 
 **E o hit-test desceu junto.** `cell_at` devolvia a célula da tela; com o desenho recuado, ela
 descreveria o campo à esquerda do que está sob o dedo, a tela inteira. É a forma de defeito que este
@@ -1297,10 +1298,34 @@ coincidência aos tokens de mesmo nome. Coincidência mantida à mão é o que o
 mudar `state.accent` mudava o rodapé e deixava a borda na cor velha. Agora elas são derivadas de
 `assets/tokens/colors.nix`.
 
-O corpo do texto subiu de 14 px para **18 px no rodapé e 20 px nos buffers**, e a entrelinha de 1,25
-para 1,45. O buffer é maior que o rodapé de propósito: o rodapé é referência periférica, o buffer é o
-que se lê. E o conteúdo dos buffers ganhou margem — sem ela o primeiro caractere encosta no limite da
-janela e parece corte.
+O corpo do texto subiu de 14 px para 18 px, e a entrelinha de 1,25 para 1,45. E o conteúdo dos
+buffers ganhou margem — sem ela o primeiro caractere encosta no limite da janela e parece corte.
+
+#### Havia DUAS medidas, e agora há uma
+
+Por muito tempo o rodapé desenhava a 18 px e toda janela nossa — gerenciador, notificações,
+atualização, terminal — mais o corpo dos buffers, a 20 px. A razão estava escrita: *"o buffer é maior
+que o rodapé de propósito: o rodapé é referência periférica, o buffer é o que se lê"*. Existia até um
+`chrome::Door` para nomear essa diferença, de modo que um teste pudesse dizer que as portas diferiam
+**nisso e em nada mais**.
+
+O dono fotografou as duas portas do gerenciador lado a lado e pediu a medida do rodapé em toda parte,
+buffers inclusive — é a que ele lê o dia inteiro, e um sistema cujas metades estão 10% distantes
+parece montado com peças de origens diferentes. Medido na foto: passo de linha de 26,1 px contra
+29,0 px, que é 18 × 1,45 contra 20 × 1,45.
+
+O que a mudança **derruba** é mais interessante que o número: sem uma segunda medida, o `Door` não
+tinha o que nomear e saiu, e o `both_doors_put_content_in_the_same_place` deixou de tolerar uma
+diferença de até uma célula — as duas portas começam o conteúdo no MESMO pixel, e o teste diz isso
+sem folga nenhuma. Dois efeitos de lambuja: o `font.size.icon = 22` foi MEDIDO contra texto de 18, e
+as janelas desenhavam ícone de 22 ao lado de texto de 20 — agora batem com a medida que o
+`chrome-icons-match-the-text` reafirma; e o `xxlarge` foi reancorado de 116 para 104,4, porque o
+comentário dele promete "exatamente quatro linhas de célula" e a célula mudou.
+
+O que **fica**: `Scale::Base` e `Scale::Normal` passam a dar o mesmo pixel. Os dois nomes ficam, e
+respondem a perguntas diferentes — `base` é "o que é INTERFACE dentro de um buffer" e `normal` é o
+conteúdo dele. Duas perguntas que chegaram a uma resposta não são uma pergunta feita duas vezes.
+Juntá-las é mexer no WIT, que reconstrói todos os buffers, e ninguém pediu isso.
 
 ---
 

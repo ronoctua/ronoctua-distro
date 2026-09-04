@@ -1501,10 +1501,12 @@ impl Host {
                 &g.device,
                 &g.queue,
                 g.config.format,
-                // SIZE_LARGE and not SIZE_BASE: the footer is peripheral
-                // reference, the buffer is what one reads. Having both at the same
-                // size made the content look like a footnote.
-                tokens::font::SIZE_LARGE,
+                // THE SYSTEM'S ONE SIZE. This used to be `SIZE_LARGE`, on the
+                // argument that "the footer is peripheral reference, the
+                // buffer is what one reads". The owner asked for one measure
+                // instead, from a photograph of the file manager's two doors:
+                // see `font.size.base` and `chrome::SIZE`.
+                tokens::font::SIZE_BASE,
             ) {
                 Ok(t) => {
                     // THE IMAGE PIPELINE is born along with the text one, and its
@@ -1604,7 +1606,7 @@ impl Host {
         ronoctua_protocol::Heights::from_sizes(
             tokens::font::SIZE_SMALL,
             tokens::font::SIZE_BASE,
-            tokens::font::SIZE_LARGE,
+            tokens::font::SIZE_BASE,
             tokens::font::SIZE_XLARGE,
             tokens::font::SIZE_XXLARGE,
             tokens::font::LINE_HEIGHT,

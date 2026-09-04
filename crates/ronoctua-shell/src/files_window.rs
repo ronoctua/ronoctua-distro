@@ -815,19 +815,14 @@ impl FilesWindow {
     /// second home for them.
     #[allow(clippy::cast_precision_loss)]
     fn metric(&self) -> crate::chrome::Frame {
-        crate::chrome::Frame::of(
-            crate::chrome::Door::Window,
-            self.width as f32,
-            self.height as f32,
-            FIRST_OF_REGION,
-        )
+        crate::chrome::Frame::of(self.width as f32, self.height as f32, FIRST_OF_REGION)
     }
 
     fn recount(&mut self) {
         // THROUGH THE FRAME, and not through a fourth spelling of the cell.
         // This function used to say `SIZE_LARGE * CELL_WIDTH_EM` — one of the
         // three spellings of one number that the survey found living in this
-        // tree, beside `metrics::cell_width` and `Door::cell_width`.
+        // tree, beside `metrics::cell_width` and `chrome::cell_width`.
         let f = self.metric();
         let (cell, line) = (f.cell(), f.line());
         let usable = f.width - 2.0 * cell * f32::from(CONTENT_MARGIN);
@@ -960,13 +955,14 @@ impl FilesWindow {
             tracing::error!("no usable GPU; the window will not draw");
             return;
         };
-        // SIZE_LARGE and not SIZE_BASE, for the reason the buffer host gives:
-        // the footer is peripheral reference and this is what one reads.
+        // THE SYSTEM'S ONE SIZE — see `chrome::SIZE`. It used to be
+        // `SIZE_LARGE`, on the argument that the footer is peripheral
+        // reference and this is what one reads.
         match ronoctua_render::Text::new(
             &g.device,
             &g.queue,
             g.config.format,
-            tokens::font::SIZE_LARGE,
+            tokens::font::SIZE_BASE,
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
@@ -1316,7 +1312,7 @@ pub(crate) struct Scene<'a> {
 
 /// One frame, as spans and rectangles. No Wayland, no wgpu, no `self`.
 pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
-    let size = tokens::font::SIZE_LARGE;
+    let size = tokens::font::SIZE_BASE;
     let margin = CONTENT_MARGIN;
     let mut spans: Vec<ronoctua_render::Span> = Vec::new();
     let mut quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
@@ -2188,7 +2184,7 @@ impl PointerHandler for FilesWindow {
                     if vertical.stop || horizontal.stop {
                         self.detents = 0.0;
                     }
-                    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
+                    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
                     self.detents += crate::surface::axis_detents(&vertical, line_px)
                         + crate::surface::axis_detents(&horizontal, line_px);
                 }
@@ -2213,7 +2209,7 @@ impl PointerHandler for FilesWindow {
             // region's top, every `y` inside them came out past the end and the
             // fraction saturated at one — the thumb jumped to the bottom and
             // stayed there, which reads exactly like a bar that does not work.
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_LARGE));
+            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
             let chrome = self.view.chrome_rows(self.columns, &self.texts);
             let found = self
                 .view
@@ -2480,12 +2476,7 @@ mod tests {
     /// `files.rs` carried them; here there is one place, and when a token
     /// moves the tests move with it.
     fn a_frame(width_px: f32, height_px: f32) -> crate::chrome::Frame {
-        crate::chrome::Frame::of(
-            crate::chrome::Door::Window,
-            width_px,
-            height_px,
-            FIRST_OF_REGION,
-        )
+        crate::chrome::Frame::of(width_px, height_px, FIRST_OF_REGION)
     }
 
     fn a_geometry(width_px: f32, height_px: f32, strip: u16, chrome: u16) -> Geometry {

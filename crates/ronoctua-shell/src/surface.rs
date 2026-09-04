@@ -6040,7 +6040,6 @@ impl Footer {
     fn metric(&self) -> Option<crate::chrome::Frame> {
         let screen = self.screens.iter().find(|t| t.configured && t.width > 0)?;
         Some(crate::chrome::Frame::of(
-            crate::chrome::Door::Footer,
             screen.width as f32,
             screen.height as f32,
             self.first_of_expansion(),
@@ -6945,12 +6944,7 @@ impl Footer {
         if !self.has_bar() {
             return None;
         }
-        let f = crate::chrome::Frame::of(
-            crate::chrome::Door::Footer,
-            width,
-            height,
-            self.first_of_expansion(),
-        );
+        let f = crate::chrome::Frame::of(width, height, self.first_of_expansion());
         #[allow(clippy::cast_possible_truncation)]
         let column = self.bar_x(f64::from(width)) as f32;
         Some(region_track_of(
@@ -6968,12 +6962,7 @@ impl Footer {
     /// is what stopped them being two arithmetics.
     fn region_bar(&self, width: f32, height: f32) -> Option<(f32, f32, f32, f32)> {
         let (x, top, cell, _) = self.region_track(width, height)?;
-        let f = crate::chrome::Frame::of(
-            crate::chrome::Door::Footer,
-            width,
-            height,
-            self.first_of_expansion(),
-        );
+        let f = crate::chrome::Frame::of(width, height, self.first_of_expansion());
         self.region_scroll()
             .bar(x + cell, top, f.bottom(), cell, f.line())
     }
@@ -7821,12 +7810,11 @@ impl Footer {
     /// view needs both: the row says which entry, the cell says which of its
     /// columns — and for the permission block, which of the ten bits.
     fn cell_at(&self, x: f64) -> Option<u16> {
-        // THROUGH THE DOOR, and not through the token directly: `chrome::Door`
-        // is what says a footer's grid is drawn at the system's size and a
-        // window's at the buffer's, and it is what the two-door test compares.
-        // Reaching past it here would leave that enum describing something
-        // nothing does.
-        let cell_px = f64::from(crate::chrome::Door::Footer.cell_width());
+        // THROUGH `chrome`, and not through the token directly: it is what
+        // says how wide a cell is on every surface this shell draws, and it is
+        // what the two-door test compares. Reaching past it here would be a
+        // second grid nobody named.
+        let cell_px = f64::from(crate::chrome::cell_width());
         if cell_px <= 0.0 || x < 0.0 {
             return None;
         }
@@ -10299,7 +10287,7 @@ mod tests {
         // A surface that is not a whole number of lines, which is every real
         // one.
         for first in 1..=5u16 {
-            let f = crate::chrome::Frame::of(crate::chrome::Door::Footer, 900.0, 317.4, first);
+            let f = crate::chrome::Frame::of(900.0, 317.4, first);
             // THE EXPANSION IS WHAT IS LEFT UNDER THE FOUR LINES ABOVE IT.
             // `Footer::region_scroll` reads `grid().lines`, which is exactly
             // that; a fixture that put fewer rows there would be asking about

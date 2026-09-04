@@ -2085,14 +2085,18 @@ let
   # still has to stay true:
   #
   #   AIR  = 1   because the air is one line height, and a cell IS one line
-  #              height (`font.size.large` x `font.lineHeight`). If the cell
+  #              height (`font.size.base` x `font.lineHeight`). If the cell
   #              ever stopped being the unit of vertical rhythm, this would
   #              quietly become "one cell of air, which is no longer a line".
-  #   ICON = 2   because `ceil(font.size.icon / font.size.large)`: the glyph is
-  #              drawn on the cell at 22 px and its advance exceeds the 12 px
+  #   ICON = 2   because `ceil(font.size.icon / font.size.base)`: the glyph is
+  #              drawn on the cell at 22 px and its advance exceeds the 10,8 px
   #              cell, so it covers two columns. Raise `font.size.icon` past
   #              two cells' worth and the title would be written ON TOP of the
   #              glyph, in every buffer at once.
+  #
+  # It used to divide by `font.size.large`, which was the buffers' body until
+  # the owner asked for one measure across the system. The definition did not
+  # change — it is still "the icon over the body" — only the body's name.
   #
   # One number, two homes, and this is what stops them drifting.
   design-constants-match-tokens = mkCheck "design-constants-match-tokens" [ pkgs.python3 ] ''
@@ -2126,10 +2130,10 @@ let
         failed = 1
 
     icon = constant("ICON")
-    wanted = math.ceil(token("icon") / token("large"))
+    wanted = math.ceil(token("icon") / token("base"))
     if icon != wanted:
         print(f"ERROR: ICON is {icon} and the font asks for {wanted}", file=sys.stderr)
-        print(f"      (icon {token('icon')} px sobre large {token('large')} px).", file=sys.stderr)
+        print(f"      (icon {token('icon')} px over base {token('base')} px).", file=sys.stderr)
         print("      With the wrong number, the title is written ON TOP of the glyph.", file=sys.stderr)
         failed = 1
 

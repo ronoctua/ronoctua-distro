@@ -124,8 +124,8 @@
     # and the browser extension's popup.
     #
     # It has to be pixels: it is the size of a PICTURE, and a picture has no
-    # cells. The widest a panel gets is about forty cells, which is some 300 px
-    # at `font.size.large`, so 512 is headroom and not appetite.
+    # cells. The widest a panel gets is about forty cells, which is 432 px at
+    # `font.size.base`, so 512 is headroom and not appetite.
     #
     # It is also what bounds the GPU, and that is the half that is arithmetic
     # rather than taste. `ronoctua-render`'s image pipeline keeps thirty-nine
@@ -295,10 +295,12 @@
   # it comes out glued to the edge, and the window version has different
   # spacing" — and he was reading two numbers, not one number badly applied.
   #
-  # The residue, after this: the footer's cell is `font.size.base` and the
-  # window's is `font.size.large`, so two cells are 21,6 px against 24,0 px.
-  # A fifth of a cell. That difference is the grid's, not the layout's, and no
-  # eye finds it.
+  # The residue, after this: NONE, and there used to be a fifth of a cell of
+  # it. The footer's cell was `font.size.base` and a window's `font.size.large`
+  # — 21,6 px against 24,0 px for the same two cells — and that difference was
+  # the grid's rather than the layout's, so it was named and allowed. The owner
+  # then asked for one measure across the system, the second size went, and two
+  # cells are 21,6 px on every surface this shell draws.
   #
   # # The one exception, and it is written down
   #

@@ -186,7 +186,7 @@ pub mod types {
 /// The unit of vertical air: **one cell**.
 ///
 /// Not a token value crossing the wall (invariant 11) — a *definition*. The
-/// cell is `font.size.large × font.lineHeight`, which is what
+/// cell is `font.size.base × font.lineHeight`, which is what
 /// [`Heights::cells`](ronoctua_protocol::Heights::cells) already computes from
 /// the other side; "the air is one line height" and "the air is one cell" are
 /// the same sentence. What a token could still change is the pixel height of
@@ -195,11 +195,15 @@ pub const AIR: u16 = 1;
 
 /// How many cells a UI icon takes across: **two**.
 ///
-/// `ceil(font.size.icon / font.size.large) = ceil(22 / 20) = 2`. The icon is
+/// `ceil(font.size.icon / font.size.base) = ceil(22 / 18) = 2`. The icon is
 /// drawn on the body's cell grid at 22 px, and its advance — `0.600 × 22 = 13.2`
-/// px — is already wider than the 12.0 px cell, so one column would clip it and
+/// px — is already wider than the 10.8 px cell, so one column would clip it and
 /// three would leave a hole. The three browsers each derived this
 /// independently and got 2, 4 and 2.
+///
+/// It was `ceil(22 / 20)` while the body was 20 px, and the answer was two
+/// then as well: the body came down to the system's one size and this
+/// definition did not move.
 pub const ICON: u16 = 2;
 
 /// The horizontal air beside anything: **one cell**.

@@ -12,12 +12,20 @@
   };
 
   size = {
-    # Base size in logical px. The footer uses this one.
+    # Base size in logical px. EVERYTHING the host draws uses this one — the
+    # footer, all four of its own windows, and a buffer's body.
     #
     # 18 and not 14: at 14 px the footer was illegible on a 1920x1200 panel
     # at working distance, and the glyph browser showed twenty tiny
     # lines where many fitted. The layout is integer arithmetic over
     # the cell, so changing the size does not touch any of the sums.
+    #
+    # THERE USED TO BE A SECOND BODY SIZE, `large = 20`, and windows and
+    # buffers drew at it: "the footer is peripheral reference, the buffer is
+    # what one reads". The owner photographed the file manager's two doors side
+    # by side and asked for one measure — the footer's, which is the one he
+    # reads all day. So the two names became one, and with it went
+    # `chrome::Door`, which existed only to say that the doors differed here.
     base = 18;
     small = 15;
     # THE SIZE A CHROME GLYPH IS DRAWN AT, next to text of the base size.
@@ -38,9 +46,6 @@
     # on every build, so a new icon token that is drawn too small fails there
     # instead of on somebody's screen.
     icon = 22;
-    # The buffers' content. LARGER than the footer on purpose: the footer is
-    # peripheral reference, the buffer is what one reads.
-    large = 20;
     # THE RUN that asks for `scale: large` — today only the glyph in the browser.
     #
     # There the content IS the icon's shape: a 20 px glyph is a text
@@ -62,10 +67,15 @@
     # siblings. On the sheet there is only one, and what one wants is to see the drawing: the curves,
     # the stroke's thickness, whether it is outlined or filled.
     #
-    # 116 is exactly FOUR cell lines (4 x 20 x 1.45). The run
+    # 104.4 is exactly FOUR cell lines (4 x 18 x 1.45). The run
     # occupies a whole number of cells, as the grid's `HEIGHT: 2` already does
     # — without that, whatever comes below the glyph falls on top of it.
-    xxlarge = 116;
+    #
+    # It was 116, which was four cell lines back when a buffer's cell was the
+    # 20 px one. The tie is what matters and not the number, so it moved with
+    # the body — otherwise a `huge` run would reserve five cells to draw four
+    # and a half, and the sheet would grow a band of nothing under the glyph.
+    xxlarge = 104.4;
   };
 
   # -------------------------------------------------------------------
