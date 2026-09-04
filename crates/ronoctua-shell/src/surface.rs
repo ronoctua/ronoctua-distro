@@ -973,54 +973,6 @@ enum Navigation {
     Page,
 }
 
-/// Breaks a text into lines of up to `width` cells.
-///
-/// It breaks by WORD when it can, and in the middle of the word when the word
-/// is longer than the line — the case of a long address, which is precisely
-/// what gets copied most. Always cutting at the limit would split short words
-/// for nothing; never cutting would leave the address invisible.
-fn wrap_text(text: &str, width: u16, ceiling: usize) -> Vec<String> {
-    let width = usize::from(width.max(1));
-    let mut out = Vec::new();
-    for raw in text.lines() {
-        let mut line = String::new();
-        for word in raw.split_whitespace() {
-            if line.is_empty() && usize::from(layout::width(word)) > width {
-                // WORD LONGER THAN THE LINE: split it into pieces the size of the
-                // line. By CLUSTER, and not by character: this is a cut, and a
-                // cut between the two halves of an emoji sequence does not
-                // shorten the word, it draws a different one — the same fault
-                // `elide_end` exists to avoid.
-                let mut rest: Vec<&str> = layout::cells_of(word).collect();
-                while rest.len() > width && out.len() < ceiling {
-                    out.push(rest.drain(..width).collect());
-                }
-                line = rest.into_iter().collect();
-                continue;
-            }
-            let fits =
-                usize::from(layout::width(&line)) + 1 + usize::from(layout::width(word)) <= width;
-            if line.is_empty() {
-                line.push_str(word);
-            } else if fits {
-                line.push(' ');
-                line.push_str(word);
-            } else {
-                out.push(std::mem::take(&mut line));
-                line.push_str(word);
-            }
-            if out.len() >= ceiling {
-                return out;
-            }
-        }
-        out.push(line);
-        if out.len() >= ceiling {
-            return out;
-        }
-    }
-    out
-}
-
 /// One line of the panel, broken into the colored spans of the highlight.
 ///
 /// With no language — or with no range at all — a single span comes out, in
@@ -9016,6 +8968,17 @@ impl Footer {
             // The pending chord keeps `state.accent`, and it is the one
             // exception on purpose: blue is what says where the next key goes,
             // and that is not a matter of register.
+            //
+            // ONE ROOM, MEASURED ONCE, FOR ALL SIX. The line starts one margin
+            // in and the page counter is drawn flush right on the same line, so
+            // what any of them may occupy is the width less both. Only the hint
+            // ever asked: the other five were pushed raw, and a message longer
+            // than the screen simply ran off it with nothing — not even an `…`
+            // — saying it had been cut. One line, one ruler.
+            let taken = indicator.as_ref().map_or(0, |i| layout::width(i) + 1);
+            let mini_room = columns
+                .saturating_sub(tokens::space::MODELINE_EDGELEFT)
+                .saturating_sub(taken);
             let (mini, mini_color) = if let Some(e) = &echo {
                 (e.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(d) = &sob_o_cursor {
@@ -9023,19 +8986,12 @@ impl Footer {
             } else if let Some(p) = &prompt_mx {
                 (p.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(h) = hint() {
-                // THE ROOM STOPS BEFORE THE PAGE INDICATOR, which is drawn
-                // flush right on this same line. The footer never elided this
-                // line at all, so a hint longer than the screen simply ran off
-                // it — the owner's photograph ends mid-sentence with no `…`.
-                let taken = indicator.as_ref().map_or(0, |i| layout::width(i) + 1);
                 spans.extend(crate::chrome::hint_spans(
                     &h,
                     ronoctua_render::Size::Grid,
                     tokens::space::MODELINE_EDGELEFT,
                     mini_line,
-                    columns
-                        .saturating_sub(tokens::space::MODELINE_EDGELEFT)
-                        .saturating_sub(taken),
+                    mini_room,
                 ));
                 (String::new(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(p) = &pending {
@@ -9046,7 +9002,7 @@ impl Footer {
             if !mini.is_empty() {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Grid,
-                    text: mini,
+                    text: layout::elide_end(&mini, mini_room),
                     column: tokens::space::MODELINE_EDGELEFT,
                     line: mini_line,
                     color: mini_color,
@@ -9442,14 +9398,21 @@ impl Footer {
                     // THE HIGHLIGHT IS PER LINE, and not over the whole text.
                     //
                     // The highlighter's ranges are offsets in BYTES of the original
-                    // text, and `wrap_text` rewrites the text — it joins spaces,
-                    // splits a long word. Matching the two would require `wrap_text`
+                    // text, and `layout::wrap` rewrites the text — it joins spaces,
+                    // splits a long word. Matching the two would require the wrapper
                     // to give back the mapping, which would cut across its
                     // responsibility. Highlighting each already broken line gives the
                     // same result on screen and keeps the two things apart.
+                    //
+                    // THE CUT IS HERE NOW, and it used to be inside the wrapper. This
+                    // panel shows the first `alto` lines and no more — it has no bar
+                    // and no offset, so a line past the panel is a line nobody can
+                    // reach. Saying that here is what let the wrapper answer the other
+                    // question, which is how many lines there are in all.
                     let tongue = ronoctua_syntax::guess(t);
-                    for (n, l) in wrap_text(t, panel, usize::from(alto))
+                    for (n, l) in layout::wrap(t, panel, usize::from(alto))
                         .into_iter()
+                        .take(usize::from(alto))
                         .enumerate()
                     {
                         let line = first_of_expansion + u16::try_from(n).unwrap_or(0);

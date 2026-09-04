@@ -235,6 +235,71 @@ pub fn window(s: &str, from: u16, max: u16) -> String {
     units(s).skip(from as usize).take(max as usize).collect()
 }
 
+/// Breaks a text into lines of up to `width` cells.
+///
+/// It breaks by WORD when it can, and in the middle of the word when the word
+/// is longer than the line — the case of a long address, which is precisely
+/// what gets copied most. Always cutting at the limit would split short words
+/// for nothing; never cutting would leave the address invisible.
+///
+/// # Why it returns EVERYTHING, and what `ceiling` is for
+///
+/// It lived in `surface.rs` and stopped the moment it had `ceiling` lines,
+/// which is all its one caller — the clipboard's preview — ever wanted. A
+/// caller that puts a SCROLLBAR on the result needs the other half of the
+/// answer: how many lines there are in all, which is a bar's `total`. Stopping
+/// early cannot tell you that.
+///
+/// So the cut moved to the caller (`.take(…)`), and `ceiling` stayed as what
+/// it always really was: a bound on work, not a layout decision. A clipboard
+/// entry can be a megabyte, and wrapping a megabyte to answer a question about
+/// six lines is the kind of cost that only shows up on somebody else's
+/// machine. When it bites, the last line is not the last line of the text —
+/// the caller is expected to say so, exactly as the preview panel already says
+/// it cut.
+#[must_use]
+pub fn wrap(text: &str, width: u16, ceiling: usize) -> Vec<String> {
+    let width = usize::from(width.max(1));
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let mut line = String::new();
+        for word in raw.split_whitespace() {
+            if line.is_empty() && usize::from(self::width(word)) > width {
+                // WORD LONGER THAN THE LINE: split it into pieces the size of the
+                // line. By CLUSTER, and not by character: this is a cut, and a
+                // cut between the two halves of an emoji sequence does not
+                // shorten the word, it draws a different one — the same fault
+                // `elide_end` exists to avoid.
+                let mut rest: Vec<&str> = cells_of(word).collect();
+                while rest.len() > width && out.len() < ceiling {
+                    out.push(rest.drain(..width).collect());
+                }
+                line = rest.into_iter().collect();
+                continue;
+            }
+            let fits =
+                usize::from(self::width(&line)) + 1 + usize::from(self::width(word)) <= width;
+            if line.is_empty() {
+                line.push_str(word);
+            } else if fits {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                out.push(std::mem::take(&mut line));
+                line.push_str(word);
+            }
+            if out.len() >= ceiling {
+                return out;
+            }
+        }
+        out.push(line);
+        if out.len() >= ceiling {
+            return out;
+        }
+    }
+    out
+}
+
 /// Resolves the modeline's layout.
 ///
 /// # The rule (section 7.3 of the plan)
@@ -795,5 +860,57 @@ mod tests {
         assert_eq!(width(three), 3);
         assert_eq!(elide_end(three, 2), "\u{1F600}…");
         assert_eq!(elide_end("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn a_word_longer_than_the_line_is_cut_by_cluster() {
+        // The long address, which is what gets copied most. Cutting between the
+        // halves of an emoji sequence does not shorten the word, it draws a
+        // different one — the fault `elide_end` exists to avoid.
+        let out = wrap("\u{1F600}\u{1F600}\u{1F600}\u{1F600}\u{1F600}", 2, 99);
+        assert_eq!(
+            out,
+            vec!["\u{1F600}\u{1F600}", "\u{1F600}\u{1F600}", "\u{1F600}"]
+        );
+        for l in &out {
+            assert!(width(l) <= 2, "{l} is wider than the line");
+        }
+    }
+
+    #[test]
+    fn it_breaks_by_word_when_it_can() {
+        let out = wrap("one two three four", 9, 99);
+        assert_eq!(out, vec!["one two", "three", "four"]);
+    }
+
+    #[test]
+    fn it_says_how_many_lines_there_are_in_all() {
+        // THE REASON IT MOVED HERE. It used to stop at the ceiling, which
+        // cannot answer "how many are there" — and that number is a
+        // scrollbar's `total`. The ceiling now bounds the WORK, and the
+        // caller cuts.
+        let text = "a b c d e f g h";
+        assert_eq!(wrap(text, 1, 99).len(), 8);
+        assert_eq!(wrap(text, 3, 99), vec!["a b", "c d", "e f", "g h"]);
+    }
+
+    #[test]
+    fn the_ceiling_bounds_the_work_and_nothing_else() {
+        let text = "a b c d e f g h";
+        let cut = wrap(text, 1, 3);
+        assert_eq!(cut.len(), 3);
+        assert_eq!(cut, wrap(text, 1, 99)[..3]);
+    }
+
+    #[test]
+    fn a_line_of_its_own_survives_the_wrap() {
+        // `text.lines()` first, then words: a paragraph break is the author's
+        // and the wrapper does not join it away.
+        assert_eq!(wrap("one\ntwo", 40, 99), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn a_width_of_zero_does_not_spin() {
+        assert!(!wrap("abc def", 0, 99).is_empty());
     }
 }
