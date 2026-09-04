@@ -582,6 +582,20 @@ impl FilesWindow {
                 let m = self.texts.t_with(e.key, &e.borrowed());
                 self.say(m);
             }
+            // THE OPENED LINE IS THE DOOR'S, and this is where the keyboard's
+            // ask lands. The view holds the focus that reached the control and
+            // nothing else about it — see `files::Pane::Fold`.
+            Step::Fold(ask) => match ask {
+                crate::fold::Ask::Toggle => self.fold.toggle(),
+                crate::fold::Ask::By(by) => {
+                    let last = self
+                        .fold_scroll
+                        .total
+                        .saturating_sub(self.fold_scroll.lines);
+                    let next = i64::try_from(self.fold.offset).unwrap_or(0) + i64::from(by);
+                    self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
+                }
+            },
             Step::Do(doing) => {
                 // THE FOUR THAT SPAWN are the door's business; everything else
                 // is the same code the footer runs.
@@ -1613,6 +1627,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
 
     // THE CONTROL THAT OPENS THE LINE, flush against the right edge. No box
     // and no border (invariant 15): a glyph on the line that already exists.
+    // AND THE MANAGER IS TOLD, so `Tab` may land there — and may not, when
+    // there is nothing to land on.
+    s.view.fold_is_shown(opens);
+    let lit = s.view.fold_focused();
     s.fold_control = opens.then_some(s.geo.columns.saturating_sub(1) + margin);
     if let Some(at) = s.fold_control {
         spans.push(ronoctua_render::Span {
@@ -1624,7 +1642,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             },
             column: at,
             line: 0,
-            color: if s.fold.open {
+            // WITH THE KEYBOARD ON IT, the accent — one glyph has no row to
+            // band, so the colour is the whole of the focus.
+            color: if lit {
+                tokens::color::STATE_ACCENT
+            } else if s.fold.open {
                 tokens::color::TEXT_SUBTLE_STRONG
             } else {
                 tokens::color::TEXT_SUBTLE_DEFAULT

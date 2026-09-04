@@ -7775,6 +7775,16 @@ impl Footer {
         use crate::files::Step;
         match step {
             Step::Nothing => {}
+            // THE OPENED LINE IS THE DOOR'S — see `files::Pane::Fold`. The
+            // geometry is applied because the drawer is lines of surface.
+            Step::Fold(ask) => {
+                match ask {
+                    crate::fold::Ask::Toggle => self.fold.toggle(),
+                    crate::fold::Ask::By(by) => self.scroll_fold(by),
+                }
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
             Step::Changed => {
                 // AND THE REGION FOLLOWS THE CURSOR, as every other list does.
                 // Without it the cursor walks past the twelfth line and off the
@@ -9388,6 +9398,10 @@ impl Footer {
             // sidebar's eject.
             // AND THE MANAGER IS TOLD, so `Tab` may land there and may not
             // land there when there is nothing to land on.
+            let lit = self.files.as_ref().is_some_and(|v| {
+                v.fold_is_shown(opens);
+                v.fold_focused()
+            });
             self.fold_control = opens.then_some(columns.saturating_sub(1));
             if let Some(at) = self.fold_control {
                 spans.push(ronoctua_render::Span {
@@ -9399,7 +9413,13 @@ impl Footer {
                     },
                     column: at,
                     line: mini_line,
-                    color: if held.open {
+                    // WITH THE KEYBOARD ON IT, the accent — the same colour
+                    // that says where the next key goes everywhere else. It is
+                    // one glyph, so there is no row to put a band on, and the
+                    // colour is the whole of the focus.
+                    color: if lit {
+                        tokens::color::STATE_ACCENT
+                    } else if held.open {
                         tokens::color::TEXT_SUBTLE_STRONG
                     } else {
                         tokens::color::TEXT_SUBTLE_DEFAULT

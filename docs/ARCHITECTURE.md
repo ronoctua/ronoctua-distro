@@ -1232,6 +1232,14 @@ como um único cinza, e a mesma frase seria desenhada de um jeito na primeira li
 linhas abaixo. O espaço de junção fica no trecho ANTERIOR: com ele à frente do seguinte, `C-m` seria
 ` C-m` e a corrida pintada como tecla começaria uma célula cedo.
 
+**O `Tab` alcança o controle, e é por isso que ele é um `Pane`.** O anel de foco é um só no sistema —
+`View::cycle_pane` sobre `panes_on` — e o dono pediu o controle nele. `Pane::Fold` não é seção e não
+tem linha: o que é do gerenciador é o FOCO que chega lá, e a linha continua sendo da porta, que
+mostra um eco ou o prompt do `M-x` com a mesma facilidade. Quem diz se o controle existe é a porta
+(`View::fold_is_shown`), pela mesma via por que ela já diz a largura desenhada — a regra escrita do
+`panes_on` é que um painel que não é desenhado não pode ser alcançável. `Enter` alterna, as setas
+andam na gaveta, e o foco se vê no próprio glifo: um glifo não tem linha para receber faixa.
+
 **Clicar numa linha é apertar a tecla dela.** Num grupo, desce um nível; num comando, executa. As
 duas coisas saem de graça da mesma definição, e o que se ganha é não haver um segundo caminho: nada
 fica alcançável só pelo mouse, e o que o mouse faz é sempre algo que o teclado também faz. No

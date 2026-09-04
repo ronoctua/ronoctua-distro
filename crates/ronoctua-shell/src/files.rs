@@ -1357,6 +1357,9 @@ pub fn section_px(
     edge: f32,
 ) -> Option<(f32, f32)> {
     match pane {
+        // THE LINE'S CONTROL IS NOT IN THE REGION at all — it sits on the line
+        // above it, which belongs to the door. No column, so no box.
+        Pane::Fold => None,
         Pane::Sidebar => (panes.sidebar > 0).then(|| (0.0, rule_x(panes.sidebar, lead, cell))),
         Pane::Listing => {
             let from = if panes.sidebar == 0 {
@@ -1615,6 +1618,18 @@ pub enum Hit {
 /// come after the listing either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Pane {
+    /// The control that opens the line above everything.
+    ///
+    /// **It is not a section and it is not the manager's**, which is why it
+    /// carries no rows: the line it opens belongs to the door and shows an
+    /// echo or an `M-x` prompt just as readily (see [`crate::fold`]). What is
+    /// the manager's is the FOCUS that reaches it — `Tab` walks one ring in
+    /// this system and the owner asked for the control to be on it, so this
+    /// is where it had to go.
+    ///
+    /// First, because it is drawn above every other pane; the order of these
+    /// variants is the order `Tab` walks, and it is the order on screen.
+    Fold,
     /// The sidebar.
     Sidebar,
     /// The directory. Where the cursor starts, and where typing always goes.
@@ -2376,6 +2391,8 @@ pub enum Step {
     Do(Doing),
     /// Put this on the message line.
     Say(Explanation),
+    /// The opened line was asked something. The DOOR answers.
+    Fold(crate::fold::Ask),
 }
 
 /// One row of the picker.
@@ -2839,6 +2856,12 @@ pub struct View {
     /// was DRAWN at is the only one that is true of what is on screen, and both
     /// doors draw before anybody types.
     drawn_at: std::cell::Cell<u16>,
+    /// Whether the door drew the control that opens the line above the region.
+    ///
+    /// A `Cell` and told from outside, for the reason `drawn_at` is one: the
+    /// answer depends on what was DRAWN and only the door knows it, while the
+    /// question — "may `Tab` land there?" — is asked here, where the ring is.
+    fold_shown: std::cell::Cell<bool>,
 }
 
 /// What the inspector was asked about one file.
@@ -3086,6 +3109,7 @@ impl View {
             looked: None,
             asked: None,
             drawn_at: std::cell::Cell::new(0),
+            fold_shown: std::cell::Cell::new(false),
             drawn_lines: std::cell::Cell::new(0),
         };
         view.reread();
@@ -7155,7 +7179,10 @@ impl View {
         match self.pane {
             Pane::Sidebar => Some((Pane::Sidebar, self.side_cursor)),
             Pane::Listing => Some((Pane::Listing, self.cursor)),
-            Pane::Preview | Pane::Info => None,
+            // NEITHER A PICTURE NOR THE FACTS HAS A LINE the `Enter` would
+            // run, and neither has the control above them: it is one glyph,
+            // and what says it has the keyboard is its own colour.
+            Pane::Preview | Pane::Info | Pane::Fold => None,
         }
     }
 
@@ -7865,6 +7892,10 @@ impl View {
             // BOTH PANELS SCROLL INSIDE THE PANEL'S OWN HEIGHT, not the
             // listing's. The preview joined the first half of that sentence
             // the day it began to show a file's letters.
+            // AND THE CONTROL HAS NO BAND TO DRAG. It is answered here
+            // rather than left out because the `match` is what stops a pane
+            // being forgotten — see `Pane::Fold`.
+            Pane::Fold => return false,
             Pane::Info | Pane::Preview => room.panel,
             // AND THE LISTING'S CHROME IS NOT A ROW THE LISTING SCROLLS.
             //
@@ -7876,6 +7907,7 @@ impl View {
             Pane::Sidebar => room.list,
         };
         let total = match pane {
+            Pane::Fold => return false,
             Pane::Sidebar => self.side.shown(self.hidden).len(),
             Pane::Info => self.sheet().len(),
             // THE COLUMN'S OWN TOTAL — the modal's when one is up, the same
@@ -7908,6 +7940,7 @@ impl View {
         let at = fraction.clamp(0.0, 1.0) as f32;
         let to = bar.offset_at(at, 1.0, 0.0);
         match pane {
+            Pane::Fold => return false,
             Pane::Sidebar => self.side_offset = to,
             Pane::Listing => self.scroll_listing_to(to),
             Pane::Preview => self.preview_offset = to,
@@ -8074,6 +8107,10 @@ impl View {
     /// Moves the cursor of whichever pane has the keyboard.
     fn step_by(&mut self, by: i32) -> Step {
         match self.pane {
+            // THE ARROWS WALK THE OPENED LINE while the keyboard is on its
+            // control. The view does not draw that line, so it asks the door.
+            Pane::Fold if self.fold_shown.get() => Step::Fold(crate::fold::Ask::By(by)),
+            Pane::Fold => self.move_by(by),
             Pane::Listing => self.move_by(by),
             Pane::Sidebar => self.side_by(by),
             // THE ARROWS WALK WHATEVER THERE IS TO WALK.
@@ -8109,6 +8146,11 @@ impl View {
     /// Opens whatever the cursor is on, in whichever pane has it.
     fn open_here(&mut self) -> Step {
         match self.pane {
+            // `Enter` ON THE CONTROL IS THE CLICK ON IT — the owner's rule,
+            // that whatever the mouse can do the keyboard can do, read the
+            // other way round.
+            Pane::Fold if self.fold_shown.get() => Step::Fold(crate::fold::Ask::Toggle),
+            Pane::Fold => self.open_focused(),
             Pane::Listing => self.open_focused(),
             Pane::Sidebar => self.open_side(),
             // BOTH PANELS ARE ABOUT THE FOCUSED ENTRY, so `Enter` in either of
@@ -8124,17 +8166,48 @@ impl View {
     /// drawn must not be reachable — a cursor in a region nobody can see is the
     /// defect `files-sidebar` already fixed once, when hiding the sidebar left
     /// the keyboard inside it.
+    /// The door says whether it drew the control that opens the line.
+    ///
+    /// Told rather than asked, for the reason `drawn_at` is told: whether the
+    /// line was cut depends on what the door put on it and how wide it drew,
+    /// and neither is the manager's to know. Landing `Tab` on a control that
+    /// is not there is the defect `panes_on`'s own rule forbids.
+    pub fn fold_is_shown(&self, shown: bool) {
+        self.fold_shown.set(shown);
+    }
+
+    /// Does the keyboard sit on the line's control right now?
+    ///
+    /// It asks BOTH: the pane, and whether the control is still drawn. A line
+    /// that got shorter — or a window that got wider — takes the control away
+    /// while the keyboard is on it, and a focus on something nobody can see is
+    /// a key that appears not to work. `cycle_pane` already lands on the
+    /// listing when a pane leaves the screen; this is the same rule for the
+    /// presses that arrive before the next `Tab`.
+    #[must_use]
+    pub fn fold_focused(&self) -> bool {
+        matches!(self.pane, Pane::Fold) && self.fold_shown.get()
+    }
+
     #[must_use]
     pub fn panes_on(&self, width: u16) -> Vec<Pane> {
         let panes = self.panes(width);
         let placed = panes.right > 0 || panes.strip > 0;
-        let mut out = Vec::with_capacity(4);
+        let mut out = Vec::with_capacity(5);
+        // THE LINE'S CONTROL, when the door says it drew one. A pane that is
+        // not on screen must not be reachable, and whether this one is drawn
+        // is a question only the door can answer — so the door tells, exactly
+        // as it tells the width it drew at.
+        if self.fold_shown.get() {
+            out.push(Pane::Fold);
+        }
         // AND WITH THE REGION GIVEN AWAY THERE IS ONE SECTION. `TAB` walking
         // onto a listing that is not drawn would put the cursor where nobody
         // can see it — the case `cycle_pane` already lands on the listing for,
         // read the other way round.
         if panes.whole {
-            return vec![Pane::Preview];
+            out.push(Pane::Preview);
+            return out;
         }
         if panes.sidebar > 0 {
             out.push(Pane::Sidebar);
@@ -8314,6 +8387,9 @@ impl View {
     /// not move a list somewhere else on the screen.
     pub fn wheel(&mut self, which: Pane, by: i64, width: u16, room: usize) -> bool {
         match which {
+            // THE CONTROL IS NOT A LIST, and the wheel over the line above the
+            // region is the door's to answer — the view has no offset for it.
+            Pane::Fold => false,
             // THE ARM THAT WAS NOT HERE. It answered `false`, which read as
             // "nothing happened" to one door and as "it is yours to do" to the
             // other — and the two doors implemented different halves of it.
@@ -8387,7 +8463,9 @@ impl View {
             // what "go to the sidebar, and back" has always said. From a panel
             // it therefore crosses the whole screen in one press, which is the
             // point of having a key with a destination at all.
-            Pane::Listing | Pane::Preview | Pane::Info => {
+            // The line's control is on this side of the crossing too: it is
+            // not the sidebar, so `C-o` takes it there like everything else.
+            Pane::Listing | Pane::Preview | Pane::Info | Pane::Fold => {
                 // NOTHING TO CROSS INTO is not silence: a key that did nothing
                 // and said nothing is indistinguishable from a key that never
                 // arrived, which is the report this project has had three times

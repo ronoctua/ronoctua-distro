@@ -2435,6 +2435,8 @@ let
 
     files = pathlib.Path("${self}/crates/ronoctua-shell/src/files.rs").read_text()
     wrong = []
+    # THE TWO THAT MAY SAY `false`, each for a reason of its own — see below.
+    MAY_REFUSE = ("Preview", "Fold")
 
     def body_of(name):
         m = re.search(r"\n    pub fn " + name + r"\b", files)
@@ -2458,15 +2460,28 @@ let
             wrong.append("`" + name + "` is gone from files.rs")
             continue
         for m in re.finditer(r"Pane::(\w+)\s*=>[^\n]*\bfalse\b", body):
-            if m.group(1) != "Preview":
+            if m.group(1) not in MAY_REFUSE:
                 wrong.append(
                     "`" + name + "` answers `false` for `Pane::" + m.group(1) + "`"
                 )
         for m in re.finditer(r"Pane::(\w+)\s*=>\s*return false", body):
-            if m.group(1) != "Preview":
+            if m.group(1) not in MAY_REFUSE:
                 wrong.append(
                     "`" + name + "` returns `false` for `Pane::" + m.group(1) + "`"
                 )
+
+    # AND THE SECOND REFUSAL HAS TO EARN ITS NAME.
+    #
+    # `Preview` refuses because a picture does not scroll — an argument about
+    # what it IS. `Fold` refuses because it is not a list at all: it is the
+    # control on the line above the region, and neither `section_at` nor
+    # `bars` can hand it to these two functions. That is checkable rather than
+    # promised, so it is checked: the day somebody gives it a `Section`, it is
+    # a list again and the exception stops being true.
+    if re.search(r"pane:\s*Pane::Fold", files):
+        wrong.append(
+            "`Pane::Fold` is a section now, so it is a list and may not refuse"
+        )
 
     if wrong:
         print("ERROR: a list answers that it is not the one to move.", file=sys.stderr)
@@ -2476,9 +2491,11 @@ let
         print("", file=sys.stderr)
         print("       `false` there means 'I did nothing', and a door that reads", file=sys.stderr)
         print("       it as 'not mine' writes the gesture a second time. The", file=sys.stderr)
-        print("       preview is the one refusal: a picture does not scroll.", file=sys.stderr)
+        print("       two refusals are allowed and no more: a picture does not", file=sys.stderr)
+        print("       scroll, and the line's control is not a list at all.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: every list moves through the view, and only the picture refuses")
+    print("OK: every list moves through the view; the picture and the line's")
+    print("    control are the two that do not, and the second is not a section")
     PY
   '';
 

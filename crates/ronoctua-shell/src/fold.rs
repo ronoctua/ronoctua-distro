@@ -43,6 +43,19 @@
 
 use ronoctua_tokens as tokens;
 
+/// What the keyboard asked of the opened line.
+///
+/// It travels out of `files::View` as a `Step`, because the view does not draw
+/// this line and so cannot answer for it: the line is the DOOR's, and the
+/// manager only holds the focus that reached it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    /// Open it, or close it.
+    Toggle,
+    /// Walk it by this many wrapped lines.
+    By(i32),
+}
+
 /// Whether the line is open, and how far down it is scrolled.
 ///
 /// One per door. It is not on `files::View` because the line is not the
