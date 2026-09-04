@@ -101,12 +101,23 @@ impl Texts {
         let id: LanguageIdentifier = language.parse().ok()?;
         let resource = FluentResource::try_new(ftl.to_owned()).ok()?;
         let mut bundle = FluentBundle::new(vec![id]);
-        // Fluent puts bidirectional isolation marks (U+2068/U+2069) around
-        // an interpolated argument. They are CORRECT in a renderer that
-        // implements the bidi algorithm; ours draws cell by cell, and
-        // they would show up as an error glyph. Switched off on purpose, with
-        // the note that they come back once there is RTL support.
-        bundle.set_use_isolating(false);
+        // ISOLATION MARKS STAY ON, and `format` is what takes them off.
+        //
+        // Fluent puts a bidirectional isolation mark (U+2068/U+2069) around
+        // every interpolated argument. They are CORRECT in a renderer that
+        // implements the bidi algorithm; ours draws cell by cell, and left in
+        // they would show up as an error glyph.
+        //
+        // Two things used to remove them — this switch and the strip in
+        // `format` — which means one of the two was dead code, and a reader
+        // could not tell which. Now there is one, and it EARNS its keep: the
+        // mark is the only thing that says where an argument ended up in the
+        // sentence, and `t_marked` hands that boundary to a caller that needs
+        // to draw the argument in a different colour from the prose around it.
+        // Asking Rust to find the value back inside the finished sentence
+        // would be a second copy of it, and it would go wrong the day a
+        // language put the same word somewhere else in the line.
+        bundle.set_use_isolating(true);
         bundle.add_resource(resource).ok()?;
         Some(Self {
             bundle,
@@ -216,13 +227,43 @@ impl Texts {
         plain
     }
 
+    /// The same as [`Texts::t_with`], and it also says WHERE each argument
+    /// landed in the sentence.
+    ///
+    /// # Why a caller would want that
+    ///
+    /// Because a line like "type to filter · C-m opens the action menu" is one
+    /// sentence with two registers in it: the KEY, which is what the eye
+    /// hunts for, and the prose that explains it. Drawing the two in
+    /// different colours means knowing where one ends, and the only thing
+    /// that honestly knows is the LOCALISER — it is the localiser that
+    /// decided where in the line the argument goes, and a different language
+    /// puts it somewhere else.
+    ///
+    /// The alternative was searching the finished sentence for `"C-m"`. That
+    /// is a second copy of the key, and it picks the wrong occurrence the day
+    /// a translation happens to contain the same two characters as prose.
+    #[must_use]
+    pub fn t_marked(&self, key: &str, args: &[(&str, &str)]) -> Marked {
+        let mut fluent = fluent_bundle::FluentArgs::new();
+        for (k, v) in args {
+            fluent.set(*k, *v);
+        }
+        self.marked(key, fluent, args.is_empty())
+    }
+
     /// The half both public forms share.
     fn format(&self, key: &str, fluent: fluent_bundle::FluentArgs<'_>, bare: bool) -> String {
+        self.marked(key, fluent, bare).text
+    }
+
+    /// The one that resolves, and the one that takes the marks off.
+    fn marked(&self, key: &str, fluent: fluent_bundle::FluentArgs<'_>, bare: bool) -> Marked {
         let Some(msg) = self.bundle.get_message(key) else {
-            return format!("[{key}]");
+            return Marked::plain(format!("[{key}]"));
         };
         let Some(default_of) = msg.value() else {
-            return format!("[{key}]");
+            return Marked::plain(format!("[{key}]"));
         };
         let args = (!bare).then_some(&fluent);
         let mut errors = Vec::new();
@@ -230,12 +271,89 @@ impl Texts {
         if !errors.is_empty() {
             tracing::warn!(key, ?errors, "text with a formatting error");
         }
-        // Fluent wraps an argument in a bidirectional ISOLATION MARK
-        // (U+2068/U+2069) for mixed RTL/LTR text. Invisible in a terminal,
-        // but it counts as a column in our integer layout and throws the
-        // line out of alignment. Since there is no RTL language here (section 2 fixes pt-BR
-        // and en-GB), we strip them.
-        s.replace(['\u{2068}', '\u{2069}'], "")
+        // THE MARKS COME OFF HERE, and their positions are kept.
+        //
+        // An isolation mark is invisible in a terminal, but it counts as a
+        // column in our integer layout and throws the line out of alignment,
+        // so no sentence may leave this crate carrying one. There is no RTL
+        // language here (section 2 fixes pt-BR and en-GB), so nothing is lost
+        // by dropping them.
+        //
+        // The DEPTH counter is what makes a range mean an argument and not a
+        // fragment of one: Fluent nests marks when a placeable resolves to
+        // something that itself carries one, and only the outermost pair is a
+        // boundary anybody asked about. A closing mark with nothing open is
+        // dropped rather than trusted — a range built from it would start
+        // wherever the last one did.
+        let mut text = String::with_capacity(s.len());
+        let mut at = Vec::new();
+        let mut depth = 0_usize;
+        let mut from = 0_usize;
+        for c in s.chars() {
+            match c {
+                '\u{2068}' => {
+                    if depth == 0 {
+                        from = text.len();
+                    }
+                    depth += 1;
+                }
+                '\u{2069}' if depth > 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        at.push(from..text.len());
+                    }
+                }
+                '\u{2069}' => {}
+                _ => text.push(c),
+            }
+        }
+        Marked { text, at }
+    }
+}
+
+/// A sentence, and where its arguments ended up inside it.
+///
+/// See [`Texts::t_marked`]. The ranges are byte ranges into [`Marked::text`],
+/// which is the sentence with the marks already gone — so they can be sliced
+/// straight, without the caller ever meeting an isolation mark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marked {
+    /// The sentence.
+    pub text: String,
+    /// One range per interpolated argument, in the order they READ, which is
+    /// not the order they were passed: the language decides.
+    pub at: Vec<core::ops::Range<usize>>,
+}
+
+impl Marked {
+    /// A sentence with no arguments in it.
+    fn plain(text: String) -> Self {
+        Self {
+            text,
+            at: Vec::new(),
+        }
+    }
+
+    /// The sentence cut into its pieces, saying which ones are arguments.
+    ///
+    /// The pieces come out in reading order and concatenate back to
+    /// [`Marked::text`] exactly — a caller that draws them one after another
+    /// draws the sentence, and nothing else has to know where the seams are.
+    #[must_use]
+    pub fn pieces(&self) -> Vec<(&str, bool)> {
+        let mut out = Vec::with_capacity(self.at.len() * 2 + 1);
+        let mut cut = 0;
+        for r in &self.at {
+            if r.start > cut {
+                out.push((&self.text[cut..r.start], false));
+            }
+            out.push((&self.text[r.clone()], true));
+            cut = r.end;
+        }
+        if cut < self.text.len() {
+            out.push((&self.text[cut..], false));
+        }
+        out
     }
 }
 
@@ -291,10 +409,97 @@ mod tests {
     }
 
     #[test]
+    fn a_marked_sentence_says_where_its_arguments_are() {
+        // The whole point of `t_marked`: the pieces concatenate back to the
+        // sentence, and the ones flagged `true` are exactly what was passed in.
+        let t = Texts::fresh("en-GB").unwrap();
+        let m = t.t_marked(
+            key::FILES_HINT,
+            &[("key", "C-m"), ("preview", "C-v"), ("info", "C-i")],
+        );
+        assert_eq!(
+            m.text,
+            t.t_with(
+                key::FILES_HINT,
+                &[("key", "C-m"), ("preview", "C-v"), ("info", "C-i")]
+            )
+        );
+        let pieces = m.pieces();
+        let rebuilt: String = pieces.iter().map(|(s, _)| *s).collect();
+        assert_eq!(rebuilt, m.text, "the pieces have to be the sentence");
+        let keys: Vec<&str> = pieces.iter().filter(|(_, k)| *k).map(|(s, _)| *s).collect();
+        assert_eq!(keys, vec!["C-m", "C-v", "C-i"]);
+    }
+
+    #[test]
+    fn an_argument_at_either_end_still_has_a_range() {
+        // `files-fact-says` is `{ $label }: { $value }` — one argument opens the
+        // sentence and one closes it. An off-by-one in the strip shows up here
+        // and nowhere else, because every other value has prose on both sides.
+        let t = Texts::fresh("en-GB").unwrap();
+        let m = t.t_marked(
+            key::FILES_FACT_SAYS,
+            &[("label", "path"), ("value", "/tmp")],
+        );
+        assert_eq!(m.text, "path: /tmp");
+        assert_eq!(m.at, vec![0..4, 6..10]);
+        assert_eq!(
+            m.pieces(),
+            vec![("path", true), (": ", false), ("/tmp", true)]
+        );
+    }
+
+    #[test]
+    fn a_sentence_with_no_arguments_has_no_ranges() {
+        let t = Texts::fresh("en-GB").unwrap();
+        let m = t.t_marked(key::FILES_UP, &[]);
+        assert!(m.at.is_empty());
+        assert_eq!(m.pieces(), vec![(m.text.as_str(), false)]);
+    }
+
+    #[test]
+    fn the_language_decides_where_an_argument_reads() {
+        // The reason the boundary comes from the localiser and not from a
+        // search: the two languages put the same argument at different byte
+        // offsets, and both are right.
+        let en = Texts::fresh("en-GB").unwrap();
+        let pt = Texts::fresh("pt-BR").unwrap();
+        let arg = [("key", "C-m"), ("preview", "C-v"), ("info", "C-i")];
+        let a = en.t_marked(key::FILES_HINT, &arg);
+        let b = pt.t_marked(key::FILES_HINT, &arg);
+        assert_ne!(a.at, b.at, "the two languages cannot agree on every offset");
+        for m in [&a, &b] {
+            assert_eq!(m.at.len(), 3);
+            for r in &m.at {
+                assert!(m.text.get(r.clone()).is_some_and(|s| s.starts_with("C-")));
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_is_marked_too() {
+        let t = Texts::fresh("en-GB").unwrap();
+        let m = t.t_marked("does-not-exist", &[("key", "C-m")]);
+        assert_eq!(m.text, "[does-not-exist]");
+        assert!(m.at.is_empty());
+    }
+
+    #[test]
     fn there_is_no_bidi_isolation_mark() {
         // U+2068/U+2069 are correct in a bidi renderer; in ours they would show up
         // as an error glyph in the middle of the sentence.
+        //
+        // The bundle PRODUCES them now — they are what `t_marked` reads the
+        // argument boundaries out of — so this is the guard that says the
+        // strip is the only door out of this crate. The call WITH arguments is
+        // the one that matters: a sentence resolved with none never had a mark
+        // to lose.
         let t = Texts::fresh("pt-BR").unwrap();
+        let with_args = t.t_with(
+            key::FILES_FACT_SAYS,
+            &[("label", "path"), ("value", "/tmp")],
+        );
+        assert_eq!(with_args, "path: /tmp");
         for key in ALL_KEYS {
             let s = t.t(key);
             assert!(
