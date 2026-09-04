@@ -255,7 +255,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         press_key("t")
         press_key("t")

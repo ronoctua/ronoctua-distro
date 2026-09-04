@@ -175,7 +175,7 @@ pkgs.testers.runNixOSTest {
 
         try:
             machine.wait_until_succeeds(
-                "journalctl -u glyphs --no-pager | grep -q 'copiado'", timeout=30
+                "journalctl -u glyphs --no-pager | grep -q 'copied'", timeout=30
             )
         except Exception:
             print(machine.execute("journalctl -u glyphs --no-pager | tail -40")[1])

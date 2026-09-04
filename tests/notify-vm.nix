@@ -341,7 +341,7 @@ pkgs.testers.runNixOSTest {
         before = machine.succeed(
             "${pkgs.jq}/bin/jq 'length' /root/.local/state/ronoctua/notifications.json"
         ).strip()
-        assert int(before) >= 4, f"o historico tem {before} registros"
+        assert int(before) >= 4, f"the history holds {before} records"
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'notification history read'",
@@ -351,6 +351,6 @@ pkgs.testers.runNixOSTest {
             "journalctl -u footer --no-pager | grep 'notification history read' | tail -1"
         )
         print(after)
-        assert f"lidas={before}" in after, after
+        assert f"read={before}" in after, after
   '';
 }

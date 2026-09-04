@@ -85,7 +85,7 @@ pkgs.testers.runNixOSTest {
         open_x11("bufx1", "first")
         try:
             machine.wait_until_succeeds(
-                "journalctl -u bufx1 --no-pager | grep -q 'satellite pronto'",
+                "journalctl -u bufx1 --no-pager | grep -q 'satellite ready'",
                 timeout=90,
             )
         except Exception:
@@ -110,7 +110,7 @@ pkgs.testers.runNixOSTest {
         # This is the test a shared satellite does not pass.
         open_x11("bufx2", "second")
         machine.wait_until_succeeds(
-            "journalctl -u bufx2 --no-pager | grep -q 'satellite pronto'",
+            "journalctl -u bufx2 --no-pager | grep -q 'satellite ready'",
             timeout=90,
         )
         machine.succeed("test -S /tmp/.X11-unix/X2")

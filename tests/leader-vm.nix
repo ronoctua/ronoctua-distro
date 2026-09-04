@@ -238,7 +238,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
 
         expanded = footer_height()
@@ -358,7 +358,7 @@ pkgs.testers.runNixOSTest {
     with subtest("Esc goes back to rest, two lines tall"):
         press_key("Escape")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader encerrada'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader closed'", timeout=30
         )
         # And it gives the keyboard back: without this no buffer would receive a key
         # again, and the system would go mute after the first leader.
@@ -383,7 +383,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         # `colon` is the name of the `:` keysym in xdotool. The key changed from `x`
         # to `:` — Doom's `M-x` one —, and `x` there is the scratch buffer.
@@ -488,7 +488,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         press_key("period")
 
@@ -621,7 +621,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         press_key("i")
         press_key("n")
@@ -700,7 +700,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         press_key("i")
         press_key("u")
@@ -746,7 +746,7 @@ pkgs.testers.runNixOSTest {
                 "${ronoctua-shell}/bin/ronoctua-shell leader"
             )
             machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+                "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
             )
             xdo("key", "i")
             machine.sleep(1)

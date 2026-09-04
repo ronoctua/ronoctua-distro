@@ -110,7 +110,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         # `c` IS A PREFIX now that the screen capture moved under it: `c c` is
         # the clipboard and `c s` the capture. A lone `c` only narrows
@@ -149,7 +149,7 @@ pkgs.testers.runNixOSTest {
         press_key("Down")
         press_key("Return")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'recopiado do historico'",
+            "journalctl -u footer --no-pager | grep -q 'recopied from the history'",
             timeout=30,
         )
         pasted = machine.succeed(
@@ -188,7 +188,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         # `c` IS A PREFIX now that the screen capture moved under it: `c c` is
         # the clipboard and `c s` the capture. A lone `c` only narrows

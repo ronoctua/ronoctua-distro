@@ -214,6 +214,12 @@ pkgs.testers.runNixOSTest {
         )
 
     with subtest("the rescue opens FLOATING, with an identity of its own"):
+        # THE UNIT IS `ronoctua-rescue` AND NOT `rescue`. systemd ships its own
+        # `rescue.service` — the single-user target — so `systemd-run
+        # --unit=rescue` is refused with "already loaded or has a fragment
+        # file". The name used to be Portuguese, which by accident could not
+        # collide; renaming it to English (invariant 18) walked straight into
+        # the collision, and nothing said so until this test ran.
         # THE FIRST DOOR of `Ctrl+Alt+Del`. The second — the VT — is in
         # `tests/rescue-vm.nix`, where there is no compositor at all; this one
         # belongs here because it is the SAME mechanism as the monitor's, and
@@ -224,7 +230,7 @@ pkgs.testers.runNixOSTest {
         # window, because what one reads during a failure is a list with a log
         # under it.
         machine.succeed(
-            "systemd-run --unit=rescue ${xvfb.env} "
+            "systemd-run --unit=ronoctua-rescue ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=LANG=C.UTF-8 "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
@@ -238,7 +244,7 @@ pkgs.testers.runNixOSTest {
                 timeout=60,
             )
         except Exception:
-            print(machine.execute("journalctl -u rescue --no-pager")[1])
+            print(machine.execute("journalctl -u ronoctua-rescue --no-pager")[1])
             raise
         with_rescue = windows()
         assert with_rescue["br.ronoctua.rescue"]["is_floating"], (
@@ -249,7 +255,7 @@ pkgs.testers.runNixOSTest {
         machine.sleep(5)
         assert "br.ronoctua.rescue" in windows(), (
             "the rescue's window went away: the program inside it died.\n"
-            + machine.execute("journalctl -u rescue --no-pager")[1]
+            + machine.execute("journalctl -u ronoctua-rescue --no-pager")[1]
         )
 
         # AND THE PROGRAM STAYS UP. When the child exits the pty closes and the

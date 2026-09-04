@@ -91,7 +91,7 @@ pkgs.testers.runNixOSTest {
     def leaders_in_log():
         return int(
             machine.succeed(
-                "journalctl -u footer --no-pager | grep -c 'leader ativa' || true"
+                "journalctl -u footer --no-pager | grep -c 'leader active' || true"
             ).strip()
             or 0
         )
@@ -165,7 +165,7 @@ pkgs.testers.runNixOSTest {
     with subtest("`LEADER a` opens with the list ALREADY READY"):
         leader()
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader ativa'", timeout=30
+            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
         press_key("a")
         journal = machine.wait_until_succeeds(
@@ -219,7 +219,7 @@ pkgs.testers.runNixOSTest {
         # that the defect made impossible.
         leader()
         machine.wait_until_succeeds(
-            f"test $(journalctl -u footer --no-pager | grep -c 'leader ativa') -gt {prior}",
+            f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {prior}",
             timeout=20,
         )
         machine.succeed("pgrep -f '${sleepPattern}' >/dev/null")
