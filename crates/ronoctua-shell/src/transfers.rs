@@ -257,16 +257,28 @@ impl View {
     /// manager's own hint gives: keys move, and a sentence naming the old one
     /// is worse than no sentence at all.
     #[must_use]
-    pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> String {
+    pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
         let of = |id: &str| key_that_runs(id).map_or_else(String::new, |t| t.notation());
-        texts.t_with(
+        let (pause, cancel, sweep) = (
+            of("transfers-pause"),
+            of("transfers-cancel"),
+            of("transfers-sweep"),
+        );
+        let marked = texts.t_marked(
             ronoctua_i18n::key::TRANSFERS_HINT,
             &[
-                ("pause", of("transfers-pause").as_str()),
-                ("cancel", of("transfers-cancel").as_str()),
-                ("sweep", of("transfers-sweep").as_str()),
+                ("pause", pause.as_str()),
+                ("cancel", cancel.as_str()),
+                ("sweep", sweep.as_str()),
             ],
-        )
+        );
+        let mut out = Vec::new();
+        crate::chrome::Piece::extend(
+            &mut out,
+            &marked,
+            &[pause.as_str(), cancel.as_str(), sweep.as_str()],
+        );
+        out
     }
 }
 

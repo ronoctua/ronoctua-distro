@@ -8513,33 +8513,54 @@ impl Footer {
         let prompt_mx = match &self.apps {
             Some(l) => Some(l.query().to_owned()),
             None => self.mx.active().then(|| self.mx.prompt()),
-        }
-        // AND THE FILE MANAGER'S HINT — but never its query.
+        };
+
+        // AND THE HINT, WHICH IS NOT A PROMPT — its own thing, on the same line.
         //
-        // The query lives at the END OF THE PATH now (`files::View::crumbs`):
-        // the two read as one sentence there, and this line goes back to its own
-        // job, which is what the pointer is resting on and what the last action
-        // said. While the query was here, hovering a permission bit replaced
-        // what was being typed, or was replaced by it, depending on the order.
+        // It used to hang off the chain above, and that is how it came to be
+        // drawn in `text.primary`: the arm it borrowed exists for "the user is
+        // typing in `M-x`", and a prompt is loud on purpose. The owner
+        // photographed the two doors side by side and found the same sentence
+        // in two different colours, one of which nobody had chosen.
         //
-        // The hint stays, because typing is not a key and so has no line in the
-        // manual — and it goes away the moment there is something typed, since
-        // by then the path itself is showing it.
-        .or_else(|| {
-            let v = self.files.as_ref()?;
-            if !v.plain() || v.filtering() {
-                return None;
-            }
-            Some(crate::files::hint_of(
-                &self.texts,
-                v.split(self.screen_columns()) > 0,
-            ))
-        })
-        // AND THE TRANSFER PANEL'S, for the same reason: its keys are chords
-        // that nothing on the row spells out, and a panel whose only way to
-        // find `C-c` is the manual is a panel where nobody ever stops
-        // anything.
-        .or_else(|| self.transfers.as_ref().map(|v| v.hint(&self.texts)));
+        // A hint is two registers — the key and the prose — so it cannot
+        // travel as a `String` at all, and `chrome::hint_spans` is the single
+        // place that says what colour either half is.
+        //
+        // THE MANAGER'S, but never its query. The query lives at the END OF
+        // THE PATH now (`files::View::crumbs`): the two read as one sentence
+        // there, and this line goes back to its own job, which is what the
+        // pointer is resting on and what the last action said. While the query
+        // was here, hovering a permission bit replaced what was being typed,
+        // or was replaced by it, depending on the order. The hint stays,
+        // because typing is not a key and so has no line in the manual — and
+        // it goes away the moment there is something typed, since by then the
+        // path itself is showing it.
+        //
+        // A CLOSURE, and not a value, because it is the LAST arm of the
+        // precedence and building it costs four sentences out of the localiser
+        // plus the key table for each of eleven notations. Computed eagerly it
+        // would be paid on every frame in which an echo, a description or a
+        // prompt is on the line — which is every frame where anything is
+        // happening — for a string nobody draws.
+        //
+        // The width comes out HERE and not inside: `screen_columns` borrows the
+        // whole of `self`, and the closure has to capture only the three
+        // fields it reads or it holds the surface for the rest of the frame.
+        let screen_columns = self.screen_columns();
+        let (files, transfers, texts) = (&self.files, &self.transfers, &self.texts);
+        let hint = move || {
+            files
+                .as_ref()
+                .filter(|v| v.plain() && !v.filtering())
+                .map(|v| crate::files::hint_of(texts, v.split(screen_columns) > 0))
+                // AND THE TRANSFER PANEL'S, for the same reason: its keys are
+                // chords that nothing on the row spells out, and a panel whose
+                // only way to find `C-c` is the manual is a panel where nobody
+                // ever stops anything.
+                .or_else(|| transfers.as_ref().map(|v| v.hint(texts)))
+                .filter(|h| !h.is_empty())
+        };
 
         // THE VISIBLE PAGE of the expanded region.
         //
@@ -8978,16 +8999,49 @@ impl Footer {
             // action that answered perfectly well — on a line something else
             // was covering. A description of what is under the pointer can wait
             // three seconds; a refusal cannot, because by then it is gone.
+            //
+            // THE HINT SITS BETWEEN THE PROMPT AND THE PENDING CHORD, which is
+            // where it has always sat — it just used to get there by borrowing
+            // the prompt's arm, and its colour with it. It is drawn by
+            // `chrome::hint_spans` and not here, because a hint is two
+            // registers and the two doors have to agree about both.
+            //
+            // AND THE WHOLE LINE IS THE DISCREET REGISTER, not the content's
+            // warm ramp. The owner asked for it after the hint moved: this
+            // line is about the screen rather than being the screen, and half
+            // of it reading in the same tones as the file names below made the
+            // two look like one thing. `text.subtle.strong` is what is being
+            // said or typed; the counter at the other end takes `default`.
+            //
+            // The pending chord keeps `state.accent`, and it is the one
+            // exception on purpose: blue is what says where the next key goes,
+            // and that is not a matter of register.
             let (mini, mini_color) = if let Some(e) = &echo {
-                (e.clone(), tokens::color::TEXT_SECONDARY)
+                (e.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(d) = &sob_o_cursor {
-                (d.clone(), tokens::color::TEXT_SECONDARY)
+                (d.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(p) = &prompt_mx {
-                (p.clone(), tokens::color::TEXT_PRIMARY)
+                (p.clone(), tokens::color::TEXT_SUBTLE_STRONG)
+            } else if let Some(h) = hint() {
+                // THE ROOM STOPS BEFORE THE PAGE INDICATOR, which is drawn
+                // flush right on this same line. The footer never elided this
+                // line at all, so a hint longer than the screen simply ran off
+                // it — the owner's photograph ends mid-sentence with no `…`.
+                let taken = indicator.as_ref().map_or(0, |i| layout::width(i) + 1);
+                spans.extend(crate::chrome::hint_spans(
+                    &h,
+                    ronoctua_render::Size::Grid,
+                    tokens::space::MODELINE_EDGELEFT,
+                    mini_line,
+                    columns
+                        .saturating_sub(tokens::space::MODELINE_EDGELEFT)
+                        .saturating_sub(taken),
+                ));
+                (String::new(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(p) = &pending {
                 (p.clone(), tokens::color::STATE_ACCENT)
             } else {
-                (mini_repouso.clone(), tokens::color::TEXT_PRIMARY)
+                (mini_repouso.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             };
             if !mini.is_empty() {
                 spans.push(ronoctua_render::Span {
@@ -9012,7 +9066,9 @@ impl Footer {
                         text: ind.clone(),
                         column: columns - indicator_width,
                         line: mini_line,
-                        color: tokens::color::TEXT_DIM,
+                        // THE QUIETER OF THE TWO, because a counter is
+                        // ambient: it is there to be found, not read.
+                        color: tokens::color::TEXT_SUBTLE_DEFAULT,
                         edge: false,
                         foot: false,
                     });

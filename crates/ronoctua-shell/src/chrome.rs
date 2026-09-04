@@ -304,6 +304,135 @@ pub fn divider(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::quad
     }
 }
 
+// ---------------------------------------------------------------------------
+// THE HINT LINE — one sentence, two registers, one decision
+// ---------------------------------------------------------------------------
+
+/// One run of a hint line: the text, and whether it is a KEY.
+///
+/// A hint reads "type to filter · C-m opens the action menu", and the two
+/// halves of that answer different questions: the key is what the eye hunts
+/// for, the prose is what it means. They are one sentence because the ORDER is
+/// the language's, so the split cannot happen in Rust — it comes back from the
+/// localiser, which is the only thing that knows where it put the argument
+/// (`ronoctua_i18n::Marked`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Piece {
+    /// The run, exactly as it reads.
+    pub text: String,
+    /// Is this run a key notation?
+    pub key: bool,
+}
+
+impl Piece {
+    /// Appends one sentence to a hint line that is being built.
+    ///
+    /// # Why the sentences are separate, and why the seam is here
+    ///
+    /// A hint is written as several `.ftl` values — what is always there, what
+    /// one asks for, the sections, the preview — because the halves are about
+    /// different things and each was added on a different day. They are joined
+    /// by a single SPACE, and the `·` between them lives inside the value: a
+    /// separator written in Rust would be a visual literal, which is what
+    /// invariant 9 is about.
+    ///
+    /// That join used to be written at each call site, and one of the three
+    /// was missing its space — the owner's photograph shows `scrolls the
+    /// facts· TAB goes to`. One seam, one place.
+    ///
+    /// # What makes a run a key
+    ///
+    /// Being an interpolated argument is not enough: `files-panel-no-room`
+    /// interpolates a NUMBER, and a number painted in the key's colour would
+    /// be a lie about what to press. So a run is a key when the localiser says
+    /// it is an argument AND its text is one of the notations this caller
+    /// passed in. A value that grows a numeric argument corrects itself.
+    pub fn extend(out: &mut Vec<Self>, m: &ronoctua_i18n::Marked, notations: &[&str]) {
+        if !out.is_empty() {
+            out.push(Self {
+                text: " ".to_owned(),
+                key: false,
+            });
+        }
+        for (text, arg) in m.pieces() {
+            if text.is_empty() {
+                continue;
+            }
+            out.push(Self {
+                text: text.to_owned(),
+                key: arg && notations.contains(&text),
+            });
+        }
+    }
+}
+
+/// Draws a hint line, and is the ONLY place that says what colour one is.
+///
+/// # Why it is here and not in each door
+///
+/// Because it was in each door, and that is precisely what the owner
+/// photographed: the same line came out `text.primary` in the footer and
+/// `text.secondary` in the window. Neither was a decision — the window wrote a
+/// token at its push site, and the footer inherited one from the arm that
+/// exists for "the user is typing in `M-x`", which the hint had been hung off
+/// years later. Two doors, two answers, and nothing anywhere that could be
+/// called wrong, which is the shape of defect this whole module exists to end.
+///
+/// # The elision happens once, across the pieces
+///
+/// The window elided and the footer did not, so the footer's line ran off the
+/// screen with no `…` to say it had been cut. Cutting per piece would put an
+/// ellipsis in the middle of the sentence, so the walk carries the room that
+/// is left and only the piece that overruns is cut.
+///
+/// `room` is how many cells the line may occupy starting at `column`.
+#[must_use]
+pub fn hint_spans(
+    pieces: &[Piece],
+    size: ronoctua_render::Size,
+    column: u16,
+    line: u16,
+    room: u16,
+) -> Vec<ronoctua_render::Span> {
+    let mut out = Vec::with_capacity(pieces.len());
+    let mut at = column;
+    let mut left = room;
+    for p in pieces {
+        if left == 0 {
+            break;
+        }
+        // `layout::width`, which is the ruler the rest of both doors position
+        // by: it counts CLUSTERS. An emoji advances more than one cell and
+        // this would place the next piece early — but every other span on the
+        // line is placed the same way, and a hint that used a second ruler
+        // would be the only thing on screen that did. No hint value contains
+        // an emoji; if one ever does, the fix belongs to the grid.
+        let width = ronoctua_render::layout::width(&p.text);
+        let text = if width <= left {
+            p.text.clone()
+        } else {
+            ronoctua_render::layout::elide_end(&p.text, left)
+        };
+        let drawn = ronoctua_render::layout::width(&text);
+        out.push(ronoctua_render::Span {
+            size,
+            text,
+            column: at,
+            line,
+            color: if p.key {
+                tokens::color::TEXT_SUBTLE_STRONG
+            } else {
+                tokens::color::TEXT_SUBTLE_DEFAULT
+            },
+            edge: false,
+            foot: false,
+        });
+        at = at.saturating_add(drawn);
+        left = left.saturating_sub(drawn);
+    }
+    out
+}
+
 /// What colour a syntax role is drawn in.
 ///
 /// # Why the map lives HERE, and why there is one of it
@@ -352,8 +481,128 @@ pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{FIELDS_LEAD, Frame, INSET, cell_width, content_left_px};
+    use super::{FIELDS_LEAD, Frame, INSET, Piece, cell_width, content_left_px, hint_spans};
     use ronoctua_tokens as tokens;
+
+    fn piece(text: &str, key: bool) -> Piece {
+        Piece {
+            text: text.to_owned(),
+            key,
+        }
+    }
+
+    #[test]
+    fn the_key_and_the_prose_are_two_colours_and_neither_is_a_content_colour() {
+        // THE OWNER'S REPORT, in one assertion: the two halves of the line
+        // used to be the same tone, and the whole line used to be one of the
+        // tones the listing under it is drawn in.
+        let line = [piece("type to filter · ", false), piece("C-m", true)];
+        let spans = hint_spans(&line, ronoctua_render::Size::Grid, 2, 0, 80);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].color, tokens::color::TEXT_SUBTLE_DEFAULT);
+        assert_eq!(spans[1].color, tokens::color::TEXT_SUBTLE_STRONG);
+        assert_ne!(spans[0].color, spans[1].color);
+        for s in &spans {
+            for content in [
+                tokens::color::TEXT_PRIMARY,
+                tokens::color::TEXT_SECONDARY,
+                tokens::color::TEXT_DIM,
+            ] {
+                assert_ne!(s.color, content, "the hint is wearing a content colour");
+            }
+        }
+    }
+
+    #[test]
+    fn each_piece_starts_where_the_one_before_it_ended() {
+        // The pieces are separate spans on ONE line, so the column each starts
+        // at is the sum of the widths before it. Get that wrong and the key
+        // draws on top of the prose — which is what a single span never had to
+        // worry about.
+        let line = [
+            piece("type to filter · ", false),
+            piece("C-m", true),
+            piece(" opens the menu", false),
+        ];
+        let spans = hint_spans(&line, ronoctua_render::Size::Grid, 2, 0, 80);
+        assert_eq!(spans[0].column, 2);
+        assert_eq!(spans[1].column, 2 + 17);
+        assert_eq!(spans[2].column, 2 + 17 + 3);
+        // And the line they draw is the sentence, in order.
+        let rebuilt: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(rebuilt, "type to filter · C-m opens the menu");
+    }
+
+    #[test]
+    fn a_hint_too_long_for_the_room_is_cut_once_at_the_end() {
+        // The footer never cut this line at all, so it ran off the screen with
+        // nothing saying it had been. Cutting per piece would put an ellipsis
+        // in the middle of the sentence.
+        let line = [
+            piece("type to filter · ", false),
+            piece("C-m", true),
+            piece(" opens the action menu", false),
+        ];
+        let spans = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, 22);
+        let drawn: u16 = spans
+            .iter()
+            .map(|s| ronoctua_render::layout::width(&s.text))
+            .sum();
+        assert!(drawn <= 22, "{drawn} cells drawn in room for 22");
+        let cut = spans.iter().filter(|s| s.text.ends_with('…')).count();
+        assert_eq!(cut, 1, "the line has to be cut exactly once");
+        assert!(
+            spans.last().is_some_and(|s| s.text.ends_with('…')),
+            "the cut has to be at the END of the line"
+        );
+    }
+
+    #[test]
+    fn no_room_draws_nothing_rather_than_one_cell_of_ellipsis() {
+        let line = [piece("type to filter", false)];
+        assert!(hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn the_sentences_are_joined_by_exactly_one_space() {
+        // The join used to be written at each call site and one of the three
+        // was missing its space: the owner's photograph reads `scrolls the
+        // facts· TAB goes to`.
+        let t = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let mut out = Vec::new();
+        let a = t.t_marked(
+            ronoctua_i18n::key::FILES_HINT_MORE,
+            &[("columns", "C-d"), ("facts", "C-.")],
+        );
+        let b = t.t_marked(
+            ronoctua_i18n::key::FILES_HINT_PANES,
+            &[("next", "TAB"), ("back", "S-TAB")],
+        );
+        Piece::extend(&mut out, &a, &["C-d", "C-."]);
+        let seam = out.len();
+        Piece::extend(&mut out, &b, &["TAB", "S-TAB"]);
+        assert_eq!(out[seam].text, " ");
+        let line: String = out.iter().map(|p| p.text.as_str()).collect();
+        assert!(!line.contains("·  "), "two spaces at a seam: {line}");
+        assert!(
+            !line.contains("s·"),
+            "a seam with no space before the separator: {line}"
+        );
+    }
+
+    #[test]
+    fn an_argument_that_is_not_a_key_is_not_painted_as_one() {
+        // `files-panel-no-room` interpolates a NUMBER. Painted in the key's
+        // colour it would be a lie about what to press, so being an
+        // interpolated argument is not enough — the run has to be one of the
+        // notations the caller passed in.
+        let t = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let m = t.t_marked(ronoctua_i18n::key::FILES_PANEL_NO_ROOM, &[("cells", "24")]);
+        let mut out = Vec::new();
+        Piece::extend(&mut out, &m, &["C-m", "C-v"]);
+        assert!(out.iter().all(|p| !p.key), "a number came out as a key");
+        assert!(out.iter().any(|p| p.text.contains("24")));
+    }
 
     #[test]
     fn the_residue_is_named_and_it_is_smaller_than_one_step() {

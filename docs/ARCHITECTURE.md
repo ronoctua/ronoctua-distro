@@ -1172,6 +1172,28 @@ lista o ponteiro está, e uma linha está na tela quer o ponteiro esteja sobre u
 campo que cobre só as letras do arquivo. A janela perguntava a profunda para a faixa e por isso não
 acendia nada nesse espaço; o rodapé nunca teve o defeito porque sempre perguntou a linha.
 
+**A linha de atalhos é UMA decisão, e a fronteira entre a tecla e a prosa é do LOCALIZADOR.** O dono
+fotografou as duas portas e a mesma frase saía em `text.primary` no rodapé e em `text.secondary` na
+janela — e nenhuma das duas era escolha: a janela escrevia um token no próprio sítio de empurrar o
+span, e o rodapé herdava o do braço que existe para "a pessoa está digitando no `M-x`", em que a dica
+tinha sido pendurada depois. Agora ela é `chrome::hint_spans`, o único lugar que diz de que cor é uma
+dica, e as duas portas chamam ele.
+
+Dentro da linha são DOIS registros — a tecla, que o olho procura, e a frase, que explica — e por isso
+ela não pode viajar como `String`. Partir a frase em Rust seria uma segunda cópia da tecla, e erraria
+no dia em que um idioma pusesse `C-m` noutro lugar (medido: en-GB e pt-BR já discordam do
+deslocamento). Quem sabe onde o argumento ficou é o Fluent, que envolve todo interpolado numa marca
+de isolamento — o `ronoctua-i18n` tirava essa marca em DOIS lugares, um deles morto; agora tira num
+só e devolve as faixas junto (`Texts::t_marked`). Ser argumento não basta para virar tecla: o
+`files-panel-no-room` interpola um NÚMERO, então o trecho também tem de ser uma das notações que
+aquele chamador passou.
+
+Os dois tons são `text.subtle.strong` (a tecla) e `text.subtle.default` (a prosa), nomeados por
+REGISTRO e não por lugar, a pedido do dono, para que outra linha discreta possa usá-los. E o preço
+está dito onde eles moram: o vão entre `text.secondary` e `text.dim` vale 2,46× em luminância, os
+degraus da própria rampa valem 2,2–2,5×, então dois degraus novos lá dentro são necessariamente mais
+finos que qualquer um — 1,34× entre si. É aritmética, não gosto.
+
 **Clicar numa linha é apertar a tecla dela.** Num grupo, desce um nível; num comando, executa. As
 duas coisas saem de graça da mesma definição, e o que se ganha é não haver um segundo caminho: nada
 fica alcançável só pelo mouse, e o que o mouse faz é sempre algo que o teclado também faz. No

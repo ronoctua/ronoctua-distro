@@ -1376,30 +1376,42 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         .view
         .cursor_explains()
         .map(|e| s.texts.t_with(e.key, &e.borrowed()));
-    let second = s
-        .message
-        .clone()
-        .or(does)
-        .or(explained)
+    let second = s.message.clone().or(does).or(explained);
+    // THE ROOM IS WHAT IS LEFT AFTER THE MARGIN, and it used to be the whole
+    // width: the line starts `margin` cells in, so eliding at `columns` let it
+    // run that many cells past the edge before anything cut it.
+    let room = s.geo.columns.saturating_sub(margin);
+    if let Some(text) = second {
+        spans.push(ronoctua_render::Span {
+            size: ronoctua_render::Size::Px(size),
+            text: ronoctua_render::layout::elide_end(&text, room),
+            column: margin,
+            line: 0,
+            // THE SAME REGISTER AS THE HINT that shares this line, and as the
+            // footer's minibuffer, which is the same line through the other
+            // door. See `text.subtle`.
+            color: tokens::color::TEXT_SUBTLE_STRONG,
+            edge: false,
+            foot: false,
+        });
+    } else if !s.view.filtering() {
         // WITH NOTHING TYPED AND NOTHING TO SAY, the hint. Typing is not a
         // key and so has no line in the manual; without this the one
         // gesture the list is built around is the one thing nothing on
         // screen mentions.
-        .or_else(|| {
-            (!s.view.filtering())
-                .then(|| crate::files::hint_of(s.texts, s.view.split(s.geo.columns) > 0))
-        })
-        .unwrap_or_default();
-    if !second.is_empty() {
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: ronoctua_render::layout::elide_end(&second, s.geo.columns),
-            column: margin,
-            line: 0,
-            color: tokens::color::TEXT_SECONDARY,
-            edge: false,
-            foot: false,
-        });
+        //
+        // It is the ONE thing on this line that is not drawn here: the keys
+        // and the prose are two colours, and both doors ask
+        // `chrome::hint_spans` for them so that neither can answer on its own
+        // — which is exactly what they were doing when the owner photographed
+        // them side by side.
+        spans.extend(crate::chrome::hint_spans(
+            &crate::files::hint_of(s.texts, s.view.split(s.geo.columns) > 0),
+            ronoctua_render::Size::Px(size),
+            margin,
+            0,
+            room,
+        ));
     }
 
     // THE HEADER, on the line above the listing. It names the columns and

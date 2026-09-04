@@ -134,6 +134,56 @@
     # without taking up a column. Purple for being the only hue in the palette not yet
     # spent: blue is the accent, green/yellow/red are state.
     group = "0xBB9AF7FF";
+    # THE DISCREET REGISTER: interface text that is ABOUT the screen rather
+    # than being the screen's content, in two weights.
+    #
+    # It is what the whole of the hint line and the whole of the minibuffer's
+    # line are drawn in — a message, what the pointer is resting on, what is
+    # being typed into `M-x`, the page counter, and the hint's own two halves.
+    # Everything on those two lines except the pending chord, which stays
+    # `state.accent` because blue is what says "this is where the next key
+    # goes".
+    #
+    # `strong` is what is being SAID or pressed: a message, a query being
+    # typed, a key notation. `default` is the prose around it and the counter.
+    # They are never on the line at once except inside a hint, which is exactly
+    # where the distinction is wanted.
+    #
+    # WHY THEY ARE NOT ON THE WARM RAMP, which is the whole point.
+    #
+    # The first attempt put both between `secondary` and `dim`, and the owner
+    # rejected it from the screen: "the colours are practically identical, both
+    # to each other and to colours that already exist". The arithmetic says why.
+    # In CIEDE2000 the ramp's own steps are 17.6 (primary to secondary) and
+    # 20.1 (secondary to dim); the pair squeezed between them came out 6.5
+    # apart, with `strong` sitting 4.3 from `text.secondary` — a third of a
+    # step, and a near-miss of an existing tone, which reads as a mistake
+    # rather than as a decision. The gap is one step wide, and two more stops
+    # inside one step cannot be a step each.
+    #
+    # So the pair leaves the ramp and takes a hue of its own: 320, chroma 10,
+    # which is the warm ramp's own chroma (10-12). Against warm content, a
+    # different temperature says "this line is not content" before any
+    # luminance is compared, which is the thing that was asked for. The hue was
+    # first 272 — the `brain` family's — and the owner asked for "a little
+    # warmer"; walking it round to 320 both warmed it and moved it AWAY from
+    # everything, because 272 is where `brain.dim` already lives. Its nearest
+    # neighbours went from 6.3 and 9.0 to 12.1 and 12.3.
+    #
+    # The numbers, and they are measurements: the two are 17.7 apart, the size
+    # of a step on the ramp; the nearest of all forty-eight other tokens is
+    # 12.1 (`brain.dim`) and against the warm ramp itself it is 17.6. On the
+    # footer's ground they read 3.4:1 and 6.3:1 — the prose is no darker than
+    # `text.dim`, which the date column already uses.
+    #
+    # NESTED, and not `subtleStrong`: the generator lowercases a key before it
+    # splits it, so that spelling would reach the WIT as `text-subtlestrong`.
+    # It is the same reason `modeline.state` is nested, argued where that one
+    # lives.
+    subtle = {
+      strong = "0x9F92A1FF";
+      default = "0x706473FF";
+    };
   };
 
   # -------------------------------------------------------------------

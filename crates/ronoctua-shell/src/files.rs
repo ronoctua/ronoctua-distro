@@ -6191,7 +6191,7 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
 /// implemented, it worked, and nothing on screen said it existed — which is
 /// the same as not having it.
 #[must_use]
-pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> String {
+pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> Vec<crate::chrome::Piece> {
     let menu = key_that_runs("files-menu").map_or_else(String::new, |t| t.notation());
     // AND THE TWO PANELS, read out of the same table.
     //
@@ -6206,16 +6206,12 @@ pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> String {
     //
     // A second key and not a longer first one, because the first one is
     // already written in two languages and the two halves are about different
-    // things: what is always there, and what one asks for. The join is a
-    // single space and the separator lives inside the value — a `·` written
-    // here would be a visual literal in Rust, which is what invariant 9 is
-    // about.
+    // things: what is always there, and what one asks for. How they are joined
+    // is `chrome::Piece::extend`'s business, and the separator lives inside the
+    // value — a `·` written here would be a visual literal in Rust, which is
+    // what invariant 9 is about.
     let columns = key_that_runs("files-columns").map_or_else(String::new, |t| t.notation());
     let scroll = key_that_runs("files-facts-scroll").map_or_else(String::new, |t| t.notation());
-    let more = texts.t_with(
-        ronoctua_i18n::key::FILES_HINT_MORE,
-        &[("columns", columns.as_str()), ("facts", scroll.as_str())],
-    );
     // AND THE FOUR SECTIONS, in a third sentence.
     //
     // A sentence of its own for the reason `files-hint-more` is one: the two
@@ -6225,13 +6221,6 @@ pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> String {
     // not about `S-TAB` has to guess that the way back exists.
     let next = key_that_runs("files-pane-next").map_or_else(String::new, |t| t.notation());
     let back = key_that_runs("files-pane-previous").map_or_else(String::new, |t| t.notation());
-    let more = format!(
-        "{more}{}",
-        texts.t_with(
-            ronoctua_i18n::key::FILES_HINT_PANES,
-            &[("next", next.as_str()), ("back", back.as_str())],
-        )
-    );
     // AND THE PREVIEW'S THREE, in a fourth sentence, for the same reason as
     // the third: none of them is a command of the registry, so none is in
     // `M-x` or the manual, and this line is the only thing on screen that says
@@ -6240,39 +6229,76 @@ pub fn hint_of(texts: &ronoctua_i18n::Texts, sidebar: bool) -> String {
     let page = key_that_runs("files-preview-scroll").map_or_else(String::new, |t| t.notation());
     let left = key_that_runs("files-preview-left").map_or_else(String::new, |t| t.notation());
     let right = key_that_runs("files-preview-right").map_or_else(String::new, |t| t.notation());
-    let more = format!(
-        "{more}{}",
-        texts.t_with(
-            ronoctua_i18n::key::FILES_HINT_PREVIEW,
+    let side = key_that_runs("files-sidebar-focus").map_or_else(String::new, |t| t.notation());
+    // EVERY NOTATION THIS LINE INTERPOLATES, in one list.
+    //
+    // It is what tells an argument that is a key from an argument that is a
+    // number — see `chrome::Piece::extend`. One list rather than one per
+    // sentence, because a notation is a notation wherever it turns up.
+    let notations = [
+        menu.as_str(),
+        side.as_str(),
+        preview.as_str(),
+        facts.as_str(),
+        columns.as_str(),
+        scroll.as_str(),
+        next.as_str(),
+        back.as_str(),
+        page.as_str(),
+        left.as_str(),
+        right.as_str(),
+    ];
+    let mut out = Vec::new();
+    let first = if sidebar {
+        texts.t_marked(
+            ronoctua_i18n::key::FILES_HINT_SIDEBAR,
             &[
-                ("page", page.as_str()),
-                ("left", left.as_str()),
-                ("right", right.as_str()),
+                ("key", menu.as_str()),
+                ("side", side.as_str()),
+                ("preview", preview.as_str()),
+                ("info", facts.as_str()),
             ],
         )
-    );
-    if !sidebar {
-        let first = texts.t_with(
+    } else {
+        texts.t_marked(
             ronoctua_i18n::key::FILES_HINT,
             &[
                 ("key", menu.as_str()),
                 ("preview", preview.as_str()),
                 ("info", facts.as_str()),
             ],
-        );
-        return format!("{first} {more}");
-    }
-    let side = key_that_runs("files-sidebar-focus").map_or_else(String::new, |t| t.notation());
-    let first = texts.t_with(
-        ronoctua_i18n::key::FILES_HINT_SIDEBAR,
-        &[
-            ("key", menu.as_str()),
-            ("side", side.as_str()),
-            ("preview", preview.as_str()),
-            ("info", facts.as_str()),
-        ],
+        )
+    };
+    crate::chrome::Piece::extend(&mut out, &first, &notations);
+    crate::chrome::Piece::extend(
+        &mut out,
+        &texts.t_marked(
+            ronoctua_i18n::key::FILES_HINT_MORE,
+            &[("columns", columns.as_str()), ("facts", scroll.as_str())],
+        ),
+        &notations,
     );
-    format!("{first} {more}")
+    crate::chrome::Piece::extend(
+        &mut out,
+        &texts.t_marked(
+            ronoctua_i18n::key::FILES_HINT_PANES,
+            &[("next", next.as_str()), ("back", back.as_str())],
+        ),
+        &notations,
+    );
+    crate::chrome::Piece::extend(
+        &mut out,
+        &texts.t_marked(
+            ronoctua_i18n::key::FILES_HINT_PREVIEW,
+            &[
+                ("page", page.as_str()),
+                ("left", left.as_str()),
+                ("right", right.as_str()),
+            ],
+        ),
+        &notations,
+    );
+    out
 }
 
 /// The KEY that runs a given id, read out of the same table.
@@ -12489,6 +12515,27 @@ mod tests {
         ronoctua_i18n::Texts::from_env()
     }
 
+    /// The hint as one sentence, for a test that only asks what it SAYS.
+    fn hint_line(b: &ronoctua_i18n::Texts, sidebar: bool) -> String {
+        hint_of(b, sidebar)
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect()
+    }
+
+    /// The runs the hint drew as KEYS.
+    ///
+    /// A stronger question than "does the sentence contain these characters":
+    /// it says the localiser marked that run as the interpolated key, which is
+    /// what decides the colour it comes out in.
+    fn hint_keys(b: &ronoctua_i18n::Texts, sidebar: bool) -> Vec<String> {
+        hint_of(b, sidebar)
+            .into_iter()
+            .filter(|p| p.key)
+            .map(|p| p.text)
+            .collect()
+    }
+
     fn press(c: char) -> Key {
         Key {
             mods: ronoctua_keymap::Mods::default(),
@@ -13950,8 +13997,8 @@ mod tests {
         // not, which is the same as the key not existing. Reported as "it is not
         // clear how I jump from the listing to the sidebar".
         let b = bundle();
-        let alone = hint_of(&b, false);
-        let beside = hint_of(&b, true);
+        let alone = hint_keys(&b, false);
+        let beside = hint_keys(&b, true);
         assert_ne!(alone, beside);
         let side = key_that_runs("files-sidebar-focus").unwrap().notation();
         assert!(
@@ -13961,6 +14008,36 @@ mod tests {
         // And the key is read from the table, so a rebinding moves the sentence
         // with it — the reason `key_that_runs` exists at all.
         assert!(!alone.contains(&side));
+    }
+
+    #[test]
+    fn the_hint_reads_as_one_sentence_with_no_seam_showing() {
+        // FROM THE OWNER'S PHOTOGRAPH: the line read `scrolls the facts· TAB
+        // goes to`. The hint is four `.ftl` values joined in Rust, the join was
+        // written out at each site, and one of the three had no space in it.
+        //
+        // Through the real `hint_of` and not through a fixture: the seam is the
+        // thing under test, and a fixture would be asserting the fixture.
+        let b = bundle();
+        for sidebar in [false, true] {
+            let line = hint_line(&b, sidebar);
+            assert!(
+                !line.contains("  "),
+                "two spaces somewhere in the hint: {line}"
+            );
+            // Every separator has air on both sides of it — which is what a
+            // missing join looks like from the outside.
+            for (i, _) in line.match_indices('·') {
+                assert!(
+                    line[..i].ends_with(' '),
+                    "a separator with nothing before it: {line}"
+                );
+                assert!(
+                    line[i..].starts_with("· "),
+                    "a separator with nothing after it: {line}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -16350,12 +16427,12 @@ mod tests {
         // and no manual either, so this line is all there is.
         let b = bundle();
         for sidebar in [false, true] {
-            let hint = hint_of(&b, sidebar);
+            let hint = hint_keys(&b, sidebar);
             for id in ["files-preview", "files-facts"] {
                 let t = key_that_runs(id).expect("the key is in the table");
                 assert!(
                     hint.contains(&t.notation()),
-                    "the hint does not name `{}` ({id}): {hint}",
+                    "the hint does not name `{}` ({id}): {hint:?}",
                     t.notation()
                 );
             }
@@ -16497,11 +16574,11 @@ mod tests {
         // AND THE HINT LINE NAMES THE KEY. It is in no registry and no manual:
         // `C-o` already cost this file the lesson.
         for sidebar in [false, true] {
-            let hint = hint_of(&b, sidebar);
+            let hint = hint_keys(&b, sidebar);
             let t = key_that_runs("files-columns").expect("the key is in the table");
             assert!(
                 hint.contains(&t.notation()),
-                "the hint does not name the key: {hint}"
+                "the hint does not name the key: {hint:?}"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -17554,17 +17631,19 @@ mod tests {
         let next = key_that_runs("files-pane-next").expect("the key that goes forward");
         let back = key_that_runs("files-pane-previous").expect("the key that goes back");
         for sidebar in [false, true] {
-            let line = hint_of(&t, sidebar);
+            let keys = hint_keys(&t, sidebar);
             assert!(
-                line.contains(&back.notation()),
-                "the hint does not say {}: {line}",
+                keys.contains(&back.notation()),
+                "the hint does not say {}: {keys:?}",
                 back.notation()
             );
-            // `TAB` is a substring of `S-TAB`, so counting is what proves the
-            // forward key is named as well as the backward one.
+            // `TAB` used to be checked by COUNTING it in the sentence, because
+            // it is a substring of `S-TAB` and `contains` could not tell the
+            // two apart. Asking for the runs the line drew as keys is the same
+            // question without the trick.
             assert!(
-                line.matches(&next.notation()).count() >= 2,
-                "the hint does not say {}: {line}",
+                keys.contains(&next.notation()),
+                "the hint does not say {}: {keys:?}",
                 next.notation()
             );
         }
