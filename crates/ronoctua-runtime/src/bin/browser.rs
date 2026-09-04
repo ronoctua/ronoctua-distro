@@ -258,7 +258,7 @@ fn main() -> Result<()> {
     // prefix as a literal because it does not depend on the host's crate
     // (invariant 11) — this is what stops the two from diverging. Without it
     // which-key shows `[cmd-glyphs-copy-glyph]`, the usual silent fallback.
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for id in &d.commands {
             let key = format!("cmd-{id}");
@@ -550,7 +550,7 @@ fn main() -> Result<()> {
     // ASSEMBLED at run time (`glyphs-set-` plus the prefix), so
     // the compiler protects nothing, and a new Nerd Fonts set would come out
     // on screen as `[glyphs-set-xyz]`.
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, _, _, budget) in &options {
             let Some(text) = table.get(key) else {
@@ -717,7 +717,7 @@ fn main() -> Result<()> {
     // `SETS` (because it becomes a search tag). Nothing forces them to
     // agree — and "Clima" in the panel with "weather" in the search would be a screen
     // that teaches a word that does not work.
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, ..) in &options {
             let Some(prefix) = key.strip_prefix(SET_PREFIX_OF) else {
@@ -1259,7 +1259,7 @@ fn main() -> Result<()> {
     if keys.is_empty() {
         bail!("the sheet emitted no text key — invariant 8 requires the labels to be keys");
     }
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in &keys {
             let Some(text) = table.get(key) else {
@@ -1395,15 +1395,10 @@ fn main() -> Result<()> {
     // the host translates (invariant 11), so what it declares is what it
     // RESERVED. This measures every screen this run looked at, against both
     // `.ftl` files, with the ruler the host CUTS with.
-    let measured = ronoctua_runtime::driven::every_label_fits(
-        &i18n,
-        ronoctua_runtime::driven::LANGUAGES,
-        ON_PURPOSE,
-        80,
-    )?;
+    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, 80)?;
     println!(
         "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::LANGUAGES.len()
+        ronoctua_runtime::driven::languages(&i18n)?.len()
     );
 
     println!(

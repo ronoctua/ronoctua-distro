@@ -19,6 +19,9 @@
   colorsFile,
   spaceFile,
   i18nDir,
+  # The languages, from `assets/i18n/languages.nix` — the same list the shell
+  # compiles in. The popup used to choose between exactly two.
+  languages,
   source,
   # The native-messaging host's name. ONE PLACE: the manifest of the host, the
   # extension's `nativeMessaging` call and the Nix module that writes the host's
@@ -48,6 +51,7 @@ stdenvNoCC.mkDerivation {
       --colors ${colorsJson} \
       --space ${spaceJson} \
       --i18n ${i18nDir} \
+      --languages ${lib.escapeShellArgs languages} \
       --host '${hostName}' \
       --version '${version}' \
       --out .

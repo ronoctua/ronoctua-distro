@@ -39,7 +39,7 @@ from fontTools.ttLib import TTFont
 
 # THE LEXICON'S CONTRACT IS SHARED with the Unicode database generator: the
 # format of `tags.en-pt.toml` is a single fact, and two readers of it would diverge.
-from lexicon import search_forms, words_of, translate
+from lexicon import SOURCE, search_forms, subtag_of, translate, words_of
 
 # Nerd Fonts source sets: prefix -> (readable name en, pt).
 # It feeds the set tag and section 6.5's "by source set" filter.
@@ -53,24 +53,28 @@ from lexicon import search_forms, words_of, translate
 # That is why the Portuguese comes ACCENTED: each glyph's `search_terms` gets the
 # unaccented form for free (see `no_accent`), so accenting here makes "indentacao"
 # AND "indentação" both find it — while writing it unaccented would give only the first.
+#
+# Keyed by SUBTAG, and a language with no entry falls back to the English —
+# which is right, because most of these are brand names that are not translated
+# at all. That is also why a name identical in both is written once.
 SETS = {
-    "cod": ("Codicons", "Codicons"),
-    "custom": ("Custom", "Personalizados"),
-    "dev": ("Devicons", "Devicons"),
-    "extra": ("Extra", "Extra"),
-    "fa": ("Font Awesome", "Font Awesome"),
-    "fae": ("Font Awesome Extension", "Font Awesome Extension"),
-    "iec": ("IEC Power", "Símbolos de energia IEC"),
-    "indent": ("Indentation", "Indentação"),
-    "indentation": ("Indentation", "Indentação"),
-    "linux": ("Font Logos", "Logos de distribuições"),
-    "md": ("Material Design", "Material Design"),
-    "oct": ("Octicons", "Octicons"),
-    "pl": ("Powerline", "Powerline"),
-    "ple": ("Powerline Extra", "Powerline Extra"),
-    "pom": ("Pomicons", "Pomicons"),
-    "seti": ("Seti-UI", "Seti-UI"),
-    "weather": ("Weather", "Clima"),
+    "cod": {"en": "Codicons"},
+    "custom": {"en": "Custom", "pt": "Personalizados"},
+    "dev": {"en": "Devicons"},
+    "extra": {"en": "Extra"},
+    "fa": {"en": "Font Awesome"},
+    "fae": {"en": "Font Awesome Extension"},
+    "iec": {"en": "IEC Power", "pt": "Símbolos de energia IEC"},
+    "indent": {"en": "Indentation", "pt": "Indentação"},
+    "indentation": {"en": "Indentation", "pt": "Indentação"},
+    "linux": {"en": "Font Logos", "pt": "Logos de distribuições"},
+    "md": {"en": "Material Design"},
+    "oct": {"en": "Octicons"},
+    "pl": {"en": "Powerline"},
+    "ple": {"en": "Powerline Extra"},
+    "pom": {"en": "Pomicons"},
+    "seti": {"en": "Seti-UI"},
+    "weather": {"en": "Weather", "pt": "Clima"},
 }
 
 def die(msg: str) -> None:
@@ -161,6 +165,7 @@ def build_glyph_index(
     overlay: dict,
     token_by_glyph: dict,
     tray_glyphs: set,
+    subtags: list[str],
 ) -> tuple[list, dict]:
     """The browser's index. It covers ALL of the font's Nerd Fonts codepoints,
     including the ones with no name — removing them would be lying about what the
@@ -184,33 +189,36 @@ def build_glyph_index(
         glyphs = sorted(by_cp.get(cp, []))
         primary = glyphs[0] if glyphs else None
 
-        tags_en, tags_pt, sets_seen = set(), set(), set()
-        # DOES THIS GLYPH HAVE ANY REAL PORTUGUESE WORD?
+        tags = {l: set() for l in subtags}
+        sets_seen = set()
+        # DOES THIS GLYPH HAVE A REAL WORD IN EACH LANGUAGE?
         #
-        # There is no answering that by looking at `tags_pt`: an untranslated token goes
-        # in there untranslated, so the list NEVER comes out empty — it just fills up
-        # with English pretending to be Portuguese. The only honest way is to mark
-        # when a translation actually came from the lexicon or from the overlay.
-        has_pt = False
+        # There is no answering that by looking at the tag list: an untranslated
+        # token goes in untranslated, so the list NEVER comes out empty — it
+        # just fills up with English pretending to be the other language. The
+        # only honest way is to mark when a translation actually came from the
+        # lexicon or from the overlay.
+        found = {l: False for l in subtags}
 
         for g in glyphs:
             prefix, parts = tokenize(g)
-            set_en, set_pt = SETS.get(prefix, (prefix, prefix))
+            named = SETS.get(prefix, {})
             sets_seen.add(prefix)
-            tags_en.add(set_en.lower())
-            tags_pt.add(set_pt.lower())
+            for language in subtags:
+                tags[language].add(named.get(language, named.get(SOURCE, prefix)).lower())
 
-            en, pt, matched = translate(parts, lexicon, untranslated)
-            tags_en.update(en)
-            tags_pt.update(pt)
-            has_pt = has_pt or matched
+            said, matched = translate(parts, lexicon, subtags, untranslated)
+            for language in subtags:
+                tags[language].update(said[language])
+                found[language] = found[language] or matched[language]
 
             # Curated overlay: it ADDS, it does not replace.
             ov = overlay.get(g)
             if ov:
-                tags_en.update(ov.get("en", []))
-                tags_pt.update(ov.get("pt", []))
-                has_pt = has_pt or bool(ov.get("pt"))
+                for language in subtags:
+                    words = ov.get(language, [])
+                    tags[language].update(words)
+                    found[language] = found[language] or bool(words)
 
         # THE ACCENT IS RESOLVED HERE, and not at runtime.
         #
@@ -220,7 +228,7 @@ def build_glyph_index(
         # stays the accented form, which is how one writes.
         #
         # Only those that DIFFER go in: `mapa` does not get a twin identical to itself.
-        search_terms = search_forms(tags_pt)
+        search_terms = search_forms(tags)
 
         rows.append(
             {
@@ -230,8 +238,11 @@ def build_glyph_index(
                 "names": glyphs,
                 "name": primary,
                 "sets": sorted(sets_seen),
-                "tags_en": sorted(tags_en),
-                "tags_pt": sorted(tags_pt),
+                # ONE FIELD PER LANGUAGE, and not a nested object: the buffer
+                # has no JSON parser (invariant 11) — it finds `"name":[` and
+                # reads to the next `]`. A nested map would be read as one
+                # list of garbage, in silence.
+                **{f"tags_{l}": sorted(w) for l, w in tags.items()},
                 "search": sorted(search_terms),
                 # Section 6.5's filters: "is in use as a token" and "is assigned
                 # to some app id".
@@ -243,7 +254,9 @@ def build_glyph_index(
         # The UNNAMED ones do not count: with no name there is nothing to tokenise, and
         # demanding a translation for a bare codepoint would be demanding the impossible. They
         # stay in the index — removing them would be lying about what the font has.
-        if primary and not has_pt:
+        # The SOURCE language is never "missing a translation": the token IS
+        # the English word. What is reported is every other language.
+        if primary and not all(found[l] for l in subtags if l != SOURCE):
             without_pt.append(primary)
 
     stats = {
@@ -267,6 +280,9 @@ def main() -> int:
     # THE FLOOR COMES FROM OUTSIDE so the negative fixture can exercise the guard without
     # editing the real lexicon — see `nix/glyphgen.nix`.
     ap.add_argument("--min-coverage", type=float, default=90.0)
+    # The languages, from `assets/i18n/languages.nix`. The tags are built for
+    # every one of them; the lexicon is keyed on the subtag.
+    ap.add_argument("--languages", required=True, nargs="+")
     ap.add_argument("--overlay", type=pathlib.Path, required=True)
     ap.add_argument("--nf-version", required=True)
     ap.add_argument("--out", type=pathlib.Path, required=True)
@@ -298,8 +314,9 @@ def main() -> int:
     token_by_glyph = {v["glyph"]: k for k, v in icons.items()}
     tray_glyphs = {icons[t]["glyph"] for t in tray.values() if t in icons}
 
+    subtags = [subtag_of(l) for l in args.languages]
     rows, stats = build_glyph_index(
-        raw_names, cmap, base_cmap, lexicon, overlay, token_by_glyph, tray_glyphs
+        raw_names, cmap, base_cmap, lexicon, overlay, token_by_glyph, tray_glyphs, subtags
     )
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -316,7 +333,7 @@ def main() -> int:
     # --- coverage.md -------------------------------------------------------
     tot_occ = sum(stats["untranslated"].values())
     total_tokens_pt = sum(
-        1 for r in rows for t in r["tags_en"] if t in lexicon
+        1 for r in rows for t in r.get(f"tags_{SOURCE}", []) if t in lexicon
     )
     coverage = (
         100.0 * total_tokens_pt / (total_tokens_pt + tot_occ) if (total_tokens_pt + tot_occ) else 0.0
@@ -363,7 +380,7 @@ def main() -> int:
     # the same reason as the icon token guard just above: what knows which glyph
     # was left untranslated is what built the table. A later check would have to
     # rediscover that from the output — and the output does NOT say, because an
-    # untranslated token goes into `tags_pt` untranslated.
+    # untranslated token goes into the tag list untranslated.
     #
     # Noisy on purpose: bumping the Nerd Fonts version starts failing until
     # the new glyphs are translated. It is the same design as the check that demands

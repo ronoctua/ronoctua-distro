@@ -587,7 +587,7 @@ pub const DEFAULT_COMPOSE: &str = "compose:caps";
 pub const DEFAULT_LAYOUT: &str = "gb";
 
 /// The interface language when nobody chooses another.
-pub const DEFAULT_LANGUAGE: &str = "en-GB";
+pub const DEFAULT_LANGUAGE: &str = ronoctua_i18n::DEFAULT;
 
 /// The system's locale when nobody chooses another.
 ///
@@ -784,7 +784,9 @@ impl Answers {
 mod tests {
     use super::*;
 
-    const LANGUAGES: &[&str] = &["pt-BR", "en-GB"];
+    // THE REAL LIST, not a fixture that shadows it. A hand-written pair here
+    // would keep passing while the system spoke three.
+    const LANGUAGES: &[&str] = &ronoctua_i18n::LANGUAGES;
     /// Enough to tell an accepted layout from a refused one.
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
 

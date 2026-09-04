@@ -476,8 +476,8 @@ fn main() -> Result<()> {
     // same fact — the panel says "Setas", the database says `arrows` — and without this
     // criterion they diverge silently: the panel stays pretty and what
     // it promises stops being findable.
-    for (file, language) in [("pt-BR.ftl", "pt-BR"), ("en-GB.ftl", "en-GB")] {
-        let table = ftl(&format!("{i18n}/{file}"))?;
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
+        let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for key in &options {
             let label = table
                 .get(key)
@@ -783,15 +783,10 @@ fn main() -> Result<()> {
     // the host translates (invariant 11), so what it declares is what it
     // RESERVED. This measures every screen this run looked at, against both
     // `.ftl` files, with the ruler the host CUTS with.
-    let measured = ronoctua_runtime::driven::every_label_fits(
-        &i18n,
-        ronoctua_runtime::driven::LANGUAGES,
-        ON_PURPOSE,
-        COLUMNS,
-    )?;
+    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;
     println!(
         "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::LANGUAGES.len()
+        ronoctua_runtime::driven::languages(&i18n)?.len()
     );
 
     println!("\nEVERY CRITERION OF THE LUCIDE ICON BROWSER PASSED");

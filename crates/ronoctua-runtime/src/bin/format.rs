@@ -225,7 +225,7 @@ fn main() -> Result<()> {
     if states != ["normal", "choose", "confirm"] {
         bail!("the buffer's states are {states:?}, outside what was agreed");
     }
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for s in &d.states {
             let key = format!("state-{}", s.id);
@@ -567,15 +567,10 @@ fn main() -> Result<()> {
     // the host translates (invariant 11), so what it declares is what it
     // RESERVED. This measures every screen this run looked at, against both
     // `.ftl` files, with the ruler the host CUTS with.
-    let measured = ronoctua_runtime::driven::every_label_fits(
-        &i18n,
-        ronoctua_runtime::driven::LANGUAGES,
-        ON_PURPOSE,
-        COLUMNS,
-    )?;
+    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;
     println!(
         "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::LANGUAGES.len()
+        ronoctua_runtime::driven::languages(&i18n)?.len()
     );
 
     println!(

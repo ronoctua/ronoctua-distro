@@ -148,6 +148,7 @@
       # Glyph layer: the icon token table (6.3) and the browser's database
       # (6.5), generated from the real font file by a single generator.
       glyphdb = pkgs.callPackage ./nix/glyphgen.nix {
+        inherit languages;
         inherit fonts;
         iconTokensFile = ./assets/tokens/icons.nix;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
@@ -159,6 +160,7 @@
       # INTERSECTION of the UCD with the font: the renderer has no fallback, so
       # a character the font does not draw would turn into tofu.
       unicodedb = pkgs.callPackage ./nix/unicodegen.nix {
+        inherit languages;
         inherit fonts;
         # The SAME lexicon as the glyph one: the vocabulary belongs to Portuguese, not to the
         # buffer. Translating `arrow` twice would mean watching them diverge.
@@ -177,6 +179,7 @@
       # collide with 634 Nerd Fonts ones in the Iosevka, and the primary face wins the
       # fallback. See `nix/lucidegen.nix`.
       lucidedb = pkgs.callPackage ./nix/lucidegen.nix {
+        inherit languages;
         inherit fonts;
         # The SAME lexicon as the other two: the vocabulary belongs to Portuguese, not to the
         # buffer.
@@ -188,8 +191,14 @@
       iconSuperpack = pkgs.callPackage ./nix/icon-superpack { };
 
       # Tokens: from assets/tokens/*.nix into a Rust table (section 7.6).
+      # THE LANGUAGES, imported ONCE. Everything downstream — the generator,
+      # the module's enum, the checks, the drivers, the extension — takes the
+      # list from here rather than naming a language of its own.
+      languages = import ./assets/i18n/languages.nix;
+
       i18nRs = pkgs.callPackage ./nix/i18n.nix {
         i18nDir = ./assets/i18n;
+        inherit languages;
       };
 
       tokensRs = pkgs.callPackage ./nix/tokens.nix {
@@ -250,6 +259,7 @@
       # The native buffers, for `wasm32-wasip2`. After `rustToolchain`
       # because they use the SAME toolchain — the wasm target is already in it.
       buffers = pkgs.callPackage ./nix/buffers.nix {
+        inherit languages;
         inherit unicodedb lucidedb;
         inherit wit;
         inherit rustToolchain glyphdb;
@@ -283,6 +293,7 @@
         colorsFile = ./assets/tokens/colors.nix;
         spaceFile = ./assets/tokens/space.nix;
         i18nDir = ./assets/i18n;
+        inherit languages;
         source = ./extension;
       };
 
@@ -832,6 +843,7 @@
       # are stubs that pass, so the plumbing exists from day one.
       # =================================================================
       checks.${system} = import ./tests/checks.nix {
+        inherit languages;
         inherit
           pkgs
           lib

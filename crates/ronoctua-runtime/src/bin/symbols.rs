@@ -270,7 +270,7 @@ fn main() -> Result<()> {
     }
     // EVERY COMMAND HAS A KEY IN BOTH LANGUAGES. Without this which-key shows
     // `[cmd-unicode-copy-utf8]`, which is the usual silent fallback.
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for id in &d.commands {
             let key = format!("cmd-{id}");
@@ -671,7 +671,7 @@ fn main() -> Result<()> {
     // The last is what ties the two representations of the same fact together: the family's
     // name lives in the `.ftl` (because it gets translated) and becomes a tag in the generator (because
     // it gets searched), and nothing else forces the two to agree.
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, _, _, budget) in &options {
             let Some(text) = table.get(key) else {
@@ -967,7 +967,7 @@ fn main() -> Result<()> {
     }
     // EVERY SHEET LABEL FITS THE BUDGET, in both languages.
     let keys = keys(&inst.render(COLUMNS, ROWS, heights())?);
-    for language in ["pt-BR", "en-GB"] {
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in &keys {
             let Some(text) = table.get(key) else {
@@ -1054,15 +1054,10 @@ fn main() -> Result<()> {
     // the host translates (invariant 11), so what it declares is what it
     // RESERVED. This measures every screen this run looked at, against both
     // `.ftl` files, with the ruler the host CUTS with.
-    let measured = ronoctua_runtime::driven::every_label_fits(
-        &i18n,
-        ronoctua_runtime::driven::LANGUAGES,
-        ON_PURPOSE,
-        COLUMNS,
-    )?;
+    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;
     println!(
         "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::LANGUAGES.len()
+        ronoctua_runtime::driven::languages(&i18n)?.len()
     );
 
     println!(

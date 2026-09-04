@@ -87,11 +87,6 @@ wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-# THE RULER THE HOST CUTS WITH. `driven::fits` measures a label the way
-# `ronoctua_render::layout::elide_end` will cut it — by grapheme cluster — and
-# depending on the renderer for that would drag wgpu and cosmic-text into every
-# test binary. This crate is 300 KB of tables.
-unicode-segmentation = "1"
 
 [lints]
 workspace = true

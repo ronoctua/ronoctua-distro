@@ -5,9 +5,13 @@
 # key that does not exist becomes a compile error; an incomplete `.ftl`
 # becomes a build error HERE, before any test.
 {
+  lib,
   stdenvNoCC,
   python3,
   i18nDir,
+  # The languages, from `assets/i18n/languages.nix`. Passed in rather than
+  # imported here so there is exactly one `import` of that file in the flake.
+  languages,
 }:
 
 stdenvNoCC.mkDerivation {
@@ -21,7 +25,7 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
     mkdir -p $out
-    python3 ${./scripts/gen-i18n.py} ${i18nDir} $out/keys.rs
+    python3 ${./scripts/gen-i18n.py} ${i18nDir} $out/keys.rs ${lib.escapeShellArgs languages}
     # The .ftl files themselves come along: the crate embeds them with
     # `include_str!`, and separating the registry from the texts would let the two
     # diverge.

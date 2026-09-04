@@ -51,6 +51,49 @@ impl Phrases {
             .map_or_else(|| fallback.to_owned(), |(_, t)| t.clone())
     }
 
+    /// The reserved key by which the host tells the buffer WHICH language the
+    /// reader is in.
+    ///
+    /// # Why a `-` in front, and why that makes it safe
+    ///
+    /// In Fluent a name beginning with `-` is a TERM, and `gen-i18n.py`'s key
+    /// pattern (`^[a-z][a-z0-9-]*\s*=`) excludes terms on purpose — they are
+    /// not addressable messages. So `-language` cannot collide with a text key
+    /// BY CONSTRUCTION, rather than by nobody having used the name yet, and
+    /// `hand_phrases` — which is what refuses a declared key the `.ftl` lacks,
+    /// and would otherwise refuse this one — walks straight past it without an
+    /// exception written by hand.
+    ///
+    /// # What it does NOT license
+    ///
+    /// It is not the buffer learning to translate (invariant 11). The value is
+    /// a tag, never a sentence, and the only thing a buffer may do with it is
+    /// INDEX data it was already holding — pick which of its own tag lists to
+    /// show first. A buffer that used it to choose between two strings it wrote
+    /// itself would be writing UI text in a language, which is the thing the
+    /// invariant forbids and which no amount of tagging makes acceptable.
+    pub const LANGUAGE: &'static str = "-language";
+
+    /// Which of `spoken` the reader's language is, or `0`.
+    ///
+    /// `0` and not `None`: the first is the SOURCE language, which every record
+    /// has, so an unseeded buffer behaves exactly as it did before — which is
+    /// the same bargain [`Self::or`] makes with its fallback.
+    ///
+    /// The match is on the SUBTAG (`pt-BR` finds `pt`), because the tag lists
+    /// are keyed on the language and not on the region.
+    #[must_use]
+    pub fn mine(&self, spoken: &str) -> usize {
+        let said = self.or(Self::LANGUAGE, "");
+        let Some(want) = said.split('-').next().map(str::to_lowercase) else {
+            return 0;
+        };
+        spoken
+            .split(',')
+            .position(|s| s.eq_ignore_ascii_case(&want))
+            .unwrap_or(0)
+    }
+
     /// Is there anything in here?
     #[must_use]
     pub fn is_empty(&self) -> bool {

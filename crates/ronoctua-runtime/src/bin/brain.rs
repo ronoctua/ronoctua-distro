@@ -54,6 +54,41 @@ const NOW: u64 = 1_800_000_000;
 /// its labels for free.
 const TASK: &str = "system-update";
 
+/// The update sequence's table, as the build generated it.
+///
+/// # Why this file is read and not summarised
+///
+/// Because a step's id is a TEXT KEY once it reaches the panel — the buffer
+/// builds `update-<id>` from it — so a driver that invented ids would draw
+/// bracketed keys, and one that copied the real ones would be a second list of
+/// the sequence. `update-has-one-list` refuses the second, and it is right to:
+/// this crate carried three step names of its own once, and they were disjoint
+/// from the twelve the unit actually runs.
+///
+/// So the ids come from the same generated table `ronoctua-brain` includes.
+const TABLE: &str = include_str!(env!("RONOCTUA_UPDATES_RS"));
+
+/// The declared step ids, in the order the sequence declares them.
+///
+/// A hand parse and not a regex: the shape is `id: "…",` on its own line, which
+/// is what generated the file and what `update-has-one-list` reads it with.
+fn declared_steps() -> Vec<String> {
+    let mut out = Vec::new();
+    for line in TABLE.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("id: \"") else {
+            continue;
+        };
+        let Some(id) = rest.split('"').next() else {
+            continue;
+        };
+        if !id.is_empty() && !out.iter().any(|x: &String| x == id) {
+            out.push(id.to_owned());
+        }
+    }
+    out
+}
+
 /// Looks at the screen, remembering its labels, and refuses a frame that
 /// overlaps itself.
 ///
@@ -86,6 +121,10 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::Disp
 
 /// A task in whichever shape the screen is being asked about.
 fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskState {
+    // THE IDS COME FROM THE DECLARATION, never from here — see `TABLE`. Two
+    // are enough for what this driver proves: that the panel draws a step that
+    // ran and one that is switched off.
+    let declared = declared_steps();
     TaskState {
         id: TASK.to_owned(),
         standing,
@@ -104,11 +143,11 @@ fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskSta
             ended: NOW - 7000,
             when_text: "yesterday, 03:00".to_owned(),
             outcome: OutcomeKind::Done,
-            at: "flake-update".to_owned(),
+            at: declared.first().cloned().unwrap_or_default(),
             why: String::new(),
             trouble: String::new(),
             steps: vec![StepOutcome {
-                id: "flake-update".to_owned(),
+                id: declared.first().cloned().unwrap_or_default(),
                 ok: true,
                 seconds: 42,
                 trouble: String::new(),
@@ -116,14 +155,14 @@ fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskSta
         },
         steps: vec![
             TaskStep {
-                id: "flake-update".to_owned(),
+                id: declared.first().cloned().unwrap_or_default(),
                 command: "nix flake update".to_owned(),
                 needs_root: false,
                 on: true,
                 changed: false,
             },
             TaskStep {
-                id: "store-optimise".to_owned(),
+                id: declared.get(1).cloned().unwrap_or_default(),
                 command: "nix store optimise".to_owned(),
                 needs_root: true,
                 on: false,
@@ -204,11 +243,16 @@ fn main() -> Result<()> {
     {
         bail!("the panel does not declare the capability that feeds it");
     }
-    let table = ronoctua_runtime::driven::ftl(&format!("{i18n}/en-GB.ftl"))?;
-    for id in &d.commands {
-        let key = format!("cmd-{id}");
-        if !table.contains_key(&key) {
-            bail!("`{key}` does not exist in en-GB.ftl");
+    // EVERY LANGUAGE, and not just the base one. Checking en-GB alone would
+    // pass a command whose label was never translated, and which-key would show
+    // the raw key to whoever reads the other one.
+    for language in ronoctua_runtime::driven::languages(&i18n)? {
+        let table = ronoctua_runtime::driven::ftl(&format!("{i18n}/{language}.ftl"))?;
+        for id in &d.commands {
+            let key = format!("cmd-{id}");
+            if !table.contains_key(&key) {
+                bail!("`{key}` does not exist in {language}.ftl");
+            }
         }
     }
     println!(
@@ -292,15 +336,10 @@ fn main() -> Result<()> {
     // what it declares is what it RESERVED. Here the reservation is a number
     // inside a `Table` and the key is assembled at run time — neither is
     // readable from the source, and both are in the frame.
-    let measured = ronoctua_runtime::driven::every_label_fits(
-        &i18n,
-        ronoctua_runtime::driven::LANGUAGES,
-        ON_PURPOSE,
-        COLUMNS,
-    )?;
+    let measured = ronoctua_runtime::driven::every_label_fits(&i18n, ON_PURPOSE, COLUMNS)?;
     println!(
         "labels    {measured} measured in {} languages, all inside their budget",
-        ronoctua_runtime::driven::LANGUAGES.len()
+        ronoctua_runtime::driven::languages(&i18n)?.len()
     );
 
     println!("OK: the brain's panel takes from the host, and every label it draws fits");

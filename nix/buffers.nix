@@ -17,6 +17,11 @@
   glyphdb,
   unicodedb,
   lucidedb,
+  # The languages, from `assets/i18n/languages.nix`. The three browsers carry
+  # one tag list per language and have to know which ones they carry: the
+  # generator writes `tags_en`, `tags_pt`, … and this is what says how to
+  # enumerate them without a JSON parser (invariant 11).
+  languages,
   wit ? ../crates/ronoctua-protocol/wit,
   protocolCrate ? ../crates/ronoctua-protocol,
   designCrate ? ../crates/ronoctua-design,
@@ -206,18 +211,39 @@ in
     # The database comes in through a VARIABLE because the component embeds it: it
     # has no filesystem to read it from (invariant 11).
     extra.RONOCTUA_GLYPHS_JSON = "${glyphdb.db}/glyphs.json";
+    # The SUBTAGS of the languages whose tags this database carries, in the same
+    # order — the first is the SOURCE, English, which is where the words come
+    # from. `pt-BR` becomes `pt`: a translation is of the language, not of the
+    # region.
+    extra.RONOCTUA_TAG_LANGUAGES = lib.concatStringsSep "," (
+      map (l: lib.toLower (builtins.head (lib.splitString "-" l))) languages
+    );
   };
 
   unicode = buffer {
     name = "unicode";
     src = ../buffers/unicode;
     extra.RONOCTUA_UNICODE_JSON = "${unicodedb.db}/unicode.json";
+    # The SUBTAGS of the languages whose tags this database carries, in the same
+    # order — the first is the SOURCE, English, which is where the words come
+    # from. `pt-BR` becomes `pt`: a translation is of the language, not of the
+    # region.
+    extra.RONOCTUA_TAG_LANGUAGES = lib.concatStringsSep "," (
+      map (l: lib.toLower (builtins.head (lib.splitString "-" l))) languages
+    );
   };
 
   lucide = buffer {
     name = "lucide";
     src = ../buffers/lucide;
     extra.RONOCTUA_LUCIDE_JSON = "${lucidedb.db}/lucide.json";
+    # The SUBTAGS of the languages whose tags this database carries, in the same
+    # order — the first is the SOURCE, English, which is where the words come
+    # from. `pt-BR` becomes `pt`: a translation is of the language, not of the
+    # region.
+    extra.RONOCTUA_TAG_LANGUAGES = lib.concatStringsSep "," (
+      map (l: lib.toLower (builtins.head (lib.splitString "-" l))) languages
+    );
   };
 
   # The memory panel — `LEADER s m`. It embeds NOTHING, and it is the first one

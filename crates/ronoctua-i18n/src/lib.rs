@@ -29,14 +29,27 @@
 use fluent_bundle::{FluentBundle, FluentResource};
 use unic_langid::LanguageIdentifier;
 
+// The key registry, the language list AND the bundle loader, all generated
+// from `assets/i18n/*.ftl` by `nix/scripts/gen-i18n.py`.
+//
+// `face` is generated rather than written because `include_str!` takes a
+// literal and cannot be looped over. Written by hand it was the one place a
+// declared language could still be missing its body: the name would be in
+// `LANGUAGES`, the file would be on disk, and `Texts::fresh` would answer
+// `None` and fall back without a word.
 include!(concat!(env!("OUT_DIR"), "/keys.rs"));
 
 /// Default language when the environment says nothing useful.
 ///
-/// `en-GB` and not `pt-BR`: a system that fell back probably is not
-/// on a Brazilian machine, and English is the least surprising choice. The
-/// distro owner's preference comes in through `LANG`, as with everything else.
-pub const DEFAULT: &str = "en-GB";
+/// THE BASE, which is the first of [`LANGUAGES`] and today is `en-GB`: a system
+/// that fell back probably is not on a Brazilian machine, and English is the
+/// least surprising choice. The distro owner's preference comes in through
+/// `LANG`, as with everything else.
+///
+/// Derived and not written, so that "the language every other is compared
+/// against" and "the language we fall back to" cannot come to disagree — they
+/// are the same decision, and `assets/i18n/languages.nix` is where it is made.
+pub const DEFAULT: &str = LANGUAGES[0];
 
 /// One language's texts.
 pub struct Texts {
@@ -49,25 +62,6 @@ impl std::fmt::Debug for Texts {
         f.debug_struct("Texts")
             .field("language", &self.language)
             .finish()
-    }
-}
-
-/// Each language's `.ftl`, embedded in the binary.
-///
-/// **Embedded, not read from disk**: the installer runs before any
-/// filesystem is mounted (section 7.1), and a shell with no text is
-/// useless. Same reason as the face embedded in the renderer.
-fn face(language: &str) -> Option<&'static str> {
-    match language {
-        "en-GB" => Some(include_str!(concat!(
-            env!("RONOCTUA_I18N_DIR"),
-            "/en-GB.ftl"
-        ))),
-        "pt-BR" => Some(include_str!(concat!(
-            env!("RONOCTUA_I18N_DIR"),
-            "/pt-BR.ftl"
-        ))),
-        _ => None,
     }
 }
 

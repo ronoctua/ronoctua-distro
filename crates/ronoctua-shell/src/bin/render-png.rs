@@ -159,7 +159,13 @@ fn main() -> Result<()> {
             .iter()
             .map(|k| ronoctua_protocol::Phrase {
                 key: k.clone(),
-                text: texts.t(k),
+                // The reserved key carries the TAG, never a translation — the
+                // same answer `buffer.rs` gives, and for the same reason.
+                text: if k == ronoctua_design::Phrases::LANGUAGE {
+                    texts.language().to_owned()
+                } else {
+                    texts.t(k)
+                },
             })
             .collect();
         inst.event(&ronoctua_protocol::Input::Phrases(said))?;

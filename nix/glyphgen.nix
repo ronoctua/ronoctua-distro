@@ -28,6 +28,9 @@
   iconTokensFile,
   trayTableFile,
   lexiconFile,
+  # The languages, from `assets/i18n/languages.nix`. The tags are built
+  # for every one of them, keyed on the subtag.
+  languages,
   overlayFile,
 }:
 
@@ -80,6 +83,7 @@ let
                 --tokens ${tokens} \
                 --tray ${trayJson} \
                 --lexicon ${lexiconFile} \
+                --languages ${lib.escapeShellArgs languages} \
                 --overlay ${overlayFile} \
                 --nf-version ${version} \
                 --out "$1"

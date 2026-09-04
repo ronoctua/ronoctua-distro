@@ -57,6 +57,32 @@ use ronoctua_design::{Phrases, budget, room, wide};
 /// `CLAUDE.md` deals with.
 const BASE: &str = include_str!(env!("RONOCTUA_GLYPHS_JSON"));
 
+/// The SUBTAGS whose tags the database carries, in the order it wrote them.
+///
+/// Generated from `assets/i18n/languages.nix` and handed in as a variable, the
+/// same way the database itself is: the buffer cannot read a file and must not
+/// carry a list of languages written by hand. The FIRST is the source, English,
+/// which is where the words come from.
+///
+/// This is not the buffer knowing a language (invariant 11). It is the buffer
+/// knowing how many tag lists it is holding and what to call the field each one
+/// came out of — the words themselves it neither writes nor translates.
+const TAG_LANGUAGES: &str = env!("RONOCTUA_TAG_LANGUAGES");
+
+/// The tag lists to show, the reader's FIRST.
+///
+/// The order is what makes the elision cut somebody else's language before the
+/// reader's on a narrow screen, and it is the whole of what the seeded language
+/// buys: no word here is chosen, only the order they come in.
+fn ordered(mine: usize, how_many: usize) -> impl Iterator<Item = usize> {
+    core::iter::once(mine).chain((0..how_many).filter(move |i| *i != mine))
+}
+
+/// The subtags of [`TAG_LANGUAGES`], in order.
+fn tag_languages() -> impl Iterator<Item = &'static str> {
+    TAG_LANGUAGES.split(',').filter(|s| !s.is_empty())
+}
+
 /// How many cells the search needs before the counter is worth showing.
 ///
 /// Twelve: enough to see what was typed. Below that the counter disappears —
@@ -234,8 +260,14 @@ mod key {
     pub const SET: &str = "glyphs-sheet-set";
     pub const TOKEN: &str = "glyphs-sheet-token";
     pub const TRAY: &str = "glyphs-sheet-tray";
-    pub const TAGS_PT: &str = "glyphs-sheet-tags-pt";
-    pub const TAGS_EN: &str = "glyphs-sheet-tags-en";
+    /// The sheet's tag rows, one per language: `glyphs-sheet-tags-<subtag>`.
+    ///
+    /// ASSEMBLED at run time, which puts it among the keys
+    /// `docs/ARCHITECTURE.md` describes as invisible to every search in the
+    /// code. It was two constants, and two constants is the shape that stops a
+    /// third language. What demands the `.ftl` line for each is
+    /// `buffer-tag-rows-have-text`.
+    pub const TAGS: &str = "glyphs-sheet-tags-";
     pub const HELP: &str = "glyphs-sheet-help";
     pub const COPIED: &str = "glyphs-sheet-copied";
     pub const FAILED: &str = "glyphs-sheet-copy-failed";
@@ -407,10 +439,13 @@ struct Glyph {
     /// to "I could have sworn this icon was called something else".
     aliases: Vec<String>,
     set_of: String,
-    /// Tags in Portuguese — ACCENTED, which is how they appear on screen.
-    tags_pt: Vec<String>,
-    /// Tags in English.
-    tags_en: Vec<String>,
+    /// One tag list per language, in [`TAG_LANGUAGES`] order.
+    ///
+    /// The words that FIND this glyph, accented as they appear on screen. It
+    /// was two named fields, `tags_pt` and `tags_en`, and the pair was the
+    /// shape a third language could not fit: the struct, the parser, the
+    /// search and the sheet all said "two" out loud.
+    tags: Vec<Vec<String>>,
     /// The forms of the pt tags WITHOUT accents, only the ones that differ.
     ///
     /// They do not go to the screen: they exist so that `localizacao` finds what
@@ -520,13 +555,17 @@ enum Filter {
 impl Glyph {
     /// Does any tag of this glyph contain `termo`?
     ///
-    /// All THREE lists: pt (accented), en, and the unaccented forms. Without the
-    /// third one, whoever typed `localizacao` would not find `localização` — and
-    /// whoever typed with accents would not find it if we only stored them without.
+    /// EVERY language's list, plus the unaccented forms. Without that last one,
+    /// whoever typed `localizacao` would not find `localização` — and whoever
+    /// typed with accents would not find it if we only stored them without.
+    ///
+    /// Every language and not only the reader's: somebody who reads the
+    /// interface in English still knows the Portuguese word for a thing, and
+    /// refusing to find it would be taking a search away to tidy up.
     fn has_tag(&self, term: &str) -> bool {
-        self.tags_pt
+        self.tags
             .iter()
-            .chain(&self.tags_en)
+            .flatten()
             .chain(&self.search)
             .any(|t| word_prefix(t, term))
     }
@@ -586,18 +625,34 @@ impl Glyph {
         }
     }
 
-    /// The tags as they appear on the screen: **pt first, en after**.
+    /// The tags as they appear on the screen: **the reader's language first**.
     ///
-    /// The order is what makes the elision cut the English before the Portuguese
-    /// on a narrow screen. The unaccented forms are left out: they exist for the
-    /// search, and showing them would mean showing the same word twice.
-    fn visible_tags(&self) -> impl Iterator<Item = &String> {
-        // The English that is ALREADY in Portuguese does not repeat. A set name
-        // (`codicons`) and a word that is the same in both languages fall into that,
-        // and seeing the same word twice on the same line looks like a defect.
-        self.tags_pt
-            .iter()
-            .chain(self.tags_en.iter().filter(|t| !self.tags_pt.contains(t)))
+    /// The order is what makes the elision cut somebody ELSE's language first on
+    /// a narrow screen. It was fixed — Portuguese first, English after — and
+    /// that was a defect the moment there were two readers: whoever ran the
+    /// interface in English had their own language cut first, on the line that
+    /// exists to tell them what the glyph is called.
+    ///
+    /// The buffer still cannot write a sentence in any language (invariant 11).
+    /// What it does here is CHOOSE among words it was already holding, and the
+    /// index it chooses with was handed to it by the host — see `receive_phrases`
+    /// and the reserved `-language` key.
+    ///
+    /// The unaccented forms are left out: they exist for the search, and showing
+    /// them would mean showing the same word twice.
+    fn visible_tags(&self, mine: usize) -> impl Iterator<Item = &String> {
+        // A WORD ALREADY SHOWN DOES NOT REPEAT. A set name (`codicons`) and any
+        // word that is the same in two languages fall into that, and seeing the
+        // same word twice on the same line looks like a defect.
+        let first = self.tags.get(mine).map(Vec::as_slice).unwrap_or(&[]);
+        first.iter().chain(
+            self.tags
+                .iter()
+                .enumerate()
+                .filter(move |(i, _)| *i != mine)
+                .flat_map(|(_, w)| w.iter())
+                .filter(|t| !first.contains(t)),
+        )
     }
 }
 
@@ -710,6 +765,11 @@ struct State {
 }
 
 impl State {
+    /// Which tag list is the reader's — see [`Phrases::mine`].
+    fn mine(&self) -> usize {
+        self.phrases.mine(TAG_LANGUAGES)
+    }
+
     fn new() -> Self {
         let glyphs = load_db();
         let sets = sets_of(&glyphs);
@@ -1258,7 +1318,7 @@ impl State {
         if left_over < MIN_TAGS {
             return;
         }
-        let tags: Vec<&str> = g.visible_tags().map(String::as_str).collect();
+        let tags: Vec<&str> = g.visible_tags(self.mine()).map(String::as_str).collect();
         if !tags.is_empty() {
             screen.put(
                 footer,
@@ -1409,7 +1469,7 @@ impl State {
             if line >= ctx.lines {
                 return;
             }
-            screen.sheet(line, label, Run::datum(&value), false);
+            screen.sheet(line, &label, Run::datum(&value), false);
             line += step;
         }
 
@@ -1596,34 +1656,40 @@ impl State {
     /// two have to match, and matching by construction is different from matching
     /// by luck. It was a mismatch like that which made the click on the grid hit
     /// the wrong glyph while the `PRIMEIRA` line was another one.
-    fn sheet_info(&self) -> Vec<(&'static str, String)> {
+    fn sheet_info(&self) -> Vec<(String, String)> {
         let Some(g) = self.chosen() else {
             return Vec::new();
         };
         let cp = g.ch as u32;
         let mut out = vec![
-            (key::CODEPOINT, format!("U+{cp:04X}")),
-            (key::DECIMAL_N, cp.to_string()),
+            (key::CODEPOINT.to_owned(), format!("U+{cp:04X}")),
+            (key::DECIMAL_N.to_owned(), cp.to_string()),
             // THE BLOCK by codepoint prefix, and not by the Unicode block table
             // — it is the same criterion as the `block:` filter, and bringing the
             // whole table inside the component would answer what the prefix
             // already answers.
-            (key::BLOCK, format!("U+{:X}xx", cp >> 8)),
-            (key::SET, g.set_of.clone()),
+            (key::BLOCK.to_owned(), format!("U+{:X}xx", cp >> 8)),
+            (key::SET.to_owned(), g.set_of.clone()),
         ];
         if let Some(t) = &g.token {
-            out.push((key::TOKEN, format!("icon.{t}")));
+            out.push((key::TOKEN.to_owned(), format!("icon.{t}")));
         }
         if g.in_tray {
             // Node value: the label is already the whole information ("it is assigned
             // to an app"). A "yes" beside it would only take up a column.
-            out.push((key::TRAY, String::new()));
+            out.push((key::TRAY.to_owned(), String::new()));
         }
-        if !g.tags_pt.is_empty() {
-            out.push((key::TAGS_PT, g.tags_pt.join(TAG_SEPARATOR)));
-        }
-        if !g.tags_en.is_empty() {
-            out.push((key::TAGS_EN, g.tags_en.join(TAG_SEPARATOR)));
+        // ONE ROW PER LANGUAGE, the reader's first — the same order the footer
+        // shows them in, and for the same reason.
+        for i in ordered(self.mine(), g.tags.len()) {
+            let Some(words) = g.tags.get(i) else { continue };
+            if words.is_empty() {
+                continue;
+            }
+            let Some(subtag) = tag_languages().nth(i) else {
+                continue;
+            };
+            out.push((format!("{}{subtag}", key::TAGS), words.join(TAG_SEPARATOR)));
         }
         out
     }
@@ -1787,8 +1853,11 @@ fn load_db() -> Vec<Glyph> {
             continue;
         };
 
-        let tags_en = list_of("tags_en");
-        let tags_pt = list_of("tags_pt");
+        // ONE FIELD PER LANGUAGE, read by name. `list_of` takes the name at
+        // run time, so enumerating them costs nothing and needs no parser.
+        let tags: Vec<Vec<String>> = tag_languages()
+            .map(|l| list_of(&format!("tags_{l}")))
+            .collect();
         let search = list_of("search");
         // `null` and `false` arrive as a BARE value, without quotes — `field_of`
         // gives back the word. Comparing against the word is what avoids a whole
@@ -1806,8 +1875,7 @@ fn load_db() -> Vec<Glyph> {
             name,
             aliases,
             set_of: list_of("sets").first().cloned().unwrap_or_default(),
-            tags_pt,
-            tags_en,
+            tags,
             search,
             token,
             in_tray: field_of("in_tray").as_deref() == Some("true"),
@@ -1971,6 +2039,10 @@ impl Guest for Component {
             phrases: PREFIX_KEYS
                 .iter()
                 .map(|(k, _, _)| (*k).to_owned())
+                // AND THE READER'S LANGUAGE, which is not a phrase and is not
+                // drawn: it says which of the tag lists this buffer is already
+                // holding belongs to whoever is looking. See `Phrases::LANGUAGE`.
+                .chain(core::iter::once(Phrases::LANGUAGE.to_owned()))
                 .collect(),
         }
     }

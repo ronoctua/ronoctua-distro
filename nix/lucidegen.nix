@@ -32,6 +32,9 @@
   fonts,
   noto-fonts-color-emoji,
   lexiconFile,
+  # The languages, from `assets/i18n/languages.nix`. The tags are built
+  # for every one of them, keyed on the subtag.
+  languages,
 }:
 
 let
@@ -80,6 +83,7 @@ let
                 --icons set_of/icons \
                 --font ${lucide}/share/fonts/truetype/Lucide.ttf \
                 --lexicon ${lexiconFile} \
+                --languages ${lib.escapeShellArgs languages} \
                 --other ${fonts.noctua-iosevka-core}/share/fonts/truetype/noctua-iosevka/NoctuaIosevkaNerdFontMono-Regular.ttf \
                 --other ${noto-fonts-color-emoji}/share/fonts/noto/NotoColorEmoji.ttf \
                 --base ${declaredBase} \

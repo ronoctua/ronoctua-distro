@@ -45,14 +45,19 @@ in
     };
 
     language = lib.mkOption {
-      type = lib.types.enum [
-        "pt-BR"
-        "en-GB"
-      ];
-      default = "en-GB";
+      # FROM THE ONE LIST, and not written out again. The description below
+      # used to warn that a third value here would give an untranslated screen;
+      # it cannot now, because the values ARE the languages that have a
+      # complete `.ftl` — `gen-i18n.py` refuses to build otherwise.
+      type = lib.types.enum (import ../../assets/i18n/languages.nix);
+      # THE BASE, and not a name written again. It is the same default
+      # `ronoctua_i18n::DEFAULT` falls back to, and for the same reason: a
+      # machine that fell back is probably not a Brazilian one.
+      default = builtins.head (import ../../assets/i18n/languages.nix);
       description = ''
-        The INTERFACE's language. Both values are the same as `ronoctua-i18n`'s —
-        a third one here would give an untranslated screen.
+        The INTERFACE's language. The values come from
+        `assets/i18n/languages.nix`, which is the same list `ronoctua-i18n`
+        compiles in — so an untranslated screen is not reachable from here.
 
         It is not the locale, and the separation is deliberate: the locale decides the format of
         date, number and unit, and there are hundreds of those against the two translations

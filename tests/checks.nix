@@ -70,6 +70,11 @@
   # could be another version, and two versions of a formatter are two opinions
   # about the same file.
   rustToolchain,
+  # THE LANGUAGES, from `assets/i18n/languages.nix`. Twenty-four checks used to
+  # write the pair out by hand, which meant a third language was checked by
+  # none of them — it would have been complete in the `.ftl`, present in the
+  # menu, and silently unverified everywhere else.
+  languages,
 }:
 
 let
@@ -132,10 +137,161 @@ let
     ${rust.workspace}/bin/ronoctua-shell check-keymap
   '';
 
-  # Both languages have exactly the same keys, none of them empty. It is the
+  # THE SHEET'S TAG ROW EXISTS FOR EVERY LANGUAGE.
+  #
+  # The glyph sheet shows one row of tags per language, and the key is
+  # ASSEMBLED — `glyphs-sheet-tags-` plus the subtag — so it is one of the keys
+  # `docs/ARCHITECTURE.md` calls invisible to every search in the code. It was
+  # two constants, `TAGS_PT` and `TAGS_EN`, which is the shape that made a third
+  # language impossible; now it is a prefix, and what a prefix loses is the
+  # compile error.
+  #
+  # Without this, declaring a third language would draw `[glyphs-sheet-tags-de]`
+  # on the sheet — the raw key, which is exactly the failure invariant 8 exists
+  # to refuse.
+  buffer-tag-rows-have-text = mkCheck "buffer-tag-rows-have-text" [ pkgs.gnugrep pkgs.coreutils ] ''
+    failed=0
+    for language in ${lib.concatStringsSep " " languages}; do
+      subtag=$(echo "$language" | cut -d- -f1 | tr 'A-Z' 'a-z')
+      for other in ${lib.concatStringsSep " " languages}; do
+        key="glyphs-sheet-tags-$subtag"
+        grep -qE "^$key = ." ${../assets/i18n}/$other.ftl || {
+          echo "ERROR: $key is missing from $other.ftl — the glyph sheet would" >&2
+          echo "       draw the raw key on the row that shows $language's tags." >&2
+          failed=1
+        }
+      done
+    done
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: a tag row for each of ${toString (builtins.length languages)} languages, in every .ftl"
+  '';
+
+  # A THIRD LANGUAGE COSTS NOTHING BUT ITS TRANSLATION.
+  #
+  # Everything else in this file now reads `assets/i18n/languages.nix`, so a
+  # third language is checked everywhere the first two are. What no check could
+  # say is whether the PIPELINE survives a third — and it could not be said by
+  # inspection, because for as long as the tree has existed the answer to "how
+  # many languages" has been two, in ninety-five places.
+  #
+  # So this builds one. `zz-ZZ` is a synthetic language whose every value is the
+  # base language's, PADDED to roughly 120% — which is about what German or
+  # French cost against English, and rather more than the 6.8% pt-BR costs. It
+  # exercises the generator's key parity, the `LANGUAGES` constant, the
+  # generated `face()`, and the arithmetic of every check that used to name a
+  # pair. It never reaches an installed system: it is built here, used here, and
+  # thrown away with the derivation.
+  #
+  # `zz` is reserved by ISO 639-2 for local use, so it cannot collide with a
+  # real language somebody adds later.
+  third-language-costs-nothing = mkCheck "third-language-costs-nothing" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, subprocess, sys, tempfile
+
+    source = pathlib.Path("${../assets/i18n}")
+    base = "${builtins.head languages}"
+    work = pathlib.Path(tempfile.mkdtemp()) / "i18n"
+    work.mkdir(parents=True)
+    for f in source.glob("*.ftl"):
+        (work / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # THE VALUE GROWS, THE KEY DOES NOT. A key that changed would be testing
+    # the generator's tolerance for a typo, which is a different check
+    # (`i18n-missing-key-fails`) and one that already exists.
+    grown = []
+    for line in (source / f"{base}.ftl").read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^([a-z][a-z0-9-]*) *= *(.+)$", line)
+        if m:
+            value = m.group(2)
+            grown.append(f"{m.group(1)} = {value + 'x' * max(1, len(value) // 5)}")
+        else:
+            grown.append(line)
+    (work / "zz-ZZ.ftl").write_text("\n".join(grown) + "\n", encoding="utf-8")
+
+    out = work.parent / "keys.rs"
+    r = subprocess.run(
+        [sys.executable, "${../nix/scripts/gen-i18n.py}", str(work), str(out),
+         *"${lib.concatStringsSep " " languages}".split(), "zz-ZZ"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print("ERROR: the generator refused a complete third language.", file=sys.stderr)
+        print(r.stderr, file=sys.stderr)
+        raise SystemExit(1)
+
+    body = out.read_text(encoding="utf-8")
+    # The three things a third language has to reach: the list, the loader,
+    # and the count the generator reports.
+    if 'pub const LANGUAGES: [&str; 3]' not in body:
+        print("ERROR: LANGUAGES did not grow to three.", file=sys.stderr)
+        raise SystemExit(1)
+    if '"zz-ZZ" => Some(include_str!' not in body:
+        print("ERROR: the generated face() has no arm for the third language —", file=sys.stderr)
+        print("       Texts::fresh would answer None and fall back in silence.", file=sys.stderr)
+        raise SystemExit(1)
+    if "in 3 languages" not in r.stdout:
+        print(f"ERROR: the generator did not report three: {r.stdout!r}", file=sys.stderr)
+        raise SystemExit(1)
+
+    # AND AN INCOMPLETE THIRD IS STILL REFUSED. Without this the check above
+    # would pass on a generator that had stopped comparing altogether.
+    lines = (work / "zz-ZZ.ftl").read_text(encoding="utf-8").splitlines()
+    (work / "zz-ZZ.ftl").write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "${../nix/scripts/gen-i18n.py}", str(work), str(out),
+         *"${lib.concatStringsSep " " languages}".split(), "zz-ZZ"],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0:
+        print("ERROR: a third language missing a key was ACCEPTED.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: a third language builds, loads and is checked — {len(grown)} lines, +20%")
+    END
+  '';
+
+  # DECLARED AND PRESENT ARE THE SAME SET.
+  #
+  # `assets/i18n/languages.nix` is the one list, and `gen-i18n.py` already
+  # closes one direction: a name there with no `.ftl` beside it takes the build
+  # down. This closes the other, which was open and silent.
+  #
+  # A `.ftl` dropped into the directory without being declared used to be
+  # copied into the store by `nix/i18n.nix` (which globs), linted by
+  # `english-names` (which globs), and then ignored by everything that
+  # matters — no key parity, no entry in `LANGUAGES`, no bundle, no menu.
+  # `Texts::fresh` would answer `None` for it and the screen would fall back to
+  # English without a word. A file that is present, processed and inert is the
+  # worst of the three states.
+  languages-are-declared = mkCheck "languages-are-declared" [ pkgs.coreutils pkgs.gnused ] ''
+    declared=$(printf '%s\n' ${lib.escapeShellArgs languages} | sort)
+    present=$(cd ${../assets/i18n} && ls *.ftl | sed 's/\.ftl$//' | sort)
+
+    if [ "$declared" != "$present" ]; then
+      echo "ERROR: the declared languages and the .ftl files on disk differ." >&2
+      echo "  declared in assets/i18n/languages.nix:" >&2
+      printf '    %s\n' $declared >&2
+      echo "  present in assets/i18n:" >&2
+      printf '    %s\n' $present >&2
+      echo "      A file that is present and undeclared is worse than a missing" >&2
+      echo "      one: it gets copied and linted, and then nothing reads it." >&2
+      exit 1
+    fi
+
+    # And the base has to be first, because that is what the generator
+    # compares every other against and what the installer's menu opens on.
+    base=${builtins.head languages}
+    test -f ${../assets/i18n}/$base.ftl || {
+      echo "ERROR: the base language $base has no .ftl" >&2; exit 1; }
+
+    echo "OK: $(printf '%s\n' $declared | wc -l) languages, declared and present, base $base"
+  '';
+
+  # Every language has exactly the same keys, none of them empty. It is the
   # generator that runs in the build; here it runs again as a named check.
   i18n-complete = mkCheck "i18n-complete" [ pkgs.python3 ] ''
-    python3 ${../nix/scripts/gen-i18n.py} ${../assets/i18n} $TMPDIR/keys.rs
+    python3 ${../nix/scripts/gen-i18n.py} ${../assets/i18n} $TMPDIR/keys.rs \
+      ${lib.escapeShellArgs languages}
   '';
 
   # THE NESTED SESSION'S `FONTCONFIG_FILE` RESOLVES A REAL FONT.
@@ -904,7 +1060,7 @@ let
     assert len(key_names) > 100, f"only {len(key_names)} actions in the generated table"
 
     absent = []
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
         present = set(re.findall(r"^([a-z0-9-]+) *=", ftl, re.M))
         absent += [f"{language}: {c}" for c in key_names if c not in present]
@@ -947,9 +1103,13 @@ let
   # Without this fixture, the check above would pass with the generator broken.
   i18n-missing-key-fails = mkCheck "i18n-missing-key-fails" [ pkgs.python3 ] ''
     cp -r ${../assets/i18n} bad && chmod -R +w bad
-    echo 'only-in-english = orphan' >> bad/en-GB.ftl
+    # The BASE language is the victim, because it is the one every other is
+    # compared against — an orphan there has to be caught whichever way the
+    # generator walks the list.
+    echo 'only-in-english = orphan' >> bad/${builtins.head languages}.ftl
 
-    if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs 2>errors.txt; then
+    if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs \
+      ${lib.escapeShellArgs languages} 2>errors.txt; then
       echo "ERROR: the generator ACCEPTED a key that exists in only one language" >&2
       exit 1
     fi
@@ -1583,7 +1743,7 @@ let
         raise SystemExit(1)
 
     failed = 0
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
         for k in owed:
@@ -1800,7 +1960,7 @@ let
     root_dir = pathlib.Path("${self}/assets/i18n")
 
     failed = 0
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         text = (root_dir / f"{language}.ftl").read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
         for key in owed:
@@ -1977,6 +2137,66 @@ let
         raise SystemExit(1)
     print(f"OK: AIR={air} (one cell and one line), ICON={icon} cells for {token('icon')} px")
     END
+  '';
+
+  # A COUNT IS NOT AN ADVANCE, AND ONLY THE DATABASE KNOWS THE DIFFERENCE.
+  #
+  # After the unification there are exactly TWO rulers left, and they answer two
+  # different questions:
+  #
+  #   `ronoctua_protocol::cells` counts CLUSTERS — how many things there are. It
+  #   is what reserves, what confers and what cuts, and the whole system now
+  #   shares the one definition.
+  #
+  #   the database's `width` field is the ADVANCE. An emoji advances 1.245 em
+  #   against the cell's 0.600, so its cluster counts as ONE thing and covers
+  #   TWO cells. No code can know that: the answer is in the font, and what read
+  #   the font was the generator.
+  #
+  # A buffer drawing such a datum budgets from the field (`Symbol::ink`), never
+  # from the count. Today every one of them does — by having been written
+  # carefully, which is not a guarantee. Writing `wide(&s.shows)` is the obvious
+  # thing to do and it is wrong: a ZWJ couple would reserve one cell for a
+  # drawing two cells wide, and the next column would be written over.
+  #
+  # The check is narrow on purpose. It does not try to understand the layout; it
+  # asserts that the character a browser DRAWS never reaches the counter, and
+  # that the run drawing it budgets from the measured width.
+  ink-is-not-a-count = mkCheck "ink-is-not-a-count" [ pkgs.gnugrep pkgs.coreutils ] ''
+    failed=0
+
+    # 1) THE DRAWN CHARACTER NEVER REACHES THE COUNTER.
+    #    `shows` is the field the generator fills with the character itself,
+    #    and it is the one field in the three databases that can hold a
+    #    cluster of six codepoints.
+    if counted=$(grep -rnE 'wide\(&?[a-z_.]*\.shows' ${self}/buffers 2>/dev/null); then
+      echo "ERROR: the drawn character was measured with the cluster count:" >&2
+      echo "$counted" >&2
+      echo "      The count answers HOW MANY THINGS; an emoji is one thing and" >&2
+      echo "      two cells. Budget it from the database width, as Symbol::ink does." >&2
+      failed=1
+    fi
+
+    # 2) AND THE RUN THAT DRAWS IT BUDGETS FROM THE MEASURED WIDTH.
+    #    Every datum run over `shows` budgets from ink on the same chain — as
+    #    the method (`s.ink(cells)`) or through the local the caller measured
+    #    into first. Without this half, deleting the budget altogether would
+    #    pass part 1.
+    drawn=$(grep -rc 'Run::datum(&[a-z_.]*\.shows)' ${self}/buffers/*/src/lib.rs \
+      | awk -F: '{ n += $2 } END { print n + 0 }')
+    inked=$(grep -rh -A 8 'Run::datum(&[a-z_.]*\.shows)' ${self}/buffers/*/src/lib.rs \
+      | grep -cE '\.within\([^)]*ink' || true)
+    if [ "$drawn" -eq 0 ]; then
+      echo "ERROR: no buffer draws the character any more — this check proves nothing now." >&2
+      failed=1
+    fi
+    if [ "$inked" -lt "$drawn" ]; then
+      echo "ERROR: $drawn run(s) draw the character and only $inked budget from ink()." >&2
+      failed=1
+    fi
+
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: $drawn drawn character(s), each budgeted from the width the font gave"
   '';
 
   # NOBODY DRAWS A HEADING OF THEIR OWN, AND NOBODY GENERATES BINDINGS.
@@ -2867,7 +3087,7 @@ let
             gaps.append(buffer + ": two identical letters would leave a state unreachable")
 
     wanted = {i for states in per_buffer.values() for i, _ in states}
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         ftl = (root_dir / "assets/i18n" / (language + ".ftl")).read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
         for ident in sorted(wanted):
@@ -3409,7 +3629,7 @@ let
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
 
-    for language in pt-BR en-GB; do
+    for language in ${lib.concatStringsSep " " languages}; do
       ${rust.workspace}/bin/ronoctua-render-png \
         ${buffers.format}/lib/ronoctua_buffer_format.wasm \
         --columns 60 --lines 10 --language "$language" \
@@ -3464,11 +3684,11 @@ let
         return width, height, pixels
 
     shape, seen = None, {}
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         width, height, pixels = read(language)
         if shape is None:
             shape = (width, height)
-        assert shape == (width, height), "the two languages came out at different sizes"
+        assert shape == (width, height), "the languages came out at different sizes"
 
         # THE INK. The commonest colour is the background by construction — it is
         # what the frame was cleared with — so anything else is something drawn.
@@ -3485,10 +3705,21 @@ let
         )
         seen[language] = pixels
 
-    # AND THE TRANSLATIONS DIFFER IN THE PIXEL.
-    assert seen["pt-BR"] != seen["en-GB"], (
-        "pt-BR and en-GB came out pixel for pixel identical: the key is not being "
-        "translated before it becomes a drawing"
+    # AND THE TRANSLATIONS DIFFER IN THE PIXEL — every pair of them.
+    #
+    # It used to compare exactly two, which is the shape a third language would
+    # have walked straight past: it would have been drawn, measured, and never
+    # once compared against anything. All pairs is the same assertion without
+    # the assumption, and it names WHICH two collided rather than "they did".
+    same = [
+        (a, b)
+        for i, a in enumerate(seen)
+        for b in list(seen)[i + 1 :]
+        if seen[a] == seen[b]
+    ]
+    assert not same, (
+        "these came out pixel for pixel identical, so the key is not being "
+        f"translated before it becomes a drawing: {same}"
     )
     print("OK: the PNG is valid, has ink in it, and the language reaches the pixel")
     END
@@ -3673,7 +3904,7 @@ let
         }
 
         for k in $keys; do
-          for language in pt-BR en-GB; do
+          for language in ${lib.concatStringsSep " " languages}; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
               echo "ERROR: '$k' is missing from $language.ftl — the screen would show [$k]" >&2
               failed=1
@@ -3810,7 +4041,7 @@ let
         bad.append("facts::needs no longer keeps ffprobe away from a playlist")
 
     # --- the sentence, in both languages ----------------------------------
-    for name in ("en-GB", "pt-BR"):
+    for name in ${builtins.toJSON languages}:
         text = (i18n / f"{name}.ftl").read_text()
         if "files-preview-playlist-unread =" not in text:
             bad.append(f"{name} cannot say why a spelling is not opened")
@@ -3994,7 +4225,7 @@ let
         if text is None:
             bad.append(f"`key::{const}`, which `Shape::{v}` uses, does not exist")
             continue
-        for language in ("en-GB", "pt-BR"):
+        for language in ${builtins.toJSON languages}:
             body = (i18n / f"{language}.ftl").read_text()
             if not re.search(rf"^{re.escape(text)} = .", body, re.M):
                 bad.append(f"`{text}` is missing from {language}.ftl")
@@ -4069,7 +4300,7 @@ let
         keys=$(for i in $ids; do echo "files-$i"; echo "files-does-$i"; done | sort -u)
 
         for k in $keys; do
-          for language in pt-BR en-GB; do
+          for language in ${lib.concatStringsSep " " languages}; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
               echo "ERROR: $k is missing from $language.ftl — the screen would show the raw key" >&2
               failed=1
@@ -4090,7 +4321,7 @@ let
         }
         sidekeys=$(for i in $side; do echo "sidebar-$i"; echo "sidebar-does-$i"; done | sort -u)
         for k in $sidekeys; do
-          for language in pt-BR en-GB; do
+          for language in ${lib.concatStringsSep " " languages}; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
               echo "ERROR: $k is missing from $language.ftl — the sidebar menu's" >&2
               echo "      row would show the raw key." >&2
@@ -4109,7 +4340,7 @@ let
         view=$(grep -ohE '"files-[a-z0-9-]+"' ${../crates/ronoctua-shell/src}/files.rs \
           | tr -d '"' | grep -vE -- '-$' | sort -u)
         for k in $view; do
-          for language in pt-BR en-GB; do
+          for language in ${lib.concatStringsSep " " languages}; do
             grep -qE "^$k = ." ${../assets/i18n}/$language.ftl || {
               echo "ERROR: $k is missing from $language.ftl — the key would have no name" >&2
               failed=1
@@ -5334,24 +5565,34 @@ let
     # The words come out of the `word()` tables — the same place the Rust
     # builds the key from. Reading the enum's variants instead would be a
     # second spelling of the same list.
+    first=""
     words=$(grep -oE '=> "[a-z]+",' "$job" | grep -oE '"[a-z]+"' | tr -d '"' | sort -u)
     [ -n "$words" ] || { echo "ERROR: could not find a single word in job.rs" >&2; exit 1; }
 
     for w in $words; do
       for prefix in transfers-work transfers-stage transfers-engine; do
-        # A word belongs to exactly one of the three families; what this
-        # loop demands is that WHEREVER it appears in one language it
-        # appears in the other.
-        pt=$(grep -c "^$prefix-$w = " ${../assets/i18n}/pt-BR.ftl || true)
-        en=$(grep -c "^$prefix-$w = " ${../assets/i18n}/en-GB.ftl || true)
-        if [ "$pt" != "$en" ]; then
-          echo "ERROR: $prefix-$w exists in only one language (pt=$pt en=$en)" >&2
-          failed=1
-        fi
+        # A word belongs to exactly one of the three families; what this loop
+        # demands is that WHEREVER it appears in one language it appears in
+        # ALL of them. Comparing two counts was the old shape and it could not
+        # grow: with a third language the pair would still have agreed while
+        # the newcomer said nothing.
+        counts=""
+        for language in ${lib.concatStringsSep " " languages}; do
+          n=$(grep -c "^$prefix-$w = " ${../assets/i18n}/$language.ftl || true)
+          counts="$counts $language=$n"
+          if [ -z "$first" ]; then first=$n; fi
+          if [ "$n" != "$first" ]; then
+            echo "ERROR: $prefix-$w does not exist in every language ($counts )" >&2
+            failed=1
+          fi
+        done
+        first=""
       done
       # And it has to exist in AT LEAST one family, or it is a variant
-      # nothing can draw.
-      total=$(grep -c "^transfers-[a-z]*-$w = " ${../assets/i18n}/pt-BR.ftl || true)
+      # nothing can draw. The base language answers for all of them: the
+      # loop above has just proved they agree.
+      total=$(grep -c "^transfers-[a-z]*-$w = " \
+        ${../assets/i18n}/${builtins.head languages}.ftl || true)
       if [ "$total" = 0 ]; then
         echo "ERROR: the word $w from job.rs has no text at all" >&2
         failed=1
@@ -5359,7 +5600,7 @@ let
     done
 
     [ "$failed" = 0 ] || exit 1
-    echo "OK: $(echo "$words" | wc -l) queue words, in both languages"
+    echo "OK: $(echo "$words" | wc -l) queue words, in ${toString (builtins.length languages)} languages"
   '';
 
   # THE EDITOR WRITES WHERE THE UNIT READS.
@@ -5668,7 +5909,11 @@ let
     export RONOCTUA_INST_HOSTNAME=noctua-teste
     export RONOCTUA_INST_PASSWORD="$password"
     export RONOCTUA_INST_PASSPHRASE="$passphrase"
-    export RONOCTUA_INST_LANGUAGE=pt-BR
+    # NOT the base language, and derived rather than named: the dry run has to
+    # prove the ANSWER reaches `host.nix`, and a value equal to the default
+    # would pass even if the answer were being dropped. `builtins.head` is the
+    # base, so the last of the list is the one that cannot be it.
+    export RONOCTUA_INST_LANGUAGE=${builtins.elemAt languages (builtins.length languages - 1)}
     # The sixth question. `br` and not the default: the dry run has to prove the
     # ANSWER reaches `host.nix`, and a value equal to the default would pass
     # even if the answer were being dropped.
@@ -5748,16 +5993,28 @@ let
     [ ! -e /tmp/disko-luks.key ] || {
       echo "ERROR: the rehearsal wrote the LUKS key" >&2; exit 1; }
 
-    # The SAME plan in both languages: same number of steps, same commands. A
+    # The SAME plan in EVERY language: same number of steps, same commands. A
     # `.ftl` that lost a key would come out with `[inst-` and would already have
-    # died above; what this line catches is the subtler case of the language
+    # died above; what this catches is the subtler case of the language
     # changing what the installer DOES, and not only what it says.
-    pt=$(LANG=pt_BR.UTF-8 ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
-    en=$(LANG=en_US.UTF-8 ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
-    [ "$pt" = "$en" ] || {
-      echo "ERROR: the plan has $pt steps in pt-BR and $en in en-GB" >&2; exit 1; }
+    #
+    # It used to run exactly two and compare them to each other, which is the
+    # shape that cannot grow — and it also used `en_US`, which does not name a
+    # UI language at all and so was really exercising the fallback. Each
+    # language now runs under its OWN locale, derived the way `base.nix`
+    # derives the list.
+    steps=""
+    howmany=""
+    for language in ${lib.concatStringsSep " " languages}; do
+      locale=$(echo "$language" | tr '-' '_').UTF-8
+      n=$(LANG=$locale ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
+      steps="$steps $language=$n"
+      if [ -z "$howmany" ]; then howmany=$n; fi
+      [ "$n" = "$howmany" ] || {
+        echo "ERROR: the plan is not the same in every language ($steps )" >&2; exit 1; }
+    done
 
-    echo "OK: $pt steps in both languages, four PCRs, a rehearsal by default"
+    echo "OK: $howmany steps in every language, four PCRs, a rehearsal by default"
   '';
 
   # The whole chain: signed UKI, Secure Boot and the proof of PCR 15 (milestone 8).
@@ -6538,7 +6795,7 @@ let
         if field.replace("-", "_") not in fields:
             print(f"ERROR: `{field}` is not a field of Presentation")
             failed = True
-        for language in ("pt-BR", "en-GB"):
+        for language in ${builtins.toJSON languages}:
             ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
             if not re.search(rf"^{why} *=", ftl, re.M):
                 print(f"ERROR: {language} does not explain `{field}` (`{why}` is missing)")
@@ -6603,7 +6860,7 @@ let
 
     keys = pathlib.Path("${notificationsRs}/keys.txt").read_text().split()
     failed = False
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
         missing = [k for k in keys if k not in have]
@@ -7679,6 +7936,13 @@ let
         re.compile(r"\bglobal\s+([A-Za-z_][A-Za-z0-9_,\s]*)", re.M),
         re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:=", re.M),
         re.compile(r"\blambda\s+([A-Za-z_][A-Za-z0-9_,\s]*?):", re.M),
+        # `from x import a, b as c` — the names it BINDS are on the right, and
+        # the plain `import x` above does not see them. The gap showed up the
+        # day a generator interpolated a constant it had imported: the name was
+        # reported as an orphan, which was this check being wrong rather than
+        # the code. (No example is written out here on purpose — an f-string in
+        # a comment is an f-string this very scanner reads.)
+        re.compile(r"^\s*from\s+[A-Za-z_.][A-Za-z0-9_.]*\s+import\s+(.+)$", re.M),
     ]
     DRIVER = {"machine", "subtest", "start_all", "nodes", "t", "polling_condition"}
 
@@ -8008,6 +8272,14 @@ let
         source = rs.read_text()
         for block in re.findall(r"\nmod key \{(.*?)\n\}", source, re.S):
             for k in re.findall(r'pub const [A-Z_0-9]+: &str = "([a-z0-9-]+)";', block):
+                # A TRAILING `-` MEANS PREFIX, NOT KEY. `glyphs-sheet-tags-` is
+                # completed at run time with the language's subtag, one row per
+                # language, and demanding a `.ftl` line for the prefix itself
+                # would be demanding a key nothing ever emits. What demands the
+                # completed ones is `buffer-tag-rows-have-text`, which knows the
+                # list of languages and so knows how many there are.
+                if k.endswith("-"):
+                    continue
                 owed.setdefault(k, rs.relative_to(root_dir))
 
     if not owed:
@@ -8015,7 +8287,7 @@ let
         raise SystemExit(1)
 
     failed = 0
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
         for k, where in sorted(owed.items()):
@@ -8088,7 +8360,7 @@ let
             wanted.add(("mode", ident))
 
     missing = []
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         ftl = (root_dir / "assets/i18n" / (language + ".ftl")).read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
         for kind, ident in sorted(wanted):
@@ -8138,7 +8410,7 @@ let
         raise SystemExit(1)
 
     failed = 0
-    for language in ("pt-BR", "en-GB"):
+    for language in ${builtins.toJSON languages}:
         text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
         have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
         for i in sorted(ids):
@@ -8867,6 +9139,7 @@ let
       buffer-states-have-text
       design-constants-match-tokens
       buffers-use-the-design-crate
+      ink-is-not-a-count
       separators-come-from-chrome
       syntax-table-generated
       syntax-refusal-refuses
@@ -8941,6 +9214,8 @@ let
     leader-vm = leaderVm;
     apps-vm = appsVm;
     inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
+    inherit languages-are-declared buffer-tag-rows-have-text;
+    inherit third-language-costs-nothing;
     inherit shell-finds-its-buffers;
     inherit
       rescue-actions-have-text
@@ -9205,9 +9480,12 @@ let
     #   minibuffer**, with no second surface.
     # ===================================================================
     m6 = pkgs.linkFarmFromDrvs "check-m6" [
-      # Both languages complete, and the proof that the generator refuses the
-      # opposite.
+      # Every language complete and declared, and the proof that the generator
+      # refuses the opposite.
       i18n-complete
+      languages-are-declared
+      buffer-tag-rows-have-text
+      third-language-costs-nothing
       i18n-missing-key-fails
       group-mark-outside-translation
       niri-actions-translated
@@ -9388,6 +9666,7 @@ let
       buffer-states-have-text
       design-constants-match-tokens
       buffers-use-the-design-crate
+      ink-is-not-a-count
       separators-come-from-chrome
       syntax-table-generated
       syntax-refusal-refuses

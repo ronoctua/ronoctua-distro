@@ -65,8 +65,6 @@ KEYS = [
     "ext-anonymous",
 ]
 
-LANGUAGES = ["pt-BR", "en-GB"]
-
 # The colours the popup uses, as `group.name` in `assets/tokens/colors.nix`.
 COLOURS = [
     ("surface", "base"),
@@ -88,11 +86,11 @@ def camel(name: str) -> str:
     return head + "".join(part[:1].upper() + part[1:] for part in rest)
 
 
-def texts(i18n: pathlib.Path) -> dict:
+def texts(i18n: pathlib.Path, languages: list[str]) -> dict:
     """Every key, in every language, or a failure naming what is missing."""
     out = {}
     missing = []
-    for language in LANGUAGES:
+    for language in languages:
         path = i18n / f"{language}.ftl"
         if not path.is_file():
             sys.exit(f"ERROR: {path} is missing")
@@ -231,6 +229,9 @@ def main() -> None:
     parser.add_argument("--host", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--out", required=True, type=pathlib.Path)
+    # The languages, from `assets/i18n/languages.nix`. The FIRST is the base:
+    # it is what the cross-check reads and what the popup falls back to.
+    parser.add_argument("--languages", required=True, nargs="+")
     args = parser.parse_args()
 
     table = manifest(args.version)
@@ -241,12 +242,15 @@ def main() -> None:
                 "by any site; see the comment at the top of this file"
             )
 
-    all_texts = texts(args.i18n)
+    all_texts = texts(args.i18n, args.languages)
     colours_of = colours(args.colors)
     measures = spacing(args.space)
     # The sources live next to this output, because the derivation copies them
     # into the build directory first.
-    cross_check(args.out, {"TEXT": all_texts[LANGUAGES[0]], "COLOUR": colours_of, "SPACE": measures})
+    cross_check(
+        args.out,
+        {"TEXT": all_texts[args.languages[0]], "COLOUR": colours_of, "SPACE": measures},
+    )
 
     body = "\n".join(
         [
@@ -260,11 +264,21 @@ def main() -> None:
             "",
             "const ALL = " + json.dumps(all_texts, ensure_ascii=False, indent=2) + ";",
             "",
-            "// The browser's own language decides, and pt-BR is the fallback:",
-            "// this is one person's distro and that is the language they read.",
+            "// The browser's own language decides, and the base language is the",
+            "// fallback — the same one `ronoctua_i18n::DEFAULT` falls back to.",
+            "//",
+            "// A LOOKUP AND NOT A TERNARY. The ternary this replaced could only",
+            "// ever answer one of two, so a third language would have been",
+            "// generated into ALL, shipped in the extension, and never chosen.",
+            "// The match is on the SUBTAG (`pt` finds `pt-BR`), because a browser",
+            "// reports `pt-PT` and `en-US` and neither is a name in this list.",
+            "const ALL_TAGS = " + json.dumps(args.languages) + ";",
             "const WHICH = (globalThis.chrome && chrome.i18n",
-            "  ? chrome.i18n.getUILanguage() : 'pt-BR').toLowerCase();",
-            "export const TEXT = WHICH.startsWith('pt') ? ALL['pt-BR'] : ALL['en-GB'];",
+            f"  ? chrome.i18n.getUILanguage() : {json.dumps(args.languages[0])}).toLowerCase();",
+            "const PICKED = ALL_TAGS.find((t) => t.toLowerCase() === WHICH)",
+            "  || ALL_TAGS.find((t) => WHICH.split('-')[0] === t.split('-')[0].toLowerCase())",
+            f"  || {json.dumps(args.languages[0])};",
+            "export const TEXT = ALL[PICKED];",
             "",
             "export const COLOUR = " + json.dumps(colours_of, ensure_ascii=False, indent=2) + ";",
             "",
@@ -278,7 +292,9 @@ def main() -> None:
         json.dumps(table, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (args.out / "generated.js").write_text(body, encoding="utf-8")
-    print(f"OK: manifest and table generated ({len(KEYS)} keys x {len(LANGUAGES)} languages)")
+    print(
+        f"OK: manifest and table generated ({len(KEYS)} keys x {len(args.languages)} languages)"
+    )
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ import uharfbuzz as hb
 from fontTools.ttLib import TTFont
 
 # THE LEXICON'S CONTRACT IS SHARED with the glyph generator.
-from lexicon import search_forms, words_of, translate
+from lexicon import SOURCE, search_forms, subtag_of, translate, words_of
 
 # The base a combining mark is drawn on top of.
 #
@@ -71,13 +71,13 @@ DOTTED_CIRCLE = "◌"
 # `family:simbolo` still finds it, because a search tag is interface text
 # and not a name. The third is the label.
 FAMILIES = {
-    "L": ("letter", "letra", "Letra"),
-    "N": ("number", "numero", "Número"),
-    "S": ("symbol", "simbolo", "Símbolo"),
-    "P": ("punctuation", "pontuacao", "Pontuação"),
-    "M": ("mark", "marca", "Marca"),
-    "Z": ("other", "outro", "Outro"),
-    "C": ("other", "outro", "Outro"),
+    "L": ("letter", {"en": ["letter"], "pt": ["letra", "letra"]}),
+    "N": ("number", {"en": ["number"], "pt": ["numero", "número"]}),
+    "S": ("symbol", {"en": ["symbol"], "pt": ["simbolo", "símbolo"]}),
+    "P": ("punctuation", {"en": ["punctuation"], "pt": ["pontuacao", "pontuação"]}),
+    "M": ("mark", {"en": ["mark"], "pt": ["marca", "marca"]}),
+    "Z": ("other", {"en": ["other"], "pt": ["outro", "outro"]}),
+    "C": ("other", {"en": ["other"], "pt": ["outro", "outro"]}),
 }
 
 
@@ -275,19 +275,19 @@ def shape_to_one_glyph(font_file: pathlib.Path, emojis: list[dict]) -> list[str]
 # English (invariant 18). The other two are SEARCH: English tags and the Portuguese
 # label, and both still find the whole group.
 EMOJI_GROUPS = {
-    "Smileys & Emotion": ("faces", "smileys emotion carinhas", "Carinhas e emoções"),
-    "People & Body": ("people", "people body pessoas", "Pessoas e corpo"),
-    "Animals & Nature": ("nature", "animals nature natureza", "Animais e natureza"),
-    "Food & Drink": ("food", "food drink comida", "Comida e bebida"),
-    "Travel & Places": ("travel", "travel places viagem", "Viagem e lugares"),
-    "Activities": ("activities", "activities atividades", "Atividades"),
-    "Objects": ("objects", "objects objetos", "Objetos"),
-    "Symbols": ("symbols", "symbols simbolos", "Símbolos"),
-    "Flags": ("flags", "flags bandeiras", "Bandeiras"),
+    "Smileys & Emotion": ("faces", {"en": "smileys emotion carinhas", "pt": "Carinhas e emoções"}),
+    "People & Body": ("people", {"en": "people body pessoas", "pt": "Pessoas e corpo"}),
+    "Animals & Nature": ("nature", {"en": "animals nature natureza", "pt": "Animais e natureza"}),
+    "Food & Drink": ("food", {"en": "food drink comida", "pt": "Comida e bebida"}),
+    "Travel & Places": ("travel", {"en": "travel places viagem", "pt": "Viagem e lugares"}),
+    "Activities": ("activities", {"en": "activities atividades", "pt": "Atividades"}),
+    "Objects": ("objects", {"en": "objects objetos", "pt": "Objetos"}),
+    "Symbols": ("symbols", {"en": "symbols simbolos", "pt": "Símbolos"}),
+    "Flags": ("flags", {"en": "flags bandeiras", "pt": "Bandeiras"}),
 }
 
 
-# The five skin tone modifiers (Fitzpatrick) -> (id, en name, pt name).
+# The five skin tone modifiers (Fitzpatrick) -> (id, words per subtag).
 #
 # The tone does NOT come from the name: in English it arrives as "light skin tone" at the
 # end, but in Portuguese the CLDR writes "pele clara", and there are emoji whose name mentions
@@ -299,11 +299,11 @@ EMOJI_GROUPS = {
 # The FIRST element is the ID (it builds `unicode-tone-<id>`, hence English); the second
 # is the Portuguese search form; the third, the label.
 TONES = {
-    0x1F3FB: ("light", "claro", "Clara"),
-    0x1F3FC: ("medium-light", "medio-claro", "Clara média"),
-    0x1F3FD: ("medium", "medio", "Média"),
-    0x1F3FE: ("medium-dark", "medio-escuro", "Escura média"),
-    0x1F3FF: ("dark", "escuro", "Escura"),
+    0x1F3FB: ("light", {"en": "light skin tone", "pt": "Clara claro pele tone"}),
+    0x1F3FC: ("medium-light", {"en": "medium-light skin tone", "pt": "Clara média medio-claro pele tone"}),
+    0x1F3FD: ("medium", {"en": "medium skin tone", "pt": "Média medio pele tone"}),
+    0x1F3FE: ("medium-dark", {"en": "medium-dark skin tone", "pt": "Escura média medio-escuro pele tone"}),
+    0x1F3FF: ("dark", {"en": "dark skin tone", "pt": "Escura escuro pele tone"}),
 }
 
 
@@ -320,7 +320,7 @@ def tom_de(seq: list[int]) -> str:
     return ""
 
 
-def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
+def emoji_lines(emojis: list[dict], cldr: dict[str, dict], subtags: list[str]) -> list[dict]:
     """One record per emoji, with the tags coming from the CLDR.
 
     `seq` is what gets COPIED and `shows` is what gets DRAWN — here the two are
@@ -331,37 +331,40 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
     not_in = []
     for e in emojis:
         raw_text = "".join(chr(c) for c in e["seq"])
-        a_pt, a_en = annotation(pt, raw_text), annotation(en, raw_text)
-        gid, g_en, g_pt = EMOJI_GROUPS.get(e["group"], ("other", "other outro", "Outro"))
+        said = {l: annotation(cldr[l], raw_text) for l in subtags}
+        gid, g_words = EMOJI_GROUPS.get(e["group"], ("other", {"en": "other outro"}))
 
-        name = safe(a_en.get("name") or e["name"])
-        # The tags: the name and the CLDR keywords in both languages, plus the
+        name = safe(said[SOURCE].get("name") or e["name"])
+        # The tags: the name and the CLDR keywords in EVERY language, plus the
         # group's name. The phrases go in WHOLE — the buffer matches a word prefix
         # inside the tag, so `risonho` finds `rosto risonho`.
         # The FAMILY also goes in as a tag, as with the others: the `Emoji` label
         # the panel shows has to find, when typed into the search, the whole
         # family — and it is the `symbols-filters` check that ties the two together.
-        tags_en = {name.lower(), g_en, "emoji"} | {
-            safe(k).lower() for k in a_en.get("keys", [])
-        }
-        tags_pt = {g_pt.lower(), "emoji"} | {
-            safe(k).lower() for k in a_pt.get("keys", [])
-        }
-        if a_pt.get("name"):
-            tags_pt.add(safe(a_pt["name"]).lower())
-        # The TONE goes in as a TAG, for the same reason as the family and the group: the label
-        # the panel shows has to find, when typed into the search, the whole tone.
-        # The CLDR already writes "pele clara" in the name, but not in every language
-        # nor in every sequence — relying on that would be relying on luck.
         tone = tom_de(e["seq"])
-        if tone:
-            # The id is ALREADY the English form; the two Portuguese ones — label and unaccented
-            # form — go in together, for the same reason as the families.
-            t_id, t_pt, t_label = next(v for v in TONES.values() if v[0] == tone)
-            tags_en |= {t_id, "skin", "tone"}
-            tags_pt |= {t_label.lower(), t_pt, "pele", "tone"}
-        tags_en |= {w for k in tags_en for w in words_of(k)}
-        tags_pt |= {w for k in tags_pt for w in words_of(k)}
+        t_words = next((v[1] for v in TONES.values() if v[0] == tone), {}) if tone else {}
+        tags = {}
+        for language in subtags:
+            # The group's and the tone's words fall back to the SOURCE, because
+            # most of them are not translated at all — a language with no entry
+            # gets the English rather than nothing.
+            one = {
+                g_words.get(language, g_words.get(SOURCE, "")).lower(),
+                "emoji",
+            } | {safe(k).lower() for k in said[language].get("keys", [])}
+            if said[language].get("name"):
+                one.add(safe(said[language]["name"]).lower())
+            # The TONE goes in as a TAG, for the same reason as the family and
+            # the group: the label the panel shows has to find, when typed into
+            # the search, the whole tone. The CLDR already writes "pele clara"
+            # in the name, but not in every language nor in every sequence —
+            # relying on that would be relying on luck.
+            if tone:
+                one.add(t_words.get(language, t_words.get(SOURCE, tone)).lower())
+            one |= {w for k in one for w in words_of(k)}
+            tags[language] = one
+        tags[SOURCE].add(name.lower())
+        tags[SOURCE] |= set(words_of(name))
 
         not_in.append(
             {
@@ -380,9 +383,10 @@ def emoji_lines(emojis: list[dict], pt: dict, en: dict) -> list[dict]:
                 "block": "",
                 "decomp": "",
                 "width": 2,
-                "tags_en": sorted(t for t in tags_en if t),
-                "tags_pt": sorted(t for t in tags_pt if t),
-                "search": sorted(search_forms(tags_pt)),
+                # ONE FIELD PER LANGUAGE, and not a nested object: the buffer
+                # has no JSON parser (invariant 11).
+                **{f"tags_{l}": sorted(x for x in w if x) for l, w in tags.items()},
+                "search": sorted(search_forms(tags)),
             }
         )
     return not_in
@@ -398,6 +402,7 @@ def build_index(
     lexicon: dict,
     cmap_emoji: set,
     ja_e_emoji: set,
+    subtags: list[str],
 ) -> tuple[list, dict]:
     block_list = read_blocks(ucd)
     aliases = read_aliases(ucd)
@@ -434,7 +439,7 @@ def build_index(
             continue
 
         category = fields[2]
-        family, fam_pt, fam_label = FAMILIES.get(category[0], ("other", "outro", "Outro"))
+        family, fam_words = FAMILIES.get(category[0], ("other", {"en": ["other"]}))
         block = block_of(cp, block_list)
         other_names = aliases.get(cp, [])
 
@@ -462,16 +467,20 @@ def build_index(
         tokens = words_of(name)
         for other in other_names:
             tokens += words_of(other)
-        tags_en, tags_pt, has_pt = translate(tokens, lexicon, no_translation)
-        tags_en.add(family)
-        # THE TWO PORTUGUESE FORMS: the accented LABEL, which is what the panel
-        # shows and what the `symbols-filters` check types, and the unaccented form,
-        # which is what one writes in a `family:simbolo` filter. Sending only one
-        # breaks the other — the first version of this line sent only the label, and
-        # inverting the tuple swapped it for the unaccented form with nothing
-        # warning beyond the check.
-        tags_pt.add(fam_label.lower())
-        tags_pt.add(fam_pt)
+        tags, found = translate(tokens, lexicon, subtags, no_translation)
+        # BOTH FORMS OF THE FAMILY, in every language: the accented LABEL, which
+        # is what the panel shows and what the `symbols-filters` check types,
+        # and the unaccented form, which is what one writes in a
+        # `family:simbolo` filter. Sending only one breaks the other — the first
+        # version of this sent only the label, and inverting the tuple swapped
+        # it for the unaccented form with nothing warning beyond the check.
+        #
+        # A LIST, and added WHOLE — never through `words_of`, which splits on
+        # `[^A-Za-z0-9]` and would cut `símbolo` into `s` and `mbolo`. That is
+        # exactly what a first pass at this did, and `symbols-filters` caught
+        # it: the panel showed "Símbolo" and the search found 230 of 3,658.
+        for language in subtags:
+            tags[language].update(fam_words.get(language, fam_words[SOURCE]))
 
         # WHAT THE GRID DRAWS, in CODEPOINTS and not in text.
         #
@@ -500,9 +509,8 @@ def build_index(
                 # markers are left out: they say HOW to decompose, and what the
                 # sheet answers is "what parts is this made of".
                 "decomp": "" if fields[5].startswith("<") else fields[5],
-                "tags_en": sorted(tags_en),
-                "tags_pt": sorted(tags_pt),
-                "search": sorted(search_forms(tags_pt)),
+                **{f"tags_{l}": sorted(w) for l, w in tags.items()},
+                "search": sorted(search_forms(tags)),
             }
         )
         # OMITTED WHEN IT IS 1, which is the case for 96% of them: always writing it
@@ -510,7 +518,9 @@ def build_index(
         if width != 1:
             lines[-1]["width"] = width
 
-        if not has_pt:
+        # The SOURCE language is never "untranslated": the token IS the English
+        # word. What is reported is every other language.
+        if not all(found[l] for l in subtags if l != SOURCE):
             without_pt.append(f"U+{cp:04X} {name}")
 
     estatisticas = {
@@ -532,6 +542,9 @@ def main() -> int:
     ap.add_argument("--lexicon", type=pathlib.Path, required=True)
     ap.add_argument("--emoji-test", type=pathlib.Path, required=True)
     ap.add_argument("--cldr", type=pathlib.Path, required=True, help="common/ do CLDR")
+    # The languages, from `assets/i18n/languages.nix`. The tags, the CLDR
+    # bundles and the lexicon are all keyed on the subtag.
+    ap.add_argument("--languages", required=True, nargs="+")
     ap.add_argument("--font-emoji", type=pathlib.Path, required=True)
     ap.add_argument("--ucd-version", required=True)
     # THE TWO FLOORS COME FROM OUTSIDE so the negative fixture can exercise the
@@ -560,7 +573,10 @@ def main() -> int:
     ja_e_emoji = {e["seq"][0] for e in emojis if len(e["seq"]) == 1}
 
     lexicon = tomllib.loads(args.lexicon.read_text(encoding="utf-8"))
-    lines, st = build_index(args.ucd, cmap, advance, lexicon, cmap_emoji, ja_e_emoji)
+    subtags = [subtag_of(l) for l in args.languages]
+    lines, st = build_index(
+        args.ucd, cmap, advance, lexicon, cmap_emoji, ja_e_emoji, subtags
+    )
     if not emojis:
         die("emoji-test.txt yielded no fully-qualified emoji at all")
 
@@ -581,19 +597,22 @@ def main() -> int:
         print("       codepoints are all there.", file=sys.stderr)
         sys.exit(1)
 
-    pt = ler_cldr(args.cldr, "pt")
-    en = ler_cldr(args.cldr, "en")
-    no_cldr = [
-        "".join(chr(c) for c in e["seq"])
-        for e in emojis
-        if not annotation(pt, "".join(chr(c) for c in e["seq"])).get("keys")
-    ]
-    if no_cldr:
-        die(
-            f"{len(no_cldr)} emoji with no Portuguese keyword in the CLDR "
-            f"(e.g. {no_cldr[:5]}). Anyone searching in Portuguese does not find them."
-        )
-    lines.extend(emoji_lines(emojis, pt, en))
+    # ONE CLDR BUNDLE PER LANGUAGE, keyed by subtag — the CLDR ships them that
+    # way, one `annotations/<subtag>.xml` per language, so this generalises by
+    # asking rather than by growing a second variable.
+    cldr = {l: ler_cldr(args.cldr, l) for l in subtags}
+    for language in subtags:
+        no_cldr = [
+            "".join(chr(c) for c in e["seq"])
+            for e in emojis
+            if not annotation(cldr[language], "".join(chr(c) for c in e["seq"])).get("keys")
+        ]
+        if no_cldr:
+            die(
+                f"{len(no_cldr)} emoji with no {language} keyword in the CLDR "
+                f"(e.g. {no_cldr[:5]}). Anyone searching in {language} does not find them."
+            )
+    lines.extend(emoji_lines(emojis, cldr, subtags))
     st["emoji"] = len(emojis)
     st["total"] = len(lines)
 
@@ -612,7 +631,7 @@ def main() -> int:
     # --- coverage.md ------------------------------------------------------
     hits_without = sum(st["untranslated"].values())
     translated = sum(
-        1 for r in lines for t in r["tags_en"] if t in lexicon
+        1 for r in lines for t in r.get(f"tags_{SOURCE}", []) if t in lexicon
     )
     total = translated + hits_without
     coverage = 100.0 * translated / total if total else 0.0
@@ -669,7 +688,7 @@ def main() -> int:
     # They live in the GENERATOR, and not in a check that reads the JSON afterwards, for the same
     # reason as the glyph generator: what knows which character was left untranslated
     # is what built the table. The output does NOT say — an untranslated word goes into
-    # `tags_pt` untranslated.
+    # the tag list untranslated.
     if len(st["no_pt"]) > args.cap_no_pt:
         print("", file=sys.stderr)
         print(

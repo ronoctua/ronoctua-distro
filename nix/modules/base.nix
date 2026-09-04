@@ -193,12 +193,24 @@ in
     # three.
     i18n = {
       defaultLocale = lib.mkDefault "en_GB.UTF-8";
-      supportedLocales = [
-        "en_GB.UTF-8/UTF-8"
-        "pt_BR.UTF-8/UTF-8"
-        "en_US.UTF-8/UTF-8"
-        "C.UTF-8/UTF-8"
-      ];
+      # EVERY UI LANGUAGE GETS ITS glibc LOCALE, derived from the one list.
+      #
+      # These are two different axes and the module's own assertion says so —
+      # but they meet here: `Texts::from_env` reads `LANG`, and a UI language
+      # whose locale was never generated means `LANG` never carries its name,
+      # so the interface falls back to English without a word. Deriving the
+      # list is what keeps "declared" and "reachable" the same set.
+      #
+      # `en_US` is not a UI language and stays by hand: it is here for whoever
+      # wants American formats, and `C.UTF-8` for the rescue console.
+      supportedLocales =
+        (map (l: "${lib.replaceStrings [ "-" ] [ "_" ] l}.UTF-8/UTF-8") (
+          import ../../assets/i18n/languages.nix
+        ))
+        ++ [
+          "en_US.UTF-8/UTF-8"
+          "C.UTF-8/UTF-8"
+        ];
       extraLocaleSettings = {
         LC_MESSAGES = lib.mkDefault "en_GB.UTF-8";
         LC_TIME = lib.mkDefault "en_GB.UTF-8";

@@ -16,7 +16,7 @@ the column-0 lines with `=`. Continuations (indented lines), comments and
 blank lines are ignored.
 
 Usage:
-    gen-i18n.py <ftl-dir> <output.rs>
+    gen-i18n.py <ftl-dir> <output.rs> <language>...
 """
 
 from __future__ import annotations
@@ -24,10 +24,6 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-
-# MANDATORY languages. Adding one here forces the file to exist and to
-# be complete — which is the point.
-LANGUAGES = ("en-GB", "pt-BR")
 
 # A Fluent message key in column 0. Attributes (`.attr = …`) and terms
 # (`-term = …`) are left out on purpose: they are not addressable keys.
@@ -82,13 +78,18 @@ def const_de(key: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
+    if len(sys.argv) < 4:
         print(__doc__, file=sys.stderr)
         return 2
     source, out_path = Path(sys.argv[1]), Path(sys.argv[2])
+    # MANDATORY languages, and they come from `assets/i18n/languages.nix`
+    # rather than from a constant here. Naming one forces its file to exist and
+    # to be complete — which is the point, and which is why this is a declared
+    # list and not a glob of the directory.
+    languages = tuple(sys.argv[3:])
 
     tables: dict[str, dict[str, str]] = {}
-    for language in LANGUAGES:
+    for language in languages:
         path_of = source / f"{language}.ftl"
         if not path_of.exists():
             print(f"ERROR: {path_of} is missing", file=sys.stderr)
@@ -98,7 +99,7 @@ def main() -> int:
     # The comparison runs BOTH ways. Only checking "every en-GB key
     # exists in pt-BR" would let an orphan translation through, which is dead
     # translation piling up in the file.
-    base, *resto = LANGUAGES
+    base, *resto = languages
     failed = False
     for language in resto:
         missing = sorted(set(tables[base]) - set(tables[language]))
@@ -155,15 +156,39 @@ def main() -> int:
     lines.append("];")
     lines.append("")
     lines.append("/// Mandatory languages. An incomplete `.ftl` fails the build.")
-    lines.append(f"pub const LANGUAGES: [&str; {len(LANGUAGES)}] = [")
-    for i in LANGUAGES:
+    lines.append("///")
+    lines.append("/// The FIRST is the base every other is compared against.")
+    lines.append(f"pub const LANGUAGES: [&str; {len(languages)}] = [")
+    for i in languages:
         lines.append(f'    "{i}",')
     lines.append("];")
+    lines.append("")
+    # THE BUNDLE LOADER IS GENERATED, and it has to be: `include_str!` takes a
+    # literal, so it cannot be put in a loop. Written by hand this was the one
+    # place a declared language could still be missing its body — the name
+    # would be in `LANGUAGES`, the file would be on disk, and `Texts::fresh`
+    # would answer `None` for it, falling back silently.
+    lines.append("/// Each language's `.ftl`, embedded in the binary.")
+    lines.append("///")
+    lines.append("/// Embedded and not read from disk: the installer runs before any")
+    lines.append("/// filesystem is mounted (section 7.1), and a shell with no text is")
+    lines.append("/// useless. Same reason as the face embedded in the renderer.")
+    lines.append("#[must_use]")
+    lines.append("pub fn face(language: &str) -> Option<&'static str> {")
+    lines.append("    match language {")
+    for i in languages:
+        lines.append(f'        "{i}" => Some(include_str!(concat!(')
+        lines.append('            env!("RONOCTUA_I18N_DIR"),')
+        lines.append(f'            "/{i}.ftl"')
+        lines.append("        ))),")
+    lines.append("        _ => None,")
+    lines.append("    }")
+    lines.append("}")
     lines.append("")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"OK: {len(every)} keys in {len(LANGUAGES)} languages -> {out_path}")
+    print(f"OK: {len(every)} keys in {len(languages)} languages -> {out_path}")
     return 0
 
 

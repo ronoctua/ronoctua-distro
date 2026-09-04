@@ -14,7 +14,7 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **Nada imperativo.** Se não está no flake, não existe.
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta.
-8. **Zero string literal em UI.** Tudo por `text-key`; `pt-BR` e `en-GB` completos.
+8. **Zero string literal em UI.** Tudo por `text-key`, completo em TODOS os idiomas declarados.
 9. **Zero valor visual hard-coded** — cor, fonte, tamanho, espaçamento, codepoint: tudo por token.
 10. **Ícones da UI são glifos da fonte.** O superpacote é só fallback de pixmap para apps
     estrangeiros; nenhum componente do design system o consulta.
@@ -24,14 +24,15 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 14. **Nenhuma chrome além do rodapé.** Sem barra, relógio, taskbar, menu iniciar, dock, ícone de
     desktop ou popup flutuante. Tray, notificação e expansão são A MESMA superfície crescendo.
 15. **Sem cards, sem sombra, sem elevação.**
-16. `noctua` e `ronoctua-distro` definidos em **um único lugar** cada — `nix/modules/base.nix`.
+16. `noctua` e `ronoctua-distro` definidos em **um único lugar** cada — `nix/modules/base.nix`;
+    os **idiomas**, em `assets/i18n/languages.nix`, e nenhum outro sítio os nomeia.
 17. **Sem Docker.**
 18. **Todo NOME, COMENTÁRIO, MENSAGEM e COMMIT são inglês** — arquivo, comando, check, chave,
     `[[bin]]`, identificador (`let`, `fn` e parâmetro inclusive), `//`, `#`, docstring, `assert`,
     `bail!`, `.context`, saída de check e ajuda de linha de comando; cobra o `english-names`.
-    pt-BR **só onde existe o par en-GB**: os 6 docs, o VALOR de chave nos DOIS `.ftl`, a tag de
-    busca e o léxico. **Onde cabe um idioma só, ele é o INGLÊS** — descrição de unidade,
-    `.desktop`, manifesto da extensão, alias do shell, `Job::trouble`.
+    pt-BR **só onde o valor existe em TODOS os idiomas declarados**: os 6 docs, o VALOR de chave
+    em TODOS os `.ftl`, a tag de busca e o léxico. **Onde cabe um idioma só, ele é o INGLÊS** —
+    descrição de unidade, `.desktop`, manifesto da extensão, alias do shell, `Job::trouble`.
 
 Ao bater num invariante: **pare e reporte.** Não contorne, não peça exceção implícita.
 
@@ -297,7 +298,8 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 
 ```
 assets/tokens/  tokens em Nix (verdade);  assets/icons/  app id e categoria → glifo;  assets/lexicon/  à mão
-assets/i18n/  pt-BR e en-GB, todo texto de UI (inv. 8);  nix/fonts.nix  5 derivações + as 27 variantes + PSF
+assets/i18n/  languages.nix (a LISTA) + um .ftl por idioma, todo texto de UI (inv. 8)
+nix/fonts.nix  5 derivações + as 27 variantes + PSF
 nix/fontconfig.nix     fallback do sistema;  nix/primary-font.nix  a do renderer, sem emoji
 nix/graphics-host.nix  driver para host não-NixOS;  nix/rust.nix  os caminhos do store
 nix/dev.nix  loop aninhado; reload.nix observa, footer-single.nix reinicia;  crates/  grafo no ARCHITECTURE
@@ -319,7 +321,11 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **Dentro de `''…''` valem DOIS idiomas**: `#`/`//` é do script embutido, mas `${...}` é do Nix e vive até em linha comentada; **`` ` `` é substituição de comando ATÉ no comentário**; e a fence FECHA num `''` qualquer — inclusive dentro de comentário (`'''`, `''$`, `''\` escapam).
 - **Chave de texto tem SETE derivados**, só um é o `.ftl`; **pergunta do instalador tem 13** — os dois no ARCHITECTURE. **`to_linear()` desfaz a curva sRGB**; **célula = 0,600 × fonte**; **caixa 1,25 em** contra entrelinha 1,45. `tiny-skia` entrega RGBA PRÉ-MULTIPLICADO. **Uma run ocupa `heights.of(escala)` CÉLULAS, e a escala alarga tanto quanto sobe**: `Large` são DUAS, e a régua em `line+1` virava sublinhado. Título é do tamanho do CORPO — hierarquia é cor e ar, nunca tamanho nem régua; os dois `DisplayList::nothing_*` cobram isso em TODO buffer, em TODO estado.
 - **Fallback silencioso precisa de check**: a tabela de tray era validada no build e não chegava ao
-  Rust. **Cortar por CODEPOINT inventa desenho**: elide por CLUSTER. **Cor de token não alcança emoji**.
+  Rust. **Há DUAS réguas de célula, e elas respondem a perguntas diferentes**:
+  `ronoctua_protocol::cells` conta CLUSTERES — reserva, confere e corta, uma definição para os dois
+  lados —, e o campo `width` do banco é o AVANÇO (emoji vale 2 células, e só a fonte sabe). Cortar por
+  CODEPOINT inventa desenho; medir avanço com a contagem espreme a coluna vizinha. Cobra o
+  `ink-is-not-a-count`. **Cor de token não alcança emoji**.
 - **`Limits::downlevel_defaults()` trava a textura em 2048 px** e a superfície É textura: `Surface::configure` devolve `()` e **mata o processo** — use `using_resolution`. **`systemd-run --scope` é SÍNCRONO**: no `calloop` de uma thread, esperar congela o rodapé. **Check contra o CÓDIGO, não o CRITÉRIO,** fecha marco vazio.
 - **`cargo test` não tinha os cinco programas, e todo teste de ffmpeg era VAZIO** — eles saem por
   `let Ok(x) = ffmpeg() else { return }`, e nem o devshell nem a derivação `tests` definiam as

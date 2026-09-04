@@ -734,7 +734,16 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             .iter()
             .map(|k| ronoctua_protocol::Phrase {
                 key: k.clone(),
-                text: texts.t(k),
+                // THE RESERVED KEY IS ANSWERED WITH THE TAG, not with a
+                // translation. `Texts::t` would give back `[-language]` — it
+                // is not a message and by construction cannot be one, because
+                // Fluent reserves the leading `-` for terms and the generator
+                // refuses them as keys. See `Phrases::LANGUAGE`.
+                text: if k == ronoctua_design::Phrases::LANGUAGE {
+                    texts.language().to_owned()
+                } else {
+                    texts.t(k)
+                },
             })
             .collect();
         instance.event(&ronoctua_protocol::Input::Phrases(said))?;

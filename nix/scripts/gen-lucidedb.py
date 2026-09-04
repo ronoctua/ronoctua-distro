@@ -48,7 +48,7 @@ from fontTools.ttLib import TTFont, newTable
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
 # THE LEXICON'S CONTRACT IS SHARED with the other two generators.
-from lexicon import STOPWORDS, search_forms, words_of, translate
+from lexicon import SOURCE, STOPWORDS, search_forms, subtag_of, translate, words_of
 
 # The elements Lucide's SVGs use, and each one's attributes.
 #
@@ -307,6 +307,9 @@ def main() -> int:
     p.add_argument("--icons", type=pathlib.Path, required=True)
     p.add_argument("--font", type=pathlib.Path, required=True)
     p.add_argument("--lexicon", type=pathlib.Path, required=True)
+    # The languages, from `assets/i18n/languages.nix`. The tags are built for
+    # every one of them; the lexicon is keyed on the subtag.
+    p.add_argument("--languages", required=True, nargs="+")
     p.add_argument(
         "--other",
         type=pathlib.Path,
@@ -375,6 +378,7 @@ def main() -> int:
 
     # --- the tags -----------------------------------------------------------
     lexicon = tomllib.loads(args.lexicon.read_text(encoding="utf-8"))
+    subtags = [subtag_of(l) for l in args.languages]
     no_translation: Counter[str] = Counter()
     without_pt = []
     categories: Counter[str] = Counter()
@@ -409,10 +413,12 @@ def main() -> int:
             tokens += words_of(t)
 
         ocorrencias_totais += sum(1 for t in tokens if t not in STOPWORDS)
-        tags_en, tags_pt, has_pt = translate(tokens, lexicon, no_translation)
-        if not has_pt:
+        tags, found = translate(tokens, lexicon, subtags, no_translation)
+        # The SOURCE language is never "untranslated": the token IS the English
+        # word. What gets reported is every other language.
+        if not all(found[l] for l in subtags if l != SOURCE):
             without_pt.append(name)
-        search_terms = search_forms(tags_pt)
+        search_terms = search_forms(tags)
 
         record = {
             "name": name,
@@ -426,8 +432,11 @@ def main() -> int:
         }
         if aliases_of:
             record["aliases"] = aliases_of
-        record["tags_en"] = sorted(tags_en)
-        record["tags_pt"] = sorted(tags_pt)
+        # ONE FIELD PER LANGUAGE, and not a nested object: the buffer has no
+        # JSON parser (invariant 11) — it finds `"name":[` and reads to the
+        # next `]`. A nested map would be read as one list of garbage.
+        for language, words in tags.items():
+            record[f"tags_{language}"] = sorted(words)
         if search_terms:
             record["search"] = sorted(search_terms)
         records.append(record)

@@ -513,9 +513,21 @@ O critério do check é a **área de transferência do sistema** (`wl-paste` den
 Elas são as palavras que **acham** aquele glifo, e até agora eram invisíveis: dava para procurar por
 "mapa", cair no `cod-location` e nunca descobrir por quê.
 
-Ordem fixa **pt primeiro, en depois** — é o que faz a elisão cortar o inglês antes do português numa
-tela estreita, sem o componente saber de idioma (invariante 11). O inglês que já está em português
-não repete: ver a mesma palavra duas vezes na mesma linha parece defeito.
+Ordem **do leitor primeiro** — é o que faz a elisão cortar o idioma dos OUTROS numa tela estreita.
+A palavra que já apareceu não repete: ver a mesma duas vezes na mesma linha parece defeito.
+
+Era ordem FIXA, pt primeiro, e isso foi um defeito desde o dia em que houve dois leitores: quem lia
+a interface em inglês tinha o próprio idioma cortado primeiro, justamente na linha que existe para
+dizer como o glifo se chama. O arranjo "que funciona sem saber" resolve ORDENAR duas coisas
+mostradas; não resolve escolher entre elas, e foi por isso que aqui entrou uma porta.
+
+A porta é a chave reservada **`-language`**, que o hospedeiro semeia junto das frases. Ela não afrouxa
+o invariante 11: o valor é uma ETIQUETA, nunca uma frase, e a única coisa que o buffer pode fazer com
+ela é INDEXAR dado que já tinha — escolher qual das próprias listas de tags mostra primeiro. Um buffer
+que a usasse para escolher entre duas strings escritas por ele estaria escrevendo UI num idioma, que
+é exatamente o que o invariante proíbe. O `-` na frente não é enfeite: em Fluent um nome com `-` é um
+TERMO, e o `KEY` do gerador exclui termos de propósito — então `-language` não pode colidir com chave
+de texto nenhuma **por construção**.
 
 Discretas por construção, e não por ajuste: `TextDim` é a cor de menor prioridade da paleta, e
 `Scale::Small` é o token `font.size.small` (15 px) contra os 20 px do corpo do buffer. **O nome
@@ -5098,6 +5110,71 @@ justamente o órfão) e respeitar os escapes da fence.
 aceitava os dois idiomas por desenho (`assets/lexicon/tags.en-pt.toml` existe para isso); os de
 glifos e Lucide, só português. A passada uniformizou pelo que já existia — os três aceitam **ambos**.
 Traduzir só para o inglês teria apagado metade de um recurso sob o pretexto de renomear.
+
+#### Uma régua por PERGUNTA, e são duas
+
+Havia seis funções medindo célula, e elas discordavam. Não eram seis respostas para a mesma pergunta:
+eram duas perguntas e quatro cópias mal-feitas delas.
+
+**Contar coisas** — `ronoctua_protocol::cells`, por CLUSTER. É o que RESERVA no buffer
+(`budget::wide` a chama), o que CONFERE no hospedeiro (`columns_of`) e o que CORTA
+(`layout::elide_end` anda os mesmos clusters). Mora no protocolo porque é o crate que os dois lados
+compilam: uma régua com duas definições são duas réguas, e foi assim que `driven::cells` nasceu — uma
+quarta, escrita só porque a do buffer era a errada para um check.
+
+**O avanço** — o campo `width` do banco gerado. Um emoji avança `1,245 em` contra os `0,600` da
+célula, então o cluster conta **um** e cobre **duas** células. Nenhum código pode saber disso: a
+resposta está na fonte, e quem leu a fonte foi o gerador. `Symbol::ink` é quem usa.
+
+As duas não se fundem, e é isso que torna honesto parar em duas. O `ink-is-not-a-count` cobra a
+fronteira: o caractere que o navegador DESENHA nunca chega ao contador, e a run que o desenha orça
+pelo campo medido.
+
+O preço da unificação foi medido antes de ser pago: `unicode-segmentation` entrou no
+`ronoctua-protocol` (que até então tinha zero dependências) e daí no `.wasm` dos buffers. Quatro não
+pagam nada — não chamam `wide`, e o LTO derruba a tabela. Os que pagam: **unicode +0,6%, glyphs
++1,0%, lucide +2,7%, format +37,6%** (102 → 140 KB, o único caso em que a proporção assusta e o
+número absoluto não). No conjunto, **+129 KiB sobre 9,57 MiB**.
+
+E quatro defeitos latentes caíram junto, todos da mesma família: `runs_of` e `wrap_text` mediam e
+CORTAVAM por `chars()` sob um comentário que afirmava, por escrito, que `layout::width` conta
+caracteres — conta clusters; o mapeamento byte→célula do realce fazia o mesmo; e um teste do buffer
+`format` reimplementava o `columns_of` do hospedeiro à mão.
+
+#### Um terceiro idioma, e o que ele custava
+
+A lista de idiomas estava escrita à mão em **95 sítios**, e **41** deles um terceiro idioma obrigaria
+a editar — sem que nada apontasse para os outros 54. Pior: um `.ftl` solto em `assets/i18n` era
+copiado para o store, passava pelo `english-names` e era **ignorado por todo o resto** — nem paridade
+de chave, nem entrada em `LANGUAGES`, nem bundle, nem menu. Presente, processado e inerte.
+
+Agora há uma lista, `assets/i18n/languages.nix`, na mesma forma dos tokens e das notificações. Dela
+saem o enum do módulo, os argumentos dos três geradores de banco, o do `gen-i18n.py`, o do
+`gen-extension.py`, os 24 sítios do `checks.nix` e as tags de cada banco. Os drivers não a leem: eles
+listam o DIRETÓRIO que já recebem em `argv[2]`, porque não linkam o `ronoctua-i18n` de propósito.
+
+Três coisas precisaram de desenho, e não só de encanamento:
+
+1. **O `face()` é GERADO.** `include_str!` recebe literal e não se põe num laço, então o `match`
+   escrito à mão era o último lugar onde um idioma declarado podia ficar sem corpo: o nome estaria em
+   `LANGUAGES`, o arquivo no disco, e `Texts::fresh` responderia `None` calada.
+2. **Três asserções eram pareadas por CONSTRUÇÃO** — `pt != en` no pixel, `grep -c` de um contra o do
+   outro, passos do instalador de um contra os do outro. Duas comparadas entre si é a forma que não
+   cresce: com três, o par continuaria concordando enquanto o novato não dizia nada. Viraram "todos
+   distintos" e "todos iguais".
+3. **O par `(en, pt)` estava na FORMA do dado** — no retorno de `translate()`, nos campos
+   `tags_en`/`tags_pt` do banco, nas structs de três buffers e em duas chaves de texto. Virou um campo
+   por idioma (`tags_<subtag>`, plano — o buffer não tem parser de JSON e leria um objeto aninhado
+   como uma lista de lixo) e uma lista de listas do lado do Rust. O léxico já aceitava a forma nomeada
+   (`{ en = [...], pt = [...] }`), então crescer é acrescentar chave, não reescrever 4 085 linhas.
+
+O que **não** ficou barato, e é honesto dizer: as 1 309 traduções, e as palavras do léxico. Isso é
+trabalho humano e não há encanamento que o remova. O que se removeu foi tudo o que se somava a ele.
+
+O `third-language-costs-nothing` prova o encanamento sem inventar tradução: constrói um `zz-ZZ`
+sintético — o idioma base com cada valor esticado ~20%, que é o que um alemão custa contra o inglês —
+e exige que o gerador o aceite, que `LANGUAGES` vire três, que o `face()` ganhe o braço, e que um
+`zz-ZZ` INCOMPLETO continue sendo recusado.
 
 #### Uma chave de texto tem SETE derivados, e só um deles é o `.ftl`
 

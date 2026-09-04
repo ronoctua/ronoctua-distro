@@ -13,11 +13,42 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
+/// The reserved phrase key that carries the reader's language.
+///
+/// Spelled out here rather than taken from `ronoctua-design`, which these
+/// binaries do not link — the same reason they read the `.ftl` instead of
+/// linking `ronoctua-i18n`. What keeps the two spellings together is
+/// [`hand_phrases`] itself, which is the only place that resolves a declared
+/// key and the only place that could disagree about this one's spelling.
+pub const LANGUAGE: &str = "-language";
+
 /// The languages this system ships, and the ones every driver measures in.
 ///
-/// Written here once. It used to be `["pt-BR", "en-GB"]` typed out in each
-/// binary, which is how a third language becomes a dozen edits nobody finds.
-pub const LANGUAGES: &[&str] = &["en-GB", "pt-BR"];
+/// # Why it is read and not written
+///
+/// It was `&["en-GB", "pt-BR"]`, and before that it was that pair typed out in
+/// each binary — which is how a third language becomes edits nobody finds. A
+/// constant here only moved the problem: it still had to be kept in step with
+/// `assets/i18n/languages.nix` by somebody remembering.
+///
+/// So it asks the DIRECTORY, which every driver already receives as its second
+/// argument. That is the same directory `nix/i18n.nix` fills, and it holds one
+/// `.ftl` per declared language and nothing else — the `languages-are-declared`
+/// check is what makes that true. Linking `ronoctua-i18n` for the list would
+/// undo the reason these binaries do not link it (see this module's header).
+///
+/// Sorted, so a failure reports in the same order twice running.
+pub fn languages(i18n: &str) -> Result<Vec<String>> {
+    let mut out: Vec<String> = std::fs::read_dir(i18n)
+        .with_context(|| format!("could not list {i18n}"))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|n| n.strip_suffix(".ftl").map(ToOwned::to_owned))
+        .collect();
+    out.sort();
+    anyhow::ensure!(!out.is_empty(), "{i18n} holds no .ftl at all");
+    Ok(out)
+}
 
 /// A `.ftl` as a `key -> text` table.
 ///
@@ -57,6 +88,17 @@ pub fn hand_phrases(
     let table = ftl(&format!("{i18n}/{language}.ftl"))?;
     let mut said = Vec::new();
     for k in &d.phrases {
+        // THE RESERVED KEY IS THE LANGUAGE ITSELF, and is not looked up: it is
+        // not a message, and the `-` in front is what makes that true by
+        // construction rather than by convention. The same answer the host
+        // gives in `buffer.rs`.
+        if k == LANGUAGE {
+            said.push(ronoctua_protocol::Phrase {
+                key: k.clone(),
+                text: language.to_owned(),
+            });
+            continue;
+        }
         let Some(text) = table.get(k) else {
             anyhow::bail!(
                 "`{}` declares the phrase `{k}`, which {language}.ftl does not have.\n\
@@ -110,19 +152,6 @@ pub fn keys_of(list: &ronoctua_protocol::DisplayList) -> Vec<(String, u16)> {
         .collect()
 }
 
-/// How many CELLS a string takes, measured the way the host CUTS.
-///
-/// By grapheme cluster, because that is what `ronoctua_render::layout::width`
-/// counts and what `elide_end` walks. The buffers count `chars()` in
-/// `ronoctua_design::budget::wide`, and the two disagree on a combining mark —
-/// so a check that used the buffer's ruler would answer "it fits" about a label
-/// the host is about to cut. What matters here is what the SCREEN does.
-#[must_use]
-pub fn cells(text: &str) -> u16 {
-    use unicode_segmentation::UnicodeSegmentation as _;
-    u16::try_from(text.graphemes(true).count()).unwrap_or(u16::MAX)
-}
-
 /// Every label of this frame that its own budget cuts, in either language.
 ///
 /// # Why this exists at all
@@ -139,13 +168,9 @@ pub fn cells(text: &str) -> u16 {
 /// It REPORTS rather than failing, because a cut can be deliberate — the
 /// transfer queue's errand column reserves eleven cells for a word that runs to
 /// twenty-three, and says so. The caller holds the list of those.
-pub fn too_wide(
-    list: &ronoctua_protocol::DisplayList,
-    i18n: &str,
-    languages: &[&str],
-) -> Result<Vec<TooWide>> {
+pub fn too_wide(list: &ronoctua_protocol::DisplayList, i18n: &str) -> Result<Vec<TooWide>> {
     let mut out = Vec::new();
-    for language in languages {
+    for language in languages(i18n)? {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in keys_of(list) {
             if budget == 0 {
@@ -154,11 +179,11 @@ pub fn too_wide(
             let Some(text) = table.get(&key) else {
                 anyhow::bail!("the frame emits `{key}`, which {language}.ftl does not have");
             };
-            let wide = cells(text);
+            let wide = ronoctua_protocol::cells(text);
             if wide > budget {
                 out.push(TooWide {
                     key,
-                    language: (*language).to_owned(),
+                    language: language.clone(),
                     text: text.clone(),
                     cells: wide,
                     budget,
@@ -178,10 +203,9 @@ pub fn too_wide(
 pub fn labels_fit(
     list: &ronoctua_protocol::DisplayList,
     i18n: &str,
-    languages: &[&str],
     on_purpose: &[(&str, &str)],
 ) -> Result<usize> {
-    let all = too_wide(list, i18n, languages)?;
+    let all = too_wide(list, i18n)?;
     let mut bad = Vec::new();
     for one in all {
         if on_purpose.iter().any(|(p, _)| one.key.starts_with(p)) {
@@ -247,7 +271,6 @@ pub fn note(list: &ronoctua_protocol::DisplayList) {
 /// every hint in the system as one cell too long.
 pub fn every_label_fits(
     i18n: &str,
-    languages: &[&str],
     on_purpose: &[(&str, &str)],
     to_the_edge: u16,
 ) -> Result<usize> {
@@ -263,7 +286,8 @@ pub fn every_label_fits(
          check would pass on a buffer with no text at all"
     );
     let mut bad = Vec::new();
-    for language in languages {
+    let spoken = languages(i18n)?;
+    for language in &spoken {
         let table = ftl(&format!("{i18n}/{language}.ftl"))?;
         for (key, budget) in &seen {
             if *budget == 0 || *budget >= to_the_edge {
@@ -272,7 +296,7 @@ pub fn every_label_fits(
             let Some(text) = table.get(key) else {
                 anyhow::bail!("a frame emits `{key}`, which {language}.ftl does not have");
             };
-            let wide = cells(text);
+            let wide = ronoctua_protocol::cells(text);
             if wide > *budget && !on_purpose.iter().any(|(p, _)| key.starts_with(p)) {
                 bad.push(format!(
                     "in {language}, `{key}` = {text:?} is {wide} cells and the buffer reserved {budget}"
