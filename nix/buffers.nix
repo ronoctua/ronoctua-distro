@@ -180,6 +180,18 @@ let
           runHook postBuild
         '';
 
+        # THE TESTS DO NOT RUN HERE, and the reason is which BATTERY pays.
+        #
+        # This derivation is an input to almost everything, so switching
+        # `doCheck` on here puts the cost on `.#most` — the everyday round —
+        # rather than on the gate. Measured: the eight buffers go from 27.8 s to
+        # 2 min 44 s, which is +2 min 16 s on a battery of sixteen minutes.
+        #
+        # So the tests live in `tested` below, which the `buffers-test` check
+        # builds and which `tests/slow.nix` keeps out of the everyday round.
+        # Same derivation, same phases, one attribute different.
+        doCheck = false;
+
         installPhase = ''
           runHook preInstall
           mkdir -p $out/lib
@@ -195,7 +207,7 @@ let
       // extra
     );
 in
-{
+lib.fix (all: {
   example = buffer {
     name = "example";
     src = ../buffers/example;
@@ -283,4 +295,43 @@ in
     name = "format";
     src = ../buffers/format;
   };
-}
+
+  # THE SAME EIGHT, WITH THEIR OWN TESTS RUN.
+  #
+  # Sixty-nine tests across the eight, and until this existed not one of them
+  # ran: the derivation above compiled the `.wasm` and stopped, and no check
+  # under `tests/` reached them. They were green only for as long as somebody
+  # remembered to run them by hand — and they could not even be run by hand
+  # without knowing which variables to set, because the three browsers embed
+  # their database with `include_str!(env!(…))` and do not compile without it.
+  #
+  # It is the trap `CLAUDE.md` already records once: *"`cargo test` did not have
+  # the five programs, and every ffmpeg test was EMPTY"*. There the variables
+  # were missing and the tests left by the back door in silence; here they are
+  # missing and the crate does not even COMPILE, which is a better failure and
+  # still one nobody was made to see.
+  #
+  # # Why the HOST target, when a buffer is a component
+  #
+  # Because a test has to RUN, and this machine does not run `wasm32-wasip2`.
+  # What these prove is arithmetic over a frame — where a field starts, what a
+  # click divides by, whether anything reaches past the edge — and none of that
+  # is what the component model changes. What only runs INSIDE a component is
+  # proved by the drivers in `crates/ronoctua-runtime`, which load the real
+  # `.wasm`.
+  #
+  # Debug and not release: the release profile carries `lto = true`, and paying
+  # for a second link buys a test suite nothing.
+  tested = lib.mapAttrs (
+    _: d:
+    d.overrideAttrs (o: {
+      pname = "${o.pname}-test";
+      doCheck = true;
+      checkPhase = ''
+        runHook preCheck
+        cargo test --offline
+        runHook postCheck
+      '';
+    })
+  ) (lib.filterAttrs (n: _: n != "tested") all);
+})

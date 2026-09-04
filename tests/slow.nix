@@ -21,14 +21,17 @@
 #
 # THE CRITERION IS STRUCTURAL
 # ---------------------------
-# It is not "felt slow". It is one of three things:
+# It is not "felt slow". It is one of four things:
 #
 #   1. it builds an INSTALLATION — the `system.build.toplevel` of one of the
 #      four NixOS systems, or the `isoImage`;
 #   2. it partitions a disk, reboots the machine, or emulates a TPM;
 #   3. it is an `mN`, which is the question "did the milestone close?" — a
 #      question for publishing time, and one that mixes costs by construction
-#      (`m1` drags in the ISO, `m7` drags in `impermanence-vm`).
+#      (`m1` drags in the ISO, `m7` drags in `impermanence-vm`);
+#   4. it compiles again something the battery has already compiled, only for
+#      another target — which is one derivation and one reason, and is written
+#      out at the bottom rather than folded into the three above.
 #
 # Where there is a number, it is on the line, and it was measured — not guessed.
 [
@@ -92,4 +95,28 @@
   "m6"
   "m7"
   "m8"
+
+  # ---------------------------------------------------------------
+  # 4. IT BUILDS THE SAME THING TWICE
+  # ---------------------------------------------------------------
+  # A FOURTH CRITERION, and it is written here rather than smuggled under one of
+  # the three above, because it does not meet any of them: `buffers-test` builds
+  # no installation, partitions nothing, and is not an `mN`.
+  #
+  # What it does is compile the eight buffers a SECOND time, for the host, so
+  # their sixty-nine tests can run — a test has to run, and this machine does
+  # not run `wasm32-wasip2`. Each buffer is its own workspace, so
+  # `ronoctua-design`, `ronoctua-protocol` and `wit-bindgen` are compiled eight
+  # times over with nothing shared, and the three browsers put their 1-to-5 MB
+  # embedded database through the compiler again.
+  #
+  # MEASURED, with `--rebuild`: the eight go from 27.8 s to 2 min 44 s. The
+  # +2 min 16 s is +14% on a battery of sixteen minutes, for a set of tests that
+  # changes only when a buffer's own source does.
+  #
+  # The exception this criterion admits is narrow on purpose: "it duplicates a
+  # compilation the battery has already paid for". A check that is merely slow
+  # still does not belong here — section 2's measured table is what that rule
+  # looks like when it is applied honestly.
+  "buffers-test"
 ]

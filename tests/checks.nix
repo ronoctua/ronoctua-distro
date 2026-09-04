@@ -2199,6 +2199,25 @@ let
     echo "OK: $drawn drawn character(s), each budgeted from the width the font gave"
   '';
 
+  # THE BUFFERS' OWN TESTS, ALL SIXTY-NINE OF THEM.
+  #
+  # They exist in the eight `src/lib.rs` and, until this check, not one of them
+  # ran: `nix/buffers.nix` compiled the `.wasm` and stopped. They were green
+  # only for as long as somebody remembered to run them by hand — and could not
+  # be run by hand without knowing which variables to set, because the three
+  # browsers embed their database with `include_str!(env!(…))`.
+  #
+  # What they cover is what a driver cannot: the arithmetic of a frame inside
+  # the component's own vocabulary — where a field starts, what a click divides
+  # by, whether a run reaches past the edge, whether a window too short for a
+  # row drops the footer. `buffers.tested` builds each one with `doCheck`, so a
+  # failing test fails the derivation, naming the test and the line.
+  #
+  # IT IS GATE-ONLY, and the reason is a number rather than a feeling: with the
+  # tests on, the eight buffers go from 27.8 s to 2 min 44 s. See the fourth
+  # criterion in `tests/slow.nix`.
+  buffers-test = pkgs.linkFarmFromDrvs "check-buffers-test" (lib.attrValues buffers.tested);
+
   # NOBODY DRAWS A HEADING OF THEIR OWN, AND NOBODY GENERATES BINDINGS.
   #
   # This is the check that makes "these mistakes cannot happen again" mean
@@ -9214,7 +9233,7 @@ let
     leader-vm = leaderVm;
     apps-vm = appsVm;
     inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
-    inherit languages-are-declared buffer-tag-rows-have-text;
+    inherit languages-are-declared buffer-tag-rows-have-text buffers-test;
     inherit third-language-costs-nothing;
     inherit shell-finds-its-buffers;
     inherit
