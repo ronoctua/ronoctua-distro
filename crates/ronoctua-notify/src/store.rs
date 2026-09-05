@@ -105,25 +105,9 @@ pub const HISTORY_FILE: &str = "notifications.json";
 /// The file the person's filters are read from, under `$XDG_CONFIG_HOME/ronoctua`.
 pub const PREFERENCES_FILE: &str = "notifications.json";
 
-/// `$XDG_STATE_HOME/ronoctua`, or `~/.local/state/ronoctua`.
-#[must_use]
-pub fn state_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
-        })?;
-    Some(base.join("ronoctua"))
-}
-
-/// `$XDG_CONFIG_HOME/ronoctua`, or `~/.config/ronoctua`.
-#[must_use]
-pub fn config_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("ronoctua"))
-}
+/// `$XDG_STATE_HOME/ronoctua` and `$XDG_CONFIG_HOME/ronoctua`, from the one
+/// crate that owns the two roots (`ronoctua-xdg`; it says why it exists).
+pub use ronoctua_xdg::{config_dir, state_dir};
 
 /// The person's own filters and adjustments, as the file holds them.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

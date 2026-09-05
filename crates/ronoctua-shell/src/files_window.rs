@@ -186,6 +186,18 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
 
+    // THE THEME'S FILE, watched — this door has no clock, and a watch that
+    // nobody touches costs nothing (the same argument as the directory's).
+    let (theme_sender, theme_changed) = channel::channel::<()>();
+    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    handle
+        .insert_source(theme_changed, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(()) = event {
+                state.theme_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
     // THE FRAMES OF A MOVING FILE, on a channel of their own.
     //
     // Their own, and not the reports': a frame arrives ten times a second
@@ -284,6 +296,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         handle: handle.clone(),
         spinning: None,
         notice,
+        _theme_watch,
     };
     // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
     // by now, so what this arms is the watch for everything that happens NEXT.
@@ -450,6 +463,8 @@ struct FilesWindow {
     /// `None` means the watch could not be armed and the fallback clock above
     /// is doing the work instead.
     notice: Option<ronoctua_files::notice::Notice>,
+    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
 }
 
 impl FilesWindow {
@@ -498,6 +513,17 @@ impl FilesWindow {
 
     /// What the manager should be asked about the file under the cursor.
     ///
+    /// The theme's file changed: the roles resolve anew on the next paint, and
+    /// what a child painted with a value — the waveform, the shape — is asked
+    /// for again, because the theme is part of the preview's key.
+    fn theme_changed(&mut self) {
+        if !crate::theme::reload() {
+            return;
+        }
+        self.look_again();
+        self.ask_paint();
+    }
+
     /// Called after anything that could have moved the cursor. `wants_look`
     /// answers `None` when the answer is already in hand, so this is a cheap
     /// call and not a decision made here.

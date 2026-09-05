@@ -1120,6 +1120,22 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "network-connect",
             label: key::CMD_NETWORK_CONNECT,
         },
+        // ---------------------------------------------------------------
+        // THE THEME CHOOSER — `LEADER s t`. Two commands: the one that opens
+        // the list, and the one the list's `RET` runs. Moving the cursor
+        // PREVIEWS the theme in the footer; `theme-apply` is what writes it,
+        // and the write is what reaches the other doors (see `theme.rs`).
+        // No `theme-next`: `check-keymap` refuses a command with no key, and a
+        // key outside the list would cycle a palette nobody can see the name of.
+        // ---------------------------------------------------------------
+        Command {
+            id: "theme-open",
+            label: key::CMD_THEME_OPEN,
+        },
+        Command {
+            id: "theme-apply",
+            label: key::CMD_THEME_APPLY,
+        },
         Command {
             id: "network-disconnect",
             label: key::CMD_NETWORK_DISCONNECT,
@@ -1323,6 +1339,9 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // queue and the notification manager already use for their second
         // door. Four views, one letter.
         ("s w", "update-watch", None),
+        // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
+        // any one buffer's: the same drawer as memory, format and the brain.
+        ("s t", "theme-open", None),
         ("q q", "session-quit", None),
         // `LEADER :` — `M-x`'s key in Doom, which is where the concept
         // comes from. It used to be `x`, which in Doom is the scratch buffer and not the locator.
@@ -1551,6 +1570,13 @@ pub const OF_NETWORK_VIEW: &[(&str, &str)] = &[
     ("d", "network-disconnect"),
 ];
 
+/// The commands the THEME CHOOSER reaches, with each one's key — one. `RET`
+/// applies the pair under the two cursors; `<up>`/`<down>` preview,
+/// `<left>`/`<right>` cross between the themes and the desk, and `Esc` puts
+/// the committed pair back — the view's own gestures rather than commands,
+/// as in every other list.
+pub const OF_THEME_VIEW: &[(&str, &str)] = &[("RET", "theme-apply")];
+
 #[must_use]
 pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     let mut out: std::collections::BTreeSet<&'static str> =
@@ -1567,6 +1593,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     out.extend(OF_CLIPBOARD_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::notifications::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_NETWORK_VIEW.iter().map(|(_, id)| *id));
+    out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
     out
 }
 
@@ -2188,6 +2215,8 @@ mod tests {
             // row and that is why they only have keys INSIDE the view; the others
             // have keys in the tree.
             "network-open",
+            "theme-open",
+            "theme-apply",
             "network-scan",
             "network-connect",
             "network-disconnect",

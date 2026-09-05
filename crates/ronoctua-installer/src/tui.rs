@@ -51,7 +51,7 @@ use crate::plan::{Step, steps};
 /// Node `to_linear`: the terminal receives sRGB, unlike wgpu. Passing
 /// linear here would darken everything — the mirror image of the mistake that cost an afternoon
 /// in the renderer, and it is worth saying which side we are on.
-const fn color(c: Color) -> ratatui::style::Color {
+fn color(c: Color) -> ratatui::style::Color {
     let [r, g, b, _] = c.to_rgba8();
     ratatui::style::Color::Rgb(r, g, b)
 }

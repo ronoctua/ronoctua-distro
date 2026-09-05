@@ -14,6 +14,10 @@
   pkgs,
   lib,
   niri,
+  # The solved palettes and the theme list: the driver reads the default
+  # theme's values when it measures a screenshot.
+  themed,
+  themes,
   ronoctua-shell,
   ronoctua-brain,
   fonts,
@@ -25,29 +29,36 @@ let
   linePx = builtins.ceil (typography.size.base * typography.lineHeight);
   footerPx = linePx * 2;
 
-  # A SYNTAX COLOUR, AS THE TOKEN FILE WRITES IT.
+  # THE TOKENS' VALUES, AS THE GENERATOR SOLVED THEM.
   #
-  # Read here rather than typed into the test script, and that is what makes
-  # the measurement below worth taking: it ties the photograph to
-  # `assets/tokens/colors.nix`. A colour hard-coded in Rust, or a role-to-token
-  # map that lost an arm, fails in this build instead of on the owner's screen
-  # — and changing the theme moves the assertion with it rather than breaking
-  # it (invariant 9, reaching a screenshot).
+  # Read by the test driver rather than typed into it, and that is what makes
+  # the measurements below worth taking: they tie the photograph to the
+  # palette. A colour hard-coded in Rust, or a role-to-token map that lost an
+  # arm, fails in this build instead of on the owner's screen — and changing a
+  # value moves the assertion with it rather than breaking it (invariant 9,
+  # reaching a screenshot).
   #
-  # `0xRRGGBBAA` becomes `RRGGBB`: the alpha is always opaque here, and
-  # ImageMagick wants six digits.
-  colours = (import ../assets/tokens/colors.nix).syntax;
-  colourOf = name: builtins.substring 2 6 colours.${name};
-  # THE COLOUR A SCROLLBAR IS DRAWN IN, out of the same file, so a measurement
-  # of one is tied to the token rather than to a number typed here.
-  barColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).rule.strong;
-  # THE COLOUR A GLYPH IS DRAWN IN, for the transport's two buttons. Counting
-  # pixels of THIS rather than thresholding the row is what tells a control
-  # apart from the hover band behind it: the band is a background and the glyph
-  # is text, and only one of them is what the pointer is supposed to summon.
-  textColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).text.primary;
-  # THE HOVER BAND'S COLOUR, so a shot can assert it is NOT on a picture.
-  bandColour = builtins.substring 2 6 (import ../assets/tokens/colors.nix).surface.selection;
+  # The DEFAULT theme's flat map, a store path the driver opens when it runs:
+  # nothing here is read at evaluation (no import-from-derivation). The driver's
+  # `token_hex` turns `0xRRGGBBAA` into the `RRGGBB` ImageMagick wants; the
+  # alpha is always opaque where it is used.
+  palette = "${themed}/${builtins.head themes}.json";
+  # AND THE SECOND THEME'S, for the chooser's shots: a preview has to show a
+  # colour the default does not have, and the assertion reads it from the
+  # generator rather than from a number typed here.
+  # With one theme declared the chooser's shots have nothing to prove and the
+  # driver skips them (`THEMES > 1`); the path still has to exist.
+  second = if builtins.length themes > 1 then builtins.elemAt themes 1 else builtins.head themes;
+  secondPalette = "${themed}/${second}.json";
+  # How many answers the desk option has, counted from the default language's
+  # texts: one `theme-backdrop-<id>` key per answer, which the chooser's own
+  # test demands of every answer. It sizes the chooser's shots without a
+  # second copy of the number.
+  deskAnswers = lib.count (line: lib.hasPrefix "theme-backdrop-" line) (
+    lib.splitString "\n" (
+      builtins.readFile (../assets/i18n + "/${builtins.head (import ../assets/i18n/languages.nix)}.ftl")
+    )
+  );
 
   # THE FILE THE PREVIEW IS PHOTOGRAPHED SHOWING.
   #
@@ -112,6 +123,20 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    import json as _json
+
+    # The default theme's palette, `key -> 0xRRGGBBAA` (see `palette` above),
+    # and the second theme's, for the chooser.
+    TOKENS = _json.load(open("${palette}"))
+    SECOND = _json.load(open("${secondPalette}"))
+    THEMES = ${toString (builtins.length themes)}
+    DESK_ANSWERS = ${toString deskAnswers}
+
+
+    def token_hex(key, table=None):
+        """`RRGGBB` of a token, for ImageMagick. The alpha is dropped."""
+        return (table or TOKENS)[key][2:8]
+
     ${xvfb.prelude}
 
     FOOTER = ${toString footerPx}
@@ -197,6 +222,19 @@ pkgs.testers.runNixOSTest {
         return n
 
 
+    def lacks_colour(hex_value, of):
+        """The other half of `has_colour`: not one pixel of `of` is that colour,
+        at the same twelve per cent. What proves a theme LEFT the screen."""
+        n = int(
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick {of} -fuzz 12% "
+                f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
+                f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
+            ).strip()
+        )
+        assert n == 0, f"{hex_value} still covers {n} pixel(s) of {of}"
+
+
     def rows_with_ink(box):
         """How many rows of pixels in `box` have anything drawn on them."""
         crop(box, "/tmp/ink.png")
@@ -228,6 +266,10 @@ pkgs.testers.runNixOSTest {
         "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
         "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_notify=debug "
         "--setenv=RONOCTUA_SWAPPY=${pkgs.swappy}/bin/swappy "
+        # The theme's floor and the generator's fragments, as the module
+        # exports them — the chooser's shots copy a fragment and assert it.
+        "--setenv=RONOCTUA_THEME=${builtins.head themes} "
+        "--setenv=RONOCTUA_THEMES=${themed} "
         "${ronoctua-shell}/bin/ronoctua-shell"
     )
     machine.wait_until_succeeds(
@@ -603,8 +645,8 @@ pkgs.testers.runNixOSTest {
         # on the owner's screen. The two asked for are the two furthest apart
         # in the palette — a string's green and a keyword's purple.
         crop(panel, "/tmp/panel-before.png")
-        has_colour("#${colourOf "string"}", at_least=20)
-        has_colour("#${colourOf "keyword"}", at_least=20)
+        has_colour("#" + token_hex("syntax.string"), at_least=20)
+        has_colour("#" + token_hex("syntax.keyword"), at_least=20)
 
         # AND IT SCROLLS. `C-,` pages the preview and the bar follows.
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+comma")
@@ -660,7 +702,7 @@ pkgs.testers.runNixOSTest {
             return int(
                 machine.succeed(
                     f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {probe} +repage "
-                    f"-fuzz 6% -fill white -opaque '#${barColour}' -fill black "
+                    f"-fuzz 6% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
                     "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
                 ).strip()
             )
@@ -883,7 +925,7 @@ pkgs.testers.runNixOSTest {
             return int(
                 machine.succeed(
                     f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {box} "
-                    "+repage -fuzz 12% -fill white -opaque '#${textColour}' "
+                    f"+repage -fuzz 12% -fill white -opaque '#{token_hex('text.primary')}' "
                     "-fill black +opaque white "
                     "-format '%[fx:int(mean*w*h+0.5)]' info:"
                 ).strip()
@@ -986,7 +1028,7 @@ pkgs.testers.runNixOSTest {
             return int(
                 machine.succeed(
                     f"${pkgs.imagemagick}/bin/magick {path} -crop {pane} +repage "
-                    "-fuzz 2% -fill white -opaque '#${bandColour}' -fill black "
+                    f"-fuzz 2% -fill white -opaque '#{token_hex('surface.selection')}' -fill black "
                     "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
                 ).strip()
             )
@@ -1040,7 +1082,7 @@ pkgs.testers.runNixOSTest {
         rule_ink = int(
             machine.succeed(
                 f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {edge} +repage "
-                "-fuzz 2% -fill white -opaque '#${barColour}' -fill black "
+                f"-fuzz 2% -fill white -opaque '#{token_hex('rule.strong')}' -fill black "
                 "+opaque white -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
         )
@@ -1189,6 +1231,82 @@ pkgs.testers.runNixOSTest {
         control("update-watch")
         machine.sleep(3)
         shot("12-update-window")
+
+    with subtest("the theme chooser, and the file that is the broadcast"):
+        # -----------------------------------------------------------------
+        # Three things are proved on screen, and none of them by a buffer
+        # (`nix run .#png` cannot reach a footer view). One: the list opens
+        # on the theme in force, its focused row in that theme's accent. Two:
+        # moving the cursor PREVIEWS — the second theme's accent is on the
+        # footer and the first's is gone — while the file manager's window,
+        # opened beforehand, is untouched. Three: `RET` writes the file, and
+        # the window follows the FILE: its focused row is now in the second
+        # theme's accent with no restart; and the footer copied the two
+        # fragments beside the file. The two accents are far more than the
+        # twelve per cent apart; the window is measured on its top half BELOW
+        # its own hint line, so neither the footer's lines nor the hint's
+        # registers enter the count.
+        # -----------------------------------------------------------------
+        if THEMES > 1:
+            # The region is as tall as the LONGER of the chooser's two lists:
+            # the themes, or the desk option's header and its answers — the
+            # answers counted from the texts (`DESK_ANSWERS` above), which
+            # every answer must have a key in.
+            CHOOSER_ROWS = max(THEMES, 1 + DESK_ANSWERS)
+            first_accent = "#" + token_hex("state.accent")
+            second_accent = "#" + token_hex("state.accent", SECOND)
+            control("files-window")
+            machine.sleep(2)
+            w, h, x, y = niri_geometry()
+            upper = f"{w}x{h // 2 - LINE}+{x}+{y + LINE}"
+
+            control("theme-open")
+            shot("26-theme-chooser", lines=2 + CHOOSER_ROWS)
+            has_colour(first_accent, at_least=20, of="/tmp/26-theme-chooser.png")
+            lacks_colour(second_accent, of="/tmp/26-theme-chooser.png")
+
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
+            machine.sleep(1)
+            shot("27-theme-preview", lines=2 + CHOOSER_ROWS)
+            has_colour(second_accent, at_least=20, of="/tmp/27-theme-preview.png")
+            lacks_colour(first_accent, of="/tmp/27-theme-preview.png")
+            # The preview is the footer's alone: the window still wears the first.
+            crop(upper, "/tmp/window-during-preview.png")
+            has_colour(first_accent, at_least=20, of="/tmp/window-during-preview.png")
+            lacks_colour(second_accent, of="/tmp/window-during-preview.png")
+
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(2)
+            machine.succeed("grep -q '\"${second}\"' /root/.config/ronoctua/theme.json")
+            shot("28-theme-applied")
+            crop(upper, "/tmp/window-after.png")
+            has_colour(second_accent, at_least=20, of="/tmp/window-after.png")
+            lacks_colour(first_accent, of="/tmp/window-after.png")
+            # And the fragments beside the file, for the compositor and the terminal.
+            machine.succeed("test -s /root/.config/ronoctua/niri-theme.kdl")
+            machine.succeed("test -s /root/.config/ronoctua/ghostty-theme.conf")
+            machine.succeed("grep -q 'active-color' /root/.config/ronoctua/niri-theme.kdl")
+            # A file that never said a desk is on black, and the fragment says so.
+            machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+
+            # THE SECOND COLUMN: the desk. `<right>` crosses to it, `<down>`
+            # lands on the theme's own colour and the compositor is shown it
+            # at once — the fragment is the preview — and `RET` writes the
+            # pair. The desk itself is not on this screen (the window fills
+            # it); what is proved is the file niri watches, and the check
+            # `themes-have-fragments` proves niri accepts and merges it.
+            second_desk = "#" + token_hex("surface.backdrop", SECOND)
+            control("theme-open")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
+            machine.sleep(1)
+            shot("29-theme-desk", lines=2 + CHOOSER_ROWS)
+            machine.succeed(f"grep -q 'background-color \"{second_desk}\"' /root/.config/ronoctua/niri-theme.kdl")
+            machine.succeed("grep -q '\"black\"' /root/.config/ronoctua/theme.json || ! grep -q backdrop /root/.config/ronoctua/theme.json")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+            machine.sleep(2)
+            machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
+            machine.succeed(f"grep -q 'background-color \"{second_desk}\"' /root/.config/ronoctua/niri-theme.kdl")
 
   '';
 }

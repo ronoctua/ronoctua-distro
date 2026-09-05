@@ -10,5 +10,10 @@
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    // The theme from the environment only: the console may be on VT 8 with no
+    // session, and a file it cannot read must not decide anything for it.
+    if let Some(theme) = ronoctua_tokens::theme::from_env() {
+        ronoctua_tokens::theme::set(theme);
+    }
     ronoctua_rescue::tui::run()
 }

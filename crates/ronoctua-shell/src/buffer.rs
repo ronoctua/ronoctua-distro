@@ -108,6 +108,17 @@ fn rasterize_preview(
     })
 }
 
+/// The cache key of a rasterised SVG: the theme's position, then the document.
+///
+/// The document alone was the key, and it was exact for the drawing — the
+/// icon and the five adjustments are all in it. What it did not carry was the
+/// ink: `currentColor` is resolved to the CURRENT theme's value below, and a
+/// key without the theme kept the old ink on the GPU after a switch, because
+/// the upload only happens for a key the cache is missing.
+fn svg_key(theme_position: usize, svg: &str) -> String {
+    format!("{theme_position}:{svg}")
+}
+
 /// The SVG's `currentColor` resolved to a value.
 ///
 /// # Why the substitution belongs to the host
@@ -131,6 +142,9 @@ fn resolver_current_color(svg: &str, color: tokens::Color) -> String {
 /// The state of the window hosting a buffer.
 struct Host {
     conn: Connection,
+    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
+    /// The component is told nothing: it never had a value (invariant 11).
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,
@@ -845,6 +859,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         quads: None,
         list,
         rasterized: std::collections::HashMap::new(),
+        _theme_watch: None,
         capabilities: d.capabilities,
         // THE SAME BUNDLE that resolved the title and the phrases above. It
         // used to be a second `from_env()` in the same process — two readings
@@ -858,6 +873,26 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     WaylandSource::new(conn, events)
         .insert(cycle.handle())
         .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
+
+    // THE THEME'S FILE, watched. The component keeps drawing NAMES; what this
+    // host must forget is the rasterised SVGs, whose `currentColor` was the
+    // old theme's value.
+    let (theme_sender, theme_changed) = calloop_channel::channel::<()>();
+    state._theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    cycle
+        .handle()
+        .insert_source(theme_changed, |event, (), state: &mut Host| {
+            if let calloop_channel::Event::Msg(()) = event
+                && crate::theme::reload()
+            {
+                // The new theme is a new key (`svg_key`), so the next paint
+                // rasterises and uploads afresh; clearing only drops the old
+                // theme's CPU copies.
+                state.rasterized.clear();
+                state.paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
 
     // THE KEYMAP AND THE STATES GO OUT, AND ORDERS COME BACK IN.
     //
@@ -1352,7 +1387,7 @@ impl Host {
                 tracing::error!(token = color.as_str(), "an invalid colour in an svg");
                 continue;
             };
-            let key = svg.clone();
+            let key = svg_key(tokens::theme::current().position(), svg);
             if !self.rasterized.contains_key(&key) {
                 // THE SIDE IN PIXELS comes from the rectangle of CELLS the buffer
                 // asked for — it does not know pixels.
@@ -3076,6 +3111,14 @@ mod tests {
     /// drawing would come out invisible — and invisible is indistinguishable from "this
     /// primitive is not implemented yet", which is the worst possible
     /// result: it looks as if nothing was done.
+    #[test]
+    fn the_svg_key_changes_with_the_theme() {
+        // Two themes, one document: two keys, so the GPU cache cannot serve
+        // the old theme's ink for the new one.
+        assert_ne!(svg_key(0, LUCIDE), svg_key(1, LUCIDE));
+        assert!(svg_key(0, LUCIDE).ends_with(LUCIDE));
+    }
+
     #[test]
     fn the_current_color_becomes_the_token_and_the_drawing_shows_up() {
         let resolved = resolver_current_color(LUCIDE, tokens::color::TEXT_PRIMARY);

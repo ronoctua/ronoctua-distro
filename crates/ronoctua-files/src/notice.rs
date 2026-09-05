@@ -57,6 +57,7 @@
 //! wants. A thread parked on a descriptor nobody can close would stay parked for
 //! the rest of the session; the player already paid for that mistake once.
 
+use std::ffi::OsString;
 use std::io::{Read as _, Write as _};
 use std::mem::MaybeUninit;
 use std::path::{Path, PathBuf};
@@ -166,6 +167,16 @@ impl Notice {
     where
         F: Fn() -> bool + Send + 'static,
     {
+        Self::raise(sidebar, None, on_stir)
+    }
+
+    /// The one constructor behind the two doors: a fixed directory (the
+    /// sidebar's, or the file's), an optional name that narrows what counts,
+    /// and the thread.
+    fn raise<F>(fixed: Option<&Path>, only: Option<OsString>, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
         // NONBLOCK so draining ends with `WOULDBLOCK` instead of parking inside
         // the drain; CLOEXEC so the manager's children — ffmpeg, the root
         // helper — do not inherit a descriptor they have no use for.
@@ -184,7 +195,7 @@ impl Notice {
             let _ = rustix::fs::fcntl_setfl(&ring, flags | rustix::fs::OFlags::NONBLOCK);
         }
         let (orders, told) = mpsc::channel();
-        let sidebar = sidebar.map(Path::to_path_buf);
+        let sidebar = fixed.map(Path::to_path_buf);
         std::thread::Builder::new()
             .name("ronoctua-notice".to_owned())
             .spawn(move || {
@@ -194,6 +205,7 @@ impl Notice {
                     told,
                     listing: None,
                     sidebar,
+                    only,
                     held: Vec::new(),
                 }
                 .run(&on_stir);
@@ -204,6 +216,26 @@ impl Notice {
             ring,
             listing: None,
         })
+    }
+
+    /// Watches ONE file in a directory, by name — the theme's, today.
+    ///
+    /// The same thread, doorbell and `Drop` as [`Notice::watching`]; what
+    /// differs is the filter: only an event whose name is `name` counts, so a
+    /// door that watches `theme.json` in the configuration directory is not
+    /// woken by the sidebar file beside it. The directory and not the file, for
+    /// the reason `watching` gives about the sidebar: the writer renames a
+    /// scratch file over the real one, and a watch on the inode would be
+    /// watching the old file. `MOVED_TO` is that rename arriving.
+    ///
+    /// # Errors
+    ///
+    /// As [`Notice::watching`].
+    pub fn on_file<F>(dir: &Path, name: &str, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        Self::raise(Some(dir), Some(OsString::from(name)), on_stir)
     }
 
     /// Points the watch at a directory.
@@ -281,8 +313,12 @@ struct Watcher {
     told: mpsc::Receiver<Option<PathBuf>>,
     /// The directory on screen.
     listing: Option<PathBuf>,
-    /// The directory the sidebar persists into. Fixed for the life of the view.
+    /// The directory the sidebar persists into — or, for [`Notice::on_file`],
+    /// the one the file lives in. Fixed for the life of the watch.
     sidebar: Option<PathBuf>,
+    /// The one file name that counts, when the watch is on a file. `None`
+    /// means every event in a held directory is ours.
+    only: Option<OsString>,
     /// Every watch descriptor held.
     ///
     /// A list and not two fields because inotify keys a watch by INODE: asking
@@ -503,7 +539,18 @@ impl Watcher {
                 // AN EVENT WITH NO OWNER IS DISCARDED. This is the arm that makes
                 // re-pointing safe: orders are taken first, so anything queued
                 // against the directory just left is no longer in `held`.
-                ours |= self.held.contains(&wd);
+                if !self.held.contains(&wd) {
+                    continue;
+                }
+                // A WATCH ON ONE FILE hears the whole directory and keeps the
+                // one name; the rest is the sidebar file, a scratch file, and
+                // whatever else lives beside it.
+                ours |= match &self.only {
+                    None => true,
+                    Some(name) => event
+                        .file_name()
+                        .is_some_and(|f| f.to_bytes() == name.as_encoded_bytes()),
+                };
             }
         }
         self.held.retain(|wd| !gone.contains(wd));
@@ -528,6 +575,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// A one-file notice whose reports are counted, and the counter.
+    fn counted_file(dir: &Path, name: &str) -> (Notice, Arc<AtomicUsize>) {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let notice = Notice::on_file(dir, name, move || {
+            mine.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .unwrap();
+        (notice, seen)
     }
 
     /// A notice whose reports are counted, and the counter.
@@ -835,6 +894,49 @@ mod tests {
         assert!(
             past(&seen, was, PATIENCE) > was,
             "resting took the sidebar's watch with it"
+        );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a watch on ONE file that hears the whole
+    // directory. Every door's live theme rides on `theme.json`; the sidebar
+    // file and the writer's own scratch file live beside it, and a filter that
+    // let them through would repaint five processes for every sidebar pin.
+    fn a_one_file_watch_hears_its_file_and_nothing_beside_it() {
+        let dir = scratch("one-file");
+        let (_notice, seen) = counted_file(&dir, "theme.json");
+        // Armed when the named file itself rings: the `arming-N` files the
+        // directory helper writes are exactly what this watch must ignore.
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let was = seen.load(Ordering::SeqCst);
+            ronoctua_xdg::write_atomically(&dir, "theme.json", b"{\"theme\":\"owl\"}").unwrap();
+            if past(&seen, was, Duration::from_millis(100)) > was {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the one-file watch never came alive"
+            );
+        }
+        settled(&seen);
+
+        // A neighbour, and a scratch file: neither rings.
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(dir.join("files-sidebar.json"), b"{}").unwrap();
+        std::fs::write(dir.join("theme.json.new"), b"half").unwrap();
+        assert_eq!(
+            past(&seen, was, Duration::from_millis(400)),
+            was,
+            "a file beside the watched one rang the door"
+        );
+
+        // The atomic rename over the file is what counts.
+        let was = seen.load(Ordering::SeqCst);
+        ronoctua_xdg::write_atomically(&dir, "theme.json", b"{\"theme\":\"forest\"}").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "the watched file was replaced and nothing said so"
         );
     }
 }

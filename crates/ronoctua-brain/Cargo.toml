@@ -13,6 +13,8 @@ publish.workspace = true
 # time. It does not draw, does not translate, does not speak Wayland, and it
 # runs no privileged command itself.
 [dependencies]
+# The two XDG roots, in the one crate that owns them (zero dependencies).
+ronoctua-xdg = { path = "../ronoctua-xdg" }
 # THE PULSE, and the only crate allowed to read `/proc`. The brain refuses to
 # start anything while the machine is busy, and it learns that the machine is
 # busy by ASKING — a scheduler that opened `/proc/pressure/cpu` for itself

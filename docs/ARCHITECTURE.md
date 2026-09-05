@@ -1861,6 +1861,141 @@ era esperar ela envelhecer. É o registro da própria pessoa.
 se instala mais um aplicativo, e ninguém ligaria os pontos. O único furo é o estado de atenção,
 porque a alternativa — um app pedindo atenção que ninguém vê — é pior.
 
+### Cores: o gerador e os temas — `LEADER s t`
+
+**Nenhuma cor é escrita à mão.** `assets/tokens/colors.nix` é uma tabela de RECEITAS — cada token
+nomeia um degrau de uma família (`text.primary = "neutral.text-strong"`, `surface.selection =
+"accent.element"`), e uma receita pode levar `alpha` (a faixa do transporte) ou escalar o croma do
+degrau (`surface.mesh`). Os valores saem de `nix/scripts/gen-theme.py`, que roda UMA vez em
+`nix/themes.nix` para todos os temas de `assets/themes/themes.nix` — uma LISTA, como a dos idiomas: o
+primeiro é o padrão, e nenhum outro sítio nomeia um tema. Um tema é um arquivo de SEMENTES
+(`assets/themes/<id>.nix`): a luminosidade do fundo e do rodapé, o matiz e o tinte dos cinzas, o
+matiz e o croma do texto, um multiplicador global, e por família um matiz, um croma relativo, um
+`shift` de contraste, uma `torsion` de matiz nos degraus de pintura e um `paint-chroma`. Nada de hex:
+o check `colours-are-computed` recusa um literal nas receitas e nas sementes, e recusa qualquer
+`import` da referência congelada fora de `nix/themes.nix`.
+
+**A escada é a paleta do owl feita regra.** Cada família tem catorze degraus com NOME (nunca número:
+um identificador do WIT começa por letra): quatro de pintura que sobem do rodapé por separação de
+luminosidade (`ground`, `element`, `border`, `border-strong` — o fundo do brain, a faixa de seleção,
+a borda inativa), três sólidos resolvidos a um contraste APCA sobre o rodapé (`solid` Lc 52,
+`solid-hover` 60, `vivid` 44 a croma pleno), seis de texto (Lc 11, 23, 48, 79, 87, 100 — o
+separador, o dim, o secondary, o brain.countdown, o primary, o brain.text) e o `on-solid` (o fundo,
+se lê a Lc 45 sobre o sólido; senão o texto mais forte). A neutra tem as duas âncoras fixas
+(`ground`, `chrome`) e os cinzas do owl byte a byte. Cada linha da tabela em `gen-theme.py` diz de
+que valor de mão foi lida, e qual nasceu de nenhuma tela. O croma é RELATIVO — uma fração do máximo
+que o sRGB mostra naquela luminosidade e naquele matiz, resolvido pela fronteira analítica de
+`colorspace.py` (a bisseção erra perto do primário azul, onde um raio sai, entra e sai de novo) —, e
+a luminosidade de um degrau APCA é bissecada rodando o pipeline INTEIRO, quantização a 8 bits
+inclusive, porque o contraste que importa é o dos bytes que chegam à tela. A matemática é a do
+`noctua-colors` do dono, portada em Python de biblioteca-padrão: Oklab com as matrizes publicadas
+CONDICIONADAS (branco é L = 1 exato, cinza tem croma zero exato), APCA-W3 0.1.9 assinado, ΔE_ok,
+Brettel para o relatório. Prova-se em `colorspace-tests`, e o owl rederivado fica a ≤ 5/255 por canal
+do que estava na tela.
+
+**As relações que a prosa prometia viraram GATES.** Contraste de cada texto sobre cada fundo em que
+ele é desenhado (o `text.dim` sobre a faixa é gate porque o gerenciador de notificações e a janela
+de atualização o desenham lá sem erguer; só o gerenciador de arquivos ergue), distância ΔE_ok entre
+os cinzas da escada e entre a faixa de seleção e cada cinza que a ladeia (o par que o dono mediu),
+degraus adjacentes de toda escada (≥ 0,012, L monótona), matiz entre as cinco famílias do rodapé
+(≥ 14°), acento fora da faixa 158–172° (colapsa sobre o vermelho na protanopia), pares categóricos e
+ordinais, e as quatro cores-filme do `shots.nix`. Deficiência de visão de cor é Warn e nunca Fail —
+verde e amarelo do próprio owl estão a 0,009 sob deuteranopia, e o glifo carrega o significado. A
+regressão compara cada chave gerada com `assets/themes/owl.reference.nix`, os 52 literais congelados
+do dia das sementes: acima de ΔE_ok 0,03 é falha de build, salvo chave listada em `deviations` com
+teto e motivo próprios (`text.subtle.faint`: o `text-shift` do registro foi medido no `strong` e vale
+para os três degraus). `report.md` de `nix build .#themes` traz cada margem; `theme-references-hold`
+e `themes-negative` (uma semente com o acento a 165° TEM de falhar) são os checks.
+
+**Uma cor é um PAPEL, e o tema é do processo.** `ronoctua_tokens::Color` é um `u16` — o índice de um
+papel — e `to_rgba8()` lê `themes::TABLE[tema][papel]`, uma tabela gerada com TODOS os temas. Os 280
+sítios que nomeiam `color::TEXT_DIM` não mudaram: nomeiam o papel, e o papel resolve ao desenhar.
+Igualdade e hash são por papel (`lift_onto_a_band` pergunta "este campo é o dim?", e é isso que
+sempre quis perguntar). O tema é um `AtomicUsize` (`theme::set`), como o idioma é uma propriedade do
+processo: enfiar um valor por 280 assinaturas carregaria algo que só o desenho lê. Buffers wasip2 não
+souberam de nada — cruzam NOMES (inv. 11), e o host resolve; o enum do WIT cresceu para 147 nomes e
+recompilaram uma vez. `to_rgba8` deixou de ser `const`; os três `const fn colour()` das TUIs viraram
+`fn`. Cada processo escolhe no arranque (`theme::resolve_at_start`, em `main.rs`, antes de qualquer
+porta): `$XDG_CONFIG_HOME/ronoctua/theme.json` > `RONOCTUA_THEME` (a opção `ronoctua.theme`) > o
+primeiro. Fonte que nomeia tema inexistente ou não parseia cai para a seguinte e diz no log.
+`render-png --theme` é determinístico (o primeiro, nunca arquivo nem ambiente); o instalador e o
+resgate leem só o ambiente.
+
+**O arquivo é o broadcast.** O socket de controle só entra no rodapé, e as portas — janela de
+arquivos, notificações, atualização, cada host de buffer — são processos. Então o rodapé não avisa
+ninguém: grava `theme.json` atomicamente (`ronoctua-xdg`, o quarto chamador que o comentário do
+brain pedia, e que agora serve os três anteriores) e toda porta segura um `Notice::on_file` sobre
+ele — o mesmo inotify do gerenciador, filtrado por UM nome, porque o `files-sidebar.json` mora ao
+lado. Ao tocar, `theme::reload()` e repintura. O que uma CRIANÇA pintou com um valor — a forma de
+onda do ffmpeg, o `currentColor` dos SVGs — se refaz porque o tema entrou na CHAVE da prévia e do
+SVG rasterizado: chave nova, cache do GPU sem ela, upload de novo; sem isso a tinta velha ficava
+na textura. Custo: o diretório `~/.config/ronoctua` passa a existir no primeiro arranque de qualquer
+porta (o inotify quer um diretório); e uma troca com um filme na prévia respawna o ffmpeg, com uma
+peça 3D relê o arquivo uma vez — chave nova é pedido novo, e o painel fica vazio até a resposta, como
+sempre ficou.
+
+**`LEADER s t` é a lista da rede com uma diferença: mover o cursor PRÉ-VISUALIZA.** O tema sob o
+cursor vira o do rodapé na hora — o rodapé é a amostra, porque amostra "na cor do tema dele" não
+existe: uma `Color` resolve pelo tema corrente e um valor preso a outro tema é justamente o que o
+crate recusa guardar. A prévia é só do rodapé; as outras portas seguem o ARQUIVO, que só `RET`
+(`theme-apply`) grava, senão toda janela piscaria pelos temas enquanto a pessoa olha. `Esc` volta ao
+gravado; um `theme.json` escrito por fora durante a prévia vence a prévia. Linhas: SÓ o id, na coluna
+da tecla (identificador, como a lista do `M-x` mostra ids de comando; o nome traduzido era uma segunda
+grafia da mesma coisa e saiu a pedido do dono), visto no gravado, foco no acento; sem faixa (é do
+gerenciador). Sem `theme-next`: o `check-keymap` recusa comando sem tecla.
+
+**E uma segunda coluna, das escolhas SOBRE o tema** — hoje uma: o fundo que o compositor pinta onde não
+há janela, preto ou a cor do tema. A cor é `surface.backdrop`, o único degrau neutro ABAIXO do chrome
+(um passo de janela abaixo, espelhado: janela um passo acima, fundo um passo abaixo), no matiz e croma
+relativo que a semente `backdrop` nomeia — a única superfície FEITA para ler como a cor do tema, com
+gate de distância contra preto, chrome e janela (owl `#040C24`, forest `#031206`). Duas listas lado a
+lado na mesma região: `<left>`/`<right>` cruzam, `<up>`/`<down>` andam na que tem o foco, o cabeçalho
+da opção não recebe cursor, e a linha da direita fica na coluna do texto mesmo quando a da esquerda
+acabou (`ExpansionRow::aside`). A prévia do fundo não pode ser do rodapé, que nunca pinta o fundo: é
+do niri — SÓ o fragmento do niri é escrito ao mover o cursor (`theme::show_to_compositor`, com o tema
+sob o outro cursor; o do Ghostty não, senão um terminal aberto durante a prévia vestiria o que ninguém
+aplicou), e no `Esc` ele volta ao que o arquivo diz — ou SOME, se não há arquivo: máquina que nunca
+escolheu não tem fragmento, e `sync_with_file` mantém isso no arranque e quando o arquivo some.
+`RET` grava o PAR (`{ "theme", "backdrop" }`; arquivo sem o campo é preto, que é o que toda máquina
+tinha). Preto NÃO é token: é o nome da opção, e o fragmento o escreve como `#000000`.
+
+**Fora do shell, três consumidores seguem, e cada um até onde pode.** O niri: a borda estática vem do
+tema padrão (substituída no build do config, sem IFD), e no FIM do config há `include
+"/home/<usuário>/.config/ronoctua/niri-theme.kdl" optional=true` — o gerador escreve por tema DOIS
+fragmentos, um por fundo (`niri-black.kdl`, `niri-backdrop.kdl`), cada um com a borda num `window-rule {
+border { … } }` (nó repetível, o último vence) e o fundo num `layout { background-color }`: o niri
+recusa dois `layout` DENTRO de um arquivo e FUNDE o de um arquivo incluído, campo a campo, o valor
+posterior vencendo (`niri-config`, `MergeWith`; `themes-have-fragments` valida cada fragmento sob um
+config que já tem `layout`). O rodapé COPIA o do par escolhido ao gravar — copiar É escolher — e o niri
+v26.04 vigia arquivos incluídos e recarrega. O `background-color` estático é o `surface.base` do tema
+padrão, o que vale antes de qualquer escolha. O Ghostty: `config-file` com a paleta gerada do tema
+padrão (ANSI 16, fundo, cursor, seleção — `terminal.*`, mapeados das famílias) e depois
+`config-file = ?~/.config/ronoctua/ghostty-theme.conf`, opcional, que o rodapé também copia; processo
+novo do Ghostty veste, processo aberto não — e toda janela É um processo, por qualquer porta: a
+config diz `gtk-single-instance = false`, mas a entrada `.desktop` do upstream passava
+`--gtk-single-instance=true` no `Exec` (flag vence arquivo) e oferecia ativação por D-Bus, que é
+de instância única por construção; o módulo instala a entrada reescrita sem os dois e sem o arquivo
+de serviço (`ghosttyPerWindow`, um `symlinkJoin`), e `ghostty-windows-are-processes` mede o instalado.
+Pelo lançador, uma janela aberta depois da troca entrava no processo antigo e não vestia nada.
+**E o Ghostty do nixpkgs 26.05 só lê
+`$XDG_CONFIG_HOME/ghostty/config`** — nunca `/etc/xdg` —, então o módulo do terminal passou a pôr o
+arquivo lá pelo home-manager, que já cuida dos dotfiles desse usuário: até isso, nenhuma linha dele
+chegava ao programa, decoração inclusive (a revisão mediu com `+show-config`, e o check
+`ghostty-config-includes-theme` agora pergunta ao binário a configuração EFETIVA). Os fragmentos têm UM renderizador (o gerador); o shell só copia, do
+`RONOCTUA_THEMES`, e os refaz ao arrancar e quando o arquivo muda por fora. GTK e Qt vestem o MODO
+(escuro), não a cor (`nix/modules/foreign.nix`); a extensão do navegador veste o tema padrão do build.
+O que NÃO segue ao vivo, e por quê: a extensão (não enxerga nossos arquivos) e terminais já abertos
+(cada janela é um processo que leu o config). O fundo do compositor SEGUE: o `layout` do fragmento é
+fundido no reload.
+
+**O que está lá para contextos que ainda não existem.** Além dos 52 tokens de sempre, cada tema traz
+`context.<família>.{solid,hover,ground,border,on,text}` para as oito famílias do rodapé e
+`context.neutral.{surface,surface-raised,fg,fg-muted,border,border-strong}` (as tabelas de forma da
+referência, sem o que o inv. 15 proíbe), `terminal.*`, `chart.one..eight` (matizes a arcos de ΔE
+iguais a partir do acento, luminosidade subindo com o índice — é o que sobrevive à dicromacia) e
+`level.zero..ten` (sequencial no matiz do acento, croma mudo nas pontas). Uma tela nova pede o papel
+que existe; a família que ela quiser criar é uma linha na semente e passa pelos mesmos gates.
+
 ---
 
 ## 4. Teclado, keymap e a leader

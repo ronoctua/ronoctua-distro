@@ -182,6 +182,16 @@ pub fn host_nix(r: &Answers) -> String {
     // It is also the line to edit to change one's mind: `minimal` to `full` plus
     // a `nixos-rebuild switch` is the whole upgrade, with no reinstall.
     let _ = writeln!(s, "  ronoctua.profile = \"{}\";", r.profile);
+    // THE THEME THE MACHINE COMES UP IN, written for the reason the profile
+    // is: it is the module's own default today, and the line is what tells
+    // whoever reads this file that the default exists and where to change it.
+    // There is no question for it — `LEADER s t` changes it at run time in a
+    // keystroke, and a question here has thirteen derivatives to keep.
+    let _ = writeln!(
+        s,
+        "  ronoctua.theme = \"{}\";",
+        ronoctua_tokens::theme::default_one().id()
+    );
     // THE LOCALE IS ITS OWN LINE, and not derived from the language: the two
     // answer different questions, and the module stopped tying them.
     let _ = writeln!(s, "  ronoctua.locale = \"{}\";", r.system_locale);
@@ -486,6 +496,20 @@ mod tests {
             profile: "minimal".into(),
             resume_offset: Some(123_456),
         }
+    }
+
+    #[test]
+    fn the_host_nix_names_the_machines_theme() {
+        // The default, spelled out: the file is where somebody looks to find
+        // out what their machine is, and an answer that only appears when it
+        // is not the default is one they have to already know the default to
+        // read. The id comes from the generated table, never from a literal.
+        let s = host_nix(&answers());
+        let line = format!(
+            "  ronoctua.theme = \"{}\";",
+            ronoctua_tokens::theme::default_one().id()
+        );
+        assert!(s.contains(&line), "the theme line is missing:\n{s}");
     }
 
     #[test]

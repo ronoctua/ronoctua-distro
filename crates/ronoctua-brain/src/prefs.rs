@@ -81,36 +81,14 @@ impl Where {
     }
 }
 
-/// `$XDG_CONFIG_HOME/ronoctua`, or `~/.config/ronoctua`.
+/// `$XDG_CONFIG_HOME/ronoctua` and `$XDG_STATE_HOME/ronoctua`.
 ///
-/// # Why this is written twice in this repository
-///
-/// Because the twin — `ronoctua_notify::store::config_dir` — lives in a crate
-/// that carries zbus and an SVG rasteriser, and depending on it would put a
-/// D-Bus stack and `resvg` inside a daemon whose whole job is to decide what
-/// time it is. Sixteen lines against a closure that size is the trade this
-/// repository already makes elsewhere, and it is written down here so the next
-/// reader does not "fix" it. If a third caller appears, the answer is a crate
-/// of its own for the XDG roots — not a dependency on whichever one happened to
-/// have them first.
-#[must_use]
-pub fn config_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("ronoctua"))
-}
-
-/// `$XDG_STATE_HOME/ronoctua`, or `~/.local/state/ronoctua`. See [`config_dir`].
-#[must_use]
-pub fn state_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
-        })?;
-    Some(base.join("ronoctua"))
-}
+/// They were written here once, with a note saying that a third caller
+/// should get a crate of its own rather than a dependency on whichever crate
+/// happened to have them first. The theme was that caller, and
+/// `ronoctua-xdg` is that crate: zero dependencies, so this daemon carries
+/// nothing it did not before.
+pub use ronoctua_xdg::{config_dir, state_dir};
 
 /// Everything the person chose.
 ///

@@ -42,6 +42,10 @@ struct Ask {
     columns: u16,
     lines: u16,
     language: String,
+    /// The theme the picture is drawn in. The FIRST declared one unless asked
+    /// — never the file or the environment: a photograph is deterministic, as
+    /// `--language` already is.
+    theme: tokens::theme::Theme,
     /// In order: everything to send the component before drawing.
     inputs: Vec<Input>,
 }
@@ -53,6 +57,7 @@ usage: ronoctua-render-png <component.wasm> [options]
   --columns <n>       width in cells           (default: 90)
   --lines <n>         height in cells          (default: 24)
   --language <id>     pt-BR or en-GB           (default: pt-BR)
+  --theme <id>        a theme of assets/themes  (default: the first)
 
   --state <id>        enters a state before drawing
   --command <id>      fires a command of the buffer
@@ -75,6 +80,7 @@ fn parse() -> Result<Ask> {
         columns: 90,
         lines: 24,
         language: "pt-BR".to_owned(),
+        theme: tokens::theme::default_one(),
         inputs: Vec::new(),
     };
     while let Some(flag) = args.next() {
@@ -91,6 +97,13 @@ fn parse() -> Result<Ask> {
             "--columns" => me.columns = value()?.parse().context("`--columns` is not a number")?,
             "--lines" => me.lines = value()?.parse().context("`--lines` is not a number")?,
             "--language" => me.language = value()?,
+            "--theme" => {
+                let id = value()?;
+                me.theme = tokens::theme::by_id(&id).with_context(|| {
+                    let known: Vec<&str> = tokens::theme::all().map(|t| t.id()).collect();
+                    format!("unknown theme `{id}`; the themes are {}", known.join(", "))
+                })?;
+            }
             "--state" => me.inputs.push(Input::EnterState(value()?)),
             "--command" => me.inputs.push(Input::Command(value()?)),
             "--type" => me.inputs.extend(value()?.chars().map(Input::Char)),
@@ -132,6 +145,9 @@ fn heights() -> ronoctua_protocol::Heights {
 
 fn main() -> Result<()> {
     let ask = parse()?;
+    // The theme, before anything resolves a colour: every `Color` is a role
+    // that reads the process's theme when drawn, and this is that theme.
+    tokens::theme::set(ask.theme);
     let texts = ronoctua_i18n::Texts::fresh(&ask.language)
         .with_context(|| format!("the language `{}` does not exist", ask.language))?;
 

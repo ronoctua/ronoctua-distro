@@ -71,15 +71,9 @@ in
       # The system's default theme for foreign apps. It does not touch our UI.
       environment.sessionVariables.XDG_ICON_THEME = "noctua";
 
-      # GTK and Qt look the theme up by name; without this each would pick its own.
-      environment.etc."xdg/gtk-3.0/settings.ini".text = ''
-        [Settings]
-        gtk-icon-theme-name=noctua
-      '';
-      environment.etc."xdg/gtk-4.0/settings.ini".text = ''
-        [Settings]
-        gtk-icon-theme-name=noctua
-      '';
+      # GTK looks the icon theme up by name in `settings.ini`; that file is
+      # written ONCE, by `nix/modules/foreign.nix`, which reads this switch —
+      # two modules writing one INI would be two `[Settings]` headers.
     }
   );
 }

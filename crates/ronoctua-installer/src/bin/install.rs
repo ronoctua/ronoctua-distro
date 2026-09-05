@@ -36,6 +36,11 @@ fn main() -> Result<()> {
     let run_for_real = args.iter().any(|a| a == "--execute");
 
     let texts = Texts::from_env();
+    // THE THEME FROM THE ENVIRONMENT ONLY: the installer runs as root from the
+    // ISO, where nobody has chosen, and a `theme.json` must not reach it.
+    if let Some(theme) = ronoctua_tokens::theme::from_env() {
+        ronoctua_tokens::theme::set(theme);
+    }
 
     // The TUI only makes sense with a terminal on BOTH sides: with no stdin there are no
     // keys, and with no stdout the drawing goes into a file as escape

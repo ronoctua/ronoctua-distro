@@ -6,6 +6,7 @@
   config,
   lib,
   pkgs,
+  ronoctua,
   ...
 }:
 
@@ -138,6 +139,25 @@ in
         `ronoctua.browser.enable = true;` to install just the browser.
 
         The table tying the profile to each key is in `nix/modules/profile.nix`.
+      '';
+    };
+
+    # THE THEME THE MACHINE COMES UP IN — the distro's default; the person's
+    # own choice (`LEADER s t`) lives in `$XDG_CONFIG_HOME/ronoctua/theme.json`
+    # and wins over it. The enum is the list in `assets/themes/themes.nix`,
+    # imported once in the flake; naming a theme that is not there fails the
+    # evaluation, which is where a typo in `host.nix` should fail.
+    #
+    # What it decides declaratively: the compositor's static border colours,
+    # Ghostty's palette, the browser extension's colours and the environment
+    # the footer starts with. Everything that follows the person's choice at
+    # runtime is the shell's business.
+    theme = lib.mkOption {
+      type = lib.types.enum ronoctua.themes;
+      default = builtins.head ronoctua.themes;
+      description = ''
+        The colour theme the system is built with. The person can pick another
+        at runtime with `LEADER s t`; this is what a fresh machine shows.
       '';
     };
   };

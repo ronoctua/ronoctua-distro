@@ -560,7 +560,7 @@ fn leaf_of(path: &Path) -> String {
 /// and the app-id table that are already there. That directory is already in
 /// `nix/modules/persist.nix`, so an impermanent root does not take it.
 pub mod store {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use super::Preferences;
 
@@ -582,14 +582,9 @@ pub mod store {
     /// The file, under `$XDG_CONFIG_HOME/ronoctua`.
     pub const FILE: &str = "files-sidebar.json";
 
-    /// `$XDG_CONFIG_HOME/ronoctua`, or `~/.config/ronoctua`.
-    #[must_use]
-    pub fn config_dir() -> Option<PathBuf> {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-        Some(base.join("ronoctua"))
-    }
+    /// `$XDG_CONFIG_HOME/ronoctua`, from the one crate that owns the roots
+    /// (`ronoctua-xdg`, which says why it exists).
+    pub use ronoctua_xdg::config_dir;
 
     /// Reads the preferences from an explicit directory — the form a test uses.
     ///
@@ -622,13 +617,10 @@ pub mod store {
     ///
     /// The directory cannot be created, or the file cannot be written.
     pub fn write_to(dir: &Path, p: &Preferences) -> std::io::Result<()> {
-        std::fs::create_dir_all(dir)?;
         let text = serde_json::to_string_pretty(p)?;
         // Written whole and renamed over, so a full disk or a kill mid-write
         // leaves the previous file rather than half of this one.
-        let scratch = dir.join(format!("{FILE}.new"));
-        std::fs::write(&scratch, text.as_bytes())?;
-        std::fs::rename(&scratch, dir.join(FILE))
+        ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())
     }
 
     /// When the file last changed, for "has somebody edited it".

@@ -99,12 +99,51 @@ def flatten(prefix: str, obj, out: dict) -> None:
             out[key] = v
 
 
+def load_themes(path: pathlib.Path) -> list[dict]:
+    """`themes.json` from `nix/themes.nix`: the ordered list of themes, each
+    `{"id": …, "colors": {key: "0xRRGGBBAA"}}`, the first being the default.
+
+    Every theme has to name exactly the same colours. The generator over
+    there already guarantees it; it is checked again here because a table
+    with a hole in it would be the wrong colour on screen, never an error."""
+    raw = json.loads(path.read_text())
+    if not isinstance(raw, list) or not raw:
+        raise SystemExit(f"ERROR: {path} is not a non-empty list of themes")
+    themes = []
+    for entry in raw:
+        if not isinstance(entry, dict) or "id" not in entry or "colors" not in entry:
+            raise SystemExit(f"ERROR: a theme in {path} is not {{id, colors}}: {entry!r:.80}")
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", entry["id"]):
+            raise SystemExit(f"ERROR: the theme id {entry['id']!r} is not kebab-case")
+        flat: dict = {}
+        flatten("", entry["colors"], flat)
+        themes.append({"id": entry["id"], "colors": flat})
+    first = set(themes[0]["colors"])
+    for theme in themes[1:]:
+        if set(theme["colors"]) != first:
+            print(
+                f"ERROR: the theme `{theme['id']}` does not name the same colours as `{themes[0]['id']}`:",
+                sorted(set(theme["colors"]) ^ first),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+    ids = [t["id"] for t in themes]
+    if len(set(ids)) != len(ids):
+        raise SystemExit(f"ERROR: a theme id repeats: {ids}")
+    return themes
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--colors", type=pathlib.Path, required=True)
+    ap.add_argument(
+        "--themes",
+        type=pathlib.Path,
+        required=True,
+        help="themes.json from nix/themes.nix: [{id, colors}], the first is the default",
+    )
     ap.add_argument("--typography", type=pathlib.Path, required=True)
     ap.add_argument("--space", type=pathlib.Path, required=True)
-    ap.add_argument("--icons", type=pathlib.Path, required=True, help="icons.json do glyphdb")
+    ap.add_argument("--icons", type=pathlib.Path, required=True, help="icons.json from the glyphdb")
     ap.add_argument(
         "--tray",
         type=pathlib.Path,
@@ -115,7 +154,7 @@ def main() -> int:
         "--categories",
         type=pathlib.Path,
         required=True,
-        help="category-glyphs.json: LISTA ordenada de {category, token}",
+        help="category-glyphs.json: an ORDERED list of {category, token}",
     )
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument(
@@ -126,13 +165,15 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    colors_raw = json.loads(args.colors.read_text())
+    themes = load_themes(args.themes)
     typo = json.loads(args.typography.read_text())
     space_raw = json.loads(args.space.read_text())
     icons = json.loads(args.icons.read_text())
 
-    colors: dict = {}
-    flatten("", colors_raw, colors)
+    # The names are the FIRST theme's: every theme has the same set (checked
+    # in `load_themes`), so the constants, the bridge and the WIT enum come
+    # out identical whichever theme is looked at.
+    colors: dict = themes[0]["colors"]
     spaces: dict = {}
     flatten("", space_raw, spaces)
 
@@ -158,18 +199,29 @@ def main() -> int:
     A("// Editing here means losing the change at the next build.")
     A("")
 
-    # --- colours -----------------------------------------------------------
-    A("/// Design system colours. RGBA format, 8 bits per channel.")
+    # --- colours: one ROLE per key, and the values in a table per theme ------
+    #
+    # The constant is an index, not bytes: `Color::to_rgba8` looks it up in the
+    # theme the process is in. Sorted, so the index is stable across generator
+    # runs and the WIT enum (also sorted) lists the same names in the same order.
+    roles = sorted(colors)
+    A("/// Design system colours: one constant per ROLE, resolved through the")
+    A("/// current theme (`theme::set`) when drawn.")
     A("///")
     A("/// There is no public `Color` constructor on purpose: invariant 9 says")
     A("/// that no colour lives outside the tokens, and the way to guarantee that")
     A("/// is for there to be no way to write one.")
     A("pub mod color {")
     A("    use super::Color;")
-    for k in sorted(colors):
-        r, g, b, a = parse_color(colors[k])
+    for i, k in enumerate(roles):
         A(f"    /// `color.{k}`")
-        A(f"    pub const {ident(k)}: Color = Color::rgba({r}, {g}, {b}, {a});")
+        A(f"    pub const {ident(k)}: Color = Color::at({i});")
+    A("")
+    A("    /// The token names, by role — what `Color::name` and `Debug` read.")
+    A(f"    pub(crate) const NAMES: [&str; {len(roles)}] = [")
+    for k in roles:
+        A(f'        "{k}",')
+    A("    ];")
     A("}")
     A("")
 
@@ -310,6 +362,29 @@ def main() -> int:
     A("}")
     A("")
 
+    # --- the themes' VALUES ------------------------------------------------
+    #
+    # `[theme][role]`, in the order of `assets/themes/themes.nix` and the sorted
+    # order of the roles above. Every theme has every role (`load_themes`
+    # checked), so the table is rectangular by construction.
+    A("/// The themes' VALUES, in `assets/themes/themes.nix` order; the first is")
+    A("/// the default. Only `Color` reads the table.")
+    A("pub mod themes {")
+    A("    /// The ids, in order.")
+    A(f"    pub const IDS: [&str; {len(themes)}] = [{', '.join(repr(t['id']) for t in themes).replace(chr(39), chr(34))}];")
+    A("    /// `[theme][role]` -> RGBA, roles in `color`'s order.")
+    A(f"    pub static TABLE: [[[u8; 4]; super::counts::COLORS]; {len(themes)}] = [")
+    for theme in themes:
+        A(f"        // {theme['id']}")
+        A("        [")
+        for k in roles:
+            r, g, b, a = parse_color(theme["colors"][k])
+            A(f"            [{r}, {g}, {b}, {a}], // {k}")
+        A("        ],")
+    A("    ];")
+    A("}")
+    A("")
+
     # --- WIT -> Rust bridge, with no fallback -----------------------------
     #
     # The guest names the colour by ENUM: an invalid name does not compile over there. On
@@ -353,6 +428,8 @@ def main() -> int:
     A(f"    pub const SPACES: usize = {len(spaces)};")
     A(f"    /// The number of icon tokens.")
     A(f"    pub const ICONS: usize = {len(icons)};")
+    A("    /// The number of themes; the first is the default.")
+    A(f"    pub const THEMES: usize = {len(themes)};")
     A("}")
     A("")
 
@@ -395,7 +472,7 @@ def main() -> int:
     args.out_wit.write_text("\n".join(W))
 
     print(
-        f"OK: {len(colors)} colours, {len(spaces)} spacings, "
+        f"OK: {len(colors)} colours in {len(themes)} theme(s), {len(spaces)} spacings, "
         f"{len(icons)} icons -> {args.out.name} and {args.out_wit.name}"
     )
     print("OK: no shadow/elevation token (invariant 15)")

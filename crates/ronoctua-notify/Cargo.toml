@@ -11,6 +11,8 @@ publish.workspace = true
 # where the business rules live — do not import it, and that is what makes it possible to test
 # "a critical one never disappears on its own" without bringing up a bus.
 [dependencies]
+# The two XDG roots, in the one crate that owns them (zero dependencies).
+ronoctua-xdg = { path = "../ronoctua-xdg" }
 zbus.workspace = true
 tracing.workspace = true
 # The history outlives the session and the person's filters outlive a rebuild.

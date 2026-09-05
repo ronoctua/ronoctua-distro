@@ -1,0 +1,16 @@
+[package]
+name = "ronoctua-xdg"
+description = "The two XDG roots this system keeps its files under, and an atomic write. Zero dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ZERO DEPENDENCIES: this is the crate three daemons and the shell share for
+# sixteen lines of path arithmetic, and the whole point of it (see `lib.rs`) is
+# that depending on it costs nobody a D-Bus stack or a renderer.
+[dependencies]
+
+[lints]
+workspace = true

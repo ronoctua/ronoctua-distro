@@ -66,6 +66,8 @@ KEYS = [
 ]
 
 # The colours the popup uses, as `group.name` in `assets/tokens/colors.nix`.
+# The VALUES come from the generated palette (`nix/themes.nix`), a flat map
+# of `group.name` -> `0xRRGGBBAA` for the default theme.
 COLOURS = [
     ("surface", "base"),
     ("surface", "selection"),
@@ -138,9 +140,10 @@ def colours(path: pathlib.Path) -> dict:
     table = json.loads(path.read_text(encoding="utf-8"))
     out = {}
     for group, name in COLOURS:
-        if group not in table or name not in table[group]:
-            sys.exit(f"ERROR: the colour token `{group}.{name}` does not exist")
-        out[camel(f"{group}.{name}")] = colour_of(table[group][name])
+        key = f"{group}.{name}"
+        if key not in table:
+            sys.exit(f"ERROR: the colour token `{key}` does not exist")
+        out[camel(key)] = colour_of(table[key])
     return out
 
 

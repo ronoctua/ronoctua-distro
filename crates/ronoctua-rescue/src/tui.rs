@@ -45,7 +45,7 @@ use crate::{Action, Own, Run, Section, Tier, action, of_section};
 ///
 /// `to_rgba8()` and NOT `to_linear()`: the terminal is sRGB. The alpha is
 /// dropped — a terminal cell has no transparency to give.
-const fn colour(c: Color) -> ratatui::style::Color {
+fn colour(c: Color) -> ratatui::style::Color {
     let [r, g, b, _] = c.to_rgba8();
     ratatui::style::Color::Rgb(r, g, b)
 }

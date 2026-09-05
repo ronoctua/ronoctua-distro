@@ -242,7 +242,7 @@ fn save_it(text: &str) -> Result<(), String> {
 }
 
 /// A token, as this terminal wants it — sRGB, never linear.
-const fn colour(c: ronoctua_tokens::Color) -> ratatui::style::Color {
+fn colour(c: ronoctua_tokens::Color) -> ratatui::style::Color {
     let [r, g, b, _] = c.to_rgba8();
     ratatui::style::Color::Rgb(r, g, b)
 }

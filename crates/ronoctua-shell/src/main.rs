@@ -68,6 +68,9 @@ mod stage;
 mod surface;
 mod syncthing;
 mod terminal;
+// WHICH THEME THIS PROCESS DRAWS IN, and how the doors hear about a change.
+mod theme;
+mod theme_chooser;
 mod transfers;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
@@ -92,6 +95,11 @@ fn main() -> Result<()> {
         )
         .with_writer(std::io::stderr)
         .init();
+
+    // THE THEME, before any door: every process of this binary — the footer,
+    // the windows, a buffer's host — draws through the same three sources,
+    // read once here. The short-lived subcommands pay one file read.
+    theme::resolve_at_start();
 
     match std::env::args().nth(1).as_deref() {
         // It tells an ALREADY-RUNNING footer. It is the compositor that sees the

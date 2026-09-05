@@ -12,6 +12,8 @@ publish.workspace = true
 # root is a parameter, so a fake tree in a test is worth more than a virtual
 # machine one has to boot.
 [dependencies]
+# The two XDG roots, in the one crate that owns them (zero dependencies).
+ronoctua-xdg = { path = "../ronoctua-xdg" }
 # `ronoctua-apps` for two things it already knows: `fold` (accents off, so that
 # sorting puts `Ágil` where a person looks for it) and `DesktopEntry`, which is
 # what answers "who opens this file". Resolving that here keeps the shell from

@@ -880,8 +880,22 @@ pub fn host_it() -> Result<()> {
         )
         .map_err(|e| anyhow::anyhow!("could not hang the clock: {e}"))?;
 
+    // THE THEME'S FILE, watched, for the same reason as every other door.
+    let (theme_sender, theme_changed) = channel::channel::<()>();
+    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    handle
+        .insert_source(theme_changed, |event, (), state: &mut UpdateWindow| {
+            if let channel::Event::Msg(()) = event
+                && crate::theme::reload()
+            {
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
     let mut state = UpdateWindow {
         conn: conn.clone(),
+        _theme_watch,
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
@@ -938,6 +952,8 @@ pub fn host_it() -> Result<()> {
 /// The window.
 struct UpdateWindow {
     conn: Connection,
+    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,

@@ -10180,7 +10180,16 @@ impl View {
         // `when::civil` — so there is no `SystemTime` in the middle to convert
         // and get wrong.
         let stamp = ronoctua_inspect::Stamp::new(path.clone(), modified, bytes, target);
-        let key = stamp.key();
+        // THE THEME IS PART OF THE KEY. The inspector paints the waveform in a
+        // token's VALUE (`wave` below), and the door uploads a still only when
+        // its key is missing from the GPU cache; a key that ignored the theme
+        // would keep the old ink on screen after a switch, and the re-ask a
+        // theme change makes would be paid for a picture nobody sees.
+        let key = format!(
+            "{}:{}",
+            stamp.key(),
+            ronoctua_tokens::theme::current().position()
+        );
         if self.asked.as_deref() == Some(key.as_str()) {
             return None;
         }

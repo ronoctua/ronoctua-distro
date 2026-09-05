@@ -27,6 +27,7 @@ path = "src/bin/niri-actions.rs"
 
 [dependencies]
 ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
 ronoctua-render = { path = "../ronoctua-render" }
 ronoctua-niri = { path = "../ronoctua-niri" }
 # The ONLY border with NetworkManager. The shell does not speak network D-Bus

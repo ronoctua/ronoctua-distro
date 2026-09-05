@@ -52,10 +52,13 @@ pub const fn papers() -> &'static [Paper] {
             path: "/etc/ronoctua/fallback-chain.json",
             origin: Some("nix/modules/fonts.nix"),
         },
-        Paper {
-            path: "/etc/xdg/ghostty/config",
-            origin: Some("nix/modules/terminal.nix"),
-        },
+        // NOT GHOSTTY'S CONFIG. It used to be `/etc/xdg/ghostty/config`, and
+        // Ghostty never read it there (nixpkgs 26.05 reads only
+        // `$XDG_CONFIG_HOME/ghostty/config`); it is now placed in the person's
+        // home by home-manager (`nix/modules/terminal.nix`), a path this
+        // console — root, on a VT, with no user in hand — cannot name as a
+        // constant. A row that leads nowhere is the one thing this list must
+        // not hold.
     ]
 }
 

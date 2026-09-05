@@ -21,19 +21,16 @@ let
   # by hand is what invariant 9 exists to forbid: changing `state.accent`
   # changed the footer and left the compositor's border on the old colour.
   #
-  # No import-from-derivation: this is reading a Nix file, evaluated like any
-  # other.
-  tokens = import ../../assets/tokens/colors.nix;
+  # And now the tokens are SOLVED, per theme, by `nix/themes.nix`: the three
+  # values are files in that derivation, for the theme `ronoctua.theme` names,
+  # spliced into the config by the build below — never read at evaluation
+  # (no import-from-derivation), the same way the chords get in.
+  palette = "${ronoctua.themed}/${config.ronoctua.theme}";
   # The keyboard layout, from the OPTION — whose default is
   # `nix/keyboard-xkb.nix`. Reading the file directly would ignore what the
   # installer wrote into `host.nix`, and the machine would come up on someone
   # else's layout with nothing to say so.
   keyboard = config.ronoctua.keyboard;
-  # `0xRRGGBBAA` (the tokens' format) -> `#RRGGBB` (what niri understands).
-  # The alpha is dropped: niri accepts it, but none of these three colours is
-  # translucent, and a border with alpha would be elevation (invariant 15).
-  hex = t: "#" + lib.substring 2 6 t;
-
   # The chords, generated from the shell's command table — see nix/niri-binds.nix.
   binds = pkgs.callPackage ../niri-binds.nix {
     ronoctua-shell = ronoctua.shell;
@@ -117,8 +114,8 @@ let
               // blue still marks exactly one window.
               border {
                   width 2
-                  active-color "${hex tokens.state.accent}"
-                  inactive-color "${hex tokens.border.inactive}"
+                  active-color "@BORDER_ACTIVE@"
+                  inactive-color "@BORDER_INACTIVE@"
               }
               focus-ring { off; }
 
@@ -135,7 +132,7 @@ let
               // had been a separate block from the start, and nothing accused
               // it because nothing validated the generated file — see the
               // `niri-config-valid` check.
-              background-color "${hex tokens.surface.base}"
+              background-color "@BACKGROUND@"
           }
 
           // The two-line footer. A single surface, anchored at the bottom,
@@ -241,6 +238,36 @@ let
     cat ${windowRules} >> $out
     grep -q "open-floating" $out || {
       echo "ERROR: the window rules did not get into niri's config." >&2; exit 1; }
+
+    # The three colours, from the solved palette. `#RRGGBB`, already: the
+    # generator writes what niri reads, and none of the three is translucent —
+    # a border with alpha would be elevation (invariant 15).
+    substituteInPlace $out \
+      --subst-var-by BORDER_ACTIVE "$(cat ${palette}/niri-border-active)" \
+      --subst-var-by BORDER_INACTIVE "$(cat ${palette}/niri-border-inactive)" \
+      --subst-var-by BACKGROUND "$(cat ${palette}/niri-background)"
+    grep -q "@[A-Z_]*@" $out && {
+      echo "ERROR: a colour marker survived in niri's config." >&2; exit 1; }
+    # ANCHORED AT THE LINE'S START: `active-color "#` is a substring of the
+    # inactive line, and a substitution that came out empty would have passed.
+    for line in 'active-color "#' 'inactive-color "#' 'background-color "#'; do
+      grep -qE "^[[:space:]]*$line" $out || {
+        echo "ERROR: $line did not get into niri's config." >&2; exit 1; }
+    done
+
+    # THE PERSON'S THEME, included LAST and optional. `nix/scripts/gen-theme.py`
+    # writes two fragments per theme — one per desk, black or the theme's own
+    # `surface.backdrop` —, the footer copies the chosen one to this path when
+    # the theme or the desk changes, and niri reloads an included file on its
+    # own (it watches them). Each carries the border as a
+    # `window-rule { border { … } }` — a repeatable node; the last one wins,
+    # which is how a file that may not exist overrides the static border
+    # above — and the desk as a `layout { background-color }`: niri refuses a
+    # duplicate node only within ONE file and merges the `layout` an included
+    # file brings, the later value winning, which is how the same file
+    # overrides the static background above. Absent, both are the default
+    # theme's: the substitution above.
+    echo 'include "/home/${config.ronoctua.user}/.config/ronoctua/niri-theme.kdl" optional=true' >> $out
   '';
 in
 {
@@ -338,6 +365,10 @@ in
       # why.
       startLimitIntervalSec = 0;
       description = "ronoctua — the two-line footer";
+      environment = {
+        RONOCTUA_THEME = config.ronoctua.theme;
+        RONOCTUA_THEMES = "${ronoctua.themed}";
+      };
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
@@ -377,6 +408,13 @@ in
       # and that is why the screen needs both variables instead of deriving one
       # from the other.
       RONOCTUA_LEADER_CHORD = "SUPER";
+      # THE THEME the machine comes up in, and where the generator's fragments
+      # are. The shell reads the first as the floor under the person's own
+      # `theme.json`, and copies from the second when the theme changes. Both
+      # places, for the reason `RONOCTUA_ICONS` gives: the footer is a user
+      # unit and inherits the manager's environment, not a login shell's.
+      RONOCTUA_THEME = config.ronoctua.theme;
+      RONOCTUA_THEMES = "${ronoctua.themed}";
       NIXOS_OZONE_WL = "1";
       # Section 6.4: the renderer does NOT use fontconfig. But the foreign apps
       # do, and they need to find our .conf.

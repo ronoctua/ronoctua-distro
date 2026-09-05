@@ -201,9 +201,18 @@
         inherit languages;
       };
 
+      # THE THEMES, imported ONCE, like the languages. And the palettes, SOLVED
+      # once for all of them: `assets/tokens/colors.nix` is recipes, and this
+      # derivation is where they become values (section 7.6, one wall earlier).
+      themes = import ./assets/themes/themes.nix;
+      themed = pkgs.callPackage ./nix/themes.nix {
+        inherit themes;
+        themesDir = ./assets/themes;
+        recipesFile = ./assets/tokens/colors.nix;
+      };
+
       tokensRs = pkgs.callPackage ./nix/tokens.nix {
-        inherit glyphdb;
-        colorsFile = ./assets/tokens/colors.nix;
+        inherit glyphdb themed;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
         categoryTableFile = ./assets/icons/category-glyphs.nix;
         typographyFile = ./assets/tokens/typography.nix;
@@ -290,7 +299,9 @@
       # same `assets/i18n` and `assets/tokens` everything else reads. Invariants
       # 8 and 9 do not stop at the browser's edge.
       extension = pkgs.callPackage ./nix/extension.nix {
-        colorsFile = ./assets/tokens/colors.nix;
+        # The DEFAULT theme's palette, as a flat `key -> 0xRRGGBBAA` map. The
+        # extension cannot see the person's choice, so it wears the default.
+        colorsJson = "${themed}/${builtins.head themes}.json";
         spaceFile = ./assets/tokens/space.nix;
         i18nDir = ./assets/i18n;
         inherit languages;
@@ -390,6 +401,7 @@
         # binary does not have. See `nix/dev.nix`'s `bakedExports`.
         inherit (rust) bufferComponents generated;
         inherit fonts fontconfigConf iconSuperpack;
+        inherit themed themes;
       };
 
       # Section 5.2's FRAME targets. Outside `nix flake check` on purpose:
@@ -537,6 +549,7 @@
         ./nix/modules/niri.nix
         ./nix/modules/keyboard.nix
         ./nix/modules/icons.nix
+        ./nix/modules/foreign.nix
         ./nix/modules/terminal.nix
         ./nix/modules/network.nix
         ./nix/modules/syncthing.nix
@@ -557,6 +570,10 @@
             ronoctua = {
               inherit fonts fontconfigConf iconSuperpack;
               inherit (inputs) niri;
+              # THE THEMES: the list (the option's enum) and the solved
+              # palettes (files the modules splice or point at; never read at
+              # evaluation).
+              inherit themes themed;
               # The shell's binary: the niri module generates the chord
               # binds from its command table.
               #
@@ -640,6 +657,8 @@
 
         # Rust token table, generated from the .nix files.
         tokens-rs = tokensRs;
+        # The solved palettes, their fragments and the gates' report.
+        themes = themed;
         mime-db = mimeDb;
         notifications-rs = notificationsRs;
         niri-actions = niriActions;
@@ -682,7 +701,7 @@
         # PNGs in the store — see `nix/shots.nix` for why it is a VM and not a
         # script on somebody's machine.
         shots = pkgs.callPackage ./nix/shots.nix {
-          inherit fonts;
+          inherit fonts themed themes;
           niri = inputs.niri.packages.${system}.niri;
           ronoctua-shell = rust.shell;
           # The daemon, so the brain's line can be photographed. It is the only
@@ -706,7 +725,12 @@
             ./nix/installer/iso.nix
             {
               _module.args.ronoctua = {
-                inherit fonts fontconfigConf;
+                inherit
+                  fonts
+                  fontconfigConf
+                  themes
+                  themed
+                  ;
                 # `rust.installer`, and NOT `rust.workspace`: the workspace
                 # derivation holds every binary, and a derivation references
                 # what its bytes mention — `ronoctua-shell` was putting Zig,
@@ -843,7 +867,7 @@
       # are stubs that pass, so the plumbing exists from day one.
       # =================================================================
       checks.${system} = import ./tests/checks.nix {
-        inherit languages;
+        inherit languages themes themed;
         inherit
           pkgs
           lib

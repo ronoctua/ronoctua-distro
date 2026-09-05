@@ -707,6 +707,8 @@ cmd-network-disconnect = Desconectar
 cmd-network-forget = Esquecer a rede
 cmd-network-wifi-toggle = Alternar o rádio Wi-Fi
 cmd-network-link = Mostrar o enlace
+cmd-theme-open = Temas
+cmd-theme-apply = Aplicar este tema e fundo
 group-network = rede
 
 # THE VIEW. States the list shows in place of rows when there is no row to
@@ -1906,3 +1908,12 @@ update-verdict-skipped = não se aplica
 update-verdict-rehearsed = só ensaiou
 update-verdict-stopped = parou aqui
 update-verdict-pending = ainda vem
+
+## The theme chooser — LEADER s t. The themes are listed by id and have no
+## key; these are the option beside them (the desk under the windows), its
+## answers — one `theme-backdrop-<id>` per answer — and the hint.
+theme-option-backdrop = Fundo
+theme-backdrop-black = Preto
+theme-backdrop-theme = A cor do tema
+theme-hint = { $apply } aplica · { $left }/{ $right } troca de coluna · { $close } volta
+echo-theme-unsaved = não deu para gravar o tema: { $error }

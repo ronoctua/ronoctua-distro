@@ -27,7 +27,7 @@ use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
-    reexports::calloop::{EventLoop, timer},
+    reexports::calloop::{EventLoop, channel, timer},
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -118,8 +118,26 @@ pub fn host_it() -> Result<()> {
         )
         .map_err(|e| anyhow::anyhow!("could not hang the clock: {e}"))?;
 
+    // THE THEME'S FILE, watched, so a choice made in the footer recolours this
+    // window without it being reopened.
+    let (theme_sender, theme_changed) = channel::channel::<()>();
+    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    handle
+        .insert_source(
+            theme_changed,
+            |event, (), state: &mut NotificationsWindow| {
+                if let channel::Event::Msg(()) = event
+                    && crate::theme::reload()
+                {
+                    state.ask_paint();
+                }
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
     let mut state = NotificationsWindow {
         conn: conn.clone(),
+        _theme_watch,
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
@@ -168,6 +186,8 @@ pub fn host_it() -> Result<()> {
 /// The window.
 struct NotificationsWindow {
     conn: Connection,
+    /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,

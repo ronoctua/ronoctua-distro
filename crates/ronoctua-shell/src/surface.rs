@@ -512,6 +512,8 @@ struct Footer {
     /// tearing the thread down to raise it again on the next open would be
     /// churn with something to get wrong in between.
     files_notice: Option<ronoctua_files::notice::Notice>,
+    /// The watch on `theme.json`: the file is the broadcast (see `theme.rs`).
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
     /// The last reading of the machine's disks.
     ///
     /// Kept even with no view on screen, so opening the manager draws the
@@ -534,6 +536,8 @@ struct Footer {
     /// Same design as the app finder, and for the same reason: the `Option` **is**
     /// the open/closed, and there is no parallel boolean that can disagree with it.
     network: Option<crate::network::ViewState>,
+    /// `LEADER s t`, while it is open. The cursor previews; `RET` commits.
+    theme_chooser: Option<crate::theme_chooser::View>,
 
     // --- file manager (`LEADER .`) ---
     /// The file manager, when open. Same design, same reason.
@@ -651,6 +655,13 @@ enum ViewState {
     Applications,
     /// The network list. Modal.
     Network,
+    /// The theme chooser. Modal.
+    ///
+    /// Where the network list sits, for the network's reason: its key branch
+    /// runs before the manager's, so `view()` has to rank it above `Files`;
+    /// and it yields to everything above because a cursor over a few rows
+    /// holds nothing a person built by hand.
+    Themes,
     /// The `M-x`. Modal.
     Commands,
     /// A leader sequence under way.
@@ -768,6 +779,14 @@ struct ExpansionRow {
     /// navegador web` asserts a relation that does not exist, and the column's
     /// ruler already separates the two.
     separator: bool,
+    /// Does the text stay in the RIGHT column when the key is empty?
+    ///
+    /// Yes where the two columns are two LISTS side by side — the theme
+    /// chooser's themes and the choices about them — and a row whose left
+    /// list has ended still belongs to the right one. No everywhere else: a
+    /// line with no key takes the whole width, which is the manual's and the
+    /// history's case, and the reason `text_start` moves the text left.
+    aside: bool,
     key_color: tokens::Color,
     text_color: tokens::Color,
     /// The file manager's row, when this line is one.
@@ -862,6 +881,8 @@ enum Click {
     /// action up there — marking read, editing a capture, adjusting a filter —
     /// is a thing one meant to do. The keys act; the mouse aims.
     Notifications(usize),
+    /// Focus — and so preview — the theme at index `n`.
+    Theme(usize),
     /// Put the focus on line `n` of the network list.
     ///
     /// Its own variant for the same reason as `Application`: the lists share the
@@ -903,6 +924,7 @@ impl ExpansionRow {
             click: None,
             key_flush_right: true,
             separator: true,
+            aside: false,
             key_color: tokens::color::STATE_ACCENT,
             text_color: tokens::color::TEXT_SECONDARY,
             fields: Vec::new(),
@@ -1604,6 +1626,7 @@ pub fn run() -> Result<()> {
         launch_sender: None,
         apps: None,
         network: None,
+        theme_chooser: None,
         files: None,
         files_sender: None,
         files_looking: None,
@@ -1622,6 +1645,7 @@ pub fn run() -> Result<()> {
         notes,
         disks_watching: false,
         files_notice: None,
+        _theme_watch: None,
         rack: None,
         catalogue: std::sync::Arc::default(),
         apps_stamp: Vec::new(),
@@ -1693,6 +1717,23 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
+
+    // THE THEME'S FILE, watched. The person's choice is written there by this
+    // very door and read by every other; hearing it here is what makes a
+    // choice made by hand — or by another footer, in the nested loop — reach
+    // this one without a restart.
+    // And the fragments beside it made to agree with the choice, before the
+    // watch: a rebuild may have moved the generator's output.
+    crate::theme::sync_with_file();
+    let (theme_sender, theme_changed) = channel::channel::<()>();
+    state._theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    handle
+        .insert_source(theme_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.theme_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
 
     // THE FRAMES OF A MOVING FILE, on a channel of their own — see the window
     // door's twin for why they are not on the reports': a frame arrives ten
@@ -3915,6 +3956,58 @@ impl Footer {
             // takes time is the radio's scan, and that one is NOT waited
             // for — see `network.rs`.
             // ---------------------------------------------------------
+            // THE THEME CHOOSER. Opening is a list; applying writes the file,
+            // which is what reaches every other door (`theme.rs`), and closes
+            // the list on the theme that is now on disk. A refusal to write
+            // keeps the list open and says why on the echo line: a choice that
+            // looked applied and was not would come back at the next start.
+            "theme-open" => {
+                // NOT OVER THE FOOTER'S MANAGER. Only the socket door can ask for
+                // it then (the leader cannot be typed while the manager grabs),
+                // and the region's height, grid and pointer maths are the
+                // manager's while it is open: two rows on top of a twelve-line
+                // region with the strip painted under them. The manager holds
+                // state a person built by hand; a cursor over a few rows can
+                // wait until it closes.
+                if self.files.is_some() {
+                    tracing::info!("theme-open refused: the file manager is open in the footer");
+                    return;
+                }
+                // Opened twice — the socket door does not know the list is up —
+                // it keeps the live view: a fresh one would read the PREVIEW as
+                // the committed theme, and `Esc` would then leave it on screen.
+                if self.theme_chooser.is_none() {
+                    self.theme_chooser = Some(crate::theme_chooser::View::fresh_one(
+                        crate::theme::committed_backdrop(),
+                    ));
+                }
+                self.first_page();
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            "theme-apply" => {
+                let Some(v) = self.theme_chooser.as_mut() else {
+                    // No key runs it outside the list; a name typed into
+                    // `M-x` with the list closed has nothing to apply.
+                    return;
+                };
+                let chosen = v.focused_choice();
+                match crate::theme::persist(chosen) {
+                    Ok(()) => {
+                        v.commit();
+                        tokens::theme::set(chosen.theme);
+                        self.theme_chooser = None;
+                        self.first_page();
+                        self.apply_geometry(self.interactivity());
+                    }
+                    Err(e) => {
+                        let text = self.texts.t_with(
+                            ronoctua_i18n::key::ECHO_THEME_UNSAVED,
+                            &[("error", &e.to_string())],
+                        );
+                        self.echo_message(text);
+                    }
+                }
+            }
             "network-open" => {
                 self.watch_scans();
                 self.network = Some(crate::network::ViewState::fresh_one());
@@ -5045,6 +5138,34 @@ impl Footer {
         }
     }
 
+    /// The theme's file changed under this process.
+    ///
+    /// Every colour is a role that resolves when drawn, so a repaint is the
+    /// whole of the change for text and quads. What has to be asked for again
+    /// is what a CHILD PROCESS painted with a token's value — the waveform, the
+    /// shape — and `look_again` does, because the theme is part of the
+    /// preview's key (`files::View::wants_look`).
+    ///
+    /// WHAT IS ON DISK WINS over what is being tried, even when the file now
+    /// names the very theme under the cursor: then `reload` changes nothing,
+    /// and the chooser's `committed` still has to move, or `Esc` would put
+    /// back a theme the file no longer says.
+    fn theme_changed(&mut self) {
+        let changed = crate::theme::reload();
+        if let Some(v) = self.theme_chooser.as_mut() {
+            v.committed_became(crate::theme::Choice {
+                theme: tokens::theme::current(),
+                backdrop: crate::theme::committed_backdrop(),
+            });
+        }
+        // A file written by hand (or by another footer) carries no fragments
+        // with it; this door is the one that copies them.
+        crate::theme::sync_with_file();
+        if changed || self.theme_chooser.is_some() {
+            self.draw_and_paint();
+        }
+    }
+
     /// Asks the inspector about the file under the manager's cursor.
     ///
     /// A no-op when there is no manager, when neither panel is on, or when the
@@ -5234,6 +5355,65 @@ impl Footer {
                     // in the list.
                     let notation = ronoctua_keymap::Key::simple(otherwise).notation();
                     if let Some((_, id)) = crate::leader::OF_NETWORK_VIEW
+                        .iter()
+                        .find(|(t, _)| *t == notation)
+                    {
+                        self.run_command(id);
+                    }
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+            }
+            return;
+        }
+
+        // THE THEME CHOOSER: the network list's keys, with one difference —
+        // moving the cursor is a PREVIEW, so the theme is set on the way and put
+        // back on `Esc`. See `theme_chooser.rs` for why the preview is this
+        // door's alone.
+        if self.theme_chooser.is_some() && self.mx.asking_for().is_none() {
+            use ronoctua_keymap::Sym;
+            match key.sym {
+                Sym::Esc => {
+                    if let Some(v) = self.theme_chooser.take() {
+                        // BOTH previews back: the footer's theme, and the desk
+                        // the compositor was shown — its fragment goes back to
+                        // what the file says, or away when there is no file
+                        // (unchanged bytes are not written, so an untouched
+                        // desk costs nothing).
+                        tokens::theme::set(v.committed().theme);
+                        crate::theme::put_compositor_back(v.committed());
+                    }
+                    self.first_page();
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+                Sym::Down | Sym::Up => {
+                    let step = if key.sym == Sym::Down { 1 } else { -1 };
+                    if let Some(v) = self.theme_chooser.as_mut() {
+                        match v.move_by(step) {
+                            crate::theme_chooser::Moved::Theme(t) => {
+                                tokens::theme::set(t);
+                            }
+                            // The desk's swatch is the desk: the compositor is
+                            // told, with the theme under the other cursor.
+                            crate::theme_chooser::Moved::Desk(c) => {
+                                crate::theme::show_to_compositor(c);
+                            }
+                        }
+                    }
+                    self.draw_and_paint();
+                }
+                Sym::Left | Sym::Right => {
+                    let step = if key.sym == Sym::Right { 1 } else { -1 };
+                    if let Some(v) = self.theme_chooser.as_mut() {
+                        v.cross(step);
+                    }
+                    self.draw_and_paint();
+                }
+                otherwise => {
+                    let notation = ronoctua_keymap::Key::simple(otherwise).notation();
+                    if let Some((_, id)) = crate::leader::OF_THEME_VIEW
                         .iter()
                         .find(|(t, _)| *t == notation)
                     {
@@ -5930,6 +6110,8 @@ impl Footer {
             ViewState::Applications
         } else if self.network.is_some() {
             ViewState::Network
+        } else if self.theme_chooser.is_some() {
+            ViewState::Themes
         } else if self.files.is_some() {
             // ABOVE THE LOCATOR AND THE LEADER, because it holds state a
             // person built by hand: a directory navigated to, a set of marks,
@@ -6594,6 +6776,91 @@ impl Footer {
     }
 
     fn expansion(&self) -> Vec<ExpansionRow> {
+        // THE THEME CHOOSER BEFORE THE MANAGER, as `view()` ranks them. The
+        // two are never open at once (`theme-open` refuses while the manager
+        // is up, because the region's height, grid and pointer maths are the
+        // manager's), so the order here is `view()`'s order and nothing more.
+        if self.view() == ViewState::Themes
+            && let Some(v) = self.theme_chooser.as_ref()
+        {
+            // TWO LISTS SIDE BY SIDE, one row per line of the longer. Left, one
+            // row per theme: the id in the key column (an identifier, as the
+            // `M-x` list shows command ids — no name in the person's
+            // language) and a check mark on the one the file says. Right, the
+            // choices about a theme: a header naming the option, then one row
+            // per answer with the check on the answer the file says, drawn in
+            // the text column and kept there when the left list has ended
+            // (`aside`). The focused item — of whichever list has the
+            // keyboard — is drawn in the accent, the network list's
+            // convention; the band under a row is the file manager's alone.
+            // THE OTHER LIST'S CURSOR STAYS VISIBLE, in the primary text over
+            // rows in the secondary: `RET` applies the pair under BOTH
+            // cursors, so both have to be readable — the manager's precedent,
+            // where a section that lost the focus keeps a quiet mark.
+            // The colours of the rows are the theme under the cursor's,
+            // because that theme IS the process's while the cursor rests
+            // there — the list is its own swatch. The desk has no swatch here:
+            // its preview is the compositor's (`theme_chooser.rs`).
+            use crate::theme_chooser::{Column, DeskRow, View};
+            let committed = v.committed();
+            let themes: Vec<tokens::theme::Theme> = tokens::theme::all().collect();
+            return (0..View::rows())
+                .map(|i| {
+                    let theme = themes.get(i).copied();
+                    let theme_focus = v.column() == Column::Themes && i == v.cursor();
+                    let (text, text_color) = match View::desk_row(i) {
+                        DeskRow::Header => (
+                            self.texts.t(ronoctua_i18n::key::THEME_OPTION_BACKDROP),
+                            tokens::color::TEXT_DIM,
+                        ),
+                        DeskRow::Answer(b) => {
+                            let under_cursor = b == v.focused_backdrop();
+                            let focus = v.column() == Column::Desk && under_cursor;
+                            // THE CHECK IS PART OF THE TEXT, and its cell is kept
+                            // when it is absent, so the answers line up: the
+                            // margin's icon column belongs to the left list.
+                            let mark = if b == committed.backdrop {
+                                tokens::icon::SUCCESS.to_string()
+                            } else {
+                                " ".to_owned()
+                            };
+                            (
+                                format!("{mark} {}", self.texts.t(b.text_key())),
+                                if focus {
+                                    tokens::color::STATE_ACCENT
+                                } else if under_cursor {
+                                    tokens::color::TEXT_PRIMARY
+                                } else {
+                                    tokens::color::TEXT_SECONDARY
+                                },
+                            )
+                        }
+                        DeskRow::Empty => (String::new(), tokens::color::TEXT_PRIMARY),
+                    };
+                    ExpansionRow {
+                        icon: theme
+                            .filter(|t| *t == committed.theme)
+                            .map(|_| tokens::icon::SUCCESS),
+                        key: theme.map_or_else(String::new, |t| t.id().to_owned()),
+                        text,
+                        key_flush_right: false,
+                        separator: false,
+                        aside: true,
+                        click: Some(Click::Theme(i)),
+                        key_color: if theme_focus {
+                            tokens::color::STATE_ACCENT
+                        } else if i == v.cursor() {
+                            tokens::color::TEXT_PRIMARY
+                        } else {
+                            tokens::color::TEXT_SECONDARY
+                        },
+                        text_color,
+                        ..ExpansionRow::empty_one()
+                    }
+                })
+                .collect();
+        }
+
         // THE FILE MANAGER FIRST, matching `view()`'s own order — the one place
         // the precedence is written. A branch here that disagreed with that
         // function is exactly the divergence `ViewState` exists to prevent.
@@ -6762,6 +7029,7 @@ impl Footer {
                     // NO `:` BETWEEN THEM. `Firefox : navegador web` asserts a
                     // relation that does not exist — the column already separates them.
                     separator: false,
+                    aside: false,
                     // THE HIGHLIGHT IS OVER THE NAME, and not over the folded key:
                     // the folding is 1:1 in characters precisely so the positions
                     // hold in both. See `ronoctua_apps::fold`.
@@ -6945,6 +7213,7 @@ impl Footer {
                     icon: None,
                     pixmap: None,
                     separator: true,
+                    aside: false,
                     // Focus is told apart by COLOR, never by a box or an
                     // outline (invariant 15).
                     key_color: if i == self.mx.cursor() {
@@ -8201,6 +8470,24 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
+            Some(Click::Theme(n)) => {
+                // WHICH LIST comes from the cell, as the manager's columns do:
+                // the row is shared by the two, and the colon's column is the
+                // seam the grid drew them on either side of.
+                let grid = self.grid();
+                let cell = self.cell_under_pointer.unwrap_or(0) % grid.width.max(1);
+                let on_the_right = cell >= grid.colon;
+                if let Some(v) = self.theme_chooser.as_mut() {
+                    if on_the_right {
+                        if let Some(c) = v.focus_desk_row(n) {
+                            crate::theme::show_to_compositor(c);
+                        }
+                    } else if n < crate::theme_chooser::View::theme_count() {
+                        tokens::theme::set(v.focus_theme(n));
+                    }
+                    self.draw_and_paint();
+                }
+            }
             // EVERYTHING THE MANAGER OWNS, through ONE resolution.
             //
             // The path's crumbs, the header, a listing row, a sidebar place, a
@@ -8350,6 +8637,10 @@ impl Footer {
                 .network
                 .as_ref()
                 .map(|v| v.cursor() + usize::from(self.network_remember.is_some())),
+            ViewState::Themes => self
+                .theme_chooser
+                .as_ref()
+                .map(crate::theme_chooser::View::row),
             // The manager's cursor, so the region scrolls with it — the same
             // `scrolloff` the locator uses. A listing that does not follow its
             // own cursor is a listing where holding `j` walks off the bottom.
@@ -8831,7 +9122,12 @@ impl Footer {
         //
         // It captures only the three fields it reads, or it would hold the
         // whole surface borrowed for the rest of the frame.
-        let (files, transfers, texts) = (&self.files, &self.transfers, &self.texts);
+        let (files, transfers, theme_chooser, texts) = (
+            &self.files,
+            &self.transfers,
+            &self.theme_chooser,
+            &self.texts,
+        );
         let hint = move || {
             files
                 .as_ref()
@@ -8842,6 +9138,9 @@ impl Footer {
                 // only way to find `C-c` is the manual is a panel where nobody
                 // ever stops anything.
                 .or_else(|| transfers.as_ref().map(|v| v.hint(texts)))
+                // AND THE THEME CHOOSER'S: `RET` applies, `Esc` goes back, and
+                // nothing on its rows says so.
+                .or_else(|| theme_chooser.as_ref().map(|v| v.hint(texts)))
                 .filter(|h| !h.is_empty())
         };
 
@@ -9641,10 +9940,14 @@ impl Footer {
                 // of two hundred cells went over the scrollbar and out past the
                 // edge, and the compositor does not clip — it simply vanished,
                 // with nothing saying that there was more.
-                let start = grid.text_start(with_key);
+                let in_its_column = with_key || line.aside;
+                let start = grid.text_start(in_its_column);
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Grid,
-                    text: layout::elide_end(&line.text, grid.fits_in_text(with_key, base, columns)),
+                    text: layout::elide_end(
+                        &line.text,
+                        grid.fits_in_text(in_its_column, base, columns),
+                    ),
                     column: base + start,
                     line: y,
                     color: line.text_color,

@@ -80,5 +80,8 @@ in
     # The shell reads it from the environment now, so the switch is real and the
     # line means what it says.
     icons.superpack = lib.mkDefault full;
+    # Qt's dark platform theme brings Qt5 and Qt6 along (591 MiB measured) for
+    # applications the minimal profile does not have.
+    foreign.qt = lib.mkDefault full;
   };
 }

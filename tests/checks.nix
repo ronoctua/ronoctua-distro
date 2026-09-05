@@ -52,6 +52,10 @@
   singleFooter,
   wit,
   tokensRs,
+  # The themes: the list from `assets/themes/themes.nix`, and the derivation
+  # that solved every palette (`nix/themes.nix`) with its gates' report.
+  themes,
+  themed,
   # The notification catalogue, for the two checks that read it: the table's
   # own shape, and the text keys it demands of both languages.
   notificationsRs,
@@ -118,6 +122,9 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf;
+      # The theme list (the option's enum) and the solved palettes — base.nix
+      # and niri.nix read them.
+      inherit themes themed;
       inherit (inputs) niri;
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -6205,6 +6212,9 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
+      # The theme list (the option's enum) and the solved palettes — base.nix
+      # and niri.nix read them.
+      inherit themes themed;
       niri = inputs.niri;
       shell = rust.shell;
     };
@@ -6227,6 +6237,9 @@ let
     formatDisk = rust.formatDisk;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
+      # The theme list (the option's enum) and the solved palettes — base.nix
+      # and niri.nix read them.
+      inherit themes themed;
       niri = inputs.niri;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
@@ -6237,6 +6250,9 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
+      # The theme list (the option's enum) and the solved palettes — base.nix
+      # and niri.nix read them.
+      inherit themes themed;
       niri = inputs.niri;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
@@ -6263,6 +6279,9 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
+      # The theme list (the option's enum) and the solved palettes — base.nix
+      # and niri.nix read them.
+      inherit themes themed;
       niri = inputs.niri;
       shell = rust.shell;
     };
@@ -7296,6 +7315,331 @@ let
     print("OK: the generator refuses a name the WIT does not accept")
     END
   '';
+
+  # THE COLOUR SCIENCE, PROVED — the module every theme value comes out of.
+  #
+  # `nix/scripts/colorspace.py` is what turns a seed (a hue, a relative chroma,
+  # a contrast target) into the bytes on screen: Oklab with conditioned
+  # matrices, the analytic sRGB boundary, gamut mapping, APCA, ΔE_ok and the
+  # lightness solver. None of it is exercised by `cargo test` — it is Python
+  # inside a derivation — so this is where its properties are checked: white
+  # is L = 1 exactly, grey has no chroma, the boundary has no kink at the blue
+  # primary, mapping is a fixed point, the APCA anchors are the published
+  # ±106/108, and the solver re-derives today's accent from its anchor. A theme
+  # would still BUILD with any of those broken; the defect would be a colour
+  # nobody could trace back.
+  colorspace-tests = mkCheck "colorspace-tests" [ pkgs.python3 ] ''
+    cd ${../nix/scripts}
+    # No pipe: under `set -o pipefail` a failing unittest ends the check at
+    # once, with its whole log, which is what a failure should look like.
+    python3 -m unittest -v test_colorspace
+    echo "OK: the colour science holds"
+  '';
+
+  # ===================================================================
+  # THEMES — declared once, solved by the generator, proved against the
+  # palette they were derived from.
+  # ===================================================================
+
+  # Same closure as `languages-are-declared`: the list in
+  # `assets/themes/themes.nix` and the seed files on disk are the same set —
+  # a seed that is present and undeclared would be solved by nobody and shown
+  # to nobody — and the first is the default.
+  themes-are-declared = mkCheck "themes-are-declared" [ pkgs.coreutils pkgs.gnused pkgs.gnugrep ] ''
+    declared=$(printf '%s\n' ${lib.escapeShellArgs themes} | sort)
+    present=$(cd ${../assets/themes} && ls *.nix | grep -v '^themes\.nix$' | grep -v '\.reference\.nix$' | sed 's/\.nix$//' | sort)
+
+    if [ "$declared" != "$present" ]; then
+      echo "ERROR: the declared themes and the seed files on disk differ." >&2
+      echo "  declared in assets/themes/themes.nix:" >&2
+      printf '    %s\n' $declared >&2
+      echo "  present in assets/themes:" >&2
+      printf '    %s\n' $present >&2
+      exit 1
+    fi
+
+    # A frozen reference belongs to a declared theme.
+    for r in $(cd ${../assets/themes} && ls *.reference.nix 2>/dev/null); do
+      id=''${r%.reference.nix}
+      printf '%s\n' $declared | grep -qx "$id" || {
+        echo "ERROR: $r is a reference for a theme that is not declared." >&2; exit 1; }
+    done
+
+    base=${builtins.head themes}
+    test -f ${../assets/themes}/$base.nix || {
+      echo "ERROR: the default theme $base has no seed file" >&2; exit 1; }
+
+    echo "OK: $(printf '%s\n' $declared | wc -l) themes, declared and present, default $base"
+  '';
+
+  # THE REGRESSION, AS A NAMED CHECK. The generator already fails the build
+  # when a solved value drifts from a frozen reference by more than ΔE_ok 0.03
+  # without a listed deviation; here the number is on screen for every theme
+  # that carries one, so a drift is read as a distance and not as a missing
+  # derivation.
+  theme-references-hold =
+    let
+      # The themes that carry a frozen reference beside their seed — today the
+      # one the palette was designed on; the check names none of them.
+      withReference = builtins.filter (
+        id: builtins.pathExists (../assets/themes + "/${id}.reference.nix")
+      ) themes;
+    in
+    mkCheck "theme-references-hold" [ pkgs.python3 ] ''
+      test -n "${lib.concatStringsSep " " withReference}" || {
+        echo "ERROR: no theme carries a reference; the regression proves nothing" >&2; exit 1; }
+      python3 - ${themed}/report.json ${lib.escapeShellArgs withReference} <<'PY'
+      import json, sys
+      report = json.load(open(sys.argv[1]))
+      for theme in sys.argv[2:]:
+          if theme not in report:
+              sys.exit(f"ERROR: the report has no `{theme}`")
+          rows = [f for f in report[theme]["findings"]
+                  if f["gate"] == "regression" and not f["subject"].endswith(" alpha")]
+          if not rows:
+              sys.exit(f"ERROR: no regression rows for {theme}: its reference is not being compared")
+          bad = [f for f in rows if f["level"] == "Fail"]
+          for f in bad:
+              print(f"ERROR: {theme}: {f['subject']} drifted ΔE_ok {f['measured']:.4f} ({f['note']})", file=sys.stderr)
+          if bad:
+              sys.exit(1)
+          worst = max(rows, key=lambda f: f["measured"])
+          noted = [f["subject"] for f in rows if f["level"] == "Note"]
+          print(f"OK: {theme}: {len(rows)} keys within ΔE_ok 0.03 of its reference, or a listed ceiling;"
+                f" worst {worst['subject']} at {worst['measured']:.4f};"
+                f" {len(noted)} listed deviation(s): {', '.join(noted) or 'none'}")
+      PY
+    '';
+
+  # THE GATES BITE. A seed that puts the accent inside the band where it
+  # collapses onto red under protanopia has to FAIL to build, with the gate
+  # and the number on screen. The positive path is proved by every build; the
+  # negative is what needs a check of its own — the same shape as the syntax
+  # table's fixture.
+  themes-negative =
+    let
+      base = import (../assets/themes + "/${builtins.head themes}.nix");
+      bad = base // {
+        families = base.families // {
+          accent = base.families.accent // {
+            hue = 165;
+          };
+        };
+      };
+      json = name: value: pkgs.writeText name (builtins.toJSON value);
+    in
+    mkCheck "themes-negative" [ pkgs.python3 ] ''
+      mkdir generator
+      cp ${../nix/scripts/colorspace.py} generator/colorspace.py
+      cp ${../nix/scripts/gen-theme.py} generator/gen-theme.py
+      if python3 generator/gen-theme.py \
+          --themes ${json "themes.json" [ "bad" ]} \
+          --seed bad=${json "bad.seed.json" bad} \
+          --recipes ${json "colors.json" (import ../assets/tokens/colors.nix)} \
+          --out out > log 2>&1; then
+        echo "ERROR: a seed with the accent at 165° built; the gates are not biting." >&2
+        cat log >&2
+        exit 1
+      fi
+      grep -q "protan band" log || {
+        echo "ERROR: the build failed, but not on the hue gate:" >&2; cat log >&2; exit 1; }
+      echo "OK: the generator refuses an accent in the protan band, naming the gate"
+    '';
+
+  # NO HEX IN THE TOKENS, AND NO SECOND SOURCE OF COLOUR.
+  #
+  # `assets/tokens/colors.nix` is recipes and the seeds are hues and chromas:
+  # a `0xRRGGBBAA` in either is a colour that escaped the generator, which is
+  # invariant 9 with one wall fewer. The frozen reference is a FIXTURE the
+  # report compares against, and nothing but `nix/themes.nix` may import it —
+  # a second reader would make it a second palette. And nobody imports
+  # `colors.nix` at evaluation any more: its values do not exist there.
+  colours-are-computed = mkCheck "colours-are-computed" [ pkgs.gnugrep ] ''
+    seeds=$(ls ${../assets/themes}/*.nix | grep -v '\.reference\.nix$')
+    if grep -nE '0x[0-9A-Fa-f]{8}' ${../assets/tokens/colors.nix} $seeds; then
+      echo "ERROR: a colour literal in a recipe or a seed." >&2
+      echo "      Colours are SOLVED by nix/scripts/gen-theme.py from hues and" >&2
+      echo "      contrast targets; a hex here is one the gates never measured." >&2
+      exit 1
+    fi
+
+    readers=$(grep -rnE '(import|readFile)[^;]*\.reference\.nix' ${self}/nix ${self}/tests ${self}/flake.nix ${self}/crates \
+      | grep -v '^${self}/nix/themes.nix:' || true)
+    if [ -n "$readers" ]; then
+      echo "ERROR: the frozen reference is read outside nix/themes.nix:" >&2
+      echo "$readers" >&2
+      exit 1
+    fi
+
+    importers=$(grep -rnE 'import[^;]*assets/tokens/colors\.nix' ${self}/nix ${self}/tests ${self}/flake.nix \
+      | grep -v '^${self}/nix/themes.nix:' | grep -v '^${self}/tests/checks.nix:' || true)
+    if [ -n "$importers" ]; then
+      echo "ERROR: colors.nix is imported at evaluation; it holds recipes, not values:" >&2
+      echo "$importers" >&2
+      exit 1
+    fi
+    echo "OK: no colour literal outside the generator, one reader of the reference"
+  '';
+
+  # THE FRAGMENTS EVERY THEME SHIPS FOR THE CONSUMERS OUTSIDE THE SHELL — and
+  # niri's own parser on the compositor's two. The footer copies these files
+  # verbatim when the theme or the desk changes; a fragment niri refused would
+  # be a border that never follows, with the refusal in a log nobody reads.
+  # Each niri fragment is validated UNDER a config that already has a
+  # `layout {}`, as the system's does: the desk travels as a second `layout`
+  # node, and niri refuses a duplicate inside one file while merging an
+  # included one — the line this whole arrangement stands on.
+  themes-have-fragments =
+    mkCheck "themes-have-fragments"
+      [
+        inputs.niri.packages.${system}.niri
+        pkgs.gnugrep
+        pkgs.jq
+      ]
+      ''
+        for id in ${lib.escapeShellArgs themes}; do
+          d=${themed}/$id
+          for f in niri-border-active niri-border-inactive niri-background niri-black.kdl niri-backdrop.kdl ghostty.conf; do
+            test -s "$d/$f" || { echo "ERROR: the theme $id has no fragment $f" >&2; exit 1; }
+          done
+          for f in niri-border-active niri-border-inactive niri-background; do
+            grep -qE '^#[0-9A-F]{6}$' "$d/$f" || {
+              echo "ERROR: $id/$f is not a #RRGGBB: $(cat "$d/$f")" >&2; exit 1; }
+          done
+          for f in niri-black.kdl niri-backdrop.kdl; do
+            printf 'layout {\n    gaps 0\n}\ninclude "%s"\n' "$d/$f" > "$id.kdl"
+            niri validate --config "$id.kdl" 2>errors.txt || {
+              echo "ERROR: niri refuses $id/$f under a config with its own layout:" >&2; cat errors.txt >&2; exit 1; }
+            grep -qE '^[[:space:]]*active-color "#' "$d/$f" || {
+              echo "ERROR: $id/$f carries no border" >&2; exit 1; }
+          done
+          # The desk each fragment names: black by name, and the theme's own
+          # `surface.backdrop` — the same bytes the shell's table has.
+          grep -qE '^[[:space:]]*background-color "#000000"$' "$d/niri-black.kdl" || {
+            echo "ERROR: $id/niri-black.kdl does not paint black" >&2; exit 1; }
+          desk=$(jq -r '."surface.backdrop"' "${themed}/$id.json" | sed -E 's/^0x([0-9A-F]{6})FF$/#\1/')
+          grep -qE "^[[:space:]]*background-color \"$desk\"$" "$d/niri-backdrop.kdl" || {
+            echo "ERROR: $id/niri-backdrop.kdl does not paint the theme's desk $desk:" >&2
+            grep background-color "$d/niri-backdrop.kdl" >&2; exit 1; }
+          grep -q '^palette = 15=#' "$d/ghostty.conf" || {
+            echo "ERROR: $id/ghostty.conf has no sixteenth ANSI colour" >&2; exit 1; }
+        done
+        echo "OK: every theme carries its six fragments, and niri merges each desk under a layout of its own"
+      '';
+
+  # GHOSTTY WEARS THE THEME: the palette solved for the machine's default, and
+  # after it the person's own, optional — AFTER, because in Ghostty the later
+  # file wins, and a machine that never chose has no second file at all.
+  ghostty-config-includes-theme =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      text = vm.home-manager.users.${vm.ronoctua.user}.xdg.configFile."ghostty/config".text;
+    in
+    mkCheck "ghostty-config-includes-theme"
+      [
+        pkgs.gnugrep
+        pkgs.ghostty
+      ]
+      ''
+        cfg=${pkgs.writeText "ghostty-config" text}
+        grep -n '^config-file = ' "$cfg" > lines || {
+          echo "ERROR: Ghostty's config includes no palette" >&2; exit 1; }
+        test "$(wc -l < lines)" -eq 2 || {
+          echo "ERROR: two config-file lines were expected:" >&2; cat lines >&2; exit 1; }
+        head -1 lines | grep -q '/ghostty.conf$' || {
+          echo "ERROR: the first include is not the generated palette:" >&2; cat lines >&2; exit 1; }
+        tail -1 lines | grep -q '= ?/home/.*/.config/ronoctua/ghostty-theme.conf$' || {
+          echo "ERROR: the second include is not the person's optional one:" >&2; cat lines >&2; exit 1; }
+        palette=$(head -1 lines | sed 's/.*= //')
+        grep -qE '^palette = 0=#[0-9A-F]{6}$' "$palette" || {
+          echo "ERROR: the generated palette has no ANSI 0: $palette" >&2; exit 1; }
+
+        # AND THE BINARY READS IT. Ghostty's only default path is
+        # `$XDG_CONFIG_HOME/ghostty/config`, which is where home-manager puts
+        # this text on the machine; here the same layout is built in a scratch
+        # home and the EFFECTIVE configuration is asked for — the text alone
+        # proves nothing about what the program does with it. (`+show-config`
+        # takes no config flags: a `--config-file` route could not be proved.)
+        export HOME=$TMPDIR/home XDG_CONFIG_HOME=$TMPDIR/xdg
+        mkdir -p "$HOME" "$XDG_CONFIG_HOME/ghostty"
+        cp "$cfg" "$XDG_CONFIG_HOME/ghostty/config"
+        ghostty +show-config > effective 2> errors.txt || {
+          echo "ERROR: Ghostty refused the system's config:" >&2; cat errors.txt >&2; exit 1; }
+        grep -q '^window-decoration = none$' effective || {
+          echo "ERROR: the decoration line did not reach Ghostty:" >&2; cat effective >&2; exit 1; }
+        grep -qiE '^palette = 0=#[0-9a-f]{6}$' effective || {
+          echo "ERROR: the palette did not reach Ghostty:" >&2; cat effective >&2; exit 1; }
+        echo "OK: Ghostty reads the system's config, and it carries the default palette, then the person's"
+      '';
+
+  # GHOSTTY'S WINDOWS ARE PROCESSES THROUGH EVERY DOOR. The module's config says
+  # `gtk-single-instance = false`; the upstream desktop entry says
+  # `--gtk-single-instance=true` on its `Exec` lines, and a flag beats the
+  # file; its `DBusActivatable=true` sends D-Bus-aware launchers through a
+  # service that is single-instance by construction. `nix/modules/terminal.nix`
+  # rewrites the entry; this measures the one that is installed, so an
+  # upstream change cannot bring either back unseen — and it passes on the day
+  # upstream drops them itself.
+  ghostty-windows-are-processes =
+    let
+      package = self.nixosConfigurations.vm.config.ronoctua.terminal.package;
+    in
+    mkCheck "ghostty-windows-are-processes" [ pkgs.gnugrep ] ''
+      entry=${package}/share/applications/com.mitchellh.ghostty.desktop
+      test -e "$entry" || { echo "ERROR: no desktop entry at $entry" >&2; exit 1; }
+      if grep -q -- 'gtk-single-instance=true' "$entry"; then
+        echo "ERROR: the installed Ghostty entry still forces a single instance:" >&2
+        grep -n 'Exec' "$entry" >&2
+        exit 1
+      fi
+      if grep -q '^DBusActivatable=true' "$entry"; then
+        echo "ERROR: the installed Ghostty entry still offers D-Bus activation, which is single-instance" >&2
+        exit 1
+      fi
+      if test -e ${package}/share/dbus-1/services/com.mitchellh.ghostty.service; then
+        echo "ERROR: the single-instance D-Bus service is still installed beside the entry" >&2
+        exit 1
+      fi
+      test "$(grep -c '^Exec=' "$entry")" -ge 1 || {
+        echo "ERROR: the rewritten entry lost its Exec line" >&2; exit 1; }
+      grep -q '^Exec=/nix/store/.*/bin/ghostty' "$entry" || {
+        echo "ERROR: the entry's Exec no longer points at Ghostty's binary:" >&2; grep -n '^Exec' "$entry" >&2; exit 1; }
+      echo "OK: Ghostty's desktop entry opens a process per window, as the config says"
+    '';
+
+  # FOREIGN APPLICATIONS ARE TOLD TO BE DARK, in the three places the toolkits
+  # ask: GTK's two `settings.ini`, the settings portal's dconf, Qt's style.
+  foreign-apps-prefer-dark =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      gtk3 = pkgs.writeText "gtk3-settings" vm.environment.etc."xdg/gtk-3.0/settings.ini".text;
+      gtk4 = pkgs.writeText "gtk4-settings" vm.environment.etc."xdg/gtk-4.0/settings.ini".text;
+      dark = lib.any (
+        db: (db.settings."org/gnome/desktop/interface".color-scheme or null) == "prefer-dark"
+      ) vm.programs.dconf.profiles.user.databases;
+    in
+    mkCheck "foreign-apps-prefer-dark" [ pkgs.gnugrep ] ''
+      for f in ${gtk3} ${gtk4}; do
+        grep -q '^gtk-application-prefer-dark-theme=1$' "$f" || {
+          echo "ERROR: $f does not prefer dark" >&2; exit 1; }
+        test "$(grep -c '^\[Settings\]$' "$f")" -eq 1 || {
+          echo "ERROR: $f has not exactly one [Settings] header" >&2; exit 1; }
+      done
+      test "${lib.boolToString dark}" = true || {
+        echo "ERROR: dconf does not answer prefer-dark to the settings portal" >&2; exit 1; }
+      ${
+        if vm.ronoctua.foreign.qt then
+          ''
+            test "${toString vm.qt.style}" = adwaita-dark || {
+              echo "ERROR: Qt's style is ${toString vm.qt.style}, not adwaita-dark" >&2; exit 1; }
+            echo "OK: GTK, the portal and Qt all prefer dark"
+          ''
+        else
+          ''
+            echo "OK: GTK and the portal prefer dark; Qt is off on this profile"
+          ''
+      }
+    '';
 
   # ===================================================================
   # INVARIANT 18 — every NAME is English; every COMMENT is English too.
@@ -8984,7 +9328,7 @@ let
 
     # What the SHELL reads at runtime and no build bakes. A variable that
     # arrives late is a variable that did not arrive.
-    AT_RUNTIME = ["RONOCTUA_ICONS", "RONOCTUA_FILES_START", "RONOCTUA_FILES_SIDEBAR"]
+    AT_RUNTIME = ["RONOCTUA_ICONS", "RONOCTUA_FILES_START", "RONOCTUA_FILES_SIDEBAR", "RONOCTUA_THEME", "RONOCTUA_THEMES"]
 
     text = pathlib.Path("${../nix/dev.nix}").read_text()
     lines = text.splitlines()
@@ -9431,6 +9775,15 @@ let
       screenshot-notification-contract
       switches-that-do-nothing-say-so
       invalid-token-fails-build
+      colorspace-tests
+      themes-are-declared
+      theme-references-hold
+      themes-negative
+      colours-are-computed
+      themes-have-fragments
+      ghostty-config-includes-theme
+      ghostty-windows-are-processes
+      foreign-apps-prefer-dark
       secrets-out-of-repo
       planted-secret-fails
       term-differential

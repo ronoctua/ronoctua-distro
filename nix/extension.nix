@@ -16,7 +16,10 @@
   stdenvNoCC,
   python3,
   writeText,
-  colorsFile,
+  # The DEFAULT theme's palette as a flat `key -> 0xRRGGBBAA` JSON, out of
+  # `nix/themes.nix`. A store PATH, read by the generator at build time — the
+  # extension cannot see the person's choice, so it wears the default.
+  colorsJson,
   spaceFile,
   i18nDir,
   # The languages, from `assets/i18n/languages.nix` — the same list the shell
@@ -32,7 +35,6 @@
 
 let
   toJson = name: file: writeText name (builtins.toJSON (import file));
-  colorsJson = toJson "colors.json" colorsFile;
   spaceJson = toJson "space.json" spaceFile;
 in
 stdenvNoCC.mkDerivation {
