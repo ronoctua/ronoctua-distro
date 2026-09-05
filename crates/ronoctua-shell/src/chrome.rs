@@ -304,6 +304,30 @@ pub fn divider(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::quad
     }
 }
 
+/// The same divider, for the section that has the KEYBOARD.
+///
+/// # Why the focus mark is a rule and not something new
+///
+/// Because everything else was tried and refused. A one-line TITLE per panel
+/// cost a line of the panel and was text where a tone would do; the panel's
+/// own SCROLLBAR, lit, was the owner's second refusal. What is left that is
+/// already drawn beside a section is the rule that begins it — so the mark is
+/// that rule, in the colour this palette reserves for focus.
+///
+/// It is one logical pixel wide, which is what makes it quiet enough to be
+/// worth trying where a whole lit cell was not.
+///
+/// Here and not at the call site for the reason [`divider`] is here: the two
+/// doors had three different answers about a separator between them, and
+/// `separators-come-from-chrome` refuses a fourth.
+#[must_use]
+pub fn divider_lit(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::quad::Quad {
+    ronoctua_render::quad::Quad {
+        color: tokens::color::STATE_ACCENT,
+        ..divider(x_px, from_px, bottom_px)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // THE HINT LINE — one sentence, two registers, one decision
 // ---------------------------------------------------------------------------

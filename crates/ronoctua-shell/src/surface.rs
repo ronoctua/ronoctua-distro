@@ -305,20 +305,13 @@ struct Footer {
     dragging_fold: bool,
     /// How many rows the line's text came to at the last width it was DRAWN at.
     ///
-    /// The height follows the content now, and the content is only known
-    /// where the line is laid out — but the height is asked for BEFORE the
-    /// frame, by whoever tells the compositor how tall the surface is. So the
-    /// drawing writes this down and the geometry reads it, which is one frame
-    /// old exactly when the text or the width has just changed. `draw_and_paint`
-    /// notices that and goes round once more; the alternative was working the
-    /// line's six sources out twice per frame.
+    /// The height is measured ONCE, when the band opens, and the content is
+    /// only known where the line is laid out — but the height is asked for
+    /// BEFORE the frame, by whoever tells the compositor how tall the surface
+    /// is. So the drawing writes this down, `fold::settle` reads it and
+    /// answers once, and `draw_and_paint` goes round one more time. After that
+    /// nothing reopens the question: see `fold::Fold::held`.
     fold_wrapped: usize,
-    /// The opened line's height as the compositor was last TOLD it.
-    ///
-    /// The guard on the settling pass above: without it the comparison would
-    /// be against a number that had already been updated, and the extra frame
-    /// would never happen.
-    fold_applied: u16,
     /// How the leader shows up on screen — see [`crate::leader`].
     leader_label: String,
     /// The echo area: the shell's last message and when it expires.
@@ -1586,7 +1579,6 @@ pub fn run() -> Result<()> {
         fold_control: None,
         dragging_fold: false,
         fold_wrapped: 0,
-        fold_applied: 0,
         fold_scroll: ronoctua_design::Scroll {
             total: 0,
             lines: 0,
@@ -5127,14 +5119,13 @@ impl Footer {
         // drew at the old height. One more round settles it; the guard is the
         // number itself, so a line that did not change costs a comparison and
         // there is no loop to run away.
-        let settled = self.fold_rows();
-        if self.fold.open && settled != self.fold_applied {
-            self.fold_applied = settled;
+        // `fold::settle` answers ONCE, when the band opens, and never again:
+        // a height that kept following the line is a height the pointer moves,
+        // which is the loop `Fold::held` is written about.
+        if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
             self.apply_geometry(self.interactivity());
             self.draw();
             self.paint();
-        } else {
-            self.fold_applied = settled;
         }
     }
 
@@ -6211,7 +6202,7 @@ impl Footer {
     /// A constant while it is open — see `crate::fold`'s header for why it may
     /// not follow the width.
     fn fold_rows(&self) -> u16 {
-        crate::fold::rows(self.fold, self.fold_wrapped)
+        crate::fold::rows(self.fold)
     }
 
     /// The first line of the opened band, when it is open.
@@ -10496,8 +10487,30 @@ impl Footer {
                 } else {
                     (strip_top, bottom)
                 };
+                // AND THE ONE THAT BEGINS THE FOCUSED SECTION IS LIT — the
+                // mark that replaced the panels' titles, and then their lit
+                // scrollbars. See `files::focus_rule`; this door's twin of the
+                // window's.
+                let lit = self
+                    .files
+                    .as_ref()
+                    .and_then(|v| crate::files::focus_rule(panes, columns, v.pane()));
+                let mut drawn = false;
                 for at in panes.rules(columns) {
-                    backgrounds.push(crate::chrome::divider(
+                    let x = crate::files::rule_x(at, lead, cell);
+                    if Some(at) == lit {
+                        drawn = true;
+                        backgrounds.push(crate::chrome::divider_lit(x, rule_from, rule_to));
+                    } else {
+                        backgrounds.push(crate::chrome::divider(x, rule_from, rule_to));
+                    }
+                }
+                // AND THE ONE THE STRIP HAS NO ROOM FOR — see the window door's
+                // twin, where the reason is written.
+                if let Some(at) = lit
+                    && !drawn
+                {
+                    backgrounds.push(crate::chrome::divider_lit(
                         crate::files::rule_x(at, lead, cell),
                         rule_from,
                         rule_to,

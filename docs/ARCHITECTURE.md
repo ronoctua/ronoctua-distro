@@ -1292,21 +1292,58 @@ palavras, e `TAB`/`S-TAB` ficam ligados fora da lista: quem chega de qualquer ou
 gerenciadores do mesmo shell discordando do `TAB` é a divergência que as duas portas existem para
 impedir, um nível acima.
 
-**A prévia e os fatos ganharam CURSOR e TÍTULO, e a listagem guarda a marca.** Com o `Tab` num
+**A prévia e os fatos ganharam CURSOR, e a marca de foco é a RÉGUA acesa.** Com o `Tab` num
 painel nada mudava na tela, e o renque que os painéis DESCREVIAM perdia a marca ao mesmo tempo —
 dois mecanismos certos (`focused_here` responde pela seção com o teclado; `colour_of` só acentua com
 `Pane::Listing`) que juntos deixavam os painéis falando de um arquivo que nada apontava. Agora: a
-playlist e os fatos têm cursor próprio, com a vista rolando atrás dele; cada painel tem um TÍTULO de
-uma linha, aceso em `state.accent` quando tem o teclado — é a única marca que serve para uma foto ou
-um filme, que não têm renque para acender, e custa uma linha do painel; e o renque da listagem fica
+playlist e os fatos têm cursor próprio, com a vista rolando atrás dele; e o renque da listagem fica
 com uma faixa mais quieta (`surface.hover`, que já quer dizer "esta linha, sem o teclado"). Uma
 acesa e uma apagada nunca são lidas como dois cursores.
+
+**Duas respostas para o foco foram recusadas da tela antes desta.** A primeira foi um TÍTULO por
+painel: custava uma linha do painel e era texto onde um tom bastava. A segunda foi a BARRA da seção,
+acesa — e essa passou por dois desenhos, porque o primeiro pintava o TRILHO de azul com o polícia
+cinza por cima e se lia como barra de progresso, com a parte acesa justamente onde não se está.
+Acender o punho consertou a leitura e o dono recusou a marca de todo modo: uma célula inteira de cor
+é muito para dizer só "aqui está o teclado".
+
+**A marca é a RÉGUA em que a seção começa** (`chrome::divider_lit`, `files::focus_rule`). É o único
+elemento já desenhado ao lado de uma seção, tem um pixel lógico de largura — o que a torna discreta
+onde uma célula acesa não era —, não cobre conteúdo nenhum e não custa linha. Renque não serve às
+duas seções, porque foto, filme e peça não têm renque; régua serve a qualquer conteúdo.
+
+**E a régua que a faixa não tem é DESENHADA.** `Panes::rules` pula a régua antes do primeiro painel
+quando eles descem para baixo da listagem — com razão, porque não há nada à esquerda dela para
+separar, e uma linha na célula zero com nada atrás já foi um defeito fotografado. Isso deixava um
+buraco exatamente onde a prévia seria marcada. Uma fronteira que existe PORQUE a seção está em foco
+não é a mesma afirmação que uma que está sempre lá, então ela é desenhada, e some com o foco.
 
 **E a faixa de um painel sai do NOME da seção, nunca de uma célula.** `band_of` resolve célula →
 seção, e com os painéis EMBAIXO da listagem as mesmas células pertencem às duas: a faixa do foco
 saía com a largura da lista acima do fato em que o cursor estava. Fotografado na primeira tentativa.
 `files::band_for` responde onde uma seção NOMEADA está; uma célula não pode responder, porque a
 pergunta não é "o que há nesta célula".
+
+**A ALTURA DA GAVETA É MEDIDA UMA VEZ, e o dono achou o laço que a alternativa causa.** Aberta, a
+gaveta seguia o conteúdo; e o conteúdo dessa linha é o que o PONTEIRO está tocando. Ele descreveu
+cada volta: com a gaveta aberta, pousar sobre algo que se explica punha uma mensagem curta na linha,
+a faixa encolhia para caber nela, tudo abaixo subia a diferença, o renque saía de baixo do ponteiro,
+a mensagem sumia, a faixa voltava a crescer, o conteúdo descia, o renque voltava para baixo do
+ponteiro — e de novo. Nada na cadeia está errado sozinho; o que está errado é a ALTURA de uma faixa
+ser consequência do que o ponteiro toca. Então ela é medida ao ABRIR (`fold::settle`, que responde
+uma vez e nunca mais) e guarda esse tamanho até fechar: mensagem curta é desenhada dentro dela com
+renques em branco embaixo, e mensagem longa rola, que é para o que a barra serve. Foi o que o dono
+pediu — *"o espaço de múltiplas linhas deve continuar como está, e dentro desse espaço será mostrada
+a mensagem"*.
+
+**E a barra da gaveta não arrastava na janela.** Essa porta resolve um clique andando pelas SEÇÕES do
+gerenciador, e a linha 0 não é de seção nenhuma — é da porta, acima da região. Então nada que a
+janela fizesse podia enxergar aquela barra, e a pressão caía no renque de baixo; o rodapé tinha o
+gesto desde que a gaveta existe. O gêmeo dele agora existe aqui, com uma diferença que só o clique
+revelou: **o chevron e a barra dividem a última célula da linha 0**. O controle vence, porque é o que
+se mira e é o único jeito de fechar a gaveta com o mouse; a barra perde uma linha de área de pega e
+nada mais — o arrasto continua mapeando contra o trilho INTEIRO, então quem pega abaixo pode subir
+até o topo.
 
 **A pasta `..` é o primeiro renque, e é o único a que nada pode ser feito.** `read_dir` nunca a
 devolve — é propriedade da syscall —, então ela é posta DEPOIS da ordenação: não é um dos nomes

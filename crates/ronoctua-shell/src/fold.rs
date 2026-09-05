@@ -66,6 +66,32 @@ pub struct Fold {
     pub open: bool,
     /// Which wrapped line is the first one showing.
     pub offset: usize,
+    /// How many rows the band was opened AT, and keeps until it closes.
+    ///
+    /// `0` means "not settled yet": the wrap is only known inside the frame,
+    /// and the height is asked for before it — see [`settle`].
+    ///
+    /// # Why the height stops following the content
+    ///
+    /// Because a height that follows the content is a height that follows the
+    /// LINE, and the line changes under the pointer. The owner found the loop
+    /// and described every turn of it: with the drawer open, resting on
+    /// something that explains itself put a short message on the line, the
+    /// band shrank to fit it, everything below moved UP by the difference, the
+    /// row that was under the pointer moved out from under it, the message
+    /// went away, the band grew back, the content moved DOWN, the row arrived
+    /// under the pointer again — and round.
+    ///
+    /// Nothing in that chain is wrong on its own. What is wrong is that the
+    /// HEIGHT of a band is downstream of what the pointer is resting on. So
+    /// the band is measured once, when it opens, and keeps that height until
+    /// it closes: a message shorter than the band is drawn inside it with
+    /// blank rows under it, and a message longer than it scrolls, which is
+    /// what the bar is already for.
+    ///
+    /// The owner asked for exactly this — *"o espaço de múltiplas linhas deve
+    /// continuar como está, e dentro desse espaço será mostrada a mensagem"*.
+    pub held: u16,
 }
 
 impl Fold {
@@ -78,6 +104,10 @@ impl Fold {
     pub const fn toggle(&mut self) {
         self.open = !self.open;
         self.offset = 0;
+        // AND THE HEIGHT IS ASKED AGAIN. Opening measures the line as it is
+        // now; closing forgets, so the next opening is not the last one's
+        // size.
+        self.held = 0;
     }
 
     /// Closes it, and says whether that changed anything.
@@ -89,6 +119,7 @@ impl Fold {
         let was = self.open;
         self.open = false;
         self.offset = 0;
+        self.held = 0;
         was
     }
 }
@@ -101,28 +132,53 @@ impl Fold {
 /// fewer. The ceiling is [`tokens::space::MODELINE_FOLDLINES`], and past it
 /// the text scrolls — which is where the bar comes from.
 ///
-/// # THE HEIGHT FOLLOWS THE CONTENT, and what that costs
+/// # THE HEIGHT IS THE CONTENT'S, MEASURED ONCE
 ///
 /// It was a constant, on the argument this module's header still makes: the
 /// footer's height is the same on every output, so a height that follows the
 /// wrap follows the WIDTH, and moving the focus between monitors of different
 /// widths reflows the buffers on one of them. The owner saw the constant on
 /// screen — a short sentence opening into a drawer with four empty rows — and
-/// chose the other trade: the drawer is the size of what is in it, up to the
-/// ceiling.
+/// chose the other trade: the drawer is the size of what is in it.
 ///
-/// So the cost is real and it is bounded: it is paid only while a drawer is
-/// OPEN, which is a state somebody entered on purpose and leaves with one
-/// key, and never past the ceiling.
+/// Then he found what "follows the content" costs when the content is the
+/// LINE, which changes under the pointer: a layout loop, described in full on
+/// [`Fold::held`]. So the measurement happens once, at [`settle`], and this
+/// reads the answer back. The cost of the first trade is paid and the loop is
+/// not: the height still fits what was opened, and nothing the pointer does
+/// changes it.
 #[must_use]
-pub fn rows(fold: Fold, wrapped: usize) -> u16 {
+pub const fn rows(fold: Fold) -> u16 {
     if !fold.open {
         return 0;
     }
+    fold.held
+}
+
+/// Measures the opened band ONCE, from the wrap the painter came to.
+///
+/// Answers whether the height changed, which is what tells the door to ask the
+/// compositor for a new size — see the doors' settling pass. It is a no-op
+/// while the band is shut, and a no-op once it has an answer: that is what
+/// makes it a measurement rather than a feedback path.
+///
+/// `wrapped` is how many rows the text came to at the width it is drawn at;
+/// one of them is the line itself, so the band under it is one fewer. The
+/// ceiling is [`tokens::space::MODELINE_FOLDLINES`], and past it the text
+/// scrolls — which is where the bar comes from.
+pub fn settle(fold: &mut Fold, wrapped: usize) -> bool {
+    if !fold.open || fold.held > 0 || wrapped == 0 {
+        return false;
+    }
     let under = wrapped.saturating_sub(1);
-    u16::try_from(under)
+    let want = u16::try_from(under)
         .unwrap_or(u16::MAX)
-        .min(tokens::space::MODELINE_FOLDLINES)
+        .min(tokens::space::MODELINE_FOLDLINES);
+    // A BAND OF NO ROWS IS NOT OPEN. A line that fits has no control to press,
+    // so this can only be reached by a line that shrank after opening — and
+    // one row is what keeps the drawer, and its bar, addressable.
+    fold.held = want.max(1);
+    true
 }
 
 /// How much of the line the control takes, in cells. `0` when there is none.
@@ -256,7 +312,7 @@ pub fn opened(
 ) -> (Vec<Vec<crate::chrome::Piece>>, ronoctua_design::Scroll) {
     let all = wrap_pieces(pieces, columns);
     // THE SUMMARY LINE COUNTS, which is the `+ 1`.
-    let lines = usize::from(rows(fold, all.len())) + 1;
+    let lines = usize::from(rows(fold)) + 1;
     // THE OFFSET IS CLAMPED HERE and not by whoever moves it, because the
     // number of wrapped lines changes with the width: a window resized
     // narrower under an open drawer leaves the offset past the end, and the
@@ -319,32 +375,71 @@ mod tests {
         vec![crate::chrome::Piece::prose(text)]
     }
 
+    /// A drawer opened at the size the given text wraps to, the way a door
+    /// does it: measure, then settle.
+    fn open_over(pieces: &[crate::chrome::Piece], columns: u16) -> Fold {
+        let mut fold = Fold::default();
+        fold.toggle();
+        settle(&mut fold, wrap_pieces(pieces, columns).len());
+        fold
+    }
+
     #[test]
     fn the_drawer_is_the_size_of_what_is_in_it() {
         // THE OWNER'S SECOND CHOICE, made from the screen: a short sentence
         // opening into a drawer with four empty rows was worse than the cost
         // of a height that follows the content.
-        let fold = Fold {
-            open: true,
-            offset: 0,
-        };
-        let (showing, scroll) = opened(&prose("one two three four"), 12, fold);
+        let text = prose("one two three four");
+        let fold = open_over(&text, 12);
+        let (showing, scroll) = opened(&text, 12, fold);
         assert_eq!(scroll.total, 2, "four short words wrap to two rows");
         assert_eq!(showing.len(), 2, "and the drawer shows exactly those");
-        assert_eq!(rows(fold, scroll.total), 1, "one row under the line");
+        assert_eq!(rows(fold), 1, "one row under the line");
         assert!(!scroll.cut(), "and no bar, because nothing was cut");
     }
 
     #[test]
-    fn it_stops_at_the_ceiling_and_the_bar_takes_over() {
-        let fold = Fold {
-            open: true,
-            offset: 0,
-        };
-        let long = "word ".repeat(200);
-        let (showing, scroll) = opened(&prose(&long), 20, fold);
+    fn the_height_is_measured_once_and_the_pointer_cannot_move_it() {
+        // THE LOOP THE OWNER FOUND, as an assertion. With the drawer open,
+        // resting on something that explains itself put a SHORT message on the
+        // line; the band shrank to fit it, everything below moved up, the row
+        // left the pointer, the message went away, the band grew back — and
+        // round for ever.
+        //
+        // The band is measured when it OPENS and keeps that height, so a short
+        // message is drawn inside it and the rows below do not move.
+        let hint = prose(&"word ".repeat(30));
+        let fold = open_over(&hint, 20);
+        let tall = rows(fold);
+        assert!(tall > 1, "the fixture has to open to more than one row");
+
+        // The pointer puts a one-line message on the same line.
+        let message = prose("copied");
         assert_eq!(
-            rows(fold, scroll.total),
+            rows(fold),
+            tall,
+            "a short message shrank the band, and everything below it moved"
+        );
+        let (showing, scroll) = opened(&message, 20, fold);
+        // ONE ROW OF CONTENT inside a band that is still `tall` rows deep: the
+        // rest are blank, which is what the owner asked for in as many words.
+        assert_eq!(showing.len(), 1);
+        assert!(!scroll.cut(), "a short message has nothing to scroll");
+
+        // AND SETTLING AGAIN CHANGES NOTHING, which is what makes it a
+        // measurement rather than a feedback path.
+        let mut again = fold;
+        assert!(!settle(&mut again, 1), "the height was asked a second time");
+        assert_eq!(again, fold);
+    }
+
+    #[test]
+    fn it_stops_at_the_ceiling_and_the_bar_takes_over() {
+        let long = prose(&"word ".repeat(200));
+        let fold = open_over(&long, 20);
+        let (showing, scroll) = opened(&long, 20, fold);
+        assert_eq!(
+            rows(fold),
             tokens::space::MODELINE_FOLDLINES,
             "past the ceiling it stops growing"
         );
@@ -360,34 +455,27 @@ mod tests {
         // The cost of the owner's choice, stated as an assertion: the height
         // follows the width now. It is bounded by the ceiling and it is only
         // paid while the drawer is open.
-        let fold = Fold {
-            open: true,
-            offset: 0,
-        };
         let text = prose("a b c d e f g h i j k l m n o p q r s t u v w x y z");
-        let (_, wide) = opened(&text, 200, fold);
-        let (_, narrow) = opened(&text, 10, fold);
+        let (_, wide) = opened(&text, 200, open_over(&text, 200));
+        let (_, narrow) = opened(&text, 10, open_over(&text, 10));
         assert!(narrow.total > wide.total, "a narrow screen wraps to more");
         assert!(
-            rows(fold, narrow.total) >= rows(fold, wide.total),
+            rows(open_over(&text, 10)) >= rows(open_over(&text, 200)),
             "and is at least as tall"
         );
         assert!(
-            rows(fold, narrow.total) <= tokens::space::MODELINE_FOLDLINES,
+            rows(open_over(&text, 10)) <= tokens::space::MODELINE_FOLDLINES,
             "never past the ceiling"
         );
     }
 
     #[test]
     fn the_bar_shows_only_when_there_is_more() {
-        let fold = Fold {
-            open: true,
-            offset: 0,
-        };
-        let (_, short) = opened(&prose("one two three"), 40, fold);
+        let brief = prose("one two three");
+        let (_, short) = opened(&brief, 40, open_over(&brief, 40));
         assert!(!short.cut(), "three words do not need a bar");
-        let long = "word ".repeat(200);
-        let (_, tall) = opened(&prose(&long), 20, fold);
+        let long = prose(&"word ".repeat(200));
+        let (_, tall) = opened(&long, 20, open_over(&long, 20));
         assert!(tall.cut(), "two hundred words do");
     }
 
@@ -395,18 +483,19 @@ mod tests {
     fn the_offset_is_clamped_against_the_width_of_the_moment() {
         // A window resized narrower under an open drawer: the offset was
         // valid for the old wrap and is past the end of the new one.
+        let text = prose("one two three four");
         let fold = Fold {
-            open: true,
             offset: 400,
+            ..open_over(&text, 40)
         };
-        let (showing, scroll) = opened(&prose("one two three four"), 40, fold);
+        let (showing, scroll) = opened(&text, 40, fold);
         assert_eq!(scroll.offset, 0);
         assert!(!showing.is_empty(), "the drawer came out empty");
     }
 
     #[test]
     fn a_closed_line_takes_no_lines_at_all() {
-        assert_eq!(rows(Fold::default(), 40), 0);
+        assert_eq!(rows(Fold::default()), 0);
     }
 
     #[test]
@@ -420,6 +509,7 @@ mod tests {
         let mut fold = Fold {
             open: true,
             offset: 3,
+            held: 2,
         };
         assert!(fold.close());
         assert_eq!(fold, Fold::default());

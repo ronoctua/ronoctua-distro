@@ -1195,6 +1195,45 @@ pub fn rule_x(at: u16, lead: u16, cell: f32) -> f32 {
     (f32::from(lead.saturating_add(at)) + 0.5) * cell
 }
 
+/// The rule COLUMN that marks the section holding the keyboard.
+///
+/// # Why the focus mark is a rule
+///
+/// Two earlier answers were refused from the screen: a one-line TITLE per
+/// panel, which cost a line of the panel and was text where a tone would do,
+/// and the panel's own SCROLLBAR lit, which was a whole cell of colour. What
+/// is left that is already drawn beside a section is the rule it begins at —
+/// see [`crate::chrome::divider_lit`].
+///
+/// # And the one the strip does not have is drawn
+///
+/// [`Panes::rules`] skips the rule before the FIRST panel when the panels sit
+/// BELOW the listing: there is nothing to its left to be separated from, and a
+/// line at cell nought with nothing behind it is a defect the owner has
+/// already photographed once. That leaves a hole exactly where the preview
+/// would be marked, so this answers for every panel and the door draws what
+/// comes back — a boundary that exists because the section is FOCUSED is not
+/// the same thing as one that is always there.
+///
+/// `None` for the listing, the sidebar and the fold: those three already light
+/// something of their own — a row, or a glyph.
+#[must_use]
+pub fn focus_rule(panes: Panes, width: u16, pane: Pane) -> Option<u16> {
+    if !matches!(pane, Pane::Preview | Pane::Info) {
+        return None;
+    }
+    let want = if matches!(pane, Pane::Preview) {
+        Panel::Preview
+    } else {
+        Panel::Info
+    };
+    panes
+        .boxes(width)
+        .into_iter()
+        .find(|(p, _, _)| *p == want)
+        .map(|(_, at, _)| at.saturating_sub(RULE))
+}
+
 /// Where the pointer's band begins and how wide it is, in PIXELS.
 ///
 /// # Why one function and not one per door
@@ -3635,12 +3674,13 @@ impl View {
 
     /// Which pane has the keyboard.
     ///
-    /// Only the tests ask, and the drawing does not: what a band needs is the
-    /// pane AND the row, and [`View::focused_here`] answers both at once. It is
-    /// here because `menu_at` has to be provable — it decides which menu opens,
-    /// and the pane is the half of that decision nothing on screen spells out.
-    #[cfg(test)]
-    const fn pane(&self) -> Pane {
+    /// It was the tests' alone while a band needed the pane AND the row, which
+    /// [`View::focused_here`] answers at once. The two panels changed that:
+    /// their mark is a lit BAR and not a band, and a photograph has no row to
+    /// pair the pane with — so the drawing asks this and
+    /// [`Section::focus_bar`] answers.
+    #[must_use]
+    pub const fn pane(&self) -> Pane {
         self.pane
     }
 
@@ -3849,13 +3889,6 @@ impl View {
         //
         // Only when there is something to title. Asking for a line here with
         // both panels off would grow the region for a panel that is not drawn.
-        //
-        // AND THE CEILING STILL BOUNDS WHAT LEAVES THIS FUNCTION. `PANEL_WANT`
-        // is not decoration — a number that leaves here is a number somebody
-        // multiplies — so the title is added inside it, not on top of it.
-        if lines > 0 {
-            lines = lines.saturating_add(1).min(PANEL_WANT);
-        }
         lines
     }
 
@@ -7465,63 +7498,6 @@ impl View {
         self.modal_cursor()
     }
 
-    /// How many of a panel's lines its content actually scrolls through.
-    ///
-    /// The title takes one and does not move, so every question about scrolling
-    /// a panel subtracts it — the same thing `Section::visible` does with
-    /// `above`, asked where a `Room` from a door is all there is.
-    #[must_use]
-    fn panel_room(&self, lines: usize) -> usize {
-        lines.saturating_sub(usize::from(!self.whole()))
-    }
-
-    /// A panel's name, on its first line, in the tone that says whether it has
-    /// the keyboard.
-    ///
-    /// # Why the panels needed a title at all
-    ///
-    /// Because the owner reported that he could not tell when the `TAB` ring
-    /// had reached them: the listing and the sidebar light their current row,
-    /// the fold control lights its glyph, and the two panels changed nothing
-    /// whatsoever. A row would have answered for the facts and for a playlist
-    /// — and not for a photograph or a film, which have no rows at all. The
-    /// title is the one mark that works for every kind of content, and he
-    /// chose it knowing the price: a line of the panel.
-    ///
-    /// Text and a tone, and nothing else: no box, no rule, no outline
-    /// (invariants 14 and 15). It is the same thing the listing's header
-    /// already does with the column that is sorting.
-    ///
-    /// The name is the same key the toggle uses — `files-preview` reads
-    /// "preview" and `files-facts` reads "information", which is what one
-    /// would write on a panel anyway. A second key would be a second place to
-    /// change and a chance for the hint line and the panel to disagree about
-    /// what the panel is called.
-    fn panel_title(
-        &self,
-        pane: Pane,
-        at: u16,
-        room: u16,
-        texts: &ronoctua_i18n::Texts,
-    ) -> Vec<Field> {
-        let key = if matches!(pane, Pane::Info) {
-            ronoctua_i18n::key::FILES_FACTS
-        } else {
-            ronoctua_i18n::key::FILES_PREVIEW
-        };
-        vec![Field {
-            at,
-            text: ronoctua_render::layout::elide_end(&texts.t(key), room),
-            color: if self.pane == pane {
-                ronoctua_tokens::color::STATE_ACCENT
-            } else {
-                ronoctua_tokens::color::TEXT_DIM
-            },
-            hit: Hit::Nothing,
-            explain: None,
-        }]
-    }
-
     /// The LISTING's own chrome: the path, then the header.
     ///
     /// The doors used to own these two rows and chain them in front of the
@@ -7808,13 +7784,8 @@ impl View {
                 // already the preview's height too — but inside the `Info`
                 // branch it never updated with `C-i` off, and the preview's
                 // page key would have worked against a stale number.
-                //
-                // AND THE TITLE'S LINE IS NOT THE CONTENT'S. It is one for both
-                // panels, so this stays a single number for the pair.
-                let titled = !self.whole();
-                let held = lines.saturating_sub(usize::from(titled));
                 self.drawn_lines
-                    .set(u16::try_from(held).unwrap_or(u16::MAX));
+                    .set(u16::try_from(lines).unwrap_or(u16::MAX));
                 if !wanted(pane) {
                     continue;
                 }
@@ -7882,22 +7853,10 @@ impl View {
                 // track's length is what depends on it — and the cursor's
                 // rectangle and both doors' drags all have to agree about that.
                 let clock = time.as_ref().map_or(0, |t| width_of(&clock_text(t)));
-                let content_lines = held
+                let content_lines = lines
                     .saturating_sub(usize::from(across.is_some()))
                     .saturating_sub(usize::from(transport));
-                // THE TITLE IS ROW ZERO AND IT DOES NOT SCROLL, which is what
-                // `above` means — the same arrangement the listing's path and
-                // header have had all along, so `Section::line_of`,
-                // `Section::visible` and `at_point` need nothing new.
-                let mut content: Vec<Row> = Vec::with_capacity(content_lines + 1);
-                if titled {
-                    content.push(Row {
-                        fields: self.panel_title(pane, at, room, texts),
-                        marked: false,
-                        foot: false,
-                        focused: false,
-                    });
-                }
+                let mut content: Vec<Row> = Vec::with_capacity(content_lines);
                 content.extend((0..content_lines).map(|k| Row {
                     fields: match which {
                         Panel::Preview => {
@@ -7950,7 +7909,7 @@ impl View {
                         self.preview_offset
                     },
                     total,
-                    above: usize::from(titled),
+                    above: 0,
                     content,
                 });
             }
@@ -8220,7 +8179,7 @@ impl View {
             // panel's name. Left in, the drag reaches one row short of the end
             // and the thumb stops a line above the bottom, which is the shape
             // of defect the owner photographed under this very bar.
-            Pane::Info | Pane::Preview => self.panel_room(room.panel),
+            Pane::Info | Pane::Preview => room.panel,
             // AND THE LISTING'S CHROME IS NOT A ROW THE LISTING SCROLLS.
             //
             // The doors hand over the REGION's height — the sidebar shares it
@@ -8883,11 +8842,6 @@ impl View {
                     return true;
                 }
                 let total = self.preview_total();
-                // MINUS THE TITLE, the same subtraction the listing makes for
-                // its path and header and the drag makes for both panels: a
-                // wheel that stopped somewhere the bar did not would be two
-                // answers to one question.
-                let room = self.panel_room(room);
                 self.preview_offset = slide(self.preview_offset, by, total, room);
                 true
             }
@@ -8901,7 +8855,6 @@ impl View {
                     return false;
                 }
                 let total = self.sheet().len();
-                let room = self.panel_room(room);
                 self.info_offset = slide(self.info_offset, by, total, room);
                 true
             }
@@ -11244,9 +11197,6 @@ mod tests {
             .into_iter()
             .find(|s| matches!(s.pane, Pane::Preview))
             .expect("the preview is a section");
-        // PAST THE TITLE. `above` is how many of a section's rows do not
-        // scroll — the listing's path and header, and now each panel's name —
-        // and what every caller here means is the n-th row of the CONTENT.
         section
             .content
             .get(n + section.above)
@@ -15411,22 +15361,35 @@ mod tests {
         let w = 200u16;
         let _ = v.panes(w);
 
-        // The title is drawn quiet while the listing has the keyboard.
-        let title = |v: &mut View| -> Option<ronoctua_tokens::Color> {
-            let sections = v.sections(&[], 24, w, &b);
-            let sec = sections
-                .into_iter()
-                .find(|s| matches!(s.pane, Pane::Info))?;
-            sec.content.first()?.fields.first().map(|f| f.color)
-        };
-        assert_eq!(title(&mut v), Some(ronoctua_tokens::color::TEXT_DIM));
+        // WHICH RULE IS LIT. Two earlier answers were refused from the screen:
+        // a one-line TITLE per panel, and then the panel's own SCROLLBAR lit.
+        // The mark is the rule the section BEGINS at — see `files::focus_rule`.
+        let panes = v.panes(w);
+        assert!(
+            focus_rule(panes, w, Pane::Preview).is_some(),
+            "the preview has no rule to light"
+        );
+        assert!(
+            focus_rule(panes, w, Pane::Info).is_some(),
+            "the facts have no rule to light"
+        );
+        assert_ne!(
+            focus_rule(panes, w, Pane::Preview),
+            focus_rule(panes, w, Pane::Info),
+            "the two panels would light the same rule"
+        );
+        // AND THE THREE THAT LIGHT SOMETHING OF THEIR OWN ANSWER NOTHING.
+        for pane in [Pane::Listing, Pane::Sidebar, Pane::Fold] {
+            assert_eq!(focus_rule(panes, w, pane), None, "{pane:?}");
+        }
         assert_eq!(v.resting_line(w, 24), None, "the listing has the keyboard");
+        assert_eq!(v.pane(), Pane::Listing);
 
         v.set_pane(Pane::Info);
         assert_eq!(
-            title(&mut v),
-            Some(ronoctua_tokens::color::STATE_ACCENT),
-            "the panel with the keyboard is not marked"
+            v.pane(),
+            Pane::Info,
+            "the panel with the keyboard is not the one the door would mark"
         );
         assert!(
             v.resting_line(w, 24).is_some(),
@@ -17511,17 +17474,12 @@ mod tests {
             .flat_map(|r| r.fields.iter())
             .filter(|f| f.at >= at && f.at < at + room)
             .collect();
-        // TWO FIELDS: the panel's name, and the sentence. The name is a row
-        // that does not scroll and it is there whatever is in the panel — what
-        // this test is about is that the CONTENT is one discreet sentence and
-        // not a picture-sized glyph.
         assert_eq!(
             inside.len(),
-            2,
-            "the panel should be its title and ONE line: {inside:?}"
+            1,
+            "the panel should have ONE line: {inside:?}"
         );
-        assert_eq!(inside[0].text, b.t(ronoctua_i18n::key::FILES_PREVIEW));
-        let said = &inside[1];
+        let said = &inside[0];
         assert_eq!(
             said.text,
             b.t(NO_PREVIEW),

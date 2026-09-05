@@ -74,8 +74,11 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   de sentido com a seção em foco** (`strong_meaning`; sem resposta própria, a listagem responde) —
   na dica elas levam a frase resolvida e cor própria. **A linha de dicas é GERADA de `OF_THE_VIEW`**,
   uma notação por ação e o `·` do código (`mark.separator`): as 40 frases já existiam nos dois
-  `.ftl` e nenhuma tela as lia. **Prévia e fatos têm cursor e TÍTULO** (aceso com o teclado; custa
-  uma linha), e a listagem guarda faixa quieta ao perder o foco. **`..` é o primeiro renque** — nunca
+  `.ftl` e nenhuma tela as lia. **Prévia e fatos têm cursor, e a marca de foco é a RÉGUA acesa**
+  (`chrome::divider_lit`; título e barra acesa foram recusados — e a régua que a FAIXA não tem é
+  desenhada, senão a prévia ficaria sem marca), e a listagem guarda faixa quieta ao perder o foco. **A gaveta mede a altura UMA VEZ, ao abrir**
+  (`fold::settle`): altura que segue o conteúdo é altura que o ponteiro move, e isso é um laço de
+  layout. O chevron fica com a última célula da linha 0; a barra pega da linha 1 para baixo. **`..` é o primeiro renque** — nunca
   oculta, nunca marcável, e toda célula dela responde a saída. Permissão
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
   **Prévia e infos nascem LIGADAS** (`C-v`/`C-i` ainda escondem) e por isso a região sobe ao teto

@@ -77,7 +77,7 @@ impl FilesWindow {
     /// from a `const` to a question, and `chrome::Frame` carries the answer
     /// for everything downstream of it.
     fn first_of_region(&self) -> u16 {
-        FIRST_OF_REGION + crate::fold::rows(self.fold, self.fold_wrapped)
+        FIRST_OF_REGION + crate::fold::rows(self.fold)
     }
 }
 
@@ -277,6 +277,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         sender,
         under_pointer: None,
         dragging: None,
+        dragging_fold: false,
         detents: 0.0,
         cell_under_pointer: None,
         line_under_pointer: None,
@@ -292,7 +293,6 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             top: 0,
         },
         fold_wrapped: 0,
-        fold_applied: 0,
         handle: handle.clone(),
         spinning: None,
         notice,
@@ -383,6 +383,13 @@ struct FilesWindow {
     /// with the mouse and it did not move. A bar one cannot drag is a picture
     /// of a bar.
     dragging: Option<(crate::files::Pane, crate::files::Axis)>,
+    /// Is the pointer holding the OPENED LINE's bar?
+    ///
+    /// A gesture of the door's own and not a fourth `Axis`, for the reason
+    /// `spinning` is not one either: line 0 belongs to no section, so
+    /// `Geometry::bars` — which walks the sections — can never produce it.
+    /// That is exactly why the bar could not be dragged; see `fold_track`.
+    dragging_fold: bool,
     /// What is left over of a touchpad gesture, in lines.
     ///
     /// A wheel sends whole detents; a touchpad sends fractions of one, and this
@@ -432,14 +439,12 @@ struct FilesWindow {
     fold_scroll: ronoctua_design::Scroll,
     /// How many rows line 0's text came to at the width it was DRAWN at.
     ///
-    /// The height follows the content, and the content is only known where
-    /// the line is laid out — but `first_of_region` is asked BEFORE the frame.
-    /// So the drawing writes this down and the geometry reads it, one frame
-    /// behind exactly when the text or the width has just changed; `draw`
-    /// notices and goes round once more.
+    /// The height is measured ONCE, when the band opens, and the content is
+    /// only known where the line is laid out — but `first_of_region` is asked
+    /// BEFORE the frame. So the drawing writes this down, `fold::settle` reads
+    /// it and answers once, and `draw` goes round one more time. After that
+    /// nothing reopens the question: see `fold::Fold::held`.
     fold_wrapped: usize,
-    /// Line 0's height as the last frame was laid out for.
-    fold_applied: u16,
     /// The loop, for the two things that need one.
     ///
     /// A keyboard that REPEATS: SCTK only generates repeat events for one made
@@ -926,6 +931,79 @@ impl FilesWindow {
         cell + 1 >= at
     }
 
+    /// The opened line's bar, as the rectangle one may GRAB.
+    ///
+    /// # Why it exists at all
+    ///
+    /// Because it did not, and the owner found that from the screen: the bar
+    /// on the opened hint line was drawn and could not be dragged. This door
+    /// resolves a press by walking the manager's SECTIONS (`bar_at_point` over
+    /// `Geometry::bars`), and line 0 belongs to no section — it is the door's
+    /// own line, above the region. So nothing this window did could ever see
+    /// that bar, and pressing it fell through to the row underneath.
+    ///
+    /// The footer's door has had this since the drawer existed; this is its
+    /// twin, in this window's geometry.
+    ///
+    /// The TRACK and not the thumb: `Scroll::offset_at` maps any point of the
+    /// track to a position, so aiming at a handle two rows tall is not
+    /// required of anybody — the same promise the region's bars already make.
+    ///
+    /// This is the whole extent, which is what the DRAG maps against. Where it
+    /// may be GRABBED is one line shorter — see `on_fold_thumb`.
+    fn fold_track(&self) -> Option<(f32, f32, f32, f32)> {
+        if !self.fold.open || !self.fold_scroll.cut() {
+            return None;
+        }
+        let f = self.metric();
+        let top = f.y_of(0);
+        let tall = f.line() * f32::from(crate::fold::rows(self.fold).saturating_add(1));
+        Some((f.width - f.cell(), top, f.cell(), tall))
+    }
+
+    /// Is the pointer somewhere the bar may be GRABBED?
+    ///
+    /// # Why line 0 is not part of it
+    ///
+    /// Because the control that opens the line is drawn there, in the same
+    /// cell: the chevron sits at the end of line 0 and the bar runs down the
+    /// last cell of the whole band, so on that one line they are the same
+    /// target. Found by pressing it — the drawer shut instead of scrolling.
+    ///
+    /// The control wins, because it is the thing one aims AT: it is two cells
+    /// of glyph and air, and it is the only way to close the drawer with the
+    /// mouse. The bar loses one line of grab area and nothing else — the drag
+    /// still maps against the FULL track, so a drag begun below can walk right
+    /// up to the top.
+    fn on_fold_thumb(&self, x: f64, y: f64) -> bool {
+        let Some((bx, by, bw, bh)) = self.fold_track() else {
+            return false;
+        };
+        let line = self.metric().line();
+        let (from, tall) = (by + line, bh - line);
+        if tall <= 0.0 {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let (px, py) = (x as f32, y as f32);
+        px >= bx && px < bx + bw && py >= from && py < from + tall
+    }
+
+    /// Drags the opened line to where the pointer is.
+    ///
+    /// `Scroll::offset_at` is the inverse of the call that drew the thumb,
+    /// which is what stops the handle and the content disagreeing.
+    fn fold_drag_to(&mut self, y: f64) {
+        let Some((_, top, _, tall)) = self.fold_track() else {
+            return;
+        };
+        let f = self.metric();
+        #[allow(clippy::cast_possible_truncation)]
+        let at = y as f32 - top;
+        self.fold.offset = self.fold_scroll.offset_at(at, tall, f.line());
+        self.ask_paint();
+    }
+
     /// Columns and rows from the size in pixels.
     ///
     /// Integer arithmetic, without measuring text: the cell is exactly 0.600 ×
@@ -1152,15 +1230,13 @@ impl FilesWindow {
         self.fold_scroll = scroll;
         self.fold_wrapped = wrapped;
         self.present(painted);
-        // AND ONCE MORE IF LINE 0 CHANGED SIZE: the region's first line is
+        // AND ONCE MORE IF LINE 0 JUST OPENED: the region's first line is
         // asked for before the frame, and the wrap is only known inside it.
-        // The guard is the number itself, so nothing loops.
-        let settled = crate::fold::rows(self.fold, self.fold_wrapped);
-        if self.fold.open && settled != self.fold_applied {
-            self.fold_applied = settled;
+        // `fold::settle` answers once and then never again, so nothing loops —
+        // and nothing the pointer does can reopen the question, which is the
+        // whole of `Fold::held`.
+        if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
             self.ask_paint();
-        } else {
-            self.fold_applied = settled;
         }
     }
 
@@ -1931,8 +2007,30 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         } else {
             (s.geo.metric.y_of(strip_top), s.geo.metric.bottom())
         };
+        // AND THE ONE THAT BEGINS THE FOCUSED SECTION IS LIT — the mark that
+        // replaced the panels' titles, and then their lit scrollbars. See
+        // `files::focus_rule`.
+        let lit = crate::files::focus_rule(panes, s.geo.columns, s.view.pane());
+        let mut drawn = false;
         for at in panes.rules(s.geo.columns) {
-            quads.push(crate::chrome::divider(
+            let x = crate::files::rule_x(at, margin, cell);
+            if Some(at) == lit {
+                drawn = true;
+                quads.push(crate::chrome::divider_lit(x, rule_from, rule_to));
+            } else {
+                quads.push(crate::chrome::divider(x, rule_from, rule_to));
+            }
+        }
+        // AND THE ONE THE STRIP HAS NO ROOM FOR. With the panels below the
+        // listing the first of them begins at cell nought and `Panes::rules`
+        // draws nothing there — rightly, because there is nothing to its left.
+        // A boundary that exists because the section is FOCUSED is a different
+        // statement, and without it the preview would be the one section the
+        // mark could never reach.
+        if let Some(at) = lit
+            && !drawn
+        {
+            quads.push(crate::chrome::divider_lit(
                 crate::files::rule_x(at, margin, cell),
                 rule_from,
                 rule_to,
@@ -2399,6 +2497,12 @@ impl PointerHandler for FilesWindow {
                     if self.dragging.is_some() {
                         dragged = Some(e.position);
                     }
+                    // THE OPENED LINE'S BAR IS DRAGGED HERE and not through
+                    // `dragged`, which carries a point to `View::drag_to` —
+                    // and the view does not own this line.
+                    if self.dragging_fold {
+                        self.fold_drag_to(e.position.1);
+                    }
                     // AND A SHAPE TURNS WITH THE HAND. The deltas are in
                     // PIXELS and become radians here, because the view has no
                     // idea how big a pixel is; a whole panel's width is about
@@ -2440,6 +2544,13 @@ impl PointerHandler for FilesWindow {
                         self.ask_paint();
                         continue;
                     }
+                    // AND ITS BAR, for the same reason and in the same place:
+                    // it is drawn on line 0, which no section owns.
+                    if self.on_fold_thumb(e.position.0, e.position.1) {
+                        self.dragging_fold = true;
+                        self.fold_drag_to(e.position.1);
+                        continue;
+                    }
                     // A BAR TAKES THE PRESS, and the row does not get it: the
                     // thumb is a control, not a line of the list under it.
                     self.dragging = self.bar_at_point(e.position.0, e.position.1);
@@ -2470,6 +2581,7 @@ impl PointerHandler for FilesWindow {
                 // one cannot let go of is worse than one that does not move.
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = None;
+                    self.dragging_fold = false;
                     self.spinning = None;
                 }
                 // THE RIGHT BUTTON OPENS THE MENU. It draws in this window's own
