@@ -288,6 +288,20 @@ pub struct Saved {
     pub id: String,
     /// `802-11-wireless`, `vpn`, `wireguard`.
     pub kind: String,
+    /// The NETWORK this profile joins, when it is a Wi-Fi one.
+    ///
+    /// # Why the id is not enough
+    ///
+    /// Because `id` is a NAME somebody typed, and NetworkManager lets it be
+    /// anything: a profile renamed to `home` still joins `NET_2G4A1`, and a
+    /// second profile for one network is called `MyWifi 1` by the daemon
+    /// itself. Matching a saved profile against what the radio can see by its
+    /// `id` therefore lists the same network twice — once as a network in
+    /// range and once as one out of range, which is a lie about the machine.
+    ///
+    /// It costs nothing to carry: `saved_profiles` already asks each profile
+    /// for its whole settings dictionary, and the SSID is a field of it.
+    pub ssid: Option<String>,
 }
 
 impl Saved {
@@ -919,6 +933,7 @@ impl Manager {
                 at: path.as_str().to_owned(),
                 id: text("id"),
                 kind: text("type"),
+                ssid: profile_ssid(&cfg),
             });
         }
         // BY NAME, and not in the daemon's order: that one is the order the
@@ -1401,6 +1416,7 @@ mod tests {
             at: "/s/1".to_owned(),
             id: "a tunnel".to_owned(),
             kind: kind.to_owned(),
+            ssid: None,
         };
         assert!(of("vpn").tunnel());
         assert!(of("wireguard").tunnel());

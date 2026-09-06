@@ -7,14 +7,16 @@
 //! does not verify itself: a face can disappear from the build, or stop being
 //! reached by the fallback, and the only symptom would be the screen.
 //!
-//! In all three cases the symptom is different, and the worst is not the most
+//! In all four cases the symptom is different, and the worst is not the most
 //! visible:
 //!
 //! - the emoji face disappears  -> tofu, which is seen;
 //! - the Lucide face disappears -> tofu, which is seen;
-//! - Lucide goes back to using the ORIGIN codepoints -> **the wrong icon**,
-//!   drawn with confidence, because 634 of them belong to the Nerd Fonts
-//!   inside Iosevka and the primary face beats the fallback. That one is not seen.
+//! - the MARKS face disappears  -> tofu, which is seen;
+//! - Lucide goes back to using the ORIGIN codepoints, or a mark is drawn into
+//!   a range some other face answers for -> **the wrong icon**, drawn with
+//!   confidence, because 634 of Lucide's belong to the Nerd Fonts inside
+//!   Iosevka and the primary face beats the fallback. That one is not seen.
 //!
 //! The last case is what this binary exists to catch, and that is why it
 //! witnesses the collision explicitly instead of only counting faces.
@@ -23,7 +25,7 @@
 
 use anyhow::{Result, bail};
 use glyphon::cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
-use ronoctua_render::text::{EMBEDDED_FONT, EMOJI_FONT, FACES, LUCIDE_FONT};
+use ronoctua_render::text::{EMBEDDED_FONT, EMOJI_FONT, FACES, LUCIDE_FONT, MARKS_FONT};
 use ronoctua_tokens as tokens;
 
 /// A codepoint the Nerd Fonts occupies INSIDE Lucide's origin range.
@@ -36,6 +38,16 @@ const COLLIDED: char = '\u{E0A0}';
 
 /// A codepoint from the REMAPPED range, where Lucide came to live.
 const REMAPPED: char = '\u{F2000}';
+
+/// The first of the marks this repository DRAWS.
+///
+/// A fourth face, and the only one with no upstream font behind it: a mark the
+/// interface has to draw and that exists in none of the other three cannot be
+/// a pixmap (invariant 10) nor a hard-coded codepoint (invariant 9), so it is
+/// drawn into a face of ours at `U+F3000`. The failure mode is the Lucide one
+/// exactly: a range that another face already answers for draws SOMEBODY
+/// ELSE'S icon, with confidence and with nothing on screen to give it away.
+const DRAWN_HERE: char = '\u{F3000}';
 
 /// How much the first glyph of `s` ADVANCES, at the footer's text body.
 ///
@@ -87,7 +99,7 @@ fn who_draws(fs: &mut FontSystem, s: &str) -> Result<(String, u16)> {
 
 fn main() -> Result<()> {
     let mut db = glyphon::fontdb::Database::new();
-    for face in [EMBEDDED_FONT, EMOJI_FONT, LUCIDE_FONT] {
+    for face in [EMBEDDED_FONT, EMOJI_FONT, LUCIDE_FONT, MARKS_FONT] {
         db.load_font_source(glyphon::fontdb::Source::Binary(std::sync::Arc::new(face)));
     }
     db.set_monospace_family(tokens::font::FAMILY_MONO);
@@ -133,6 +145,20 @@ fn main() -> Result<()> {
     }
     if glyph == 0 {
         bail!("the Lucide icon fell through to `.notdef`");
+    }
+
+    // 3b. THE MARK WE DRAW falls on the marks face, by the same path.
+    let (family, glyph) = who_draws(&mut fs, &DRAWN_HERE.to_string())?;
+    if !family.to_lowercase().contains("marks") {
+        bail!(
+            "U+{:05X} was drawn by `{family}`, and not by the marks face.\n\
+             That is the Lucide defect again: the range is answered for by \
+             somebody else and the mark comes out as another icon.",
+            DRAWN_HERE as u32
+        );
+    }
+    if glyph == 0 {
+        bail!("the mark fell through to `.notdef` — the marks face does not answer for it");
     }
 
     // 4. THE COLLISION'S WITNESS.
@@ -242,7 +268,10 @@ fn main() -> Result<()> {
         worst.0
     );
 
-    println!("OK: {FACES} faces — text on Iosevka, emoji on the emoji one, icon on Lucide's");
+    println!(
+        "OK: {FACES} faces — text on Iosevka, emoji on the emoji one, icon on Lucide's, \
+         mark on ours"
+    );
     println!(
         "OK: the 75 emoji-presentation ones are on the emoji face, and `#`/`©` did not go with them"
     );

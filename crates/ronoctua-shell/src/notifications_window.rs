@@ -158,6 +158,9 @@ pub fn host_it() -> Result<()> {
         owed: false,
         gpu: None,
         text: None,
+        quads: None,
+        dragging: false,
+        lines_owed: 0.0,
         view: crate::notifications::View::fresh(),
         records: Vec::new(),
         book: ronoctua_notify::Book::distro(),
@@ -227,6 +230,31 @@ struct NotificationsWindow {
     owed: bool,
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
+    /// The one rectangle this window draws: the list's scrollbar.
+    ///
+    /// It had none — see `chrome::list_bar` for what that cost — and the wheel
+    /// was the only way down a list that does not fit.
+    quads: Option<ronoctua_render::quad::Quads>,
+    /// Is the pointer dragging the bar?
+    ///
+    /// Held, because a drag is three events: the press that grabs it, every
+    /// motion until the release, and the release. Without the flag the list
+    /// would only move where the pointer was PRESSED.
+    dragging: bool,
+    /// How many LINES the wheel and the touchpad have asked for and not yet
+    /// been paid.
+    ///
+    /// LINES, and the unit is in the name on purpose: the footer's own
+    /// accumulator holds DETENTS, because one of its two modes turns a page per
+    /// detent. Two fields of one crate holding two units under one name is the
+    /// `ink-is-not-a-count` confusion, and it costs a factor of three.
+    ///
+    /// A touchpad sends fractions of a line and a mouse sends a detent as
+    /// fifteen pixels, which is also a fraction. Spending only the whole part
+    /// and keeping the rest is what makes a slow gesture move the list at the
+    /// speed of the finger instead of standing still and then jumping — the
+    /// reason is written over `surface::wheel_arrived`.
+    lines_owed: f64,
     view: crate::notifications::View,
     /// The history, as it was last read off disk.
     records: Vec<ronoctua_notify::Record>,
@@ -268,6 +296,18 @@ impl NotificationsWindow {
     }
 
     /// How many rows fit under the two fixed lines.
+    /// How many rows the list has, right now.
+    ///
+    /// The pointer needs the count and only the count — for the scrollbar's
+    /// arithmetic — and building the rows to take `.len()` is what the wheel
+    /// below already does.
+    fn rows_now(&self) -> usize {
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        self.view
+            .rows(&lists, &self.book, self.columns, &self.texts)
+            .len()
+    }
+
     const fn room(&self) -> usize {
         self.lines.saturating_sub(FIRST_OF_LIST) as usize
     }
@@ -276,6 +316,33 @@ impl NotificationsWindow {
     ///
     /// `scrolloff` two, vi's number and the footer's: a cursor pinned to the
     /// last visible line gives no warning of what is coming.
+    /// Keeps the offset inside the list, and nothing else.
+    ///
+    /// # Why this is not `follow`
+    ///
+    /// Because a paint may not move the list. `follow` slaves the offset to
+    /// the CURSOR, and calling it from `paint` undid, on the same frame, every
+    /// offset the pointer had just set: a drag of the scrollbar and a turn of
+    /// the wheel both wrote an offset and then watched the paint put it back
+    /// under the cursor — which on a freshly-opened window (cursor on row 1)
+    /// means back to the top, every time. The bar looked like a bar that does
+    /// not work, which is exactly the report it was built to answer.
+    ///
+    /// The footer never made this mistake: `Footer::follow_cursor` is called
+    /// from seventeen places and every one of them is an EVENT.
+    ///
+    /// What a paint may do is keep the offset inside a list that changed size
+    /// under it — the watch thread brings a new reading while nobody is
+    /// touching anything — and honour an anchor the view asked for.
+    fn settle_offset(&mut self, rows: usize) {
+        let room = self.room();
+        if room == 0 {
+            return;
+        }
+
+        self.offset = self.offset.min(rows.saturating_sub(room));
+    }
+
     fn follow(&mut self, rows: usize) {
         const MARGIN: usize = 2;
         let room = self.room();
@@ -437,6 +504,11 @@ impl NotificationsWindow {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
         }
+        // AND THE ONE RECTANGLE THIS WINDOW DRAWS: the list's scrollbar.
+        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
+            Ok(q) => self.quads = Some(q),
+            Err(e) => tracing::error!(error = %e, "assembling the quads failed"),
+        }
         self.gpu = Some(g);
     }
 
@@ -458,6 +530,11 @@ impl NotificationsWindow {
             let lists = crate::notifications::Lists::of(&self.records, &self.book);
             self.view.key(press, &lists, &self.book)
         };
+        // THE CURSOR MOVED, so the list follows it — here, on the EVENT, and
+        // never in the paint. See `settle_offset` for what following from a
+        // paint cost.
+        let rows = self.rows_now();
+        self.follow(rows);
         self.apply(errand);
     }
 
@@ -494,7 +571,7 @@ impl NotificationsWindow {
             self.view
                 .rows(&lists, &self.book, self.columns, &self.texts)
         };
-        self.follow(rows.len());
+        self.settle_offset(rows.len());
 
         let mut spans: Vec<ronoctua_render::Span> = Vec::new();
 
@@ -568,6 +645,11 @@ impl NotificationsWindow {
             }
         }
 
+        // THE BAR, from the same `Scroll` every other bar in this system uses.
+        let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
+        #[allow(clippy::cast_precision_loss)]
+        let bar =
+            crate::chrome::list_bar(scroll, FIRST_OF_LIST, self.width as f32, self.height as f32);
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
@@ -585,7 +667,24 @@ impl NotificationsWindow {
         // TEXT ONLY: this window draws no rectangle. The focus is a colour
         // (see the paint loop), there is no scrollbar, and the hint line is
         // text — so there is no quad pipeline here, and a frame is one pass.
-        if let Err(e) = gpu.frame(|pass| text.draw(ronoctua_render::Atlas::Pinned, pass)) {
+        if let Some(q) = self.quads.as_mut() {
+            q.prepare(
+                &gpu.device,
+                &gpu.queue,
+                gpu.config.width,
+                gpu.config.height,
+                bar.as_slice(),
+            );
+        }
+        // THE RECTANGLE FIRST, THEN THE TEXT. There is no depth test: whoever
+        // draws later is on top, and a bar over a letter would hide it.
+        let quads_ref = self.quads.as_ref();
+        if let Err(e) = gpu.frame(|pass| {
+            if let Some(q) = quads_ref {
+                q.draw(pass);
+            }
+            text.draw(ronoctua_render::Atlas::Pinned, pass)
+        }) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
@@ -815,14 +914,75 @@ impl PointerHandler for NotificationsWindow {
         // and looking the position up again later would be a second answer to
         // one question.
         let mut clicked: Option<(usize, Option<u16>)> = None;
-        let mut wheel = 0.0f64;
+        let mut turned = false;
+        // THE BAR IS A CONTROL, and a drag is three events. `Scroll::offset_at`
+        // maps any point of the TRACK, so nobody has to aim at the handle.
+        // THE ROWS ARE ONLY BUILT WHEN THE BAR IS IN PLAY.
+        //
+        // A `Motion` arrives on every pixel of movement, and these windows
+        // deliberately skip a REPAINT on motion because it "spent a GPU frame
+        // per row crossed". Building the whole list to answer "is the pointer
+        // on the bar?" would spend the more expensive half of that anyway.
+        let bar_in_play = self.dragging
+            || events.iter().any(|e| {
+                matches!(e.kind, PointerEventKind::Press { button, .. } if button == LEFT_BUTTON)
+            });
+        let scroll = if bar_in_play {
+            crate::chrome::list_scroll(self.rows_now(), self.room(), self.offset)
+        } else {
+            crate::chrome::list_scroll(0, 0, 0)
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let (bar_w, bar_h) = (self.width as f32, self.height as f32);
+        let mut dragged: Option<usize> = None;
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.row_under_pointer = self.row_at(e.position.1);
+                    #[allow(clippy::cast_possible_truncation)]
+                    if self.dragging {
+                        dragged = Some(crate::chrome::list_offset_at(
+                            scroll,
+                            FIRST_OF_LIST,
+                            bar_w,
+                            bar_h,
+                            e.position.1 as f32,
+                        ));
+                    } else {
+                        self.row_under_pointer = self.row_at(e.position.1);
+                    }
                 }
-                PointerEventKind::Leave { .. } => self.row_under_pointer = None,
+                PointerEventKind::Leave { .. } => {
+                    // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
+                    // grab usually delivers the release, but a popup grab, an
+                    // unmap or a broken grab drops it — and a `dragging` left
+                    // true makes the next ENTER, with no button held, jump the
+                    // list to wherever the pointer came in.
+                    self.dragging = false;
+                    self.row_under_pointer = None;
+                }
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    self.dragging = false;
+                }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    if crate::chrome::on_the_list_bar(
+                        scroll,
+                        FIRST_OF_LIST,
+                        bar_w,
+                        bar_h,
+                        e.position.0 as f32,
+                        e.position.1 as f32,
+                    ) {
+                        self.dragging = true;
+                        dragged = Some(crate::chrome::list_offset_at(
+                            scroll,
+                            FIRST_OF_LIST,
+                            bar_w,
+                            bar_h,
+                            e.position.1 as f32,
+                        ));
+                        continue;
+                    }
                     self.row_under_pointer = self.row_at(e.position.1);
                     clicked = self
                         .row_under_pointer
@@ -831,9 +991,25 @@ impl PointerHandler for NotificationsWindow {
                 // THE RIGHT BUTTON DOES NOTHING HERE. There is no menu in this
                 // view: every action it offers is one key, and a second meaning
                 // for the same target would be chrome nobody asked for.
-                PointerEventKind::Axis { vertical, .. } => wheel += vertical.absolute,
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    // THE ARITHMETIC IS SHARED — see `surface::wheel_arrived`.
+                    // Written out here it was `(pixels / line) * 3`, which
+                    // moved nothing for a slow gesture and three lines for the
+                    // next one: a list that jumps.
+                    crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    turned = true;
+                }
                 _ => {}
             }
+        }
+        if let Some(offset) = dragged {
+            self.offset = offset;
+            self.ask_paint();
+            return;
         }
         // THE MOUSE AIMS, THE KEYS ACT — the transfer panel's rule, and this
         // view has the same shape: marking read, running an action, adjusting a
@@ -852,10 +1028,14 @@ impl PointerHandler for NotificationsWindow {
             self.ask_paint();
             return;
         }
-        if wheel.abs() >= 1.0 {
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-            #[allow(clippy::cast_possible_truncation)]
-            let by = (wheel / line_px.max(1.0)) as i64 * 3;
+        if turned {
+            let by = crate::surface::wheel_lines(&mut self.lines_owed);
+            if by == 0 {
+                // WHAT IS LEFT OVER STAYS. A gesture too small to be a line
+                // yet is not a gesture that did nothing — it is one that has
+                // not finished adding up.
+                return;
+            }
             let rows = {
                 let lists = crate::notifications::Lists::of(&self.records, &self.book);
                 self.view

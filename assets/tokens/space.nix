@@ -350,6 +350,115 @@
     insetY = 0;
   };
 
+  # WHERE A VALUE BEGINS, in the row's own cells — the network, power and
+  # Bluetooth views, which are lists of a label and a value.
+  #
+  # # Why it is a column and not a right edge
+  #
+  # It was the right EDGE, and each of the three wrote the arithmetic itself: a
+  # short value was pushed to the last cell of the surface and a long one fell
+  # back to a third of the row. On a wide window that puts `off` a hundred and
+  # fifty columns from `aeroplane mode`, with nothing in between, and the owner
+  # read it off the screen: *"as informações estão alinhadas na extrema direita,
+  # muito distantes"*. Two ragged edges and no column to run the eye down.
+  #
+  # A fixed column makes the three views a definition list: every value starts
+  # in the same place, so reading down a section is one movement instead of a
+  # zigzag. What it costs is that a long label is cut here rather than growing —
+  # which is the right trade, because a label is a NAME and names are short by
+  # the time they are good.
+  #
+  # # Why this number
+  #
+  # Twenty-eight cells is the longest label these three views need once they
+  # say what they mean — `endereço desta máquina`, `velocidade máxima` — plus
+  # the air after it. It is CLAMPED to half the row, so the narrow footer does
+  # not become two columns of nothing; below that clamp the value simply gets
+  # the other half.
+  #
+  # IT IS A MINIMUM, NOT A CEILING. A label longer than this pushes the value
+  # right instead of being cut: the column is what makes a section readable
+  # down one line, and a label cut to make it is a worse trade than one row
+  # whose value sits further along. `power-keep-awake` is 36 cells in English
+  # and 50 in Portuguese — a sentence, beside a two-letter value — and the
+  # first version of this cut it to `keep awake: no s…`, which is the very
+  # defect the comment deleted from `power.rs` had been written about.
+  view = {
+    labelCells = 28;
+    # THE CELLS A ROW SPENDS ON THE MARK IN FRONT OF IT.
+    #
+    # The glyph and its air. Every row of the three views pays it, answering or
+    # not, so the labels line up — an indent only some rows pay is a ragged
+    # edge, which reads worse than no mark at all.
+    markerCells = 2;
+    # HOW MUCH ROOM A VALUE GETS, in the row's own cells.
+    #
+    # `labelCells` says where a value BEGINS; this says how far it may run. On
+    # a row drawn straight onto the surface nothing needs it — what is left of
+    # the line is the answer — and it exists for the one place where something
+    # else does: a CONTAINER (`shelf`) has a right edge of its own, so somebody
+    # has to say where that edge is, and the honest answer is "as far as one of
+    # its rows needs".
+    #
+    # # Why forty
+    #
+    # It is the longest value these lists carry. A tailnet peer's is four
+    # facts — `online · Linux · 100.64.12.34 · saída` is 38 cells — and a
+    # neighbour's is three, with a manufacturer's name in the middle of it.
+    # Below this the container would cut, on a screen with room to spare, the
+    # very line somebody opened it to read.
+    valueCells = 40;
+  };
+
+  # A LIST WITH A CEILING OF ITS OWN, inside the network view's one list.
+  #
+  # # What it is for
+  #
+  # Wi-Fi is read continuously and the answer changes: a neighbour's router
+  # comes and goes, a phone's hotspot appears, the signal reorders them. With
+  # the list free to grow, everything under it moved up and down while nobody
+  # touched anything — the owner read it off the screen: *"como as redes
+  # aparecem e desaparecem, acaba fazendo o resto do conteúdo descer e subir"*.
+  #
+  # A shelf always draws the SAME number of lines, padding with blanks when it
+  # holds fewer, and scrolls inside itself with a bar of its own. Nothing under
+  # it ever moves. That is the whole property, and it is why the number is
+  # fixed rather than a share of the room: a height that follows the content is
+  # the thing being fixed.
+  #
+  # # Why five
+  #
+  # The footer's region is twelve lines (`expansion.maxLines`), so a shelf is a
+  # little under half of it: enough to compare a handful of networks at a
+  # glance, and short enough that two shelves and the rows between them still
+  # fit on one page. It was six, and the owner asked for a little less.
+  #
+  # ONE NUMBER FOR ALL FIVE. A shelf that was taller than its neighbours would
+  # be saying something about its content that is not true — they are all the
+  # same kind of thing, and the eye should not have to ask.
+  #
+  # # AND ITS WIDTH IS NOT WRITTEN HERE, on purpose
+  #
+  # A container is as wide as one of its rows needs — `view.markerCells` plus
+  # `view.labelCells` plus `view.valueCells`, plus the air at each edge and the
+  # cell its own bar takes. That is arithmetic over tokens that already exist,
+  # so it lives in `chrome::SHELF_ROOM` beside the code that draws it, the way
+  # `chrome::FIELDS_LEAD` does. A number repeated here would be a second truth
+  # that goes stale the day either column moves.
+  shelf = {
+    lines = 5;
+    # THE AIR INSIDE A CONTAINER, in cells: before its first glyph, and after
+    # its last text cell and before its own bar. It is spent once more on the
+    # other side of that bar, so that on a narrow screen — where the box is
+    # clamped rather than measured — the container's bar and the page's are
+    # still two bars with a gap between them.
+    #
+    # The reason is the one every drawing here owes, and it is the same one
+    # `files.gutter` gives: ink against a border reads as ink that was CUT, not
+    # as ink that ended.
+    pad = 1;
+  };
+
   # HOW FAR THE EXPANSION MAY GROW — the which-key list, the `M-x`
   # candidates, the history, the manual.
   #

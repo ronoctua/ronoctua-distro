@@ -252,7 +252,7 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--notifications", type=pathlib.Path, required=True)
-    ap.add_argument("--icons", type=pathlib.Path, required=True, help="icons.json do glyphdb")
+    ap.add_argument("--icons", type=pathlib.Path, required=True, help="the glyph database's icons.json")
     ap.add_argument(
         "--glyphs",
         type=pathlib.Path,

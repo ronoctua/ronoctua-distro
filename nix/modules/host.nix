@@ -82,8 +82,8 @@ in
 
         What checks it is the `locale-exists` check, which runs INSIDE a build, where
         reading the file is free. It is the same arrangement as the keyboard layout, and for the
-        same reason: the wrong value breaks nothing at the time, and the symptom shows up
-        longe da causa.
+        same reason: the wrong value breaks nothing at the time, and the symptom shows
+        up far from the cause.
       '';
     };
 

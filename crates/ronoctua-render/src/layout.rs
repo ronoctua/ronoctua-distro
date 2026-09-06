@@ -657,7 +657,7 @@ mod tests {
             let s = r.text(40);
             let max = u16::try_from(r.up_to(40)).unwrap_or(0);
             let e = elide_middle(&s, max);
-            assert!(width(&e) <= max, "`{e}` passa de {max}");
+            assert!(width(&e) <= max, "`{e}` runs past {max}");
             // With room for both ends plus the ellipsis, the original's first
             // and last letter have to still be there.
             if width(&s) > max && max >= 5 {

@@ -182,11 +182,11 @@ if command -v eza >/dev/null 2>&1; then
     alias ll='eza -lah --group-directories-first --icons=auto'
     alias la='eza -la --group-directories-first --icons=auto'
     alias lt='eza --tree --level=2 --group-directories-first --icons=auto'
-    alias listar='eza -lah --group-directories-first --icons=auto'
+    alias list='eza -lah --group-directories-first --icons=auto'
 else
     alias ll='ls -lah --color=auto --group-directories-first'
     alias la='ls -la --color=auto'
-    alias listar='ls -lah --color=auto --group-directories-first'
+    alias list='ls -lah --color=auto --group-directories-first'
 fi
 
 command -v tree >/dev/null 2>&1 && alias tree2='tree -L 2 --dirsfirst'

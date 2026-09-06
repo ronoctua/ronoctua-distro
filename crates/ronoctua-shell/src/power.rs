@@ -950,6 +950,18 @@ impl Builder<'_> {
     }
 
     fn heading(&mut self, key: &str) {
+        // AIR FIRST, and never before the first title. See `chrome::AIR`: a
+        // section that starts immediately under the last row of the one above
+        // does not start anywhere, and the owner read that off the screen.
+        if !self.out.is_empty() {
+            self.out.push(Row {
+                fields: crate::chrome::AIR,
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                disabled: false,
+            });
+        }
         self.out.push(Row {
             fields: vec![Self::piece(
                 self.left,
@@ -973,8 +985,13 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         self.out.push(Row {
             fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
+                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
+                // The mark's indent is paid by every row of these views on
+                // purpose — an indent only some rows pay is a ragged edge —
+                // and a note that skipped it sat two cells left of everything
+                // around it.
+                crate::chrome::text_left(self.left),
+                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -996,29 +1013,29 @@ impl Builder<'_> {
     fn fact_coloured(&mut self, key: &str, value: String, colour: Option<tokens::Color>) {
         let label = self.texts.t(key);
         let focused = self.cursor == self.out.len();
-        let split = self.room / 3;
         let value_colour = colour.unwrap_or(if focused {
             tokens::color::STATE_ACCENT
         } else {
             tokens::color::TEXT_PRIMARY
         });
+        // THE SAME COLUMN THE ROW BELOW IT USES. A fact used to be placed at a
+        // third of the row and a `pair` at the surface's right edge, in this
+        // same file — so two neighbouring lines of one section put their
+        // values in two different places.
         self.out.push(Row {
-            fields: vec![
-                Self::piece(
-                    self.left,
-                    layout::elide_end(&label, split.saturating_sub(1)),
-                    if focused {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        tokens::color::TEXT_SECONDARY
-                    },
-                ),
-                Self::piece(
-                    self.left + split,
-                    layout::elide_end(&value, self.room.saturating_sub(split)),
-                    value_colour,
-                ),
-            ],
+            fields: crate::chrome::field_pair(
+                self.left,
+                self.room,
+                false,
+                &label,
+                &value,
+                if focused {
+                    tokens::color::STATE_ACCENT
+                } else {
+                    tokens::color::TEXT_SECONDARY
+                },
+                value_colour,
+            ),
             focused,
             heading: false,
             target: Target::Nothing,
@@ -1035,33 +1052,19 @@ impl Builder<'_> {
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
             (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_PRIMARY),
         };
-        // A SHORT VALUE SITS AT THE RIGHT END — `on`, `off`, `80%` — and the
-        // label keeps the rest of the row: at a third, "keep awake: no sleep,
-        // no idle action" was cut to "keep awake: no s…" beside a two-letter
-        // value, which the window showed at 57 columns. A long value takes
-        // the fact's third instead.
-        let width = layout::width(&value);
-        let value_at = if value.is_empty() {
-            self.left + self.room
-        } else if width <= self.room / 3 {
-            self.left + self.room.saturating_sub(width)
-        } else {
-            self.left + self.room / 3
-        };
-        let mut fields = vec![Self::piece(
-            self.left,
-            layout::elide_end(&label, value_at.saturating_sub(self.left + 1)),
-            label_colour,
-        )];
-        if !value.is_empty() {
-            fields.push(Self::piece(
-                value_at,
-                layout::elide_end(&value, (self.left + self.room).saturating_sub(value_at)),
-                value_colour,
-            ));
-        }
+        // ONE ARITHMETIC, and it is `chrome::field_pair` — see the comment on
+        // `chrome::value_column` for the three answers this file and its two
+        // neighbours used to give.
         self.out.push(Row {
-            fields,
+            fields: crate::chrome::field_pair(
+                self.left,
+                self.room,
+                target != Target::Nothing,
+                &label,
+                &value,
+                label_colour,
+                value_colour,
+            ),
             focused,
             heading: false,
             target,
@@ -1246,7 +1249,9 @@ mod tests {
         for snap in [None, Some(laptop())] {
             let rows = View::fresh().rows(snap.as_ref(), Profile::Performance, 80, &t);
             for (i, row) in rows.iter().enumerate() {
-                if !row.heading {
+                // THE AIR IS A HEADING WITH NO FIELDS (`chrome::AIR`), and
+                // what it is under is the title it introduces.
+                if !row.heading || row.fields.is_empty() {
                     continue;
                 }
                 let next = rows.get(i + 1);
@@ -1280,8 +1285,18 @@ mod tests {
         // peripherals) are not drawn at all rather than drawn empty: see
         // `a_heading_is_never_alone`, which is where that rule lives.
         let rows = View::fresh().rows(None, Profile::Performance, 80, &t);
-        assert!(rows.iter().filter(|r| r.heading).count() >= 6);
-        assert!(rows.iter().all(|r| !r.fields.is_empty()));
+        assert!(
+            rows.iter()
+                .filter(|r| r.heading && !r.fields.is_empty())
+                .count()
+                >= 6
+        );
+        // EVERY ROW SAYS SOMETHING, and the air says it by being air: it is
+        // the one row in the list that is fieldless on purpose.
+        assert!(
+            rows.iter()
+                .all(|r| !r.fields.is_empty() || (r.heading && r.target == Target::Nothing))
+        );
     }
 
     #[test]

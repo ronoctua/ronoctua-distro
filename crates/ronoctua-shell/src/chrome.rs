@@ -687,6 +687,454 @@ pub fn hint_spans(
     out
 }
 
+/// A window's list, as a [`ronoctua_design::Scroll`].
+///
+/// # The four windows that had no bar at all
+///
+/// The notification, power, Bluetooth and network windows are one shape: a
+/// hint line, and under it a list that scrolls. Not one of them drew a
+/// scrollbar — only the file manager's window did — so the wheel worked, there
+/// was nothing to grab, and nothing on screen said how far down a nine-section
+/// list one was. The owner reported it as *"na janela de redes a scrollbar não
+/// está funcionando"*, and the answer is that there was none to work.
+///
+/// The arithmetic is the one every other bar in this system already uses.
+/// `first_line` is where the list starts — the line under the hint.
+#[must_use]
+pub fn list_scroll(total: usize, lines: usize, offset: usize) -> ronoctua_design::Scroll {
+    ronoctua_design::Scroll {
+        total,
+        lines,
+        offset,
+        top: 0,
+    }
+}
+
+/// That list's bar, as a rectangle — `None` when the list fits.
+#[must_use]
+pub fn list_bar(
+    scroll: ronoctua_design::Scroll,
+    first_line: u16,
+    width: f32,
+    height: f32,
+) -> Option<ronoctua_render::quad::Quad> {
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    // THE LAST BAND TAKES THE LEFTOVER, which is what `Scroll::track` decides:
+    // a surface is not a whole number of lines, and a track that stops at
+    // `lines × line` leaves a strip of background under the thumb at the last
+    // page. The list IS the last band in these four windows.
+    let (x, y, w, h) = scroll.bar(f.width, top, f.bottom(), f.cell(), f.line())?;
+    Some(ronoctua_render::quad::Quad {
+        x,
+        y,
+        width: w,
+        height: h,
+        color: tokens::color::RULE_STRONG,
+    })
+}
+
+/// The air inside a container, in cells — `space.shelf.pad`, and the reason
+/// is written there.
+pub const SHELF_PAD: u16 = tokens::space::SHELF_PAD;
+
+/// How many cells a scrollbar takes.
+///
+/// # Why this is not a token
+///
+/// Because it is not a choice: it is a MEASUREMENT of what
+/// [`ronoctua_design::Scroll::bar`] returns. That function is handed the cell
+/// and answers with a rectangle exactly one cell wide, on every surface this
+/// shell draws — so a token here would be a second opinion about somebody
+/// else's arithmetic, and the day the two disagreed the box would reserve one
+/// width and the thumb would draw another.
+///
+/// It is a constant rather than `f.cell()` written out at each site because
+/// the box counts CELLS and the drawing counts pixels, and the conversion
+/// belongs to `Frame`.
+pub const BAR_CELLS: u16 = 1;
+
+/// How many cells of TEXT a row inside a container gets, at full width.
+///
+/// It is the two columns the row holds and the mark in front of them, and
+/// nothing else: a container is as wide as one of its rows needs, which is why
+/// one number serves all five of them.
+pub const SHELF_ROOM: u16 =
+    MARKER + tokens::space::VIEW_LABELCELLS + tokens::space::VIEW_VALUECELLS;
+
+/// Where a container is drawn, in the SURFACE's own cells, and how much text
+/// fits in it.
+///
+/// # Why the surface's cells and not the row's
+///
+/// Because the ground, the bar and the pointer are the three that read this,
+/// and all three work in the surface's — a door draws a row's cell `c` at
+/// `FIELDS_LEAD + c`. The row's cells go IN; the box comes out in the
+/// coordinate it is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShelfBox {
+    /// Its left edge, in the surface's cells.
+    pub from: u16,
+    /// How many cells wide it is.
+    pub cells: u16,
+    /// How many cells of text a row inside it gets — what a door hands to
+    /// [`field_pair`] as the room.
+    pub room: u16,
+}
+
+/// The box a container draws in, from the row's own `left` and `room`.
+///
+/// # Why a container is not the width of the surface
+///
+/// Because its bar goes at its own right edge, and a container as wide as the
+/// screen puts that bar a hundred columns from the list it belongs to. The
+/// owner asked for it in those words: *"o container não precisa ter toda a
+/// largura do espaço disponível... assim trazendo a scrollbar dos containers
+/// para mais perto de seus conteúdos"*.
+///
+/// # And it is the same width for every one of them
+///
+/// A box that followed the widest row it happened to hold would move its right
+/// edge every time a network appeared — which is horizontally the very thing a
+/// shelf exists to stop vertically. So it is [`SHELF_ROOM`] of text, clamped by
+/// what the row was given: one measure, and it stops being a measure the moment
+/// the surface is too narrow to hold it.
+///
+/// # What it can never reach
+///
+/// The page's own bar, which is the surface's LAST cell. A container is laid
+/// out as air, text, air, its own bar — and then one more cell of air before
+/// the surface's edge, so that on a narrow screen, where the box is clamped
+/// rather than measured, the two bars are still two bars with a gap between
+/// them.
+///
+/// That gap is the whole defect, twice over. The two thumbs were drawn in the
+/// SAME column and the owner saw them collide; then the container's ground,
+/// being the width of the surface and drawn afterwards, PAINTED OVER the
+/// page's thumb — which is how a scrollbar comes to disappear and change size
+/// while nobody is touching it.
+#[must_use]
+pub fn shelf_box(left: u16, room: u16) -> ShelfBox {
+    let at = FIELDS_LEAD + left;
+    let from = at.saturating_sub(SHELF_PAD);
+    // THE AIR ON THE LEFT IS WHAT THERE IS ROOM FOR. On every surface this
+    // draws on it is `SHELF_PAD`; the subtraction is what keeps a door that
+    // starts its rows at cell zero from being given a negative edge.
+    let lead = at - from;
+    // AIR, BAR AND THE GAP: what the box spends to the right of its text.
+    let tail = SHELF_PAD + BAR_CELLS + SHELF_PAD;
+    let inner = SHELF_ROOM.min(room.saturating_sub(tail)).max(1);
+    ShelfBox {
+        from,
+        cells: lead + inner + SHELF_PAD + BAR_CELLS,
+        room: inner,
+    }
+}
+
+/// A container's own ground, as a rectangle.
+///
+/// # Why a shelf has a ground at all
+///
+/// Because nothing else on screen says where one ends. The air before a
+/// heading says where a SECTION starts, and a shelf is not a section — it is a
+/// list inside one, with a ceiling of its own, and the rows above and below it
+/// belong to the same section. The owner asked for it in those terms: a
+/// different and DISCREET background.
+///
+/// It is a change of ground and nothing else — no border, no radius, no shadow
+/// (invariant 15) — the same device the modeline and the notification band
+/// already use, one rung lower on the same ladder.
+#[must_use]
+pub fn shelf_ground(
+    shelf: ShelfBox,
+    first_line: u16,
+    lines: usize,
+    width: f32,
+    height: f32,
+) -> ronoctua_render::quad::Quad {
+    let f = Frame::of(width, height, first_line);
+    #[allow(clippy::cast_precision_loss)]
+    ronoctua_render::quad::Quad {
+        x: f32::from(shelf.from) * f.cell(),
+        y: f.y_of(first_line),
+        width: f32::from(shelf.cells) * f.cell(),
+        height: f.line() * lines as f32,
+        color: tokens::color::SURFACE_SHELF,
+    }
+}
+
+/// A container's bar: the same arithmetic, at its own right edge, and bounded
+/// by its band.
+///
+/// `scroll.lines` is the band's own height, so the track stops where the shelf
+/// does — a shelf is never the last band, and handing it the surface's bottom
+/// would run its thumb down into the section underneath.
+#[must_use]
+pub fn shelf_bar(
+    scroll: ronoctua_design::Scroll,
+    shelf: ShelfBox,
+    first_line: u16,
+    width: f32,
+    height: f32,
+) -> Option<ronoctua_render::quad::Quad> {
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    #[allow(clippy::cast_precision_loss)]
+    let bottom = top + f.line() * scroll.lines as f32;
+    let right = f32::from(shelf.from + shelf.cells) * f.cell();
+    let (x, y, w, h) = scroll.bar(right, top, bottom, f.cell(), f.line())?;
+    Some(ronoctua_render::quad::Quad {
+        x,
+        y,
+        width: w,
+        height: h,
+        color: tokens::color::RULE_STRONG,
+    })
+}
+
+/// Where a press at height `y` puts that list.
+///
+/// The whole TRACK answers, not the thumb — [`ronoctua_design::Scroll::offset_at`]
+/// is `thumb`'s own inverse, so nobody has to aim at a handle two rows tall.
+#[must_use]
+pub fn list_offset_at(
+    scroll: ronoctua_design::Scroll,
+    first_line: u16,
+    width: f32,
+    height: f32,
+    y: f32,
+) -> usize {
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    let track = scroll.track(top, f.bottom(), f.line());
+    scroll.offset_at(y - top, track, f.line())
+}
+
+/// Where a press at height `y` puts a SHELF, whose track is its own band.
+#[must_use]
+pub fn shelf_offset_at(
+    scroll: ronoctua_design::Scroll,
+    first_line: u16,
+    width: f32,
+    height: f32,
+    y: f32,
+) -> usize {
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    #[allow(clippy::cast_precision_loss)]
+    let track = (f.line() * scroll.lines as f32).max(f.line());
+    scroll.offset_at(y - top, track, f.line())
+}
+
+/// Is the pointer on that bar's track?
+///
+/// The bar is the surface's LAST CELL, which is the same edge the footer's
+/// region and the manager's four sections use.
+#[must_use]
+pub fn on_the_list_bar(
+    scroll: ronoctua_design::Scroll,
+    first_line: u16,
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+) -> bool {
+    if !scroll.cut() {
+        return false;
+    }
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    x >= f.width - f.cell() && y >= top && y <= f.bottom()
+}
+
+/// The same question for a band that is NOT the last one on the surface.
+///
+/// # Why it is a second function
+///
+/// Because a container's bar is drawn at ITS right edge and not at the
+/// surface's, and a press there has to reach the bar that was DRAWN at that
+/// height. Asking [`on_the_list_bar`] would answer for the wrong column and,
+/// with its track running to the surface's bottom, for every line below the
+/// band as well: the shelf's thumb would be visible and dragging it would move
+/// the whole list instead. Where a bar is drawn is where it is grabbed, and
+/// that promise needs both the band's own bottom and the box's own edge.
+#[must_use]
+pub fn on_the_band(
+    scroll: ronoctua_design::Scroll,
+    shelf: ShelfBox,
+    first_line: u16,
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+) -> bool {
+    if !scroll.cut() {
+        return false;
+    }
+    let f = Frame::of(width, height, first_line);
+    let top = f.y_of(first_line);
+    #[allow(clippy::cast_precision_loss)]
+    let bottom = top + f.line() * scroll.lines as f32;
+    // ITS OWN COLUMN: the last cell of the box, and never the surface's — see
+    // `shelf_box`.
+    let right = f32::from(shelf.from + shelf.cells) * f.cell();
+    x >= right - f.cell() && x < right && y >= top && y < bottom
+}
+
+/// The blank line that goes BEFORE a section's title, as a row.
+///
+/// # Why a row and not a door's decision
+///
+/// Because the cursor, the click and the scrollbar all count rows, and a blank
+/// line drawn by a door would put the three of them one line out of step with
+/// what is on screen.
+///
+/// # What it looks like, and how to recognise one
+///
+/// A heading with NO fields. It is skipped by the cursor for the reason every
+/// heading is, it draws nothing, and `fields.is_empty()` is what tells it from
+/// a title — which is what the `a_heading_is_never_alone` tests ask.
+///
+/// The owner read the absence off the screen: *"os títulos estão colados com
+/// os conteúdos acima deles"*. A section that begins immediately under the
+/// last row of the one before it does not begin anywhere.
+pub const AIR: Vec<crate::files::Field> = Vec::new();
+
+/// Where a value begins, in the ROW's own cells.
+///
+/// # One arithmetic, three views
+///
+/// The network, power and Bluetooth views are the same shape — a list of a
+/// label and a value — and each of them had written the placement itself.
+/// Between them they managed three different answers, two of them in the same
+/// file: a short value pushed to the last cell of the surface, a long one
+/// dropped back to a third of the row, and a fact placed at the third
+/// unconditionally. On a wide window the first of those puts `off` a hundred
+/// and fifty columns away from `aeroplane mode`, which is what the owner
+/// photographed.
+///
+/// A COLUMN, and not an edge: every value in a section starts in the same
+/// place, so reading down it is one movement. The column is
+/// `space.view.labelCells` (invariant 9 — a spacing is a token), clamped to
+/// half of what is left after the mark, so a narrow footer does not become two
+/// columns of nothing.
+///
+/// This is the rule `rule` and `divider` already established for separators:
+/// no view writes its own.
+#[must_use]
+pub fn value_column(left: u16, room: u16) -> u16 {
+    let for_text = room.saturating_sub(MARKER);
+    text_left(left) + tokens::space::VIEW_LABELCELLS.min(for_text / 2).max(1)
+}
+
+/// How many cells the mark in front of a row takes: the glyph and its air.
+///
+/// It is spent on EVERY row of the three views, answering or not, so that the
+/// labels line up — an indent that only some rows pay is a ragged edge, which
+/// is harder to read than no mark at all.
+pub const MARKER: u16 = tokens::space::VIEW_MARKERCELLS;
+
+/// Where a row's TEXT begins, once the mark in front of it is paid for.
+///
+/// A heading does not pay it: a section title standing two cells left of its
+/// own rows is what says it is a title, and it costs no glyph to say so.
+#[must_use]
+pub const fn text_left(left: u16) -> u16 {
+    left + MARKER
+}
+
+/// The label and the value of one row, placed and cut.
+///
+/// An EMPTY value gives the label the whole row, because a row with nothing on
+/// the right is not a definition — it is a sentence, and cutting it at the
+/// value column would cut it for no reason. `hit` and `explain` are the
+/// caller's to fill in afterwards: this decides WHERE, never what a click does.
+#[must_use]
+pub fn field_pair(
+    left: u16,
+    room: u16,
+    acts: bool,
+    label: &str,
+    value: &str,
+    label_colour: tokens::Color,
+    value_colour: tokens::Color,
+) -> Vec<crate::files::Field> {
+    let piece = |at: u16, text: String, color: tokens::Color| crate::files::Field {
+        at,
+        text,
+        color,
+        hit: crate::files::Hit::Nothing,
+        explain: None,
+    };
+    let from = text_left(left);
+    let mut out: Vec<crate::files::Field> = Vec::with_capacity(3);
+    if acts && room > MARKER {
+        // THE MARK IS QUIET UNLESS THE CURSOR IS HERE. It says the row is a
+        // door, not that it is the interesting one — and on the focused row it
+        // follows the label into the accent so the whole line reads as one
+        // thing.
+        let colour = if label_colour == tokens::color::STATE_ACCENT {
+            label_colour
+        } else {
+            tokens::color::TEXT_DIM
+        };
+        out.push(piece(left, tokens::icon::ROW_ACTS.to_string(), colour));
+    }
+    let for_text = room.saturating_sub(MARKER);
+    // THE COLUMN IS A MINIMUM, NOT A CEILING.
+    //
+    // A label longer than it pushes the value right instead of being cut. The
+    // column is what makes a section readable down one line, and cutting a
+    // label to keep it is the worse trade: `keep awake: no sleep, no idle
+    // action` is 36 cells beside a two-letter value, and cutting it to `keep
+    // awake: no s…` is exactly the defect the power view's own comment was
+    // written about. One row's value sitting further along costs a glance;
+    // a name nobody can read costs the row.
+    //
+    // What it may never do is push the value off the end: below three cells
+    // for the value the label yields again, and the elision comes back.
+    let at = value_column(left, room)
+        .max(from + ronoctua_render::layout::width(label) + 2)
+        .min((from + for_text).saturating_sub(3))
+        .max(value_column(left, room).min(from + 1));
+    let ends = from + for_text;
+    // AN EMPTY PIECE IS NOT A PIECE. Below the mark's own width there is no
+    // room for a label or a value, and elision hands back `""` — which draws
+    // nothing but still occupies a slot, at a column the row does not reach.
+    let mut put = |at: u16, text: String, colour| {
+        if !text.is_empty() {
+            out.push(piece(at, text, colour));
+        }
+    };
+    if value.is_empty() {
+        put(
+            from,
+            ronoctua_render::layout::elide_end(label, for_text),
+            label_colour,
+        );
+        return out;
+    }
+    put(
+        from,
+        // TWO CELLS OF AIR before the value, always.
+        //
+        // It was one, and one is not enough: `the tailnet connection` filled
+        // the column exactly and the screen read `this machine on the tailnet
+        // up` as a single phrase. A label longer than what is left is CUT
+        // here, which is the trade a fixed column makes — and that trade
+        // needs no check, because an ellipsis on a label is the one kind of
+        // defect that looking at the screen always finds.
+        ronoctua_render::layout::elide_end(label, at.min(ends).saturating_sub(from + 2)),
+        label_colour,
+    );
+    put(
+        at,
+        ronoctua_render::layout::elide_end(value, ends.saturating_sub(at)),
+        value_colour,
+    );
+    out
+}
+
 /// What colour a syntax role is drawn in.
 ///
 /// # Why the map lives HERE, and why there is one of it
@@ -736,8 +1184,10 @@ pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        FIELDS_LEAD, Frame, INSET, Piece, Register, cell_width, content_left_px, hint_spans,
-        key_text, split_at_the_modifier,
+        BAR_CELLS, FIELDS_LEAD, Frame, INSET, MARKER, Piece, Register, SHELF_PAD, SHELF_ROOM,
+        cell_width, content_left_px, field_pair, hint_spans, key_text, list_bar, list_offset_at,
+        list_scroll, on_the_band, on_the_list_bar, shelf_bar, shelf_box, shelf_ground,
+        split_at_the_modifier, text_left, value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -1054,5 +1504,362 @@ mod tests {
         // that a runtime assertion over two of them proves nothing at runtime
         // — this way it is the COMPILER that refuses.
         const { assert!(FIELDS_LEAD <= INSET) };
+    }
+
+    #[test]
+    fn the_value_column_does_not_follow_the_width() {
+        // THE DEFECT THIS HOLDS SHUT. The three views placed a short value at
+        // the surface's right edge, so widening the window moved the value and
+        // left the label where it was: on a 200-column window `off` sat a
+        // hundred and fifty columns from `aeroplane mode`. A column that grows
+        // with the screen is not a column.
+        let wide: Vec<u16> = [80u16, 120, 200, 400]
+            .into_iter()
+            .map(|columns| value_column(2, columns - 4))
+            .collect();
+        assert!(
+            wide.windows(2).all(|w| w[0] == w[1]),
+            "the value moved with the window: {wide:?}"
+        );
+        assert_eq!(wide[0], text_left(2) + tokens::space::VIEW_LABELCELLS);
+    }
+
+    #[test]
+    fn a_narrow_row_gives_the_value_half_and_draws_nothing_past_the_end() {
+        // A footer can be narrower than the label column, and there the column
+        // has to yield: at 24 cells of room, a 28-cell label column would put
+        // the value past the end of the row.
+        //
+        // AND WHAT IS CHECKED IS WHAT IS DRAWN. Below the mark's own width
+        // there is no room for a value at all, and the answer is to draw no
+        // value — not to place one at a column the row does not reach.
+        for room in 1u16..=tokens::space::VIEW_LABELCELLS * 2 {
+            for acts in [false, true] {
+                let fields = field_pair(
+                    2,
+                    room,
+                    acts,
+                    "a label of some length",
+                    "a value",
+                    tokens::color::TEXT_SECONDARY,
+                    tokens::color::TEXT_PRIMARY,
+                );
+                for f in &fields {
+                    let ends = f.at + ronoctua_render::layout::width(&f.text);
+                    assert!(
+                        ends <= 2 + room,
+                        "at {room} cells a field ran to {ends}: {:?}",
+                        f.text
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_with_no_value_keeps_the_whole_width_for_its_label() {
+        // "share this connection" is a row with nothing on the right. Cutting
+        // it at the value column would cut a sentence for no reason.
+        let long = "share this connection with the machines around this one";
+        let fields = field_pair(
+            2,
+            60,
+            false,
+            long,
+            "",
+            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_PRIMARY,
+        );
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].text, long,
+            "a sentence was cut at the value column"
+        );
+    }
+
+    #[test]
+    fn a_list_that_fits_has_no_bar_and_one_that_does_not_can_be_dragged_to_its_end() {
+        // FOUR WINDOWS HAD NO BAR AT ALL, which is what the owner reported as
+        // one not working. The two halves that make a bar a control rather
+        // than an ornament are here: it does not exist when there is nothing
+        // to scroll, and pressing at the bottom of the TRACK lands on the last
+        // page — the defect written down in `scroll.rs` is a thumb that stops
+        // half way down its own column.
+        let (w, h) = (600.0_f32, 400.0_f32);
+        let fits = list_scroll(4, 12, 0);
+        assert!(
+            list_bar(fits, 1, w, h).is_none(),
+            "a bar over a list that fits is a control that does nothing"
+        );
+
+        let long = list_scroll(200, 12, 0);
+        let bar = list_bar(long, 1, w, h).expect("a list of 200 in 12 lines has no bar");
+        let f = Frame::of(w, h, 1);
+        assert!(
+            bar.x >= f.width - f.cell(),
+            "the bar is not on the surface's last cell"
+        );
+        assert!(bar.height > 0.0 && bar.height <= f.bottom() - f.y_of(1));
+
+        // The bottom of the track is the last page, and the top is the first.
+        let last = list_offset_at(long, 1, w, h, f.bottom());
+        assert_eq!(last, 200 - 12, "the bottom of the track is not the end");
+        assert_eq!(list_offset_at(long, 1, w, h, f.y_of(1)), 0);
+
+        // AND THE TRACK IS WHERE IT IS DRAWN. A bar one cannot press is a bar
+        // that is not there.
+        assert!(on_the_list_bar(long, 1, w, h, f.width - 1.0, f.y_of(2)));
+        assert!(!on_the_list_bar(long, 1, w, h, 10.0, f.y_of(2)));
+        assert!(
+            !on_the_list_bar(fits, 1, w, h, f.width - 1.0, f.y_of(2)),
+            "a list that fits offered a track to grab"
+        );
+    }
+
+    #[test]
+    fn the_lists_bar_and_a_shelfs_bar_never_share_a_pixel() {
+        // THE OWNER SAW THEM COLLIDE: *"a scrollbar dos containers e a
+        // scrollbar do buffer inteiro estão se colidindo"*. Both were drawn on
+        // the surface's last cell, in the same colour — two thumbs in one line
+        // of pixels, one of them for a list the pointer was not on.
+        let (w, h) = (600.0_f32, 400.0_f32);
+        let f = Frame::of(w, h, 4);
+        let (left, room) = crate::network::extent(f.columns());
+        let shelf_of = shelf_box(left, room);
+        let outer = list_scroll(200, 12, 40);
+        let inner = list_scroll(30, 5, 3);
+        let list = list_bar(outer, 1, w, h).expect("the list has no bar");
+        let shelf = shelf_bar(inner, shelf_of, 4, w, h).expect("the shelf has no bar");
+
+        assert!(
+            list.x >= shelf.x + shelf.width || shelf.x >= list.x + list.width,
+            "the two bars overlap: the list at {}..{} and the shelf at {}..{}",
+            list.x,
+            list.x + list.width,
+            shelf.x,
+            shelf.x + shelf.width
+        );
+        // AND THERE IS A CELL BETWEEN THEM. Two thumbs of the same colour in
+        // neighbouring columns read as one bar of double width.
+        assert!(
+            list.x - (shelf.x + shelf.width) >= f.cell() - 0.5,
+            "the two bars are neighbours: {} to {}",
+            shelf.x + shelf.width,
+            list.x
+        );
+
+        // AND THE CONTAINER'S GROUND NEVER REACHES THE PAGE'S BAR.
+        //
+        // This is the second half of what the owner read off the screen: the
+        // ground was the width of the surface and was pushed AFTER the list's
+        // bar, so it painted the page's thumb out of existence wherever a
+        // shelf was on screen — *"ela acaba desaparecendo e mudando de
+        // tamanho"*. Order in the quad list cannot be asserted from here;
+        // geometry can, and geometry is what makes the order not matter.
+        let ground = shelf_ground(shelf_of, 4, 5, w, h);
+        assert!(
+            ground.x + ground.width <= list.x,
+            "the container's ground ({}..{}) covers the page's bar at {}",
+            ground.x,
+            ground.x + ground.width,
+            list.x
+        );
+        assert!(
+            ground.x > 0.0,
+            "the container is glued to the screen's edge"
+        );
+
+        // AND WHAT IS DRAWN IS WHAT IS GRABBED.
+        let on_shelf = shelf.x + shelf.width / 2.0;
+        assert!(
+            on_shelf < f.width - f.cell(),
+            "the shelf's bar is on the list's cell"
+        );
+        assert!(on_the_band(
+            inner,
+            shelf_of,
+            4,
+            w,
+            h,
+            on_shelf,
+            shelf.y + 1.0
+        ));
+        assert!(
+            !on_the_band(inner, shelf_of, 4, w, h, f.width - 1.0, shelf.y + 1.0),
+            "the list's own column answered for the shelf"
+        );
+
+        // AND THE SHELF'S TRACK STOPS AT ITS BAND: its thumb may not run down
+        // into the section underneath.
+        #[allow(clippy::cast_precision_loss)]
+        let band_bottom = f.y_of(4) + f.line() * inner.lines as f32;
+        assert!(
+            shelf.y + shelf.height <= band_bottom + 0.5,
+            "the shelf's thumb ran past its own band"
+        );
+    }
+
+    #[test]
+    fn a_container_is_narrower_than_the_screen_and_the_same_width_everywhere() {
+        // The owner asked for both halves: *"o container não precisa ter toda
+        // a largura do espaço disponível, seria melhor uma largura menor,
+        // assim trazendo a scrollbar dos containers para mais perto de seus
+        // conteúdos"* — and, of the shelves, *"deixando um tamanho padrão para
+        // todos"*.
+        //
+        // A WIDE SURFACE IS WHERE IT MATTERS: at 1920 px the row's own room is
+        // over a hundred and fifty cells, and a bar at the end of that is the
+        // defect. Below the measure the box is CLAMPED, which is the only
+        // honest answer when there is not enough screen for one.
+        let wide = shelf_box(1, 160);
+        assert_eq!(wide.room, SHELF_ROOM, "a wide screen shrank the container");
+        assert!(
+            wide.from + wide.cells < 160,
+            "the container took the whole row"
+        );
+
+        let narrow = shelf_box(1, 30);
+        assert!(narrow.room < SHELF_ROOM, "a narrow screen was not clamped");
+
+        // AND "EVERYWHERE" MEANS THE TWO DOORS.
+        //
+        // They feed this different numbers and both are right: the footer
+        // hands the SURFACE's columns, and the window hands columns already
+        // net of both margins (`network_window::recount`). The promise is not
+        // that the two boxes are equal — they cannot be, the surfaces differ —
+        // but that in either the container's bar, the page's bar and the text
+        // are three separate columns.
+        for columns in 8_u16..=240 {
+            for (door, cells) in [
+                ("the footer", columns),
+                ("the window", columns.saturating_sub(2 * FIELDS_LEAD)),
+            ] {
+                let (left, room) = crate::network::extent(cells);
+                let shelf = shelf_box(left, room);
+                let text_ends = shelf.from + shelf.cells - SHELF_PAD - BAR_CELLS;
+                assert!(
+                    text_ends > shelf.from,
+                    "{door} at {columns} columns: the box has no room for text"
+                );
+                assert_eq!(
+                    text_ends,
+                    FIELDS_LEAD + left + shelf.room,
+                    "{door} at {columns} columns: the ground does not end where the text does"
+                );
+                // THE PAGE'S BAR IS THE LAST CELL of the door's own surface,
+                // and the box may not reach it — nor sit against it.
+                assert!(
+                    shelf.from + shelf.cells + SHELF_PAD <= cells,
+                    "{door} at {columns} columns: the box ends at {}, and the page's bar is at {}",
+                    shelf.from + shelf.cells,
+                    cells - 1
+                );
+            }
+        }
+
+        // AND THE ROOM IS WHAT A ROW IS CUT TO, which is what keeps the text
+        // inside the box: label column, value column and the mark, and not one
+        // cell more.
+        assert_eq!(
+            SHELF_ROOM,
+            MARKER + tokens::space::VIEW_LABELCELLS + tokens::space::VIEW_VALUECELLS
+        );
+        let row = field_pair(
+            1,
+            wide.room,
+            true,
+            "a network with a very long name indeed, quite a long one",
+            "online · Linux · 100.64.12.34 · exit node",
+            tokens::color::TEXT_PRIMARY,
+            tokens::color::TEXT_SECONDARY,
+        );
+        for piece in &row {
+            assert!(
+                piece.at + ronoctua_render::layout::width(&piece.text) <= 1 + wide.room,
+                "a row ran out of its container: {} at {}",
+                piece.text,
+                piece.at
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_row_that_answers_wears_the_mark_and_both_line_up() {
+        // The owner asked for the difference and chose the mark over colour:
+        // it survives a palette nobody can separate by tone. What it must NOT
+        // do is move the text — a mark only some rows pay for is a ragged
+        // left edge, which is harder to read than no mark at all.
+        let acts = field_pair(
+            2,
+            60,
+            true,
+            "radio",
+            "on",
+            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_PRIMARY,
+        );
+        let fact = field_pair(
+            2,
+            60,
+            false,
+            "band",
+            "5 GHz",
+            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_PRIMARY,
+        );
+        assert_eq!(acts.len(), 3, "the row that answers has no mark");
+        assert_eq!(fact.len(), 2, "the row that does nothing wears one");
+        assert_eq!(acts[0].at, 2);
+        assert_eq!(acts[0].text, tokens::icon::ROW_ACTS.to_string());
+        assert_eq!(
+            acts[1].at, fact[0].at,
+            "the two labels start in different places"
+        );
+        assert_eq!(
+            acts[2].at, fact[1].at,
+            "the two values start in different places"
+        );
+    }
+
+    #[test]
+    fn a_label_longer_than_the_column_pushes_the_value_rather_than_being_cut() {
+        // THE COLUMN IS A MINIMUM. `keep awake: no sleep, no idle action` is
+        // 36 cells beside a two-letter value; cutting it to `keep awake: no
+        // s…` is the defect the power view's own comment was written about.
+        let long = "keep awake: no sleep, no idle action";
+        let fields = field_pair(
+            2,
+            80,
+            false,
+            long,
+            "on",
+            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_PRIMARY,
+        );
+        assert_eq!(fields[0].text, long, "the label was cut");
+        assert!(
+            fields[1].at > value_column(2, 80),
+            "the value did not move out of the label's way"
+        );
+        assert!(
+            fields[1].at >= 2 + MARKER + ronoctua_render::layout::width(long) + 2,
+            "the label ran into the value"
+        );
+
+        // AND A LABEL SO LONG THAT THE VALUE WOULD FALL OFF still yields.
+        let fields = field_pair(
+            2,
+            40,
+            false,
+            &"x".repeat(200),
+            "on",
+            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_PRIMARY,
+        );
+        for f in &fields {
+            let ends = f.at + ronoctua_render::layout::width(&f.text);
+            assert!(ends <= 2 + 40, "a field ran to {ends} in a row of 40");
+        }
+        assert_eq!(fields.len(), 2, "the value disappeared: {fields:?}");
     }
 }

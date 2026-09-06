@@ -933,7 +933,7 @@ fn main() -> Result<()> {
     }
     println!(
         "spacing   rule {rule} · grid {first_row}..{last_row} · footer \
-         {footer_line} de {ROWS} (sobra {left_over})"
+         {footer_line} of {ROWS} (left over {left_over})"
     );
 
     // ---- the search finds by TAG, in both languages and with or without accents ----

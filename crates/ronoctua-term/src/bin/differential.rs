@@ -16,8 +16,8 @@
 //! strong one without touching this file — just by adding the engine to the list.
 //!
 //! Usage:
-//!   diferencial <corpus-dir> <golden-dir>            compares
-//!   diferencial <corpus-dir> <golden-dir> --write_out   re-records
+//!   ronoctua-term-diff <corpus-dir> <golden-dir>            compares
+//!   ronoctua-term-diff <corpus-dir> <golden-dir> --write_out   re-records
 
 use std::path::Path;
 

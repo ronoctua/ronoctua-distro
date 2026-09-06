@@ -311,6 +311,8 @@ pkgs.testers.runNixOSTest {
         # `janela` — the `w` group's label, which the root list always has.
         # It was `buffer`, until the buffer commands moved under `w` and
         # the `b` prefix became the brain's.
+        # pt-BR: the OCR needle is the VALUE of a text key on screen
+        # (`group-window`), not a message of this test.
         assert "janela" in lowered, (
             f"the which-key list is not on screen in pt-BR; OCR read {read_back!r}"
         )

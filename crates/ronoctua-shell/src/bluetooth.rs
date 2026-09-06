@@ -1346,6 +1346,18 @@ impl Builder<'_> {
     }
 
     fn heading(&mut self, key: &str) {
+        // AIR FIRST, and never before the first title. See `chrome::AIR`: a
+        // section that starts immediately under the last row of the one above
+        // does not start anywhere, and the owner read that off the screen.
+        if !self.out.is_empty() {
+            self.out.push(Row {
+                fields: crate::chrome::AIR,
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                disabled: false,
+            });
+        }
         self.out.push(Row {
             fields: vec![Self::piece(
                 self.left,
@@ -1369,8 +1381,13 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         self.out.push(Row {
             fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
+                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
+                // The mark's indent is paid by every row of these views on
+                // purpose — an indent only some rows pay is a ragged edge —
+                // and a note that skipped it sat two cells left of everything
+                // around it.
+                crate::chrome::text_left(self.left),
+                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -1417,28 +1434,19 @@ impl Builder<'_> {
             (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_PRIMARY),
         };
         let value_colour = colour.filter(|_| !focused).unwrap_or(value_colour);
-        let width = layout::width(&value);
-        let value_at = if value.is_empty() {
-            self.left + self.room
-        } else if width <= self.room / 3 {
-            self.left + self.room.saturating_sub(width)
-        } else {
-            self.left + self.room / 3
-        };
-        let mut fields = vec![Self::piece(
-            self.left,
-            layout::elide_end(&label, value_at.saturating_sub(self.left + 1)),
-            label_colour,
-        )];
-        if !value.is_empty() {
-            fields.push(Self::piece(
-                value_at,
-                layout::elide_end(&value, (self.left + self.room).saturating_sub(value_at)),
-                value_colour,
-            ));
-        }
+        // ONE ARITHMETIC, and it is `chrome::field_pair` — see the comment on
+        // `chrome::value_column` for what the three copies of it had drifted
+        // into.
         self.out.push(Row {
-            fields,
+            fields: crate::chrome::field_pair(
+                self.left,
+                self.room,
+                target != Target::Nothing,
+                &label,
+                &value,
+                label_colour,
+                value_colour,
+            ),
             focused,
             heading: false,
             target,
@@ -1844,7 +1852,11 @@ mod tests {
         let t = texts();
         let v = View::fresh();
         let rows = v.rows(&a_scene(), 80, &t);
-        let headings = rows.iter().filter(|r| r.heading).count();
+        // TITLES, not the air before them — see `chrome::AIR`.
+        let headings = rows
+            .iter()
+            .filter(|r| r.heading && !r.fields.is_empty())
+            .count();
         assert_eq!(headings, 3, "radio, paired, nearby");
         // The unnamed stranger is hidden until `h`.
         let mut open = View::fresh();
@@ -2191,7 +2203,9 @@ mod tests {
         for scene in [Scene::default(), a_scene()] {
             let rows = View::fresh().rows(&scene, 80, &t);
             for (i, row) in rows.iter().enumerate() {
-                if !row.heading {
+                // THE AIR IS A HEADING WITH NO FIELDS (`chrome::AIR`), and
+                // what it is under is the title it introduces.
+                if !row.heading || row.fields.is_empty() {
                     continue;
                 }
                 assert!(

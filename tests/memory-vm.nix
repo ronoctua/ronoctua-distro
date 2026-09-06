@@ -89,7 +89,7 @@ pkgs.testers.runNixOSTest {
 
         journal = machine.succeed("journalctl -u panel --no-pager")
         for bad in ["panicked", "refused: the buffer did not declare the capability"]:
-            assert bad not in journal, f"o panel reportou: {bad}"
+            assert bad not in journal, f"the panel reported: {bad}"
 
     with subtest("the COMPOSITOR sees a window, not a region of ours"):
         machine.wait_until_succeeds(

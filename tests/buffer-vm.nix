@@ -116,7 +116,7 @@ pkgs.testers.runNixOSTest {
         )
         journal = machine.succeed("journalctl -u buffer --no-pager")
         for bad in ["drawing the frame failed", "preparing the text failed", "panicked"]:
-            assert bad not in journal, f"o buffer reportou: {bad}"
+            assert bad not in journal, f"the buffer reported: {bad}"
 
     with subtest("the component's key came out TRANSLATED on screen"):
         # The whole chain: component -> DisplayList -> i18n -> tokens -> wgpu ->
@@ -137,6 +137,8 @@ pkgs.testers.runNixOSTest {
             "${pkgs.tesseract}/bin/tesseract /tmp/buffer.png stdout --psm 6 2>/dev/null"
         ).strip()
         print(f"OCR: {read_back!r}")
+        # pt-BR: the OCR needle is the VALUE of a text key on screen
+        # (`cmd-mx-open`), not a message of this test.
         assert "executar" in read_back.lower(), (
             f"the key did not come out translated on screen; OCR read {read_back!r}"
         )
@@ -254,8 +256,13 @@ pkgs.testers.runNixOSTest {
         machine.sleep(2)
 
         journal = machine.succeed("journalctl -u format --no-pager")
-        for bad in ["drawing the frame failed", "panicked", "sem udisks2"]:
-            assert bad not in journal, f"o buffer de formatar reportou: {bad}"
+        # THE THIRD NEEDLE WAS `sem udisks2`, WHICH EXISTS NOWHERE. It was
+        # Portuguese, and it was also a guard that could never fire: the
+        # sentence the host actually writes when the daemon is absent is
+        # `udisks2 is off the bus` (`ronoctua_disks::Manager::read`). A needle
+        # nothing can produce is a subtest that passes by construction.
+        for bad in ["drawing the frame failed", "panicked", "udisks2 is off the bus"]:
+            assert bad not in journal, f"the format buffer reported: {bad}"
 
         # WHAT THE READING CARRIED, ASKED OF THE JOURNAL AND NOT OF THE PIXEL.
         #
@@ -278,6 +285,9 @@ pkgs.testers.runNixOSTest {
         assert "/dev/vda" in last, (
             f"the machine's root went away from the reading instead of coming refused:\n{last}"
         )
+        # The compared span is the VALUE of a text key, and a value exists in
+        # every declared language — the assertion accepts either.
+        # pt-BR: `format-needed-at`, in both .ftl files.
         assert "mora em" in last or "lives at" in last, (
             f"the root crossed over with no reason written beside it:\n{last}"
         )
@@ -360,10 +370,15 @@ pkgs.testers.runNixOSTest {
         # that it MOVES — with the cursor on the empty stick the line talks
         # about partition tables, and with it on the machine's root it talks
         # about why udisks would refuse. A caption could not do both.
+        # pt-BR: the OCR needle is the VALUE of a text key on screen
+        # (`format-tech-whole`), not a message of this test.
         assert "tabela" in read_back.lower(), (
             "with the cursor on the free disk, the technical line does not say what is going to be "
             f"written on it: {read_back!r}"
         )
+        # The compared span is the VALUE of a text key, drawn by the format
+        # buffer on the technical line — not a message of this test.
+        # pt-BR: `format-tech-needed`, in both .ftl files.
         assert "montado pelo sistema" in moved.lower(), (
             "with the cursor on the root, the technical line does not say why it does not do: "
             f"{moved!r}"

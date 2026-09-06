@@ -675,7 +675,7 @@ def emit_step(s: dict, wiring: dict[str, str], programs: dict[str, str]) -> list
         f"{name}() {{",
         f"  local id={shlex.quote(s['id'])}",
         '  if ! turned_on "$id"; then',
-        '    say "-- $id: desligado"',
+        '    say "-- $id: switched off"',
         '    record "$id" off 0',
         "    return 0",
         "  fi",
@@ -754,7 +754,7 @@ def emit_runner(
     if root_half:
         report = f"{wiring['state-dir']}/system.report"
         lock = f"{wiring['state-dir']}/system.lock"
-        who = "a metade privilegiada"
+        who = "the privileged half"
     else:
         report = '"$runtime"/user.report'
         lock = '"$runtime"/user.lock'
@@ -856,9 +856,9 @@ def emit_runner(
         "",
         "skip() {",
         '  if [ -n "$3" ]; then',
-        '    say "-- $1: pulado ($2: $3)"',
+        '    say "-- $1: skipped ($2: $3)"',
         "  else",
-        '    say "-- $1: pulado ($2)"',
+        '    say "-- $1: skipped ($2)"',
         "  fi",
         '  record "$1" "skipped-$2" 0',
         "}",
@@ -910,7 +910,7 @@ def emit_runner(
             "fi",
             'say "== $privileged"',
             f"if ! {shlex.quote(wiring['systemctl'])} start \"$privileged\"; then",
-            '  say "!! a metade privilegiada parou; veja: journalctl -u $privileged"',
+            '  say "!! the privileged half stopped; see: journalctl -u $privileged"',
             "  record system-half failed 0",
             "  exit 1",
             "fi",
@@ -933,7 +933,7 @@ def emit_runner(
             out += [f"{name} || true"]
     out += [
         "",
-        'say "== fim"',
+        'say "== end"',
         "exit 0",
         "",
     ]

@@ -307,7 +307,7 @@ TONES = {
 }
 
 
-def tom_de(seq: list[int]) -> str:
+def tone_of(seq: list[int]) -> str:
     """A sequence's skin tone, or empty.
 
     The FIRST modifier rules. There are sequences with two — the handshake between
@@ -341,7 +341,7 @@ def emoji_lines(emojis: list[dict], cldr: dict[str, dict], subtags: list[str]) -
         # The FAMILY also goes in as a tag, as with the others: the `Emoji` label
         # the panel shows has to find, when typed into the search, the whole
         # family — and it is the `symbols-filters` check that ties the two together.
-        tone = tom_de(e["seq"])
+        tone = tone_of(e["seq"])
         t_words = next((v[1] for v in TONES.values() if v[0] == tone), {}) if tone else {}
         tags = {}
         for language in subtags:
@@ -537,11 +537,11 @@ def build_index(
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ucd", type=pathlib.Path, required=True, help="share/unicode do UCD")
+    ap.add_argument("--ucd", type=pathlib.Path, required=True, help="the UCD's share/unicode")
     ap.add_argument("--font", type=pathlib.Path, required=True, help="the UNPATCHED font")
     ap.add_argument("--lexicon", type=pathlib.Path, required=True)
     ap.add_argument("--emoji-test", type=pathlib.Path, required=True)
-    ap.add_argument("--cldr", type=pathlib.Path, required=True, help="common/ do CLDR")
+    ap.add_argument("--cldr", type=pathlib.Path, required=True, help="the CLDR's common/")
     # The languages, from `assets/i18n/languages.nix`. The tags, the CLDR
     # bundles and the lexicon are all keyed on the subtag.
     ap.add_argument("--languages", required=True, nargs="+")
@@ -705,7 +705,7 @@ def main() -> int:
         print("       Anyone searching in Portuguese does NOT find these characters.", file=sys.stderr)
         print("       Translate their words in assets/lexicon/tags.en-pt.toml", file=sys.stderr)
         print("       — the queue, by frequency, is in the coverage.md this", file=sys.stderr)
-        print("       mesmo build gera.", file=sys.stderr)
+        print("       same build writes.", file=sys.stderr)
         sys.exit(1)
 
     if coverage < args.min_coverage:

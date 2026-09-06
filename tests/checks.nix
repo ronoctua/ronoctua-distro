@@ -38,6 +38,9 @@
   glyphdb,
   unicodedb,
   lucidedb,
+  # The face holding the marks this repository draws — a mark is an icon on
+  # the same modeline and answers the same band, but it lives in its own face.
+  marksdb,
   # The generated update table, so `updates-have-text` reads the list the
   # generator DERIVED instead of a hand-written copy of it.
   updatesTable,
@@ -1508,6 +1511,117 @@ let
     grep -q "collides with 634 codepoints" ${lucidedb.rangeTakenFails}/out_text.txt \
       || { echo "ERROR: the message does not say how many codepoints collide" >&2; exit 1; }
     echo "OK: the source range takes the build down, saying how many collide"
+  '';
+
+  # THE MARKS THIS REPOSITORY DRAWS — the fourth face, and the only one with no
+  # upstream font behind it.
+  #
+  # WHY THE FACE EXISTS AT ALL. A mark the interface has to draw and that is in
+  # none of the other faces meets two invariants at once: 10 says a UI icon is
+  # a glyph and no design system component consults a pixmap, 9 says a
+  # codepoint is a token resolved against a real cmap. Drawing it into a face
+  # of ours is the only door left, and `nix/marksgen.nix` is it.
+  #
+  # WHAT THIS ASSERTS BEYOND "THE FILE EXISTS": that every mark declared
+  # reached the cmap, that every mark is reached by a token, that each carries
+  # the ADVANCE its neighbours carry, and that its ink fits inside a reference
+  # icon's box. Both numbers are MEASURED here from the real font rather than
+  # written down — see the comment beside them.
+  marks-are-in-the-font = mkCheck "marks-are-in-the-font" [ pkgs.jq py ] ''
+    db=${marksdb.db}
+    for f in NoctuaMarks.ttf marks.json report.md; do
+      [ -s "$db/$f" ] || { echo "ERROR: $f is missing or empty" >&2; exit 1; }
+    done
+
+    declared=$(jq 'length' ${pkgs.writeText "marks-declared.json" (builtins.toJSON (import ../assets/icons/marks.nix))})
+    built=$(jq 'length' "$db/marks.json")
+    [ "$declared" = "$built" ] || {
+      echo "ERROR: $declared marks declared and $built in the face" >&2; exit 1; }
+
+    # EVERY `ours-` TOKEN RESOLVED. The icon table is what the shell reads; a
+    # mark that built but that no token reaches is a drawing nobody draws, and
+    # a token naming a mark that does not exist already fails the generator.
+    python3 - <<'PYEOF'
+    import json, sys
+    from fontTools.ttLib import TTFont
+    from fontTools.pens.boundsPen import BoundsPen
+
+    marks = json.load(open("${marksdb.db}/marks.json"))
+    icons = json.load(open("${glyphdb.db}/icons.json"))
+    font = TTFont("${marksdb.db}/NoctuaMarks.ttf", lazy=True)
+    cmap, shapes = font.getBestCmap(), font.getGlyphSet()
+
+    # THE BOX IS READ, NOT WRITTEN DOWN.
+    #
+    # It used to be `(0, 40, 600, 640)` typed here as well as copied by the
+    # generator — a second truth, and the wrong one: measured over the 6896
+    # `md-` glyphs of the built face there are 747 distinct ink boxes and that
+    # one is on 1992 of them. What IS constant is the advance, 600 for every
+    # one. So the reference is measured here too, and the rule is: the advance
+    # matches and the ink fits INSIDE.
+    nerd = TTFont(
+        "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf",
+        lazy=True,
+    )
+    nerd_cmap, nerd_shapes = nerd.getBestCmap(), nerd.getGlyphSet()
+    reference = nerd_cmap[int("${marksdb.reference}", 16)]
+    pen = BoundsPen(nerd_shapes)
+    nerd_shapes[reference].draw(pen)
+    BOX = tuple(round(v) for v in pen.bounds)
+    ADVANCE = int(nerd_shapes[reference].width)
+
+    bad = []
+    ours = {t: v for t, v in icons.items() if v["glyph"].startswith("ours-")}
+    if not ours:
+        sys.exit("ERROR: no icon token reaches a mark; the face draws for nobody")
+
+    # AND EVERY MARK IS REACHED, not just some mark by some token. The first
+    # version asked only whether the set was non-empty, so a second mark that
+    # nothing drew would have passed the very guard whose comment forbids it.
+    drawn = {v["glyph"][len("ours-"):] for v in ours.values()}
+    for orphan in sorted(set(marks) - drawn):
+        bad.append(f"the face draws `{orphan}` and no icon token reaches it")
+
+    for token, entry in sorted(ours.items()):
+        name = entry["glyph"][len("ours-"):]
+        if name not in marks:
+            bad.append(f"icon.{token} -> {entry['glyph']}, which the face does not hold")
+            continue
+        if entry["codepoint"] != marks[name]["codepoint"]:
+            bad.append(f"icon.{token} points at U+{entry['codepoint']:05X} and the face says "
+                       f"U+{marks[name]['codepoint']:05X}")
+            continue
+        if entry["codepoint"] not in cmap:
+            bad.append(f"icon.{token} is not in the face's cmap")
+            continue
+        pen = BoundsPen(shapes)
+        glyph = shapes[cmap[entry["codepoint"]]]
+        glyph.draw(pen)
+        got = tuple(round(v) for v in pen.bounds)
+        if not (got[0] >= BOX[0] and got[1] >= BOX[1] and got[2] <= BOX[2] and got[3] <= BOX[3]):
+            bad.append(f"icon.{token} draws at {got}, outside {reference}'s box {BOX}")
+        if int(glyph.width) != ADVANCE:
+            bad.append(f"icon.{token} advances {glyph.width} and every icon advances {ADVANCE}")
+
+    if bad:
+        print("ERROR: the marks do not match the icons they sit beside:", file=sys.stderr)
+        for line in bad:
+            print(f"       {line}", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {len(ours)} mark(s) drawn here, in the icons' own box {BOX}")
+    PYEOF
+  '';
+
+  # THE COLLISION GUARD SPEAKS, for the marks face — the negative fixture.
+  #
+  # The same defect Lucide's fixture is about, and the reason the range is
+  # `U+F3000` and not something convenient: the face asked for by name beats
+  # the fallback chain, so a mark sharing a codepoint with a Nerd Fonts glyph
+  # comes out drawn as ANOTHER icon. Not tofu, which one sees — a pretty and
+  # wrong drawing, which nobody catches by looking.
+  marks-range-taken-fails = mkCheck "marks-range-taken-fails" [ ] ''
+    grep -q "collides with" ${marksdb.rangeTakenFails}/out_text.txt       || { echo "ERROR: the message does not say the range collides" >&2; exit 1; }
+    echo "OK: a taken range takes the build down, saying which face answers for it"
   '';
 
   # THE PANEL ANSWERS THE HOST — driven on the real component.
@@ -3758,7 +3872,7 @@ let
   # answers for `U+E0A0`, publishing Lucide in the origin range means drawing the
   # wrong symbol. The day that changes, the check fails and someone re-reads the
   # decision instead of rediscovering it through the screen.
-  renderer-loads-three-faces = mkCheck "renderer-loads-three-faces" [ ] ''
+  renderer-loads-four-faces = mkCheck "renderer-loads-four-faces" [ ] ''
     ${rust.workspace}/bin/ronoctua-test-faces
   '';
 
@@ -3873,7 +3987,7 @@ let
 
     def read(language):
         raw = pathlib.Path(f"{language}.png").read_bytes()
-        assert raw[:8] == b"\x89PNG\r\n\x1a\n", f"{language}: assinatura PNG errada"
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n", f"{language}: wrong PNG signature"
         at, chunks = 8, {}
         while at < len(raw):
             size = struct.unpack(">I", raw[at : at + 4])[0]
@@ -3883,7 +3997,7 @@ let
             # THE CRC AGAINST A REAL IMPLEMENTATION. Our table is written by
             # hand; `zlib.crc32` is not.
             mine = zlib.crc32(kind + body)
-            assert mine == said, f"{language}: CRC de {kind!r}: {mine:08x} != {said:08x}"
+            assert mine == said, f"{language}: CRC of {kind!r}: {mine:08x} != {said:08x}"
             chunks.setdefault(kind, b"")
             chunks[kind] += body
             at += 12 + size
@@ -5315,6 +5429,208 @@ let
   # The rule is structural: a file that implements `KeyboardHandler` asks for
   # a keyboard that repeats. The footer is the ONE exception and says why in
   # its own line — repeating a leader key is always a mistake.
+  # EVERY WINDOW THAT SCROLLS A LIST DRAWS A BAR FOR IT.
+  #
+  # WHAT THIS IS ABOUT. Four windows — notifications, power, Bluetooth and
+  # network — scroll one list under a hint line, and not one of them drew a
+  # scrollbar: the wheel worked, there was nothing to grab, and nothing on
+  # screen said how far down a nine-section list one was. Only the file
+  # manager's window had one. The owner reported it as the network window's
+  # bar "not working", and the answer was that there was none to work.
+  #
+  # WHY A CHECK AND NOT FOUR TESTS. Because the defect is an ABSENCE, and an
+  # absence is exactly what a unit test of the window cannot see — the same
+  # argument `every-window-repeats` beside this one makes about a keyboard
+  # that does not repeat. A fifth window would inherit the hole in silence.
+  every-list-window-has-a-bar = mkCheck "every-list-window-has-a-bar" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    # THE MANAGER'S WINDOW IS THE EXCEPTION, and it is the one that already
+    # had a bar: it has FOUR bands rather than one list, so it asks `Scroll`
+    # per section instead of going through `chrome::list_bar`.
+    EXCEPT = {"files_window.rs"}
+    wrong, windows = [], 0
+
+    # COMMENTS COME OFF FIRST. The strings below are grepped for, and four of
+    # these files name `chrome::list_bar` in a doc comment explaining why they
+    # have one — so a check that read the comments would pass on a window
+    # whose CALL had been deleted and whose prose survived. That is a check
+    # satisfiable by a sentence, which is worse than no check.
+    def code_of(text):
+        out = []
+        for line in text.splitlines():
+            bare = line.split("//")[0]
+            out.append(bare)
+        return "\n".join(out)
+
+    for f in sorted(shell.rglob("*_window.rs")):
+        body = code_of(f.read_text())
+        # A WINDOW THAT SCROLLS IS ONE THAT ANSWERS THE WHEEL.
+        #
+        # It was "has an offset", and that missed the manager's window
+        # entirely — it scrolls through `files::Section`, so the `EXCEPT`
+        # written for it and the comment explaining that were both dead, and
+        # `update_window` was detected only by the substring `offset: usize`
+        # inside `step_offset: usize`. Every window that scrolls a list
+        # handles `Axis`; nothing else does.
+        if "PointerEventKind::Axis" not in body:
+            continue
+        windows += 1
+        if f.name in EXCEPT:
+            continue
+        for what, why in (
+            ("chrome::list_bar", "draws no scrollbar"),
+            ("chrome::on_the_list_bar", "has a bar that cannot be pressed"),
+            ("chrome::list_offset_at", "has a bar that cannot be dragged"),
+            ("quad::Quads::new", "has no renderer to draw a rectangle with"),
+        ):
+            if what not in body:
+                wrong.append(f"{f.name}: {why} (`{what}` is not there)")
+
+    # SIX, and the number is the count with the manager in it. A guard set to
+    # exactly what the sweep found is a guard that proves nothing.
+    if windows < 6:
+        wrong.append(f"only {windows} scrolling windows found; the sweep is not reaching them")
+
+    if wrong:
+        print("ERROR: a list nobody can see the length of.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A window that scrolls draws its bar from `chrome::list_bar`,", file=sys.stderr)
+        print("       presses it through `on_the_list_bar` and drags it through", file=sys.stderr)
+        print("       `list_offset_at` — one arithmetic, the same one the footer's", file=sys.stderr)
+        print("       region and the manager's four sections already use.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {windows} scrolling windows, and every list has a bar to grab")
+    END
+  '';
+
+  # NO TWO LABELS OF ONE VIEW SAY THE SAME THING.
+  #
+  # THE DEFECT, read off the screen: *"há duas labels com nome `tailnet` e
+  # duas `address`, nada específicas e beginner friendly"*. There were THREE
+  # `tailnet`s — the section's title, the machine's state on it and the
+  # tailnet's own name — and THREE `address`es: this machine's, its address on
+  # the tailnet, and the one a VPN file would hand it. Each of the three was a
+  # different fact wearing the same word, in a list where the word is the only
+  # thing telling you which fact you are looking at.
+  #
+  # WHY A CHECK AND NOT CARE. Because a label is added by whoever adds the row,
+  # months apart, and the collision is only visible when the two rows happen to
+  # be on screen together. Nothing else in this tree can see it: `i18n-complete`
+  # asks whether a key HAS a value, never whether two keys have the same one.
+  #
+  # SCOPED PER VIEW, and that is the whole rule: two views may both say `on`,
+  # and they do. What may not happen is one list saying the same word twice.
+  labels-of-a-view-are-distinct = mkCheck "labels-of-a-view-are-distinct" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    ftl = pathlib.Path("${../assets/i18n}/en-GB.ftl").read_text()
+
+    # A VALUE MAY RUN OVER SEVERAL LINES — a Fluent selector does, and two
+    # selectors share their first line by construction. Reading only the first
+    # would call every plural in this tree a duplicate.
+    values, key, held = {}, None, []
+    for line in ftl.splitlines():
+        if re.match(r"^[a-z0-9-]+ = ", line):
+            if key:
+                values[key] = "\n".join(held).strip()
+            key, held = line.split(" = ", 1)[0], [line.split(" = ", 1)[1]]
+        elif key and (line.startswith((" ", "\t")) or line.strip().startswith("*[")):
+            held.append(line.strip())
+        elif not line.strip():
+            continue
+        else:
+            if key:
+                values[key] = "\n".join(held).strip()
+            key, held = None, []
+    if key:
+        values[key] = "\n".join(held).strip()
+
+    # THE PAIRS THAT MAY SAY THE SAME THING, each with its reason.
+    #
+    # WRITTEN DOWN, and not inferred from a table. The first version excluded
+    # every key named in `OF_THE_VIEW` on the theory that those are hint VERBS
+    # and never labels — and in the network view that is false: `a` teaches
+    # `network-airplane` on the hint line AND the row it acts on is labelled
+    # with the same key. A structural exclusion that is wrong for one view is a
+    # false negative nobody can see; three written lines cannot be.
+    ALLOWED = {
+        # The hint teaches the VERB and the row shows the ANSWER. Two
+        # registers, and the pair reading the same is the point.
+        ("bluetooth-accept", "bluetooth-yes"),
+        ("bluetooth-no", "bluetooth-refuse"),
+        # THE SAME FACT NAMED TWICE, which is the opposite of the defect. The
+        # manager draws a file's size and its date in two places at once —
+        # the listing's column heading and the facts panel's label, both born
+        # visible — for one fact each. Two words for one fact is what would be
+        # wrong; this pair saying the same thing is what makes them read as
+        # the same thing.
+        ("files-column-modified", "files-detail-modified"),
+        ("files-column-size", "files-detail-size"),
+    }
+
+    # THE VIEWS: one file each, and the keys are the ones IT names.
+    VIEWS = ["network.rs", "power.rs", "bluetooth.rs", "notifications.rs", "files.rs"]
+    wrong, checked = [], 0
+    for name in VIEWS:
+        f = shell / name
+        if not f.is_file():
+            wrong.append(f"{name}: the view is not there any more; fix this list")
+            continue
+        body = f.read_text()
+        # ONLY WHAT IS DRAWN AS A LABEL. A key named inside the trailing test
+        # module is an assertion about the screen, not a row on it.
+        #
+        # THE TRAILING ONE, and that is not pedantry: `files.rs` has a
+        # `#[cfg(test)]` on a function at line 209, so splitting at the FIRST
+        # one read 209 lines of an 18,000-line view — 7 of its 90 keys — while
+        # the check printed a total that looked like it had swept everything.
+        # Two duplicates were sitting in the part it never opened.
+        cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
+        code = body[: cut.start()] if cut else body
+        keys = sorted({
+            m.group(1).lower().replace("_", "-")
+            for m in re.finditer(r"key::([A-Z0-9_]+)", code)
+        })
+        # A FORMAT IS NOT A LABEL. `{ $dbm } dBm` is the shape of a number with
+        # a unit, and two different facts may well be measured in the same
+        # unit — a fact about decibels, not a defect.
+        keys = [k for k in keys if k in values and "{ $" not in values[k]]
+        checked += len(keys)
+        seen = {}
+        for k in keys:
+            seen.setdefault(values[k], []).append(k)
+        for said, which in sorted(seen.items()):
+            if len(which) > 1 and tuple(sorted(which)) not in ALLOWED:
+                wrong.append(f"{name}: {which} all say {said[:48]!r}")
+
+    if checked < 200:
+        wrong.append(f"only {checked} labels read; the sweep is not reaching them")
+
+    if wrong:
+        print("ERROR: one view, two labels, one word.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A label says WHAT the value is. Two rows of one list", file=sys.stderr)
+        print("       carrying the same word are two different facts a person", file=sys.stderr)
+        print("       has no way to tell apart — which is what the owner", file=sys.stderr)
+        print("       reported about `tailnet` and `address`.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {checked} labels across {len(VIEWS)} views, and no view repeats a word")
+    END
+  '';
+
   every-window-repeats = mkCheck "every-window-repeats" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -5677,7 +5993,7 @@ let
         exit 1
       fi
 
-      # AND THE MANAGER ESTA LA. A check that only forbids goes green on a
+      # AND THE MANAGER IS THERE. A check that only forbids goes green on a
       # shell that lost the feature altogether — the lesson `iso-has-no-toolchain`
       # already learned. `bsdtar` is the file manager's one new runtime
       # reference, so its absence means the compressing half is gone.
@@ -7335,6 +7651,10 @@ let
           # are the same circle filled and hollow, so the measurement is also
           # what keeps them the same drawing.
           "working-one", "working-two",
+          # THE MARK IN FRONT OF A ROW THAT ANSWERS `RET`, drawn shoulder to
+          # shoulder with the label in three views. It is the one glyph this
+          # change added inline, and it was the one glyph nothing measured.
+          "row-acts",
       ]
 
       face = "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"
@@ -7343,9 +7663,26 @@ let
       glyphs = f.getGlyphSet()
       icons = json.load(open("${glyphdb.db}/icons.json"))
 
+      # THE MARKS FACE IS ONE OF THE READERS TOO.
+      #
+      # A mark this repository draws is an icon on the same modeline, beside
+      # the same text, and it has to answer the same band — but it lives in
+      # another face (`nix/marksgen.nix`), so asking the Nerd Font for its
+      # codepoint is a `KeyError` and not a measurement. Both faces are asked,
+      # in the order the renderer asks them.
+      marks_face = TTFont("${marksdb.db}/NoctuaMarks.ttf", lazy=True)
+      marks_cmap = marks_face.getBestCmap()
+      marks_glyphs = marks_face.getGlyphSet()
+
       def ink(cp):
-          pen = BoundsPen(glyphs)
-          glyphs[cmap[cp]].draw(pen)
+          table, shapes = (cmap, glyphs) if cp in cmap else (marks_cmap, marks_glyphs)
+          if cp not in table:
+              raise SystemExit(
+                  f"U+{cp:05X} is in no face this check knows: neither the Nerd "
+                  "Font nor the marks."
+              )
+          pen = BoundsPen(shapes)
+          shapes[table[cp]].draw(pen)
           return pen.bounds
 
       x0, y0, x1, y1 = ink(ord("0"))
@@ -7373,6 +7710,7 @@ let
       # `deviations` of `owl.reference.nix`, in another file.
       WIDE = {
           "bluetooth-device-keyboard": "a keyboard is drawn wide and flat; nothing square in the font means keyboard",
+          "tailscale": "four dots, three across and one under the middle: three cells wide by two tall, and a dot has to stay round",
       }
       FLOOR = 0.60
 
@@ -8062,6 +8400,21 @@ let
     grep -q "icon tokens that do not resolve" ${glyphdb.negativeFixture}/out_text.txt \
       || { echo "ERROR: the negative fixture did not fail for the right reason" >&2; exit 1; }
     echo "OK: an icon token that does not exist takes the build down (section 6.3)"
+  '';
+
+  # THE SAME GUARD, DOWN THE OTHER BRANCH.
+  #
+  # `ours-<mark>` resolves against `marks.json` and the marks face, not against
+  # `glyphnames.json` and the Nerd Font — a whole second resolution path, whose
+  # three failure modes the fixture above cannot reach. It is the same argument
+  # that fixture's own comment makes, applied to the branch added beside it.
+  marks-unknown-token-fails = mkCheck "marks-unknown-token-fails" [ ] ''
+    test -f ${glyphdb.negativeMarkFixture}/out_text.txt \
+      || { echo "ERROR: the negative fixture produced no output" >&2; exit 1; }
+    grep -q "is not declared in assets/icons/marks.nix" \
+      ${glyphdb.negativeMarkFixture}/out_text.txt \
+      || { echo "ERROR: the fixture did not fail for the right reason" >&2; exit 1; }
+    echo "OK: a mark nobody drew takes the build down"
   '';
 
   # fontconfig <-> renderer parity — section 6.4.
@@ -8823,6 +9176,22 @@ let
         r"(?<![a-zà-ü])[a-zà-ü]{3,}"
         r"(?:ção|ções|cao|coes|mente|ência|encia|ância|ancia"
         r"|agem|idade|ndo|ado|ada|ados|adas|ido|ida|idos|idas"
+        # THE PLURALS OF THE THREE ABOVE, which were not: the group ends in
+        # `(?![a-zà-ü])`, so the `s` blocks the singular from ever matching.
+        # `ocorrencias` sat in a generator through every green battery for
+        # exactly that reason, while `ocorrencia` would have been caught.
+        r"|encias|ências|ancias|âncias|agens|idades"
+        # THE DIMINUTIVE, and the compounds that end in one: `entrelinha` sat
+        # in a signature because `FORBIDDEN`'s `linha` wants a word boundary
+        # in front of it and there is an `l` there instead. No English word
+        # ends in any of these four.
+        r"|inha|inho|inhas|inhos"
+        # THE IMPERFECT, which was missing and let a whole tense through:
+        # `deviam`, `cabiam`, `estavam`. `-aram|-eram|-iram` above are the
+        # PERFECT, and an assertion says what a thing OUGHT to do far more
+        # often than what it did. Three letters have to come before, so
+        # `priam` and the like do not reach it.
+        r"|iam|avam"
         r"|ou|ei|eu|iu|aram|eram|iram)"
         r"(?![a-zà-ü])"
     )
@@ -8845,6 +9214,77 @@ let
         # and `-ada` is its last three letters by accident.
         "collada",
     }
+    # THE TWO PROSE RULERS, and they are read by two passes.
+    #
+    # They lived beside pass 9, which is the only place that used them —
+    # and pass 7, which reads every comment in this tree, was left asking
+    # the NAME ruler about a SENTENCE. They are here, above both readers,
+    # so that one cannot have a ruler the other has not.
+    #
+    # TWO RULES, because Portuguese slips in two ways.
+    #
+    # GRAMMAR: a sentence in Portuguese carries a function word, and the ones
+    # below have no English homograph. `do` and `no` and `a` are left out for
+    # exactly that reason — "do not run" and "no such file" are English.
+    #
+    # VOCABULARY: a one-word message has no grammar to catch. So the verbs and
+    # nouns that were removed are listed, the same bargain `FORBIDDEN` above
+    # already makes: adding one is cheap, and taking one out has to be argued.
+    GRAMMAR = re.compile(
+        r"(?:^| )(da|das|na|nas|ao|aos|uma|umas|pelo|pela|não|nao|são|sao"
+        r"|sem|que|com|para|foi|pra|nem"
+        # `em`, `dos`, `nos` and the demonstratives, added after a review
+        # found three Portuguese assertions this pass could not see: "o
+        # progresso termina EM 100%", "OS sete toques viraram". `do`, `no`
+        # and `a` stay out for the reason above — they are English words.
+        # `numa` is `em`+`uma` CONTRACTED, and the rule above cannot see it:
+        # it asks for a space before `uma`, and there is an `n` there. "caber
+        # numa pagina" went through every green battery.
+        #
+        # `num` STAYS OUT, and that is the whole reason this note names it: it
+        # is an ordinary English abbreviation ("num rows", "the num of items"),
+        # so putting it here would report correct English as Portuguese. The
+        # feminine has no such twin.
+        r"|dos|este|esta|isso|seus|suas|numa|numas|como)(?: |$)"
+        # `em` NEEDS ITS OWN RULE, because it is also the typographic unit:
+        # "0.600 em at the normal width" is English about a measurement. So it
+        # counts only when a NUMBER does not come before it. `nos` is left out
+        # entirely — the Unicode database has a field by that name.
+        #
+        # AND A NUMBER IS NOT THE ONLY THING THAT COMES BEFORE IT. Written out,
+        # the unit takes an English determiner instead: "an em dash", "a full
+        # em", "thousandths of an em", "1000 units per em". Six comments in
+        # this tree say one of those, and they are correct English — the day
+        # this pass started reading prose they all came back as Portuguese at
+        # once, which is the shape of a ruler being wrong rather than six files
+        # being wrong. Portuguese never puts any of these words before `em`.
+        r"|(?<![0-9])(?<!\ban)(?<!\bthe)(?<!\bof)(?<!\bper)(?<!\bone)"
+        r"(?<!\bfull)(?<!\bhalf)(?:^| )em(?: |$)"
+    )
+    VOCABULARY = re.compile(
+        r"(?<![a-z])(ler|mudar|abrir|criar|gravar|apagar|mover|copiar|verbo|dono"
+        r"|senha|invalido|desconhecid[oa]|duplicar|esvaziar|clonar|esperar"
+        r"|consultar|pendurar|recusou|recusa|saiu|devolver|recriar|ajustar"
+        r"|renomear|permissao|inicio|contagem|devia|fechou|abriu|mostrando"
+        r"|hospedar|mandar|rodar|codificar|geracao|atualizacao|mestre|espacos"
+        r"|colar|folga|escolheu|pediu|verificado|bandeira|distingue|uso"
+        r"|diferencial|fatos|resgate|passou|razao|confirmacao|subiu|desceu"
+        r"|nasceu|interruptor|clicar|avancou|modificador|sumiu|ausente|diferenca"
+        r"|esperava|virou|tela|erro|linha|arquivo|pasta|qualquer"
+        # AND THE ONES A REVIEW FOUND IN ASSERTIONS. An `assert!`'s message is
+        # what a person reads when a battery goes red at three in the morning,
+        # and invariant 18 names `assert` explicitly.
+        r"|termina|terminam|progresso|toques|viraram|digite|glifo|glifos"
+        # AND THE ONES OF THE SENTENCE THAT ESCAPED ALL THREE RULERS:
+        # "dez itens deviam caber numa pagina". `devia` was already here and
+        # did not reach `deviam`, because of the `(?![a-z])` that ends this
+        # group — an ending needs the MORPH rule above, not this one.
+        r"|deve|devem|deviam|itens|caber|pagina|paginas"
+        # "o editor roda como a pessoa": the whole sentence was function words
+        # and these two, and no ruler had either.
+        r"|pessoa|pessoas|roda)(?![a-z])"
+    )
+
 
     def portuguese(text):
         """The first Portuguese word in `text`, by the list OR by the ending."""
@@ -8956,6 +9396,24 @@ let
     # functions, but not a method inside an `impl` and not one parameter of
     # either — which is how `colunas_da_tela` and `altura_da_tela` sat in the
     # signature of a function whose own name was English.
+    def top_level(text):
+        """The comma-separated pieces of a parameter list, brackets respected."""
+        out, piece, depth = [], [], 0
+        for ch in text:
+            if ch in "([{<":
+                depth += 1
+            elif ch in ")]}>":
+                if depth == 0:
+                    break
+                depth -= 1
+            if ch == "," and depth == 0:
+                out.append("".join(piece))
+                piece = []
+                continue
+            piece.append(ch)
+        out.append("".join(piece))
+        return out
+
     FN_NAME = re.compile(r"\bfn\s+([a-z_][a-z0-9_]*)")
     FN_ARGS = re.compile(r"\bfn\s+[a-z_0-9]*\s*(?:<[^>]*>)?\s*\((.*)")
     ARG = re.compile(r"^\s*(?:mut\s+)?([a-z_][a-z0-9_]*)\s*:")
@@ -8987,7 +9445,14 @@ let
                     # One line, and the arguments that fit on it: a signature
                     # broken over several lines still shows every name after a
                     # comma, and each of those is read as its own field below.
-                    for piece in fargs.group(1).split(")")[0].split(","):
+                    #
+                    # SPLIT AT DEPTH ZERO, not at the first bracket. It used to
+                    # cut at the first `)` in the text, and in
+                    # `fn aligned_tops(spans: &[(u16, f32)], line_height: f32)`
+                    # that `)` closes the TUPLE — so the pass read one argument
+                    # of two and `entrelinha` sat in the signature of a
+                    # function whose own name was English.
+                    for piece in top_level(fargs.group(1)):
                         a = ARG.match(piece)
                         if a:
                             word = a.group(1).lower().replace("_", "-")
@@ -9120,10 +9585,33 @@ let
     # in Portuguese from the first commit and stayed that way — comments AND
     # names. They are the code that runs on the GPU for every frame this
     # system draws, and nothing here had ever read a line of them.
-    MARKER = { ".rs": "//", ".nix": "#", ".py": "#", ".wgsl": "//" }
-    for suf in ("*.rs", "*.nix", "*.py", "*.wgsl"):
+    # AND PROSE IS MEASURED WITH THE PROSE RULERS.
+    #
+    # This pass used to ask `portuguese()`, which is the NAME ruler: `FORBIDDEN`
+    # plus a word ending. A comment is not a name — it is a sentence, and the
+    # two rulers written for sentences (`GRAMMAR`, the function words with no
+    # English homograph, and `VOCABULARY`, the words a message uses) were never
+    # applied to the largest body of prose in this tree. `# Ligue ou desligue
+    # em ronoctua.update.steps.` went into `/etc/ronoctua/updates.conf` through
+    # every green battery, with an English line directly above it.
+    def comment_is_portuguese(prose):
+        hit = GRAMMAR.search(prose) or VOCABULARY.search(prose)
+        return hit.group(0) if hit else portuguese(prose)
+
+    # AND `.toml` AND `.sh` ARE LANGUAGES TOO, by the same argument the shaders
+    # were added by: `crates/ronoctua-apps/Cargo.toml` explained itself by
+    # naming `estrangeiro::scope_from_cgroup`, a module that had been renamed
+    # to `foreign` — Portuguese AND stale, in a file no pass opened. The shell
+    # profile is the other one: it is a file a person reads, and invariant 18
+    # names its aliases explicitly.
+    #
+    # THE LEXICON IS THE EXCEPTION, and it is the dictionary's exception:
+    # `assets/lexicon/` is Portuguese on purpose, in the value AND in the
+    # comments that argue about a translation.
+    MARKER = { ".rs": "//", ".nix": "#", ".py": "#", ".wgsl": "//", ".toml": "#", ".sh": "#" }
+    for suf in ("*.rs", "*.nix", "*.py", "*.wgsl", "*.toml", "*.sh"):
         for f in sorted(root_dir.rglob(suf)):
-            if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
+            if any(x in f.parts for x in (".git", "result", "target", ".direnv", "lexicon")):
                 continue
             mark = MARKER[f.suffix]
             line_is = re.compile(r"^\s*" + re.escape(mark) + r"[!/]?\s?(.*)$")
@@ -9139,7 +9627,7 @@ let
                     prose = " ".join(run)
                     prose = re.sub(r"`[^`]*`", " ", prose)
                     prose = re.sub(r'"[^"]*"', " ", prose)
-                    hit = portuguese(prose.lower())
+                    hit = comment_is_portuguese(prose.lower())
                     if hit:
                         rel = f.relative_to(root_dir)
                         gaps.append(f"comment: {rel}:{first}: {hit}")
@@ -9147,7 +9635,7 @@ let
             if run:
                 prose = re.sub(r"`[^`]*`", " ", " ".join(run))
                 prose = re.sub(r'"[^"]*"', " ", prose)
-                hit = portuguese(prose.lower())
+                hit = comment_is_portuguese(prose.lower())
                 if hit:
                     gaps.append(f"comment: {f.relative_to(root_dir)}:{first}: {hit}")
 
@@ -9189,45 +9677,6 @@ let
     # `"o niri recusou {request}"`, `"registry do Wayland"`. They are the
     # sentences a person actually SEES when something goes wrong, which makes
     # them the half of invariant 18 that matters most.
-    #
-    # TWO RULES, because Portuguese slips in two ways.
-    #
-    # GRAMMAR: a sentence in Portuguese carries a function word, and the ones
-    # below have no English homograph. `do` and `no` and `a` are left out for
-    # exactly that reason — "do not run" and "no such file" are English.
-    #
-    # VOCABULARY: a one-word message has no grammar to catch. So the verbs and
-    # nouns that were removed are listed, the same bargain `FORBIDDEN` above
-    # already makes: adding one is cheap, and taking one out has to be argued.
-    GRAMMAR = re.compile(
-        r"(?:^| )(da|das|na|nas|ao|aos|uma|umas|pelo|pela|não|nao|são|sao"
-        r"|sem|que|com|para|foi|pra|nem"
-        # `em`, `dos`, `nos` and the demonstratives, added after a review
-        # found three Portuguese assertions this pass could not see: "o
-        # progresso termina EM 100%", "OS sete toques viraram". `do`, `no`
-        # and `a` stay out for the reason above — they are English words.
-        r"|dos|este|esta|isso|seus|suas)(?: |$)"
-        # `em` NEEDS ITS OWN RULE, because it is also the typographic unit:
-        # "0.600 em at the normal width" is English about a measurement. So it
-        # counts only when a NUMBER does not come before it. `nos` is left out
-        # entirely — the Unicode database has a field by that name.
-        r"|(?<![0-9])(?:^| )em(?: |$)"
-    )
-    VOCABULARY = re.compile(
-        r"(?<![a-z])(ler|mudar|abrir|criar|gravar|apagar|mover|copiar|verbo|dono"
-        r"|senha|invalido|desconhecid[oa]|duplicar|esvaziar|clonar|esperar"
-        r"|consultar|pendurar|recusou|recusa|saiu|devolver|recriar|ajustar"
-        r"|renomear|permissao|inicio|contagem|devia|fechou|abriu|mostrando"
-        r"|hospedar|mandar|rodar|codificar|geracao|atualizacao|mestre|espacos"
-        r"|colar|folga|escolheu|pediu|verificado|bandeira|distingue|uso"
-        r"|diferencial|fatos|resgate|passou|razao|confirmacao|subiu|desceu"
-        r"|nasceu|interruptor|clicar|avancou|modificador|sumiu|ausente|diferenca"
-        r"|esperava|virou|tela|erro|linha|arquivo|pasta|qualquer"
-        # AND THE ONES A REVIEW FOUND IN ASSERTIONS. An `assert!`'s message is
-        # what a person reads when a battery goes red at three in the morning,
-        # and invariant 18 names `assert` explicitly.
-        r"|termina|terminam|progresso|toques|viraram|digite|glifo|glifos)(?![a-z])"
-    )
     # The macros a message reaches a person through.
     #
     # THE LIST WAS TOO SHORT, and every absence was a whole vehicle. Twenty-six
@@ -9243,6 +9692,13 @@ let
         r"|\bformat!|\bwrite_str\(|\.name\(|\.set_title\(|\.set_app_id\("
     )
     LITERAL = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"')
+
+    # LOWERCASE, because `said_in_portuguese` measures the lowered text —
+    # written in capitals this pattern matched nothing at all, and the
+    # mutation that proves it is `"o Google Chrome (0,42 GiB)"`.
+    DECIMAL_COMMA = re.compile(
+        r"[0-9],[0-9]{1,2}\s*(?:[gmk]i?b|ghz|mhz|khz|ms|px|pt)\b"
+    )
 
     def morph_only(text):
         """The first word whose ENDING is Portuguese, or None."""
@@ -9283,7 +9739,7 @@ let
             # have no English homograph. `FORBIDDEN` is deliberately NOT
             # applied here: it holds `comando` and `arquivo`, which is what the
             # pt-BR VALUE of a key says on purpose, and a test may assert it.
-            m = GRAMMAR.search(low) or VOCABULARY.search(low)
+            m = GRAMMAR.search(low) or VOCABULARY.search(low) or DECIMAL_COMMA.search(low)
             return m.group(0) if m else morph_only(low)
         # ONE WORD has no grammar to catch it — but `FORBIDDEN` is still the
         # wrong ruler for it. Half the single-word literals in this tree are
@@ -9367,12 +9823,38 @@ let
     # reading every literal would fail on `FORBIDDEN` and `VOCABULARY` above,
     # which are Portuguese on purpose, and on the pt-BR half of every generated
     # table. A message is an ARGUMENT of something that prints.
+    #
+    # AND `assert` IS ONE OF THEM, which it was not: the VM tests are Python
+    # inside a `.nix`, their assertions are the sentence somebody reads when a
+    # boot goes wrong at three in the morning, and `tests/rescue-vm.nix` had
+    # half of one in Portuguese through every green battery this tree has run.
+    # Invariant 18 names `assert` explicitly; this pass is the only reader that
+    # reaches an assertion which is not written in Rust.
+    # AND FOUR MORE VEHICLES, each one a whole class that had no reader.
+    #
+    #   `help=`   is COMMAND-LINE HELP, which invariant 18 names in so many
+    #             words. Four generators described their own flags in
+    #             Portuguese — `"inicio da faixa, em hexadecimal"` — while the
+    #             identical English line already existed in a sibling.
+    #   `mkEnableOption`/`description` are what `nixos-option` prints and what
+    #             a person reads when deciding whether to turn something on.
+    #             One language fits there, so it is English (invariant 18), and
+    #             five options in four modules were Portuguese with English
+    #             ones beside them in the SAME file.
+    #   `say `    is the generated update script's own voice: it reaches the
+    #             journal and the terminal, and half its lines were English.
     SHOWN = re.compile(
-        r"\becho\s|\bprintf\s|\bprint\(|\bdie\(|\bcomplain\(|\bsys\.exit\(|\bsubtest\("
+        r"\becho\s|\bprintf\s|\bprint\(|\bdie\(|\bcomplain\(|\bsys\.exit\("
+        r"|\bsubtest\(|\bassert\s|\bhelp=|\bmkEnableOption\s|\bdescription\s*="
+        r"|\bsay\s"
     )
+    # SINGLE QUOTES COUNT TOO. A VM test writes Python INSIDE a Nix string, so
+    # its own assertions have to use the other quote — `f'sem resposta: …'` sat
+    # in `tests/extension-vm.nix` for exactly that reason.
     SPOKEN = re.compile(r'"([^"\n]*)"')
+    SPOKEN_SINGLE = re.compile(r"'([^'\n]*)'")
 
-    for suf in ("*.nix", "*.py"):
+    for suf in ("*.nix", "*.py", "*.sh"):
         for f in sorted(root_dir.rglob(suf)):
             if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
                 continue
@@ -9384,7 +9866,10 @@ let
                 # the Portuguese was on the third of them. Follow it until the
                 # brackets close, counting them OUTSIDE the strings.
                 span, i = whole_call(lines, n)
-                for s in SPOKEN.findall(span):
+                # BOTH QUOTES, SCANNED SEPARATELY. As one alternation the
+                # double-quoted span wins at the outer quote and swallows the
+                # single-quoted one, which is where the Portuguese was.
+                for s in SPOKEN.findall(span) + SPOKEN_SINGLE.findall(span):
                     s = re.sub(r"`[^`]*`", " ", s)
                     hit = said_in_portuguese(s)
                     if hit and not allowed_at(lines, n, i):
@@ -10744,6 +11229,8 @@ let
       files-polkit-is-narrow
       tor-polkit-is-narrow
       every-window-repeats
+      every-list-window-has-a-bar
+      labels-of-a-view-are-distinct
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
       keys-are-never-text
@@ -10800,6 +11287,8 @@ let
       files-polkit-is-narrow
       tor-polkit-is-narrow
       every-window-repeats
+      every-list-window-has-a-bar
+      labels-of-a-view-are-distinct
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
       keys-are-never-text
@@ -10884,6 +11373,9 @@ let
       lucide-filters
       lucide-table-generated
       lucide-range-taken-fails
+      marks-are-in-the-font
+      marks-range-taken-fails
+      marks-unknown-token-fails
       lucide-instance-fast
       memory-instance-fast
       memory-driven
@@ -10900,7 +11392,7 @@ let
       pot-provider-is-script-only
       extension-has-no-literal
       secrets-are-not-in-the-repo
-      renderer-loads-three-faces
+      renderer-loads-four-faces
       chrome-icons-match-the-text
       layout-fast
       shaping-fast
@@ -11139,6 +11631,9 @@ let
       lucide-filters
       lucide-table-generated
       lucide-range-taken-fails
+      marks-are-in-the-font
+      marks-range-taken-fails
+      marks-unknown-token-fails
       lucide-instance-fast
       memory-instance-fast
       memory-driven
@@ -11147,7 +11642,7 @@ let
       transfers-driven
       format-instance-fast
       format-driven
-      renderer-loads-three-faces
+      renderer-loads-four-faces
       # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
       # in the pixel, and the footer still responding with the application open —
       # the `--scope` is synchronous, and waiting for it froze everything.

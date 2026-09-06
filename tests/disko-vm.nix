@@ -94,13 +94,13 @@ disko.lib.testLib.makeDiskoTest {
         subs = machine.succeed("btrfs subvolume list /")
         print(subs)
         for sv in ["@root", "@home", "@nix", "@persist", "@log", "@snapshots", "@swap"]:
-            assert sv in subs, f"subvolume {sv} ausente"
+            assert sv in subs, f"the subvolume {sv} is not there"
 
     with subtest("zstd and noatime where 7.2 says"):
         for mp in ["/", "/nix"]:
             opts = machine.succeed(f"findmnt -n -o OPTIONS {mp}")
-            assert "compress=zstd" in opts, f"{mp} sem compress=zstd: {opts}"
-            assert "noatime" in opts, f"{mp} sem noatime: {opts}"
+            assert "compress=zstd" in opts, f"{mp} has no compress=zstd: {opts}"
+            assert "noatime" in opts, f"{mp} has no noatime: {opts}"
 
     with subtest("/persist exists from day one (impermanence by design)"):
         # Section 7.2 says to create it right away and route state there, even with
@@ -124,7 +124,7 @@ disko.lib.testLib.makeDiskoTest {
         attrs = machine.succeed("lsattr /swap/swapfile").split()[0]
         print(f"swapfile attributes: {attrs}")
         assert "C" in attrs, (
-            f"swapfile sem NOCOW (atributos: {attrs}). "
+            f"the swapfile has no NOCOW (attributes: {attrs}). "
             "Without it section 7.2's hibernation does not work."
         )
 

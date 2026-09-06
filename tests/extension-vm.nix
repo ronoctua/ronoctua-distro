@@ -206,7 +206,7 @@ pkgs.testers.runNixOSTest {
         "done = subprocess.run([host['path'], 'browser'],\n"
         "    input=struct.pack('<I', len(body)) + body, capture_output=True, timeout=30)\n"
         "out = done.stdout\n"
-        "assert len(out) > 4, f'sem resposta: {done.stderr!r}'\n"
+        "assert len(out) > 4, f'no answer: {done.stderr!r}'\n"
         "size = struct.unpack('<I', out[:4])[0]\n"
         "answer = json.loads(out[4:4 + size])\n"
         "assert answer.get('ok') is True, answer\n"

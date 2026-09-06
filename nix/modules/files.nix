@@ -95,10 +95,11 @@ in
         Which folders the manager's sidebar is born with, RELATIVE to home —
         names, never paths, for the same reason as `start`.
 
-        Whoever adjusts the sidebar afterwards does not touch this: what the person adds,
-        oculta ou remove vive em `$XDG_CONFIG_HOME/ronoctua/files-sidebar.json`
-        and beats this list. A folder from here that does not exist on the machine does not become
-        line, and that is not an error.
+        Whoever adjusts the sidebar afterwards does not touch this: what the person
+        adds, hides or removes lives in
+        `$XDG_CONFIG_HOME/ronoctua/files-sidebar.json` and beats this list. A folder
+        from here that does not exist on the machine does not become a line, and that
+        is not an error.
       '';
     };
   };

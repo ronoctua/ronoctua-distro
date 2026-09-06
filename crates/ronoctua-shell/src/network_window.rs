@@ -218,6 +218,10 @@ pub fn host_it() -> Result<()> {
         owed: false,
         gpu: None,
         text: None,
+        quads: None,
+        dragging: false,
+        lines_owed: 0.0,
+        dragging_shelf: None,
         view: crate::network::View::fresh(),
         wire,
         net,
@@ -275,6 +279,38 @@ struct NetworkWindow {
     owed: bool,
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
+    /// The one rectangle this window draws: the list's scrollbar.
+    ///
+    /// It had none — see `chrome::list_bar` for what that cost — and the wheel
+    /// was the only way down a nine-section list.
+    quads: Option<ronoctua_render::quad::Quads>,
+    /// Is the pointer dragging the bar?
+    ///
+    /// Held, because a drag is three events: the press that grabs it, every
+    /// motion until the release, and the release. Without the flag the list
+    /// would only move where the pointer was PRESSED.
+    dragging: bool,
+    /// How many LINES the wheel and the touchpad have asked for and not yet
+    /// been paid.
+    ///
+    /// LINES, and the unit is in the name on purpose: the footer's own
+    /// accumulator holds DETENTS, because one of its two modes turns a page per
+    /// detent. Two fields of one crate holding two units under one name is the
+    /// `ink-is-not-a-count` confusion, and it costs a factor of three.
+    ///
+    /// A touchpad sends fractions of a line and a mouse sends a detent as
+    /// fifteen pixels, which is also a fraction. Spending only the whole part
+    /// and keeping the rest is what makes a slow gesture move the list at the
+    /// speed of the finger instead of standing still and then jumping — the
+    /// reason is written over `surface::wheel_arrived`.
+    lines_owed: f64,
+    /// And WHICH shelf, when the bar grabbed was a shelf's.
+    ///
+    /// A shelf's bar is drawn at its CONTAINER's right edge and the list's at
+    /// the surface's (`chrome::shelf_box`), so a press has to
+    /// reach the bar that was drawn at that HEIGHT. Without this the shelf's
+    /// thumb was visible, and pressing it dragged the whole list.
+    dragging_shelf: Option<crate::network::Shelf>,
     view: crate::network::View,
     /// This window's own telephone to the daemon, and the access points it
     /// has seen.
@@ -348,6 +384,41 @@ impl NetworkWindow {
     }
 
     /// Keeps the cursor on screen, starting to scroll two rows before the edge.
+    /// Keeps the offset inside the list, and nothing else.
+    ///
+    /// # Why this is not `follow`
+    ///
+    /// Because a paint may not move the list. `follow` slaves the offset to
+    /// the CURSOR, and calling it from `paint` undid, on the same frame, every
+    /// offset the pointer had just set: a drag of the scrollbar and a turn of
+    /// the wheel both wrote an offset and then watched the paint put it back
+    /// under the cursor — which on a freshly-opened window (cursor on row 1)
+    /// means back to the top, every time. The bar looked like a bar that does
+    /// not work, which is exactly the report it was built to answer.
+    ///
+    /// The footer never made this mistake: `Footer::follow_cursor` is called
+    /// from seventeen places and every one of them is an EVENT.
+    ///
+    /// What a paint may do is keep the offset inside a list that changed size
+    /// under it — the watch thread brings a new reading while nobody is
+    /// touching anything — and honour an anchor the view asked for.
+    fn settle_offset(&mut self, rows: usize) {
+        let room = self.room();
+        if room == 0 {
+            return;
+        }
+        // A VIEW MAY ASK FOR A LINE AT THE TOP — see
+        // `network::View::take_anchor`. `TAB` lands on a section and has to
+        // SHOW it, and keeping the cursor visible is satisfied by the
+        // section's title being off the screen above it.
+        if let Some(top) = self.view.take_anchor() {
+            self.offset = top.min(rows.saturating_sub(room));
+            return;
+        }
+
+        self.offset = self.offset.min(rows.saturating_sub(room));
+    }
+
     fn follow(&mut self, rows: usize) {
         const MARGIN: usize = 2;
         let room = self.room();
@@ -572,10 +643,23 @@ impl NetworkWindow {
                     self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
                     &at,
                 );
+                // ONE KEY, ONE IDEA — the same rule the footer's door states:
+                // `f` on a Wi-Fi row and `f` on the same network in the
+                // remembered shelf are one act, and the profile's kind is what
+                // picks the sentence.
+                let saying = if self
+                    .net
+                    .saved
+                    .iter()
+                    .find(|s| s.at == at)
+                    .is_some_and(|s| s.kind == crate::network::WIRELESS)
+                {
+                    key::ECHO_NETWORK_FORGOTTEN
+                } else {
+                    key::ECHO_NETWORK_DELETED
+                };
                 self.message = Some(match self.wire.delete(&at) {
-                    Ok(()) => self
-                        .texts
-                        .t_with(key::ECHO_NETWORK_DELETED, &[("network", &name)]),
+                    Ok(()) => self.texts.t_with(saying, &[("network", &name)]),
                     Err(e) => refused(&e, &self.texts),
                 });
             }
@@ -633,6 +717,11 @@ impl NetworkWindow {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
         }
+        // AND THE ONE RECTANGLE THIS WINDOW DRAWS: the list's scrollbar.
+        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
+            Ok(q) => self.quads = Some(q),
+            Err(e) => tracing::error!(error = %e, "assembling the quads failed"),
+        }
         self.gpu = Some(g);
     }
 
@@ -654,6 +743,11 @@ impl NetworkWindow {
             self.view = view;
             errand
         };
+        // THE CURSOR MOVED, so the list follows it — here, on the EVENT, and
+        // never in the paint. See `settle_offset` for what following from a
+        // paint cost.
+        let rows = self.rows().len();
+        self.follow(rows);
         self.apply(errand);
     }
 
@@ -693,7 +787,7 @@ impl NetworkWindow {
         let size = tokens::font::SIZE_BASE;
         let margin = CONTENT_MARGIN;
         let rows = self.rows();
-        self.follow(rows.len());
+        self.settle_offset(rows.len());
 
         let mut spans: Vec<ronoctua_render::Span> = Vec::new();
 
@@ -738,6 +832,59 @@ impl NetworkWindow {
             }
         }
 
+        #[allow(clippy::cast_precision_loss)]
+        let (bar_w, bar_h) = (self.width as f32, self.height as f32);
+        let mut bar: Vec<ronoctua_render::quad::Quad> = Vec::new();
+        // EVERY CONTAINER ON SCREEN GETS ITS GROUND, and it goes in FIRST —
+        // before the page's bar and before every other rectangle. Quads draw in
+        // order and there is no depth test, so a ground pushed after the page's
+        // bar paints the page's THUMB out of existence wherever a container is
+        // on screen, which is what the owner read off the screen: *"ela acaba
+        // desaparecendo e mudando de tamanho"*. The box (`chrome::shelf_box`)
+        // now makes that impossible by geometry as well; the order is the
+        // second lock, and the footer's door has both.
+        let box_of = self.shelf_box();
+        for band in self.view.shelves(&rows) {
+            let (from, to) = (band.first, band.first + band.lines);
+            let seen_from = from.max(self.offset);
+            let seen_to = to.min(self.offset + self.room());
+            if seen_to > seen_from
+                && let Ok(line) = u16::try_from(seen_from - self.offset)
+            {
+                bar.push(crate::chrome::shelf_ground(
+                    box_of,
+                    FIRST_OF_LIST + line,
+                    seen_to - seen_from,
+                    bar_w,
+                    bar_h,
+                ));
+            }
+        }
+        // THE PAGE'S BAR, from the same `Scroll` every other bar in this system
+        // uses.
+        let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
+        bar.extend(crate::chrome::list_bar(scroll, FIRST_OF_LIST, bar_w, bar_h));
+        // AND A CONTAINER'S OWN, when the whole band is on screen — for the
+        // reason the footer's door writes down: a track shorter than its band
+        // would move the list by a different amount than the drag.
+        for band in self.view.shelves(&rows) {
+            let (from, to) = (band.first, band.first + band.lines);
+            if band.total <= band.lines {
+                continue;
+            }
+            if from < self.offset || to > self.offset + self.room() {
+                continue;
+            }
+            let Ok(line) = u16::try_from(from - self.offset) else {
+                continue;
+            };
+            let inner = crate::chrome::list_scroll(band.total, band.lines, band.offset);
+            if let Some(q) =
+                crate::chrome::shelf_bar(inner, box_of, FIRST_OF_LIST + line, bar_w, bar_h)
+            {
+                bar.push(q);
+            }
+        }
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
@@ -752,13 +899,93 @@ impl NetworkWindow {
             tracing::error!(error = %e, "preparing the text failed");
             return;
         }
-        if let Err(e) = gpu.frame(|pass| text.draw(ronoctua_render::Atlas::Pinned, pass)) {
+        if let Some(q) = self.quads.as_mut() {
+            q.prepare(
+                &gpu.device,
+                &gpu.queue,
+                gpu.config.width,
+                gpu.config.height,
+                &bar,
+            );
+        }
+        // THE RECTANGLE FIRST, THEN THE TEXT. There is no depth test: whoever
+        // draws later is on top, and a bar over a letter would hide it.
+        let quads_ref = self.quads.as_ref();
+        if let Err(e) = gpu.frame(|pass| {
+            if let Some(q) = quads_ref {
+                q.draw(pass);
+            }
+            text.draw(ronoctua_render::Atlas::Pinned, pass)
+        }) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
         if let Err(e) = self.conn.flush() {
             tracing::warn!(error = %e, "the flush failed");
         }
+    }
+
+    /// The box every container of this view is drawn in.
+    ///
+    /// ONE BOX FOR ALL OF THEM, and it comes from the same `extent` the rows
+    /// were built with — a ground measured from a different width than the
+    /// text inside it is a ground that cuts its own rows.
+    fn shelf_box(&self) -> crate::chrome::ShelfBox {
+        let (left, room) = crate::network::extent(self.columns);
+        crate::chrome::shelf_box(left, room)
+    }
+
+    /// Every shelf whose band is WHOLLY on screen, and the line it starts on.
+    ///
+    /// The same filter the drawing uses, so what can be grabbed is exactly
+    /// what was drawn — see `chrome::on_the_band` for why a band that is half
+    /// out gets no bar.
+    fn bands(&self, rows: &[crate::network::Row]) -> Vec<(u16, crate::network::Band)> {
+        self.view
+            .shelves(rows)
+            .into_iter()
+            .filter(|b| b.total > b.lines)
+            .filter_map(|b| {
+                let (from, to) = (b.first, b.first + b.lines);
+                if from < self.offset || to > self.offset + self.room() {
+                    return None;
+                }
+                let line = u16::try_from(from - self.offset).ok()?;
+                Some((FIRST_OF_LIST + line, b))
+            })
+            .collect()
+    }
+
+    /// The shelf whose BAR is under `(x, y)`, if any.
+    fn shelf_bar_at(
+        &self,
+        rows: &[crate::network::Row],
+        x: f32,
+        y: f32,
+    ) -> Option<crate::network::Band> {
+        #[allow(clippy::cast_precision_loss)]
+        let (w, h) = (self.width as f32, self.height as f32);
+        self.bands(rows).into_iter().find_map(|(line, b)| {
+            let inner = crate::chrome::list_scroll(b.total, b.lines, b.offset);
+            crate::chrome::on_the_band(inner, self.shelf_box(), line, w, h, x, y).then_some(b)
+        })
+    }
+
+    /// Where a drag of that shelf's bar puts it.
+    fn shelf_offset_at(
+        &self,
+        rows: &[crate::network::Row],
+        which: crate::network::Shelf,
+        y: f32,
+    ) -> Option<usize> {
+        #[allow(clippy::cast_precision_loss)]
+        let (w, h) = (self.width as f32, self.height as f32);
+        self.bands(rows).into_iter().find_map(|(line, b)| {
+            (b.shelf == which).then(|| {
+                let inner = crate::chrome::list_scroll(b.total, b.lines, b.offset);
+                crate::chrome::shelf_offset_at(inner, line, w, h, y)
+            })
+        })
     }
 
     /// Which drawn row is at height `y`.
@@ -789,6 +1016,10 @@ fn press_of(event: &KeyEvent) -> Option<crate::network::Press> {
         Keysym::Return | Keysym::KP_Enter => Press::Enter,
         Keysym::Up => Press::Up,
         Keysym::Down => Press::Down,
+        // `ISO_Left_Tab` IS `S-TAB`: xkb has already applied the shift, and a
+        // door that tested for a modifier would never see one.
+        Keysym::Tab => Press::Section,
+        Keysym::ISO_Left_Tab => Press::SectionBack,
         // AND THE BARE LETTERS, out of the view's own table — the footer
         // reads it the same way, so the two doors cannot teach different
         // keys. A letter with no press there is a letter that does nothing,
@@ -963,33 +1194,139 @@ impl PointerHandler for NetworkWindow {
     ) {
         let before = self.row_under_pointer;
         let mut clicked: Option<usize> = None;
-        let mut wheel = 0.0f64;
+        let mut turned = false;
+        // THE BAR IS A CONTROL, and a drag is three events. `Scroll::offset_at`
+        // maps any point of the TRACK, so nobody has to aim at the handle.
+        // THE ROWS ARE ONLY BUILT WHEN THE BAR IS IN PLAY.
+        //
+        // A `Motion` arrives on every pixel of movement, and these windows
+        // deliberately skip a REPAINT on motion because it "spent a GPU frame
+        // per row crossed". Building the whole list to answer "is the pointer
+        // on the bar?" would spend the more expensive half of that anyway.
+        // AND A SHELF'S DRAG COUNTS AS ONE. It did not, and the consequence was
+        // exactly the defect this bar was built to answer: the press builds the
+        // rows (a Press is in that frame) and the shelf jumps once, then every
+        // Motion frame carries no press, `rows` comes back empty, `bands(&[])`
+        // is empty and `shelf_offset_at` answers `None` — the thumb is held and
+        // the shelf is frozen until the button comes up. The footer's twin
+        // never had it: `drag_shelf_to` builds its own rows.
+        let bar_in_play = self.dragging
+            || self.dragging_shelf.is_some()
+            || events.iter().any(|e| {
+                matches!(e.kind, PointerEventKind::Press { button, .. } if button == LEFT_BUTTON)
+            });
+        let rows = if bar_in_play { self.rows() } else { Vec::new() };
+        let scroll = crate::chrome::list_scroll(rows.len(), self.room(), self.offset);
+        #[allow(clippy::cast_precision_loss)]
+        let (w, h) = (self.width as f32, self.height as f32);
+        let mut dragged: Option<usize> = None;
+        let mut shelved: Option<(crate::network::Shelf, usize)> = None;
         for e in events {
+            #[allow(clippy::cast_possible_truncation)]
+            let (px, py) = (e.position.0 as f32, e.position.1 as f32);
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.row_under_pointer = self.row_at(e.position.1);
+                    if let Some(which) = self.dragging_shelf {
+                        shelved = self.shelf_offset_at(&rows, which, py).map(|at| (which, at));
+                    } else if self.dragging {
+                        dragged = Some(crate::chrome::list_offset_at(
+                            scroll,
+                            FIRST_OF_LIST,
+                            w,
+                            h,
+                            py,
+                        ));
+                    } else {
+                        self.row_under_pointer = self.row_at(e.position.1);
+                    }
                 }
-                PointerEventKind::Leave { .. } => self.row_under_pointer = None,
+                PointerEventKind::Leave { .. } => {
+                    // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
+                    // grab usually delivers the release, but a popup grab, an
+                    // unmap or a broken grab drops it — and a `dragging` left
+                    // true makes the next ENTER, with no button held, jump the
+                    // list to wherever the pointer came in.
+                    self.dragging = false;
+                    self.dragging_shelf = None;
+                    self.row_under_pointer = None;
+                }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    self.row_under_pointer = self.row_at(e.position.1);
-                    clicked = self.row_under_pointer;
+                    // A SHELF'S BAR FIRST: it is drawn at its container's
+                    // right edge and the list's at the surface's, so the two
+                    // are different columns — but the list's TRACK runs the
+                    // whole height, so asking it first would let it answer for
+                    // a press on a container's thumb and drag the wrong list.
+                    if let Some(band) = self.shelf_bar_at(&rows, px, py) {
+                        self.dragging_shelf = Some(band.shelf);
+                        shelved = self
+                            .shelf_offset_at(&rows, band.shelf, py)
+                            .map(|at| (band.shelf, at));
+                    } else if crate::chrome::on_the_list_bar(scroll, FIRST_OF_LIST, w, h, px, py) {
+                        self.dragging = true;
+                        dragged = Some(crate::chrome::list_offset_at(
+                            scroll,
+                            FIRST_OF_LIST,
+                            w,
+                            h,
+                            py,
+                        ));
+                    } else {
+                        self.row_under_pointer = self.row_at(e.position.1);
+                        clicked = self.row_under_pointer;
+                    }
                 }
-                PointerEventKind::Axis { vertical, .. } => wheel += vertical.absolute,
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    self.dragging = false;
+                    self.dragging_shelf = None;
+                }
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    // THE ARITHMETIC IS SHARED — see `surface::wheel_arrived`.
+                    // Written out here it was `(pixels / line) * 3`, which
+                    // moved nothing for a slow gesture and three lines for the
+                    // next one: a list that jumps.
+                    crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    turned = true;
+                }
                 _ => {}
             }
+        }
+        if let Some((which, at)) = shelved {
+            self.view.put_shelf(which, at);
+            self.ask_paint();
+            return;
+        }
+        if let Some(offset) = dragged {
+            self.offset = offset;
+            self.ask_paint();
+            return;
         }
         // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
         // and `RET` is what joins, drops and brings up.
         if let Some(row) = clicked {
             let rows = self.rows();
             self.view.clicked(row, &rows);
+            self.follow(rows.len());
             self.ask_paint();
             return;
         }
-        if wheel.abs() >= 1.0 {
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-            #[allow(clippy::cast_possible_truncation)]
-            let by = (wheel / line_px.max(1.0)) as i64 * 3;
+        if turned {
+            let by = crate::surface::wheel_lines(&mut self.lines_owed);
+            if by == 0 {
+                // WHAT IS LEFT OVER STAYS. A gesture too small to be a line
+                // yet is not a gesture that did nothing — it is one that has
+                // not finished adding up.
+                return;
+            }
+            // THE WHEEL IS THE PAGE'S. A shelf took it, on the manager's rule
+            // that the gesture scrolls the section under the hand — but the
+            // manager's sections are COLUMNS side by side and a shelf is a
+            // band inside one list, so with five of them the page stopped
+            // scrolling almost everywhere. A shelf has its own bar, its own
+            // column and the arrows at its edge.
             let rows = self.rows().len();
             let last = rows.saturating_sub(self.room());
             self.offset = usize::try_from(

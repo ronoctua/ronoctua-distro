@@ -133,7 +133,7 @@ pkgs.testers.runNixOSTest {
         )
         journal = machine.succeed("journalctl -u term --no-pager")
         for bad in ["drawing the frame failed", "preparing the text failed", "panicked"]:
-            assert bad not in journal, f"o terminal reportou: {bad}"
+            assert bad not in journal, f"the terminal reported: {bad}"
 
     with subtest("what is typed reaches the program and comes back to the screen"):
         # With no window manager nobody calls `XSetInputFocus`: the injected key
@@ -271,6 +271,6 @@ pkgs.testers.runNixOSTest {
         )
         journal = machine.succeed("journalctl -u monitor --no-pager")
         for bad in ["panicked", "drawing the frame failed"]:
-            assert bad not in journal, f"o monitor reportou: {bad}"
+            assert bad not in journal, f"the monitor reported: {bad}"
   '';
 }

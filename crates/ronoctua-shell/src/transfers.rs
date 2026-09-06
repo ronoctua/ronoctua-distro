@@ -413,7 +413,7 @@ fn amounts(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
     // say how big the folder turned out to be, which is the whole reason
     // somebody asked.
     if let Some(answer) = job.answer {
-        return crate::files::size_text(answer);
+        return crate::files::size_text(answer, texts.decimal_mark());
     }
     if job.total == 0 {
         return String::new();
@@ -421,8 +421,8 @@ fn amounts(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
     match job.measure {
         Measure::Bytes => format!(
             "{} / {}",
-            crate::files::size_text(job.done),
-            crate::files::size_text(job.total)
+            crate::files::size_text(job.done, texts.decimal_mark()),
+            crate::files::size_text(job.total, texts.decimal_mark())
         ),
         Measure::Items => texts.t_with(
             ronoctua_i18n::key::TRANSFERS_ITEMS,

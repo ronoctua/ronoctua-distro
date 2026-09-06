@@ -70,6 +70,7 @@
   bufferBrain,
   iconSuperpack,
   lucideFontFile,
+  marksFontFile,
   primaryFontFile,
   src,
 }:
@@ -104,6 +105,15 @@ let
   # and the primary face wins the fallback chain — the icons would come out drawn
   # as some other symbol, with no tofu to give it away. See `nix/lucidegen.nix`.
   lucideFont = lucideFontFile;
+
+  # THE MARKS FACE, and it is the only one this repository DRAWS.
+  #
+  # A mark the interface has to draw and that exists in none of the other four
+  # faces has nowhere else to go: invariant 10 forbids a pixmap, invariant 9
+  # forbids a hard-coded codepoint. It is built out of `assets/icons/marks.nix`
+  # at `U+F3000`, past Nerd Fonts and past Lucide, and the generator checks the
+  # range is free in all three before writing. See `nix/marksgen.nix`.
+  marksFont = marksFontFile;
 
   # FILTERED source. Without this, any change under docs/ or nix/ would
   # invalidate the entire compilation cache.
@@ -202,6 +212,7 @@ let
     RONOCTUA_FONT_REGULAR = regularFont;
     RONOCTUA_FONT_EMOJI = emojiFont;
     RONOCTUA_FONT_LUCIDE = lucideFont;
+    RONOCTUA_FONT_MARKS = marksFont;
 
     # THE TWO PROGRAMS THE SHELL SPAWNS, BY PATH AND NOT BY NAME.
     #
@@ -448,7 +459,12 @@ rec {
   inherit cargoArtifacts craneLib;
   # Exposed so the devshell can offer the SAME environment as crane — see the
   # comment over there.
-  inherit regularFont emojiFont lucideFont;
+  inherit
+    regularFont
+    emojiFont
+    lucideFont
+    marksFont
+    ;
   # THE ONE TRUTH about where the components are. The wrapper below reads it;
   # so do the devshell and the nested loop, which run a binary `cargo` built and
   # that therefore has no wrapper. Three readers, one table.

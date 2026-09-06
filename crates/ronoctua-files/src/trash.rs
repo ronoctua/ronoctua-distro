@@ -273,7 +273,7 @@ mod tests {
             "/home/person/a file.txt",
             "/home/person/acentuação.md",
             "/home/person/100% mine#1.txt",
-            "/home/pessoa/simples",
+            "/home/person/plain",
         ] {
             assert_eq!(
                 decoded(&encoded(original)),

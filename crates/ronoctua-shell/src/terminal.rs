@@ -759,7 +759,7 @@ mod tests {
         // back to its own default, with none of our shortcuts.
         assert!(
             rule.contains("r#\""),
-            "a regex tem de ser string crua:\n{rule}"
+            "the regex has to be a raw string:\n{rule}"
         );
         assert!(rule.contains("open-floating true"), "{rule}");
     }

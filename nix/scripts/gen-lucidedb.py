@@ -317,7 +317,7 @@ def main() -> int:
         default=[],
         help="the embedded face the target range must not invade",
     )
-    p.add_argument("--base", required=True, help="inicio da faixa, em hexadecimal")
+    p.add_argument("--base", required=True, help="start of the range, in hexadecimal")
     p.add_argument("--min-coverage", type=float, default=0.0)
     p.add_argument("--cap-no-pt", type=int, default=0)
     p.add_argument("--out", type=pathlib.Path, required=True)
@@ -388,7 +388,7 @@ def main() -> int:
     # from the output tags would give a different number: `translate` deduplicates into sets
     # and adds synonyms, so the sum would be over a population that is not
     # the one we want to measure.
-    ocorrencias_totais = 0
+    occurrences_total = 0
 
     for i, name in enumerate(name_list):
         meta = json.loads((args.icons / f"{name}.json").read_text(encoding="utf-8"))
@@ -412,7 +412,7 @@ def main() -> int:
         for t in meta.get("tags", []):
             tokens += words_of(t)
 
-        ocorrencias_totais += sum(1 for t in tokens if t not in STOPWORDS)
+        occurrences_total += sum(1 for t in tokens if t not in STOPWORDS)
         tags, found = translate(tokens, lexicon, subtags, no_translation)
         # The SOURCE language is never "untranslated": the token IS the English
         # word. What gets reported is every other language.
@@ -446,10 +446,10 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    ocorrencias = sum(no_translation.values())
+    occurrences = sum(no_translation.values())
     kinds = len(no_translation)
     coverage = (
-        100.0 * (1 - ocorrencias / ocorrencias_totais) if ocorrencias_totais else 100.0
+        100.0 * (1 - occurrences / occurrences_total) if occurrences_total else 100.0
     )
 
     raw_text = [
@@ -459,8 +459,8 @@ def main() -> int:
         "",
         f"- Icons in the database: **{len(records)}**",
         f"- Categories: **{len(categories)}**",
-        f"- Apelidos: **{total_aliases}**",
-        f"- Faixa de desenho: **U+{base:04X}..U+{base + len(records) - 1:04X}**",
+        f"- Aliases: **{total_aliases}**",
+        f"- Drawing range: **U+{base:04X}..U+{base + len(records) - 1:04X}**",
         f"- With NO Portuguese word at all: **{len(without_pt)}**",
         "",
         "## By category",

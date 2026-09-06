@@ -46,7 +46,7 @@ let
   };
 in
 {
-  options.ronoctua.browser.enable = lib.mkEnableOption "o Google Chrome (0,42 GiB)" // {
+  options.ronoctua.browser.enable = lib.mkEnableOption "Google Chrome (0.42 GiB)" // {
     default = true;
   };
 

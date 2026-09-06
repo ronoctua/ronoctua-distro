@@ -405,13 +405,21 @@ struct Footer {
     /// have the same size and are different images — and the screen would show the
     /// previous one.
     clip_version: u64,
-    /// Fraction of a detent not yet spent by the wheel or by the touchpad.
+    /// How many LINES the wheel and the touchpad have asked for and not yet
+    /// been paid — the same unit the five windows keep.
     ///
     /// Without it the touchpad does not scroll: each of its events is worth a
     /// small fraction, and truncating event by event would give zero forever.
     /// Keeping the remainder, the pieces add up — which is what turns the
-    /// continuous gesture into lines.
-    detents: f64,
+    /// continuous gesture into movement.
+    ///
+    /// LINES AND NOT DETENTS, which it used to hold. This region has two
+    /// modes, and it was the paginating one that set the unit: a page per
+    /// detent. So the scrolling one spent three lines at a stroke and stood
+    /// still in between — the stutter the five windows were cured of, alive in
+    /// the door the report was about. The mode's STEP is where the difference
+    /// belongs, and that is where it is now.
+    lines_owed: f64,
     /// Is the pointer OVER the footer right now?
     under_pointer: bool,
     /// The scrollbar is being DRAGGED right now.
@@ -428,6 +436,14 @@ struct Footer {
     /// nothing listened — the owner tried the facts' with the mouse in both
     /// doors and neither moved.
     dragging_section: Option<(crate::files::Pane, crate::files::Axis)>,
+    /// Which SHELF of the network view has the thumb, when one does.
+    ///
+    /// A shelf's bar is drawn at its CONTAINER's right edge and the region's
+    /// at the surface's (`chrome::shelf_box`), so a press is answered by the
+    /// bar drawn in that column at that height — and once grabbed it has to
+    /// keep answering until the button comes up, or the drag would move the
+    /// shelf only where the pointer was pressed.
+    dragging_shelf: Option<crate::network::Shelf>,
     /// Which line of the visible PAGE is under the pointer.
     ///
     /// An index into the page, and not into the whole list: it is what the drawing
@@ -1480,16 +1496,79 @@ pub const LINES_PER_DETENT: f64 = 3.0;
 /// if the font changes. Without that it would be one more visual value
 /// outside the tokens (invariant 9).
 pub fn axis_detents(v: &smithay_client_toolkit::seat::pointer::AxisScroll, line_px: f64) -> f64 {
+    axis_lines(v, line_px) / LINES_PER_DETENT
+}
+
+/// The same event, in LINES.
+///
+/// # Why this is the primitive and the detent is derived from it
+///
+/// Because a detent is a MOUSE's unit and a line is the list's. A wheel says
+/// "one notch" and the answer is three lines; a touchpad says "so many pixels"
+/// and the answer is that many lines, which is what makes the list travel with
+/// the finger. Rounding the finger's pixels into notches first and multiplying
+/// back afterwards quantises it to three: the list stands still, stands still,
+/// and jumps — which is what the owner read off the screen.
+///
+/// The footer keeps counting DETENTS because one of its two modes turns a
+/// PAGE per detent, and a page is not a number of lines. The two are one
+/// arithmetic with a division between them.
+pub fn axis_lines(v: &smithay_client_toolkit::seat::pointer::AxisScroll, line_px: f64) -> f64 {
     if v.value120 != 0 {
-        return f64::from(v.value120) / 120.0;
+        return f64::from(v.value120) / 120.0 * LINES_PER_DETENT;
     }
     if v.discrete != 0 {
-        return f64::from(v.discrete);
+        return f64::from(v.discrete) * LINES_PER_DETENT;
     }
     if line_px <= 0.0 {
         return 0.0;
     }
-    v.absolute / (line_px * LINES_PER_DETENT)
+    v.absolute / line_px
+}
+
+/// One axis event, added to a door's accumulator of LINES.
+///
+/// # Why every list window needs one of these
+///
+/// Because the five of them worked the wheel out for themselves and all five
+/// reached the same answer — `(pixels / line) as i64 * 3` — which is wrong in
+/// both directions at once. Integer division throws away a fraction of a line,
+/// so a slow touchpad gesture moved NOTHING until it crossed a whole line and
+/// then moved THREE at once; and a mouse detent arrives as fifteen pixels,
+/// which is nought lines, so the wheel did nothing at all until two of them
+/// landed in the same frame. The owner read the result off the screen: a page
+/// that jumps.
+///
+/// The footer never had it. It keeps what is left over and spends only whole
+/// steps, which is the whole of what makes a continuous gesture continuous —
+/// and this is that arithmetic, in the one place the five doors can share.
+///
+/// THE HORIZONTAL AXIS COUNTS TOO, for the reason the footer gives: sideways
+/// is the natural touchpad gesture for "move on", and none of these lists
+/// scrolls horizontally, so it competes with nothing.
+pub fn wheel_arrived(
+    left: &mut f64,
+    vertical: &smithay_client_toolkit::seat::pointer::AxisScroll,
+    horizontal: &smithay_client_toolkit::seat::pointer::AxisScroll,
+) {
+    // The `stop` of a continuous gesture zeroes what was left: without it,
+    // half a line from the last gesture adds itself to the next and the first
+    // scroll comes out bigger than the finger asked for.
+    if vertical.stop || horizontal.stop {
+        *left = 0.0;
+    }
+    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+    *left += axis_lines(vertical, line_px) + axis_lines(horizontal, line_px);
+}
+
+/// How many whole LINES the accumulator has earned, taken out of it.
+///
+/// What is left STAYS, which is the half that makes the gesture add up.
+#[allow(clippy::cast_possible_truncation)]
+pub fn wheel_lines(left: &mut f64) -> i64 {
+    let whole = left.trunc();
+    *left -= whole;
+    whole as i64
 }
 
 /// What separates the key from what it does.
@@ -1710,10 +1789,11 @@ pub fn run() -> Result<()> {
         clip_qr: None,
         clip_image: None,
         clip_version: 0,
-        detents: 0.0,
+        lines_owed: 0.0,
         under_pointer: false,
         dragging: false,
         dragging_section: None,
+        dragging_shelf: None,
         row_under_pointer: None,
         cell_under_pointer: None,
         manual: false,
@@ -3689,6 +3769,8 @@ impl PointerHandler for Footer {
                     // DRAGGING: the pointer's position BECOMES the offset.
                     if let Some((pane, axis)) = self.dragging_section {
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
+                    } else if let Some(which) = self.dragging_shelf {
+                        self.drag_shelf_to(which, e.position.1);
                     } else if self.dragging {
                         self.drag_to(e.position.1);
                     }
@@ -3701,6 +3783,7 @@ impl PointerHandler for Footer {
                     self.band_hint = None;
                     self.brain_hint = None;
                     self.dragging = false;
+                    self.dragging_shelf = None;
                     if let Some(v) = self.files.as_ref() {
                         v.pointing(None);
                     }
@@ -3816,6 +3899,15 @@ impl PointerHandler for Footer {
                     if let Some((pane, axis)) = section {
                         self.dragging_section = Some((pane, axis));
                         self.drag_section_to(pane, axis, e.position.0, e.position.1);
+                    } else if let Some(which) = self.shelf_bar_at(e.position.0, e.position.1) {
+                        // A SHELF'S BAR FIRST. It is drawn at its container's
+                        // right edge and the region's at the surface's, so the
+                        // two are different columns — but the region's TRACK
+                        // spans the whole height, so asking it first would let
+                        // it answer for a press that landed on a container's
+                        // thumb and drag the page instead of the shelf.
+                        self.dragging_shelf = Some(which);
+                        self.drag_shelf_to(which, e.position.1);
                     } else if self.on_thumb(e.position.0, e.position.1) {
                         self.dragging = true;
                         self.drag_to(e.position.1);
@@ -3841,6 +3933,7 @@ impl PointerHandler for Footer {
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     self.dragging = false;
                     self.dragging_section = None;
+                    self.dragging_shelf = None;
                     self.dragging_fold = false;
                     self.spinning = None;
                 }
@@ -3856,20 +3949,10 @@ impl PointerHandler for Footer {
                     horizontal,
                     ..
                 } => {
-                    // The `stop` of a continuous gesture zeroes what was left:
-                    // without that, half a detent left over from the previous
-                    // gesture would add to the next one and the first scroll
-                    // would come out bigger than the finger asked for.
-                    if vertical.stop || horizontal.stop {
-                        self.detents = 0.0;
-                    }
-                    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-                    // THE HORIZONTAL AXIS COUNTS TOO. On a touchpad, turning
-                    // a page sideways is the natural gesture; and the region
-                    // has nowhere to scroll horizontally, so it competes with
-                    // nothing.
-                    self.detents +=
-                        axis_detents(&vertical, line_px) + axis_detents(&horizontal, line_px);
+                    // THE SAME ARITHMETIC THE FIVE WINDOWS USE, including the
+                    // `stop` that zeroes what was left and the horizontal axis
+                    // — see `wheel_arrived`.
+                    wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
                     // WHERE THE WHEEL WAS, because the opened line is drawn
                     // above the region and `row_under_pointer` answers `None`
                     // up there — see `pointer_on_fold`.
@@ -3936,33 +4019,60 @@ impl PointerHandler for Footer {
             return;
         }
 
-        // WHAT IS LEFT OF THE ACCUMULATOR STAYS. See the `detents` field: the
-        // touchpad sends fractions, and spending only the whole part is what lets
-        // the continuous gesture add up until it becomes a line.
-        #[allow(clippy::cast_possible_truncation)]
-        let whole = self.detents.trunc() as i32;
-        if whole != 0 {
-            self.detents -= f64::from(whole);
-            // ONE detent = one page where it paginates, three lines where it
-            // scrolls. The `page_by` already multiplies by the mode's step (which
-            // is 1 on scrolling), so the difference fits in the factor.
+        // THE OPENED LINE TAKES THE WHEEL FIRST, when the pointer is on it.
+        //
+        // It sits ABOVE the region, so nothing below here would ever be asked
+        // about it: `row_at` counts from the region's first line and answers
+        // `None` up there. A bar with no wheel is half a control in this
+        // footer — the manager's wheel-per-section was a whole piece of work
+        // for exactly that reason.
+        //
+        // IT TAKES LINES, which is what the accumulator holds.
+        if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(y)) {
             #[allow(clippy::cast_possible_truncation)]
-            let step = match self.navigation() {
-                Navigation::Page => 1,
-                Navigation::Scroll => LINES_PER_DETENT as i32,
-            };
-            // THE OPENED LINE TAKES IT FIRST, when the pointer is on it.
-            //
-            // It sits ABOVE the region, so nothing below here would ever be
-            // asked about it: `row_at` counts from the region's first line and
-            // answers `None` up there. A bar with no wheel is half a control
-            // in this footer — the manager's wheel-per-section was a whole
-            // piece of work for exactly that reason.
-            if self.fold.open && wheel_at.is_some_and(|y| self.pointer_on_fold(y)) {
-                self.scroll_fold(whole.saturating_mul(LINES_PER_DETENT as i32));
+            let whole = self.lines_owed.trunc() as i32;
+            if whole != 0 {
+                self.lines_owed -= f64::from(whole);
+                self.scroll_fold(whole);
                 self.owes_paint = true;
-                return;
             }
+            return;
+        }
+        // WHAT IS LEFT OF THE ACCUMULATOR STAYS. See the `lines_owed` field:
+        // the touchpad sends fractions, and spending only the whole part is
+        // what lets a continuous gesture add up until it becomes a step.
+        //
+        // AND THE STEP IS THE MODE'S. Where the region SCROLLS, a step is a
+        // line and the finger moves the list at its own speed; where it
+        // PAGINATES, a step is a page, and a page costs a whole detent —
+        // `LINES_PER_DETENT` lines of finger, the same distance a notch of the
+        // wheel asks for.
+        //
+        // It used to be the other way round: detents in the accumulator, and
+        // three lines spent at once on the scrolling side. That is the very
+        // stutter the five windows were just cured of — fourteen events moving
+        // nothing and the fifteenth moving three lines — kept alive in the
+        // door the report was written about.
+        let per_step = match self.navigation() {
+            Navigation::Page => LINES_PER_DETENT,
+            Navigation::Scroll => 1.0,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let whole = (self.lines_owed / per_step).trunc() as i32;
+        if whole != 0 {
+            self.lines_owed -= f64::from(whole) * per_step;
+            // A SHELF DOES NOT TAKE THE WHEEL, and that is a correction.
+            //
+            // It did, on the manager's rule that the gesture scrolls the
+            // section under the hand. But the manager's sections are COLUMNS
+            // side by side, and a shelf is a band inside one list: with five
+            // of them the pointer is over a shelf almost everywhere, so the
+            // page stopped scrolling at all. The owner reported exactly that —
+            // *"não consegui utilizar o gesto do touchpad para dar scroll na
+            // página"*.
+            //
+            // The wheel is the PAGE's. A shelf has its own bar, its own column
+            // and the arrows at its edge.
             // THE SECTION UNDER THE POINTER TAKES IT FIRST.
             //
             // Only the listing's offset is the footer's — it is the one the
@@ -3995,12 +4105,12 @@ impl PointerHandler for Footer {
                     crate::files::Pane::Info | crate::files::Pane::Preview => panel_room,
                     _ => ceiling,
                 };
-                if v.wheel(which, i64::from(whole.saturating_mul(step)), columns, room) {
+                if v.wheel(which, i64::from(whole), columns, room) {
                     self.owes_paint = true;
                     return;
                 }
             }
-            if self.page_by(whole.saturating_mul(step)) {
+            if self.page_by(whole) {
                 self.apply_geometry(self.interactivity());
                 self.ask_paint();
                 return;
@@ -4744,6 +4854,8 @@ impl Footer {
             // is what let it through — see `run-command-handles-every-key`,
             // which now reads this `match` instead of a list.
             "network-lan" => self.network_press(crate::network::Press::Discover),
+            "network-section-next" => self.network_press(crate::network::Press::Section),
+            "network-section-previous" => self.network_press(crate::network::Press::SectionBack),
             "network-forget" => self.network_press(crate::network::Press::Forget),
             // THE FILE IS READ AND LOOKED AT FIRST, and imported only after
             // somebody answered the reading — see `ronoctua_network::vpn`.
@@ -4779,8 +4891,17 @@ impl Footer {
                         &[
                             ("connected", &e.connected.to_string()),
                             ("percent", &e.percent.to_string()),
-                            ("up", &crate::network::readable_bytes(e.sent)),
-                            ("down", &crate::network::readable_bytes(e.received)),
+                            (
+                                "up",
+                                &crate::network::readable_bytes(e.sent, self.texts.decimal_mark()),
+                            ),
+                            (
+                                "down",
+                                &crate::network::readable_bytes(
+                                    e.received,
+                                    self.texts.decimal_mark(),
+                                ),
+                            ),
                         ],
                     ),
                     None => self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED),
@@ -5677,7 +5798,7 @@ impl Footer {
                 Some(match wire.delete(&at) {
                     Ok(()) => self
                         .texts
-                        .t_with(key::ECHO_NETWORK_DELETED, &[("network", &name)]),
+                        .t_with(Self::removed_saying(&self.net, &at), &[("network", &name)]),
                     Err(e) => self
                         .texts
                         .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
@@ -5701,6 +5822,27 @@ impl Footer {
     }
 
     /// The name of one stored profile — for the sentence about it.
+    /// The sentence for a profile that has just been removed.
+    ///
+    /// ONE KEY, ONE IDEA. From the person's side, `f` on a Wi-Fi row and `f`
+    /// on the same network in the remembered shelf are the same act — and they
+    /// were two sentences, "forgotten" and "deleted", because the first went
+    /// through `Errand::Forget` and the second through `Errand::Delete`. What
+    /// tells them apart is the profile's KIND, which the snapshot already
+    /// carries; nothing new had to cross.
+    fn removed_saying(net: &ronoctua_network::Snapshot, at: &str) -> &'static str {
+        let wireless = net
+            .saved
+            .iter()
+            .find(|s| s.at == at)
+            .is_some_and(|s| s.kind == crate::network::WIRELESS);
+        if wireless {
+            ronoctua_i18n::key::ECHO_NETWORK_FORGOTTEN
+        } else {
+            ronoctua_i18n::key::ECHO_NETWORK_DELETED
+        }
+    }
+
     fn name_of_saved(net: &ronoctua_network::Snapshot, at: &str) -> String {
         net.saved
             .iter()
@@ -6453,6 +6595,14 @@ impl Footer {
                 Sym::Up => Some(crate::network::Press::Up),
                 Sym::Down => Some(crate::network::Press::Down),
                 Sym::Enter => Some(crate::network::Press::Enter),
+                // ONLY THE SHIFTED HALF, because only it cannot be expressed
+                // by the table: `Key::simple` drops the modifier, so a shifted
+                // `TAB` would find the unshifted row and walk the ring the
+                // wrong way. The unshifted one goes through `OF_THE_VIEW` like
+                // every other key — rebinding it there has to move the footer
+                // too, and an arm for both halves would be the second truth
+                // this branch's own comment forbids.
+                Sym::Tab if key.mods.shift => Some(crate::network::Press::SectionBack),
                 otherwise => {
                     let notation = ronoctua_keymap::Key::simple(otherwise).notation();
                     crate::network::OF_THE_VIEW
@@ -7550,7 +7700,7 @@ impl Footer {
     ///
     /// Without it the region grows with the content: an `M-x` with 170 commands
     /// took the whole screen, and the footer stopped being a footer (invariant
-    /// 14). What does not fit becomes a PAGE — see [`Footer::pagina`].
+    /// 14). What does not fit becomes a PAGE — see [`Footer::pages`].
     ///
     /// # Why two limits
     ///
@@ -8794,6 +8944,93 @@ impl Footer {
             .bar(x + cell, top, f.bottom(), cell, f.line())
     }
 
+    /// The box every container of the network view is drawn in.
+    ///
+    /// ONE BOX FOR ALL FIVE, out of the same `extent` the rows were built
+    /// with: a ground measured from a different width than the text inside it
+    /// is a ground that cuts its own rows.
+    /// # Why it takes the columns instead of asking
+    ///
+    /// Because the drawing runs once per SCREEN and `screen_columns()` is the
+    /// first one's. With two outputs of different widths the box measured on
+    /// the wide one was drawn on the narrow one, and on that screen its bar
+    /// landed in the very cell the page's bar occupies — the collision this
+    /// box exists to end, on the monitor nobody was looking at while fixing it.
+    /// The pointer sites pass `screen_columns()`, which is the screen the
+    /// pointer is on, and that is the same number they resolve rows with.
+    fn shelf_box_of(columns: u16) -> crate::chrome::ShelfBox {
+        let (left, room) = crate::network::extent(columns);
+        crate::chrome::shelf_box(left, room)
+    }
+
+    /// A band on screen line `line`, cut to the container it falls in.
+    ///
+    /// # Why a band has to be cut at all
+    ///
+    /// Because the hover band says WHICH ROW the pointer is on, and a row
+    /// inside a container is as wide as the container. A band running the
+    /// width of the region would leave the box on one side and reach the
+    /// page's bar on the other, saying that the row extends where it does not.
+    /// It is the same rule `files::band_of` applies to the manager's panes.
+    ///
+    /// THE BANDS COME IN, and are not asked for again: `shelf_bands` rebuilds
+    /// the whole network list, and this door repaints on pointer motion.
+    fn cut_to_the_shelf(
+        bands: &[(u16, usize, crate::network::Band)],
+        shelf: crate::chrome::ShelfBox,
+        line: u16,
+        at: f32,
+        wide: f32,
+        cell: f32,
+    ) -> (f32, f32) {
+        let inside = bands
+            .iter()
+            .any(|(first, seen, _)| line >= *first && usize::from(line - *first) < *seen);
+        if !inside {
+            return (at, wide);
+        }
+        let left = f32::from(shelf.from) * cell;
+        // AND IT STOPS BEFORE THE CONTAINER'S OWN BAR: a band under the thumb
+        // would tint the one thing on that column that is not a row.
+        let right = f32::from(shelf.from + shelf.cells - crate::chrome::BAR_CELLS) * cell;
+        let from = at.max(left);
+        ((from), (right - from).clamp(0.0, wide))
+    }
+
+    /// The shelves of the network view that are WHOLLY inside the region, and
+    /// which screen line each one starts on.
+    ///
+    /// See the comment at the drawing site for why a band that is half out
+    /// does not get a bar.
+    fn shelf_bands(&self) -> Vec<(u16, usize, crate::network::Band)> {
+        let Some(view) = self.network.as_ref() else {
+            return Vec::new();
+        };
+        if self.view() != ViewState::Network {
+            return Vec::new();
+        }
+        let rows = self.network_rows();
+        let offset = self.current_offset();
+        let ceiling = self.expansion_ceiling();
+        let above = usize::from(self.network_remember.is_some());
+        view.shelves(&rows)
+            .into_iter()
+            .filter_map(|b| {
+                // THE VISIBLE SLICE, and not only the bands that fit whole:
+                // the GROUND follows whatever is on screen, because a shelf
+                // half out of the region still has to say where it is. Only
+                // the BAR asks for the whole band — see the drawing site.
+                let from = (b.first + above).max(offset);
+                let to = (b.first + above + b.lines).min(offset + ceiling);
+                if to <= from {
+                    return None;
+                }
+                let line = self.first_of_expansion() + u16::try_from(from - offset).ok()?;
+                Some((line, to - from, b))
+            })
+            .collect()
+    }
+
     /// The first configured screen's size, which is the one the pointer is on.
     fn pointer_screen(&self) -> Option<(f32, f32)> {
         #[allow(clippy::cast_precision_loss)]
@@ -8837,6 +9074,64 @@ impl Footer {
             .as_ref()
             .and_then(|v| v.panes(columns).listing_bar(columns))
             .map_or(last, |at| f64::from(crate::chrome::FIELDS_LEAD + at) * cell)
+    }
+
+    /// The rows of the network view, as both the drawing and the pointer see
+    /// them.
+    fn network_rows(&self) -> Vec<crate::network::Row> {
+        let Some(view) = self.network.as_ref() else {
+            return Vec::new();
+        };
+        let wire = self.network_wire.as_ref();
+        let seen: &[ronoctua_network::Network] = wire.map_or(&[], crate::network::Wire::seen);
+        let facts = crate::network::Facts {
+            net: &self.net,
+            seen,
+            watch: &self.network_watch,
+            tunnels: &self.tunnels,
+        };
+        view.rows(&facts, self.screen_columns(), &self.texts)
+    }
+
+    /// The shelf whose BAR is under `(x, y)`, if any.
+    ///
+    /// Only a band that is wholly inside the region has a bar, and this asks
+    /// exactly what the drawing asked — `shelf_bands` — so what can be grabbed
+    /// is what was drawn.
+    fn shelf_bar_at(&self, x: f64, y: f64) -> Option<crate::network::Shelf> {
+        let (w, h) = self.pointer_screen()?;
+        #[allow(clippy::cast_possible_truncation)]
+        let (px, py) = (x as f32, y as f32);
+        self.shelf_bands().into_iter().find_map(|(line, seen, b)| {
+            if seen < b.lines || b.total <= b.lines {
+                return None;
+            }
+            let inner = crate::chrome::list_scroll(b.total, b.lines, b.offset);
+            let shelf = Self::shelf_box_of(self.screen_columns());
+            crate::chrome::on_the_band(inner, shelf, line, w, h, px, py).then_some(b.shelf)
+        })
+    }
+
+    /// Scrolls one shelf from a drag of its own bar.
+    fn drag_shelf_to(&mut self, which: crate::network::Shelf, y: f64) {
+        let Some((w, h)) = self.pointer_screen() else {
+            return;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let py = y as f32;
+        let Some((line, _, band)) = self
+            .shelf_bands()
+            .into_iter()
+            .find(|(_, _, b)| b.shelf == which)
+        else {
+            return;
+        };
+        let inner = crate::chrome::list_scroll(band.total, band.lines, band.offset);
+        let at = crate::chrome::shelf_offset_at(inner, line, w, h, py);
+        if let Some(view) = self.network.as_mut() {
+            view.put_shelf(which, at);
+            self.owes_paint = true;
+        }
     }
 
     /// Puts the top of what is seen where the pointer is, dragging the bar.
@@ -9912,6 +10207,58 @@ impl Footer {
         }
     }
 
+    /// A view asked for a line at the top, and got it.
+    ///
+    /// It beats following the cursor for exactly one redraw: keeping the
+    /// cursor VISIBLE is satisfied by it sitting at the bottom of the region
+    /// with its section's title off the screen above it — which is what `TAB`
+    /// and a click on a modeline mark would otherwise produce. See
+    /// `network::View::take_anchor`.
+    fn took_the_anchor(&mut self) -> bool {
+        let showing = self.view() == ViewState::Network;
+        let Some(top) = self
+            .network
+            .as_mut()
+            .filter(|_| showing)
+            .and_then(crate::network::View::take_anchor)
+        else {
+            return false;
+        };
+        let ceiling = self.expansion_ceiling();
+        let total = self.expansion_len();
+        let top = top + usize::from(self.network_remember.is_some());
+        self.scroll_offset_to(top.min(last_offset(total, ceiling)));
+        true
+    }
+
+    /// Keeps the region inside a list that changed size under it — and
+    /// NOTHING else.
+    ///
+    /// # Why an arrival may not follow the cursor
+    ///
+    /// Because nobody asked it to. Three things arrive on their own clocks in
+    /// the network view — NetworkManager's snapshot, the tunnels' ten-second
+    /// reading and a finished sweep — and each of them called `follow_cursor`,
+    /// which SLAVES the offset to the cursor. So somebody reading the Wi-Fi
+    /// list with the cursor parked in the tailnet section had the page thrown
+    /// back to the tailnet a few seconds later, with nothing on screen having
+    /// been touched. The owner reported exactly that: *"está ocorrendo um
+    /// redirecionamento/scroll forçado para baixo, como se pulasse... para a
+    /// região da tailnet"*.
+    ///
+    /// It is the same split the five windows already make between
+    /// `settle_offset` and `follow`, arrived at there for the same reason. An
+    /// arrival clamps; a person's key follows.
+    fn settle_region(&mut self) {
+        if self.took_the_anchor() {
+            return;
+        }
+        let ceiling = self.expansion_ceiling();
+        let total = self.expansion_len();
+        let now = self.current_offset();
+        self.scroll_offset_to(now.min(last_offset(total, ceiling)));
+    }
+
     /// Scrolls to keep the focused item visible, with a margin.
     ///
     /// # Why a margin, and not "only when it leaves the screen"
@@ -9922,6 +10269,9 @@ impl Footer {
     /// screen already when you decide to go down — it is vi's `scrolloff`, and
     /// the request was exactly that: start following before the end.
     fn follow_cursor(&mut self) {
+        if self.took_the_anchor() {
+            return;
+        }
         let Some(cursor) = self.list_cursor() else {
             return;
         };
@@ -11716,6 +12066,35 @@ impl Footer {
             // THE FOCUS FIRST, and the pointer over it: they are never the
             // same row (`under_the_pointer` filters it out), so the order only
             // decides which is drawn under the scrollbar — and both are.
+            // A CONTAINER'S GROUND, BEFORE EVERY BAND DRAWN ON IT.
+            //
+            // Quads draw in order and there is no depth test, so this is where
+            // it has to be: pushed after the bands it would paint over the
+            // very row the pointer is on, and pushed after the page's bar — as
+            // it was, being the width of the surface — it painted the page's
+            // THUMB out of existence wherever a shelf was on screen. The owner
+            // read that off the screen twice: the two bars colliding, and then
+            // the page's bar disappearing and changing size on its own.
+            //
+            // AND IT IS DRAWN WHETHER OR NOT THE PAGE SCROLLS. It says where a
+            // container is, which is true of a list that fits as much as of
+            // one that does not.
+            //
+            // MEASURED ONCE PER FRAME: `shelf_bands` rebuilds the whole
+            // network list, and this door repaints on pointer motion. It was
+            // asked three times a frame, plus once per press.
+            let shelf = Self::shelf_box_of(columns);
+            let bands = self.shelf_bands();
+            #[allow(clippy::cast_precision_loss)]
+            for (first, seen, _) in &bands {
+                backgrounds.push(crate::chrome::shelf_ground(
+                    shelf,
+                    *first,
+                    *seen,
+                    width as f32,
+                    bottom,
+                ));
+            }
             if let Some((base, grid_y)) = focused_row {
                 let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
                 #[allow(clippy::cast_precision_loss)]
@@ -11799,6 +12178,15 @@ impl Footer {
                             width as f32,
                         )
                     },
+                );
+                // AND AT A CONTAINER'S EDGES, when the row is inside one.
+                let (band_at, band_wide) = Self::cut_to_the_shelf(
+                    &bands,
+                    shelf,
+                    first_of_expansion + grid_y,
+                    band_at,
+                    band_wide,
+                    cell,
                 );
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
@@ -11992,6 +12380,34 @@ impl Footer {
                         height: bh,
                         color: tokens::color::RULE_STRONG,
                     });
+                }
+            }
+
+            // AND EVERY SHELF THAT IS WHOLLY ON SCREEN GETS ITS OWN BAR.
+            //
+            // A shelf is a list inside the list (`network::Shelf`) with a
+            // ceiling of its own, and nothing else on screen says it holds
+            // more than it draws. It is the same `Scroll::bar` — a third band,
+            // like the drawer's, and not a second bar for one list.
+            //
+            // OUTSIDE `bar_showing`, which was a defect: that flag says the
+            // PAGE was cut, and a container is cut or not on its own account.
+            //
+            // WHOLLY ON SCREEN, and the rule is not fussiness: a band half out
+            // of the region would need a track shorter than the shelf, and
+            // dragging that track would move the list by a different amount
+            // than the drag. What is moving THEN is the region, and the
+            // region's own bar already says so.
+            #[allow(clippy::cast_precision_loss)]
+            for (first, seen, band) in &bands {
+                if *seen < band.lines || band.total <= band.lines {
+                    continue;
+                }
+                let scroll = crate::chrome::list_scroll(band.total, band.lines, band.offset);
+                if let Some(q) =
+                    crate::chrome::shelf_bar(scroll, shelf, *first, width as f32, bottom)
+                {
+                    backgrounds.push(q);
                 }
             }
 
@@ -13010,7 +13426,20 @@ impl Footer {
         if let (Some(v), Some(rows)) = (self.network.as_mut(), rows) {
             v.settle(&rows);
         }
-        self.follow_cursor();
+        // AND THE REGION IS ONLY CLAMPED — see `settle_region`.
+        //
+        // The first version of this followed the cursor when `settle` had MOVED
+        // it, on the argument that a cable unplugged takes six facts out from
+        // under it. A review took that apart: `settle` moves the cursor for two
+        // reasons and BOTH are the arrival's own doing — the list got shorter,
+        // or the row under the cursor became a heading. Of some eighty rows
+        // here, nineteen are headings and up to twenty-five more are a shelf's
+        // padding, so roughly one shift in three lands on one; the cursor
+        // shuffles by one, and the page is thrown wherever the cursor was.
+        // Which is the report, exactly. Nothing an arrival does is a reason to
+        // move the page: the cursor is a colour, and the next arrow key brings
+        // the region to it.
+        self.settle_region();
     }
 
     /// A fresh reading of the two tunnels, or the end of an order.
@@ -13190,7 +13619,11 @@ impl Footer {
             self.bluetooth_unasked();
         }
         if before != after || self.bluetooth.is_some() {
-            self.follow_cursor();
+            // AN ARRIVAL CLAMPS; IT DOES NOT FOLLOW. The radio answers on its
+            // own clock and moving the page under whoever is reading it is not
+            // this reading's business — the same rule the network view's
+            // arrivals keep, and `settle_region` writes down why.
+            self.settle_region();
             self.apply_geometry(self.interactivity());
             self.draw_and_paint();
         }
@@ -13764,10 +14197,89 @@ mod tests {
     }
 
     use super::{
-        BAND_CEILING, FOOTER_LINES, Footer, Grid, Inheritance, Measure, expansion_ceiling,
-        grid_for, item_at, last_offset, navigation_step, row_at_height, runs_of, screen_difference,
-        scrolling, tokens, usable_actions,
+        BAND_CEILING, FOOTER_LINES, Footer, Grid, Inheritance, LINES_PER_DETENT, Measure,
+        axis_detents, axis_lines, expansion_ceiling, grid_for, item_at, last_offset,
+        navigation_step, row_at_height, runs_of, screen_difference, scrolling, tokens,
+        usable_actions, wheel_arrived, wheel_lines,
     };
+
+    /// One axis event, as the compositor sends a CONTINUOUS gesture: pixels,
+    /// and neither `discrete` nor `value120`.
+    fn finger(px: f64) -> smithay_client_toolkit::seat::pointer::AxisScroll {
+        smithay_client_toolkit::seat::pointer::AxisScroll {
+            absolute: px,
+            discrete: 0,
+            value120: 0,
+            stop: false,
+            ..Default::default()
+        }
+    }
+
+    /// And as a mouse sends one notch.
+    fn notch(n: i32) -> smithay_client_toolkit::seat::pointer::AxisScroll {
+        smithay_client_toolkit::seat::pointer::AxisScroll {
+            absolute: 0.0,
+            discrete: 0,
+            value120: n * 120,
+            stop: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_slow_gesture_travels_with_the_finger_instead_of_jumping() {
+        // THE OWNER READ IT OFF THE SCREEN: *"está ocorrendo um
+        // redirecionamento/scroll forçado para baixo, como se pulasse"*. The
+        // five list windows each wrote `(pixels / line) as i64 * 3`, which
+        // throws the fraction away and then multiplies what is left by three:
+        // nothing, nothing, nothing, three lines.
+        let line = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let mut left = 0.0;
+        let mut moved = 0;
+        // A finger crossing four lines, a fifth of a line at a time.
+        for _ in 0..20 {
+            wheel_arrived(&mut left, &finger(line / 5.0), &finger(0.0));
+            let by = wheel_lines(&mut left);
+            assert!(
+                by <= 1,
+                "a fifth of a line moved {by} lines: the gesture jumps"
+            );
+            moved += by;
+        }
+        // NOTHING IS LOST AND NOTHING IS INVENTED: what the list moved plus
+        // what is still owed is exactly what the finger asked for. Asserting
+        // the total alone would be an assertion about the last floating-point
+        // bit — twenty fifths of a line add up to 3.999…, and the fourth line
+        // is owed rather than missing.
+        #[allow(clippy::cast_precision_loss)]
+        let travelled = moved as f64 + left;
+        assert!(
+            (travelled - 4.0).abs() < 1e-9,
+            "four lines of finger became {travelled}"
+        );
+
+        // AND A MOUSE NOTCH IS STILL THREE LINES, which is what every text
+        // viewer does and what the footer already did.
+        let mut left = 0.0;
+        wheel_arrived(&mut left, &notch(1), &finger(0.0));
+        #[allow(clippy::cast_possible_truncation)]
+        let expected = LINES_PER_DETENT as i64;
+        assert_eq!(wheel_lines(&mut left), expected);
+
+        // AND THE DETENT IS THE LINE, DIVIDED — one arithmetic, not two: the
+        // footer counts detents because one of its modes turns a page per
+        // detent.
+        for px in [0.0, 3.0, line, line * 7.5] {
+            let (a, b) = (
+                axis_lines(&finger(px), line),
+                axis_detents(&finger(px), line),
+            );
+            assert!(
+                (a - b * LINES_PER_DETENT).abs() < 1e-9,
+                "the two rulers disagree at {px} px: {a} lines against {b} detents"
+            );
+        }
+    }
 
     /// A line with no icon, measuring `(key, text)`.
     const fn measurement(key: u16, text: u16) -> Measure {
@@ -14111,7 +14623,7 @@ mod tests {
             "it used {} lines for 10 items: it did not use the width",
             g.lines
         );
-        assert!(g.per_page() >= 10, "dez itens deviam caber numa pagina");
+        assert!(g.per_page() >= 10, "ten items did not fit on one page");
     }
 
     #[test]

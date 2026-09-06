@@ -89,13 +89,13 @@ let
       # block a login.
       echo "ronoctua: doom sync"
       "$framework/bin/doom" sync --force
-      echo "ronoctua: pronto. Reinicie o daemon com: systemctl --user restart emacs"
+      echo "ronoctua: done. Restart the daemon with: systemctl --user restart emacs"
     '';
   };
 in
 {
   options.ronoctua.editor.emacs =
-    lib.mkEnableOption "o Emacs 30 e as dependencias do Doom (~0,6 GiB)"
+    lib.mkEnableOption "Emacs 30 and Doom's dependencies (~0.6 GiB)"
     // {
       default = true;
     };

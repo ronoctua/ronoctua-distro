@@ -85,10 +85,33 @@ pub const OPEN: &str = match option_env!("RONOCTUA_XDG_OPEN") {
 /// footer drew — and nothing would say so.
 const DECIDING_WIDTH: u16 = 80;
 
+/// What NetworkManager calls a Wi-Fi profile.
+///
+/// The same string [`ronoctua_network::Saved::tunnel`] tests the other two
+/// against, and it is the daemon's word rather than ours: a profile's `kind`
+/// is what came off the bus.
+pub const WIRELESS: &str = "802-11-wireless";
+
+/// THE ORDER IS THE TEACHING ORDER, and it is load-bearing: the hint line is
+/// CUT at the width it is given (`chrome::hint_spans` elides, it does not
+/// wrap), and this table is 174 cells in English against a footer that has
+/// about 114. So whatever goes last is not taught at any width anybody has.
+///
+/// The four movements come first — down, up, act, and the section ring — and
+/// the rest follows in the order somebody meets it.
 pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("<down>", "network-down"),
     ("<up>", "network-up"),
     ("RET", "network-connect"),
+    // THE SECTIONS, and this is the ring the owner asked for: ten sections in
+    // one list is a lot of `<down>`, and `TAB` is the key this system already
+    // uses to walk a ring (`files`, `notifications`).
+    //
+    // `S-TAB` is the keysym `ISO_Left_Tab` — xkb has already applied the shift
+    // by the time a door sees it, which is why the notation carries the
+    // modifier and the window does not test for one.
+    ("TAB", "network-section-next"),
+    ("S-TAB", "network-section-previous"),
     ("s", "network-scan"),
     ("r", "network-wifi-toggle"),
     ("d", "network-disconnect"),
@@ -126,6 +149,10 @@ pub enum Press {
     Discover,
     /// Bring a tunnel in from a file.
     Import,
+    /// To the first row of the next section.
+    Section,
+    /// To the first row of the previous section.
+    SectionBack,
 }
 
 /// What `RET` on a row does.
@@ -175,6 +202,51 @@ pub enum Switch {
     Identity,
 }
 
+/// A list inside the list, with a ceiling and a bar of its own.
+///
+/// # Why the view has these at all
+///
+/// Because three of its lists are read CONTINUOUSLY and the answer changes
+/// under the eye: Wi-Fi as routers come and go, the neighbours as the sweep
+/// answers, the ports as programs open and close them. With each of them free
+/// to grow, everything below moved up and down while nobody touched anything —
+/// which the owner reported from the screen.
+///
+/// A shelf draws `space.shelf.lines` rows ALWAYS, padded with blanks when it
+/// holds fewer, and scrolls inside itself. Nothing under it moves, ever. See
+/// `View::shelves` for what the two doors ask in order to draw its bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Shelf {
+    /// Every network in range.
+    Wifi,
+    /// Every network this machine has a password for, in range or not.
+    Remembered,
+    /// What this machine is answering on.
+    Ports,
+    /// Who else is on this network.
+    Neighbours,
+    /// The other machines of the tailnet.
+    Peers,
+}
+
+/// How many rows a shelf draws, whatever it holds.
+pub const SHELF_LINES: usize = tokens::space::SHELF_LINES as usize;
+
+/// One shelf, as it was DRAWN — what a door needs to put a bar beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Band {
+    /// Which one.
+    pub shelf: Shelf,
+    /// Its first row's index in the drawn list.
+    pub first: usize,
+    /// How many rows it drew.
+    pub lines: usize,
+    /// How many it holds.
+    pub total: usize,
+    /// Which of them is first on screen.
+    pub offset: usize,
+}
+
 /// One row the view draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -189,6 +261,15 @@ pub struct Row {
     /// Drawn dim and REFUSING — a network the radio cannot reach, a tunnel
     /// with no daemon to bring it up. Reachable, so the row can say why.
     pub disabled: bool,
+    /// Which shelf this row is in, and HOW MANY rows that shelf really holds.
+    ///
+    /// THE TOTAL TRAVELS WITH THE ROW because the shelf is what clips it: the
+    /// drawn list has `space.shelf.lines` rows and the shelf may hold fifty,
+    /// and both the bar and the arrow at the shelf's edge need the fifty. The
+    /// alternative was building the rows a second time unclipped to count
+    /// them, which is a whole frame's work for a number the builder already
+    /// had in its hand.
+    pub shelf: Option<(Shelf, usize)>,
 }
 
 /// What the view wants done, after a key or a click.
@@ -437,6 +518,30 @@ pub struct View {
     /// across a room. It is not stored anywhere by the view — the profile
     /// NetworkManager wrote is where it lives.
     sharing: Option<String>,
+    /// The line the region should put at the TOP, once.
+    ///
+    /// # Why the cursor is not enough
+    ///
+    /// Because both doors scroll to keep the CURSOR visible, with a margin,
+    /// and "visible" is satisfied by the cursor sitting at the bottom of the
+    /// region with its section's title off the screen above it. Two things
+    /// need more than that:
+    ///
+    ///   * `TAB`, which lands on a section and has to SHOW the section;
+    ///   * a click on a mark in the modeline, which the owner asked to open
+    ///     the view *"com o título no topo"* — clicking the tailnet's mark
+    ///     opens the network with `tailnet` at the top, not with one of its
+    ///     rows somewhere in the middle.
+    ///
+    /// It is taken ONCE and cleared: after that the cursor is in charge again,
+    /// or the region would refuse to scroll for the arrows.
+    anchor: Option<usize>,
+    /// Where each shelf is scrolled to — see [`Shelf`].
+    ///
+    /// A map and not five fields: a shelf that has never been scrolled has no
+    /// entry, which is the same thing as nought, and adding a sixth shelf is
+    /// then a variant and nothing else.
+    shelves: std::collections::BTreeMap<Shelf, usize>,
 }
 
 /// Where a row's cells begin and how wide they are, in the ROW's cells —
@@ -560,6 +665,8 @@ impl View {
             cursor: 1,
             bringing: None,
             sharing: None,
+            anchor: None,
+            shelves: std::collections::BTreeMap::new(),
         }
     }
 
@@ -568,11 +675,120 @@ impl View {
     #[must_use]
     pub fn fresh_at(facts: &Facts<'_>, want: &Target, texts: &ronoctua_i18n::Texts) -> Self {
         let mut v = Self::fresh();
-        let rows = v.rows(facts, 80, texts);
+        let rows = v.rows(facts, DECIDING_WIDTH, texts);
         if let Some(i) = rows.iter().position(|r| &r.target == want) {
             v.cursor = i;
+            // AND THE SECTION'S TITLE GOES TO THE TOP. The owner asked for it
+            // in those words: clicking a mark should open the view *"com o
+            // título no topo"*, not with the row somewhere in the middle of a
+            // section whose name is off the screen.
+            v.anchor = Self::title_above(&rows, i);
         }
         v
+    }
+
+    /// The title of the section row `n` belongs to.
+    fn title_above(rows: &[Row], n: usize) -> Option<usize> {
+        rows.iter()
+            .take(n + 1)
+            .rposition(|r| r.heading && !r.fields.is_empty())
+    }
+
+    /// One step INSIDE a shelf, when the cursor is at its edge and it has more.
+    ///
+    /// Answers whether it moved. `step` is the same `-1`/`+1` the arrows use.
+    fn scrolled_the_shelf(&mut self, rows: &[Row], step: isize) -> bool {
+        let Some((which, total)) = rows.get(self.cursor).and_then(|r| r.shelf) else {
+            return false;
+        };
+        if total <= SHELF_LINES {
+            return false;
+        }
+        // THE EDGE IS THE LAST ROW WITH SOMETHING ON IT: the padding under a
+        // short shelf belongs to it too, and stepping into a blank row is not
+        // stepping out of the shelf.
+        let filled: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.shelf.map(|(s, _)| s) == Some(which) && !r.heading)
+            .map(|(i, _)| i)
+            .collect();
+        let (Some(first), Some(last)) = (filled.first(), filled.last()) else {
+            return false;
+        };
+        // CLAMPED HERE TOO. `Builder::shelf` clamps when it DRAWS and leaves
+        // the stored number alone, so a shelf that shrank under a scrolled
+        // view kept an offset the list no longer has — and `Up` then spent one
+        // press per phantom row bringing it back down, swallowing the key each
+        // time. With the keyboard repeating, what that looks like is the view
+        // frozen under a held arrow.
+        let last_offset = total.saturating_sub(SHELF_LINES);
+        let at = self
+            .shelves
+            .get(&which)
+            .copied()
+            .unwrap_or(0)
+            .min(last_offset);
+        if at != self.shelves.get(&which).copied().unwrap_or(0) {
+            self.shelves.insert(which, at);
+        }
+        if step > 0 && self.cursor == *last && at + SHELF_LINES < total {
+            self.shelves.insert(which, at + 1);
+            return true;
+        }
+        if step < 0 && self.cursor == *first && at > 0 {
+            self.shelves.insert(which, at - 1);
+            return true;
+        }
+        false
+    }
+
+    /// Every shelf on screen: where it starts, how many lines it draws, how
+    /// many rows it holds and where it is scrolled to.
+    ///
+    /// ASKED BY BOTH DOORS, so each can draw the shelf's own bar with the same
+    /// [`ronoctua_design::Scroll`] the region and the manager already use.
+    #[must_use]
+    pub fn shelves(&self, rows: &[Row]) -> Vec<Band> {
+        let mut out: Vec<Band> = Vec::new();
+        for (i, row) in rows.iter().enumerate() {
+            let Some((which, total)) = row.shelf else {
+                continue;
+            };
+            match out.last_mut() {
+                // CONTIGUOUS, and not merely the same shelf: two runs of one
+                // shelf with anything between them are two bands, and merging
+                // them would give a band whose `lines` covers rows it does not
+                // own. Nothing produces that today; a band is cheap insurance.
+                Some(band) if band.shelf == which && band.first + band.lines == i => {
+                    band.lines += 1;
+                }
+                _ => out.push(Band {
+                    shelf: which,
+                    first: i,
+                    lines: 1,
+                    total,
+                    offset: self.shelves.get(&which).copied().unwrap_or(0),
+                }),
+            }
+        }
+        out
+    }
+
+    /// Scrolls one shelf, from a door's drag of its bar.
+    ///
+    /// Clamped by the shelf itself when it next draws (`Builder::shelf`), so a
+    /// door may hand in whatever its arithmetic produced.
+    pub fn put_shelf(&mut self, which: Shelf, offset: usize) {
+        self.shelves.insert(which, offset);
+    }
+
+    /// The line the region should put at the top, if the view asked for one.
+    ///
+    /// TAKEN, not read: it answers once and then the cursor is in charge —
+    /// see the field's own comment.
+    pub fn take_anchor(&mut self) -> Option<usize> {
+        self.anchor.take()
     }
 
     /// The row the cursor is on — what the region scrolls to.
@@ -678,6 +894,14 @@ impl View {
         match press {
             Press::Up | Press::Down => {
                 let step: isize = if press == Press::Down { 1 } else { -1 };
+                // AT THE EDGE OF A SHELF, THE SHELF MOVES. A shelf draws a
+                // fixed number of rows out of however many it holds, so
+                // walking off its end has to bring the next one INTO it —
+                // otherwise the rows the ceiling hides are unreachable by
+                // keyboard, which is half a list.
+                if self.scrolled_the_shelf(&rows, step) {
+                    return Errand::Nothing;
+                }
                 let mut i = self.cursor;
                 loop {
                     let next = i.checked_add_signed(step);
@@ -689,6 +913,43 @@ impl View {
                         self.cursor = i;
                         break;
                     }
+                }
+                Errand::Nothing
+            }
+            Press::Section | Press::SectionBack => {
+                // TO THE SECTION, AND THE SECTION TO THE TOP. Nine sections in
+                // one list is a lot of `<down>`, and landing on a row whose
+                // title is off the screen above it is landing nowhere: the
+                // anchor is what makes `TAB` show the section rather than one
+                // row of it.
+                let titles: Vec<usize> = rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.heading && !r.fields.is_empty())
+                    .map(|(i, _)| i)
+                    .collect();
+                let Some(count) = std::num::NonZeroUsize::new(titles.len()) else {
+                    return Errand::Nothing;
+                };
+                let here = Self::title_above(&rows, self.cursor)
+                    .and_then(|t| titles.iter().position(|i| *i == t));
+                let step: isize = if press == Press::Section { 1 } else { -1 };
+                // A RING, like every other `TAB` in this system.
+                // WITH NO TITLE ABOVE THE CURSOR, the ring starts at the end
+                // it is walking towards — the first section going forwards,
+                // the last going back. `map_or(0, …)` sent both to the first.
+                let next = here.map_or(if step > 0 { 0 } else { count.get() - 1 }, |a| {
+                    let n = isize::try_from(count.get()).unwrap_or(1);
+                    usize::try_from((isize::try_from(a).unwrap_or(0) + step).rem_euclid(n))
+                        .unwrap_or(0)
+                });
+                let title = titles[next];
+                self.anchor = Some(title);
+                // THE CURSOR GOES TO THE FIRST ROW OF THE SECTION, never to
+                // its title: `RET` on a title does nothing, which the power
+                // view's first screen proofs already showed.
+                if let Some(i) = rows.iter().skip(title).position(|r| !r.heading) {
+                    self.cursor = title + i;
                 }
                 Errand::Nothing
             }
@@ -782,6 +1043,8 @@ impl View {
             room,
             cursor: self.cursor,
             texts,
+            shelf: None,
+            offsets: &self.shelves,
         };
 
         // 1. WHAT THE MACHINE BELIEVES ABOUT THE WAY OUT.
@@ -839,20 +1102,6 @@ impl View {
             // scan saw would offer a connection that cannot happen, and the key
             // would fail looking like a fault.
             let listed: &[Network] = if net.radio { seen } else { &[] };
-            if listed.is_empty() {
-                // THREE DIFFERENT EMPTIES, and not one generic "no networks":
-                // no radio, radio off and nothing in range have different fixes —
-                // the first has none, the second is one key, the third is a walk
-                // to another room. One sentence for all three would send the
-                // person looking in the wrong place.
-                b.note(if !has_radio(net) {
-                    key::NETWORK_NO_ADAPTER
-                } else if net.radio {
-                    key::NETWORK_EMPTY
-                } else {
-                    key::NETWORK_RADIO_OFF
-                });
-            }
             // WHAT THE RADIO IS DOING, for the row of the network it is doing it
             // with: `active_one` says "this is the one in use", which is true
             // while the link is still authenticating and asking for an address.
@@ -861,9 +1110,40 @@ impl View {
                 .iter()
                 .find(|l| l.medium == Medium::Radio)
                 .map(|l| l.state);
-            for one in listed {
-                Self::network_row(&mut b, one, radio_state);
-            }
+            // THE NETWORKS IN RANGE, ON A SHELF. Every one of them is listed
+            // — the daemon's reading is deduplicated by NAME, keeping the
+            // strongest access point of each, and nothing is cut — and the
+            // shelf is what stops the list from moving the page every time a
+            // neighbour's router answers or goes quiet.
+            //
+            // THE EMPTY SENTENCE GOES INSIDE THE SHELF, and that is the whole
+            // difference between a shelf that keeps its promise and one that
+            // nearly does: with the sentence outside, nought networks drew one
+            // line and one network drew six, so everything under the Wi-Fi
+            // moved five lines every time a scan came back empty and refilled.
+            // Measured, and the first version of the test asserted the jump
+            // instead of forbidding it.
+            b.shelf(Shelf::Wifi, |b| {
+                if listed.is_empty() {
+                    // THREE DIFFERENT EMPTIES, and not one generic "no
+                    // networks": no radio, radio off and nothing in range have
+                    // different fixes — the first has none, the second is one
+                    // key, the third is a walk to another room. One sentence
+                    // for all three would send the person looking in the wrong
+                    // place.
+                    b.note(if !has_radio(net) {
+                        key::NETWORK_NO_ADAPTER
+                    } else if net.radio {
+                        key::NETWORK_EMPTY
+                    } else {
+                        key::NETWORK_RADIO_OFF
+                    });
+                }
+                for one in listed {
+                    Self::network_row(b, one, radio_state);
+                }
+            });
+
             // AND THE OTHER DIRECTION: this machine BEING the network.
             //
             // Only where there is a radio to do it with, and the row says what it
@@ -896,6 +1176,63 @@ impl View {
                     b.fact(key::NETWORK_HOTSPOT_PASSWORD, word.clone());
                 }
             }
+
+            // 3b. THE ONES THIS MACHINE REMEMBERS, which were nowhere at all.
+            //
+            // A saved network OUT OF RANGE existed in no list: the only place
+            // `saved` appeared was as a word beside a network the radio could
+            // see. So the answer to "which Wi-Fi does this machine know?" was
+            // "the ones you happen to be near", and forgetting one you are not
+            // near was impossible.
+            //
+            // AFTER the hotspot rows, and not between them and the Wi-Fi list:
+            // a heading inserted in the middle of a section takes everything
+            // below it, and "share this connection" read as part of the
+            // remembered list.
+            //
+            // AND WITHOUT A RADIO TOO. The profiles are still there when the
+            // adapter is out or its driver is reloading, and that is exactly
+            // when somebody wants to look at them.
+            b.heading(key::NETWORK_HEADING_REMEMBERED);
+            let remembered: Vec<&Saved> = net
+                .saved
+                .iter()
+                .filter(|p| p.kind == WIRELESS)
+                // BY THE NETWORK IT JOINS, and never by its NAME. `id` is a
+                // name somebody typed and NetworkManager lets it be anything:
+                // a profile renamed to `home` still joins `NET_2G4A1`, and the
+                // daemon calls a second profile for one network `MyWifi 1`.
+                // Matched by `id`, the same network was listed twice — once in
+                // range and once out of it, which is a lie about the machine.
+                .filter(|p| {
+                    let joins = p.ssid.as_deref().unwrap_or(&p.id);
+                    !listed.iter().any(|n| n.ssid == joins)
+                })
+                .collect();
+            b.shelf(Shelf::Remembered, |b| {
+                if remembered.is_empty() {
+                    b.note(key::NETWORK_NO_REMEMBERED);
+                }
+                for p in &remembered {
+                    b.pair(
+                        format!(
+                            "{} {}",
+                            tokens::icon::NETWORK_SECURED,
+                            p.ssid.as_deref().unwrap_or(&p.id)
+                        ),
+                        texts.t(key::NETWORK_OUT_OF_RANGE),
+                        Target::Saved(p.at.clone()),
+                        // THE AEROPLANE AND THE RADIO BOTH REFUSE IT, and they
+                        // are two independent properties: `airplane()` is the
+                        // daemon's `NetworkingEnabled` and `radio` is its
+                        // `WirelessEnabled`, so in the aeroplane the radio flag
+                        // stays true. The row says so by being dim rather than
+                        // by sending an order NetworkManager will refuse with a
+                        // sentence nobody wrote.
+                        flying || !net.radio || !has_radio(net),
+                    );
+                }
+            });
 
             // 4. THE TUNNELS — what is up, what is stored, and what is waiting
             // at the door.
@@ -979,7 +1316,7 @@ impl View {
             b.texts.t(&format!("network-import-{}", preview.kind.id())),
         );
         if let Some(address) = &preview.address {
-            b.fact(key::NETWORK_FACT_ADDRESS, address.clone());
+            b.fact(key::NETWORK_IMPORT_ADDRESS, address.clone());
         }
         for peer in &preview.peers {
             if let Some(endpoint) = &peer.endpoint {
@@ -1079,7 +1416,18 @@ impl View {
             b.fact(key::NETWORK_FACT_TAILNET, t.tailnet.clone());
         }
         for address in &t.addresses {
-            b.fact(key::NETWORK_FACT_ADDRESS, address.clone());
+            // ONE LABEL FOR TWO FAMILIES SAYS NOTHING. The tailnet hands out
+            // a v4 and a v6, and two rows reading `address on the tailnet`
+            // leave the reader to work out which is which from the shape of
+            // the number.
+            b.fact(
+                if address.contains(':') {
+                    key::NETWORK_FACT_ADDRESS_TAILNET6
+                } else {
+                    key::NETWORK_FACT_ADDRESS_TAILNET
+                },
+                address.clone(),
+            );
         }
         b.fact(key::NETWORK_FACT_MAGIC_DNS, b.word(t.magic_dns));
         b.pair(
@@ -1094,37 +1442,41 @@ impl View {
             Target::Tunnels(Switch::Shields, !t.shields_up),
             false,
         );
-        for peer in &t.peers {
-            let mut said = Vec::new();
-            said.push(b.texts.t(if peer.online {
-                key::NETWORK_TAILSCALE_ONLINE
-            } else {
-                key::NETWORK_TAILSCALE_OFFLINE
-            }));
-            if !peer.os.is_empty() {
-                said.push(peer.os.clone());
+        // ON A SHELF: a tailnet is every machine somebody owns, and a laptop
+        // that wakes up moves the whole list.
+        b.shelf(Shelf::Peers, |b| {
+            for peer in &t.peers {
+                let mut said = Vec::new();
+                said.push(b.texts.t(if peer.online {
+                    key::NETWORK_TAILSCALE_ONLINE
+                } else {
+                    key::NETWORK_TAILSCALE_OFFLINE
+                }));
+                if !peer.os.is_empty() {
+                    said.push(peer.os.clone());
+                }
+                if let Some(address) = peer.addresses.first() {
+                    said.push(address.clone());
+                }
+                // ONLY A NODE THAT OFFERS TO BE ONE can be chosen as the exit,
+                // and the rest are facts: a `RET` that sent an id the daemon
+                // refuses would be a key that fails for a reason nothing says.
+                let target = if peer.offers_exit {
+                    Target::ExitNode(peer.id.clone())
+                } else {
+                    Target::Nothing
+                };
+                if peer.exit_node {
+                    said.push(b.texts.t(key::NETWORK_TAILSCALE_EXIT));
+                }
+                b.pair(
+                    format!("{} {}", tokens::icon::TAILSCALE, peer.name),
+                    said.join(&format!(" {} ", tokens::mark::SEPARATOR)),
+                    target,
+                    false,
+                );
             }
-            if let Some(address) = peer.addresses.first() {
-                said.push(address.clone());
-            }
-            // ONLY A NODE THAT OFFERS TO BE ONE can be chosen as the exit,
-            // and the rest are facts: a `RET` that sent an id the daemon
-            // refuses would be a key that fails for a reason nothing says.
-            let target = if peer.offers_exit {
-                Target::ExitNode(peer.id.clone())
-            } else {
-                Target::Nothing
-            };
-            if peer.exit_node {
-                said.push(b.texts.t(key::NETWORK_TAILSCALE_EXIT));
-            }
-            b.pair(
-                format!("{} {}", tokens::icon::TAILSCALE, peer.name),
-                said.join(&format!(" {} ", tokens::mark::SEPARATOR)),
-                target,
-                false,
-            );
-        }
+        });
     }
 
     /// Tor: how far it got, what it has, and the two things to do to it.
@@ -1179,8 +1531,14 @@ impl View {
         if !t.version.is_empty() {
             b.fact(key::NETWORK_FACT_VERSION, t.version.clone());
         }
-        b.fact(key::NETWORK_FACT_RECEIVED, readable_bytes(t.received));
-        b.fact(key::NETWORK_FACT_SENT, readable_bytes(t.sent));
+        b.fact(
+            key::NETWORK_FACT_RECEIVED,
+            readable_bytes(t.received, b.texts.decimal_mark()),
+        );
+        b.fact(
+            key::NETWORK_FACT_SENT,
+            readable_bytes(t.sent, b.texts.decimal_mark()),
+        );
         b.fact(
             key::NETWORK_FACT_SOCKS,
             ronoctua_tunnel::tor::SOCKS.to_owned(),
@@ -1193,52 +1551,66 @@ impl View {
         );
     }
 
-    /// How many established sockets of ours are listed before the rest
-    /// become a sentence.
+    /// How many established sockets of ours are read before the rest become a
+    /// sentence.
     ///
-    /// A browser holds hundreds, and a wall of them would bury the listening
-    /// rows above — which are the ones a person opens this section to read.
+    /// A browser holds hundreds, and reading all of them into rows to throw
+    /// most away is work for nothing. The SHELF is what decides how many are
+    /// on screen; this is the ceiling on how many are counted at all, and the
+    /// sentence under it says how many were left out.
     const ESTABLISHED: usize = 10;
 
     /// What is listening, and what of ours is talking.
     fn port_rows(b: &mut Builder<'_>, watch: &Watch) {
         use ronoctua_i18n::key;
         let listening: Vec<&Socket> = watch.sockets().iter().filter(|s| s.listening).collect();
-        if listening.is_empty() {
-            b.note(key::NETWORK_NO_PORTS);
-        }
-        for s in listening {
-            b.pair(
-                format!("{} {}", s.protocol.label(), s.named()),
-                Self::owner_of(b, s),
-                Target::Nothing,
-                false,
-            );
-        }
         let talking: Vec<&Socket> = watch
             .sockets()
             .iter()
             .filter(|s| !s.listening && s.owner.is_some())
             .collect();
         let hidden = talking.len().saturating_sub(Self::ESTABLISHED);
-        for s in talking.iter().take(Self::ESTABLISHED) {
-            let peer = s
-                .peer
-                .map_or_else(String::new, |(address, port)| match address {
-                    std::net::IpAddr::V4(a) => format!("{a}:{port}"),
-                    std::net::IpAddr::V6(a) => format!("[{a}]:{port}"),
-                });
-            b.pair(
-                format!(
-                    "{} {} {peer}",
-                    s.protocol.label(),
-                    tokens::mark::ARROW_RIGHT
-                ),
-                Self::owner_of(b, s),
-                Target::Nothing,
-                false,
-            );
-        }
+        // ONE SHELF FOR BOTH HALVES, and that is what they are on screen: what
+        // this machine answers on and what it is talking to run one into the
+        // other with no heading between them. Two shelves of five made a block
+        // of ten — twice the height of every other one, for a section that
+        // reads as a single list.
+        //
+        // What a machine is listening on changes as programs come and go, and
+        // what it is talking to changes faster still: a browser opens and
+        // closes connections while nobody touches anything, and a list free to
+        // grow moved everything under it.
+        b.shelf(Shelf::Ports, |b| {
+            if listening.is_empty() && talking.is_empty() {
+                b.note(key::NETWORK_NO_PORTS);
+            }
+            for s in listening {
+                b.pair(
+                    format!("{} {}", s.protocol.label(), s.named()),
+                    Self::owner_of(b, s),
+                    Target::Nothing,
+                    false,
+                );
+            }
+            for s in talking.iter().take(Self::ESTABLISHED) {
+                let peer = s
+                    .peer
+                    .map_or_else(String::new, |(address, port)| match address {
+                        std::net::IpAddr::V4(a) => format!("{a}:{port}"),
+                        std::net::IpAddr::V6(a) => format!("[{a}]:{port}"),
+                    });
+                b.pair(
+                    format!(
+                        "{} {} {peer}",
+                        s.protocol.label(),
+                        tokens::mark::ARROW_RIGHT
+                    ),
+                    Self::owner_of(b, s),
+                    Target::Nothing,
+                    false,
+                );
+            }
+        });
         if hidden > 0 {
             let said = b.texts.t_args(
                 key::NETWORK_PORTS_MORE,
@@ -1285,37 +1657,50 @@ impl View {
 
         let fresh: Vec<&ronoctua_memory::net::Neighbour> =
             watch.neighbours().iter().filter(|n| n.fresh).collect();
-        if fresh.is_empty() {
-            b.note(key::NETWORK_LAN_NOBODY);
-        }
-        for one in fresh {
-            let address = one.address.to_string();
-            let mut said = Vec::new();
-            if gateways.contains(&address) {
-                said.push(b.texts.t(key::NETWORK_LAN_GATEWAY));
+        // ON A SHELF, and this machine sits on it too: the neighbour table
+        // answers a little differently every second — an entry goes stale, a
+        // sweep fills it — and a list free to grow moved the two sections
+        // under it every time.
+        b.shelf(Shelf::Neighbours, |b| {
+            // AND THIS MACHINE FIRST, not after the neighbours: the shelf shows
+            // six rows and the seventh neighbour would push the machine's own
+            // address off it — in a section whose stated point is that a list
+            // of the network without the machine reading it has a hole in it.
+            for address in &mine {
+                b.pair(
+                    address.clone(),
+                    b.texts.t(key::NETWORK_LAN_THIS_MACHINE),
+                    Target::Nothing,
+                    false,
+                );
             }
-            if let Some(maker) = vendors.of_address(&one.hardware) {
-                said.push(maker.to_owned());
+            // THE NOTE IS ABOUT THE NEIGHBOURS, and it goes inside the shelf
+            // for the reason every empty sentence does — outside it, the
+            // section moved by five lines the first time anybody answered.
+            // It said "nobody has been spoken to yet" directly above a shelf
+            // listing this machine, which is why it now waits for BOTH to be
+            // empty.
+            if fresh.is_empty() && mine.is_empty() {
+                b.note(key::NETWORK_LAN_NOBODY);
             }
-            said.push(one.interface.clone());
-            b.pair(
-                address,
-                said.join(&format!(" {} ", tokens::mark::SEPARATOR)),
-                Target::Nothing,
-                false,
-            );
-        }
-        // AND THIS MACHINE, which the neighbour table never holds: nothing
-        // ARPs for itself, and a list of the network without the machine
-        // reading it is a list with a hole in it.
-        for address in &mine {
-            b.pair(
-                address.clone(),
-                b.texts.t(key::NETWORK_LAN_THIS_MACHINE),
-                Target::Nothing,
-                false,
-            );
-        }
+            for one in fresh {
+                let address = one.address.to_string();
+                let mut said = Vec::new();
+                if gateways.contains(&address) {
+                    said.push(b.texts.t(key::NETWORK_LAN_GATEWAY));
+                }
+                if let Some(maker) = vendors.of_address(&one.hardware) {
+                    said.push(maker.to_owned());
+                }
+                said.push(one.interface.clone());
+                b.pair(
+                    address,
+                    said.join(&format!(" {} ", tokens::mark::SEPARATOR)),
+                    Target::Nothing,
+                    false,
+                );
+            }
+        });
         if watch.sweeping {
             b.note(key::NETWORK_LAN_LOOKING);
             return;
@@ -1382,7 +1767,7 @@ impl View {
     fn monitor_rows(b: &mut Builder<'_>, watch: &Watch) {
         use ronoctua_i18n::key;
         if watch.counters().is_empty() {
-            b.note(key::NETWORK_NO_LINK);
+            b.note(key::NETWORK_NO_TRAFFIC);
             return;
         }
         for c in watch.counters() {
@@ -1400,8 +1785,14 @@ impl View {
                     )
                 });
             b.pair(c.interface.clone(), rate, Target::Nothing, false);
-            b.fact(key::NETWORK_FACT_RECEIVED, readable_bytes(c.received));
-            b.fact(key::NETWORK_FACT_SENT, readable_bytes(c.sent));
+            b.fact(
+                key::NETWORK_FACT_RECEIVED_BOOT,
+                readable_bytes(c.received, b.texts.decimal_mark()),
+            );
+            b.fact(
+                key::NETWORK_FACT_SENT_BOOT,
+                readable_bytes(c.sent, b.texts.decimal_mark()),
+            );
         }
     }
 
@@ -1466,7 +1857,7 @@ impl View {
             said.push(b.texts.t(if radio == Some(State::Connected) {
                 key::NETWORK_STATE_CONNECTED
             } else {
-                key::NETWORK_CONNECTING
+                key::NETWORK_STATE_CONNECTING
             }));
         } else if one.saved {
             said.push(b.texts.t(key::NETWORK_SAVED));
@@ -1681,9 +2072,105 @@ struct Builder<'a> {
     room: u16,
     cursor: usize,
     texts: &'a ronoctua_i18n::Texts,
+    /// Which shelf is being filled, if any. The TOTAL is stamped on when the
+    /// shelf closes, which is the first moment anybody knows it.
+    shelf: Option<Shelf>,
+    /// Where each shelf is scrolled to.
+    offsets: &'a std::collections::BTreeMap<Shelf, usize>,
 }
 
 impl Builder<'_> {
+    /// Fills a shelf, and closes it at exactly [`SHELF_LINES`] rows.
+    ///
+    /// # Why the rows are built and then CUT
+    ///
+    /// Because `focused` is decided by where a row lands in the final list,
+    /// and a shelf that emitted only its visible slice would have to know that
+    /// before it knew how many rows came before it. Building all of them into
+    /// a side list and taking the window afterwards keeps one coordinate
+    /// system: the cursor counts DRAWN rows, which is what the click, the
+    /// scrollbar and both doors already count.
+    ///
+    /// AND IT ALWAYS CLOSES AT THE SAME HEIGHT, padding with air. That is the
+    /// whole point: the rows under a shelf do not move when its content
+    /// changes.
+    fn shelf<F: FnOnce(&mut Self)>(&mut self, which: Shelf, fill: F) {
+        let before = std::mem::take(&mut self.out);
+        let was = self.shelf.replace(which);
+        // AND THE ROWS INSIDE IT ARE THE CONTAINER'S WIDTH, not the surface's.
+        //
+        // A container has a right edge of its own and a bar sitting on it
+        // (`chrome::shelf_box`), so a row that went on being cut at the
+        // surface's edge would run its value out of the box and under that
+        // bar. It is the same reason the manager's panels each cut to their
+        // own section rather than to the window.
+        let inner = crate::chrome::shelf_box(self.left, self.room).room;
+        let full_room = std::mem::replace(&mut self.room, inner);
+        // NO ROW INSIDE THE SHELF DECIDES IT IS FOCUSED.
+        //
+        // The focus is a COLOUR, not a flag — neither door reads `Row.focused`,
+        // both read the fields — and the colour is baked where the row is
+        // built, from `cursor == out.len()`. Inside here `out` is an empty side
+        // list, so that index counts from zero and has nothing to do with where
+        // the row will land. Left alone it painted the accent on whichever row
+        // of the shelf happened to sit at the cursor's NUMBER, which for the
+        // Wi-Fi shelf (starting around row twelve) meant the highlight simply
+        // vanished when the cursor walked into it.
+        //
+        // A cursor no row can match, then, and the accent applied on the way
+        // out — where the row's real position is known.
+        let held_cursor = std::mem::replace(&mut self.cursor, usize::MAX);
+        fill(self);
+        self.cursor = held_cursor;
+        self.room = full_room;
+        let held = std::mem::replace(&mut self.out, before);
+        self.shelf = was;
+        let total = held.len();
+        // NOTHING TO SCROLL, NOTHING TO PAD: a shelf that never fills is a
+        // block of blank lines under a heading, which is worse than a short
+        // list. It takes its ceiling only once it has reached it.
+        let offset = if total > SHELF_LINES {
+            (*self.offsets.get(&which).unwrap_or(&0)).min(total - SHELF_LINES)
+        } else {
+            0
+        };
+        let shown = held.into_iter().skip(offset).take(SHELF_LINES);
+        let mut drawn = 0;
+        for row in shown {
+            // THE FOCUS IS DECIDED HERE, where the row's real position is
+            // known — and it is applied to the FIELDS, because that is what a
+            // door draws. `Row::focused` is carried for the tests.
+            let focused = self.cursor == self.out.len();
+            let mut row = row;
+            if focused {
+                for f in &mut row.fields {
+                    f.color = tokens::color::STATE_ACCENT;
+                }
+            }
+            row.focused = focused;
+            row.shelf = Some((which, total));
+            self.out.push(row);
+            drawn += 1;
+        }
+        // A SHELF WITH ANYTHING ON IT IS ALWAYS ITS FULL HEIGHT. Padding only
+        // up to what it holds is the defect back again: a Wi-Fi list going
+        // from one network to six moves everything under it by five lines,
+        // which is exactly what the owner reported. An EMPTY one draws
+        // nothing at all — the section says why in a sentence of its own,
+        // and a block of blank lines under a heading says nothing.
+        let height = if total == 0 { 0 } else { SHELF_LINES };
+        for _ in drawn..height {
+            self.out.push(Row {
+                fields: crate::chrome::AIR,
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                disabled: false,
+                shelf: Some((which, total)),
+            });
+        }
+    }
+
     fn piece(at: u16, text: String, color: tokens::Color) -> Field {
         Field {
             at,
@@ -1698,7 +2185,7 @@ impl Builder<'_> {
     fn per_second(&self, bytes: u64) -> String {
         self.texts.t_with(
             ronoctua_i18n::key::NETWORK_PER_SECOND,
-            &[("bytes", &readable_bytes(bytes))],
+            &[("bytes", &readable_bytes(bytes, self.texts.decimal_mark()))],
         )
     }
 
@@ -1712,6 +2199,27 @@ impl Builder<'_> {
     }
 
     fn heading(&mut self, key: &str) {
+        // A TITLE IS NEVER INSIDE A SHELF. The shelf clips and pads by
+        // counting rows, and a title among them would be counted as content,
+        // stamped with the shelf on the way out and then treated as PADDING by
+        // the arrow at the shelf's edge — a section that scrolls its own name.
+        debug_assert!(
+            self.shelf.is_none(),
+            "a section title was opened inside a shelf"
+        );
+        // AIR FIRST, and never before the first title. See `chrome::AIR`: a
+        // section that starts immediately under the last row of the one above
+        // does not start anywhere, and the owner read that off the screen.
+        if !self.out.is_empty() {
+            self.out.push(Row {
+                fields: crate::chrome::AIR,
+                focused: false,
+                heading: true,
+                target: Target::Nothing,
+                disabled: false,
+                shelf: None,
+            });
+        }
         self.out.push(Row {
             fields: vec![Self::piece(
                 self.left,
@@ -1722,6 +2230,7 @@ impl Builder<'_> {
             heading: true,
             target: Target::Nothing,
             disabled: false,
+            shelf: None,
         });
     }
 
@@ -1736,8 +2245,13 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         self.out.push(Row {
             fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
+                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
+                // The mark's indent is paid by every row of these views on
+                // purpose — an indent only some rows pay is a ragged edge —
+                // and a note that skipped it sat two cells left of everything
+                // around it.
+                crate::chrome::text_left(self.left),
+                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -1748,6 +2262,7 @@ impl Builder<'_> {
             heading: false,
             target: Target::Nothing,
             disabled: false,
+            shelf: self.shelf.map(|which| (which, 0)),
         });
     }
 
@@ -1756,8 +2271,13 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         self.out.push(Row {
             fields: vec![Self::piece(
-                self.left,
-                layout::elide_end(&text, self.room),
+                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
+                // The mark's indent is paid by every row of these views on
+                // purpose — an indent only some rows pay is a ragged edge —
+                // and a note that skipped it sat two cells left of everything
+                // around it.
+                crate::chrome::text_left(self.left),
+                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -1768,6 +2288,7 @@ impl Builder<'_> {
             heading: false,
             target: Target::Nothing,
             disabled: false,
+            shelf: self.shelf.map(|which| (which, 0)),
         });
     }
 
@@ -1787,9 +2308,14 @@ impl Builder<'_> {
         self.coloured(label, value, target, disabled, None);
     }
 
-    /// The one that draws them all — the power view's arithmetic, and the
-    /// same reason: a short value sits at the right end and the label keeps
-    /// the rest of the row; a long one takes the fact's third.
+    /// The one that draws them all — and the placement is
+    /// [`crate::chrome::field_pair`], which is the same one the power and
+    /// Bluetooth views draw with.
+    ///
+    /// IT USED TO BE WRITTEN HERE, and in each of the other two, and the three
+    /// had already drifted: this one pushed a short value to the last cell of
+    /// the surface, which on a wide window is a hundred and fifty columns from
+    /// its label with nothing in between. See the comment on `value_column`.
     fn coloured(
         &mut self,
         label: String,
@@ -1799,38 +2325,42 @@ impl Builder<'_> {
         colour: Option<tokens::Color>,
     ) {
         let focused = self.cursor == self.out.len();
+        // A LIST ITEM READS THE OTHER WAY ROUND FROM A FACT.
+        //
+        // The owner asked for it: *"as listas, como redes WiFi ou Tailnet,
+        // devem ter cores diferentes do resto"*. A fact is a LABEL and a
+        // value — the label names the question and the value is the answer,
+        // so the value is the strong half. A list item is the other shape: the
+        // name of the thing IS the content and what follows it describes it.
+        //
+        // So the weights swap, and no new colour is spent: a hue of its own
+        // would have to pass the theme generator's contrast gates to say what
+        // a weight already says, and the accent is reserved for the cursor.
+        let listed = self.shelf.is_some();
         let (label_colour, value_colour) = match (focused, disabled) {
             (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
+            (false, false) if listed => {
+                (tokens::color::TEXT_PRIMARY, tokens::color::TEXT_SECONDARY)
+            }
             (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_PRIMARY),
         };
         let value_colour = colour.filter(|_| !focused).unwrap_or(value_colour);
-        let width = layout::width(&value);
-        let value_at = if value.is_empty() {
-            self.left + self.room
-        } else if width <= self.room / 3 {
-            self.left + self.room.saturating_sub(width)
-        } else {
-            self.left + self.room / 3
-        };
-        let mut fields = vec![Self::piece(
-            self.left,
-            layout::elide_end(&label, value_at.saturating_sub(self.left + 1)),
-            label_colour,
-        )];
-        if !value.is_empty() {
-            fields.push(Self::piece(
-                value_at,
-                layout::elide_end(&value, (self.left + self.room).saturating_sub(value_at)),
-                value_colour,
-            ));
-        }
         self.out.push(Row {
-            fields,
+            fields: crate::chrome::field_pair(
+                self.left,
+                self.room,
+                target != Target::Nothing,
+                &label,
+                &value,
+                label_colour,
+                value_colour,
+            ),
             focused,
             heading: false,
             target,
             disabled,
+            shelf: self.shelf.map(|which| (which, 0)),
         });
     }
 }
@@ -1840,8 +2370,13 @@ impl Builder<'_> {
 /// One decimal place, like the link's rate: the total transferred grows all
 /// the time, and the second place would be a digit flickering without
 /// informing anything.
+///
+/// THE SEPARATOR IS THE LANGUAGE'S and comes in from
+/// [`ronoctua_i18n::Texts::decimal_mark`]. It was a comma written into the
+/// format string, so an English screen said `44,2 GB` — which in English is
+/// forty-four thousand two hundred gigabytes.
 #[must_use]
-pub fn readable_bytes(bytes: u64) -> String {
+pub fn readable_bytes(bytes: u64, mark: char) -> String {
     const K: u64 = 1_000;
     const M: u64 = K * 1_000;
     const G: u64 = M * 1_000;
@@ -1851,7 +2386,7 @@ pub fn readable_bytes(bytes: u64) -> String {
         1_000_000..=999_999_999 => format!("{} MB", bytes / M),
         _ => {
             let tenth = (bytes + G / 20) / (G / 10);
-            format!("{},{} GB", tenth / 10, tenth % 10)
+            format!("{}{mark}{} GB", tenth / 10, tenth % 10)
         }
     }
 }
@@ -1905,6 +2440,7 @@ mod tests {
             at: "/s/1".to_owned(),
             id: "a tunnel".to_owned(),
             kind: "wireguard".to_owned(),
+            ssid: None,
         }];
         let facts = facts(&snap, &[]);
         for (notation, id) in OF_THE_VIEW {
@@ -2045,7 +2581,9 @@ mod tests {
         for snap in [Snapshot::default(), full] {
             let rows = View::fresh().rows(&facts(&snap, &[]), 80, &t);
             for (i, row) in rows.iter().enumerate() {
-                if !row.heading {
+                // THE AIR IS A HEADING WITH NO FIELDS (`chrome::AIR`), and
+                // what it is under is the title it introduces.
+                if !row.heading || row.fields.is_empty() {
                     continue;
                 }
                 assert!(
@@ -2066,6 +2604,7 @@ mod tests {
             at: "/s/1".to_owned(),
             id: "an office".to_owned(),
             kind: "vpn".to_owned(),
+            ssid: None,
         }];
         let seen = vec![network("a network with a very long name indeed", 90)];
         for columns in [40_u16, 60, 80, 120, 200] {
@@ -2165,10 +2704,19 @@ mod tests {
         open_one.saved = true;
         let seen = vec![network("a house", 90), open_one];
         let rows = View::fresh().rows(&facts(&snap, &seen), 80, &t);
+        // EVERY FIELD OF THE ROW, and not the first: a row that answers `RET`
+        // wears `icon.row-acts` in front of its label now, so `fields[0]` is
+        // the mark and the padlock is one field further along.
         let label_of = |ssid: &str| {
             rows.iter()
                 .find(|r| matches!(&r.target, Target::Wireless(n) if n.ssid == ssid))
-                .and_then(|r| r.fields.first().map(|f| f.text.clone()))
+                .map(|r| {
+                    r.fields
+                        .iter()
+                        .map(|f| f.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
                 .unwrap()
         };
         assert!(
@@ -2205,7 +2753,7 @@ mod tests {
         for l in &mut snap.links {
             l.state = State::Connecting;
         }
-        assert!(words(&snap).contains(&t.t(ronoctua_i18n::key::NETWORK_CONNECTING)));
+        assert!(words(&snap).contains(&t.t(ronoctua_i18n::key::NETWORK_STATE_CONNECTING)));
     }
 
     #[test]
@@ -2247,11 +2795,13 @@ mod tests {
                 at: "/s/1".to_owned(),
                 id: "an office".to_owned(),
                 kind: "vpn".to_owned(),
+                ssid: None,
             },
             Saved {
                 at: "/s/2".to_owned(),
                 id: "a house".to_owned(),
                 kind: "wireguard".to_owned(),
+                ssid: None,
             },
             // AND A NETWORK IS NOT A TUNNEL: every profile the daemon has is
             // in the snapshot, and this section is about two of the words.
@@ -2259,11 +2809,23 @@ mod tests {
                 at: "/s/3".to_owned(),
                 id: "a café".to_owned(),
                 kind: "802-11-wireless".to_owned(),
+                ssid: Some("a café".to_owned()),
             },
         ];
-        let rows = View::fresh().rows(&facts(&snap, &[]), 80, &t);
+        let rows = View::fresh().rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        // THE TUNNELS' SECTION, and not every row that carries a profile: a
+        // remembered Wi-Fi is a `Saved` too now (its own shelf, so that a
+        // network one is not near can still be forgotten), and reading the
+        // whole list would call that a tunnel.
+        let title = t.t(ronoctua_i18n::key::NETWORK_HEADING_TUNNELS);
+        let from = rows
+            .iter()
+            .position(|r| r.fields.first().is_some_and(|f| f.text == title))
+            .expect("no tunnels section");
         let tunnels: Vec<&Target> = rows
             .iter()
+            .skip(from + 1)
+            .take_while(|r| !(r.heading && !r.fields.is_empty()))
             .map(|r| &r.target)
             .filter(|t| matches!(t, Target::Tunnel(_) | Target::Saved(_)))
             .collect();
@@ -2273,6 +2835,12 @@ mod tests {
                 &Target::Tunnel("/a/1".to_owned()),
                 &Target::Saved("/s/2".to_owned())
             ]
+        );
+        // AND THE WIRELESS PROFILE IS IN THE OTHER SECTION, not missing.
+        assert!(
+            rows.iter()
+                .any(|r| r.target == Target::Saved("/s/3".to_owned())),
+            "the remembered network went nowhere at all"
         );
     }
 
@@ -2288,6 +2856,7 @@ mod tests {
             at: "/s/1".to_owned(),
             id: "an office".to_owned(),
             kind: "vpn".to_owned(),
+            ssid: None,
         }];
         let mut v = View::fresh();
         let rows = v.rows(&facts(&snap, &[]), 80, &t);
@@ -2308,6 +2877,7 @@ mod tests {
             at: "/s/1".to_owned(),
             id: "an office".to_owned(),
             kind: "vpn".to_owned(),
+            ssid: None,
         }];
         let mut saved_one = network("a house", 80);
         saved_one.saved = true;
@@ -2448,6 +3018,349 @@ mod tests {
     }
 
     #[test]
+    fn the_cursor_is_visible_wherever_it_stands_inside_a_shelf() {
+        // THE FOCUS IS A COLOUR, not a flag: neither door reads
+        // `Row::focused`, both read the fields. A shelf builds its rows into a
+        // side list that starts at zero, so a row that baked its colour from
+        // `cursor == out.len()` there painted the accent on whichever row of
+        // the shelf carried the cursor's NUMBER — which for a shelf starting
+        // at row twelve is none of them, and the highlight vanished.
+        let t = texts();
+        let snap = machine();
+        let seen: Vec<Network> = (0..20)
+            .map(|i| network(&format!("net {i}"), 90 - u8::try_from(i).unwrap_or(0)))
+            .collect();
+        let f = facts(&snap, &seen);
+        let mut v = View::fresh();
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let first = rows
+            .iter()
+            .position(|r| r.shelf.map(|(s, _)| s) == Some(Shelf::Wifi) && !r.heading)
+            .expect("the shelf drew nothing");
+        v.clicked(first, &rows);
+
+        let accented = |v: &View| -> Vec<usize> {
+            v.rows(&f, DECIDING_WIDTH, &t)
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    r.fields
+                        .iter()
+                        .any(|x| x.color == tokens::color::STATE_ACCENT)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+        // Walk the whole shelf, including the part that only exists after it
+        // scrolls, and ask every step which row is lit.
+        for step in 0..seen.len() + 4 {
+            let lit = accented(&v);
+            assert_eq!(
+                lit,
+                vec![v.cursor()],
+                "step {step}: the cursor is at {} and the accent is on {lit:?}",
+                v.cursor()
+            );
+            let _ = v.key(Press::Down, &f, &t);
+        }
+    }
+
+    #[test]
+    fn a_list_item_and_a_fact_do_not_read_the_same() {
+        // The owner asked for the difference. A fact's ANSWER is the strong
+        // half; a list item's NAME is.
+        let t = texts();
+        let snap = machine();
+        let seen = vec![network("a house", 90)];
+        let rows = View::fresh().rows(&facts(&snap, &seen), DECIDING_WIDTH, &t);
+        let strong_of = |r: &Row| {
+            r.fields
+                .iter()
+                .filter(|f| f.color == tokens::color::TEXT_PRIMARY)
+                .map(|f| f.text.clone())
+                .collect::<Vec<_>>()
+        };
+        let item = rows
+            .iter()
+            .find(|r| matches!(&r.target, Target::Wireless(n) if n.ssid == "a house"))
+            .expect("no network row");
+        let fact = rows
+            .iter()
+            .find(|r| {
+                r.fields
+                    .first()
+                    .is_some_and(|f| f.text == t.t(ronoctua_i18n::key::NETWORK_FACT_BAND))
+            })
+            .expect("no fact row");
+        assert!(
+            strong_of(item).iter().any(|s| s.contains("a house")),
+            "the network's NAME is not the strong half: {:?}",
+            item.fields
+        );
+        assert!(
+            !strong_of(fact)
+                .iter()
+                .any(|s| s == &t.t(ronoctua_i18n::key::NETWORK_FACT_BAND)),
+            "the fact's LABEL is the strong half"
+        );
+    }
+
+    #[test]
+    fn a_shelf_is_the_same_height_whatever_it_holds() {
+        // THE WHOLE PROPERTY. The owner read the absence off the screen: the
+        // Wi-Fi list grew and shrank as routers answered, and everything under
+        // it moved while nobody touched anything. A shelf that always draws
+        // the same number of lines is what stops that, and the test is that
+        // the rows AFTER it do not move.
+        let t = texts();
+        let snap = machine();
+        let where_of = |seen: &[Network]| {
+            let rows = View::fresh().rows(&facts(&snap, seen), DECIDING_WIDTH, &t);
+            let title = t.t(ronoctua_i18n::key::NETWORK_HEADING_TUNNELS);
+            rows.iter()
+                .position(|r| r.fields.first().is_some_and(|f| f.text == title))
+                .expect("no tunnels section")
+        };
+        // EVERY COUNT, INCLUDING NOUGHT. The first version of this asserted
+        // that nought and one were DIFFERENT — it proved the jump instead of
+        // forbidding it, and a review caught that: a scan coming back empty
+        // and refilling moved everything under the Wi-Fi by five lines, which
+        // is the report this whole shelf exists to answer. The empty sentence
+        // lives inside the shelf now, so the height never changes.
+        let counts: Vec<Vec<Network>> = [0usize, 1, 2, 5, 6, 7, 30]
+            .into_iter()
+            .map(|n| {
+                (0..n)
+                    .map(|i| network(&format!("net {i}"), 90 - u8::try_from(i).unwrap_or(0)))
+                    .collect()
+            })
+            .collect();
+        let places: Vec<usize> = counts.iter().map(|c| where_of(c)).collect();
+        assert!(
+            places.windows(2).all(|w| w[0] == w[1]),
+            "the section under the Wi-Fi moved with the list: {places:?} for \
+             0, 1, 2, 5, 6, 7 and 30 networks"
+        );
+    }
+
+    #[test]
+    fn nothing_inside_a_container_is_drawn_outside_it() {
+        // A CONTAINER HAS A RIGHT EDGE AND A BAR ON IT (`chrome::shelf_box`),
+        // so a row that went on being cut at the surface's edge would run its
+        // value out of the box and under that bar. A wide surface is where it
+        // shows: at 200 columns the row's own room is nearly two hundred cells
+        // and the box is a third of that.
+        let t = texts();
+        let mut snap = machine();
+        // TWO SHELVES WITH ROWS IN THEM, and not one: the Wi-Fi list and the
+        // remembered one. The other three are empty here and draw their own
+        // sentence, which is a shelf row too and is measured with the rest.
+        snap.saved = (0..4)
+            .map(|i| Saved {
+                at: format!("/s/{i}"),
+                id: format!("a remembered network with a name long enough to be cut, number {i}"),
+                kind: WIRELESS.to_owned(),
+                ssid: None,
+            })
+            .collect();
+        let seen: Vec<Network> = (0..12)
+            .map(|i| {
+                network(
+                    &format!("a network with a name long enough to be cut, number {i}"),
+                    90 - u8::try_from(i).unwrap_or(0),
+                )
+            })
+            .collect();
+        for columns in [60u16, 100, 200] {
+            let rows = View::fresh().rows(&facts(&snap, &seen), columns, &t);
+            let (left, room) = extent(columns);
+            let shelf = crate::chrome::shelf_box(left, room);
+            // IN THE SURFACE'S CELLS, which is where the ground and the bar
+            // are: a door draws a row's cell `c` at `FIELDS_LEAD + c`.
+            let text_ends =
+                shelf.from + shelf.cells - crate::chrome::SHELF_PAD - crate::chrome::BAR_CELLS;
+            let mut measured = 0;
+            let mut which: std::collections::BTreeSet<Shelf> = std::collections::BTreeSet::new();
+            for row in rows.iter().filter(|r| r.shelf.is_some()) {
+                if let Some((s, _)) = row.shelf {
+                    which.insert(s);
+                }
+                for f in &row.fields {
+                    let at = crate::chrome::FIELDS_LEAD + f.at;
+                    measured += 1;
+                    assert!(
+                        at >= shelf.from,
+                        "a row began left of its container at {columns} columns"
+                    );
+                    assert!(
+                        at + layout::width(&f.text) <= text_ends,
+                        "at {columns} columns a row ran past its container: \
+                         {:?} ends at {}, the box's text stops at {text_ends}",
+                        f.text,
+                        at + layout::width(&f.text)
+                    );
+                }
+            }
+            // AND IT DID NOT PASS BY MEASURING NOTHING. A test whose loop
+            // never runs is green for the wrong reason, and this one is one
+            // fixture change away from that.
+            assert!(
+                measured > 20 && which.len() >= 4,
+                "at {columns} columns only {measured} pieces in {} containers were measured",
+                which.len()
+            );
+        }
+    }
+
+    #[test]
+    fn every_network_is_reachable_by_keyboard_through_the_shelf() {
+        // A CEILING THAT HIDES ROWS THE KEYBOARD CANNOT REACH is half a list.
+        // Walking down has to bring the next one INTO the shelf.
+        let t = texts();
+        let snap = machine();
+        let seen: Vec<Network> = (0..20)
+            .map(|i| network(&format!("net {i}"), 90 - u8::try_from(i).unwrap_or(0)))
+            .collect();
+        let f = facts(&snap, &seen);
+        let mut v = View::fresh();
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let band = v
+            .shelves(&rows)
+            .into_iter()
+            .find(|b| b.shelf == Shelf::Wifi)
+            .expect("no Wi-Fi shelf");
+        assert_eq!(band.lines, SHELF_LINES);
+        assert_eq!(band.total, seen.len());
+
+        // Walk to the shelf's first row, then all the way down it.
+        v = View::fresh();
+        let first = rows
+            .iter()
+            .position(|r| r.shelf.map(|(s, _)| s) == Some(Shelf::Wifi) && !r.heading)
+            .expect("the shelf drew nothing");
+        v.clicked(first, &rows);
+        let mut names = std::collections::BTreeSet::new();
+        for _ in 0..seen.len() * 2 {
+            let rows = v.rows(&f, DECIDING_WIDTH, &t);
+            if let Some(Target::Wireless(n)) = rows.get(v.cursor()).map(|r| r.target.clone()) {
+                names.insert(n.ssid.clone());
+            }
+            let _ = v.key(Press::Down, &f, &t);
+        }
+        assert_eq!(
+            names.len(),
+            seen.len(),
+            "the keyboard reached {} of {} networks",
+            names.len(),
+            seen.len()
+        );
+    }
+
+    #[test]
+    fn a_remembered_network_out_of_range_is_listed_and_can_be_forgotten() {
+        // IT WAS NOWHERE. `saved` was a word beside a network the radio could
+        // see, so "which Wi-Fi does this machine know?" answered "the ones you
+        // are near", and forgetting one you are not near was impossible.
+        let t = texts();
+        let mut snap = machine();
+        snap.saved = vec![Saved {
+            at: "/s/9".to_owned(),
+            id: "the office".to_owned(),
+            kind: "802-11-wireless".to_owned(),
+            ssid: Some("the office".to_owned()),
+        }];
+        let rows = View::fresh().rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        let row = rows
+            .iter()
+            .find(|r| r.target == Target::Saved("/s/9".to_owned()))
+            .expect("the remembered network is in no list");
+        assert_eq!(row.shelf.map(|(s, _)| s), Some(Shelf::Remembered));
+        assert!(
+            row.fields.iter().any(|f| f.text.contains("the office")),
+            "the row does not say which network it is"
+        );
+
+        // AND A PROFILE WHOSE NAME IS NOT THE NETWORK IS NOT LISTED TWICE.
+        //
+        // `id` is a name somebody typed and NetworkManager lets it be
+        // anything: a profile renamed to `home` still joins `NET_2G4A1`, and
+        // the daemon calls a second profile for one network `MyWifi 1`.
+        // Matched by name, the same network appeared as in range AND as out
+        // of it.
+        snap.saved = vec![Saved {
+            at: "/s/9".to_owned(),
+            id: "home".to_owned(),
+            kind: "802-11-wireless".to_owned(),
+            ssid: Some("a house".to_owned()),
+        }];
+        let seen = vec![network("a house", 90)];
+        let rows = View::fresh().rows(&facts(&snap, &seen), DECIDING_WIDTH, &t);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.target == Target::Saved("/s/9".to_owned())),
+            "a network in range was listed again as out of range"
+        );
+    }
+
+    #[test]
+    fn tab_walks_the_sections_in_a_ring_and_puts_each_title_at_the_top() {
+        // NINE SECTIONS IN ONE LIST is a lot of `<down>`, and the owner asked
+        // for the ring. What makes it useful is the anchor: landing on a row
+        // whose title is off the screen above it is landing nowhere.
+        let t = texts();
+        let snap = machine();
+        let f = facts(&snap, &[]);
+        let mut v = View::fresh();
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let titles: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.heading && !r.fields.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        assert!(titles.len() >= 4, "too few sections to walk: {titles:?}");
+
+        let mut seen = Vec::new();
+        for _ in 0..titles.len() {
+            assert_eq!(v.key(Press::Section, &f, &t), Errand::Nothing);
+            let top = v.take_anchor().expect("TAB did not ask for a title");
+            assert!(titles.contains(&top), "{top} is not a section's title");
+            assert!(
+                v.cursor() > top && !rows[v.cursor()].heading,
+                "the cursor landed on a heading, where RET does nothing"
+            );
+            seen.push(top);
+        }
+        // A RING: every section once, and back where it started.
+        let mut sorted = seen.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), titles.len(), "the ring skipped a section");
+        assert_eq!(v.key(Press::Section, &f, &t), Errand::Nothing);
+        assert_eq!(v.take_anchor(), Some(seen[0]), "the ring did not close");
+
+        // AND BACKWARDS IS THE OTHER WAY ROUND.
+        assert_eq!(v.key(Press::SectionBack, &f, &t), Errand::Nothing);
+        assert_eq!(v.take_anchor(), Some(*seen.last().unwrap()));
+    }
+
+    #[test]
+    fn the_anchor_answers_once_and_then_the_cursor_is_in_charge() {
+        // Taken, not read: a region that kept scrolling to the anchor would
+        // refuse to follow the arrows afterwards.
+        let t = texts();
+        let snap = machine();
+        let f = facts(&snap, &[]);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Section, &f, &t);
+        assert!(v.take_anchor().is_some());
+        assert!(v.take_anchor().is_none(), "the anchor answered twice");
+        let _ = v.key(Press::Down, &f, &t);
+        assert!(v.take_anchor().is_none(), "an arrow asked for a title");
+    }
+
+    #[test]
     fn a_mark_opens_the_view_on_the_row_it_was_about() {
         let t = texts();
         let mut snap = machine();
@@ -2506,7 +3419,9 @@ mod tests {
         // THE CEILING SAYS WHAT IT HID: silence would read as "that is all".
         assert!(said("2"), "the two it did not draw are not counted");
         // AND THE MONITOR'S TOTALS, in the units the rest of the screen uses.
-        assert!(said("44,2 GB"));
+        // THE SEPARATOR IS THE LANGUAGE'S: asked of the bundle, never written
+        // down, or this passes or fails with whoever runs it.
+        assert!(said(&format!("44{}2 GB", t.decimal_mark())));
         assert!(said(&t.t(ronoctua_i18n::key::NETWORK_FACT_SENT)));
     }
 
@@ -2899,9 +3814,14 @@ mod tests {
 
     #[test]
     fn the_bytes_change_unit_without_losing_the_magnitude() {
-        assert_eq!(readable_bytes(0), "0 B");
-        assert_eq!(readable_bytes(70_123), "70 kB");
-        assert_eq!(readable_bytes(44_220_000_000), "44,2 GB");
+        assert_eq!(readable_bytes(0, ','), "0 B");
+        assert_eq!(readable_bytes(70_123, ','), "70 kB");
+        // THE SEPARATOR IS THE LANGUAGE'S, and both are asserted: the same
+        // number came out `44,2 GB` on an English screen until the mark
+        // started coming in from the bundle.
+        // pt-BR: the comma below is the Portuguese separator, on purpose.
+        assert_eq!(readable_bytes(44_220_000_000, ','), "44,2 GB");
+        assert_eq!(readable_bytes(44_220_000_000, '.'), "44.2 GB");
     }
 
     #[test]

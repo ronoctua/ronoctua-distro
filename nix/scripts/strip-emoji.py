@@ -109,8 +109,8 @@ def main() -> int:
         die(
             f"{len(leftover)} emoji-presentation codepoints are still in the face "
             f"primary (the first is U+{min(leftover):04X}).\n"
-            "       They would be drawn monochrome, and the screen would not have "
-            "como denunciar."
+            "       They would be drawn monochrome, and nothing on screen would "
+            "say so."
         )
 
     # WHAT MUST NOT HAVE LEFT: TEXT presentation. Losing `#` or the digits

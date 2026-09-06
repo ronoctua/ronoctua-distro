@@ -22,6 +22,8 @@ pub fn press_of(id: &str) -> Option<crate::network::Press> {
         "network-link" => Press::Facts,
         "network-lan" => Press::Discover,
         "network-import" => Press::Import,
+        "network-section-next" => Press::Section,
+        "network-section-previous" => Press::SectionBack,
         _ => return None,
     })
 }

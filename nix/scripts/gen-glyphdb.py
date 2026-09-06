@@ -132,6 +132,15 @@ def chrome_size(ink_ratio: float | None, base: float, icon: float, tolerance: fl
     return float(min(icon, int(base / ink_ratio + 0.5)))
 
 
+# The prefix of a glyph this repository DRAWS, rather than one it is given.
+#
+# It resolves against `assets/icons/marks.nix` and the face `nix/marksgen.nix`
+# builds out of it, instead of against `glyphnames.json` and the Nerd Font —
+# and it is checked exactly as hard: the codepoint has to be in the real cmap
+# of the real face, and the ink is measured on the glyph that was written.
+OURS = "ours-"
+
+
 def build_icon_table(
     tokens: dict,
     names: dict,
@@ -140,20 +149,54 @@ def build_icon_table(
     base: float,
     icon: float,
     tolerance: float,
+    marks: dict,
+    marks_font: TTFont | None,
 ) -> dict:
     out = {}
     missing = []
     cmap = font.getBestCmap()
     glyphs = font.getGlyphSet()
+    ours_cmap = marks_font.getBestCmap() if marks_font else {}
+    ours_glyphs = marks_font.getGlyphSet() if marks_font else {}
 
-    def ink(cp: int) -> float | None:
-        pen = BoundsPen(glyphs)
-        glyphs[cmap[cp]].draw(pen)
+    def ink(cp: int, where=None) -> float | None:
+        table, shapes = (cmap, glyphs) if where is None else where
+        pen = BoundsPen(shapes)
+        shapes[table[cp]].draw(pen)
         return None if pen.bounds is None else pen.bounds[3] - pen.bounds[1]
 
+    # THE DIGIT IS ALWAYS THE PRIMARY FACE'S, for a mark as much as for an
+    # icon: the ratio says how tall the drawing stands beside the TEXT it is
+    # drawn next to, and the text is never in the marks face.
     digit = ink(ord("0"))
 
     for token, glyph in sorted(tokens.items()):
+        if glyph.startswith(OURS):
+            name = glyph[len(OURS) :]
+            entry = marks.get(name)
+            if entry is None:
+                missing.append((token, glyph, "is not declared in assets/icons/marks.nix"))
+                continue
+            cp = entry["codepoint"]
+            if cp not in ours_cmap:
+                missing.append(
+                    (token, glyph, f"U+{cp:05X} is missing from the marks face's cmap")
+                )
+                continue
+            height = ink(cp, (ours_cmap, ours_glyphs))
+            out[token] = {
+                "glyph": glyph,
+                "codepoint": cp,
+                "char": chr(cp),
+                "ink": None if height is None or not digit else round(height / digit, 4),
+                "chrome": chrome_size(
+                    None if height is None or not digit else round(height / digit, 4),
+                    base,
+                    icon,
+                    tolerance,
+                ),
+            }
+            continue
         entry = names.get(glyph)
         if entry is None:
             missing.append((token, glyph, "does not exist in glyphnames.json"))
@@ -187,7 +230,9 @@ def build_icon_table(
             print(f"           {reason}", file=sys.stderr)
         print("", file=sys.stderr)
         print("       Fix it in assets/tokens/icons.nix. The glyph browser", file=sys.stderr)
-        print("       (milestone 7) exists to find the right name without guessing.", file=sys.stderr)
+        print("       (milestone 7) exists to find the right name without guessing;", file=sys.stderr)
+        print(f"       a name starting with `{OURS}` is drawn by this repository and", file=sys.stderr)
+        print("       is declared in assets/icons/marks.nix.", file=sys.stderr)
         sys.exit(1)
 
     print(f"OK: {len(out)} icon tokens resolved against the real cmap")
@@ -335,6 +380,10 @@ def main() -> int:
     # every one of them; the lexicon is keyed on the subtag.
     ap.add_argument("--languages", required=True, nargs="+")
     ap.add_argument("--overlay", type=pathlib.Path, required=True)
+    # THE MARKS THIS REPOSITORY DRAWS, and the face holding them. A token
+    # naming `ours-<mark>` resolves here — see `nix/marksgen.nix`.
+    ap.add_argument("--marks", type=pathlib.Path, required=True, help="marks.json")
+    ap.add_argument("--marks-font", type=pathlib.Path, required=True)
     ap.add_argument("--nf-version", required=True)
     ap.add_argument("--out", type=pathlib.Path, required=True)
     args = ap.parse_args()
@@ -363,6 +412,8 @@ def main() -> int:
             "       Use the name without the `nf-` prefix (e.g. `fa-folder`, not `nf-fa-folder`)."
         )
 
+    marks = json.loads(args.marks.read_text())
+    marks_font = TTFont(args.marks_font, lazy=True)
     icons = build_icon_table(
         tokens,
         raw_names,
@@ -371,6 +422,8 @@ def main() -> int:
         float(sizes["base"]),
         float(sizes["icon"]),
         float(typography["chromeTolerance"]),
+        marks,
+        marks_font,
     )
     token_by_glyph = {v["glyph"]: k for k, v in icons.items()}
     tray_glyphs = {icons[t]["glyph"] for t in tray.values() if t in icons}

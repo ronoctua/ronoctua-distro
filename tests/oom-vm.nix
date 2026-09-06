@@ -123,10 +123,10 @@ pkgs.testers.runNixOSTest {
             total = int(m.succeed(
                 "awk '/^MemTotal:/ {print $2}' /proc/meminfo").strip()) * 1024
             expected = total * ${toString minPercent} / 100
-            assert got[name] > 0, f"{name}: memory.min efetivo e ZERO — a corrente quebrou"
+            assert got[name] > 0, f"{name}: the effective memory.min is ZERO — the chain broke"
             assert abs(got[name] - expected) < expected * 0.15, (
                 f"{name}: memory.min {got[name]} does not match "
-                f"${toString minPercent}% de {total}"
+                f"${toString minPercent}% of {total}"
             )
 
         # AND IT VARIES WITH THE MACHINE. One node proves the number exists; two

@@ -319,10 +319,10 @@ mod tests {
 
     #[test]
     fn the_breadcrumb_names_every_ancestor() {
-        let parts = ancestry(Path::new("/home/pessoa/main"));
+        let parts = ancestry(Path::new("/home/somebody/main"));
         let labels: Vec<_> = parts.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels, ["/", "home", "pessoa", "main"]);
-        assert_eq!(parts[2].1, PathBuf::from("/home/pessoa"));
+        assert_eq!(labels, ["/", "home", "somebody", "main"]);
+        assert_eq!(parts[2].1, PathBuf::from("/home/somebody"));
     }
 
     #[test]

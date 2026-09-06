@@ -754,7 +754,6 @@ network-scanning = scanning…
 network-empty = no networks in range
 network-no-adapter = this machine has no Wi-Fi radio
 network-radio-off = radio off
-network-connecting = connecting…
 network-wired = wired
 network-saved = saved
 network-open = open
@@ -2216,7 +2215,7 @@ notif-action-power-panel = power panel
 notif-action-bluetooth-panel = bluetooth
 
 # THE WAY OUT — the three marks, and what the daemon believes.
-network-way = the way out
+network-way = the internet
 network-airplane = aeroplane mode
 network-tunnel-drop = RET takes it down
 cmd-network-airplane = Aeroplane mode (toggle)
@@ -2231,34 +2230,43 @@ hint-tor = going out through Tor — click opens it
 network-way-unknown = not decided yet
 network-way-none = no way out
 network-way-portal = a login page is in the way
-network-way-limited = connected, but the internet is not answering
-network-way-full = the internet answers
+network-way-limited = connected, but it is not answering
+network-way-full = it answers
 
 # THE VIEW — one list, four headings, and the same rows in both doors.
 network-heading-overview = at a glance
-network-heading-links = links
+network-heading-links = cable and Wi-Fi
 network-heading-wifi = Wi-Fi
+network-heading-remembered = remembered networks
+network-no-remembered = this machine remembers no network it cannot see
+network-out-of-range = not in range
 network-heading-tunnels = tunnels
 network-radio = Wi-Fi radio
 network-on = on
 network-off = off
 network-no-link = this machine has no cable and no radio
+network-no-traffic = nothing has gone in or out yet
 network-no-tunnel = no tunnel here
 network-tunnel-raise = RET brings it up
 network-state-connected = connected
 network-state-connecting = connecting…
 network-state-disconnected = not connected
-network-fact-network = network
-network-fact-band = band
-network-fact-signal = signal
-network-fact-rate = rate
-network-fact-address = address
-network-fact-gateway = gateway
-network-fact-dns = DNS
+network-fact-network = Wi-Fi network
+network-fact-band = Wi-Fi band
+network-fact-signal = signal strength
+network-fact-rate = link speed
+network-fact-address = this machine's address
+network-import-address = your address on it
+network-fact-address-tailnet = IPv4 on the tailnet
+network-fact-address-tailnet6 = IPv6 on the tailnet
+network-fact-gateway = router
+network-fact-dns = DNS server
 network-fact-received = received
+network-fact-received-boot = received since boot
 network-fact-sent = sent
-network-heading-ports = ports
-network-heading-monitor = monitor
+network-fact-sent-boot = sent since boot
+network-heading-ports = open ports
+network-heading-monitor = traffic
 network-no-ports = nothing is listening
 network-port-not-ours = not ours to see
 network-ports-more = { $count ->
@@ -2266,18 +2274,19 @@ network-ports-more = { $count ->
    *[other] and { $count } more of ours
   }
 network-per-second = { $bytes }/s
+number-decimal-mark = .
 # THE UNITS ARE THE SAME IN EVERY LANGUAGE; the DECIMAL SEPARATOR is not, and
 # that is why these are keys with a number in them rather than a string built
 # in the crate.
 network-rate-kilobits = { $rate } kb/s
 network-rate-megabits = { $rate } Mb/s
 network-rate-gigabits = { $rate } Gb/s
-network-no-rate = no link
+network-no-rate = not up
 network-band = { $ghz } GHz
 network-band-unknown = an unusual frequency
-network-heading-lan = this network
+network-heading-lan = machines on this network
 network-lan-nobody = nobody has been spoken to yet
-network-lan-gateway = the way out
+network-lan-gateway = this network's router
 network-lan-this-machine = this machine
 network-lan-looking = looking for the others…
 network-lan-answered = answered
@@ -2289,17 +2298,21 @@ network-lan-swept = { $answered ->
 cmd-network-lan = Look for the other machines here
 network-lan = look
 network-import = bring in
+network-section-next = section
+network-section-previous = section back
 network-hotspot-start = share this connection
 network-hotspot-stop = stop sharing
 network-hotspot-cost = the radio leaves the network it is on: what it shares is the cable
 network-hotspot-on = this machine is the network now
-network-hotspot-password = password
+network-hotspot-password = password for this hotspot
 echo-network-hotspot = sharing as { $network }, password { $password }
 echo-network-hotspot-failed = could not share: { $reason }
 cmd-network-import = Bring a VPN in from a file
+cmd-network-section-next = Next section of the network view
+cmd-network-section-previous = Previous section of the network view
 ask-network-import = Path of the .conf or .ovpn file
-network-import-file = file
-network-import-kind = kind
+network-import-file = file to bring in
+network-import-kind = kind of VPN
 network-import-wireguard = WireGuard
 network-import-openvpn = OpenVPN
 network-import-endpoint = goes to
@@ -2317,9 +2330,9 @@ echo-network-import-failed = could not bring { $file } in: { $reason }
 # THE TWO TUNNELS. Neither is on at rest: Tor does not start at boot and
 # Tailscale needs a login, so a machine that uses neither draws neither
 # heading.
-network-heading-tailscale = tailnet
+network-heading-tailscale = Tailscale
 network-heading-tor = Tor
-network-tailscale-state = tailnet
+network-tailscale-state = the tailnet connection
 network-tailscale-running = up
 network-tailscale-stopped = down
 network-tailscale-needslogin = waiting for a login
@@ -2329,12 +2342,12 @@ network-tailscale-needsmachineauth = waiting to be approved on the tailnet
 network-tailscale-inuseotheruser = another person on this machine is using it
 network-tailscale-login = log in
 network-tailscale-logout = log out
-network-tailscale-routes = accept the tailnet's routes
-network-tailscale-shields = refuse incoming connections
+network-tailscale-routes = accept tailnet routes
+network-tailscale-shields = refuse what comes in
 network-tailscale-online = online
 network-tailscale-offline = offline
 network-tailscale-exit = everything goes through here
-network-tor-state = Tor
+network-tor-state = the Tor service
 network-tor-ready = a circuit is up
 network-tor-not-ready = no circuit
 network-tor-bootstrap = starting, { $percent }%
@@ -2343,11 +2356,11 @@ network-tor-circuits = { $count ->
    *[other] { $count } circuits open
   }
 network-tor-identity = ask for a new identity
-network-fact-name = name
-network-fact-tailnet = tailnet
+network-fact-name = name on the tailnet
+network-fact-tailnet = your tailnet's name
 network-fact-magic-dns = MagicDNS
-network-fact-version = version
-network-fact-socks = SOCKS
+network-fact-version = Tor's version
+network-fact-socks = SOCKS address
 echo-network-login = open { $url } to finish logging in
 # THE HINT LINE'S WORDS — the id read as a text key, short because the line
 # is one line. The long form is `cmd-<id>`, which the manual reads.

@@ -17,7 +17,9 @@ linhas. Niri como compositor, camada de shell própria em Rust. O porquê de cad
 8. **Zero string literal em UI.** Tudo por `text-key`, completo em TODOS os idiomas declarados.
 9. **Zero valor visual hard-coded** — cor, fonte, tamanho, espaçamento, codepoint: tudo por token.
 10. **Ícones da UI são glifos da fonte.** O superpacote é só fallback de pixmap para apps
-    estrangeiros; nenhum componente do design system o consulta.
+    estrangeiros; nenhum componente do design system o consulta. Marca que fonte nenhuma tem se
+    DESENHA numa nossa (`assets/icons/marks.nix`, `nix/marksgen.nix`, `U+F3000`) — pontos numa
+    grade, e o que é DESENHADO é centrado, não a grade.
 11. **Buffers WASM não tocam Wayland, não recebem valores de token, não traduzem.**
 12. **`ronoctua-design`, `ronoctua-protocol` e `ronoctua-syntax` compilam para `wasm32-wasip2`.**
 13. **Nenhum dado pessoal** — nem `host.nix`, `facter.json`, `~/.shellrc.local`: nascem NA máquina.
@@ -269,13 +271,28 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   tecla anda (`n h` ensinou `n h` por semanas depois de virar `n n`) e a palavra "LEADER" não é
   tecla de ninguém — em produção é `SUPER`, no aninhado é `CTRL ALT SPC`.
 - **`LEADER s n` é rede; `LEADER s s`, Syncthing** (os dois moraram em `r`, que morreu — rede é do SISTEMA, ao lado de memória e disco). Só o `ronoctua-network` fala NetworkManager; `overrideFolders` FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo: `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
-- **A rede é UMA `View` com DUAS portas** (`s n n` rodapé, `s n w` janela) e NOVE seções como
-  linhas, no molde da energia: relance (a saída e o avião), enlaces (endereço, gateway, DNS, taxa),
-  Wi-Fi (rádio, redes, hotspot), túneis, tailnet, Tor, portas, esta rede e monitor. **Dica GERADA da
-  `OF_THE_VIEW`**; senha e caminho se digitam no RODAPÉ, e a janela DIZ isso (molde da pergunta de
-  pareamento). **Cinco marcas na modeline** — `airplane`, `net-off`, `vpn`, `tailscale`, `tor` —, e
-  todas somem em repouso: uma máquina conectada, sem túnel e fora do avião não desenha nada.
-  Clicar numa abre a vista NA LINHA dela.
+- **A rede é UMA `View` com DUAS portas** (`s n n` rodapé, `s n w` janela) e DEZ seções como
+  linhas, no molde da energia: relance, enlaces, Wi-Fi, redes lembradas, túneis, tailnet, Tor,
+  portas, esta rede e monitor. **Dica GERADA da `OF_THE_VIEW`**; senha e caminho se digitam no
+  RODAPÉ, e a janela DIZ isso (molde da pergunta de pareamento). **Cinco marcas na modeline** —
+  `airplane`, `net-off`, `vpn`, `tailscale`, `tor` —, e todas somem em repouso. **`TAB` anda no
+  ANEL das seções** e o clique numa marca abre a vista com o TÍTULO daquela seção no topo: as duas
+  saem do mesmo campo (`View::anchor`, honrado UMA vez, senão a região recusaria as setas depois).
+  **Lista que se lê continuamente vai numa PRATELEIRA** (`Shelf`: Wi-Fi, lembradas, portas,
+  vizinhos, pares): altura FIXA de `space.shelf.lines` para TODAS, completada com vazio, e **CAIXA
+  própria** (`chrome::shelf_box`) — fundo discreto (`surface.shelf`, 0,018 acima do chrome), largura
+  de UMA linha dela (`markerCells + labelCells + valueCells`, mais ar e a barra), barra na sua
+  ÚLTIMA célula e uma célula livre antes da barra da página. As duas barras moravam na mesma coluna
+  e o dono as viu colidir; depois o fundo, que era a largura da superfície e era empilhado DEPOIS,
+  pintava por cima do polegar da página — *"ela acaba desaparecendo e mudando de tamanho"*. O fundo
+  vai antes de toda faixa, e a faixa de hover é CORTADA na caixa. A seta na borda rola a PRATELEIRA;
+  **a roda é da PÁGINA** — ela chegou a rolar a prateleira sob o ponteiro, pela regra do gerenciador,
+  mas as seções dele são COLUNAS lado a lado e uma prateleira é uma faixa dentro de uma lista, então
+  com cinco delas a página parou de rolar. A frase vazia da seção mora DENTRO da prateleira: fora
+  dela, zero itens desenhava uma linha e um item desenhava cinco, e tudo abaixo andava quatro. O
+  TOTAL viaja no `Row`, senão contá-lo custaria montar a lista duas vezes. **Rede lembrada FORA de alcance existia em lugar nenhum** —
+  `saved` era uma palavra ao lado de uma rede visível, então esquecer uma que não se está perto era
+  impossível.
 - **`ronoctua-tunnel` é a fronteira dos dois túneis que não são do NM**: Tailscale pelo local API
   (HTTP sobre socket, `--operator=<user>` é o que dispensa root; toda preferência vai MASCARADA, ou
   o daemon zera o resto) e Tor pelo socket de controle (cookie em `/run/tor`, **`CookieAuthFile`
@@ -293,6 +310,32 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   máquina e uma linha `DNS` muda todo nome que se procura — as duas viram frase na tela antes do
   `RET`. Quem importa é o `nmcli` (a tradução são trinta ajustes que o upstream mantém); a chave
   privada NUNCA sai do arquivo para a prévia.
+- **Rótulo e valor têm UMA aritmética** (`chrome::field_pair`), e as três vistas que são lista de
+  rótulo+valor a chamam. Eram três cópias com três respostas — valor curto na borda DIREITA da
+  superfície, valor longo no terço, fato no terço sempre —, e numa janela larga isso punha `off` a
+  cento e cinquenta colunas de `modo avião`. Agora o valor começa numa COLUNA fixa
+  (`space.view.labelCells`, limitada a metade da linha), o que faz das três uma lista de
+  definições. **Linha que responde ao `RET` ganha `icon.row-acts` na frente**; a informativa deixa
+  as células vazias, então as duas alinham — e a diferença sobrevive a quem não separa tons.
+  **Item de LISTA inverte os pesos** do fato: o nome da coisa é a metade forte. **Ar antes de todo
+  título** (`chrome::AIR`, um `heading` sem campos), e o título recua para fora das linhas dele.
+- **Toda janela que rola desenha a barra dela** (`chrome::list_bar`, e o `on_the_list_bar` +
+  `list_offset_at` que a fazem um CONTROLE): cinco janelas não desenhavam nenhuma — só o
+  gerenciador — e a roda era o único caminho. Cobra o `every-list-window-has-a-bar`, que achou a
+  quinta sozinho. **A RODA é uma aritmética só** (`surface::axis_lines` + `wheel_arrived` +
+  `wheel_lines`, e o rodapé junto): a LINHA é a primitiva e o detente é ela dividida — as cinco
+  janelas escreveram `(pixels / linha) as i64 * 3`, que joga a fração fora e multiplica o resto por
+  três, então gesto lento não movia nada e depois pulava. Sobra fica guardada; a diferença entre
+  rolar e paginar vive no PASSO do modo, não no acumulador.
+  **Chegada de daemon NÃO segue o cursor** (`Footer::settle_region`): as três da rede e a do rádio
+  chamavam `follow_cursor`, e um relógio de 10 s jogava a página de volta para onde o cursor
+  estava. Chegada ajusta; tecla de gente é que segue — e nem o cursor que o `settle` moveu conta,
+  porque quem o moveu foi a chegada. **O separador decimal é da LÍNGUA**
+  (`Texts::decimal_mark`): estava escrito nos dois formatadores de tamanho, então uma tela inglesa
+  dizia `44,2 GB`.
+- **Dois rótulos de UMA vista não dizem a mesma coisa** (`labels-of-a-view-are-distinct`): havia
+  TRÊS `tailnet` e TRÊS `address`, cada um um fato diferente com a mesma palavra, numa lista onde a
+  palavra é a única coisa que diz qual fato é. Verbo da dica e formato com `{ $ }` não contam.
 - **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix`, `*.ftl`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9. **Layout é aritmética de inteiros**, em duas fases: preferência, e "nada vaza da tela".
 - **Cor NENHUMA é escrita à mão: `colors.nix` é RECEITA** (`text.primary = "neutral.text-strong"`) e o valor sai de `nix/scripts/gen-theme.py`, por tema, das SEMENTES em `assets/themes/<id>.nix` (matiz, croma relativo, shift, torção) — a lista é `assets/themes/themes.nix`, o primeiro é o padrão, e nenhum outro sítio nomeia um tema (inv. 16). A escada é a paleta do owl feita regra; toda relação que era prosa é GATE (contraste APCA, distância ΔE_ok, matiz ≥ 14°, faixa protan 158–172°), e o owl gerado é comparado chave a chave com `owl.reference.nix` (≤ 0,03, ou `deviations` com motivo). `nix build .#themes` deixa o `report.md`. **Mexer no gerador reconstrói o workspace** (o caminho do `tokens.rs` muda): itere com `python3 nix/scripts/gen-theme.py --report-only` no scratchpad.
 - **`LEADER s t` escolhe o tema, e mover o cursor PRÉ-VISUALIZA só no rodapé**; `RET` grava `$XDG_CONFIG_HOME/ronoctua/theme.json`, `Esc` volta ao gravado. A lista mostra SÓ o id. **A segunda coluna (`←/→`) é o FUNDO do compositor — preto ou `surface.backdrop`, o degrau neutro ABAIXO do chrome no matiz da semente `backdrop`** —, e a prévia dele é o próprio niri: o fragmento é escrito ao mover o cursor e reescrito no `Esc`; `RET` grava o PAR. **O arquivo É o broadcast**: as cinco portas vigiam `theme.json` por inotify (`Notice::on_file`) e repintam; `RONOCTUA_THEME` (opção `ronoctua.theme`) é o piso, o primeiro tema é o chão. O rodapé COPIA os fragmentos do tema (`$RONOCTUA_THEMES/<id>/`): `niri-theme.kdl` (borda E fundo — `window-rule` mais `layout { background-color }`, que o niri FUNDE ao incluir; dois `layout` no MESMO arquivo ele recusa; o config o inclui `optional=true` no FIM e recarrega) e `ghostty-theme.conf` (`config-file = ?…`, processo novo — e a entrada `.desktop` é REESCRITA sem o `--gtk-single-instance=true` do upstream: flag vence arquivo). **O Ghostty só lê `~/.config/ghostty/config`** — `/etc/xdg` ele NÃO lê —, e é lá que o home-manager põe o config do módulo. GTK/Qt vestem o MODO escuro (Qt só no perfil `full`: custa 591 MiB); a extensão, o padrão do build.

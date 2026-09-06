@@ -21,9 +21,11 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ### 0.00004. A rede não sabe nomes, e três coisas do plano ficaram medidas · pequeno cada
 
-A vista da rede está inteira: uma `View` com duas portas (`s n n` e `s n w`), oito seções, dica
-GERADA da `OF_THE_VIEW`, cinco marcas na modeline, VPN com prévia antes de importar, Tailscale, Tor,
-portas, monitor, quem está na rede e hotspot. O que ficou de fora tem motivo, e cada um é pequeno:
+A vista da rede está inteira: uma `View` com duas portas (`s n n` e `s n w`), dez seções com
+prateleiras de altura fixa, anel de `TAB`, dica GERADA da `OF_THE_VIEW`, cinco marcas na modeline
+(a da Tailscale desenhada por nós), VPN com prévia antes de importar, Tailscale, Tor, portas,
+monitor, quem está na rede, redes lembradas e hotspot. O que ficou de fora tem motivo, e cada um é
+pequeno:
 
 - **Nome de máquina na LAN.** As linhas de "esta rede" mostram endereço, fabricante (OUI do nmap) e
   interface — não o NOME. Quem sabe o nome de um vizinho é o `resolve1.ResolveAddress`, uma chamada
@@ -49,6 +51,21 @@ portas, monitor, quem está na rede e hotspot. O que ficou de fora tem motivo, e
   ter chave. Falta o terceiro: um check que prenda o `Errand` de cada vista sendo tratado nas DUAS
   portas sem `_ =>`. Hoje o compilador já pega o que falta numa porta (`match` sem `_`), mas não pega
   os dois lados tratando o MESMO `Errand` de jeitos diferentes.
+- **Um emoji num rótulo come uma célula do ar.** `layout::width` conta CLUSTERES e o avanço de um
+  emoji é 1,245 em contra os 0,600 da célula — quase duas. A coluna do valor é calculada com essa
+  régua, então um SSID com um emoji desenha uma célula mais larga do que foi medido. As duas células
+  de ar de `chrome::field_pair` absorvem UM; com dois, o rótulo encosta no valor. Trocar a régua é
+  trocá-la em todo o sistema — é a mesma função que corta em toda parte —, e o preço é maior do que
+  o defeito.
+- **Prateleira mais alta do que a região não tem barra.** Num rodapé cujo teto (`expansion.maxLines`
+  contra `maxFooterPct`) fica abaixo de `space.shelf.lines`, nenhuma prateleira cabe inteira, então
+  nenhuma ganha barra. Teclado e roda continuam alcançando as linhas: a seta na borda rola a
+  prateleira e o texto sob o cursor muda, que é o sinal.
+- **A prateleira só é arrastável quando cabe INTEIRA na tela.** A barra de uma prateleira meio fora
+  da região precisaria de um trilho mais curto do que a faixa, e arrastar esse trilho moveria a
+  lista por uma quantidade diferente do arrasto. Quando ela está meio fora, quem está se movendo é a
+  REGIÃO, e a barra da região já diz isso. Uma prateleira que atravessa a borda continua rolando por
+  teclado e por roda.
 
 - acabou quando: cada item acima ou existe, ou está escrito aqui com o motivo de não existir
 

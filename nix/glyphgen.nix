@@ -35,6 +35,11 @@
   # for every one of them, keyed on the subtag.
   languages,
   overlayFile,
+  # The face holding the marks this repository DRAWS, and the table naming
+  # them. A token whose glyph starts with `ours-` resolves against these two
+  # instead of against `glyphnames.json` and the Nerd Font — and is checked
+  # just as hard, against the real cmap of the real face.
+  marksdb,
 }:
 
 let
@@ -90,6 +95,8 @@ let
                 --lexicon ${lexiconFile} \
                 --languages ${lib.escapeShellArgs languages} \
                 --overlay ${overlayFile} \
+                --marks ${marksdb.db}/marks.json \
+                --marks-font ${marksdb.db}/NoctuaMarks.ttf \
                 --nf-version ${version} \
                 --out "$1"
             }
@@ -143,6 +150,17 @@ let
   badTokens = writeText "icon-tokens-bad.json" (
     builtins.toJSON ((import iconTokensFile) // { negative-fixture = "md-this-glyph-does-not-exist"; })
   );
+
+  # AND THE SAME FOR A MARK THIS REPOSITORY DRAWS.
+  #
+  # `ours-` resolves down a different branch of `build_icon_table` — against
+  # `marks.json` and the marks face, not against `glyphnames.json` and the Nerd
+  # Font — and the fixture above exercises only the other one. A whole
+  # resolution path with no negative fixture is exactly what that fixture's own
+  # comment says must not exist.
+  badMark = writeText "icon-tokens-bad-mark.json" (
+    builtins.toJSON ((import iconTokensFile) // { negative-fixture = "ours-this-mark-is-not-drawn"; })
+  );
 in
 {
   inherit version glyphnames;
@@ -158,6 +176,13 @@ in
   negativeFixture = mkGen {
     name = "ronoctua-glyphdb-negative-fixture";
     tokens = badTokens;
+    expectFailure = true;
+  };
+
+  # The same, down the `ours-` branch.
+  negativeMarkFixture = mkGen {
+    name = "ronoctua-glyphdb-negative-mark-fixture";
+    tokens = badMark;
     expectFailure = true;
   };
 }

@@ -1354,7 +1354,7 @@ impl Host {
         let hit = advance_sequence(&self.keymap, &mut pending, c);
         self.pending = pending;
         if let Some(command) = hit {
-            tracing::info!(command, "keymap do buffer");
+            tracing::info!(command, "the buffer's keymap");
             return Some(ronoctua_protocol::Input::Command(command));
         }
         None

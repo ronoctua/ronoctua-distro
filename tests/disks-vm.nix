@@ -160,7 +160,7 @@ pkgs.testers.runNixOSTest {
           )
           assert "HintSystem:" in info, (
               f"udisks did not publish HintSystem, which is the property "
-              f"todo o desenho depende:\n{info}"
+              f"the whole drawing depends on:\n{info}"
           )
 
       with subtest("with no active session, mounting is refused by name — and does NOT hang"):

@@ -753,7 +753,6 @@ network-scanning = varrendo…
 network-empty = nenhuma rede ao alcance
 network-no-adapter = esta máquina não tem rádio Wi-Fi
 network-radio-off = rádio desligado
-network-connecting = conectando…
 network-wired = cabo
 network-saved = salva
 network-open = aberta
@@ -2207,7 +2206,7 @@ notif-action-power-panel = painel de energia
 notif-action-bluetooth-panel = bluetooth
 
 # A SAÍDA — as três marcas, e o que o daemon acredita.
-network-way = a saída
+network-way = a internet
 network-airplane = modo avião
 network-tunnel-drop = RET derruba
 cmd-network-airplane = Modo avião (alterna)
@@ -2222,34 +2221,43 @@ hint-tor = saindo pelo Tor — clique abre
 network-way-unknown = ainda não decidido
 network-way-none = sem saída
 network-way-portal = uma página de login está no caminho
-network-way-limited = conectado, mas a internet não responde
-network-way-full = a internet responde
+network-way-limited = conectado, mas ela não responde
+network-way-full = ela responde
 
 # A VISTA — uma lista, quatro títulos, e as mesmas linhas nas duas portas.
 network-heading-overview = num relance
-network-heading-links = enlaces
+network-heading-links = cabo e Wi-Fi
 network-heading-wifi = Wi-Fi
+network-heading-remembered = redes lembradas
+network-no-remembered = esta máquina não lembra nenhuma rede que não esteja vendo
+network-out-of-range = fora de alcance
 network-heading-tunnels = túneis
 network-radio = rádio Wi-Fi
 network-on = ligado
 network-off = desligado
 network-no-link = esta máquina não tem cabo nem rádio
+network-no-traffic = nada entrou nem saiu ainda
 network-no-tunnel = nenhum túnel aqui
 network-tunnel-raise = RET levanta
 network-state-connected = conectado
 network-state-connecting = conectando…
 network-state-disconnected = sem conexão
-network-fact-network = rede
-network-fact-band = banda
-network-fact-signal = sinal
-network-fact-rate = taxa
-network-fact-address = endereço
-network-fact-gateway = gateway
-network-fact-dns = DNS
+network-fact-network = rede Wi-Fi
+network-fact-band = banda do Wi-Fi
+network-fact-signal = força do sinal
+network-fact-rate = velocidade da conexão
+network-fact-address = endereço desta máquina
+network-import-address = seu endereço nela
+network-fact-address-tailnet = IPv4 no tailnet
+network-fact-address-tailnet6 = IPv6 no tailnet
+network-fact-gateway = roteador
+network-fact-dns = servidor DNS
 network-fact-received = recebido
+network-fact-received-boot = recebido desde o boot
 network-fact-sent = enviado
-network-heading-ports = portas
-network-heading-monitor = monitor
+network-fact-sent-boot = enviado desde o boot
+network-heading-ports = portas abertas
+network-heading-monitor = tráfego
 network-no-ports = ninguém escutando
 network-port-not-ours = não é nosso para ver
 network-ports-more = { $count ->
@@ -2257,18 +2265,19 @@ network-ports-more = { $count ->
    *[other] e mais { $count } nossos
   }
 network-per-second = { $bytes }/s
+number-decimal-mark = ,
 # AS UNIDADES SÃO AS MESMAS EM TODO IDIOMA; o SEPARADOR DECIMAL não é, e é por
 # isso que estas são chaves com um número dentro, e não uma string montada no
 # crate.
 network-rate-kilobits = { $rate } kb/s
 network-rate-megabits = { $rate } Mb/s
 network-rate-gigabits = { $rate } Gb/s
-network-no-rate = sem enlace
+network-no-rate = não está de pé
 network-band = { $ghz } GHz
 network-band-unknown = uma frequência incomum
-network-heading-lan = esta rede
+network-heading-lan = máquinas nesta rede
 network-lan-nobody = ninguém foi falado ainda
-network-lan-gateway = a saída
+network-lan-gateway = o roteador desta rede
 network-lan-this-machine = esta máquina
 network-lan-looking = procurando as outras…
 network-lan-answered = respondeu
@@ -2280,17 +2289,21 @@ network-lan-swept = { $answered ->
 cmd-network-lan = Procurar as outras máquinas daqui
 network-lan = procurar
 network-import = trazer
+network-section-next = seção
+network-section-previous = seção anterior
 network-hotspot-start = compartilhar esta conexão
 network-hotspot-stop = parar de compartilhar
 network-hotspot-cost = o rádio sai da rede em que está: o que ele compartilha é o cabo
 network-hotspot-on = esta máquina é a rede agora
-network-hotspot-password = senha
+network-hotspot-password = senha do ponto de acesso
 echo-network-hotspot = compartilhando como { $network }, senha { $password }
 echo-network-hotspot-failed = não deu para compartilhar: { $reason }
 cmd-network-import = Trazer uma VPN de um arquivo
+cmd-network-section-next = Próxima seção da vista de rede
+cmd-network-section-previous = Seção anterior da vista de rede
 ask-network-import = Caminho do arquivo .conf ou .ovpn
-network-import-file = arquivo
-network-import-kind = tipo
+network-import-file = arquivo a trazer
+network-import-kind = tipo de VPN
 network-import-wireguard = WireGuard
 network-import-openvpn = OpenVPN
 network-import-endpoint = vai para
@@ -2308,9 +2321,9 @@ echo-network-import-failed = não deu para trazer { $file }: { $reason }
 # OS DOIS TÚNEIS. Nenhum fica ligado em repouso: o Tor não sobe no boot e o
 # Tailscale precisa de login, então uma máquina que não usa nenhum dos dois não
 # desenha nenhum dos títulos.
-network-heading-tailscale = tailnet
+network-heading-tailscale = Tailscale
 network-heading-tor = Tor
-network-tailscale-state = tailnet
+network-tailscale-state = a conexão ao tailnet
 network-tailscale-running = de pé
 network-tailscale-stopped = desligado
 network-tailscale-needslogin = esperando um login
@@ -2320,12 +2333,12 @@ network-tailscale-needsmachineauth = esperando aprovação no tailnet
 network-tailscale-inuseotheruser = outra pessoa nesta máquina está usando
 network-tailscale-login = entrar
 network-tailscale-logout = sair
-network-tailscale-routes = aceitar as rotas do tailnet
-network-tailscale-shields = recusar conexões de entrada
+network-tailscale-routes = aceitar rotas do tailnet
+network-tailscale-shields = recusar o que chega
 network-tailscale-online = on-line
 network-tailscale-offline = off-line
 network-tailscale-exit = tudo sai por aqui
-network-tor-state = Tor
+network-tor-state = o serviço do Tor
 network-tor-ready = há um circuito
 network-tor-not-ready = sem circuito
 network-tor-bootstrap = subindo, { $percent }%
@@ -2334,11 +2347,11 @@ network-tor-circuits = { $count ->
    *[other] { $count } circuitos abertos
   }
 network-tor-identity = pedir uma identidade nova
-network-fact-name = nome
-network-fact-tailnet = tailnet
+network-fact-name = nome no tailnet
+network-fact-tailnet = nome do seu tailnet
 network-fact-magic-dns = MagicDNS
-network-fact-version = versão
-network-fact-socks = SOCKS
+network-fact-version = versão do Tor
+network-fact-socks = endereço SOCKS
 echo-network-login = abra { $url } para terminar de entrar
 # AS PALAVRAS DA LINHA DE DICAS — o id lido como chave de texto, curtas porque
 # a linha é uma só. A forma longa é `cmd-<id>`, que o manual lê.

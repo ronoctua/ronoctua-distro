@@ -104,11 +104,11 @@ in
     # not exist and evaluation dies with "attribute 'dev' missing". All the
     # `ronoctua.*` options live in one place anyway (invariant 16).
     dev = {
-      android = lib.mkEnableOption "o SDK do Android, o Studio e o Flutter" // {
+      android = lib.mkEnableOption "the Android SDK, Studio and Flutter" // {
         default = true;
       };
       androidNdk = lib.mkEnableOption "the NDK (a few GB more; only for native code)";
-      toolchains = lib.mkEnableOption "os compiladores: rust, go, python, node, gcc" // {
+      toolchains = lib.mkEnableOption "the toolchains: rust, go, python, node, gcc" // {
         default = true;
       };
     };

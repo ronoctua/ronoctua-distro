@@ -149,8 +149,8 @@ pkgs.testers.runNixOSTest {
           )
           owner = machine.succeed("stat -c %U /run/ronoctua-rescue").strip()
           assert owner == user_name, (
-              f"/run/ronoctua-rescue e de `{owner}`; o editor roda como a pessoa "
-              "and would not manage to write"
+              f"/run/ronoctua-rescue belongs to `{owner}`; the editor runs as the "
+              "person and would not manage to write"
           )
 
       with subtest("leaving gives the screen back to where it came from"):

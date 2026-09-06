@@ -281,7 +281,7 @@ pkgs.testers.runNixOSTest {
         assert listed > 0, "the queue emptied before the panel opened"
         assert f"jobs={listed}" in journal, (
             f"the panel opened without the list the footer already had "
-            f"({listed} na queue):\n{journal}"
+            f"({listed} in the queue):\n{journal}"
         )
   '';
 }

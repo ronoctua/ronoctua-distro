@@ -399,6 +399,57 @@ esperada; o `METADATA.version` do `glyphnames.json` também; e todo token de íc
 codepoint que **existe no cmap**. O fixture negativo `icons-unknown-token-fails` prova a
 terceira — sem ele, "o build falha se o codepoint não existir" seria afirmação não testada.
 
+#### A quarta face é a única que este repositório DESENHA
+
+O dono pediu o logotipo da Tailscale na modeline, e ele não existe em nenhuma das cinco fontes.
+Dois invariantes se encontram aí e sobra uma porta só: o 10 diz que ícone de UI é **glifo de
+fonte** e que componente nenhum do design system consulta pixmap; o 9 diz que codepoint é **token**,
+resolvido no build contra um cmap de verdade. Então a marca é desenhada NUMA FACE NOSSA.
+
+O molde já existia — o `nix/lucidegen.nix` constrói uma face, remapeia codepoint e é carregada pelo
+renderer. A diferença é que esta não tem fonte upstream atrás dela:
+
+* **`assets/icons/marks.nix` é a verdade**, e declara CÍRCULOS numa grade, não um caminho. Um
+  caminho é uma coisa que ninguém lê nem ajusta; a marca da Tailscale são três linhas que se
+  **veem** (`"ooo" "***" "o*o"`, `*` cheio e `o` anel). O dia em que uma marca precisar de uma curva
+  que não é círculo, vai precisar de um caminho — e de uma razão escrita ao lado.
+* **`U+F3000`**: passa do Nerd Fonts (que para em `U+F1AF0`) e da Lucide (remapeada para `U+F2000`).
+  A face pedida por NOME vence a cadeia de fallback, então uma marca dividindo codepoint com um
+  glifo do Nerd Fonts sairia desenhada como OUTRO símbolo — não tofu, que se vê, mas um ícone
+  bonito e errado. O gerador confere a faixa nas três outras faces antes de escrever, e
+  `marks-range-taken-fails` prova a guarda.
+* **O AVANÇO É COPIADO, e a caixa é um TETO.** Medido sobre os 6896 glifos `md-` da face
+  construída: o AVANÇO é 600 em todos, e é ele que decide quantas células um glifo ocupa. A caixa
+  de tinta não é constante — 747 caixas distintas, a mais comum `(0, 40, 600, 640)` em 1992 delas,
+  e o `md-battery` em `(28, -114, 572, 794)`. Então o gerador exige avanço IGUAL e tinta DENTRO da
+  caixa do glifo de referência. A primeira versão exigia caixa igual, apoiada na afirmação de que
+  todo ícone compartilha uma — e recusava desenhos legítimos: uma marca cujos pontos claros são
+  menores não alcança a borda de cima. Se o tamanho na tela está certo é outra pergunta, e ela tem
+  check próprio (`chrome-icons-match-the-text`), que mede a tinta contra o dígito.
+* **Buraco tem de ser buraco.** TrueType preenche pela regra não-zero: um anel é um contorno externo
+  e um interno enrolado ao CONTRÁRIO, e enrolar os dois igual dá um disco cheio sem diagnóstico
+  nenhum. A área com sinal dos contornos é comparada — o fato em si, e não uma rasterização dele.
+
+**Quatro pontos, e não nove.** O desenho de que ela saiu tem nove numa grade três por três: cinco
+claros e quatro cheios. Carregar os cinco claros falhou duas vezes na medição — como anéis no 2,5 do
+próprio desenho eles se quebram a 13 px, e no 1,6 pesam 75% de um ponto cheio contra os 31% do
+original. Mas os cinco claros nunca eram o ponto: o que distingue esta marca de uma grade de pontos
+qualquer — que foi o que o dono recusou — é a FORMA que os cheios fazem, e ela sobrevive sozinha. Com
+os outros cinco fora, sobra uma marca legível a 13 px, que não é um menu e não é o logotipo de
+ninguém: parecida, e não igual. E o desenho é nosso, então nada aqui se apoia em uso nominativo.
+
+**O que é DESENHADO é centrado, não a grade.** Uma marca pode usar só parte dela — quatro pontos de
+nove — e centrar a grade deixa o desenho baixo ou de lado dentro da caixa, o que numa modeline lê
+como um glifo que escorregou.
+
+**Os dois tons, decididos OLHANDO** (o registro da tentativa que não vingou): A 22 px — o único tamanho em que esta marca é desenhada, nos
+dois sítios que a usam — a marca tem 13 px de tinta e cada ponto 3,3 px. O anel de 1,6 rasteriza
+como um QUADRADO vazado de três pixels e pesa 75% do disco ao lado, contra os 31% do desenho
+original; no 2,5 do próprio desenho ele se quebra em marcas soltas. O ponto MENOR sai com dois
+pixels contra os três do cheio: mais claro, e os nove centros — que é o que o olho reconhece —
+continuam todos lá. A escolha é do tamanho, não do gosto: o anel é fiel ao DESENHO em qualquer
+tamanho e o ponto menor é fiel ao TOM no tamanho em que isto é desenhado.
+
 Medido: 10.764 nomes no `glyphnames.json`, 10.473 codepoints na fonte, **0 que não resolvem**.
 
 #### As tags são bilíngues, e isso é uma garantia — não um esforço
@@ -2635,7 +2686,7 @@ de uma.
 **Isso não contradiz a regra da fonte única.** O que ela proíbe é o renderizador *consultar* o
 fontconfig; a cadeia
 aqui é **declarada** em duas linhas de código, não descoberta em tempo de execução. "Qual face
-desenhou isto" continua tendo resposta fixa, e o check `renderer-loads-three-faces` a fixa. A guarda
+desenhou isto" continua tendo resposta fixa, e o check `renderer-loads-four-faces` a fixa. A guarda
 conta o número **exato** de faces, e não `> 0`: com `> 0`, a face de emoji poderia sumir do build e o
 único sintoma seria o tofu voltando na tela de quem procura um emoji.
 
@@ -2867,7 +2918,7 @@ O critério exige que cada rótulo, nos **dois idiomas**, ache a categoria intei
 #### Um check citado num comentário não é um check
 
 O `text.rs` prometeu por dois marcos um check com nome e tudo, e ele **não existia** — ninguém
-confere se o nome citado num comentário corresponde a algo. `renderer-loads-three-faces` faz mais do
+confere se o nome citado num comentário corresponde a algo. `renderer-loads-four-faces` faz mais do
 que contar faces: afirma qual delas desenha texto, qual desenha emoji e qual desenha ícone, e
 **testemunha a colisão**, exigindo que a Iosevka ainda responda por `U+E0A0`. No dia em que ela
 deixar de responder, o check falha e alguém relê a decisão do remapeamento em vez de redescobri-la
@@ -2949,7 +3000,7 @@ acrescentou", o `unicodegen` pergunta "que caracteres existem" —, e a base
 continua cobrindo os 75, agora pela face certa.
 
 **Esta é a terceira vez que a mesma pergunta aparece com outra roupa:** qual
-face desenha o quê. Por isso o check `renderer-loads-three-faces` deixou de
+face desenha o quê. Por isso o check `renderer-loads-four-faces` deixou de
 contar faces e passou a nomear casos: os 75 na face de emoji, `#` e `©` na
 primária, e `U+E0A0` ainda na Iosevka (que é a premissa do remapeamento da
 Lucide).
@@ -5278,6 +5329,97 @@ mesma armadilha do `systemd-run --scope`.
 
 Rádio desligado lista **zero** redes, e não as da última varredura: oferecer uma conexão que não
 pode acontecer faria a tecla falhar parecendo defeito.
+
+#### A vista foi lida da tela, e onze coisas voltaram
+
+Ela passava em tudo. O dono abriu, olhou, e trouxe onze — nove delas defeitos de LEITURA: a tela
+estava certa e se lia mal. O que elas têm em comum vale mais do que cada uma:
+
+**Uma aritmética escrita três vezes já tinha divergido.** Rede, energia e Bluetooth são a mesma
+forma — lista de rótulo e valor — e cada uma tinha escrito a colocação. Entre as três havia três
+respostas, duas delas no MESMO arquivo: valor curto encostado na borda direita da superfície, valor
+longo caindo para o terço da linha, e fato no terço sempre. Numa janela larga a primeira põe `off` a
+cento e cinquenta colunas de `modo avião`, com nada no meio. `chrome::field_pair` é uma só, e o
+valor começa numa COLUNA (`space.view.labelCells`) — o que faz das três uma lista de definições:
+o olho desce uma coluna em vez de ziguezaguear. É a mesma regra que o `chrome::rule` e o
+`chrome::divider` já tinham estabelecido para separador.
+
+**Fato e controle eram desenhados idênticos.** A diferença virou um glifo na frente
+(`icon.row-acts`) e não uma cor: o acento já está gasto no cursor, os cinzas que sobram são uma
+diferença de peso que some de relance, e quem não separa bem tons ficaria sem nada. A informativa
+deixa as células vazias, então as duas alinham — um recuo que só algumas linhas pagam é uma borda
+irregular, que se lê pior do que marca nenhuma.
+
+**Uma lista que se lê continuamente não pode ser livre para crescer.** O Wi-Fi é relido o tempo
+todo e a resposta muda: o roteador do vizinho responde, o celular de alguém aparece, o sinal
+reordena. Com a lista livre, tudo abaixo dela subia e descia sem ninguém tocar em nada. Uma
+PRATELEIRA (`network::Shelf`) desenha SEMPRE o mesmo número de linhas, completando com vazio, e
+rola dentro de si com barra própria. Três decisões dentro dessa:
+
+* **preenche até a altura inteira já com um item.** Completar só até o que tem é o defeito de volta
+  — de uma rede para seis move cinco linhas;
+* **vazia não desenha nada.** Um bloco de linhas em branco sob um título não diz nada; a seção diz
+  por quê numa frase;
+* **o TOTAL viaja no `Row`.** A prateleira é quem corta, e tanto a barra quanto a seta na borda
+  precisam do número inteiro; contá-lo de outro jeito seria montar a lista uma segunda vez.
+
+**E a prateleira é uma CAIXA, não uma faixa da largura da tela** (`chrome::shelf_box`). A largura é
+a de UMA linha dela — `view.markerCells` + `view.labelCells` + `view.valueCells` — mais o ar de cada
+lado, a célula da própria barra e uma célula livre antes da barra da página. Três coisas saem disso,
+e as três foram lidas da tela pelo dono:
+
+* **as duas barras deixam de disputar coluna.** Moravam as duas na última célula da superfície;
+* **o fundo não alcança o polegar da página.** Sendo da largura da superfície e empilhado DEPOIS da
+  barra, ele a apagava onde houvesse prateleira na tela — *"ela acaba desaparecendo e mudando de
+  tamanho"*. A ordem agora é fundo → faixa → barra → texto, e a geometria é o que faz a ordem não
+  ser a única defesa;
+* **a barra fica perto do que ela rola.** Numa janela de 118 colunas a caixa tem 73: o polegar
+  encosta na lista em vez de ficar a cinquenta colunas dela.
+
+Largura FIXA e não a da linha mais larga que a prateleira tenha: uma borda direita que segue o
+conteúdo é, na horizontal, exatamente o que a prateleira existe para impedir na vertical. Abaixo da
+medida ela é APERTADA, que é a única resposta honesta quando não há tela para uma.
+
+**A roda tinha cinco cópias e as cinco erravam igual.** `(pixels / linha) as i64 * 3`: a divisão
+inteira joga fora a fração de linha, então gesto lento de touchpad não movia NADA até cruzar uma
+linha inteira e então movia TRÊS; e o detente de mouse chega como quinze pixels, que é zero linha,
+então a roda só andava quando dois caíam no mesmo quadro. `surface::axis_lines` faz da LINHA a
+primitiva e do detente a linha dividida; `wheel_arrived` guarda a sobra e `wheel_lines` gasta só o
+inteiro. **O rodapé conta linhas junto**, e a diferença dos seus dois modos foi para onde ela
+pertence: onde a região ROLA, um passo é uma linha; onde ela PAGINA, um passo é uma página e custa
+um detente inteiro — `LINES_PER_DETENT` linhas de dedo, a mesma distância que uma volta da roda
+pede. Antes o acumulador guardava detentes, e o lado que rola gastava três linhas de uma vez: era a
+mesma gagueira que as cinco janelas acabavam de perder, viva na porta sobre a qual o relato foi
+escrito.
+
+**E uma chegada não segue o cursor** (`Footer::settle_region`). Três coisas chegam sozinhas na vista
+de rede — o snapshot do NetworkManager, a leitura de 10 s dos túneis e uma varredura que terminou —
+e as três chamavam `follow_cursor`, que ESCRAVIZA o deslocamento ao cursor. Quem estava lendo a
+lista de Wi-Fi com o cursor parado na seção do tailnet via a página ser jogada de volta para lá
+segundos depois, sem ter tocado em nada. É a mesma separação que as cinco janelas já fazem entre
+`settle_offset` e `follow`: chegada ajusta, tecla de gente segue.
+
+A primeira versão disso seguia o cursor quando o `settle` o tivesse MOVIDO — um cabo desligado leva
+seis fatos embaixo dele. Um revisor desmontou o argumento: o `settle` move o cursor por dois motivos
+e os DOIS são obra da própria chegada — a lista encurtou, ou a linha sob o cursor virou um título.
+De umas oitenta linhas ali, dezenove são títulos e até vinte e cinco são enchimento de prateleira,
+então mais ou menos uma mudança em cada três cai numa; o cursor anda um, e a página é jogada para
+onde ele está. Que é o relato, exatamente. Nada que uma chegada faça é razão para mover a página: o
+cursor é uma COR, e a próxima seta leva a região até ele.
+
+**Rede lembrada fora de alcance existia em lugar nenhum.** `saved` era uma palavra ao lado de uma
+rede que o rádio via, então "quais Wi-Fi esta máquina conhece?" respondia "os que você está perto",
+e esquecer um que não se está perto era impossível.
+
+**Três `tailnet` e três `address`.** Cada um era um fato diferente vestindo a mesma palavra, numa
+lista onde a palavra é a única coisa que diz qual fato é. O check `labels-of-a-view-are-distinct`
+prende isso por VISTA — duas vistas podem dizer `on`, e dizem; o que não pode é uma lista dizer a
+mesma palavra duas vezes.
+
+**Cinco janelas rolavam sem barra nenhuma.** Só a do gerenciador desenhava uma. A roda funcionava,
+não havia o que agarrar, e nada na tela dizia onde se estava numa lista de dez seções — o dono
+reportou como "a barra não funciona", e a resposta é que não havia barra para funcionar. O check
+que fecha isso (`every-list-window-has-a-bar`) achou a quinta sozinho, que ninguém tinha citado.
 
 #### Três vazios diferentes, e não um "sem redes"
 

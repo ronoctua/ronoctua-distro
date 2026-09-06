@@ -36,7 +36,7 @@ pub const EMBEDDED_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_REGULAR"));
 /// §6.4 forbids the renderer from CONSULTING fontconfig, and that still holds:
 /// the chain here is DECLARED in two lines of code, not discovered at run
 /// time. Which face draws what is still a question with a fixed
-/// answer, and the `renderer-loads-three-faces` check fixes it —
+/// answer, and the `renderer-loads-four-faces` check fixes it —
 /// written when the third face came in, because until then it was only a
 /// promise in a comment, which is the same thing as an absent guard.
 ///
@@ -62,12 +62,38 @@ pub const EMOJI_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_EMOJI"));
 /// two different sources — not two copies of one.
 pub const LUCIDE_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_LUCIDE"));
 
+/// The MARKS face, and it is the only one this repository DRAWS.
+///
+/// # Why a fourth face exists
+///
+/// Because a mark the interface has to draw existed in none of the other
+/// three, and the two invariants that meet there leave one way out. Invariant
+/// 10: a UI icon is a glyph of a font, and no design system component consults
+/// a pixmap. Invariant 9: a codepoint is a token, resolved at build time
+/// against a real cmap. So the mark is drawn INTO a face of ours, declared as
+/// dots on a grid in `assets/icons/marks.nix` and built by
+/// `nix/marksgen.nix` — which is a drawing somebody can read and tune, and not
+/// a path nobody can.
+///
+/// It sits at `U+F3000`: past Nerd Fonts, which stops at `U+F1AF0`, and past
+/// Lucide, which was moved to `U+F2000` for the same reason. The face asked
+/// for by name wins the fallback chain, so a mark sharing a codepoint with a
+/// Nerd Fonts glyph would come out drawn as ANOTHER symbol — and the generator
+/// checks the range is free in all three others before writing anything.
+///
+/// Its glyphs carry the ADVANCE of the icons they sit beside — 600 units on a
+/// 1000-unit em-square, which is what every one of the font's 6896 `md-`
+/// glyphs advances — so a mark counts one cell and draws one cell. Their ink
+/// has to fit inside a reference icon's box; it need not equal it, and no two
+/// icons agree on one anyway.
+pub const MARKS_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_MARKS"));
+
 /// How many faces the bank has to have once assembled.
 ///
 /// An EXACT number, and not `> 0`. The old guard could only say "some face
 /// loaded": with it, the emoji face could disappear from the build and the only symptom
 /// would be tofu coming back on the screen of whoever looks for an emoji.
-pub const FACES: usize = 3;
+pub const FACES: usize = 4;
 
 /// Which atlas to use for a run of text.
 ///
@@ -243,7 +269,7 @@ pub fn line_box(size: Size, grid: f32) -> f32 {
 /// It takes `(line in cells, height of the run's box)` and returns the top in
 /// pixels, in the same order.
 #[must_use]
-pub fn aligned_tops(spans: &[(u16, f32)], entrelinha: f32) -> Vec<f32> {
+pub fn aligned_tops(spans: &[(u16, f32)], line_height: f32) -> Vec<f32> {
     // The largest box on each line. There are few lines per frame, so the linear
     // search costs less than the table that would avoid it.
     let mut largest: Vec<(u16, f32)> = Vec::new();
@@ -260,7 +286,7 @@ pub fn aligned_tops(spans: &[(u16, f32)], entrelinha: f32) -> Vec<f32> {
                 .iter()
                 .find(|(l, _)| l == line)
                 .map_or(*bounds, |(_, c)| *c);
-            f32::from(*line).mul_add(entrelinha, (of_the_line - bounds) / 2.0)
+            f32::from(*line).mul_add(line_height, (of_the_line - bounds) / 2.0)
         })
         .collect()
 }
@@ -324,10 +350,17 @@ impl Text {
         // CODEPOINT, and not by family name — and that is why the
         // remapping had to be done: with the source codepoints, the
         // Iosevka would answer first for 634 of them. Measured with a probe that
-        // asks `cosmic-text` which face drew the glyph; the `renderer-loads-three-faces`
+        // asks `cosmic-text` which face drew the glyph; the `renderer-loads-four-faces`
         // check repeats it on every build.
         db.load_font_source(glyphon::fontdb::Source::Binary(std::sync::Arc::new(
             LUCIDE_FONT,
+        )));
+        // THE FOURTH, and the only one with no upstream font behind it: the
+        // marks this repository draws, at `U+F3000`. Reached by codepoint like
+        // the two above, and free of them by construction — the generator
+        // refuses to write into a range any other face already answers for.
+        db.load_font_source(glyphon::fontdb::Source::Binary(std::sync::Arc::new(
+            MARKS_FONT,
         )));
         // All three generics point at our face: if some day a
         // run asks for `Serif`, let it land here and not on the system.
@@ -341,9 +374,10 @@ impl Text {
         let n = face.db().faces().count();
         anyhow::ensure!(
             n == FACES,
-            "the database has {n} faces and should have {FACES} (Iosevka, emoji and Lucide). \
-             One face fewer draws tofu again in place of the emoji or the \
-             icons, and carrying on from here would only produce that on screen."
+            "the database has {n} faces and should have {FACES} (Iosevka, emoji, Lucide \
+             and the marks). One face fewer draws tofu again in place of the emoji, \
+             the icons or a mark, and carrying on from here would only produce that \
+             on screen."
         );
         tracing::debug!(faces = n, "the embedded faces are loaded");
 

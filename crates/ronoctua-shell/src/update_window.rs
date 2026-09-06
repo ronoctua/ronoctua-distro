@@ -914,6 +914,8 @@ pub fn host_it() -> Result<()> {
         gpu: None,
         text: None,
         quads: None,
+        dragging: false,
+        lines_owed: 0.0,
         texts,
         steps: declared::steps(),
         verdicts: Verdicts::read(),
@@ -991,6 +993,19 @@ struct UpdateWindow {
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
     quads: Option<ronoctua_render::quad::Quads>,
+    /// Is the pointer dragging the output's bar?
+    ///
+    /// Held, because a drag is three events: the press that grabs it, every
+    /// motion until the release, and the release.
+    dragging: bool,
+    /// How many LINES the wheel and the touchpad have asked for and not yet
+    /// been paid.
+    ///
+    /// LINES, and the unit is in the name: the footer's accumulator holds
+    /// DETENTS. See `surface::wheel_arrived` — spending only the whole part and
+    /// keeping the rest is what makes a slow gesture move at the speed of the
+    /// finger instead of standing still and then jumping.
+    lines_owed: f64,
     texts: ronoctua_i18n::Texts,
     /// The declared sequence, from the one table there is.
     steps: &'static [ronoctua_brain::Step],
@@ -1391,6 +1406,28 @@ impl UpdateWindow {
             }
         }
 
+        // THE OUTPUT'S BAR. This window scrolls from the TAIL — `output_up` is
+        // how many lines above the end the band sits — so the offset from the
+        // top is what is left over. One arithmetic, `chrome::list_bar`, the
+        // same one the other four windows and the footer's region use.
+        {
+            let room = self.output_room();
+            let total = self.scrollback.amount();
+            let scroll = crate::chrome::list_scroll(
+                total,
+                room,
+                total.saturating_sub(self.output_up + room),
+            );
+            #[allow(clippy::cast_precision_loss)]
+            if let Some(q) = crate::chrome::list_bar(
+                scroll,
+                self.output_top(),
+                self.width as f32,
+                self.height as f32,
+            ) {
+                quads.push(q);
+            }
+        }
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
@@ -1629,41 +1666,113 @@ impl PointerHandler for UpdateWindow {
         events: &[PointerEvent],
     ) {
         let before = (self.row_under_pointer, self.cursor, self.output_up);
-        let mut wheel = 0.0f64;
+        let mut turned = false;
         let mut over_the_steps = false;
+        // THE OUTPUT'S BAR IS A CONTROL. This window counts from the TAIL, so
+        // an offset from the top has to be turned back into `output_up` — see
+        // the drawing, which does the same conversion the other way round.
+        let room = self.output_room();
+        let total = self.scrollback.amount();
+        let scroll =
+            crate::chrome::list_scroll(total, room, total.saturating_sub(self.output_up + room));
+        #[allow(clippy::cast_precision_loss)]
+        let (bar_w, bar_h) = (self.width as f32, self.height as f32);
+        let mut dragged: Option<usize> = None;
         for e in events {
+            #[allow(clippy::cast_possible_truncation)]
+            let (px, py) = (e.position.0 as f32, e.position.1 as f32);
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.row_under_pointer = self.at(e.position.0, e.position.1);
+                    if self.dragging {
+                        dragged = Some(crate::chrome::list_offset_at(
+                            scroll,
+                            self.output_top(),
+                            bar_w,
+                            bar_h,
+                            py,
+                        ));
+                    } else {
+                        self.row_under_pointer = self.at(e.position.0, e.position.1);
+                    }
                 }
-                PointerEventKind::Leave { .. } => self.row_under_pointer = None,
+                PointerEventKind::Leave { .. } => {
+                    // AND THE DRAG ENDS WITH THE POINTER — see the same arm
+                    // in the four list windows.
+                    self.dragging = false;
+                    self.row_under_pointer = None;
+                }
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    self.dragging = false;
+                }
                 // A CLICK MOVES THE CURSOR, which is what an arrow does. There
                 // is nothing else on this window to do to a step: switching one
                 // on and off belongs to the brain's screen, where the person's
                 // choice is written down.
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    if let Some(row) = self.at(e.position.0, e.position.1) {
+                    if crate::chrome::on_the_list_bar(
+                        scroll,
+                        self.output_top(),
+                        bar_w,
+                        bar_h,
+                        px,
+                        py,
+                    ) {
+                        self.dragging = true;
+                        dragged = Some(crate::chrome::list_offset_at(
+                            scroll,
+                            self.output_top(),
+                            bar_w,
+                            bar_h,
+                            py,
+                        ));
+                    } else if let Some(row) = self.at(e.position.0, e.position.1) {
                         self.cursor = row;
                         self.follow_the_cursor();
                     }
                 }
-                PointerEventKind::Axis { vertical, .. } => {
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
                     over_the_steps = self.at(e.position.0, e.position.1).is_some();
-                    wheel += vertical.absolute;
+                    // THE ARITHMETIC IS SHARED — see `surface::wheel_arrived`.
+                    crate::surface::wheel_arrived(&mut self.lines_owed, &vertical, &horizontal);
+                    turned = true;
                 }
                 _ => {}
             }
         }
-        if wheel.abs() >= 1.0 {
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-            #[allow(clippy::cast_possible_truncation)]
-            let by = (wheel / line_px.max(1.0)) as i64 * 3;
+        if let Some(offset) = dragged {
+            // BACK TO THE TAIL'S OWN COUNT. And nothing else this frame: a
+            // wheel tick arriving during a drag would move the list twice,
+            // which the other four windows avoid by returning here.
+            self.output_up = total.saturating_sub(offset + room);
+            self.follow_the_tail();
+            if before != (self.row_under_pointer, self.cursor, self.output_up) {
+                self.ask_paint();
+            }
+            return;
+        }
+        let by = if turned {
+            crate::surface::wheel_lines(&mut self.lines_owed)
+        } else {
+            0
+        };
+        if by != 0 {
             if over_the_steps {
                 // THE WHEEL DOES WHAT THE ARROW DOES, on whichever half it is
                 // resting over — the rule this project applies to every
                 // pointer: a second meaning would be a door only the mouse
                 // knows about.
-                let moved = i64::try_from(self.cursor).unwrap_or(0).saturating_add(by);
+                //
+                // AND IT DOES IT ONCE. `by` is LINES, which is what a viewport
+                // moves; this half moves a CURSOR, and a cursor's unit is the
+                // arrow's — one. Three steps per notch on a list of eight
+                // would cross it in three turns of the wheel.
+                let moved = i64::try_from(self.cursor)
+                    .unwrap_or(0)
+                    .saturating_add(by.signum());
                 self.cursor = usize::try_from(moved.max(0))
                     .unwrap_or(0)
                     .min(self.steps.len().saturating_sub(1));

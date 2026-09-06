@@ -4958,7 +4958,7 @@ impl View {
         }
     }
 
-    fn row_of(&self, n: usize, i: usize, layout: &Layout) -> Row {
+    fn row_of(&self, n: usize, i: usize, layout: &Layout, mark: char) -> Row {
         let entry = &self.entries[i];
         let of_type = self.types[i];
         let owner = self
@@ -5092,9 +5092,9 @@ impl View {
                     // number that answers a different question is worse than
                     // no number.
                     let text = match (entry.kind, measured) {
-                        (_, Some(bytes)) => size_text(bytes),
+                        (_, Some(bytes)) => size_text(bytes, mark),
                         (Kind::Directory, None) => String::new(),
-                        (_, None) => size_text(entry.bytes),
+                        (_, None) => size_text(entry.bytes, mark),
                     };
                     // A DIRECTORY'S SIZE IS A WALK, and the empty cell has to
                     // say so — an empty column reads as "zero bytes", which is
@@ -6167,9 +6167,13 @@ fn follow_within(offset: usize, cursor: usize, total: usize, room: usize) -> usi
 ///
 /// Assembled here rather than through the bundle because a listing draws two
 /// hundred of these per frame and the language only decides the separator —
-/// which the caller passes in when it has the bundle. The plain form is what
-/// the tests and the window use.
-pub(crate) fn size_text(bytes: u64) -> String {
+/// which the caller passes in, out of [`ronoctua_i18n::Texts::decimal_mark`].
+///
+/// THE SEPARATOR USED TO BE WRITTEN IN, and that is the defect this signature
+/// exists to close: `5,0 MiB` came out on an English screen as well, where a
+/// comma is the thousands separator and the number reads as five thousand.
+/// The comment above already described the arrangement; nothing implemented it.
+pub(crate) fn size_text(bytes: u64, mark: char) -> String {
     let h = size::human(bytes);
     if matches!(h.unit, size::Unit::Bytes) {
         format!("{} B", h.whole)
@@ -6181,7 +6185,7 @@ pub(crate) fn size_text(bytes: u64) -> String {
             size::Unit::Tebi => "TiB",
             size::Unit::Bytes => "B",
         };
-        format!("{},{} {unit}", h.whole, h.tenth)
+        format!("{}{mark}{} {unit}", h.whole, h.tenth)
     }
 }
 
@@ -7723,7 +7727,7 @@ impl View {
                         foot: false,
                         focused: false,
                     },
-                    |i| self.row_of(n, *i, &layout),
+                    |i| self.row_of(n, *i, &layout, texts.decimal_mark()),
                 ));
             }
             // "NOTHING HERE" IS A FIELD OF THE LISTING, on its own first row
@@ -9647,7 +9651,7 @@ impl View {
             .measured
             .as_ref()
             .filter(|(n, _)| n == name)
-            .map(|(_, b)| size_text(*b));
+            .map(|(_, b)| size_text(*b, texts.decimal_mark()));
 
         // WHAT EACH ROW OFFERS IS DECIDED HERE, once, beside the value it is
         // about — and not in the drawing, which would have to work out what
@@ -9682,7 +9686,7 @@ impl View {
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_SIZE,
-                measured.unwrap_or_else(|| size_text(entry.bytes)),
+                measured.unwrap_or_else(|| size_text(entry.bytes, texts.decimal_mark())),
                 // A DIRECTORY'S SIZE IS A WALK and a file's is already known:
                 // one of the two is a thing to ask for and the other is a
                 // thing to read. See `measure_field`.
@@ -14305,9 +14309,14 @@ mod tests {
         // ROW ONE: row zero is `..`, the way out.
         assert_eq!(v.drawn(120, &bundle())[1].field_at(at).unwrap().text, "");
         v.measured("folder", 5 * 1024 * 1024);
+        // THE SEPARATOR IS THE LANGUAGE'S, so the expectation is asked of the
+        // bundle rather than written down: `bundle()` is `Texts::from_env`,
+        // and a literal comma here would make this test pass or fail
+        // depending on the locale the person running it happens to have.
+        let expected = format!("5{}0 MiB", bundle().decimal_mark());
         assert_eq!(
             v.drawn(120, &bundle())[1].field_at(at).unwrap().text,
-            "5,0 MiB"
+            expected
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -17793,7 +17802,11 @@ mod tests {
             if matches!(f.hit, Hit::Nothing) {
                 continue;
             }
-            assert!(f.explain.is_some(), "o campo `{}` acende e cala", f.text);
+            assert!(
+                f.explain.is_some(),
+                "the field `{}` lights up and says nothing",
+                f.text
+            );
         }
         // AND PRESSING ONE REACHES THE SAME QUESTION THE TABLE REACHES.
         let bit = inside

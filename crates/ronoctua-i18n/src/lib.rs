@@ -221,10 +221,41 @@ impl Texts {
     /// a millimetre.
     fn decimal(&self, n: f64) -> String {
         let plain = format!("{n:.1}");
-        if self.language.starts_with("pt") {
+        if self.decimal_mark() == ',' {
             return plain.replace('.', ",");
         }
         plain
+    }
+
+    /// What this language puts between a whole number and its tenths.
+    ///
+    /// # Why a CHARACTER and not a formatted string
+    ///
+    /// Because two places assemble a size by hand, and both are hot: the file
+    /// listing writes two hundred of them per frame and the network monitor
+    /// rewrites its totals every second. Going through the bundle for each
+    /// would be a Fluent resolution per row.
+    ///
+    /// They used to write `','` INTO the format string, so `44,2 GB` and
+    /// `5,0 MiB` were on an English screen too — which reads as forty-four
+    /// thousand two hundred gigabytes. The doc comment on one of them already
+    /// described the arrangement this makes real: *the language only decides
+    /// the separator, which the caller passes in*.
+    #[must_use]
+    ///
+    /// # Why it comes out of the bundle and not out of the language's NAME
+    ///
+    /// Because a separator is a property of the language, and the languages
+    /// are declared in `assets/i18n/languages.nix` and nowhere else
+    /// (invariant 16). `self.language.starts_with("pt")` named one in Rust —
+    /// it worked, and it was the second place in this system that knew what
+    /// languages there are. The value is a text key like every other, and a
+    /// language added tomorrow brings its own.
+    pub fn decimal_mark(&self) -> char {
+        self.t(key::NUMBER_DECIMAL_MARK)
+            .chars()
+            .next()
+            .unwrap_or('.')
     }
 
     /// The same as [`Texts::t_with`], and it also says WHERE each argument

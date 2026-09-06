@@ -182,7 +182,7 @@ mod tests {
 
     const PASSWD: &str = "\
 root:x:0:0:System administrator:/root:/bin/sh
-noctua:x:1000:100:Pessoa:/home/noctua:/run/current-system/sw/bin/zsh
+noctua:x:1000:100:The person:/home/noctua:/run/current-system/sw/bin/zsh
 broken-line
 nobody:x:65534:65534:Nobody:/var/empty:/bin/sh
 ";

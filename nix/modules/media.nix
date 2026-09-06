@@ -29,7 +29,7 @@ let
 in
 {
   options.ronoctua.media.enable =
-    lib.mkEnableOption "os players e conversores: ffmpeg-full, VLC, mpv, gstreamer (~1,0 GiB)"
+    lib.mkEnableOption "the players and converters: ffmpeg-full, VLC, mpv, gstreamer (~1.0 GiB)"
     // {
       default = true;
     };

@@ -96,6 +96,21 @@
     # fundo; hover ganha um tom mais fraco"*.
     hover = "neutral.hover";
 
+    # THE GROUND OF A SHELF — the fixed-height lists inside the network view.
+    #
+    # The owner asked for it: *"quero que coloque um background diferente e
+    # discreto para esses containers"*. A shelf is a list inside a list, and
+    # nothing on screen said where one ended — the air before a heading says
+    # where a SECTION starts, and a shelf is not a section.
+    #
+    # THE SMALLEST STEP THERE IS, `neutral.window` at 0,018 ΔL above the
+    # chrome. Discreet was the word, and it is also what invariant 15 leaves
+    # room for: a change of ground, with no border, no radius and no shadow —
+    # the same device the modeline and the notification band already use, one
+    # rung lower. The hover row is at 0,070 and the focused one takes the
+    # accent, so both still read on top of it.
+    shelf = "neutral.window";
+
     # THE ONE SURFACE WITH AN ALPHA, and it is the film's controls.
     #
     # The file manager's transport is painted ON the picture — the owner asked

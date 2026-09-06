@@ -155,6 +155,10 @@
         trayTableFile = ./assets/icons/tray-glyphs.nix;
         lexiconFile = ./assets/lexicon/tags.en-pt.toml;
         overlayFile = ./assets/lexicon/overlay.toml;
+        # A token naming `ours-<mark>` resolves HERE and is cross-checked
+        # against the face that holds it, exactly as an `md-` one is checked
+        # against the Nerd Font. See `nix/marksgen.nix`.
+        inherit marksdb;
       };
 
       # The Unicode symbol browser's database (`LEADER i u`). It is the
@@ -185,6 +189,16 @@
         # The SAME lexicon as the other two: the vocabulary belongs to Portuguese, not to the
         # buffer.
         lexiconFile = ./assets/lexicon/tags.en-pt.toml;
+      };
+
+      # The face holding the marks this repository DRAWS — the fourth, and the
+      # only one with no upstream font behind it. A mark the interface has to
+      # draw and that exists in none of the five faces cannot become a pixmap
+      # (invariant 10) nor a hard-coded codepoint (invariant 9): it is drawn
+      # into a face of ours. See `nix/marksgen.nix`.
+      marksdb = pkgs.callPackage ./nix/marksgen.nix {
+        inherit fonts lucidedb;
+        marksFile = ./assets/icons/marks.nix;
       };
 
       # Icon superpackage (6.6) — a pixmap fallback for foreign
@@ -335,6 +349,10 @@
         # The THIRD face embedded in the renderer, generated along with the database: without
         # it the 1,668 icons would come out as tofu.
         lucideFontFile = "${lucidedb.db}/NoctuaLucide.ttf";
+        # And the FOURTH, which is the only one with no upstream font behind
+        # it: the marks this repository draws itself, because a UI icon is a
+        # glyph (invariant 10) and there was no glyph to be had.
+        marksFontFile = "${marksdb.db}/NoctuaMarks.ttf";
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
         niri = inputs.niri.packages.${system}.niri;
         src = ./.;
@@ -889,6 +907,7 @@
           glyphdb
           unicodedb
           lucidedb
+          marksdb
           updatesTable
           syntaxTable
           iconSuperpack

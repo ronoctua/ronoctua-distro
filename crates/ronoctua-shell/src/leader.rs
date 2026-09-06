@@ -1449,6 +1449,18 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "network-import",
             label: key::CMD_NETWORK_IMPORT,
         },
+        // THE SECTION RING. Reachable by name (`LEADER :`) like every other
+        // command of a view, and taught on the hint line because it is in
+        // `network::OF_THE_VIEW` — which is also what makes the orphan check
+        // cover it.
+        Command {
+            id: "network-section-next",
+            label: key::CMD_NETWORK_SECTION_NEXT,
+        },
+        Command {
+            id: "network-section-previous",
+            label: key::CMD_NETWORK_SECTION_PREVIOUS,
+        },
         // SYNCTHING. It ships with the distro (nix/modules/
         // syncthing.nix), and a service the distro installs needs a
         // path through the leader — otherwise the only way to look at it is typing
@@ -2639,6 +2651,8 @@ mod tests {
             "network-down",
             "network-lan",
             "network-import",
+            "network-section-next",
+            "network-section-previous",
             "network-wifi-toggle",
             "network-link",
             "syncthing-open",
