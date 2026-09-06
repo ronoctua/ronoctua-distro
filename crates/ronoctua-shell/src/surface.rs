@@ -5600,6 +5600,9 @@ impl Footer {
         };
         let said = match errand {
             crate::network::Errand::Nothing => None,
+            // AN INFORMATIVE ROW COPIES ITSELF — see `chrome::information_of`,
+            // and `chrome::copied` for the one place the six doors share.
+            crate::network::Errand::Copy(text) => Some(crate::chrome::copied(&text, &self.texts)),
             crate::network::Errand::Close => {
                 self.network = None;
                 self.first_page();
@@ -13788,6 +13791,13 @@ impl Footer {
         use crate::bluetooth::Errand;
         match errand {
             Errand::Nothing => {}
+            // AN INFORMATIVE ROW COPIES ITSELF — see
+            // `chrome::information_of`, and `chrome::copied` for the
+            // one place the six doors share.
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
             Errand::Close => {
                 // A NAME NOBODY FINISHED TYPING is not a name waiting for
                 // the next device: closing the view drops it.
@@ -13880,6 +13890,13 @@ impl Footer {
         use crate::power::Errand;
         match errand {
             Errand::Nothing => {}
+            // AN INFORMATIVE ROW COPIES ITSELF — see
+            // `chrome::information_of`, and `chrome::copied` for the
+            // one place the six doors share.
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
             Errand::Close => {
                 self.power = None;
                 self.first_page();

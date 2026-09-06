@@ -277,6 +277,9 @@ pub struct Row {
 pub enum Errand {
     /// Nothing; redraw.
     Nothing,
+    /// Put this on the system clipboard — what `RET` does on an INFORMATIVE
+    /// row. See `chrome::information_of` for what "this" is and why.
+    Copy(String),
     /// Join this network. Whether it needs a password typed is the DOOR's
     /// question: only one of the two can ask.
     Connect(Box<Network>),
@@ -989,7 +992,15 @@ impl View {
             // the order would only bring the daemon's refusal back as an echo.
             Press::Enter if disabled => Errand::Nothing,
             Press::Enter => match target {
-                Target::Nothing => Errand::Nothing,
+                // AN INFORMATIVE ROW COPIES ITSELF.
+                //
+                // `RET` here used to be the one key on the one row that did
+                // nothing, in a list where half of what is drawn is a thing
+                // somebody wants to paste. See `chrome::information_of`.
+                Target::Nothing => rows
+                    .get(self.cursor)
+                    .and_then(|r| crate::chrome::information_of(&r.fields))
+                    .map_or(Errand::Nothing, Errand::Copy),
                 Target::Airplane(on) => Errand::Airplane(on),
                 Target::Radio(on) => Errand::Radio(on),
                 Target::Wireless(n) => Errand::Connect(n),
@@ -2245,13 +2256,11 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         self.out.push(Row {
             fields: vec![Self::piece(
-                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
-                // The mark's indent is paid by every row of these views on
-                // purpose — an indent only some rows pay is a ragged edge —
-                // and a note that skipped it sat two cells left of everything
-                // around it.
-                crate::chrome::text_left(self.left),
-                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
+                // A SENTENCE LINES UP WITH THE LABELS, which since the mark
+                // went is where the titles are too — a section's title and its
+                // rows share one left edge now.
+                self.left,
+                layout::elide_end(&text, self.room),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -2271,13 +2280,11 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         self.out.push(Row {
             fields: vec![Self::piece(
-                // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
-                // The mark's indent is paid by every row of these views on
-                // purpose — an indent only some rows pay is a ragged edge —
-                // and a note that skipped it sat two cells left of everything
-                // around it.
-                crate::chrome::text_left(self.left),
-                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
+                // A SENTENCE LINES UP WITH THE LABELS, which since the mark
+                // went is where the titles are too — a section's title and its
+                // rows share one left edge now.
+                self.left,
+                layout::elide_end(&text, self.room),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -2325,32 +2332,49 @@ impl Builder<'_> {
         colour: Option<tokens::Color>,
     ) {
         let focused = self.cursor == self.out.len();
-        // A LIST ITEM READS THE OTHER WAY ROUND FROM A FACT.
+        // A LIST ITEM READS THE OTHER WAY ROUND FROM A FACT, and only in the
+        // VALUE.
         //
         // The owner asked for it: *"as listas, como redes WiFi ou Tailnet,
-        // devem ter cores diferentes do resto"*. A fact is a LABEL and a
-        // value — the label names the question and the value is the answer,
-        // so the value is the strong half. A list item is the other shape: the
-        // name of the thing IS the content and what follows it describes it.
+        // devem ter cores diferentes do resto"*. A fact's value is the answer
+        // to the question its label asks, so it is the strong half; a list
+        // item's is a description of a thing whose NAME is already on the
+        // line, so it is the weak one.
         //
-        // So the weights swap, and no new colour is spent: a hue of its own
-        // would have to pass the theme generator's contrast gates to say what
-        // a weight already says, and the accent is reserved for the cursor.
+        // The LABEL is not in that trade at all any more — it says whether the
+        // row is a door, in a hue no value wears. See `colors.nix`, `label`.
         let listed = self.shelf.is_some();
+        let acts = target != Target::Nothing;
         let (label_colour, value_colour) = match (focused, disabled) {
             (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) if listed => {
-                (tokens::color::TEXT_PRIMARY, tokens::color::TEXT_SECONDARY)
-            }
-            (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_PRIMARY),
+            (false, false) => (
+                if acts {
+                    tokens::color::TEXT_LABEL_ACTS
+                } else {
+                    tokens::color::TEXT_LABEL_FACT
+                },
+                // AND THE VALUE SAYS THE SAME THING FROM THE OTHER SIDE.
+                //
+                // A row one cannot act on takes its value's colour out — grey
+                // at the weight it already had (`colors.nix`, `text.read`).
+                // Against the warm ramp everything else is drawn in, a neutral
+                // value reads as a step back without being any darker: what
+                // one came to read stays perfectly legible, it just stops
+                // being the loudest thing on the line.
+                match (acts, listed) {
+                    (true, false) => tokens::color::TEXT_PRIMARY,
+                    (true, true) => tokens::color::TEXT_SECONDARY,
+                    (false, false) => tokens::color::TEXT_READ_STRONG,
+                    (false, true) => tokens::color::TEXT_READ_WEAK,
+                },
+            ),
         };
         let value_colour = colour.filter(|_| !focused).unwrap_or(value_colour);
         self.out.push(Row {
             fields: crate::chrome::field_pair(
                 self.left,
                 self.room,
-                target != Target::Nothing,
                 &label,
                 &value,
                 label_colour,
@@ -3067,19 +3091,15 @@ mod tests {
 
     #[test]
     fn a_list_item_and_a_fact_do_not_read_the_same() {
-        // The owner asked for the difference. A fact's ANSWER is the strong
-        // half; a list item's NAME is.
+        // The owner asked for the difference twice, and the second time moved
+        // it: a fact's ANSWER is the strong half and a list item's DESCRIPTION
+        // is the weak one — the two VALUES, on the neutral ramp. The LABEL is
+        // out of that trade entirely now; it says whether the row is a door,
+        // in a hue no value wears.
         let t = texts();
         let snap = machine();
         let seen = vec![network("a house", 90)];
         let rows = View::fresh().rows(&facts(&snap, &seen), DECIDING_WIDTH, &t);
-        let strong_of = |r: &Row| {
-            r.fields
-                .iter()
-                .filter(|f| f.color == tokens::color::TEXT_PRIMARY)
-                .map(|f| f.text.clone())
-                .collect::<Vec<_>>()
-        };
         let item = rows
             .iter()
             .find(|r| matches!(&r.target, Target::Wireless(n) if n.ssid == "a house"))
@@ -3092,16 +3112,110 @@ mod tests {
                     .is_some_and(|f| f.text == t.t(ronoctua_i18n::key::NETWORK_FACT_BAND))
             })
             .expect("no fact row");
-        assert!(
-            strong_of(item).iter().any(|s| s.contains("a house")),
-            "the network's NAME is not the strong half: {:?}",
+        assert_eq!(
+            item.fields[1].color,
+            tokens::color::TEXT_SECONDARY,
+            "a list item's description is not the weak half: {:?}",
             item.fields
         );
+        // A FACT IS A ROW ONE CANNOT ACT ON, so its answer is the STRONG step
+        // with the colour taken out — the owner's third reading of this line:
+        // *"mude a cor apenas dos valores que não são interativos, deixando
+        // eles cinza"*.
+        assert_eq!(
+            fact.fields[1].color,
+            tokens::color::TEXT_READ_STRONG,
+            "a fact's answer is not the grey strong half: {:?}",
+            fact.fields
+        );
+        // AND THE LABEL SAYS WHICH ROW IS A DOOR, everywhere in the view.
+        assert_eq!(item.fields[0].color, tokens::color::TEXT_LABEL_ACTS);
+        assert_eq!(fact.fields[0].color, tokens::color::TEXT_LABEL_FACT);
+        // NO LABEL ANYWHERE WEARS A VALUE'S COLOUR, which is what the owner
+        // asked for in those words: *"não quero que você utilize as mesmas
+        // cores para as labels e para os valores"*.
+        for row in rows.iter().filter(|r| !r.heading && r.fields.len() == 2) {
+            let (label, value) = (row.fields[0].color, row.fields[1].color);
+            if label == tokens::color::STATE_ACCENT || label == tokens::color::TEXT_DIM {
+                // The cursor and a refusing row take BOTH halves: they are not
+                // a kind of row, they are what is happening to one.
+                assert_eq!(label, value);
+                continue;
+            }
+            assert!(
+                label == tokens::color::TEXT_LABEL_ACTS || label == tokens::color::TEXT_LABEL_FACT,
+                "a label outside the label family: {:?}",
+                row.fields
+            );
+            assert_ne!(
+                label, value,
+                "a label wears its value's colour: {:?}",
+                row.fields
+            );
+            // AND THE TWO HALVES AGREE ABOUT THE ROW: a value keeps its
+            // colour only where the label says the row is a door.
+            let grey =
+                value == tokens::color::TEXT_READ_STRONG || value == tokens::color::TEXT_READ_WEAK;
+            assert_eq!(
+                grey,
+                label == tokens::color::TEXT_LABEL_FACT,
+                "the value's colour and the label's disagree: {:?}",
+                row.fields
+            );
+        }
+    }
+
+    #[test]
+    fn ret_on_an_informative_row_copies_its_value() {
+        // The owner asked for it: *"ao interagir (clicar enter) com os itens
+        // não interativos, os informativos, a info seja copiada para o
+        // clipboard"*. `RET` there used to be the one key on the one row that
+        // did nothing, in a list where half of what is drawn is an address, a
+        // port or a name somebody wants to paste.
+        let t = texts();
+        let snap = machine();
+        let rows = View::fresh().rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        let (i, row) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.target == Target::Nothing && !r.heading && r.fields.len() == 2)
+            .expect("no informative row with a value");
+        let value = row.fields[1].text.clone();
+        let mut v = View::fresh();
+        v.clicked(i, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &facts(&snap, &[]), &t),
+            Errand::Copy(value.clone()),
+            "`RET` on an informative row did not ask for the copy"
+        );
+        // AND IT IS THE VALUE, NOT THE LINE. `192.168.1.5/24` is what goes
+        // into a terminal; the label in front of it does not.
         assert!(
-            !strong_of(fact)
-                .iter()
-                .any(|s| s == &t.t(ronoctua_i18n::key::NETWORK_FACT_BAND)),
-            "the fact's LABEL is the strong half"
+            !value.contains(&row.fields[0].text),
+            "the label was copied with the value"
+        );
+
+        // A SENTENCE HAS NO VALUE, and there the whole of it is the
+        // information — the same rule, and `chrome::information_of` is the one
+        // place it lives.
+        let sentence = rows
+            .iter()
+            .find(|r| r.target == Target::Nothing && !r.heading && r.fields.len() == 1)
+            .expect("no sentence row");
+        assert_eq!(
+            crate::chrome::information_of(&sentence.fields),
+            Some(sentence.fields[0].text.trim().to_owned())
+        );
+        // AND A ROW THAT ACTS IS UNTOUCHED: `RET` there still does its thing.
+        let door = rows
+            .iter()
+            .position(|r| matches!(r.target, Target::Airplane(_)))
+            .expect("no aeroplane row");
+        let mut v = View::fresh();
+        v.clicked(door, &rows);
+        assert!(
+            !matches!(v.key(Press::Enter, &facts(&snap, &[]), &t), Errand::Copy(_)),
+            "`RET` on a door copied instead of acting"
         );
     }
 

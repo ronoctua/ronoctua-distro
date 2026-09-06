@@ -273,6 +273,9 @@ pub struct Row {
 pub enum Errand {
     /// Nothing; redraw.
     Nothing,
+    /// Put this on the system clipboard — what `RET` does on an INFORMATIVE
+    /// row. See `chrome::information_of` for what "this" is and why.
+    Copy(String),
     /// Send this to the bluetooth thread.
     Order(Ask),
     /// Answer the question the other side is asking. It does NOT go through
@@ -661,7 +664,15 @@ impl View {
             }
             Press::Enter if disabled => Errand::Nothing,
             Press::Enter => match target {
-                Target::Nothing => Errand::Nothing,
+                // AN INFORMATIVE ROW COPIES ITSELF.
+                //
+                // `RET` here used to be the one key on the one row that did
+                // nothing, in a list where half of what is drawn is a thing
+                // somebody wants to paste. See `chrome::information_of`.
+                Target::Nothing => rows
+                    .get(self.cursor)
+                    .and_then(|r| crate::chrome::information_of(&r.fields))
+                    .map_or(Errand::Nothing, Errand::Copy),
                 Target::Device(at) => {
                     self.level = Level::Device(at);
                     self.cursor = 1;
@@ -1386,8 +1397,8 @@ impl Builder<'_> {
                 // purpose — an indent only some rows pay is a ragged edge —
                 // and a note that skipped it sat two cells left of everything
                 // around it.
-                crate::chrome::text_left(self.left),
-                layout::elide_end(&text, self.room.saturating_sub(crate::chrome::MARKER)),
+                self.left,
+                layout::elide_end(&text, self.room),
                 if focused {
                     tokens::color::STATE_ACCENT
                 } else {
@@ -1428,10 +1439,28 @@ impl Builder<'_> {
         colour: Option<tokens::Color>,
     ) {
         let focused = self.cursor == self.out.len();
+        // THE LABEL SAYS WHETHER THE ROW IS A DOOR, in a hue no value wears —
+        // see `colors.nix`, `label`. It replaced a mark in front of the row,
+        // which the owner refused: a chevron is what a tree uses to open and
+        // close, and this row does neither.
         let (label_colour, value_colour) = match (focused, disabled) {
             (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (tokens::color::TEXT_SECONDARY, tokens::color::TEXT_PRIMARY),
+            (false, false) => (
+                if target == Target::Nothing {
+                    tokens::color::TEXT_LABEL_FACT
+                } else {
+                    tokens::color::TEXT_LABEL_ACTS
+                },
+                // AND THE VALUE SAYS THE SAME FROM THE OTHER SIDE: a row one
+                // cannot act on takes the colour out of its value — see
+                // `colors.nix`, `text.read`.
+                if target == Target::Nothing {
+                    tokens::color::TEXT_READ_STRONG
+                } else {
+                    tokens::color::TEXT_PRIMARY
+                },
+            ),
         };
         let value_colour = colour.filter(|_| !focused).unwrap_or(value_colour);
         // ONE ARITHMETIC, and it is `chrome::field_pair` — see the comment on
@@ -1441,7 +1470,6 @@ impl Builder<'_> {
             fields: crate::chrome::field_pair(
                 self.left,
                 self.room,
-                target != Target::Nothing,
                 &label,
                 &value,
                 label_colour,

@@ -759,8 +759,7 @@ pub const BAR_CELLS: u16 = 1;
 /// It is the two columns the row holds and the mark in front of them, and
 /// nothing else: a container is as wide as one of its rows needs, which is why
 /// one number serves all five of them.
-pub const SHELF_ROOM: u16 =
-    MARKER + tokens::space::VIEW_LABELCELLS + tokens::space::VIEW_VALUECELLS;
+pub const SHELF_ROOM: u16 = tokens::space::VIEW_LABELCELLS + tokens::space::VIEW_VALUECELLS;
 
 /// Where a container is drawn, in the SURFACE's own cells, and how much text
 /// fits in it.
@@ -1000,6 +999,70 @@ pub fn on_the_band(
 /// last row of the one before it does not begin anywhere.
 pub const AIR: Vec<crate::files::Field> = Vec::new();
 
+/// What an INFORMATIVE row hands to the clipboard, when `RET` is pressed on it.
+///
+/// # Why a row that does nothing should do this
+///
+/// Because the owner asked for it, and the reason is in the rows themselves:
+/// half of what these three views draw is a thing one copies — an address, a
+/// port, a hardware address, a network's name, a peer's number. Reading it off
+/// the screen and typing it back in is the only thing the screen was leaving
+/// for the person to do by hand.
+///
+/// # And it is the VALUE, not the line
+///
+/// `192.168.1.5/24` is what goes into a terminal; `this machine's address
+/// 192.168.1.5/24` is not. A row with no value is a SENTENCE — a section
+/// saying it has nothing to list, a note explaining a cost — and there the
+/// whole of it is the information.
+///
+/// The rule falls straight out of [`field_pair`]: it pushes the mark, the
+/// label and the value, never an empty piece, and never the mark on a row that
+/// does not answer `RET`. So an informative row is one or two pieces, and the
+/// LAST of them is the answer either way.
+#[must_use]
+pub fn information_of(fields: &[crate::files::Field]) -> Option<String> {
+    debug_assert!(
+        fields.len() <= 2,
+        "an informative row grew a third piece; `information_of` copies the last"
+    );
+    fields
+        .last()
+        .map(|f| f.text.trim().to_owned())
+        .filter(|t| !t.is_empty())
+}
+
+/// Puts an informative row's value on the clipboard, and answers with the
+/// sentence to say about it.
+///
+/// # Why the six doors do not each write this
+///
+/// Because they would each write it differently, which is the defect this file
+/// exists to end — and because there is nothing to decide: a failure here is
+/// not something a door can do anything else about, so the whole of the
+/// behaviour is "copy, and say which of the two happened".
+///
+/// The mechanism is `wl-copy`, for the reason written over
+/// [`crate::buffer::copy_to_clipboard`]: whoever owns the selection has to
+/// stay alive to serve it, and a footer or a window that is closed a moment
+/// later would hand over an empty clipboard — which looks exactly like a copy
+/// that worked.
+#[must_use]
+pub fn copied(text: &str, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::key;
+    match crate::buffer::copy_to_clipboard(text) {
+        Ok(()) => texts.t_with(key::ECHO_COPIED_VALUE, &[("value", text)]),
+        Err(e) => {
+            // THE REASON GOES TO THE LOG AND NOT TO THE LINE. It is a store
+            // path or a compositor's refusal, neither of which the person
+            // reading a network's address can act on — and the message line is
+            // one line.
+            tracing::warn!(error = %e, "could not put the row's value on the clipboard");
+            texts.t(key::ECHO_COPY_FAILED)
+        }
+    }
+}
+
 /// Where a value begins, in the ROW's own cells.
 ///
 /// # One arithmetic, three views
@@ -1016,31 +1079,13 @@ pub const AIR: Vec<crate::files::Field> = Vec::new();
 /// A COLUMN, and not an edge: every value in a section starts in the same
 /// place, so reading down it is one movement. The column is
 /// `space.view.labelCells` (invariant 9 — a spacing is a token), clamped to
-/// half of what is left after the mark, so a narrow footer does not become two
-/// columns of nothing.
+/// half the row, so a narrow footer does not become two columns of nothing.
 ///
 /// This is the rule `rule` and `divider` already established for separators:
 /// no view writes its own.
 #[must_use]
 pub fn value_column(left: u16, room: u16) -> u16 {
-    let for_text = room.saturating_sub(MARKER);
-    text_left(left) + tokens::space::VIEW_LABELCELLS.min(for_text / 2).max(1)
-}
-
-/// How many cells the mark in front of a row takes: the glyph and its air.
-///
-/// It is spent on EVERY row of the three views, answering or not, so that the
-/// labels line up — an indent that only some rows pay is a ragged edge, which
-/// is harder to read than no mark at all.
-pub const MARKER: u16 = tokens::space::VIEW_MARKERCELLS;
-
-/// Where a row's TEXT begins, once the mark in front of it is paid for.
-///
-/// A heading does not pay it: a section title standing two cells left of its
-/// own rows is what says it is a title, and it costs no glyph to say so.
-#[must_use]
-pub const fn text_left(left: u16) -> u16 {
-    left + MARKER
+    left + tokens::space::VIEW_LABELCELLS.min(room / 2).max(1)
 }
 
 /// The label and the value of one row, placed and cut.
@@ -1053,7 +1098,6 @@ pub const fn text_left(left: u16) -> u16 {
 pub fn field_pair(
     left: u16,
     room: u16,
-    acts: bool,
     label: &str,
     value: &str,
     label_colour: tokens::Color,
@@ -1066,21 +1110,9 @@ pub fn field_pair(
         hit: crate::files::Hit::Nothing,
         explain: None,
     };
-    let from = text_left(left);
-    let mut out: Vec<crate::files::Field> = Vec::with_capacity(3);
-    if acts && room > MARKER {
-        // THE MARK IS QUIET UNLESS THE CURSOR IS HERE. It says the row is a
-        // door, not that it is the interesting one — and on the focused row it
-        // follows the label into the accent so the whole line reads as one
-        // thing.
-        let colour = if label_colour == tokens::color::STATE_ACCENT {
-            label_colour
-        } else {
-            tokens::color::TEXT_DIM
-        };
-        out.push(piece(left, tokens::icon::ROW_ACTS.to_string(), colour));
-    }
-    let for_text = room.saturating_sub(MARKER);
+    let from = left;
+    let mut out: Vec<crate::files::Field> = Vec::with_capacity(2);
+    let for_text = room;
     // THE COLUMN IS A MINIMUM, NOT A CEILING.
     //
     // A label longer than it pushes the value right instead of being cut. The
@@ -1184,10 +1216,10 @@ pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        BAR_CELLS, FIELDS_LEAD, Frame, INSET, MARKER, Piece, Register, SHELF_PAD, SHELF_ROOM,
-        cell_width, content_left_px, field_pair, hint_spans, key_text, list_bar, list_offset_at,
-        list_scroll, on_the_band, on_the_list_bar, shelf_bar, shelf_box, shelf_ground,
-        split_at_the_modifier, text_left, value_column,
+        BAR_CELLS, FIELDS_LEAD, Frame, INSET, Piece, Register, SHELF_PAD, SHELF_ROOM, cell_width,
+        content_left_px, field_pair, hint_spans, key_text, list_bar, list_offset_at, list_scroll,
+        on_the_band, on_the_list_bar, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier,
+        value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -1521,7 +1553,7 @@ mod tests {
             wide.windows(2).all(|w| w[0] == w[1]),
             "the value moved with the window: {wide:?}"
         );
-        assert_eq!(wide[0], text_left(2) + tokens::space::VIEW_LABELCELLS);
+        assert_eq!(wide[0], 2 + tokens::space::VIEW_LABELCELLS);
     }
 
     #[test]
@@ -1530,15 +1562,14 @@ mod tests {
         // has to yield: at 24 cells of room, a 28-cell label column would put
         // the value past the end of the row.
         //
-        // AND WHAT IS CHECKED IS WHAT IS DRAWN. Below the mark's own width
-        // there is no room for a value at all, and the answer is to draw no
-        // value — not to place one at a column the row does not reach.
+        // AND WHAT IS CHECKED IS WHAT IS DRAWN: below three cells for a
+        // value the answer is to draw no value, not to place one at a column
+        // the row does not reach.
         for room in 1u16..=tokens::space::VIEW_LABELCELLS * 2 {
-            for acts in [false, true] {
+            {
                 let fields = field_pair(
                     2,
                     room,
-                    acts,
                     "a label of some length",
                     "a value",
                     tokens::color::TEXT_SECONDARY,
@@ -1564,7 +1595,6 @@ mod tests {
         let fields = field_pair(
             2,
             60,
-            false,
             long,
             "",
             tokens::color::TEXT_SECONDARY,
@@ -1762,12 +1792,11 @@ mod tests {
         // cell more.
         assert_eq!(
             SHELF_ROOM,
-            MARKER + tokens::space::VIEW_LABELCELLS + tokens::space::VIEW_VALUECELLS
+            tokens::space::VIEW_LABELCELLS + tokens::space::VIEW_VALUECELLS
         );
         let row = field_pair(
             1,
             wide.room,
-            true,
             "a network with a very long name indeed, quite a long one",
             "online · Linux · 100.64.12.34 · exit node",
             tokens::color::TEXT_PRIMARY,
@@ -1784,41 +1813,56 @@ mod tests {
     }
 
     #[test]
-    fn only_the_row_that_answers_wears_the_mark_and_both_line_up() {
-        // The owner asked for the difference and chose the mark over colour:
-        // it survives a palette nobody can separate by tone. What it must NOT
-        // do is move the text — a mark only some rows pay for is a ragged
-        // left edge, which is harder to read than no mark at all.
+    fn the_label_says_whether_the_row_is_a_door_and_the_text_never_moves() {
+        // THE OWNER REFUSED THE MARK: *"não quero mais o chevron, pois isso é
+        // utilizado em elementos de descolapsar/colapsar"* — and then refused
+        // a mark of any kind, asking for the difference to be a colour, in
+        // colours no VALUE wears.
+        //
+        // So the two rows are the same shape, to the cell, and differ only in
+        // the hue of their label. What this guards is both halves: that the
+        // text did not move when the mark left, and that the label's colour is
+        // never one of the value's.
         let acts = field_pair(
             2,
             60,
-            true,
             "radio",
             "on",
-            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_LABEL_ACTS,
             tokens::color::TEXT_PRIMARY,
         );
         let fact = field_pair(
             2,
             60,
-            false,
             "band",
             "5 GHz",
-            tokens::color::TEXT_SECONDARY,
+            tokens::color::TEXT_LABEL_FACT,
             tokens::color::TEXT_PRIMARY,
         );
-        assert_eq!(acts.len(), 3, "the row that answers has no mark");
-        assert_eq!(fact.len(), 2, "the row that does nothing wears one");
-        assert_eq!(acts[0].at, 2);
-        assert_eq!(acts[0].text, tokens::icon::ROW_ACTS.to_string());
+        assert_eq!(acts.len(), 2, "a row grew a piece it does not draw");
+        assert_eq!(fact.len(), 2);
         assert_eq!(
-            acts[1].at, fact[0].at,
+            acts[0].at, 2,
+            "the label no longer starts at the row's own left"
+        );
+        assert_eq!(
+            acts[0].at, fact[0].at,
             "the two labels start in different places"
         );
         assert_eq!(
-            acts[2].at, fact[1].at,
+            acts[1].at, fact[1].at,
             "the two values start in different places"
         );
+        assert_ne!(
+            acts[0].color, fact[0].color,
+            "a door and a fact wear the same label"
+        );
+        for row in [&acts, &fact] {
+            assert_ne!(
+                row[0].color, row[1].color,
+                "the label wears the value's own colour"
+            );
+        }
     }
 
     #[test]
@@ -1830,7 +1874,6 @@ mod tests {
         let fields = field_pair(
             2,
             80,
-            false,
             long,
             "on",
             tokens::color::TEXT_SECONDARY,
@@ -1842,7 +1885,7 @@ mod tests {
             "the value did not move out of the label's way"
         );
         assert!(
-            fields[1].at >= 2 + MARKER + ronoctua_render::layout::width(long) + 2,
+            fields[1].at >= 2 + ronoctua_render::layout::width(long) + 2,
             "the label ran into the value"
         );
 
@@ -1850,7 +1893,6 @@ mod tests {
         let fields = field_pair(
             2,
             40,
-            false,
             &"x".repeat(200),
             "on",
             tokens::color::TEXT_SECONDARY,

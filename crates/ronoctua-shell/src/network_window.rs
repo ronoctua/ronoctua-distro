@@ -447,6 +447,12 @@ impl NetworkWindow {
         };
         match errand {
             Errand::Nothing => {}
+            // AN INFORMATIVE ROW COPIES ITSELF — see
+            // `chrome::information_of`, and `chrome::copied` for the
+            // one place the six doors share.
+            Errand::Copy(text) => {
+                self.message = Some(crate::chrome::copied(&text, &self.texts));
+            }
             Errand::Close => {
                 self.quit = true;
                 return;

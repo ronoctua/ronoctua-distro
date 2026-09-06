@@ -256,6 +256,53 @@
       faint = "subtle.text-faint";
       alternate = "alternate.text";
     };
+    # THE LABEL COLUMN of the three views that are a list of a label and a
+    # value — network, power and Bluetooth.
+    #
+    # # Why the label leaves the neutral ramp
+    #
+    # Because it was wearing the value's own colours. The two columns were
+    # drawn from one pair of greys — the label in one step, the value in the
+    # other, and swapped inside a list — so nothing said which column was
+    # which except its position, and nothing at all said whether the row was a
+    # DOOR. A mark in front of it said that for a while, and the owner refused
+    # it: a chevron is what a tree uses to open and close, and this row does
+    # neither.
+    #
+    # So the difference moves to where the palette's own rule puts it. HUE says
+    # "another kind of thing": the label column takes a hue of its own, and no
+    # value ever wears it. LUMINANCE says "another importance": inside that
+    # hue, `acts` is a row that answers `RET` and `fact` a row one can only
+    # read.
+    #
+    # The cursor keeps `state.accent` over both, and a row that is reachable
+    # and REFUSING keeps `text.dim` over both — neither of those is a kind of
+    # row, they are what is happening to one.
+    #
+    # AND THE PAIR IS SOBER, at the owner's word. It went out loud the first
+    # time — the family's `text-loud` step at `alternate`'s chroma — and a
+    # whole column of labels at that weight competes with the values it names.
+    # A label is the quiet half of its line; it is the VALUE one reads.
+    label = {
+      acts = "label.text";
+      fact = "label.text-muted";
+    };
+    # THE VALUE OF A ROW ONE CANNOT ACT ON.
+    #
+    # Grey, at the weight it already had: `strong` is a fact's answer and
+    # `weak` a list item's description, the same two steps the neutral ramp
+    # gives an interactive row's value — with the colour taken out.
+    #
+    # Everything else on these screens is warm (the ramp is hue 85 at chroma
+    # 0.26), so a neutral value reads as a step back from a cream one without
+    # being any darker. That is the whole device, and it is why only the
+    # COLOUR changes: a row one can only read should not be the loudest thing
+    # on its line, and it should still be perfectly legible — it is, after
+    # all, the thing one came to read.
+    read = {
+      strong = "grey.text-loud";
+      weak = "grey.text";
+    };
   };
 
   # -------------------------------------------------------------------

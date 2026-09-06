@@ -84,6 +84,34 @@
       text-chroma = 0.34;
       text-shift = -6;
     };
+    # The label column — see owl's own seed for the whole reasoning. Here the
+    # seat is between `alternate` (200) and `group` (310), because 155 is where
+    # this theme's ACCENT lives: a green theme cannot spend green on a column.
+    label = {
+      hue = 255;
+      text-chroma = 0.20;
+      text-shift = 6;
+    };
+
+    # THE VALUE OF A ROW ONE CANNOT ACT ON — grey, and grey is the whole of it.
+    #
+    # `text-chroma` is nought, so the hue below is not drawn: it is the theme's own green hue, with the colour taken out.
+    # The owner asked for it in one line — *"mude a cor apenas dos valores que
+    # não são interativos, deixando eles cinza"* — and the reason it works is
+    # that everything else on these screens is WARM: against a cream value at
+    # the same weight, a neutral one reads as a step back without being any
+    # darker. Luminance is left alone on purpose; what changes is only the
+    # colour, which is what was asked.
+    grey = {
+      hue = 140;
+      text-chroma = 0.0;
+      # EIGHT Lc DOWN THE LADDER, at the owner's word: at the strong step
+      # a grey with no colour in it is still a near-white (#E0E0E0), and
+      # he read it that way — *"está muito branco"*. Sixteen Lc below the
+      # cream it sits beside, and twenty-three above the ramp's own `text`:
+      # far enough to be grey, near enough that nothing is harder to read.
+      text-shift = -8;
+    };
     brain = {
       hue = 230;
       # The same lever, for the same reason: the brain's line has to read as a

@@ -87,6 +87,51 @@
       text-chroma = 0.34;
       text-shift = -6;
     };
+    # THE LABEL COLUMN of the three views that are a list of a label and a
+    # value — network, power and Bluetooth.
+    #
+    # A hue of its own because the label is another KIND of thing than the
+    # value beside it: the value is the screen's content and the label is the
+    # question the content answers. Inside the family, `text` is a row that
+    # ANSWERS `RET` and `text-muted` a row one can only read — luminance for
+    # importance, which is this palette's other half of the rule.
+    #
+    # 155° is the seat between `success` (130) and `alternate` (183), 25° from
+    # each and the widest gap this palette had left.
+    #
+    # AND IT IS SOBER, which the owner asked for after seeing the first one on
+    # screen: *"por ser labels, essas novas cores deveriam ser mais sóbrias"*.
+    # It started at `alternate`'s chroma with the loud text step, and a whole
+    # COLUMN at that weight competes with the values it is naming — a label is
+    # the quiet half of its line. Measured against the neutral ramp the pair
+    # now sits a little above it (Lc 54 and 29 against the ramp's 48 and 23):
+    # quiet enough not to shout, bright enough that the hue is still a hue and
+    # not another grey.
+    label = {
+      hue = 155;
+      text-chroma = 0.20;
+      text-shift = 6;
+    };
+
+    # THE VALUE OF A ROW ONE CANNOT ACT ON — grey, and grey is the whole of it.
+    #
+    # `text-chroma` is nought, so the hue below is not drawn: it is the neutral ramp's own hue, with the colour taken out.
+    # The owner asked for it in one line — *"mude a cor apenas dos valores que
+    # não são interativos, deixando eles cinza"* — and the reason it works is
+    # that everything else on these screens is WARM: against a cream value at
+    # the same weight, a neutral one reads as a step back without being any
+    # darker. Luminance is left alone on purpose; what changes is only the
+    # colour, which is what was asked.
+    grey = {
+      hue = 85;
+      text-chroma = 0.0;
+      # EIGHT Lc DOWN THE LADDER, at the owner's word: at the strong step
+      # a grey with no colour in it is still a near-white (#E0E0E0), and
+      # he read it that way — *"está muito branco"*. Sixteen Lc below the
+      # cream it sits beside, and twenty-three above the ramp's own `text`:
+      # far enough to be grey, near enough that nothing is harder to read.
+      text-shift = -8;
+    };
     # The brain's line: a blue-cast ground with neutral near-white text.
     brain = {
       hue = 264;

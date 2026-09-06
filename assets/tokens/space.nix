@@ -385,12 +385,6 @@
   # defect the comment deleted from `power.rs` had been written about.
   view = {
     labelCells = 28;
-    # THE CELLS A ROW SPENDS ON THE MARK IN FRONT OF IT.
-    #
-    # The glyph and its air. Every row of the three views pays it, answering or
-    # not, so the labels line up — an indent only some rows pay is a ragged
-    # edge, which reads worse than no mark at all.
-    markerCells = 2;
     # HOW MUCH ROOM A VALUE GETS, in the row's own cells.
     #
     # `labelCells` says where a value BEGINS; this says how far it may run. On
@@ -439,9 +433,9 @@
   #
   # # AND ITS WIDTH IS NOT WRITTEN HERE, on purpose
   #
-  # A container is as wide as one of its rows needs — `view.markerCells` plus
-  # `view.labelCells` plus `view.valueCells`, plus the air at each edge and the
-  # cell its own bar takes. That is arithmetic over tokens that already exist,
+  # A container is as wide as one of its rows needs — `view.labelCells` plus
+  # `view.valueCells`, plus the air at each edge and the cell its own bar
+  # takes. That is arithmetic over tokens that already exist,
   # so it lives in `chrome::SHELF_ROOM` beside the code that draws it, the way
   # `chrome::FIELDS_LEAD` does. A number repeated here would be a second truth
   # that goes stale the day either column moves.

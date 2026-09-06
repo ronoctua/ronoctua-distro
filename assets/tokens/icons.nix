@@ -40,21 +40,6 @@
   notification-mark-read = "md-email_open_outline";
   notification-delete = "cod-trash";
 
-  # THE ROW THAT ANSWERS `RET`, in the three views that are a list of a label
-  # and a value — network, power and Bluetooth.
-  #
-  # WHY A GLYPH AND NOT A COLOUR. In those views a fact and a control were
-  # drawn exactly alike, and the owner asked for the difference. Colour was the
-  # other candidate and it is the worse one: the accent is already spent on the
-  # cursor, the remaining greys are a weight difference that disappears at a
-  # glance, and a person who does not separate tones well would be left with
-  # nothing at all. A mark in front of the row says it in any palette.
-  #
-  # A CODICON, like the rest of the chrome above: it was drawn for editor
-  # interface, it is the same weight as the text beside it, and it is quiet —
-  # the row is what one reads, the mark only says the row is a door.
-  row-acts = "cod-chevron_right";
-
   # HOW LONG THE ONE ON SCREEN HAS LEFT — a pie in ONE cell, eight steps.
   #
   # Not a bar: a bar of a few cells next to a sentence reads as a second piece

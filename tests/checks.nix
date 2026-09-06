@@ -7651,10 +7651,6 @@ let
           # are the same circle filled and hollow, so the measurement is also
           # what keeps them the same drawing.
           "working-one", "working-two",
-          # THE MARK IN FRONT OF A ROW THAT ANSWERS `RET`, drawn shoulder to
-          # shoulder with the label in three views. It is the one glyph this
-          # change added inline, and it was the one glyph nothing measured.
-          "row-acts",
       ]
 
       face = "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"

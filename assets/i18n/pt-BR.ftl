@@ -538,6 +538,7 @@ clipboard-actions = Ações
 clipboard-clipcascade = ClipCascade
 clipboard-clipcascade-missing = não integrado
 echo-copied = Copiado
+echo-copied-value = Copiado: { $value }
 echo-copy-failed = Não consegui copiar — veja o log
 echo-qr-large = O conteúdo é grande demais para um QR code
 echo-clipcascade-missing = O ClipCascade ainda não está integrado
