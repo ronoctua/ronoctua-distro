@@ -16,7 +16,7 @@ cmd-session-quit = Encerrar sessão
 
 ## which-key prefix groups
 
-group-buffer = buffer
+group-brain = cérebro
 group-quit = sair
 
 ## The modeline's two left segments
@@ -32,6 +32,9 @@ buffer-example = exemplo
 mode-files = arquivos
 mode-monitor = monitor
 mode-notifications = notificações
+mode-power = energia
+mode-bluetooth = bluetooth
+mode-network = rede
 mode-rescue = resgate
 mode-terminal = terminal
 
@@ -73,7 +76,7 @@ state-update = atualização
 ## Notifications
 
 notif-empty = sem notificações
-notif-history = Notificações
+notif-title = Notificações
 notif-critical = CRÍTICA
 
 # A faixa, acima da modeline. O contador só aparece com mais de uma.
@@ -104,7 +107,21 @@ notif-rule-small-things-are-quick = Coisa pequena passa rápido
 notif-column-happened = Recebidas
 notif-column-suppressed = Filtradas
 notif-column-catalogue = Notificações e filtros
+# A LINHA DE DICAS lê cada id das tabelas de teclas do gerenciador como um texto
+# curto — a convenção do gerenciador de arquivos; `cmd-<id>` é o rótulo longo do manual.
 notif-read = lida
+notif-forget = esquecer
+notif-read-all = todas lidas
+notif-act = rodar a ação
+notif-adjust = ajustar este tipo
+notif-where = { $at } de { $total }
+notif-up = sobe
+notif-down = desce
+notif-pane-next = próxima coluna
+notif-pane-previous = coluna anterior
+notif-knob-next = próximo valor
+notif-knob-previous = valor anterior
+notif-restore = o padrão da distro
 notif-suppressed-by = filtrada por { $rule }
 notif-decided-by = por { $rule }
 notif-from-catalogue = { $entry }
@@ -115,9 +132,7 @@ notif-yes = sim
 notif-no = não
 notif-knob-show = aparece
 notif-knob-life = fica
-notif-window-title = { $pane } — { $n } não lidas
-notif-window-keys = TAB coluna · ↑↓ move · ESPAÇO lida · r todas · RET ajustar · ←→ mudar
-notif-act-in-the-footer = A ação roda pelo rodapé: LEADER n h, e a letra dela
+notif-act-in-the-footer = A ação roda pelo rodapé: { $keys }, e a letra dela
 
 # Como os campos da apresentação aparecem na tela.
 notif-show-hidden = não mostrar
@@ -137,8 +152,19 @@ notif-audio = tocar som
 notif-inert-vibrate = sem dispositivo háptico nesta máquina
 notif-inert-audio = ainda não implementado — veja docs/PENDING.md
 
-# O que o ponteiro explica na faixa.
-hint-notif-bell = clique para abrir o gerenciador de notificações
+# O que o ponteiro explica no SINO, na modeline — não na faixa.
+# O ZERO EXATO VEM PRIMEIRO. O Fluent casa um número exato antes da categoria
+# de plural, e a categoria `one` do português cobre o 0 também — sem o ramo
+# `[0]`, "0 filtradas" saía como "uma filtrada".
+hint-notif-bell = { $unread ->
+        [0] nenhuma não lida
+        [one] uma não lida
+       *[other] { $unread } não lidas
+    }, { $filtered ->
+        [0] nenhuma filtrada
+        [one] uma filtrada
+       *[other] { $filtered } filtradas
+    } — clique abre o gerenciador
 hint-notif-read = marcar como lida e tirar da tela
 hint-notif-countdown = quanto tempo ela ainda tem
 hint-notif-action = { $action } — aperte { $key } no gerenciador
@@ -235,12 +261,20 @@ cmd-workspace-move = Levar a janela para o espaço
 
 ## Notifications, keyboard and help — commands that existed only as an order or a key
 
-cmd-notif-history = Histórico de notificações
+cmd-notif-open = Notificações
 cmd-notif-window = Notificações em uma janela
 cmd-notif-read-all = Marcar todas como lidas
 cmd-notif-read = Marcar esta notificação como lida
 cmd-notif-forget = Esquecer esta notificação
 cmd-notif-act = Rodar a ação da notificação
+cmd-notif-adjust = Ajustar este tipo de notificação
+cmd-notif-up = Uma notificação acima
+cmd-notif-down = Uma notificação abaixo
+cmd-notif-pane-next = Próxima coluna do gerenciador
+cmd-notif-pane-previous = Coluna anterior do gerenciador
+cmd-notif-knob-next = Próximo valor do ajuste
+cmd-notif-knob-previous = Valor anterior do ajuste
+cmd-notif-restore = De volta ao padrão da distro
 cmd-notif-dismiss = Dispensar a notificação
 cmd-keyboard-restore = Restaurar o teclado
 group-notification = notificação
@@ -698,11 +732,12 @@ unicode-tone-medium = Pele média
 unicode-tone-medium-dark = Pele escura média
 unicode-tone-dark = Pele escura
 
-## Network — Wi-Fi and Ethernet (LEADER r)
+## Network — Wi-Fi and Ethernet (LEADER s n)
 
 cmd-network-open = Redes
 cmd-network-scan = Varrer redes
 cmd-network-connect = Conectar à rede
+ask-network-connect = Senha desta rede
 cmd-network-disconnect = Desconectar
 cmd-network-forget = Esquecer a rede
 cmd-network-wifi-toggle = Alternar o rádio Wi-Fi
@@ -737,7 +772,7 @@ echo-network-link-wired = { $network } · { $rate }
 echo-network-no-link = Sem conexão
 echo-network-unavailable = O NetworkManager não está respondendo
 
-## Syncthing (LEADER r s)
+## Syncthing (LEADER s s)
 
 cmd-syncthing-open = Abrir o Syncthing
 cmd-syncthing-state = Estado do Syncthing
@@ -1762,7 +1797,7 @@ update-kind-reclaim-space = recupera espaço em disco
 
 
 # ===================================================================
-# A TELA DO CÉREBRO — LEADER s b, e uma janela só dela
+# A TELA DO CÉREBRO — LEADER b b, e uma janela só dela
 #
 # O que a máquina faz SOZINHA, quando, e no que deu da última vez. Nenhuma
 # frase daqui escreve uma data: o buffer as desenha em ISO, porque um
@@ -1917,3 +1952,610 @@ theme-backdrop-black = Preto
 theme-backdrop-theme = A cor do tema
 theme-hint = { $apply } aplica · { $left }/{ $right } troca de coluna · { $close } volta
 echo-theme-unsaved = não deu para gravar o tema: { $error }
+
+## Energia — a bateria, o carregador, o perfil e o sono (LEADER s p)
+
+cmd-power-open = Energia
+cmd-power-window = Energia em uma janela
+cmd-power-profile-performance = Perfil de energia: desempenho
+cmd-power-profile-balanced = Perfil de energia: equilibrado
+cmd-power-profile-saver = Perfil de energia: economia
+cmd-power-keep-awake = Manter a máquina acordada (alterna)
+cmd-power-keep-lid = Ignorar a tampa (alterna)
+cmd-power-thresholds = Limites de carga
+cmd-power-suspend = Suspender
+cmd-power-hibernate = Hibernar
+cmd-power-reboot = Reiniciar
+cmd-power-off = Desligar
+cmd-power-enter = Aplicar, armar ou confirmar a linha
+cmd-power-less = Baixar o limite sob o cursor
+cmd-power-more = Subir o limite sob o cursor
+cmd-power-up = Uma linha acima
+cmd-power-down = Uma linha abaixo
+group-power = energia
+
+# A LINHA DE DICAS lê cada id da tabela de teclas da vista como um texto curto.
+power-enter = aplicar
+power-less = menos
+power-more = mais
+power-up = sobe
+power-down = desce
+
+power-title = Energia
+
+# As duas marcas da modeline, na linha sob o ponteiro.
+hint-battery = { $percent }% { $state }, { $time }, { $rate } W — clique abre energia
+hint-profile = perfil: { $profile } — clique abre energia
+
+# As seções da vista, um cabeçalho cada.
+power-heading-battery = Bateria
+power-heading-adapter = Carregador
+power-heading-profile = Perfil
+power-heading-thresholds = Limites de carga
+power-heading-awake = Manter acordado
+power-heading-lid = Tampa e ociosidade
+power-heading-actions = Ações
+power-heading-peripherals = Periféricos
+
+power-no-battery = sem bateria nesta máquina
+power-no-adapter = nenhum carregador conhecido
+power-plugged = na tomada
+power-unplugged = fora da tomada
+power-no-daemon = o power-profiles-daemon não está rodando
+
+power-fact-charge = carga
+power-fact-time = tempo
+power-fact-rate = taxa
+power-fact-energy = energia
+power-fact-health = saúde
+power-fact-health-daemon = saúde, pelo firmware
+power-percent = { $percent }%
+power-fact-cycles = ciclos
+power-fact-voltage = tensão
+power-fact-temperature = temperatura
+power-fact-technology = química
+power-fact-make = fabricante
+power-fact-supply = fonte
+power-fact-behaviour = comportamento de carga
+power-fact-charge-type = tipo de carga
+power-fact-idle = ocioso
+
+power-time-empty = { $time } restantes
+power-time-full = { $time } até encher
+power-time-unknown = tempo desconhecido
+power-duration = { $h } h { $m } min
+power-duration-minutes = { $m } min
+power-rate = { $rate } W
+power-energy = { $now } / { $full } Wh
+power-health = { $health }% ({ $full } de { $design } Wh)
+power-voltage = { $v } V
+power-temperature = { $t } °C
+
+power-state-unknown = desconhecido
+power-state-charging = carregando
+power-state-discharging = descarregando
+power-state-empty = vazia
+power-state-full = cheia
+power-state-pending-charge = esperando para carregar
+power-state-pending-discharge = esperando para descarregar
+
+power-technology-unknown = desconhecida
+power-technology-lithium-ion = íon de lítio
+power-technology-lithium-polymer = polímero de lítio
+power-technology-lithium-iron-phosphate = fosfato de ferro-lítio
+power-technology-lead-acid = chumbo-ácido
+power-technology-nickel-cadmium = níquel-cádmio
+power-technology-nickel-metal-hydride = níquel-hidreto metálico
+
+power-profile-performance = desempenho
+power-profile-balanced = equilibrado
+power-profile-power-saver = economia
+power-profile-wanted = (sua escolha)
+power-profile-not-offered = não oferecido por esta máquina
+power-degraded = desempenho degradado: { $why }
+power-inhibited = desempenho impedido: { $why }
+power-hold = { $who } segura { $profile }: { $why }
+power-battery-aware = baixar o perfil quando a bateria estiver acabando
+power-on = ligado
+power-off-label = desligado
+
+power-threshold-start = começa a carregar abaixo de ({ $supply })
+power-threshold-end = para de carregar em ({ $supply })
+power-threshold-pending = { $value }% — RET grava
+power-threshold-none = não ajustável
+power-preset-longevity = 40–80: um laptop que vive na mesa
+power-preset-desk = 60–80: quase sempre na tomada
+power-preset-full = carga cheia: uma viagem
+power-thresholds-unsupported = esta bateria não tem limites de carga
+power-thresholds-readonly = os limites são só leitura para você — a regra udev não chegou a esta bateria
+
+power-keep-awake = manter acordado: sem sono, sem ação por ociosidade
+power-keep-lid = ignorar a tampa: fechá-la não faz nada
+power-inhibitor = { $who } segura { $what }: { $why }
+
+power-lid-closed = a tampa está fechada
+power-lid-open = a tampa está aberta
+power-lid-action = fechar a tampa
+power-lid-action-external = fechar a tampa, na tomada
+power-lid-action-docked = fechar a tampa, no dock
+power-lid-action-value = { $action }
+power-action-unset = o padrão
+power-power-key = a tecla de energia
+power-idle-action = { $action } depois de { $time }
+power-idle-never = nada
+power-critical-action = no nível crítico, o UPower vai
+power-blocked = bloqueado agora
+
+power-action-suspend = suspender
+power-action-suspend-then-hibernate = suspender e depois hibernar
+power-action-hybrid-sleep = suspender e hibernar ao mesmo tempo
+power-action-hibernate = hibernar
+power-action-reboot = reiniciar
+power-action-off = desligar
+power-action-confirm = { $action }? RET confirma, Esc cancela
+power-cannot = não disponível
+# THE DAEMONS' WORDS — logind's kebab-case and UPower's CamelCase land on
+# the same key (`power_words::daemon_word`); a word outside this list is shown raw.
+power-duration-hours = { $h } h
+hint-battery-no-rate = { $percent }% { $state }, { $time } — clique abre energia
+notif-battery-critical-body-unset = { $percent }% restantes. A máquina vai agir sozinha em breve.
+power-word-ignore = não fazer nada
+power-word-poweroff = desligar
+power-word-reboot = reiniciar
+power-word-halt = parar
+power-word-kexec = reiniciar pelo kexec
+power-word-suspend = suspender
+power-word-hibernate = hibernar
+power-word-hybrid-sleep = entrar em sono híbrido
+power-word-suspend-then-hibernate = suspender e depois hibernar
+power-word-lock = bloquear a tela
+power-word-factory-reset = restaurar de fábrica
+power-word-soft-reboot = reiniciar sem desligar
+# THE KERNEL'S TWO CHARGE VOCABULARIES — `charge_behaviour` and `charge_type`,
+# from the `power_supply` class; the raw word shows only for one we do not know.
+power-behaviour-auto = carregar normalmente
+power-behaviour-inhibit-charge = manter a carga onde está
+power-behaviour-inhibit-charge-awake = manter a carga enquanto acordado
+power-behaviour-force-discharge = usar a bateria
+power-charge-type-unknown = desconhecida
+power-charge-type-na = não se aplica
+power-charge-type-trickle = lenta
+power-charge-type-fast = rápida
+power-charge-type-standard = padrão
+power-charge-type-adaptive = adaptativa
+power-charge-type-custom = personalizada
+power-charge-type-long-life = vida longa
+power-charge-type-bypass = direto da tomada
+# WHAT AN INHIBITOR HOLDS — nouns, because "holds sleep" is a thing held and the
+# lid's `sleep` above is an action; in Portuguese they are two words.
+notif-battery-critical-body-ignore = { $percent }% restantes, e nada vai impedir. Ligue na tomada agora.
+power-what-sleep = o sono
+power-what-idle = a ociosidade
+power-what-shutdown = o desligamento
+power-what-handle-power-key = a tecla de energia
+power-what-handle-suspend-key = a tecla de suspender
+power-what-handle-hibernate-key = a tecla de hibernar
+power-what-handle-lid-switch = a tampa
+power-what-handle-reboot-key = a tecla de reiniciar
+power-word-sleep = dormir
+
+power-peripheral = { $kind }: { $model }
+power-kind-unknown = dispositivo
+power-kind-line-power = carregador
+power-kind-battery = bateria
+power-kind-ups = nobreak
+power-kind-monitor = monitor
+power-kind-mouse = mouse
+power-kind-keyboard = teclado
+power-kind-pda = PDA
+power-kind-phone = telefone
+power-kind-media-player = tocador de mídia
+power-kind-tablet = tablet
+power-kind-computer = computador
+power-kind-gaming-input = controle
+power-kind-pen = caneta
+power-kind-touchpad = touchpad
+power-kind-modem = modem
+power-kind-network = dispositivo de rede
+power-kind-headset = headset
+power-kind-speakers = caixas de som
+power-kind-headphones = fones de ouvido
+power-kind-video = dispositivo de vídeo
+power-kind-other-audio = dispositivo de áudio
+power-kind-remote-control = controle remoto
+power-kind-printer = impressora
+power-kind-scanner = scanner
+power-kind-camera = câmera
+power-kind-wearable = vestível
+power-kind-toy = brinquedo
+power-kind-bluetooth = dispositivo Bluetooth
+
+# O que as portas dizem quando um daemon recusou, e o que a janela não faz.
+power-answer-in-the-footer = A trava é do rodapé: { $awake }, ou { $lid }
+power-what-profile = o perfil
+power-what-lock = a trava
+power-what-thresholds = os limites
+power-what-action = a ação
+power-refused-authority = não permitido para esta sessão
+power-refused-absent = o daemon não está lá, ou o hardware não consegue
+power-refused-invalid = o valor foi recusado
+power-refused-other = recusado
+echo-power-refused = { $what } { $why } ({ $words })
+echo-power-profile-not-offered = { $wanted } não é oferecido por esta máquina; { $applied } aplicado
+
+# OS TRÊS ALARMES, levantados pelo rodapé quando o nível do UPower muda.
+notif-power-app = energia
+notif-bluetooth-app = bluetooth
+notif-bluetooth-pairing-summary = Algo quer parear
+notif-bluetooth-pairing-keys = { $yes } responde sim, { $no } responde não — depois que este aviso sai.
+notif-bluetooth-pairing-body = Abra o Bluetooth para responder.
+notif-action-bluetooth-accept = sim
+notif-action-bluetooth-refuse = não
+notif-bluetooth-connected-summary = { $device } conectado
+notif-bluetooth-connected-body = Está pronto para usar.
+notif-bluetooth-disconnected-summary = { $device } desconectado
+notif-bluetooth-disconnected-body = Se for o seu teclado ou mouse, é por isso que a máquina parou de responder.
+notif-bluetooth-battery-low-summary = { $device } está acabando
+notif-bluetooth-battery-low-body = Restam { $percent }%. Carregue quando puder.
+notif-battery-low-summary = Bateria baixa
+notif-battery-low-body = { $percent }% restantes. Ligue na tomada quando puder.
+notif-battery-critical-summary = Bateria crítica
+notif-battery-critical-body = { $percent }% restantes. A máquina vai { $action } sozinha em breve.
+notif-battery-charged-summary = Bateria carregada
+notif-battery-charged-body = Pode desligar da tomada.
+notif-action-power-panel = painel de energia
+notif-action-bluetooth-panel = bluetooth
+
+# A SAÍDA — as três marcas, e o que o daemon acredita.
+network-way = a saída
+network-airplane = modo avião
+network-tunnel-drop = RET derruba
+cmd-network-airplane = Modo avião (alterna)
+echo-network-refused = a rede recusou: { $error }
+echo-view-busy = outra vista está com o rodapé: Esc fecha ela primeiro
+hint-net-off = conectado, e nada do outro lado — clique abre a rede
+hint-net-portal = algo está pedindo que você entre — clique abre a rede
+hint-airplane = modo avião: todo rádio e cabo desligado — clique liga de volta
+hint-vpn = { $name } está de pé — clique abre a rede
+hint-tailscale = no tailnet { $tailnet } — clique abre
+hint-tor = saindo pelo Tor — clique abre
+network-way-unknown = ainda não decidido
+network-way-none = sem saída
+network-way-portal = uma página de login está no caminho
+network-way-limited = conectado, mas a internet não responde
+network-way-full = a internet responde
+
+# A VISTA — uma lista, quatro títulos, e as mesmas linhas nas duas portas.
+network-heading-overview = num relance
+network-heading-links = enlaces
+network-heading-wifi = Wi-Fi
+network-heading-tunnels = túneis
+network-radio = rádio Wi-Fi
+network-on = ligado
+network-off = desligado
+network-no-link = esta máquina não tem cabo nem rádio
+network-no-tunnel = nenhum túnel aqui
+network-tunnel-raise = RET levanta
+network-state-connected = conectado
+network-state-connecting = conectando…
+network-state-disconnected = sem conexão
+network-fact-network = rede
+network-fact-band = banda
+network-fact-signal = sinal
+network-fact-rate = taxa
+network-fact-address = endereço
+network-fact-gateway = gateway
+network-fact-dns = DNS
+network-fact-received = recebido
+network-fact-sent = enviado
+network-heading-ports = portas
+network-heading-monitor = monitor
+network-no-ports = ninguém escutando
+network-port-not-ours = não é nosso para ver
+network-ports-more = { $count ->
+    [one] e mais um nosso
+   *[other] e mais { $count } nossos
+  }
+network-per-second = { $bytes }/s
+# AS UNIDADES SÃO AS MESMAS EM TODO IDIOMA; o SEPARADOR DECIMAL não é, e é por
+# isso que estas são chaves com um número dentro, e não uma string montada no
+# crate.
+network-rate-kilobits = { $rate } kb/s
+network-rate-megabits = { $rate } Mb/s
+network-rate-gigabits = { $rate } Gb/s
+network-no-rate = sem enlace
+network-band = { $ghz } GHz
+network-band-unknown = uma frequência incomum
+network-heading-lan = esta rede
+network-lan-nobody = ninguém foi falado ainda
+network-lan-gateway = a saída
+network-lan-this-machine = esta máquina
+network-lan-looking = procurando as outras…
+network-lan-answered = respondeu
+network-lan-refused = esta máquina não pode mandar ping: { $error }
+network-lan-swept = { $answered ->
+    [one] uma máquina respondeu de { $asked } perguntadas, { $range }
+   *[other] { $answered } máquinas responderam de { $asked } perguntadas, { $range }
+  }
+cmd-network-lan = Procurar as outras máquinas daqui
+network-lan = procurar
+network-import = trazer
+network-hotspot-start = compartilhar esta conexão
+network-hotspot-stop = parar de compartilhar
+network-hotspot-cost = o rádio sai da rede em que está: o que ele compartilha é o cabo
+network-hotspot-on = esta máquina é a rede agora
+network-hotspot-password = senha
+echo-network-hotspot = compartilhando como { $network }, senha { $password }
+echo-network-hotspot-failed = não deu para compartilhar: { $reason }
+cmd-network-import = Trazer uma VPN de um arquivo
+ask-network-import = Caminho do arquivo .conf ou .ovpn
+network-import-file = arquivo
+network-import-kind = tipo
+network-import-wireguard = WireGuard
+network-import-openvpn = OpenVPN
+network-import-endpoint = vai para
+network-import-dns = mudaria seu DNS para
+network-import-everything = tudo o que esta máquina manda passaria por ele
+network-import-asks = vai pedir senha na primeira vez que subir
+network-import-bring = RET traz
+network-import-leave = Esc deixa onde está
+network-import-where = Caminho do arquivo .conf ou .ovpn
+network-import-help = Leia antes de trazer: o arquivo decide por onde seu tráfego sai.
+echo-network-imported = { $network } trazido
+echo-network-not-a-tunnel = { $file } não é arquivo WireGuard nem OpenVPN
+echo-network-import-failed = não deu para trazer { $file }: { $reason }
+
+# OS DOIS TÚNEIS. Nenhum fica ligado em repouso: o Tor não sobe no boot e o
+# Tailscale precisa de login, então uma máquina que não usa nenhum dos dois não
+# desenha nenhum dos títulos.
+network-heading-tailscale = tailnet
+network-heading-tor = Tor
+network-tailscale-state = tailnet
+network-tailscale-running = de pé
+network-tailscale-stopped = desligado
+network-tailscale-needslogin = esperando um login
+network-tailscale-nostate = subindo
+network-tailscale-starting = subindo
+network-tailscale-needsmachineauth = esperando aprovação no tailnet
+network-tailscale-inuseotheruser = outra pessoa nesta máquina está usando
+network-tailscale-login = entrar
+network-tailscale-logout = sair
+network-tailscale-routes = aceitar as rotas do tailnet
+network-tailscale-shields = recusar conexões de entrada
+network-tailscale-online = on-line
+network-tailscale-offline = off-line
+network-tailscale-exit = tudo sai por aqui
+network-tor-state = Tor
+network-tor-ready = há um circuito
+network-tor-not-ready = sem circuito
+network-tor-bootstrap = subindo, { $percent }%
+network-tor-circuits = { $count ->
+    [one] um circuito aberto
+   *[other] { $count } circuitos abertos
+  }
+network-tor-identity = pedir uma identidade nova
+network-fact-name = nome
+network-fact-tailnet = tailnet
+network-fact-magic-dns = MagicDNS
+network-fact-version = versão
+network-fact-socks = SOCKS
+echo-network-login = abra { $url } para terminar de entrar
+# AS PALAVRAS DA LINHA DE DICAS — o id lido como chave de texto, curtas porque
+# a linha é uma só. A forma longa é `cmd-<id>`, que o manual lê.
+network-up = sobe
+network-down = desce
+network-connect = conecta
+network-scan = procura
+network-wifi-toggle = rádio
+network-disconnect = desconecta
+network-forget = esquece
+network-link = enlace
+network-title = rede
+network-answer-in-the-footer = Senha se digita no rodapé: abra a rede por lá.
+cmd-network-window = Rede numa janela
+cmd-network-up = Uma linha acima
+cmd-network-down = Uma linha abaixo
+echo-network-tunnel-up = { $network } está subindo
+echo-network-tunnel-down = { $network } caiu
+echo-network-deleted = { $network } apagado
+
+## Bluetooth — o rádio, os dispositivos e o que cada um faz (LEADER s b)
+
+cmd-bluetooth-open = Bluetooth
+cmd-bluetooth-window = Bluetooth numa janela
+cmd-bluetooth-scan = Procurar dispositivos por perto
+cmd-bluetooth-power = Ligar ou desligar o rádio
+cmd-bluetooth-discoverable = Deixar outros dispositivos verem esta máquina
+cmd-bluetooth-reconnect = Reconectar os dispositivos confiáveis
+cmd-bluetooth-disconnect-all = Desconectar todos os dispositivos
+cmd-bluetooth-accept = Dizer sim ao pareamento
+cmd-bluetooth-refuse = Dizer não ao pareamento
+cmd-bluetooth-device = Abrir o dispositivo sob o cursor
+cmd-bluetooth-connect = Conectar ou desconectar o dispositivo
+cmd-bluetooth-pair = Parear com o dispositivo
+cmd-bluetooth-forget = Esquecer o dispositivo
+cmd-bluetooth-trust = Confiar no dispositivo, ou deixar de confiar
+cmd-bluetooth-block = Bloquear o dispositivo, ou desbloquear
+cmd-bluetooth-rename = Dar outro nome ao dispositivo
+ask-bluetooth-rename = Um nome para ele
+cmd-bluetooth-unnamed = Mostrar os dispositivos que não dizem o nome
+cmd-bluetooth-up = Uma linha acima
+cmd-bluetooth-down = Uma linha abaixo
+group-bluetooth = bluetooth
+
+# A LINHA DE DICAS lê cada id da tabela de teclas da vista como um texto curto.
+bluetooth-down = desce
+bluetooth-up = sobe
+bluetooth-device = abrir
+bluetooth-connect = conectar
+bluetooth-pair = parear
+bluetooth-forget = esquecer
+bluetooth-trust = confiar
+bluetooth-block = bloquear
+bluetooth-rename = renomear
+bluetooth-scan = procurar
+bluetooth-power = rádio
+bluetooth-discoverable = visível
+bluetooth-unnamed = sem nome
+bluetooth-accept = sim
+bluetooth-refuse = não
+
+bluetooth-title = Bluetooth
+bluetooth-row-kind = { $name } — { $kind }
+bluetooth-audio-state = { $what } — { $state }
+
+# As marcas de dispositivo da modeline, na linha sob o ponteiro.
+hint-bluetooth-device = { $kind }: { $name } — clique abre o bluetooth
+hint-bluetooth-device-battery = { $kind }: { $name }, { $percent }% restantes — clique abre o bluetooth
+
+# AS TRÊS SEÇÕES, e o que uma vazia diz.
+bluetooth-heading-adapter = Rádio
+bluetooth-heading-paired = Pareados
+bluetooth-heading-nearby = Por perto
+bluetooth-heading-profiles = O que ele faz
+bluetooth-nothing-here = nada aqui
+bluetooth-no-adapter = não há rádio Bluetooth nesta máquina
+bluetooth-no-daemon = o serviço de Bluetooth não está respondendo
+bluetooth-scanning = procurando dispositivos
+bluetooth-unnamed-hidden = { $count } por perto sem nome — aperte h para mostrar
+
+# AS LINHAS DO PRÓPRIO RÁDIO.
+bluetooth-adapter-power = o rádio
+bluetooth-adapter-discoverable = outros dispositivos veem esta máquina
+bluetooth-adapter-pairable = outros dispositivos podem parear com ela
+bluetooth-adapter-timeout = deixa de estar visível depois de
+bluetooth-adapter-forever = fica visível
+bluetooth-adapter-pairable-forever = fica aberto
+bluetooth-adapter-alias = esta máquina se chama
+bluetooth-power-state-on = ligado
+bluetooth-power-state-off = desligado
+bluetooth-power-state-off-enabling = ligando
+bluetooth-power-state-on-disabling = desligando
+bluetooth-power-state-off-blocked = travado pela chave do hardware
+
+# OS FATOS DE UM DISPOSITIVO, um por linha, na ordem em que o detalhe desenha.
+bluetooth-fact-address = endereço
+bluetooth-fact-address-type = tipo de endereço
+bluetooth-fact-alias = chamado de
+bluetooth-fact-name = nome próprio
+bluetooth-fact-connected = conectado
+bluetooth-fact-paired = pareado
+bluetooth-fact-bonded = as chaves ficaram guardadas
+bluetooth-fact-trusted = confiável
+bluetooth-fact-blocked = bloqueado
+bluetooth-fact-legacy = pareamento antigo
+bluetooth-fact-wake = pode acordar esta máquina
+bluetooth-fact-services = serviços lidos
+bluetooth-fact-battery = bateria
+bluetooth-fact-battery-source = a bateria é informada por
+bluetooth-fact-rssi = sinal
+bluetooth-fact-tx-power = ele transmite a
+bluetooth-fact-class = classe
+bluetooth-fact-appearance = aparência
+bluetooth-fact-modalias = id de firmware
+bluetooth-fact-adapter = pelo rádio
+bluetooth-fact-reconnect = quem reconecta
+bluetooth-fact-volume = volume
+bluetooth-fact-codec = codec
+bluetooth-fact-audio = perfil de áudio
+bluetooth-yes = sim
+bluetooth-no = não
+bluetooth-rssi-value = { $dbm } dBm
+bluetooth-tx-power-value = { $dbm } dBm
+bluetooth-percent = { $percent }%
+bluetooth-seconds = { $seconds }s
+
+# OS TIPOS, da classe ou da aparência que o próprio dispositivo diz.
+bluetooth-kind-headphones = fones de ouvido
+bluetooth-kind-headset = headset
+bluetooth-kind-speaker = caixa de som
+bluetooth-kind-keyboard = teclado
+bluetooth-kind-mouse = mouse
+bluetooth-kind-gamepad = controle
+bluetooth-kind-tablet = tablet
+bluetooth-kind-phone = telefone
+bluetooth-kind-computer = computador
+bluetooth-kind-watch = relógio
+bluetooth-kind-camera = câmera
+bluetooth-kind-printer = impressora
+bluetooth-kind-network = rede
+bluetooth-kind-display = tela
+bluetooth-kind-unknown = dispositivo
+
+# AS ENUMERAÇÕES DO PRÓPRIO BLUEZ, na língua de quem lê. São listas fechadas,
+# não dado livre — o NOME do dispositivo continua sendo dele. O `word_or` cai
+# na palavra do daemon se ele ganhar um valor novo, então o novo fica sem
+# tradução e nunca `[uma chave entre colchetes]`.
+bluetooth-adapter-pairable-timeout = aberto para parear por
+bluetooth-fact-manufacturer = fabricante
+bluetooth-fact-version = versão do bluetooth
+bluetooth-fact-roles = papéis
+bluetooth-fact-service = oferece
+bluetooth-audio-profile = o que está fazendo
+bluetooth-audio-next = o próximo perfil de áudio
+bluetooth-audio-previous = o anterior
+cmd-bluetooth-audio-next = Bluetooth: próximo perfil de áudio
+cmd-bluetooth-audio-previous = Bluetooth: perfil de áudio anterior
+bluetooth-audio-off = desligado
+bluetooth-audio-a2dp-sink = música, em estéreo
+bluetooth-audio-a2dp-source = música, vinda dele
+bluetooth-audio-headset-head-unit = chamada, com o microfone dele
+bluetooth-audio-headset-audio-gateway = chamada, por esta máquina
+bluetooth-codec-0 = SBC
+bluetooth-codec-1 = áudio MPEG-1/2
+bluetooth-codec-2 = AAC
+bluetooth-codec-4 = aptX
+bluetooth-codec-255 = o do fabricante
+bluetooth-address-type-public = fixo
+bluetooth-address-type-random = aleatório
+bluetooth-reconnect-none = nunca
+bluetooth-reconnect-host = quando esta máquina pede
+bluetooth-reconnect-device = quando o dispositivo pede
+bluetooth-reconnect-any = qualquer um dos dois
+bluetooth-transport-idle = parado
+bluetooth-transport-pending = começando
+bluetooth-transport-active = tocando
+bluetooth-transport-suspending = parando
+bluetooth-transport-broadcasting = transmitindo
+
+# O QUE UM DISPOSITIVO FAZ — os perfis por trás dos ids de serviço.
+bluetooth-profile-headset = headset, com microfone
+bluetooth-profile-handsfree = mãos livres, com microfone
+bluetooth-profile-audio-sink = toca o som daqui
+bluetooth-profile-audio-source = manda som para cá
+bluetooth-profile-remote-control = os botões dele controlam o player
+bluetooth-profile-human-interface = digita e aponta
+bluetooth-profile-file-transfer = arquivos
+bluetooth-profile-object-push = recebe arquivos enviados a ele
+bluetooth-profile-phone-book = os contatos do telefone
+bluetooth-profile-message-access = as mensagens do telefone
+bluetooth-profile-network = compartilha a rede dele
+bluetooth-profile-battery = diz quanta bateria tem
+bluetooth-profile-device-information = diz o que ele é
+bluetooth-profile-serial = uma porta serial
+bluetooth-profile-sim-access = o SIM do telefone
+
+# PAREAMENTO — a pergunta que o outro lado faz, e as duas respostas.
+bluetooth-pairing-confirm = { $name } quer parear. Ele mostra { $code }?
+bluetooth-pairing-passkey = digite { $code } em { $name }
+bluetooth-pairing-pin = { $name } quer um PIN
+bluetooth-pairing-passkey-here = { $name } quer seis dígitos digitados aqui
+bluetooth-pairing-authorize = { $name } quer parear
+bluetooth-pairing-service = { $name } quer usar { $service }
+bluetooth-pairing-answer = y aceita · n recusa
+bluetooth-answer-in-the-footer = a pergunta é respondida no rodapé
+bluetooth-type-in-the-footer = o nome é digitado no rodapé
+
+# O QUE DEU ERRADO, dito como o nome da porta que fechou.
+echo-bluetooth-refused = { $what }: { $why } ({ $words })
+bluetooth-what-connect = a conexão
+bluetooth-what-pair = o pareamento
+bluetooth-what-forget = esquecer o dispositivo
+bluetooth-what-radio = o rádio
+bluetooth-what-device = o dispositivo
+bluetooth-refused-authority = esta sessão não tem permissão
+bluetooth-refused-absent = não existe nesta máquina
+bluetooth-refused-away = ninguém respondeu
+bluetooth-refused-busy = outra coisa está fazendo isso
+bluetooth-refused-rejected = o outro lado disse não
+bluetooth-refused-other = não funcionou

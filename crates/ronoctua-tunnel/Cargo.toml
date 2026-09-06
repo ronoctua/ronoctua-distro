@@ -1,0 +1,25 @@
+[package]
+name = "ronoctua-tunnel"
+description = "The one boundary with Tailscale's local API and Tor's control socket: the two tunnels the network view knows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO `[[bin]]`: nothing here is a daemon. The footer and the window raise the
+# thread, the same way they do for the radio and the batteries.
+
+[dependencies]
+anyhow.workspace = true
+# The watching thread outlives whoever asked for it, and when a daemon goes
+# away there is nobody to return an error to — so it says so to the log.
+tracing.workspace = true
+# Tailscale's local API answers JSON, and it is NOT a stable interface: every
+# field is read with `#[serde(default)]` so that a release adding, removing or
+# renaming one takes a fact off the screen instead of emptying it.
+serde = { workspace = true }
+serde_json.workspace = true
+
+[lints]
+workspace = true

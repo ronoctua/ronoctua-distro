@@ -170,6 +170,232 @@
         }
       ];
     };
+
+    # THE OTHER SIDE IS ASKING, and the view could not open to say so —
+    # another view is in the footer holding something somebody built by hand.
+    # The question is the one thing here another machine is waiting on, so it
+    # is critical and it carries its two answers: the same commands `s b y`
+    # and `s b n` run.
+    #
+    # THE CARD IS SHORTER THAN THE QUESTION, and the body says what to do
+    # about it. `long` is twenty seconds, nothing here stays for ever — not
+    # even a critical one — and the agent holds the question for fifty-five.
+    # So for thirty-five seconds the card is gone while the question stands,
+    # and the two buttons that were the whole point of it go with it.
+    #
+    # There is no fourth `life`, and inventing one would put "for ever" back
+    # in under another name. What the body does instead is NAME THE TWO KEYS,
+    # which work for the whole fifty-five and do not depend on a card being on
+    # screen. The keys arrive as arguments, never as text (`keys-are-never-text`).
+    #
+    # And the other end is closed too: `bluetooth_unasked` dismisses this card
+    # the moment the question is answered, taken back or times out, so the
+    # card never outlives the question.
+    bluetooth-pairing = {
+      when = [
+        {
+          field = "tag";
+          is = "bluetooth-pairing";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "long";
+      loud = true;
+      level = 90;
+      icon = "bluetooth-connected";
+      tags = [
+        "bluetooth-pairing"
+        "bluetooth"
+      ];
+      actions = [
+        {
+          id = "bluetooth-accept";
+          key = "y";
+          command = "bluetooth-accept";
+        }
+        {
+          id = "bluetooth-refuse";
+          key = "n";
+          command = "bluetooth-refuse";
+        }
+      ];
+    };
+
+    # WHAT THE RADIO DID, and only the two moments worth a line.
+    #
+    # A DEVICE THAT DROPS IS THE ONE THAT MATTERS, and the owner's own case
+    # says why: the keyboard is Bluetooth. When it goes, the machine stops
+    # answering keys — and reading the modeline for a glyph that has just
+    # DISAPPEARED is not something a person can do. So this one is `full`,
+    # names the device and lives a little longer than its twin.
+    #
+    # THE ONE THAT CONNECTS is `brief` and quick: it confirms something that
+    # was asked for, and the mark on the modeline says it too.
+    #
+    # NEITHER REWRITES: two devices coming back after a suspend are two
+    # sentences, and one overwriting the other would say the wrong name.
+    bluetooth-connected = {
+      when = [
+        {
+          field = "tag";
+          is = "bluetooth-connected";
+        }
+      ];
+      rewrite = false;
+      show = "brief";
+      life = "quick";
+      loud = false;
+      level = 20;
+      icon = "bluetooth-connected";
+      tags = [
+        "bluetooth-connected"
+        "bluetooth"
+      ];
+      actions = [ ];
+    };
+    bluetooth-disconnected = {
+      when = [
+        {
+          field = "tag";
+          is = "bluetooth-disconnected";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "bluetooth-off";
+      tags = [
+        "bluetooth-disconnected"
+        "bluetooth"
+      ];
+      actions = [
+        {
+          id = "bluetooth-panel";
+          key = "b";
+          command = "bluetooth-open";
+        }
+      ];
+    };
+
+    # AND THE DEVICE'S OWN BATTERY, on the SAME number the modeline turns red
+    # at (`ronoctua_bluetooth::battery::DANGER_FROM`). It is raised on the
+    # crossing, once per device, exactly as the machine's own battery is: a
+    # mouse sitting at 12% for an afternoon is one line and not a hundred.
+    #
+    # It exists because the machine's battery had a second voice and the
+    # devices had none: the percentage on the modeline appears at 30% and
+    # turns red at 15%, and a mark that changes colour is not something one
+    # notices while typing.
+    bluetooth-battery-low = {
+      when = [
+        {
+          field = "tag";
+          is = "bluetooth-battery-low";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 60;
+      icon = "battery-danger";
+      tags = [
+        "bluetooth-battery-low"
+        "bluetooth"
+      ];
+      actions = [
+        {
+          id = "bluetooth-panel";
+          key = "b";
+          command = "bluetooth-open";
+        }
+      ];
+    };
+
+    # THE BATTERY'S THREE ALARMS, raised by the footer on a CROSSING of
+    # UPower's warning level — never on the level itself, so a battery that
+    # sits at "low" for an hour is one notification and not sixty
+    # (`ronoctua_power::alarms`). The tag is how the row is recognised, the
+    # `memory-killed` shape.
+    #
+    # `low` is `full` and `long`, quiet: it is the one worth reading and not
+    # the one worth jumping at. `critical` is loud and above the
+    # `important-gets-room` line: the daemon is about to act on its own.
+    # `charged` is a brief line that goes quickly — the rule
+    # `small-things-are-quick` would have made it so anyway, and saying it
+    # here is what a reader of this file expects to find.
+    battery-low = {
+      when = [
+        {
+          field = "tag";
+          is = "battery-low";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "long";
+      loud = false;
+      level = 60;
+      icon = "battery-danger";
+      tags = [
+        "battery-low"
+        "power"
+      ];
+      actions = [
+        {
+          id = "power-panel";
+          key = "p";
+          command = "power-open";
+        }
+      ];
+    };
+    battery-critical = {
+      when = [
+        {
+          field = "tag";
+          is = "battery-critical";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "long";
+      loud = true;
+      level = 90;
+      icon = "battery-danger";
+      tags = [
+        "battery-critical"
+        "power"
+      ];
+      actions = [
+        {
+          id = "power-panel";
+          key = "p";
+          command = "power-open";
+        }
+      ];
+    };
+    battery-charged = {
+      when = [
+        {
+          field = "tag";
+          is = "battery-charged";
+        }
+      ];
+      rewrite = false;
+      show = "brief";
+      life = "quick";
+      loud = false;
+      level = 10;
+      icon = "battery-charging-full";
+      tags = [
+        "battery-charged"
+        "power"
+      ];
+      actions = [ ];
+    };
   };
 
   # ===================================================================

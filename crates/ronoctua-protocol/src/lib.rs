@@ -1242,7 +1242,7 @@ pub enum Tone {
 pub struct BufferState {
     /// English, kebab-case (invariant 18). The screen reads `state-<id>`.
     pub id: String,
-    /// The key that selects it directly under `SPC b s`.
+    /// The key that selects it directly under `SPC w s`.
     pub letter: char,
     /// How it is drawn.
     pub tone: Tone,
@@ -1394,7 +1394,7 @@ impl Descriptor {
             if self.states[..n].iter().any(|o| o.letter == s.letter) {
                 return Err(format!(
                     "the buffer `{}` uses `{}` for two states; one of them would be \
-                     inalcancavel sob `SPC b s`.",
+                     inalcancavel sob `SPC w s`.",
                     self.name, s.letter
                 ));
             }
@@ -1832,7 +1832,7 @@ impl DisplayList {
                 if at.saturating_add(wide) > next {
                     return Err(format!(
                         "on line {line}, {} starts at {at} and can reach {}, \
-                         mas {} comeca em {next}: os dois se sobrepoem",
+                         but {} starts at {next}: the two overlap",
                         Self::sketch(what),
                         at.saturating_add(wide),
                         Self::sketch(after)
@@ -1985,7 +1985,7 @@ pub enum Input {
     /// completes.
     ///
     /// It arrives when somebody tapped `Esc`, held it and used an arrow, or
-    /// chose a state under `SPC b s`. The buffer is told the ID IT DECLARED and
+    /// chose a state under `SPC w s`. The buffer is told the ID IT DECLARED and
     /// never a key, the same rule as [`Input::Command`] and for the same reason.
     EnterState(String),
     /// A character typed.

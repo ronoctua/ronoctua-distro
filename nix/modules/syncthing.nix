@@ -106,7 +106,7 @@ in
       default = "127.0.0.1:8384";
       description = ''
         Where the web interface listens. It stays on localhost on purpose: whoever
-        opens it is the `syncthing-open` command of `LEADER r`, on the very same
+        opens it is the `syncthing-open` command of `LEADER s s`, on the very same
         machine. Exposing it on the LAN would be an administrative port with no password.
       '';
     };

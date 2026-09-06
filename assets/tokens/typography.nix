@@ -42,9 +42,22 @@
     # then the ink overflows 0,3 px on each side, while the neighbouring digit's
     # ink only begins 1,4 px into its own cell. They do not touch.
     #
-    # The `chrome-icons-match-the-text` check re-measures this against the font
-    # on every build, so a new icon token that is drawn too small fails there
-    # instead of on somebody's screen.
+    # The `chrome-icons-match-the-text` check re-measures the glyphs it LISTS
+    # against the font on every build, so one of those drawn out of scale
+    # fails there instead of on somebody's screen. The list is by hand, and
+    # it is the chrome's own glyphs: a token nothing draws inline is not
+    # measured, and does not need to be.
+    #
+    # AND IT IS A CEILING. The vertical battery showed the other half of the
+    # rule: 908 units of ink, taller than the digit at the text's own size, and
+    # at 22 px it stood 48% above the number beside it. So the rule is written
+    # once, in `gen-glyphdb.py`: this size, unless it would put the glyph's ink
+    # above the band below — then the size that brings the ink to the digit's.
+    # 22 for the bell, 15 for the battery. The shell asks
+    # `tokens::icon::chrome_size`, generated from that, for every leading
+    # glyph of the modeline, the band and the brain line, and for the two
+    # chevrons — the runs centred on a cell. Rows of a listing are text at
+    # the base size and are not touched.
     icon = 22;
     # THE RUN that asks for `scale: large` — today only the glyph in the browser.
     #
@@ -80,6 +93,15 @@
 
   # TYPOGRAPHIC MARKS the host punctuates WITH, rather than draws as content.
   #
+  # HOW FAR FROM THE DIGIT'S HEIGHT a chrome glyph may stand, in percent, both
+  # ways. Not "equal": a bell, a swap arrow and a pie are different families
+  # of drawing and will not agree to the unit; what the band excludes is what
+  # the eye reads as another size. `chrome-icons-match-the-text` measures
+  # every listed glyph against it, and `gen-glyphdb.py` brings a glyph down
+  # only when the icon size would put its ink ABOVE the band — a drawing
+  # under the band is not brought up, because the icon size is the ceiling.
+  chromeTolerance = 15;
+
   # A mark here is not an icon: `assets/tokens/icons.nix` maps a token to a
   # NERD FONTS GLYPH NAME, resolved against the pinned `glyphnames.json`, and
   # `·` is not in that catalogue — it is U+00B7, an ordinary character of the

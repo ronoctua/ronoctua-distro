@@ -288,7 +288,7 @@ fn main() -> Result<()> {
     if base.total_in_db < 10_000 {
         bail!(
             "the database has {} glyphs; there are 10,473. The buffer's parser did not split \
-             os registros — ver o `split` em `carregar`",
+             the records — see the `split` in `load`",
             base.total_in_db
         );
     }
@@ -328,7 +328,7 @@ fn main() -> Result<()> {
         .iter()
         .find(|n| !n.starts_with("fa-") || !n.contains("folder"))
     {
-        bail!("`fa:folder` deixou passar {bad}");
+        bail!("`fa:folder` let {bad} through");
     }
     println!("set       `fa:folder`  -> {}", fa_folder.total_filtered);
 

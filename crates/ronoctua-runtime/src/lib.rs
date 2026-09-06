@@ -1767,7 +1767,7 @@ mod tests {
         };
         assert!(
             same_letter.validate().is_err(),
-            "two identical letters leave a state unreachable under `SPC b s`"
+            "two identical letters leave a state unreachable under `SPC w s`"
         );
 
         let good = Descriptor {

@@ -1433,9 +1433,10 @@ então abrir a lista redimensiona o que está atrás. Cobrir o conteúdo esconde
 se estava lendo — e num sistema sem popup (invariante 14), a superfície do rodapé é a única coisa
 capaz de cobrir algo. O custo é o reflow: os buffers recebem `configure` a cada expansão.
 
-**A modeline só mostra o que existe.** Sem janela em foco ela fica com o contador de notificações e
-mais nada; assim que algo abre, o nome do buffer aparece. Um rótulo de ausência inventado ocuparia
-coluna afirmando algo falso, e quem o lê procura um buffer que não existe.
+**A modeline só mostra o que existe.** Sem janela em foco e sem nada acontecendo ela fica VAZIA —
+não há contador de notificações, e o sino só existe com não lida (o dono pediu assim); assim que algo
+abre, o nome do buffer aparece. Um rótulo de ausência inventado ocuparia coluna afirmando algo falso,
+e quem o lê procura um buffer que não existe.
 
 A sequência pendente aparece como `LEADER g-`. O `-` no fim custa duas colunas a menos que ` …`
 dizendo a mesma coisa, e num rodapé onde tudo elide, espaço é o recurso.
@@ -1785,9 +1786,10 @@ uma**, porque `1/1` não diz nada e custa três colunas de uma linha que elide.
 **Nada fica para sempre — nem a crítica.** Essa regra foi invertida por decisão do dono, e a razão é
 a faixa: enquanto ela está lá, o conteúdo está uma a três linhas mais curto. Uma notificação que
 nunca sai é um imposto permanente sobre toda janela. A crítica ganha `long` (20 s) e **continua não
-lida**: sair da tela e ter sido vista são eventos diferentes, e o contador do sino é o que lembra
-depois. O que sobrou de "a especificação permite ao cliente cravar timeout" é uma aproximação: o
-`expire_timeout` vira a mais próxima das três classes, e só quando nenhum filtro opinou.
+lida**: sair da tela e ter sido vista são eventos diferentes, e o sino na modeline é o que lembra
+depois — ele só existe enquanto há algo não lido. O que sobrou de "a especificação permite ao
+cliente cravar timeout" é uma aproximação: o `expire_timeout` vira a mais próxima das três classes,
+e só quando nenhum filtro opinou.
 
 **O que CHEGOU e o que foi DECIDIDO são dois tipos.** `Notification` é dado — um aplicativo disse
 uma frase num instante, e nada revisa isso. `Presentation` é política — os filtros da pessoa
@@ -1807,10 +1809,12 @@ de fora. As nossas carregam uma `tag` igual ao próprio id, que é por que quase
 linha. O check `screenshot-notification-contract` lê a fonte do niri fixado: se o texto lá mudar, o
 filtro pararia de casar **em silêncio**.
 
-**O sino abre o gerenciador.** É a única coisa daquela linha para onde o olho vai quando quer saber o
-que perdeu, e clicar nele não fazia nada — uma marca que diz "há seis" e não responde quando
-perguntada. Os dois botões fazem o mesmo: há uma coisa só a fazer ali, e um segundo sentido para o
-botão direito seria um menu que ninguém pediu.
+**O sino abre o gerenciador, e só existe com algo não lido.** Era um sino com um número, em toda
+tela, para sempre — um `0` respondendo a uma pergunta que ninguém fez —, e o dono pediu o contrário:
+nada em repouso, e o sino pontilhado sozinho quando há algo a ler. O NÚMERO foi junto: quantas é a
+pergunta do gerenciador, e o ponteiro a responde no minibuffer sem abrir nada ("2 não lidas, nenhuma
+filtrada"). Clicar abre, e os dois botões fazem o mesmo: há uma coisa só a fazer ali, e um segundo
+sentido para o botão direito seria um menu que ninguém pediu.
 
 **O filtro é `campo + teste`, e não regex.** Duas razões, nenhuma ascética: é dependência num crate
 que o rodapé linka, e é armadilha num arquivo que o dono edita à mão — um regex que casa demais vira
@@ -1832,7 +1836,7 @@ uma regra da distro sobre nível baixo rodava depois e a devolvia ao discreto.
 contador que não dá para zerar. Mas ela é REGISTRADA, e a coluna da direita do gerenciador é onde
 ela aparece — um filtro que ninguém consegue auditar é um filtro em que ninguém confia.
 
-**Duas portas, uma `notifications::View`.** `n h` abre no rodapé, `n w` numa janela; duas colunas
+**Duas portas, uma `notifications::View`.** `n n` abre no rodapé, `n w` numa janela; duas colunas
 quando cabe, uma quando não. O corte sai de um token, e vale para as duas portas — que é o que faz
 "uma implementação, duas portas" ser verdade também do layout.
 
@@ -1847,6 +1851,25 @@ grande — e mora em `$XDG_STATE_HOME`. As preferências são configuração e m
 `$XDG_CONFIG_HOME`, ao lado da tabela de ícone por app id que já estava lá. O arquivo é reescrito
 inteiro porque um registro MUDA (ser lido é mutação do que já foi escrito), e um log append-only
 precisaria de um segundo fluxo de "e esta foi lida" mais um replay para reconstruir o estado.
+
+##### E o arquivo é o BROADCAST, porque a janela é um segundo escritor
+
+Reescrever o arquivo inteiro é certo com UM escritor, e há dois: a janela é um processo próprio e
+marca lida e esquece escrevendo. O rodapé lia esse arquivo UMA vez, na partida, e escrevia o vetor
+dele por cima a cada mudança — então um `d` dado na janela se desfazia no instante em que qualquer
+notificação chegasse, e o `reread()` de 2 s da janela mostrava o registro de volta. Um ajuste feito
+lá não alcançava a faixa até o rodapé reiniciar.
+
+O conserto é o mesmo do `theme.json`, e é por isso que ele é o precedente citado: **as duas portas
+vigiam os dois arquivos por inotify**. O que o rodapé faz ao ser acordado não é reler — é
+RECONCILIAR por id (`Queue::took_from_disk`): o que o arquivo decidiu sobre um registro que este
+processo tem é tomado, e o que este processo tem e o arquivo não tem é dado por esquecido. O que
+está vivo aqui — a faixa, a fila, a ordem de chegada — não está no arquivo e não pode vir dele.
+
+Duas regras seguram o laço. **O que chegou DEPOIS do arquivo sobrevive**, comparado pelo carimbo de
+tempo: sem isso, a janela apagaria a notificação que acabou de chegar no rodapé. E **nada é escrito
+de volta** ao reconciliar: escrever mexeria no inotify do outro processo, que leria, que escreveria —
+dois processos respondendo ao evento um do outro para sempre.
 
 **`vibrate` e `audio` existem e não fazem nada — e a tela diz isso, na linha de mensagem.** Eles
 existem porque a API externa que o dono vai pôr no ar vai setá-los, e derrubá-los na porta faria a
@@ -2222,7 +2245,7 @@ numa string de avaliação seria import-from-derivation: a avaliação do flake 
 build.
 
 **`Esc` não mata buffer.** Ele cancela o que está em curso — a busca — e para aí. Destruir trabalho é
-comando nomeado (`LEADER b k`), porque não pode depender de uma tecla que se aperta por reflexo ao sair
+comando nomeado (`LEADER w d`), porque não pode depender de uma tecla que se aperta por reflexo ao sair
 de qualquer coisa.
 
 #### As 141 ações do compositor viram comandos
@@ -2504,7 +2527,7 @@ exceção existe.
 **Quem faz flutuar é o niri** (inv. 4). O que o shell decide é a IDENTIDADE da janela: o mesmo
 terminal sobe com `app_id` `br.ronoctua.monitor` em vez de `br.ronoctua.terminal`, e uma
 `window-rule` casa esse id. Com um `app_id` só, a regra flutuaria todo terminal — inclusive o
-`LEADER b t`.
+`LEADER w o`.
 
 **E a regra é GERADA do mesmo constante** (`export-niri-window-rules`, como os acordes). Escrita à
 mão, a string existiria em três lugares — o Rust, `nix/modules/niri.nix` e `nix/dev.nix` —, e o dia
@@ -3012,6 +3035,30 @@ mantinha o rodapé de pé era as quatro concordarem. Divergiram uma vez, e o sin
 pedir vinte e duas linhas para desenhar seis. Agora há `Footer::view()`, **derivada** das flags e
 não guardada: guardá-la criaria a segunda verdade que ela existe para não ter.
 
+##### E ter UM lugar não bastou; era preciso que todo mundo perguntasse a ele
+
+`Footer::view()` existiu por meses enquanto o ramo de teclas, o `expansion()` e o `region_is_free`
+continuavam lendo o PRÓPRIO campo de cada vista. Ou seja: a ordem passou a estar escrita num lugar e
+mantida à mão em três, o que é pior do que estar escrita em quatro — porque agora havia uma função
+com a autoridade de decidir, e ninguém a consultava.
+
+As três ordens tinham divergido em silêncio. O `view()` punha o manual em terceiro e o gerenciador de
+notificações em ÚLTIMO; o ramo de teclas punha o gerenciador em terceiro e o manual em décimo; o
+`expansion()` começava pelo seletor de temas e punha o clipboard em quarto. Três revisores
+independentes acharam o mesmo defeito em três vistas diferentes, o que é o que um invariante mantido
+à mão faz: não falha num lugar, falha em todos ao mesmo tempo e cada pessoa vê um.
+
+O conserto não é reordenar — reordenar seria manter à mão outra vez. É **toda guarda perguntar ao
+`view()`**: então no máximo um ramo casa, e a ordem em que eles aparecem no arquivo deixa de ser uma
+resposta. O que restou de ordem no arquivo é acidente, e o `the-footer-draws-what-the-keyboard-drives`
+recusa qualquer ramo que volte a ler um campo.
+
+A pergunta do minibuffer é a única exceção, e é deliberada: entrar numa rede pede a senha na LINHA
+enquanto a região continua desenhando a lista em que se está entrando. Uma pergunta é uma linha, não
+uma região — e ela é interceptada ANTES de tudo, porque quatro vistas carregavam
+`&& mx.asking_for().is_none()` e as outras sete não, então com o clipboard ou o manual abertos a
+pergunta era desenhada e não podia ser respondida.
+
 #### Nada na expansão elidia
 
 Descoberto ao pôr descrição na terceira coluna: uma linha de duzentas células passava por cima da
@@ -3261,19 +3308,23 @@ saiu da tela. O título vive em `Asking::title()`, no próprio enum, porque um s
 do que monta as escolhas é um segundo lugar para esquecer uma variante — e esse o compilador não
 pegaria: ele desenharia a frase errada.
 
-#### `LEADER f f` abria outra coisa, e `f m` nunca disse por que é `m`
+#### `LEADER f f` abria outra coisa
 
 `f f` era o seletor de arquivo do EDITOR, e foi relatado como "um gerenciador de arquivos diferente e
 inferior". A leitura estava certa: quem digita `f f` num grupo chamado "file" está atrás de arquivos,
 e o que subia era uma lista chata de nomes que só sabia fazer uma coisa com o que você escolhesse.
 Hoje `f f` abre o mesmo que `.`.
 
-O seletor continua existindo em `f e` — `e` de *edit* —, porque ele faz algo que o gerenciador não
-faz: entrega o caminho ao BUFFER DO EDITOR. E `f m` é o mesmo gerenciador em janela própria, `m` de
-*manager*: o teto de doze linhas do rodapé está certo para um rodapé e não para o trabalho que se
-abre um gerenciador para fazer. Essa letra nunca foi escrita em lugar nenhum, e a pergunta "por que
-m?" é o que lhe rendeu três linhas de comentário — um mnemônico que só o autor reconstrói é um
-mnemônico que não funciona.
+O grupo tem DUAS teclas e nada mais: `f f` abre o gerenciador no rodapé e **`f w` o abre em janela**,
+`w` de *window* — a mesma letra que toda vista com segunda porta usa (`t w`, `n w`, `s n w`, `s p w`,
+`s b w`, `s w`). O teto de doze linhas do rodapé está certo para um rodapé e não para o trabalho que
+se abre um gerenciador para fazer.
+
+Este parágrafo ensinou por meses duas teclas que não existem — `f e` para o seletor do editor e `f m`
+para a janela — e nenhuma das duas jamais foi ligada; a janela nasceu em `f w`, e o seletor do editor
+não existe em tecla nenhuma (o caminho é abrir o arquivo pelo gerenciador, que manda texto ao
+`emacsclient`). Documentação que ensina tecla errada é documentação mentindo, e é por isso que a
+varredura de menções virou parte do trabalho de mexer no keymap.
 
 #### Duas margens, e uma que era paga duas vezes
 
@@ -3286,8 +3337,9 @@ tooltip sobre o campo vizinho.
 
 E do outro lado faltava: a data terminava colada na borda, o que se lê como coluna cortada e não como
 coluna que acabou. `space.files.edgeRight` é o ar depois da última coluna — e não é o `edgeRight` da
-modeline, que é zero de propósito para o ícone de notificação encostar: uma tabela não é uma linha de
-status.
+modeline, que é UM e não zero, e pelo mesmo motivo: glifo encostado na borda se lê como glifo
+CORTADO. O zero era o defeito, e o comentário do próprio token o conta. Uma tabela não é uma linha de
+status, e as duas medidas continuam sendo duas.
 
 #### A linha na TELA não é a linha da LISTAGEM
 
@@ -3612,11 +3664,17 @@ que uma cópia termina toda linha abaixo dela se move. Um cursor que estava na l
 para outro trabalho sem a mão ter saído do lugar — e o `C-c` seguinte desistiria da transferência
 errada.
 
-#### A modeline some em repouso, e o sino não
+#### A modeline some em repouso, e o sino também
 
-O sino é o **único** indicador de que há algo pendente: uma tela sem ele diz "nada está esperando", e
-ela precisa poder dizer isso — encolhe, nunca desaparece. O segmento das transferências aparece
-porque algo está acontecendo; em repouso seria uma coluna gasta com `0%`, para sempre, em toda tela.
+O sino só existe com algo não lido — em repouso a linha da direita é vazia, por decisão do dono. O
+que ele conserva é a PRIORIDADE: numa linha estreita demais para tudo, ele é a última das marcas da
+direita a sair (2 contra 3 da transferência e 5 da atualização), porque as outras têm um painel e um
+diário e uma notificação que ninguém viu não está em lugar nenhum. E reservar as duas bordas
+(`modeline.edgeLeft`/`edgeRight`) no orçamento do `resolve` veio junto: uma linha cujo único
+sobrevivente é o nome do buffer, à esquerda, era encolhida à largura inteira e desenhada uma célula
+adentro — uma célula fora da tela —, e essa linha só passou a existir quando o sino deixou de estar
+sempre lá. O segmento das transferências aparece porque algo está acontecendo; em repouso seria uma
+coluna gasta com `0%`, para sempre, em toda tela.
 
 Mas ele **fica quando algo falhou**. Uma cópia que morreu há dois minutos não deixa nada correndo, e
 um segmento que só mostrasse trabalho em curso tiraria a falha da tela antes de alguém ver.
@@ -5117,7 +5175,7 @@ Por isso `format-driven` carrega as duas:
 #### Não existe estado `working`
 
 Havia, no primeiro rascunho, e o `states-driven` o derrubou: todo estado declarado é oferecido no
-`SPC b s`, então um `working` escolhível poria *"escrevendo no disco"* na modeline com nada sendo
+`SPC w s`, então um `working` escolhível poria *"escrevendo no disco"* na modeline com nada sendo
 escrito. A espera acontece **na lista**, com a linha de mensagem dizendo o que está em curso — que
 também é onde ela deve acontecer, porque a linha que está sendo formatada está ali e vai mudar
 sozinha.
@@ -5171,7 +5229,7 @@ buffer estão NA FRENTE dessas duas**: são o desenho, não a execução.
 
 ## 6. Rede, área de transferência e serviços
 
-### Rede e Syncthing — `LEADER r`
+### Rede e Syncthing — `LEADER s n` e `LEADER s s`
 
 #### A rede saiu da lista do "não se pergunta", e por quê
 
@@ -5610,7 +5668,7 @@ para ler. `ronoctua_network::watch_scan` sobe uma thread bloqueada no fluxo de m
 propriedade e avisa por `calloop::channel`; `Footer::rescanned` relê — e só se a vista estiver
 aberta, porque preencher um estado que ninguém olha custa uma ida ao barramento à toa.
 
-A thread é **preguiçosa**: sobe no primeiro `LEADER r`, não na partida. Numa máquina sem rádio ela
+A thread é **preguiçosa**: sobe no primeiro `LEADER s n`, não na partida. Numa máquina sem rádio ela
 falharia toda vez, e tentar de novo a cada tecla daria uma ida ao barramento e um aviso por toque —
 por isso a marca de "já tentei" é posta *antes* de saber se deu certo.
 
@@ -5621,7 +5679,7 @@ por isso a marca de "já tentei" é posta *antes* de saber se deu certo.
 `c` virou GRUPO: a captura de tela era `t c`, e `t` passou a ser a fila de transferências. O dono
 escolheu onde ela cairia — `c` de CAPTURA, que é o que as duas coisas embaixo dele fazem: o clipboard
 captura o que se copia, a tela captura o que se vê. Custou uma tecla ao histórico (`c` virou `c c`),
-que é a convenção que este keymap já usa em todo prefixo com um segundo item — `r r`, `f f`,
+que é a convenção que este keymap já usa em todo prefixo com um segundo item — `s n n`, `f f`,
 `TAB TAB`.
 
 `LEADER c c` abre, na região abaixo do minibuffer, o histórico à esquerda e — separado por uma régua,
@@ -6233,7 +6291,7 @@ amarra o estado **pós-destrave** ao volume que foi realmente aberto.
 
 ---
 
-### O cérebro — `LEADER s b`, e a linha que avisa antes
+### O cérebro — `LEADER b b`, e a linha que avisa antes
 
 A máquina faz coisas sozinha, e até esta tela nada dizia o quê, quando, nem no que deu. `nix flake
 update` era um ALIAS de shell; o rebuild morava no `rescue.nix`, a coleta de lixo no `memory.nix`, o
@@ -6378,7 +6436,7 @@ por ACIDENTE, e o `updates-never-ask` transforma a ausência em requisito.
 #### O laço esperava passado a versão de ANTES da própria passada
 
 O dono relatou a tela: o buffer do cérebro com **muito** lag, a janela deixando o minibuffer por
-cima em vez de encolher, `Enter` levando segundos para trocar de página, e `LEADER b k` levando
+cima em vez de encolher, `Enter` levando segundos para trocar de página, e `LEADER w d` levando
 segundos para a janela sumir. E a frase que fecha o diagnóstico antes de ele começar: *"a janela
 deveria responder imediatamente, independente de o buffer estar com lag ou não."*
 
@@ -6464,6 +6522,347 @@ diferente. É o único fundo do arquivo que carrega matiz, e é esse o ponto —
 fazer alguma coisa consigo mesma, e a linha que diz isso não pode se ler como uma modeline que mudou
 de ideia. O branco dela também é o único quase-branco neutro do arquivo, e não sai desta linha: o
 corpo do texto é quente de propósito, e sobre um fundo azulado um branco quente se lê como sujo.
+
+### Energia — `LEADER s p`, `LEADER q`, e um glifo que só aparece quando diz alguma coisa
+
+Quatro daemons contam a história da energia — UPower (bateria, carregador, periféricos), o
+power-profiles-daemon (perfil), o logind (dormir, tampa, inibidores) e o sysfs (limites de carga) —,
+e **um crate os fala todos**: `ronoctua-power`, molde do `ronoctua-disks`. Cada serviço é lido por
+conta própria e sua ausência é a SUA parte vazia no `Snapshot`; um desktop sem bateria e uma VM sem
+PPD desenham a vista com o que existe e dizem o que não existe (`power-no-battery`,
+`power-no-daemon`), nunca um erro. Três threads, cada uma com a própria conexão: `upower` (que cobre
+o PPD pelo `path_namespace` de `/org/freedesktop/UPower`), `login` (`PropertiesChanged` e
+`PrepareForSleep`) e `orders`. **Os fds dos inibidores vivem na thread das ordens** — fechar o fd é
+soltar o inibidor, então quem o segura tem de ser o processo que sobrevive: a janela nativa manda
+qualquer outra ordem direto ao seu `Handle` (PPD, logind e sysfs não têm estado), mas *manter
+acordado* ela encaminha ao rodapé por `ronoctua-shell command`. E os dois interruptores são lidos de
+`ListInhibitors`, nunca da memória: reiniciar o rodapé solta o fd, e a linha tem de dizer.
+
+**Nada pergunta**, pela mesma razão do udisks: não há agente polkit na sessão. Toda chamada ao logind
+vai com `false` no `interactive`, e o check `power-never-asks` lê o crate e recusa `true`, `pkexec`,
+`sudo` e `systemd-run`. Nenhuma regra polkit nossa (`power-adds-no-polkit-rule-of-its-own`): dormir,
+hibernar, reiniciar, desligar e inibir são `allow_active: yes` no logind 260, e `switch-profile` no
+PPD 0.30. A única coisa que o upstream não entrega é o sysfs: `charge_control_start_threshold` e
+`charge_control_end_threshold` são `root:root 0644`, e `GROUP=`/`MODE=` de udev só alcançam nós de
+dispositivo. A regra usa `RUN+=` com o `chgrp`/`chmod` do store sobre `/sys$devpath/<atributo>`,
+para o grupo `users`, e `power-thresholds-rule-lands` confere a FORMA dela — no
+`services.udev.extraRules` AVALIADO, não no arquivo: o alvo (`/sys$devpath/<atributo>`), o grupo, o
+`g+w` e o `TEST==` que a limita à bateria que tem o arquivo. Regra com o verbo certo e o caminho
+errado não entrega nada, e passaria sem isso. Quando a regra não chegou (outro sistema, firmware sem o atributo) a vista escreve
+`readonly` na seção e desenha os presets desabilitados — alcançáveis e recusando, o molde do XFS —,
+e o `RET` nunca falha em silêncio. A escrita segue a ordem que o kernel aceita (`end` antes ao subir,
+`start` antes ao descer) e a verdade RELIDA substitui o que se pediu.
+
+**O glifo da modeline só aparece quando diz alguma coisa.** Bateria a 99% ou 100%, ou em
+`FullyCharged`, não desenha nada: com limite de carga a 80% o UPower diz `FullyCharged` a 80 para
+sempre, e um glifo que nunca sai não informa. O número (`NN%`) só entra a ≤30, a cor de perigo a
+≤15 — pela regra LITERAL, carregando ou não, a mesma que o Bluetooth usa —, e a escada tem cinco
+degraus por PALAVRA (`battery-empty`…`battery-full`, com a variante `-charging-`), o precedente do
+`wifi-*`. O perfil segue a mesma lógica: a marca só aparece quando o ativo NÃO é o topo do que o
+daemon oferece — num desktop cujo PPD só lista `balanced` e `power-saver`, o `balanced` em repouso
+fica mudo, senão o glifo seria permanente. As três constantes (`HIDE_FROM`, `PERCENT_UNTIL`,
+`DANGER_UNTIL`) moram no crate e a regra é uma função pura (`mark`), testada em 98/99/100, 30/31 e
+15/16.
+
+**O rodapé só aplica o que ALGUÉM NOMEOU.** O sistema instalado nomeia sempre — o módulo põe
+`RONOCTUA_POWER_PROFILE` na unidade do rodapé e na sessão —, então a única máquina onde o desejo cai
+no chão é a que não tem esta distro embaixo: o laço aninhado do `nix run .#dev`, que roda no
+computador do dono e fala com o power-profiles-daemon DELE. Sem essa trava, abrir o laço de
+desenvolvimento trocava o perfil que o dono estava usando (`prefs::Source::Default` não é palavra de
+ninguém). O mesmo vale quando o arquivo é apagado e o desejo volta ao chão.
+
+**"Desempenho" é o padrão da distro, e o rodapé é quem o aplica.** `ronoctua.power.profile` sai como
+`RONOCTUA_POWER_PROFILE` na unidade do rodapé e no `sessionVariables`; o arquivo
+`$XDG_CONFIG_HOME/ronoctua/power.json` vence a variável, e a variável vence o chão. No primeiro
+snapshot com PPD o rodapé pede o perfil querido se ele é oferecido, senão o topo do oferecido — e diz
+UMA vez `echo-power-profile-not-offered` (é o que a VM prova: `performance not offered, applying
+balanced`). Com `holds` de outro programa ele não briga. O arquivo é o broadcast, como `theme.json`:
+as duas portas o vigiam por inotify — o rodapé APLICA a mudança feita por fora, a janela só move a
+marca "(sua escolha)". **Escolher é ordem E arquivo** (`Errand::Choose`, nas duas portas — `RET` na
+linha, ou as setas girando os oferecidos): uma ordem só valeria até o próximo início do rodapé, que
+aplica o arquivo por cima. E o rodapé anota o desejo ANTES de gravar, porque o inotify vê a própria
+escrita como a de qualquer um — sem isso uma escolha eram duas ordens, duas releituras e dois ecos.
+
+**A vista é UMA lista com cursor, e os cabeçalhos são linhas.** Oito seções (bateria, carregador,
+perfil, limites, manter acordado, tampa e ocioso, ações, periféricos), `RET` faz o que a linha diz,
+`←/→` giram o perfil ativo pelos oferecidos e movem os limites — DENTRO do admissível, nos dois
+sentidos (oito toques de 40/80 davam 40/40, e o `RET` mandava um par que o kernel recusa). **Linha
+desabilitada RECUSA**: perfil não oferecido, limite sem a regra udev, ação que o logind nega — cada
+uma desenhada apagada dizendo o porquê, alcançável, e o `RET` nela não manda nada (mandar só traria
+a recusa do daemon de volta como eco). Ação destrutiva **ARMA**: o primeiro `RET` troca a linha por
+`power-action-confirm` — *"suspender? RET confirma, Esc cancela"* — e a mesma frase é PREFIXADA à
+dica gerada, que segue dizendo o resto (a linha pode estar fora da página; a dica nunca está); só o
+segundo `RET` manda. É um
+mecanismo de confirmação sem nada flutuar (inv. 14), e `LEADER q s/h/r/p` não agem às cegas — abrem
+a vista com o cursor na linha e já armada — e **só arma o que o logind faria**: numa máquina sem
+hibernação o `q h` abre a linha apagada, sem pergunta, porque pergunta que o `RET` não responde é
+pior que nenhuma. Ação que o logind nega (`Can* != yes`) é desenhada desabilitada dizendo `power-cannot`
+("não disponível"); o porquê, quando existe, é a frase da seção (`power-no-daemon`, `power-thresholds-readonly`). `Esc` volta UM nível: editando → larga; armado → desarma;
+senão fecha. **Valor curto fica na ponta direita da linha**: com a coluna do valor a um terço, "keep
+awake: no sleep, no idle action" virava "keep awake: no s…" ao lado de um `off` de três letras —
+foi a janela a 57 colunas que mostrou. **A palavra do daemon é FALADA** (`power_words::daemon_word`):
+o logind diz `hybrid-sleep` e o UPower `HybridSleep`, e a tela dizia os dois crus no meio da frase
+traduzida ("a máquina vai Hibernate sozinha"); o vocabulário é FECHADO, cada chave é constante (texto
+que falta é erro de compilação), e palavra de fora aparece como veio. Periféricos com bateria (o
+`!PowerSupply` do UPower) são da última seção e nunca da modeline: o teclado é assunto do Bluetooth.
+
+**O tamanho do glifo de chrome é MEDIDO, e `font.size.icon` virou TETO.** O 22 já era uma medição
+— o sino tem 600 unidades de tinta contra 751 do dígito, e 22 px é o que os iguala —, mas a bateria
+vertical do Material tem 908: mais alta que o dígito no tamanho do TEXTO, e a 22 px ficava 48% acima
+do número ao lado (o check `chrome-icons-match-the-text` a pegou; nenhuma bateria plana do arquivo
+cabe na faixa, e a horizontal do FontAwesome tem metade da altura). A regra foi escrita uma vez, em
+`gen-glyphdb.py`, que já abre a fonte: o tamanho do ícone, a menos que ele ponha a tinta do glifo
+acima da faixa do check (`chromeTolerance`, os 15% para cada lado, agora num lugar só) — aí o
+tamanho que leva a tinta à do dígito. 22 para o sino, 15 para a bateria, e todo desenho que já
+passava fica exatamente onde estava — e a regra alcança só o que é desenhado CENTRADO na célula:
+o glifo à frente de um segmento da modeline, da faixa e da linha do brain, e os dois chevrons; linha
+de listagem é texto no tamanho base e não muda. Sai no `icons.json`, vira `tokens::icon::chrome_size`
+(só as exceções escritas, agrupadas por tamanho) e é o número que o check remede. Nenhuma lista à
+mão: a fonte é a autoridade, e um glifo novo de outra proporção cai no tamanho certo sozinho.
+
+**Bateria baixa é notificação por TRANSIÇÃO**, levantada só pelo rodapé (`alarms(antes, depois)`):
+`battery-low` ao cruzar 15 descarregando, `battery-critical` ao cruzar 8, `battery-charged` ao
+chegar a `FullyCharged` — uma por cruzamento, e nunca de novo enquanto fica. O UPower é alinhado ao
+mesmo número (`percentageLow = 15`) e `criticalPowerAction = "Hibernate"` porque o swapfile e o
+`resumeDevice` já existem; `/var/lib/upower` persiste para o histórico que dá o `TimeToEmpty`.
+
+### A saída — três marcas, e a que só existe porque o daemon foi ensinado a olhar
+
+O `ronoctua-network` ganhou um `Snapshot` INTEIRO (a saída, o avião, os links, as conexões ativas) e
+um `watch` que roda desde a partida, porque a modeline desenha com vista nenhuma aberta. São três
+marcas, e cada uma diz algo que as barras do Wi-Fi não dizem: as barras dizem quão alto o roteador
+fala; estas dizem se existe alguém do outro lado.
+
+**`net-off` é um link que não leva a lugar nenhum** — o portal do hotel, o roteador sem uplink. NÃO é
+"não há internet": um laptop com o cabo fora e o rádio desligado não tem saída e não há nada de
+errado com ele, então a regra pede um link que se acha conectado (`Snapshot::adrift`). E ela só pode
+existir porque o módulo LIGA o teste de conectividade do NetworkManager: sem `connectivity.uri` o
+daemon responde `FULL` para qualquer rota, e portal cativo e uplink morto ficam idênticos a
+"funciona". O custo — um GET a cada cinco minutos para um servidor que a pessoa não escolheu — está
+escrito na opção, que pode ser desligada; o que se perde é a marca.
+
+**`airplane` é decisão de alguém**, e é a única das três que é INTERRUPTOR: clicar sai do modo avião,
+que é a única coisa que alguém quer fazer com ele. **`vpn` é um túnel de pé**, e ler só o `Vpn` do
+NetworkManager seria o defeito: o WireGuard responde `false` ali (para o NM ele é um DISPOSITIVO) e é
+justamente o que a maioria das pessoas chama de VPN hoje — `Active::tunnel` lê os dois.
+
+As três abrem a vista da rede, e a vista DIZ o que a marca queria dizer: uma linha para a saída, uma
+para o avião (com `RET` que volta), uma por túnel (com `RET` que derruba). Marca que abre uma tela
+que não fala dela seria uma porta para uma parede.
+
+### A vista da rede — uma `View`, duas portas, e oito seções que são linhas
+
+O molde é o da energia, e a razão é a mesma: o rodapé tem teto de doze linhas (inv. 14) e esta vista
+tem nove seções. `s n n` desenha na região; `s n w` abre a mesma `View` numa janela
+(`br.ronoctua.network`). O que a `View` guarda é um cursor, um arquivo lido esperando resposta e a
+senha do hotspot enquanto ele está de pé — nenhuma LEITURA: o `Snapshot`, os pontos de acesso, o
+`/proc` e os dois túneis chegam num `Facts` na hora de pedir as linhas. **Um parâmetro e não
+quatro**, porque uma assinatura que cresce com as seções é uma assinatura editada nas duas portas, no
+clique e em cada teste toda vez que uma seção nasce.
+
+**O que se digita se digita no RODAPÉ.** Senha de Wi-Fi e caminho de arquivo passam pelo minibuffer,
+que a janela não tem — então lá a linha DIZ onde responder, que é o arranjo que as perguntas de
+pareamento do Bluetooth já têm. Uma porta que não pode perguntar não finge que pode.
+
+**A pergunta "lembrar?" continua sendo do rodapé**, desenhada acima da lista e não pela `View`: a
+senha que ela guarda vive por uma tecla, e uma `View` que duas portas desenham não pode carregá-la.
+
+**As cinco marcas somem em repouso.** `airplane`, `net-off`, `vpn`, `tailscale` e `tor` — as três
+primeiras já existiam; as duas novas são RUNNING e não INSTALADO: um tailnet em que ninguém entrou e
+um Tor parado não desenham nada. Clicar numa abre a vista NA LINHA dela (`View::fresh_at`), porque
+uma marca é uma porta para a coisa de que ela fala, não para o prédio.
+
+### O que a revisão do entregável encontrou, e o que virou regra
+
+Um agente novo leu o entregável inteiro contra os requisitos e os invariantes, e o que ele achou vale
+mais escrito do que corrigido em silêncio — cada item aqui é um defeito que passou por toda a bateria
+verde.
+
+**Dois que teriam ido para o commit.** `hotspot_password` lia `/dev/urandom` com `fs::read`, que
+NUNCA retorna — um dispositivo de caractere não tem fim — então a função crescia um `Vec` até o
+kernel matar o processo, no laço de eventos da própria porta; o `oomd` levava o cgroup inteiro junto.
+E um comentário de `group_by_ssid` guardava três SSIDs REAIS lidos da tela do dono, dois deles de
+vizinhos: num repositório público isso é endereço de rua (inv. 13). A lição do segundo é que o
+invariante 13 vale para COMENTÁRIO, não só para fixture.
+
+**O prazo de uma medição começa quando a medição começa.** A varredura ICMP marcava o prazo antes dos
+envios; mandar para 254 endereços espera o ARP de cada vizinho desconhecido — três segundos medidos —
+e a janela de escuta acabava antes do primeiro pacote sair: zero máquinas numa rede com cinco. E o
+tempo medido desde o envio incluía essa espera, então uma máquina na sala ao lado aparecia com
+3 000 ms. Por isso a varredura responde QUEM e o `ping` responde QUANTO.
+
+**Um protocolo de linhas precisa de ESTADO.** O socket de controle do Tor termina a resposta com
+`NNN ` — três dígitos e um espaço — e uma linha DENTRO de um bloco `NNN+` tem a mesma forma quando o
+id do circuito passa de 99. Sem guardar "estou dentro de um bloco", a leitura parava no meio e as
+sobras eram consumidas como resposta das perguntas seguintes: versão e tráfego chegando como linhas
+de circuito, a cada dez segundos, só depois de uma sessão longa.
+
+**Enquadramento é BYTE, texto é o fim.** O corpo HTTP chunked era lido como `String` antes de tirar o
+enquadramento; um caractere partido entre dois chunks virava um caractere de substituição de tamanho
+diferente e o `&str[..n]` seguinte dava pânico — matando a thread que também executa as ordens, em
+silêncio, pelo resto da sessão. Uma máquina no tailnet com nome acentuado bastava.
+
+**`null` não é ausência para o serde.** `#[serde(default)]` cobre campo FALTANDO, não campo presente
+e nulo — e um `tailscaled` que nunca entrou num tailnet responde `"Peer": null`. A leitura inteira
+falhava e um daemon rodando era relatado como ausente. Todo campo passa por `or_default`.
+
+**Um interruptor lê o que ele MUDA.** O do tailnet lia `running` (está de pé) em vez de `wanted`
+(pediram que ficasse de pé), então numa máquina que quer rodar e não consegue ele oferecia LIGAR o
+que já estava pedido, sem jeito de desligar. O do Tor lia o circuito em vez do daemon: a seção só
+existe porque o socket respondeu, isto é, porque a unidade está de pé.
+
+**Um check que não checa fecha marco vazio.** O `tor-polkit-is-narrow` original passava por quatro
+alargamentos da regra — `YES` virando `AUTH_ADMIN`, uma segunda unidade, `try-restart`, um segundo
+usuário — porque procurava presença de palavras e nunca o RESULTADO. Agora lê a regra MERGED do
+sistema, exige que a condição não teste mais nada além dos quatro comparadores, e foi provado contra
+as cinco mutações. O `english-names` tinha o mesmo tipo de buraco: não conhecia o pretérito (`-ou`,
+`-ei`), e `escapou` estava num `assert!` havia meses — corrigido, e ele achou mais dez mensagens em
+português espalhadas pela árvore.
+
+### Os dois túneis que não são do NetworkManager
+
+`ronoctua-tunnel` é a fronteira, e são dois protocolos numa crate porque na tela são uma ideia só:
+"estou saindo por outra coisa, e ela está funcionando?".
+
+**Tailscale fala HTTP num socket Unix** (`--operator=<user>` no `tailscaled` é o que dispensa root —
+não é grupo nem polkit, é o mecanismo do próprio daemon). Toda preferência vai MASCARADA
+(`{"WantRunning":false,"WantRunningSet":true}`): sem a máscara o daemon toma a struct inteira como
+dada e escreve zero em tudo que não foi mandado, o que desloga a máquina ao mexer num interruptor.
+Todo campo é lido com `#[serde(default)]` — a local API não é estável, e uma release que renomeia um
+campo tem de custar um FATO na tela, não a seção inteira.
+
+**Tor fala um protocolo de linhas no socket de controle**, autenticado por cookie. `CookieAuthFile`
+NÃO é opcional: sem ele o Tor escreve o cookie dentro do `DataDirectory`, que é `/var/lib/tor` a
+0700 — então a flag de grupo abre um arquivo dentro de um diretório em que ninguém do grupo entra, e
+a vista encontra "permission denied" numa máquina que parece configurada. Foi o
+`tests/network-vm.nix` que falhou exatamente nessa linha.
+
+**Nenhum dos dois sinaliza** — não há barramento para assinar —, então uma thread pergunta a cada dez
+segundos e manda a cena inteira. Numa máquina sem os dois, a pergunta é um `connect` que falha.
+
+**A única regra polkit nova do plano é o `tor.service`**, com os verbos `start` e `stop`, para um
+usuário. `tor-polkit-is-narrow` lê a regra instalada e a constante do crate e compara nos DOIS
+sentidos; e o Tor não sobe no boot, porque quem não pediu Tor não está usando Tor.
+
+### `/proc`, ICMP e o que se pode saber sem privilégio
+
+**`ronoctua-memory::net` é a fronteira do `/proc/net`** — a mesma regra que faz o `ronoctua-niri` o
+único a falar com o compositor. Duas armadilhas viraram teste: o endereço em `/proc/net/tcp` é
+LITTLE-ENDIAN (lido ao contrário, `0100007F` vira `1.0.0.127`, um endereço plausível que não é o que
+está aberto), e UDP não tem `LISTEN` — o kernel escreve `07` para um socket sem par, e ler `0A` ali
+não listaria o resolvedor na 53. **Porta sem dono diz que não é nossa**: `/proc/<pid>/fd` de outro
+usuário não se lê, e uma segunda coluna vazia leria como "não há ninguém ali".
+
+**`ronoctua-lan` varre a rede SEM PRIVILÉGIO NENHUM**: o Linux tem um terceiro tipo de socket ICMP
+(`SOCK_DGRAM` + `IPPROTO_ICMP`) aberto a qualquer processo dentro de `net.ipv4.ping_group_range`, que
+no NixOS é todo mundo — é o que o próprio `ping` usa em vez de um binário setuid. O kernel preenche o
+identificador e o checksum, então o pacote sai com zeros nos dois e o que casa resposta com pergunta
+é a SEQUÊNCIA.
+
+**O prazo começa depois dos envios, e o número de milissegundos não vem da varredura.** As duas são a
+mesma medição: mandar para 254 endereços não é instantâneo, porque cada um cujo endereço de hardware
+o kernel não conhece ESPERA o ARP — três segundos na rede do dono. Com o prazo começando antes, a
+janela de escuta acabava antes do primeiro pacote sair e a varredura achava zero máquinas numa rede
+com cinco. E com o tempo medido desde o envio, uma máquina na sala ao lado aparecia com 3 000 ms.
+Então a varredura responde QUEM, e `ping` — um endereço de cada vez, já resolvido — responde QUANTO.
+
+### Bluetooth — `LEADER s b`, e o glifo é o que a coisa É
+
+Um crate fala com o BlueZ (`ronoctua-bluetooth`, molde do `ronoctua-disks` e do `ronoctua-power`), e
+o que atravessa o canal é a CENA INTEIRA (`Scene`), nunca um delta: durante uma varredura o daemon
+emite centenas de mudanças por segundo, e delta é coisa que tem de ser reproduzida na ordem em que
+foi produzida. **Tudo é lido por um `GetManagedObjects`** — adaptadores, dispositivos, baterias e
+transportes numa resposta só — e NADA por `Properties.Get`: o BlueZ declara as propriedades
+opcionais com um predicado `exists`, e `RSSI`, `TxPower`, `Modalias`, `Icon`, `Class` e `Appearance`
+simplesmente não estão no mapa quando não há o que dizer; perguntar por uma delas responde
+`No such property`, que é erro, não valor vazio.
+
+**A regra de assinatura é por INTERFACE, não por caminho.** `InterfacesAdded` e `InterfacesRemoved`
+saem de `/`, não de `/org/bluez` — uma regra com `path_namespace=/org/bluez` (o idioma que o
+`ronoctua-power` usa para o UPower) veria toda mudança de propriedade e PERDERIA toda chegada e
+partida: um dispositivo só apareceria na tela quando mudasse alguma outra coisa.
+
+**São QUATRO threads, e duas delas existem por causa da varredura.** Uma segura o fluxo de sinais do
+`org.bluez` e não faz mais nada; ela levanta uma bandeira. Outra segura o fluxo do BARRAMENTO
+(`NameOwnerChanged` com `arg0=org.bluez`), porque um daemon que MORRE não remove os objetos um a um —
+some o nome inteiro, e sem essa regra a modeline continuaria desenhando um dispositivo que não existe
+mais. A terceira lê a cena quando a bandeira sobe, no MÁXIMO quatro vezes por segundo — ler dentro da
+primeira transformaria uma varredura em centenas de idas ao barramento. A quarta executa as ordens,
+porque `Device1.Connect` bloqueia por segundos, e é ela que SERVE o agente de pareamento: o objeto
+que responde à pergunta tem de viver mais que a pergunta.
+
+**E a RESPOSTA não passa pela fila de ordens.** `Pair` está bloqueando aquela thread enquanto a
+pergunta existe; uma resposta enfileirada atrás dela esperaria a ordem que espera a resposta. O
+`Watch` devolve, ao lado da mão, o punho das perguntas (`agent::Questions`), e responder é mandar
+num canal. Cada pergunta leva um SERIAL: dois tempos limite que se cruzam não podem limpar a
+pergunta um do outro.
+
+**Ninguém pede permissão a ninguém, e desta vez nem grupo há.** O BlueZ não tem ação polkit nenhuma:
+a política de barramento dele deixa `context="default"` falar com `org.bluez`, e essa é a porta
+inteira. O módulo não escreve regra (não há o que alargar) e o check `bluetooth-bus-policy-is-open`
+lê o arquivo INSTALADO — no dia em que o upstream mudar de ideia, um check diz, em vez de a tela
+ficar muda. **O agente não reivindica nome no barramento**: `RegisterAgent` recebe um CAMINHO e o
+bluetoothd guarda o nome único de quem chamou; pedir um nome bem-conhecido falharia contra o
+`<deny own="*"/>` do dbus, com um erro que se lê exatamente como "daemon ausente".
+
+**O glifo da modeline é o que a coisa É** — fone como fone, teclado como teclado, o pedido do dono —
+e isso sai da CLASSE (BR/EDR) ou da APARÊNCIA (LE), números que o próprio dispositivo anuncia, nunca
+do nome. O `Icon` do BlueZ é derivado desses dois e joga informação fora (um relógio é `None` nas
+duas tabelas dele), então entra como terceira palavra e não como resposta. Até quatro marcas
+(`bt-1`..`bt-4`), uma por dispositivo CONECTADO, alarmado primeiro; `NN%` só a ≤30 e cor de perigo a
+≤15, os mesmos dois números da bateria da máquina e pela mesma regra literal. Clicar numa marca abre
+AQUELE dispositivo inteiro, com o mesmo comando que o `RET` na linha dele roda.
+
+#### O perfil de áudio não está no barramento que este crate fala
+
+O `MediaTransport1` diz o que ESTÁ tocando: um UUID, um estado, um codec, um volume. Ele não diz o
+que o aparelho PODE fazer — e é essa a pergunta atrás de "todas as opções e configurações": um
+headset faz música em estéreo (A2DP) **ou** uma chamada com o microfone (HFP), nunca as duas ao mesmo
+tempo. Quem é dono da placa é o PipeWire, então a resposta vem de lá.
+
+**A medição decidiu qual programa**, e ela ficou meses por fazer no `PENDING`. As opções eram o
+`pactl`, que arrasta o cliente do PulseAudio para dentro do fecho, e a dupla `wpctl`/`pw-dump`. Um
+`nix path-info -r` sobre o `toplevel` do próprio sistema responde: os dois já estão em `sw/bin`,
+postos lá pelo `services.pipewire`; o `pactl` não está. Custo zero, e é isso que tirou o item do
+"tem preço" para o "está feito".
+
+**A armadilha é a identidade.** O PipeWire nunca ouviu falar de `/org/bluez/hci0/dev_…`; o que ele
+conhece é `bluez_card.AA_BB_CC_DD_EE_FF`, montado a partir do ENDEREÇO com `:` virando `_`. Procurar
+a placa pelo caminho do objeto não acha nada, em silêncio — que é como esse tipo de erro sempre se
+apresenta.
+
+`pw-dump` LÊ e `wpctl` ESCREVE, e essa também é a linha de segurança: nada muda até uma tecla ser
+apertada. A leitura acontece quando o nível do dispositivo ABRE e em mais lugar nenhum: o `pw-dump`
+imprime o grafo inteiro, e perguntar por quadro seria um `fork` dentro do laço do rodapé.
+
+**Sem placa, sem linha** — e sem a linha, a dica também não a ensina. Um teclado não tem placa de
+áudio, e a primeira foto depois de escrito mostrava `→ o próximo perfil de áudio` na página de um
+teclado: a coluna `Where::OnACard` existe porque `OnADevice` responde QUAL TELA e esta pergunta é
+sobre o que a coisa naquela tela sabe fazer.
+
+**O desenho do teclado é a única exceção medida do `chrome-icons-match-the-text`.** Um teclado é um
+desenho LARGO e baixo: a tinta dele já ocupa a célula inteira, então nenhum tamanho o leva à altura
+do dígito sem encostar no caractere ao lado, e não existe teclado quadrado na fonte (os nove que
+passam na faixa são caps-lock, um `x`, uma engrenagem ou a tecla ⌘ — a coisa errada dita com
+clareza). Então ele é medido pela outra régua, com o motivo escrito no check: preenche a célula e
+não é uma lasca. Os outros cinco desenhos que a faixa recusou trocaram de glifo, que é o que a
+mensagem do check manda fazer.
+
+**O perfil de áudio não é trocável aqui, e isso está escrito** (`docs/PENDING.md`): o BlueZ diz o que
+está tocando (`MediaTransport1`), não o que se pode escolher — quem sabe isso é o PipeWire, e é uma
+fronteira que este entregável não abriu.
+
+**A vista tem TRÊS níveis e o `Esc` volta um**: a lista (o rádio, os pareados, os por perto), o
+DETALHE de um dispositivo (cada fato numa linha, e uma linha por serviço que ele oferece) e o rádio.
+As teclas são LETRAS NUAS — nada se digita ali —, lidas da própria `OF_THE_VIEW` pelas duas portas,
+de modo que uma letra acrescentada à tabela é uma tecla que funciona e uma tecla fora dela é uma
+tecla que ninguém ensina. **Uma pergunta de pareamento toma a tela** (nada pareia até ela ser respondida) e o `Esc` ali
+responde NÃO, em vez de deixar o outro lado esperando os sessenta segundos do bluetoothd. Quando a
+vista NÃO PODE abrir — o gerenciador de arquivos está no rodapé, segurando uma pasta que alguém
+navegou —, a pergunta vira NOTIFICAÇÃO, com os dois botões que rodam os mesmos comandos do `s b y` e
+`s b n`; e ela é RETIRADA quando a pergunta acaba, porque um cartão crítico com dois botões que não
+respondem mais nada é pior que cartão nenhum. Pergunta que pede DÍGITOS (um PIN) não aceita um "sim"
+seco de lugar nenhum: abre a vista e pede no minibuffer, senão o que sairia daqui é um PIN vazio.
 
 ---
 

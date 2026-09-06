@@ -995,7 +995,7 @@ def main() -> int:
             complain(
                 "programs",
                 f"no step can run: `{p}` was not resolved by Nix. "
-                "Acrescente-o em nix/modules/update.nix.",
+                "Add it to nix/modules/update.nix.",
             )
         # AND THE OTHER WAY ROUND, which is the half that rots in silence: a
         # package left here after its step went away is a dependency nobody

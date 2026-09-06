@@ -425,6 +425,53 @@ impl Piece {
     }
 }
 
+/// A hint line GENERATED from a view's key table, in the table's order.
+///
+/// The file manager's `View::hint` wrote this loop first, and its header says
+/// why a hint is generated rather than written: a second list kept by hand
+/// beside the table is a list that falls behind — and it had, in two doors
+/// at once. Every view that has a table and no section-dependent keys calls
+/// this; the file manager keeps its own loop because four of its keys change
+/// meaning with the focused section and take the `Alternate` register.
+///
+/// An id bound twice shows once, under its FIRST notation, which makes the
+/// table's order a teaching decision. The words are the id read as a TEXT
+/// KEY (`notif-read` → "read"), the file manager's own convention — short,
+/// because the line is one line; the long form is `cmd-<id>`, which the
+/// manual and which-key read.
+#[must_use]
+pub fn hint_of(table: &[(&str, &str)], texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+    let mut out = Vec::with_capacity(table.len() * 3);
+    let mut said: Vec<&str> = Vec::with_capacity(table.len());
+    for (notation, id) in table {
+        if said.contains(id) {
+            continue;
+        }
+        // THE ID IS SPENT ONLY ONCE THE NOTATION PARSES.
+        //
+        // It used to be pushed first: a notation this crate could not read —
+        // a typo, a key spelt the compositor's way — silently suppressed that
+        // id for the rest of the line, INCLUDING a later row of the same
+        // table that spelt it correctly. So one bad row could take a working
+        // key off the screen, and the only symptom was a sentence one item
+        // shorter than the table.
+        let Ok(t) = ronoctua_keymap::Key::parse(notation) else {
+            continue;
+        };
+        said.push(id);
+        if !out.is_empty() {
+            out.push(Piece::separator());
+        }
+        out.push(Piece::key(key_text(&t), false));
+        // THE SPACE BETWEEN THE KEY AND ITS WORDS BELONGS TO THE WORDS, for
+        // the reason `fold::wrap_pieces` gives about the other seam: a key
+        // piece has to be exactly the notation, because that is what the
+        // colour is about.
+        out.push(Piece::prose(format!(" {}", texts.t(id))));
+    }
+    out
+}
+
 /// How a key is DRAWN, as against how it is written down.
 ///
 /// # Why this is not `Key::notation`

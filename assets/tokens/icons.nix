@@ -26,9 +26,7 @@
   # ===================================================================
 
   # Notifications — the icon at the modeline's right edge (4.2).
-  notification = "cod-bell";
   notification-pending = "cod-bell_dot";
-  notification-muted = "cod-bell_slash";
 
   # THE TWO THINGS ONE DOES TO A NOTIFICATION WITH THE MOUSE.
   #
@@ -295,7 +293,7 @@
   mesh = "md-cube_outline";
 
   # ===================================================================
-  # NETWORK — the seventh view of the expansion (LEADER r r).
+  # NETWORK — the seventh view of the expansion (LEADER s n n).
   #
   # Four signal steps, and not a percentage: the exact number wobbles
   # every second and nobody decides anything with "67%". What one decides with
@@ -312,12 +310,20 @@
   # "invalid character in identifier '0'" — three derivations later, inside
   # a buffer that has nothing to do with icons. The generator now rejects that
   # here, with the token's name in the message (see nix/scripts/gen-tokens.py).
-  wifi-none = "md-wifi_strength_outline";
-  wifi-weak = "md-wifi_strength_1";
-  wifi-fair = "md-wifi_strength_2";
-  wifi-good = "md-wifi_strength_3";
-  wifi-strong = "md-wifi_strength_4";
-  wifi-off = "md-wifi_off";
+  #
+  # AND THE `network_strength` FAMILY, not `wifi_strength`: the two draw the
+  # same five steps, and only one of them is the height of the text beside
+  # it. The arc family's ink is 77,5% of the digit `0` — the ladder used to
+  # sit in a column of its own, where that passed unnoticed, and it now sits
+  # shoulder to shoulder with the network's name in the row's label. The
+  # triangle family measures 97,6%, and `chrome-icons-match-the-text` is what
+  # says so.
+  wifi-none = "md-network_strength_outline";
+  wifi-weak = "md-network_strength_1";
+  wifi-fair = "md-network_strength_2";
+  wifi-good = "md-network_strength_3";
+  wifi-strong = "md-network_strength_4";
+  wifi-off = "md-network_strength_off";
   ethernet = "md-ethernet";
   # The network asks for a key. A CLOSED padlock and only that: an open network does not get
   # an open padlock, it gets the absence of a padlock — the column already says so by being
@@ -353,6 +359,104 @@
   # drawing one out of what is left gives a symbol that means nothing.
   eject = "md-eject";
   power = "md-power";
+
+  # THE BATTERY'S LADDER — five steps, by WORD, the Wi-Fi block's reason
+  # (a WIT identifier segment starts with a letter). Material, because it is
+  # the one family with the ladder drawn as a ladder, and its charging
+  # variants carry the bolt on the same drawing. The modeline draws one of
+  # these only while there is something to say: nothing at 99% and above,
+  # nothing at `FullyCharged`, and the alert glyph in the danger colour at
+  # 15% and below.
+  # ---- The way out ---------------------------------------------------
+  # THREE MARKS, and each says something the WI-FI BARS cannot.
+  #
+  # The bars say how loud the router is; these say whether anything is out
+  # there. `no-internet` is a link that leads nowhere — the hotel's portal,
+  # the router with no uplink — which is the case that looks fine and is not.
+  # `airplane` is somebody's own decision, and is drawn so that "nothing
+  # works" has an answer on screen. `vpn` is a shield and not `md-vpn`: that
+  # drawing is wide and flat, 66% of the digit's ink at the icon size, and
+  # `chrome-icons-match-the-text` is what said so.
+  no-internet = "md-web_off";
+  airplane = "md-airplane";
+  vpn = "md-shield_lock";
+  # THE OTHER TWO TUNNELS. There is no Tailscale glyph in any of the six
+  # families — `linux-tails` is the Tails OS and not this — so the mark is the
+  # four-dot grid its own logo is drawn from, and it earns its place by being
+  # unlike every other mark on this line. `linux-tor` IS the onion, and it is
+  # the one case where the brand's own mark is in the font.
+  tailscale = "md-dots_grid";
+  tor = "linux-tor";
+
+  # ---- Bluetooth -----------------------------------------------------
+  # THE DEVICE KINDS, for the modeline's marks and the list's rows.
+  #
+  # A CONNECTED DEVICE IS DRAWN AS WHAT IT IS — headphones as headphones, a
+  # keyboard as a keyboard — because that is the only thing about it one
+  # reads at a glance: which of the four things on my desk is this. The kind
+  # comes from the device's own class or appearance (`Kind::of`), never from
+  # its name.
+  # THE DRAWING IS CHOSEN BY MEASUREMENT, not by name: `md-gamepad_variant`,
+  # `md-laptop`, `md-tablet`, `md-access_point` and `md-television` all mean
+  # the right thing and all draw a SLIVER — 53% to 80% of the digit's ink at
+  # the icon size, which reads as a smaller kind of thing beside the `NN%`.
+  # These are their in-band siblings, and `chrome-icons-match-the-text` is
+  # what found the difference.
+  bluetooth-device-headphones = "md-headphones";
+  bluetooth-device-headset = "md-headset";
+  bluetooth-device-speaker = "md-speaker";
+  # THE ONE EXCEPTION, and it is in the check by name: a keyboard is a WIDE
+  # drawing. Its ink already spans the cell, so no size brings it to the
+  # digit's height without it touching the character beside it — and there is
+  # no square keyboard in the whole font (the nine in band are caps-lock, an
+  # `x`, a cog or the ⌘ key: the wrong thing said clearly).
+  bluetooth-device-keyboard = "md-keyboard";
+  bluetooth-device-mouse = "md-mouse";
+  bluetooth-device-gamepad = "md-gamepad";
+  bluetooth-device-tablet = "md-tablet_android";
+  bluetooth-device-phone = "md-cellphone";
+  bluetooth-device-computer = "md-desktop_tower";
+  bluetooth-device-watch = "md-watch";
+  bluetooth-device-camera = "md-camera";
+  bluetooth-device-printer = "md-printer";
+  bluetooth-device-network = "md-router_wireless";
+  bluetooth-device-display = "md-television_classic";
+  # The radio itself, for the list's first row and for a device of no kind.
+  bluetooth-device-unknown = "md-bluetooth";
+  bluetooth-connected = "md-bluetooth_connect";
+  bluetooth-off = "md-bluetooth_off";
+  # ---- Battery -------------------------------------------------------
+
+  # A VERTICAL DRAWING, and the reason the chrome size is measured per glyph:
+  # at the icon size these stood 48% above the digit. The generator brings
+  # them down to it (`chrome_size` in `gen-glyphdb.py`); the charging ones are
+  # wider drawings and already sit at the digit's height.
+  #
+  # FOUR STEPS AND NOT FIVE, unplugged. `battery-empty` was the fifth and
+  # nothing could draw it: the bottom rung is 0-10% and the danger colour
+  # takes over at 15%, so a battery that low and off the charger is always
+  # the alert glyph. A token no path reaches is a token the theme generator
+  # still has to solve, and a comment claiming it is drawn is a comment that
+  # sends the next reader looking for the screen it is on.
+  battery-low = "md-battery_20";
+  battery-half = "md-battery_50";
+  battery-high = "md-battery_80";
+  battery-full = "md-battery";
+  battery-charging-empty = "md-battery_charging_10";
+  battery-charging-low = "md-battery_charging_20";
+  battery-charging-half = "md-battery_charging_50";
+  battery-charging-high = "md-battery_charging_80";
+  battery-charging-full = "md-battery_charging_100";
+  battery-danger = "md-battery_alert";
+  # THE PROFILE'S MARK, only when the machine is NOT at its top profile: a
+  # leaf for power-saver, the middle gauge for balanced. `performance` never
+  # reaches the modeline — the distro's default says nothing — and its glyph
+  # is drawn in the VIEW's own rows, where all three sit one under the other
+  # and each says which it is. That was already written here and was not true
+  # of any code: the rows drew a tick and nothing else.
+  profile-power-saver = "md-leaf";
+  profile-balanced = "md-speedometer_medium";
+  profile-performance = "md-speedometer";
 
   # ===================================================================
   # Development

@@ -186,7 +186,7 @@ fn drive(path: &str) -> Result<()> {
             // that costs — the driver printed a line and exited zero, which is
             // the exact defect it exists to catch. A state nobody can reach from
             // the base state is a state nobody can reach, and the modeline would
-            // go on offering it under `SPC b s`.
+            // go on offering it under `SPC w s`.
             //
             // If a buffer ever has a state that genuinely needs a setup first,
             // the answer is to give this driver the setup — not to let silence
@@ -194,7 +194,7 @@ fn drive(path: &str) -> Result<()> {
             None => bail!(
                 "{}: I asked for `{going}` and the component reported nothing.\n\
                  A declared state that is not reachable from the base is a state that \
-                 `SPC b s` offers and nobody enters.",
+                 `SPC w s` offers and nobody enters.",
                 d.name
             ),
         }

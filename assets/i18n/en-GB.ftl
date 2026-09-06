@@ -27,7 +27,7 @@ cmd-session-quit = Quit session
 
 ## which-key prefix groups
 
-group-buffer = buffer
+group-brain = brain
 group-quit = quit
 
 ## The modeline's two left segments
@@ -43,6 +43,9 @@ buffer-example = example
 mode-files = files
 mode-monitor = monitor
 mode-notifications = notifications
+mode-power = power
+mode-bluetooth = bluetooth
+mode-network = network
 mode-rescue = rescue
 mode-terminal = terminal
 
@@ -84,7 +87,7 @@ state-update = update
 ## Notifications
 
 notif-empty = no notifications
-notif-history = Notifications
+notif-title = Notifications
 notif-critical = CRITICAL
 
 # The band, above the modeline. The counter only appears with more than one.
@@ -115,7 +118,21 @@ notif-rule-small-things-are-quick = Small things go by quickly
 notif-column-happened = Received
 notif-column-suppressed = Filtered out
 notif-column-catalogue = Notifications and filters
+# THE HINT LINE reads each id of the manager's key tables as a short text —
+# the file manager's convention; `cmd-<id>` is the long label the manual reads.
 notif-read = read
+notif-forget = forget
+notif-read-all = all read
+notif-act = run its action
+notif-adjust = adjust this kind
+notif-where = { $at } of { $total }
+notif-up = up
+notif-down = down
+notif-pane-next = next column
+notif-pane-previous = previous column
+notif-knob-next = next value
+notif-knob-previous = previous value
+notif-restore = the distro's default
 notif-suppressed-by = filtered out by { $rule }
 notif-decided-by = by { $rule }
 notif-from-catalogue = { $entry }
@@ -126,9 +143,7 @@ notif-yes = yes
 notif-no = no
 notif-knob-show = shows
 notif-knob-life = stays
-notif-window-title = { $pane } — { $n } unread
-notif-window-keys = TAB pane · ↑↓ move · SPACE read · r all · RET adjust · ←→ change
-notif-act-in-the-footer = The action runs from the footer: LEADER n h, then its letter
+notif-act-in-the-footer = The action runs from the footer: { $keys }, then its letter
 
 # How the presentation's fields are named on screen.
 notif-show-hidden = do not show
@@ -148,8 +163,20 @@ notif-audio = play a sound
 notif-inert-vibrate = no haptic device on this machine
 notif-inert-audio = not implemented yet — see docs/PENDING.md
 
-# What the pointer explains on the band.
-hint-notif-bell = click to open the notification manager
+# What the pointer explains on the BELL, on the modeline — not on the band.
+# THE EXACT ZERO COMES FIRST. Fluent matches an exact number before a plural
+# category, and Portuguese's `one` category covers 0 as well — without the
+# `[0]` branch "0 filtradas" came out as "uma filtrada". Both languages keep
+# the same shape so the next person sees the trap here too.
+hint-notif-bell = { $unread ->
+        [0] none unread
+        [one] one unread
+       *[other] { $unread } unread
+    }, { $filtered ->
+        [0] none filtered out
+        [one] one filtered out
+       *[other] { $filtered } filtered out
+    } — click opens the manager
 hint-notif-read = mark as read and take it off the screen
 hint-notif-countdown = how long it has left
 hint-notif-action = { $action } — press { $key } in the manager
@@ -246,12 +273,20 @@ cmd-workspace-move = Move window to workspace
 
 ## Notifications, keyboard and help — commands that existed only as an order or a key
 
-cmd-notif-history = Notification history
+cmd-notif-open = Notifications
 cmd-notif-window = Notifications in a window
 cmd-notif-read-all = Mark every notification read
 cmd-notif-read = Mark this notification read
 cmd-notif-forget = Forget this notification
 cmd-notif-act = Run the notification's action
+cmd-notif-adjust = Adjust this kind of notification
+cmd-notif-up = Up one notification
+cmd-notif-down = Down one notification
+cmd-notif-pane-next = Next column of the manager
+cmd-notif-pane-previous = Previous column of the manager
+cmd-notif-knob-next = Next value of the adjustment
+cmd-notif-knob-previous = Previous value of the adjustment
+cmd-notif-restore = Back to the distro's default
 cmd-notif-dismiss = Dismiss notification
 cmd-keyboard-restore = Restore the keyboard
 group-notification = notification
@@ -698,11 +733,12 @@ unicode-tone-medium = Medium skin
 unicode-tone-medium-dark = Medium-dark skin
 unicode-tone-dark = Dark skin
 
-## Network — Wi-Fi and Ethernet (LEADER r)
+## Network — Wi-Fi and Ethernet (LEADER s n)
 
 cmd-network-open = Networks
 cmd-network-scan = Scan networks
 cmd-network-connect = Connect to network
+ask-network-connect = Password for this network
 cmd-network-disconnect = Disconnect
 cmd-network-forget = Forget network
 cmd-network-wifi-toggle = Toggle Wi-Fi radio
@@ -737,7 +773,7 @@ echo-network-link-wired = { $network } · { $rate }
 echo-network-no-link = Not connected
 echo-network-unavailable = NetworkManager is not responding
 
-## Syncthing (LEADER r s)
+## Syncthing (LEADER s s)
 
 cmd-syncthing-open = Open Syncthing
 cmd-syncthing-state = Syncthing status
@@ -1769,7 +1805,7 @@ update-kind-reclaim-space = reclaims disk space
 
 
 # ===================================================================
-# THE BRAIN'S SCREEN — LEADER s b, and a window of its own
+# THE BRAIN'S SCREEN — LEADER b b, and a window of its own
 #
 # What the machine does BY ITSELF, when, and what came of it last time. No
 # sentence here spells a date: the buffer draws those ISO, because a component
@@ -1925,3 +1961,610 @@ theme-backdrop-black = Black
 theme-backdrop-theme = The theme's colour
 theme-hint = { $apply } applies · { $left }/{ $right } changes column · { $close } goes back
 echo-theme-unsaved = the theme could not be saved: { $error }
+
+## Power — the battery, the charger, the profile and sleep (LEADER s p)
+
+cmd-power-open = Power
+cmd-power-window = Power in a window
+cmd-power-profile-performance = Power profile: performance
+cmd-power-profile-balanced = Power profile: balanced
+cmd-power-profile-saver = Power profile: power saver
+cmd-power-keep-awake = Keep the machine awake (toggle)
+cmd-power-keep-lid = Ignore the lid (toggle)
+cmd-power-thresholds = Charge thresholds
+cmd-power-suspend = Suspend
+cmd-power-hibernate = Hibernate
+cmd-power-reboot = Reboot
+cmd-power-off = Power off
+cmd-power-enter = Apply, arm or confirm the row
+cmd-power-less = Lower the threshold under the cursor
+cmd-power-more = Raise the threshold under the cursor
+cmd-power-up = Up one row
+cmd-power-down = Down one row
+group-power = power
+
+# THE HINT LINE reads each id of the view's key table as a short text.
+power-enter = apply
+power-less = less
+power-more = more
+power-up = up
+power-down = down
+
+power-title = Power
+
+# The modeline's two marks, on the line under the pointer.
+hint-battery = { $percent }% { $state }, { $time }, { $rate } W — click opens power
+hint-profile = profile: { $profile } — click opens power
+
+# The view's sections, one heading each.
+power-heading-battery = Battery
+power-heading-adapter = Charger
+power-heading-profile = Profile
+power-heading-thresholds = Charge thresholds
+power-heading-awake = Keep awake
+power-heading-lid = Lid and idling
+power-heading-actions = Actions
+power-heading-peripherals = Peripherals
+
+power-no-battery = no battery in this machine
+power-no-adapter = no charger known
+power-plugged = plugged in
+power-unplugged = unplugged
+power-no-daemon = power-profiles-daemon is not running
+
+power-fact-charge = charge
+power-fact-time = time
+power-fact-rate = rate
+power-fact-energy = energy
+power-fact-health = health
+power-fact-health-daemon = health, by the firmware
+power-percent = { $percent }%
+power-fact-cycles = cycles
+power-fact-voltage = voltage
+power-fact-temperature = temperature
+power-fact-technology = chemistry
+power-fact-make = make
+power-fact-supply = supply
+power-fact-behaviour = charge behaviour
+power-fact-charge-type = charge type
+power-fact-idle = idle
+
+power-time-empty = { $time } left
+power-time-full = { $time } to full
+power-time-unknown = time unknown
+power-duration = { $h } h { $m } min
+power-duration-minutes = { $m } min
+power-rate = { $rate } W
+power-energy = { $now } / { $full } Wh
+power-health = { $health }% ({ $full } of { $design } Wh)
+power-voltage = { $v } V
+power-temperature = { $t } °C
+
+power-state-unknown = unknown
+power-state-charging = charging
+power-state-discharging = discharging
+power-state-empty = empty
+power-state-full = full
+power-state-pending-charge = waiting to charge
+power-state-pending-discharge = waiting to discharge
+
+power-technology-unknown = unknown
+power-technology-lithium-ion = lithium-ion
+power-technology-lithium-polymer = lithium-polymer
+power-technology-lithium-iron-phosphate = lithium iron phosphate
+power-technology-lead-acid = lead-acid
+power-technology-nickel-cadmium = nickel-cadmium
+power-technology-nickel-metal-hydride = nickel-metal hydride
+
+power-profile-performance = performance
+power-profile-balanced = balanced
+power-profile-power-saver = power saver
+power-profile-wanted = (your choice)
+power-profile-not-offered = not offered by this machine
+power-degraded = performance degraded: { $why }
+power-inhibited = performance held off: { $why }
+power-hold = { $who } holds { $profile }: { $why }
+power-battery-aware = lower the profile when the battery runs low
+power-on = on
+power-off-label = off
+
+power-threshold-start = start charging below ({ $supply })
+power-threshold-end = stop charging at ({ $supply })
+power-threshold-pending = { $value }% — RET writes
+power-threshold-none = not adjustable
+power-preset-longevity = 40–80: a laptop that lives on the desk
+power-preset-desk = 60–80: mostly plugged in
+power-preset-full = full charge: a trip
+power-thresholds-unsupported = this battery has no charge thresholds
+power-thresholds-readonly = the thresholds are read-only for you — the udev rule has not reached this battery
+
+power-keep-awake = keep awake: no sleep, no idle action
+power-keep-lid = ignore the lid: closing it does nothing
+power-inhibitor = { $who } holds { $what }: { $why }
+
+power-lid-closed = the lid is closed
+power-lid-open = the lid is open
+power-lid-action = closing the lid
+power-lid-action-external = closing the lid, on the charger
+power-lid-action-docked = closing the lid, docked
+power-lid-action-value = { $action }
+power-action-unset = the default
+power-power-key = the power key
+power-idle-action = { $action } after { $time }
+power-idle-never = nothing
+power-critical-action = at the critical level, UPower will
+power-blocked = blocked right now
+
+power-action-suspend = suspend
+power-action-suspend-then-hibernate = suspend, then hibernate
+power-action-hybrid-sleep = suspend and hibernate at once
+power-action-hibernate = hibernate
+power-action-reboot = reboot
+power-action-off = power off
+power-action-confirm = { $action }? RET confirms, Esc cancels
+power-cannot = not available
+# THE DAEMONS' WORDS — logind's kebab-case and UPower's CamelCase land on
+# the same key (`power_words::daemon_word`); a word outside this list is shown raw.
+power-duration-hours = { $h } h
+hint-battery-no-rate = { $percent }% { $state }, { $time } — click opens power
+notif-battery-critical-body-unset = { $percent }% left. The machine will act on its own soon.
+power-word-ignore = do nothing
+power-word-poweroff = power off
+power-word-reboot = reboot
+power-word-halt = halt
+power-word-kexec = reboot through kexec
+power-word-suspend = suspend
+power-word-hibernate = hibernate
+power-word-hybrid-sleep = go into hybrid sleep
+power-word-suspend-then-hibernate = suspend, then hibernate
+power-word-lock = lock the screen
+power-word-factory-reset = factory reset
+power-word-soft-reboot = soft reboot
+# THE KERNEL'S TWO CHARGE VOCABULARIES — `charge_behaviour` and `charge_type`,
+# from the `power_supply` class; the raw word shows only for one we do not know.
+power-behaviour-auto = charge normally
+power-behaviour-inhibit-charge = hold the charge where it is
+power-behaviour-inhibit-charge-awake = hold the charge while awake
+power-behaviour-force-discharge = run off the battery
+power-charge-type-unknown = unknown
+power-charge-type-na = not applicable
+power-charge-type-trickle = trickle
+power-charge-type-fast = fast
+power-charge-type-standard = standard
+power-charge-type-adaptive = adaptive
+power-charge-type-custom = custom
+power-charge-type-long-life = long life
+power-charge-type-bypass = straight from the charger
+# WHAT AN INHIBITOR HOLDS — nouns, because "holds sleep" is a thing held and the
+# lid's `sleep` above is an action; in Portuguese they are two words.
+notif-battery-critical-body-ignore = { $percent }% left, and nothing will stop it. Plug in now.
+power-what-sleep = sleep
+power-what-idle = idling
+power-what-shutdown = shutdown
+power-what-handle-power-key = the power key
+power-what-handle-suspend-key = the suspend key
+power-what-handle-hibernate-key = the hibernate key
+power-what-handle-lid-switch = the lid
+power-what-handle-reboot-key = the reboot key
+power-word-sleep = sleep
+
+power-peripheral = { $kind }: { $model }
+power-kind-unknown = device
+power-kind-line-power = charger
+power-kind-battery = battery
+power-kind-ups = UPS
+power-kind-monitor = monitor
+power-kind-mouse = mouse
+power-kind-keyboard = keyboard
+power-kind-pda = PDA
+power-kind-phone = phone
+power-kind-media-player = media player
+power-kind-tablet = tablet
+power-kind-computer = computer
+power-kind-gaming-input = gamepad
+power-kind-pen = pen
+power-kind-touchpad = touchpad
+power-kind-modem = modem
+power-kind-network = network device
+power-kind-headset = headset
+power-kind-speakers = speakers
+power-kind-headphones = headphones
+power-kind-video = video device
+power-kind-other-audio = audio device
+power-kind-remote-control = remote control
+power-kind-printer = printer
+power-kind-scanner = scanner
+power-kind-camera = camera
+power-kind-wearable = wearable
+power-kind-toy = toy
+power-kind-bluetooth = Bluetooth device
+
+# What the doors say when a daemon refused, and what the window cannot do.
+power-answer-in-the-footer = The lock is the footer's to hold: { $awake }, or { $lid }
+power-what-profile = the profile
+power-what-lock = the lock
+power-what-thresholds = the thresholds
+power-what-action = the action
+power-refused-authority = not allowed for this session
+power-refused-absent = the daemon is not there, or the hardware cannot
+power-refused-invalid = the value was refused
+power-refused-other = refused
+echo-power-refused = { $what } { $why } ({ $words })
+echo-power-profile-not-offered = { $wanted } is not offered by this machine; { $applied } applied
+
+# THE THREE ALARMS, raised by the footer when UPower's level changes.
+notif-power-app = power
+notif-bluetooth-app = bluetooth
+notif-bluetooth-pairing-summary = Something wants to pair
+notif-bluetooth-pairing-keys = { $yes } says yes, { $no } says no — after this card goes.
+notif-bluetooth-pairing-body = Open Bluetooth to answer.
+notif-action-bluetooth-accept = yes
+notif-action-bluetooth-refuse = no
+notif-bluetooth-connected-summary = { $device } connected
+notif-bluetooth-connected-body = It is ready to use.
+notif-bluetooth-disconnected-summary = { $device } disconnected
+notif-bluetooth-disconnected-body = If it is your keyboard or mouse, that is why the machine has stopped answering.
+notif-bluetooth-battery-low-summary = { $device } is running out
+notif-bluetooth-battery-low-body = { $percent }% left. Charge it when you can.
+notif-battery-low-summary = Battery low
+notif-battery-low-body = { $percent }% left. Plug in when you can.
+notif-battery-critical-summary = Battery critical
+notif-battery-critical-body = { $percent }% left. The machine will { $action } on its own soon.
+notif-battery-charged-summary = Battery charged
+notif-battery-charged-body = You can unplug.
+notif-action-power-panel = power panel
+notif-action-bluetooth-panel = bluetooth
+
+# THE WAY OUT — the three marks, and what the daemon believes.
+network-way = the way out
+network-airplane = aeroplane mode
+network-tunnel-drop = RET takes it down
+cmd-network-airplane = Aeroplane mode (toggle)
+echo-network-refused = the network refused: { $error }
+echo-view-busy = another view has the footer: Esc closes it first
+hint-net-off = connected, and nothing out there — click opens the network
+hint-net-portal = something is asking you to log in — click opens the network
+hint-airplane = aeroplane mode: every radio and cable is off — click turns it back on
+hint-vpn = { $name } is up — click opens the network
+hint-tailscale = on the { $tailnet } tailnet — click opens it
+hint-tor = going out through Tor — click opens it
+network-way-unknown = not decided yet
+network-way-none = no way out
+network-way-portal = a login page is in the way
+network-way-limited = connected, but the internet is not answering
+network-way-full = the internet answers
+
+# THE VIEW — one list, four headings, and the same rows in both doors.
+network-heading-overview = at a glance
+network-heading-links = links
+network-heading-wifi = Wi-Fi
+network-heading-tunnels = tunnels
+network-radio = Wi-Fi radio
+network-on = on
+network-off = off
+network-no-link = this machine has no cable and no radio
+network-no-tunnel = no tunnel here
+network-tunnel-raise = RET brings it up
+network-state-connected = connected
+network-state-connecting = connecting…
+network-state-disconnected = not connected
+network-fact-network = network
+network-fact-band = band
+network-fact-signal = signal
+network-fact-rate = rate
+network-fact-address = address
+network-fact-gateway = gateway
+network-fact-dns = DNS
+network-fact-received = received
+network-fact-sent = sent
+network-heading-ports = ports
+network-heading-monitor = monitor
+network-no-ports = nothing is listening
+network-port-not-ours = not ours to see
+network-ports-more = { $count ->
+    [one] and one more of ours
+   *[other] and { $count } more of ours
+  }
+network-per-second = { $bytes }/s
+# THE UNITS ARE THE SAME IN EVERY LANGUAGE; the DECIMAL SEPARATOR is not, and
+# that is why these are keys with a number in them rather than a string built
+# in the crate.
+network-rate-kilobits = { $rate } kb/s
+network-rate-megabits = { $rate } Mb/s
+network-rate-gigabits = { $rate } Gb/s
+network-no-rate = no link
+network-band = { $ghz } GHz
+network-band-unknown = an unusual frequency
+network-heading-lan = this network
+network-lan-nobody = nobody has been spoken to yet
+network-lan-gateway = the way out
+network-lan-this-machine = this machine
+network-lan-looking = looking for the others…
+network-lan-answered = answered
+network-lan-refused = this machine may not send a ping: { $error }
+network-lan-swept = { $answered ->
+    [one] one machine answered out of { $asked } asked, { $range }
+   *[other] { $answered } machines answered out of { $asked } asked, { $range }
+  }
+cmd-network-lan = Look for the other machines here
+network-lan = look
+network-import = bring in
+network-hotspot-start = share this connection
+network-hotspot-stop = stop sharing
+network-hotspot-cost = the radio leaves the network it is on: what it shares is the cable
+network-hotspot-on = this machine is the network now
+network-hotspot-password = password
+echo-network-hotspot = sharing as { $network }, password { $password }
+echo-network-hotspot-failed = could not share: { $reason }
+cmd-network-import = Bring a VPN in from a file
+ask-network-import = Path of the .conf or .ovpn file
+network-import-file = file
+network-import-kind = kind
+network-import-wireguard = WireGuard
+network-import-openvpn = OpenVPN
+network-import-endpoint = goes to
+network-import-dns = it would move your DNS to
+network-import-everything = everything this machine sends would go through it
+network-import-asks = it will ask for a password the first time it comes up
+network-import-bring = RET brings it in
+network-import-leave = Esc leaves it where it is
+network-import-where = Path of the .conf or .ovpn file
+network-import-help = Read before importing: the file decides where your traffic goes.
+echo-network-imported = { $network } brought in
+echo-network-not-a-tunnel = { $file } is neither a WireGuard nor an OpenVPN file
+echo-network-import-failed = could not bring { $file } in: { $reason }
+
+# THE TWO TUNNELS. Neither is on at rest: Tor does not start at boot and
+# Tailscale needs a login, so a machine that uses neither draws neither
+# heading.
+network-heading-tailscale = tailnet
+network-heading-tor = Tor
+network-tailscale-state = tailnet
+network-tailscale-running = up
+network-tailscale-stopped = down
+network-tailscale-needslogin = waiting for a login
+network-tailscale-nostate = starting
+network-tailscale-starting = starting
+network-tailscale-needsmachineauth = waiting to be approved on the tailnet
+network-tailscale-inuseotheruser = another person on this machine is using it
+network-tailscale-login = log in
+network-tailscale-logout = log out
+network-tailscale-routes = accept the tailnet's routes
+network-tailscale-shields = refuse incoming connections
+network-tailscale-online = online
+network-tailscale-offline = offline
+network-tailscale-exit = everything goes through here
+network-tor-state = Tor
+network-tor-ready = a circuit is up
+network-tor-not-ready = no circuit
+network-tor-bootstrap = starting, { $percent }%
+network-tor-circuits = { $count ->
+    [one] one circuit open
+   *[other] { $count } circuits open
+  }
+network-tor-identity = ask for a new identity
+network-fact-name = name
+network-fact-tailnet = tailnet
+network-fact-magic-dns = MagicDNS
+network-fact-version = version
+network-fact-socks = SOCKS
+echo-network-login = open { $url } to finish logging in
+# THE HINT LINE'S WORDS — the id read as a text key, short because the line
+# is one line. The long form is `cmd-<id>`, which the manual reads.
+network-up = up
+network-down = down
+network-connect = connect
+network-scan = scan
+network-wifi-toggle = radio
+network-disconnect = disconnect
+network-forget = forget
+network-link = link
+network-title = network
+network-answer-in-the-footer = A password is typed in the footer: open the network there.
+cmd-network-window = Network in a window
+cmd-network-up = Up one row
+cmd-network-down = Down one row
+echo-network-tunnel-up = { $network } is coming up
+echo-network-tunnel-down = { $network } is down
+echo-network-deleted = { $network } deleted
+
+## Bluetooth — the radio, the devices and what each one can do (LEADER s b)
+
+cmd-bluetooth-open = Bluetooth
+cmd-bluetooth-window = Bluetooth in a window
+cmd-bluetooth-scan = Look for devices nearby
+cmd-bluetooth-power = Turn the radio on or off
+cmd-bluetooth-discoverable = Let other devices see this machine
+cmd-bluetooth-reconnect = Reconnect the trusted devices
+cmd-bluetooth-disconnect-all = Disconnect every device
+cmd-bluetooth-accept = Say yes to the pairing
+cmd-bluetooth-refuse = Say no to the pairing
+cmd-bluetooth-device = Open the device under the cursor
+cmd-bluetooth-connect = Connect or disconnect the device
+cmd-bluetooth-pair = Pair with the device
+cmd-bluetooth-forget = Forget the device
+cmd-bluetooth-trust = Trust the device, or stop trusting it
+cmd-bluetooth-block = Block the device, or unblock it
+cmd-bluetooth-rename = Give the device another name
+ask-bluetooth-rename = A name for it
+cmd-bluetooth-unnamed = Show the devices that give no name
+cmd-bluetooth-up = Up one row
+cmd-bluetooth-down = Down one row
+group-bluetooth = bluetooth
+
+# THE HINT LINE reads each id of the view's key table as a short text.
+bluetooth-down = down
+bluetooth-up = up
+bluetooth-device = open
+bluetooth-connect = connect
+bluetooth-pair = pair
+bluetooth-forget = forget
+bluetooth-trust = trust
+bluetooth-block = block
+bluetooth-rename = rename
+bluetooth-scan = scan
+bluetooth-power = radio
+bluetooth-discoverable = visible
+bluetooth-unnamed = unnamed
+bluetooth-accept = yes
+bluetooth-refuse = no
+
+bluetooth-title = Bluetooth
+bluetooth-row-kind = { $name } — { $kind }
+bluetooth-audio-state = { $what } — { $state }
+
+# The modeline's device marks, on the line under the pointer.
+hint-bluetooth-device = { $kind }: { $name } — click opens bluetooth
+hint-bluetooth-device-battery = { $kind }: { $name }, { $percent }% left — click opens bluetooth
+
+# THE THREE SECTIONS, and what an empty one says.
+bluetooth-heading-adapter = Radio
+bluetooth-heading-paired = Paired
+bluetooth-heading-nearby = Nearby
+bluetooth-heading-profiles = What it can do
+bluetooth-nothing-here = nothing here
+bluetooth-no-adapter = there is no Bluetooth radio on this machine
+bluetooth-no-daemon = the Bluetooth daemon is not answering
+bluetooth-scanning = looking for devices
+bluetooth-unnamed-hidden = { $count } nearby with no name — press h to show them
+
+# THE RADIO'S OWN ROWS.
+bluetooth-adapter-power = the radio
+bluetooth-adapter-discoverable = other devices can see this machine
+bluetooth-adapter-pairable = other devices can pair with it
+bluetooth-adapter-timeout = it stops being visible after
+bluetooth-adapter-forever = it stays visible
+bluetooth-adapter-pairable-forever = it stays open
+bluetooth-adapter-alias = this machine is called
+bluetooth-power-state-on = on
+bluetooth-power-state-off = off
+bluetooth-power-state-off-enabling = turning on
+bluetooth-power-state-on-disabling = turning off
+bluetooth-power-state-off-blocked = blocked by the hardware switch
+
+# A DEVICE'S FACTS, one per line, in the order the detail draws them.
+bluetooth-fact-address = address
+bluetooth-fact-address-type = address type
+bluetooth-fact-alias = called
+bluetooth-fact-name = its own name
+bluetooth-fact-connected = connected
+bluetooth-fact-paired = paired
+bluetooth-fact-bonded = the keys were kept
+bluetooth-fact-trusted = trusted
+bluetooth-fact-blocked = blocked
+bluetooth-fact-legacy = old-style pairing
+bluetooth-fact-wake = it may wake this machine
+bluetooth-fact-services = services read
+bluetooth-fact-battery = battery
+bluetooth-fact-battery-source = the battery is reported by
+bluetooth-fact-rssi = signal
+bluetooth-fact-tx-power = it transmits at
+bluetooth-fact-class = class
+bluetooth-fact-appearance = appearance
+bluetooth-fact-modalias = firmware id
+bluetooth-fact-adapter = through the radio
+bluetooth-fact-reconnect = who reconnects
+bluetooth-fact-volume = volume
+bluetooth-fact-codec = codec
+bluetooth-fact-audio = audio profile
+bluetooth-yes = yes
+bluetooth-no = no
+bluetooth-rssi-value = { $dbm } dBm
+bluetooth-tx-power-value = { $dbm } dBm
+bluetooth-percent = { $percent }%
+bluetooth-seconds = { $seconds }s
+
+# THE KINDS, from the device's own class or appearance.
+bluetooth-kind-headphones = headphones
+bluetooth-kind-headset = headset
+bluetooth-kind-speaker = speaker
+bluetooth-kind-keyboard = keyboard
+bluetooth-kind-mouse = mouse
+bluetooth-kind-gamepad = gamepad
+bluetooth-kind-tablet = tablet
+bluetooth-kind-phone = phone
+bluetooth-kind-computer = computer
+bluetooth-kind-watch = watch
+bluetooth-kind-camera = camera
+bluetooth-kind-printer = printer
+bluetooth-kind-network = network
+bluetooth-kind-display = display
+bluetooth-kind-unknown = device
+
+# BLUEZ'S OWN ENUMERATIONS, in the person's language. Closed lists, not
+# free-form data — a device's NAME stays the device's. `word_or` falls back to
+# the daemon's word if it grows a value, so a new one is untranslated and never
+# `[a key in brackets]`.
+bluetooth-adapter-pairable-timeout = open to pairing for
+bluetooth-fact-manufacturer = maker
+bluetooth-fact-version = bluetooth version
+bluetooth-fact-roles = roles
+bluetooth-fact-service = offers
+bluetooth-audio-profile = what it is doing
+bluetooth-audio-next = the next audio profile
+bluetooth-audio-previous = the one before
+cmd-bluetooth-audio-next = Bluetooth: the next audio profile
+cmd-bluetooth-audio-previous = Bluetooth: the audio profile before
+bluetooth-audio-off = off
+bluetooth-audio-a2dp-sink = music, in stereo
+bluetooth-audio-a2dp-source = music, from it
+bluetooth-audio-headset-head-unit = a call, with its microphone
+bluetooth-audio-headset-audio-gateway = a call, through this machine
+bluetooth-codec-0 = SBC
+bluetooth-codec-1 = MPEG-1/2 audio
+bluetooth-codec-2 = AAC
+bluetooth-codec-4 = aptX
+bluetooth-codec-255 = the maker's own
+bluetooth-address-type-public = fixed
+bluetooth-address-type-random = random
+bluetooth-reconnect-none = never
+bluetooth-reconnect-host = when this machine asks
+bluetooth-reconnect-device = when the device asks
+bluetooth-reconnect-any = either side
+bluetooth-transport-idle = idle
+bluetooth-transport-pending = starting
+bluetooth-transport-active = playing
+bluetooth-transport-suspending = stopping
+bluetooth-transport-broadcasting = broadcasting
+
+# WHAT A DEVICE CAN DO — the profiles behind its service ids.
+bluetooth-profile-headset = headset, with a microphone
+bluetooth-profile-handsfree = hands-free, with a microphone
+bluetooth-profile-audio-sink = plays sound from here
+bluetooth-profile-audio-source = sends sound to here
+bluetooth-profile-remote-control = its buttons control the player
+bluetooth-profile-human-interface = types and points
+bluetooth-profile-file-transfer = files
+bluetooth-profile-object-push = takes files sent to it
+bluetooth-profile-phone-book = the phone's contacts
+bluetooth-profile-message-access = the phone's messages
+bluetooth-profile-network = shares its network
+bluetooth-profile-battery = says how much battery it has
+bluetooth-profile-device-information = says what it is
+bluetooth-profile-serial = a serial port
+bluetooth-profile-sim-access = the phone's SIM
+
+# PAIRING — the question the other side asks, and the two answers.
+bluetooth-pairing-confirm = { $name } wants to pair. Does it show { $code }?
+bluetooth-pairing-passkey = type { $code } on { $name }
+bluetooth-pairing-pin = { $name } wants a PIN
+bluetooth-pairing-passkey-here = { $name } wants six digits typed here
+bluetooth-pairing-authorize = { $name } wants to pair
+bluetooth-pairing-service = { $name } wants to use { $service }
+bluetooth-pairing-answer = y accepts · n refuses
+bluetooth-answer-in-the-footer = the question is answered in the footer
+bluetooth-type-in-the-footer = the name is typed in the footer
+
+# WHAT WENT WRONG, said as the name of the door that shut.
+echo-bluetooth-refused = { $what }: { $why } ({ $words })
+bluetooth-what-connect = the connection
+bluetooth-what-pair = the pairing
+bluetooth-what-forget = forgetting the device
+bluetooth-what-radio = the radio
+bluetooth-what-device = the device
+bluetooth-refused-authority = this session is not allowed
+bluetooth-refused-absent = there is no such thing on this machine
+bluetooth-refused-away = nobody answered
+bluetooth-refused-busy = something else is doing it
+bluetooth-refused-rejected = the other side said no
+bluetooth-refused-other = it did not work

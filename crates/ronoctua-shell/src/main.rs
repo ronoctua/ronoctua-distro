@@ -44,6 +44,9 @@ use ronoctua_tokens as tokens;
 mod actions;
 mod apps;
 mod band;
+mod bluetooth;
+mod bluetooth_window;
+mod bluetooth_words;
 // THE BRAIN'S LINE, under the minibuffer, and the thread that feeds it.
 mod brain;
 mod buffer;
@@ -61,9 +64,14 @@ mod manual;
 mod minibuffer;
 mod motion;
 mod network;
+mod network_window;
+mod network_words;
 mod notifications;
 mod notifications_window;
 mod paint;
+mod power;
+mod power_window;
+mod power_words;
 mod stage;
 mod surface;
 mod syncthing;
@@ -242,6 +250,93 @@ fn main() -> Result<()> {
         Some("notifications") => {
             return notifications_window::host_it().context("host the manager");
         }
+        // `ronoctua-shell power` — the power view in a window of its own. The
+        // SAME `power::View` the footer draws from.
+        // THE RADIO'S SECOND DOOR, one device to a line and a fact to a
+        // row — the footer's twelve lines are a glance, not a reading.
+        Some("bluetooth") => {
+            return bluetooth_window::host_it().context("host the bluetooth view");
+        }
+        Some("power") => {
+            return power_window::host_it().context("host the power view");
+        }
+        // `ronoctua-shell network` — the network in a window of its own. The
+        // SAME `network::View` the footer draws from; what it cannot do here
+        // is ask for a password, because a window has no minibuffer, and the
+        // row says so rather than pretending.
+        Some("network") => {
+            return network_window::host_it().context("host the network view");
+        }
+        // `ronoctua-shell network-facts` — what the view would draw, as lines
+        // a test can read.
+        //
+        // IT EXISTS FOR THE VM, and it is honest about that: a virtual machine
+        // has no screen worth photographing and no radio at all, so what it
+        // can prove about this view is the READINGS — the daemon's answer, the
+        // aeroplane, whether the two tunnels are there, how many sockets are
+        // listening. Each line is `key=value`, which is what a test asserts on
+        // and what a person reads when the screen says something surprising.
+        Some("network-facts") => {
+            let net = ronoctua_network::Manager::fresh()
+                .map(|m| m.look())
+                .unwrap_or_default();
+            println!("daemon={}", net.daemon);
+            println!("way={}", net.way.id());
+            println!("networking={}", net.networking);
+            println!("airplane={}", net.airplane());
+            println!("radio={}", net.radio);
+            println!("links={}", net.links.len());
+            for l in &net.links {
+                println!(
+                    "link={} medium={:?} state={:?} address={}",
+                    l.interface,
+                    l.medium,
+                    l.state,
+                    l.address.as_deref().unwrap_or("none")
+                );
+            }
+            println!("saved={}", net.saved.len());
+            for a in &net.active {
+                println!("active={} kind={} tunnel={}", a.id, a.kind, a.tunnel());
+            }
+            let tunnels = ronoctua_tunnel::look(&ronoctua_tunnel::Places::default());
+            match tunnels.tailscale.as_ref() {
+                Some(t) => println!("tailscale={} running={}", t.state, t.running),
+                None => println!("tailscale=absent running=false"),
+            }
+            match tunnels.tor.as_ref() {
+                Some(t) => println!(
+                    "tor=present established={} bootstrap={}",
+                    t.established, t.bootstrap
+                ),
+                None => println!("tor=absent established=false bootstrap=0"),
+            }
+            let places = ronoctua_memory::Places::default();
+            let sockets = ronoctua_memory::net::sockets(&places);
+            println!(
+                "listening={}",
+                sockets.iter().filter(|s| s.listening).count()
+            );
+            for s in sockets.iter().filter(|s| s.listening) {
+                println!(
+                    "port={} {} owner={}",
+                    s.protocol.label(),
+                    s.named(),
+                    s.owner.as_ref().map_or("unknown", |o| o.program.as_str())
+                );
+            }
+            println!(
+                "neighbours={}",
+                ronoctua_memory::net::neighbours(&places).len()
+            );
+            println!(
+                "vendors={}",
+                ronoctua_lan::oui::table()
+                    .map(|t| ronoctua_lan::oui::Vendors::read(&t).len())
+                    .unwrap_or(0)
+            );
+            return Ok(());
+        }
         Some("files") => {
             let where_ = std::env::args().nth(2).map(std::path::PathBuf::from);
             return files_window::host_it(where_.as_deref()).context("host the manager");
@@ -391,16 +486,49 @@ pub fn leader_chord() -> String {
     std::env::var("RONOCTUA_LEADER_CHORD").unwrap_or_else(|_| leader())
 }
 
+/// The right-hand side's optional marks, as text — each `None` at rest.
+///
+/// A struct and not four parameters, because there were four and clippy is
+/// right that a call with eight positional arguments is a call somebody
+/// will get in the wrong order. Every field is what the segment DRAWS,
+/// already resolved by whoever knows the daemon: this function only places.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Marks<'a> {
+    /// The transfer queue's `glyph NN%`, while something is moving.
+    pub transfer: Option<&'a str>,
+    /// The update's animated mark, while a rebuild runs.
+    pub update: Option<&'a str>,
+    /// The battery's glyph (and number), while there is one to show.
+    pub battery: Option<&'a str>,
+    /// The profile's glyph, off the machine's top profile.
+    pub profile: Option<&'a str>,
+    /// One mark per CONNECTED bluetooth device, four at most — already
+    /// resolved by `bluetooth::modeline`, which is where the owner's rule
+    /// about the percentage and the danger colour lives.
+    pub devices: &'a [crate::bluetooth::Shown],
+    /// A link that leads NOWHERE — the portal, the router with no uplink.
+    /// Not "there is no internet": nothing connected is not a fault.
+    pub adrift: bool,
+    /// Networking off, by somebody's own decision.
+    pub airplane: bool,
+    /// A tunnel is up.
+    pub tunnel: bool,
+    /// This machine is on its tailnet.
+    pub tailscale: bool,
+    /// Tor has a circuit.
+    pub tor: bool,
+}
+
 /// The modeline's segments, with section 4.2's priority order.
 ///
 /// `name`, `mode`, `state` and `unread` are PARAMETERS and not reads of global
 /// state on purpose: that way the layout stays a pure function of (width,
 /// segments) and every combination can be tested without a compositor.
 ///
-/// `unread` is what the BELL counts, and it is deliberately not the queue's
-/// length: a notification a filter suppressed is not shown and is not counted
-/// either — a badge that counts what the person asked never to see is a badge
-/// that cannot be brought to zero.
+/// `unread` is what decides whether the BELL is there at all, and it is
+/// deliberately not the queue's length: a notification a filter suppressed is
+/// not shown and is not counted either — a badge that counts what the person
+/// asked never to see is a badge that cannot be brought to zero.
 ///
 /// # What left here, and why
 ///
@@ -418,60 +546,51 @@ pub fn segments(
     mode: &str,
     state: &str,
     unread: usize,
-    transfer: Option<&str>,
-    update: Option<&str>,
+    marks: &Marks<'_>,
 ) -> Vec<Segment> {
-    let mut out = vec![
-        // 2. Never disappears: the only indicator that something is pending.
-        //
-        // # One cell between the glyph and the number
-        //
-        // Glued (`{glyph}{n}`), they were reported from the screen as too close
-        // to read — and the measurement says why: a chrome glyph is drawn at
-        // `font.size.icon` and its ink leaves the cell by up to 1,2 px, while
-        // the digit beside it only begins 1,44 px into its own. They do not
-        // touch, and 0,24 px apart is indistinguishable from touching.
-        //
-        // One cell, not two: two is `space.modeline.segmentGap`, which is what
-        // separates one SEGMENT from the next. Spending the same gap inside a
-        // segment would say these are two things.
-        //
-        // # And the bell gains a dot when something is unread
-        //
-        // `notification-pending` existed in `icons.nix` since the icon layer
-        // and had never been drawn. A zero next to a bell answers the question,
-        // but only after the number is read; the dot answers it before.
-        Segment {
+    let Marks {
+        transfer,
+        update,
+        battery,
+        profile,
+        devices,
+        ..
+    } = *marks;
+    let mut out = Vec::new();
+    // 2. THE BELL, and only while something is UNREAD.
+    //
+    // It used to be a glyph and a count, on every screen, forever — a `0`
+    // beside a bell answering a question nobody had asked. The owner asked for
+    // the opposite: nothing at rest, and the dotted bell alone when something
+    // is waiting to be read. The NUMBER went with the rest of it: how many is
+    // the manager's question, and the pointer answers it on the minibuffer
+    // without opening anything (`Footer::segment_hint`).
+    //
+    // `removable`, now that it can be absent — but at priority 2, so on a line
+    // too narrow for everything it is the LAST of the right-hand marks to go.
+    // A copy at 62% is on the panel and in the log; a notification nobody was
+    // told about is nowhere.
+    if unread > 0 {
+        out.push(Segment {
             id: "notif",
-            text: format!(
-                "{} {unread}",
-                if unread > 0 {
-                    tokens::icon::NOTIFICATION_PENDING
-                } else {
-                    tokens::icon::NOTIFICATION
-                }
-            ),
+            text: tokens::icon::NOTIFICATION_PENDING.to_string(),
             priority: 2,
-            min_cols: 3,
+            min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
-            removable: false,
-        },
-    ];
+            removable: true,
+        });
+    }
     // 3. THE TRANSFERS, next to the bell — and it goes away when there is
     // nothing to say.
     //
-    // # Why `removable`, when the bell is not
+    // # Why the bell outranks it
     //
-    // They answer different questions. The bell is the ONLY indicator that
-    // something is pending, so a screen without it has to be able to say
-    // "nothing is waiting" — it may shrink, never vanish. This one appears
-    // because something is happening; with nothing happening it would be a
-    // column spent on `0%`, on every screen, forever.
-    //
-    // So on a screen too narrow for both, the bell wins. That is the right way
-    // round: a copy at 62% is on the panel and in the log, and a notification
-    // nobody was told about is nowhere.
+    // They answer different questions, and on a screen too narrow for both the
+    // bell wins (2 against 3). That is the right way round: a copy at 62% is on
+    // the panel and in the log, and a notification nobody was told about is
+    // nowhere. With nothing happening this one is not there at all — it would
+    // be a column spent on `0%`, on every screen, forever.
     if let Some(t) = transfer {
         out.push(Segment {
             id: "transfer",
@@ -510,6 +629,139 @@ pub fn segments(
             // One glyph. There is nothing narrower that still says anything,
             // and there is nothing wider worth saying here: a percentage of a
             // rebuild is a number nobody can compute honestly.
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // 8. THE BATTERY, and 9. THE PROFILE — both absent at rest by the owner's
+    // rule: no glyph at 99% and above, none at the machine's top profile.
+    // Below the bell, the transfer and the update in priority: the battery
+    // has the catalogue's alarms as a second voice and the profile has the
+    // view; the bell has nothing else.
+    //
+    // `Cut` AND `min_cols` NEVER APPLY TO IT, and this used to say they did
+    // ("`Cut` drops the ` NN%` before the glyph"). `layout::resolve` REMOVES a
+    // removable segment whole while the line overflows and only shrinks what
+    // is left, so a `removable: true` segment is drawn at its natural width or
+    // not at all. The two fields are the shape every segment has, and on this
+    // one they are inert — which is worth knowing, because it means a narrow
+    // line loses the battery ENTIRELY at priority 8, danger colour and all,
+    // before it loses the bell, the transfer or the update. That order is the
+    // one this file argues for, and it is the order that happens.
+    if let Some(b) = battery {
+        out.push(Segment {
+            id: "battery",
+            text: b.to_owned(),
+            priority: 8,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // THE WAY OUT, before everything else on this side: whether anything
+    // reaches the world is the first question a modeline answers, and the
+    // two faults are the only ones drawn — a machine that is simply not
+    // connected shows nothing, because nothing is wrong with it.
+    //
+    // The aeroplane and the fault cannot both be true (`Snapshot::adrift`
+    // asks for networking to be ON), so the two never crowd each other.
+    if marks.airplane {
+        out.push(Segment {
+            id: "airplane",
+            text: tokens::icon::AIRPLANE.to_string(),
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    if marks.adrift {
+        out.push(Segment {
+            id: "net-off",
+            text: tokens::icon::NO_INTERNET.to_string(),
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    if marks.tunnel {
+        out.push(Segment {
+            id: "vpn",
+            text: tokens::icon::VPN.to_string(),
+            priority: 5,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // AND THE OTHER TWO TUNNELS, beside the first and at its priority: they
+    // answer the same question — is this machine going out through something
+    // else — and they can all three be true at once, which is why each has a
+    // mark of its own rather than one shared glyph.
+    //
+    // RUNNING, and not installed: a tailnet nobody has logged into and a Tor
+    // that is not started draw nothing at all. Nothing at rest.
+    if marks.tailscale {
+        out.push(Segment {
+            id: "tailscale",
+            text: tokens::icon::TAILSCALE.to_string(),
+            priority: 5,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    if marks.tor {
+        out.push(Segment {
+            id: "tor",
+            text: tokens::icon::TOR.to_string(),
+            priority: 5,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // THE DEVICES, after the battery and the profile: they are about things
+    // on the desk, and the machine's own state comes first.
+    //
+    // THE MARKS DO MOVE, and this used to say they did not ("each one keeps
+    // its place in the pool"). The id is `POOL[i]` where `i` is the index in
+    // `Scene::connected()`, which sorts ALARMED FIRST and then by kind — so
+    // headphones connecting at 12% take `bt-1` and push every other mark
+    // along, and a disconnect pulls them back.
+    //
+    // That is the RIGHT order — the one about to die is the one to see — and
+    // the id is a pool slot rather than the device's path for the reason
+    // written over `POOL`: `Segment::id` is `&'static str`. What was wrong
+    // was the sentence, not the arithmetic.
+    for (i, shown) in devices.iter().enumerate() {
+        let Some(id) = crate::bluetooth::POOL.get(i) else {
+            break;
+        };
+        out.push(Segment {
+            id,
+            text: shown.text.clone(),
+            priority: 10 + u8::try_from(i).unwrap_or(0),
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    if let Some(p) = profile {
+        out.push(Segment {
+            id: "profile",
+            text: p.to_owned(),
+            priority: 9,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
@@ -586,6 +838,26 @@ mod tests {
         // name now comes from the compositor, so it can be ABSURD — a browser
         // title easily goes past 200 characters.
         let name = "a".repeat(300);
+        // AND THE LINE IS AS FULL AS IT EVER GETS: the queue, an update, the
+        // battery with its number, a profile off the top, and four devices —
+        // one of them with a percentage of its own. Anything that fits here
+        // fits.
+        let devices: Vec<crate::bluetooth::Shown> = crate::bluetooth::POOL
+            .iter()
+            .enumerate()
+            .map(|(i, at)| crate::bluetooth::Shown {
+                at: (*at).to_owned(),
+                text: if i == 0 {
+                    format!(
+                        "{} 12%",
+                        crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Keyboard)
+                    )
+                } else {
+                    crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Headphones).to_string()
+                },
+                alarmed: i == 0,
+            })
+            .collect();
         for columns in [20_u16, 40, 80, 200] {
             for c in layout::resolve(
                 columns,
@@ -594,8 +866,32 @@ mod tests {
                     "ghostty",
                     "search",
                     99,
-                    Some("\u{ebcb} 62%"),
-                    Some(&crate::update_window::frame_of(u64::from(columns)).to_string()),
+                    &Marks {
+                        // THE TOKENS AND NOT THE CODEPOINTS. Invariant 9
+                        // names `codepoint` explicitly, and a test written in
+                        // literals stays green on the old drawing the day a
+                        // glyph moves in `icons.nix` — which is exactly what
+                        // this test is for.
+                        transfer: Some(&format!("{} 62%", tokens::icon::TRANSFER)),
+                        update: Some(
+                            &crate::update_window::frame_of(u64::from(columns)).to_string(),
+                        ),
+                        battery: Some(&format!("{} 12%", tokens::icon::BATTERY_DANGER)),
+                        profile: Some(&tokens::icon::PROFILE_POWER_SAVER.to_string()),
+                        devices: &devices,
+                        // AND THE WAY OUT'S TWO THAT CAN SHOW AT ONCE: the
+                        // aeroplane and the fault are exclusive by rule, so
+                        // the fullest line carries the fault and a tunnel.
+                        adrift: true,
+                        airplane: false,
+                        // AND ALL THREE TUNNELS AT ONCE, which is a real
+                        // machine: a VPN inside a tailnet with Tor on top is
+                        // three marks, and the narrowest line has to survive
+                        // them.
+                        tunnel: true,
+                        tailscale: true,
+                        tor: true,
+                    },
                 ),
             ) {
                 assert!(
@@ -608,6 +904,45 @@ mod tests {
     }
 
     #[test]
+    fn the_bell_survives_a_deskful_of_devices() {
+        // THE POOL IS REMOVABLE AND THE BELL IS NOT ABOUT TO BE: four device
+        // marks must not push the one thing on this line that says something
+        // was missed. `priority` is what decides it, and this is the test
+        // that reads the decision rather than the number.
+        let devices: Vec<crate::bluetooth::Shown> = crate::bluetooth::POOL
+            .iter()
+            .map(|at| crate::bluetooth::Shown {
+                at: (*at).to_owned(),
+                text: format!(
+                    "{} 12%",
+                    crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Headphones)
+                ),
+                alarmed: true,
+            })
+            .collect();
+        for columns in [20_u16, 30, 40, 80] {
+            let placed = layout::resolve(
+                columns,
+                &segments(
+                    "buffer",
+                    "ghostty",
+                    "normal",
+                    3,
+                    &Marks {
+                        devices: &devices,
+                        ..Marks::default()
+                    },
+                ),
+            );
+            let ids: Vec<&str> = placed.iter().map(|c| c.id).collect();
+            assert!(
+                ids.contains(&"notif"),
+                "at {columns} columns the devices pushed the bell off: {ids:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_minibuffer_at_rest_is_empty() {
         // The line always exists (the footer has TWO lines, section 4.1), but
         // does not invent content.
@@ -615,54 +950,49 @@ mod tests {
     }
 
     #[test]
-    fn one_cell_separates_the_bell_from_the_count() {
-        // ONE, and not two: two is `segmentGap`, which is what separates one
-        // segment from the next — using it inside a segment would say the bell
-        // and the number are two different things.
-        let s = segments("", "", "", 3, None, None);
-        let notif = s.iter().find(|x| x.id == "notif").unwrap();
-        let cells: Vec<&str> = notif.text.split(' ').collect();
+    fn the_bell_is_only_there_while_something_is_unread() {
+        // NOTHING AT REST. A bell with a `0` beside it was a mark on every
+        // screen answering a question nobody had asked; the owner asked for
+        // silence, and for the dotted bell alone when something is waiting.
+        let quiet = segments("", "", "", 0, &Marks::default());
+        assert!(
+            !quiet.iter().any(|s| s.id == "notif"),
+            "a bell with nothing unread"
+        );
+        let with = segments("", "", "", 3, &Marks::default());
+        let notif = with.iter().find(|x| x.id == "notif").unwrap();
+        // ONE GLYPH AND NO NUMBER: how many is the manager's question, and the
+        // pointer answers it on the minibuffer without opening anything.
         assert_eq!(
-            cells.len(),
-            2,
-            "{:?} is not a glyph, a space, a number",
+            layout::width(&notif.text),
+            1,
+            "{:?} is not one glyph",
             notif.text
         );
-        assert_eq!(cells[1], "3");
-    }
-
-    #[test]
-    fn the_bell_gains_a_dot_when_something_is_unread() {
-        let with = segments("", "", "", 1, None, None);
-        let without = segments("", "", "", 0, None, None);
-        let of = |v: &[Segment]| {
-            v.iter()
-                .find(|x| x.id == "notif")
-                .unwrap()
-                .text
-                .chars()
-                .next()
-                .unwrap()
-        };
-        assert_eq!(of(&with), tokens::icon::NOTIFICATION_PENDING);
-        assert_eq!(of(&without), tokens::icon::NOTIFICATION);
+        assert_eq!(
+            notif.text.chars().next().unwrap(),
+            tokens::icon::NOTIFICATION_PENDING
+        );
     }
 
     #[test]
     fn the_update_mark_is_a_column_only_while_something_runs() {
-        // IT COSTS NOTHING AT REST. The bell has to be able to say "nothing is
-        // waiting" and therefore never disappears; this one appears because
-        // something is happening, and at rest it would be a column spent on a
-        // still glyph on every screen in the session, forever.
-        let quiet = segments("a.rs", "rust", "", 0, None, None);
+        // IT COSTS NOTHING AT REST: it appears because something is happening,
+        // and at rest it would be a column spent on a still glyph on every
+        // screen in the session, forever.
+        let quiet = segments("a.rs", "rust", "", 0, &Marks::default());
         assert!(!quiet.iter().any(|s| s.id == "update"));
+        // ONE UNREAD, so that the bell is on the line and the second half of
+        // this test has something to outlive the mark.
         let busy = segments(
             "a.rs",
             "rust",
             "",
-            0,
-            None,
-            Some(&crate::update_window::frame_of(0).to_string()),
+            1,
+            &Marks {
+                update: Some(&crate::update_window::frame_of(0).to_string()),
+                ..Marks::default()
+            },
         );
         let mark = busy
             .iter()
@@ -676,7 +1006,9 @@ mod tests {
             "the mark did not come from the clock's lap"
         );
         // AND THE BELL OUTLIVES IT on every width worth drawing. A screen too
-        // narrow for both keeps the only indicator that something is pending.
+        // narrow for both keeps the one that says something is waiting to be
+        // read — the mark has the brain's own line, a screen and a window; the
+        // bell has nothing else.
         for columns in [20_u16, 30, 40, 80] {
             let placed = layout::resolve(columns, &busy);
             let has = |id: &str| placed.iter().any(|p| p.id == id);
@@ -692,8 +1024,8 @@ mod tests {
         // Invariant 9: no icon codepoint outside the tokens. If
         // someone writes a literal here, this test does not catch it — but the
         // generator has already guaranteed that the token exists in the font.
-        let s = segments("arq.rs", "rust", "", 0, None, None);
+        let s = segments("arq.rs", "rust", "", 1, &Marks::default());
         let notif = s.iter().find(|x| x.id == "notif").unwrap();
-        assert!(notif.text.starts_with(tokens::icon::NOTIFICATION));
+        assert!(notif.text.starts_with(tokens::icon::NOTIFICATION_PENDING));
     }
 }

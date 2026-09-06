@@ -417,7 +417,7 @@ mod tests {
         // two levels down.
         assert!(out[0].name.ends_with("large"));
         assert_eq!(out[0].bytes, 8192);
-        assert_eq!(seen.last(), Some(&1000), "o progresso termina em 100%");
+        assert_eq!(seen.last(), Some(&1000), "the progress ends at 100%");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

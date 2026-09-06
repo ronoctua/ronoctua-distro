@@ -35,6 +35,7 @@ import sys
 import tomllib
 from collections import Counter, defaultdict
 
+from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
 
 # THE LEXICON'S CONTRACT IS SHARED with the Unicode database generator: the
@@ -110,9 +111,47 @@ def check_versions(font: TTFont, names_meta: dict, expected: str) -> None:
 # ---------------------------------------------------------------------------
 # Icon token table (section 6.3)
 # ---------------------------------------------------------------------------
-def build_icon_table(tokens: dict, names: dict, cmap: set, tray: dict) -> dict:
+def chrome_size(ink_ratio: float | None, base: float, icon: float, tolerance: float) -> float:
+    """THE SIZE A CHROME GLYPH IS DRAWN AT beside text of the base size.
+
+    `font.size.icon` was found by measurement: the bell's ink is 600 units
+    against the digit's 751, and 22 px is what brings the two to the same
+    height. It is the size of every chrome glyph whose ink, drawn there, stays
+    within the band the check allows (`chromeTolerance`, both ways) — which
+    keeps every drawing that already passed exactly where it was. A vertical
+    battery is 908 units tall, taller than the digit at the text's own size,
+    and at 22 px it stood 48% above the number beside it: past the band, so
+    it comes DOWN to the size that puts its ink at the digit's — 15 px. Whole
+    pixels, so the run's metrics stay what the renderer can hint. A glyph
+    with no ink (nothing to measure) takes the icon size.
+    """
+    if not ink_ratio:
+        return icon
+    if ink_ratio * icon / base <= 1.0 + tolerance / 100.0:
+        return icon
+    return float(min(icon, int(base / ink_ratio + 0.5)))
+
+
+def build_icon_table(
+    tokens: dict,
+    names: dict,
+    font: TTFont,
+    tray: dict,
+    base: float,
+    icon: float,
+    tolerance: float,
+) -> dict:
     out = {}
     missing = []
+    cmap = font.getBestCmap()
+    glyphs = font.getGlyphSet()
+
+    def ink(cp: int) -> float | None:
+        pen = BoundsPen(glyphs)
+        glyphs[cmap[cp]].draw(pen)
+        return None if pen.bounds is None else pen.bounds[3] - pen.bounds[1]
+
+    digit = ink(ord("0"))
 
     for token, glyph in sorted(tokens.items()):
         entry = names.get(glyph)
@@ -123,7 +162,18 @@ def build_icon_table(tokens: dict, names: dict, cmap: set, tray: dict) -> dict:
         if cp not in cmap:
             missing.append((token, glyph, f"U+{cp:04X} is missing from the font's cmap"))
             continue
-        out[token] = {"glyph": glyph, "codepoint": cp, "char": chr(cp)}
+        height = ink(cp)
+        ratio = None if height is None or not digit else round(height / digit, 4)
+        out[token] = {
+            "glyph": glyph,
+            "codepoint": cp,
+            "char": chr(cp),
+            # The ink's height against the digit's, and the size that follows
+            # from it — the ONE measurement `chrome-icons-match-the-text`
+            # re-checks and `gen-tokens.py` hands to the shell.
+            "ink": ratio,
+            "chrome": chrome_size(ratio, base, icon, tolerance),
+        }
 
     # The tray table may only point at tokens that exist.
     for app_id, token in sorted(tray.items()):
@@ -276,6 +326,7 @@ def main() -> int:
     ap.add_argument("--glyphnames", type=pathlib.Path, required=True)
     ap.add_argument("--tokens", type=pathlib.Path, required=True, help="icons.json")
     ap.add_argument("--tray", type=pathlib.Path, required=True, help="tray.json")
+    ap.add_argument("--typography", type=pathlib.Path, required=True, help="typography.json")
     ap.add_argument("--lexicon", type=pathlib.Path, required=True)
     # THE FLOOR COMES FROM OUTSIDE so the negative fixture can exercise the guard without
     # editing the real lexicon — see `nix/glyphgen.nix`.
@@ -299,6 +350,8 @@ def main() -> int:
 
     tokens = json.loads(args.tokens.read_text())
     tray = json.loads(args.tray.read_text())
+    typography = json.loads(args.typography.read_text())
+    sizes = typography["size"]
     lexicon = tomllib.loads(args.lexicon.read_text())
     overlay = tomllib.loads(args.overlay.read_text())
 
@@ -310,7 +363,15 @@ def main() -> int:
             "       Use the name without the `nf-` prefix (e.g. `fa-folder`, not `nf-fa-folder`)."
         )
 
-    icons = build_icon_table(tokens, raw_names, cmap, tray)
+    icons = build_icon_table(
+        tokens,
+        raw_names,
+        font,
+        tray,
+        float(sizes["base"]),
+        float(sizes["icon"]),
+        float(typography["chromeTolerance"]),
+    )
     token_by_glyph = {v["glyph"]: k for k, v in icons.items()}
     tray_glyphs = {icons[t]["glyph"] for t in tray.values() if t in icons}
 

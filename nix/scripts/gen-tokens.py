@@ -292,6 +292,44 @@ def main() -> int:
         e = icons[k]
         A(f"    /// `icon.{k}` — `{e['glyph']}` (U+{e['codepoint']:04X})")
         A(f"    pub const {ident(k)}: char = '\\u{{{e['codepoint']:X}}}';")
+    # THE CHROME SIZE, MEASURED. `font.size.icon` is the ceiling and the common
+    # case; a glyph whose drawing already tops the digit at the text's size is
+    # drawn smaller, and how much smaller was decided by `gen-glyphdb.py`
+    # against the real face — see `chrome_size` there. Only the exceptions are
+    # written out, grouped by size, so the function reads as the list of
+    # glyphs that are NOT at the icon size.
+    icon_px = float(typo["size"]["icon"])
+    # ONE ARM PER CODEPOINT: two tokens may name the same glyph (`battery`
+    # and `battery-full` both point at `md-battery`), and a repeated pattern
+    # is an error under `-D warnings`.
+    by_size: dict[float, dict[int, str]] = {}
+    for k in sorted(icons):
+        px = float(icons[k]["chrome"])
+        if px != icon_px:
+            cp = icons[k]["codepoint"]
+            by_size.setdefault(px, {})[cp] = f"'\\u{{{cp:X}}}'"
+    A("")
+    A("    /// THE SIZE A CHROME GLYPH IS DRAWN AT beside text of the base size:")
+    A("    /// `font::SIZE_ICON` brings a small drawing up to the digit's ink, and")
+    A("    /// a drawing that already stands taller than the digit comes DOWN to")
+    A("    /// it instead. Measured against the real face by the glyph generator,")
+    A("    /// never by hand; the check `chrome-icons-match-the-text` re-measures")
+    A("    /// every chrome glyph at the size written here.")
+    A("    pub fn chrome_size(glyph: char) -> f32 {")
+    if by_size:
+        A("        match glyph {")
+        for px in sorted(by_size):
+            A(f"            {' | '.join(by_size[px][cp] for cp in sorted(by_size[px]))} => {px:.1f},")
+        A("            _ => super::font::SIZE_ICON,")
+        A("        }")
+    else:
+        # NO EXCEPTIONS TODAY, no `match` either: a match with only a wildcard
+        # arm is `clippy::match_single_binding`, and the workspace denies
+        # warnings — the build would fail inside generated code, far from the
+        # token edit that emptied the list.
+        A("        let _ = glyph;")
+        A("        super::font::SIZE_ICON")
+    A("    }")
     A("}")
     A("")
 

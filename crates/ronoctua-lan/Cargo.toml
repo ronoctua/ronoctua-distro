@@ -1,0 +1,22 @@
+[package]
+name = "ronoctua-lan"
+description = "Who else is on this network: an unprivileged ICMP sweep and the vendor behind a hardware address."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO `[[bin]]` and no daemon: the sweep is a call, made on a thread by
+# whoever asked for it.
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+# THE SOCKET, and `rustix` rather than `libc` because its API is SAFE: this
+# crate is `forbid(unsafe_code)`, and an ICMP socket opened with libc would
+# need `unsafe` for something the kernel already does safely.
+rustix = { workspace = true, features = [ "net" ] }
+
+[lints]
+workspace = true

@@ -19,6 +19,60 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.00004. A rede não sabe nomes, e três coisas do plano ficaram medidas · pequeno cada
+
+A vista da rede está inteira: uma `View` com duas portas (`s n n` e `s n w`), oito seções, dica
+GERADA da `OF_THE_VIEW`, cinco marcas na modeline, VPN com prévia antes de importar, Tailscale, Tor,
+portas, monitor, quem está na rede e hotspot. O que ficou de fora tem motivo, e cada um é pequeno:
+
+- **Nome de máquina na LAN.** As linhas de "esta rede" mostram endereço, fabricante (OUI do nmap) e
+  interface — não o NOME. Quem sabe o nome de um vizinho é o `resolve1.ResolveAddress`, uma chamada
+  de barramento por host em thread; a fronteira com o `systemd-resolved` ainda não existe neste
+  projeto (o `ronoctua-network` só fala NetworkManager). É uma coluna a mais, não uma seção.
+- **Latência na varredura.** O `ronoctua_lan::ping` mede uma máquina de cada vez e mede certo; a
+  VARREDURA não traz número, e isso é uma decisão medida: o primeiro pacote para uma máquina cujo
+  endereço de hardware o kernel não conhece espera o ARP — três segundos, medidos na rede do dono —
+  e o número apareceria como um enlace péssimo para uma máquina na sala ao lado. A linha do gateway
+  é onde um número honesto caberia, sob demanda.
+- **IPv6 na vizinhança.** `/proc/net/arp` é IPv4 e o kernel não tem arquivo equivalente para IPv6 —
+  os vizinhos v6 vivem no netlink, que é outra conversa. O título diz qual é.
+- **Hotspot na TELA do dono.** Está implementado e provado por teste unitário (a linha oferece o
+  outro estado, diz o que custa e recusa com o rádio desligado), mas nunca foi acionado: ligá-lo
+  derruba o Wi-Fi da máquina de quem está lendo isto. Falta uma VM com `mac80211_hwsim`.
+- **Perfil de VPN com senha.** Importar um `.ovpn` que pede senha traz o perfil; a senha em si ainda
+  é digitada no `nmcli` ou no primeiro `RET` do NetworkManager. O `store_vpn_secret` do plano
+  (`GetSecrets` + `Update` com `password-flags=0`) não foi escrito.
+- **Um check oferecido e não escrito.** Dos três que a revisão do entregável propôs, dois foram
+  escritos depois — `the-footer-draws-what-the-keyboard-drives` (existe, e a ordem que ele prende
+  deixou de ser mantida à mão: toda porta pergunta ao `view()`) e o das famílias do rádio, que virou
+  o `every_service_this_table_names_has_a_sentence` mais as três enumerações do BlueZ que passaram a
+  ter chave. Falta o terceiro: um check que prenda o `Errand` de cada vista sendo tratado nas DUAS
+  portas sem `_ =>`. Hoje o compilador já pega o que falta numa porta (`match` sem `_`), mas não pega
+  os dois lados tratando o MESMO `Errand` de jeitos diferentes.
+
+- acabou quando: cada item acima ou existe, ou está escrito aqui com o motivo de não existir
+
+### 0.00006. O Bluetooth não faz três coisas que o BlueZ oferece · média cada
+
+O detalhe do dispositivo mostra e deixa mudar tudo o que o `Device1` tem — inclusive o `WakeAllowed`
+e o perfil de áudio (este por PipeWire, ver `ronoctua_bluetooth::audio`). Faltam três interfaces
+inteiras, e cada uma é uma decisão e não um esquecimento:
+
+- **`org.bluez.MediaPlayer1`/`MediaControl1`** (tocar, pausar, faixa de um celular ou caixa). Fora
+  **de propósito**: o PipeWire já publica isso como MPRIS, o `playerctl` fala MPRIS, e uma segunda
+  implementação aqui seria uma segunda resposta para "o que está tocando" — a mesma razão pela qual
+  o crate não reimplementa layout de janela.
+- **`org.bluez.Network1`** (PAN: usar a internet do celular). É a única que vale a pena e não foi
+  feita: precisa de uma linha na vista, de um `Ask` e de uma decisão sobre o que o NetworkManager faz
+  com a interface `bnep0` que aparece — ou seja, atravessa a fronteira do `ronoctua-network`, e as
+  duas vistas teriam de concordar sobre quem manda nela.
+- **`ManufacturerData`, `ServiceData`, `AdvertisingFlags`, `Sets`, `CablePairing`.** Bytes crus de
+  anúncio; o `Sets` (LE Audio) e o `CablePairing` estão em toda máquina moderna. São FATOS sem frase
+  possível hoje: mostrar `0x004C: 0215...` é encher a tela com o que ninguém lê.
+
+- acabou quando: a linha do PAN existe e as duas vistas concordam sobre quem manda no `bnep0`, ou
+  este parágrafo diz por que não
+
 ### 0.0001. O realce de sintaxe deixa quatro coisas de fora, de propósito · pequeno cada
 
 Não são esquecimentos; cada uma tem um motivo estrutural escrito no `ARCHITECTURE`, e estão aqui para
@@ -91,10 +145,10 @@ que isso cria (`t t` sem estado, `t w` com) é menor que a de inventar um segund
 
 ### 0.001. O minibuffer não mostra os submenus montados em runtime · pequeno
 
-`SPC m` e `SPC b s` são listados a partir do que a janela em foco publicou, e por isso não estão na
+`SPC m` e `SPC w s` são listados a partir do que a janela em foco publicou, e por isso não estão na
 `ronoctua_keymap::Tree` — as ligações dela são `&'static str`. A consequência é que a sequência
 pendente que o minibuffer desenha vem só do `Leader`, e ela **para no nível anterior**: com a lista
-de estados na tela, a linha diz `LEADER b-` e não `LEADER b s-`.
+de estados na tela, a linha diz `LEADER w-` e não `LEADER w s-`.
 
 Isto **não é novo**: o `SPC m` faz o mesmo desde que existe, e o `buffer_pending` dele nunca foi
 alimentado no prefixo. O estado só acrescentou um segundo caso, e por isso vira item — dois é
@@ -103,7 +157,7 @@ padrão, um era acidente.
 O conserto é um só e serve para ambos: o prefixo do minibuffer passa a somar o que os submenus de
 runtime têm pendente, em vez de ler só a sequência do `Leader`.
 
-- acabou quando: com a lista de estados aberta, o minibuffer diz `LEADER b s-`, e o `SPC m` diz
+- acabou quando: com a lista de estados aberta, o minibuffer diz `LEADER w s-`, e o `SPC m` diz
   `LEADER m-`
 
 ### 0.01. Nenhum buffer usa o `tone` explícito · pequeno

@@ -1635,10 +1635,13 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         )]
     };
     let line_text: String = line_pieces.iter().map(|p| p.text.as_str()).collect();
-    // THE ROOM IS WHAT IS LEFT AFTER THE MARGIN, and it used to be the whole
-    // width: the line starts `margin` cells in, so eliding at `columns` let it
-    // run that many cells past the edge before anything cut it.
-    let plain_room = s.geo.columns.saturating_sub(margin);
+    // THE ROOM IS THE WHOLE OF `columns`: `recount` took BOTH margins off the
+    // width before counting cells, so a line that starts `margin` in and
+    // runs `columns` wide ends `margin` short of the edge. It used to take
+    // the margin off a second time here, which cut the hint one margin
+    // early — found by the review of the notification window, whose paint
+    // was written against this one.
+    let plain_room = s.geo.columns;
     let opens = s.fold.open
         || crate::fold::wanted(&line_text, plain_room.saturating_sub(crate::fold::WIDTH));
     let room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
@@ -1734,13 +1737,14 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     let lit = s.view.fold_focused();
     s.fold_control = opens.then_some(s.geo.columns.saturating_sub(1) + margin);
     if let Some(at) = s.fold_control {
+        let chevron = if s.fold.open {
+            tokens::icon::COLLAPSE
+        } else {
+            tokens::icon::EXPAND
+        };
         spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::OnTheCell(tokens::font::SIZE_ICON),
-            text: if s.fold.open {
-                tokens::icon::COLLAPSE.to_string()
-            } else {
-                tokens::icon::EXPAND.to_string()
-            },
+            size: ronoctua_render::Size::OnTheCell(tokens::icon::chrome_size(chevron)),
+            text: chevron.to_string(),
             column: at,
             line: 0,
             // WITH THE KEYBOARD ON IT, the accent — one glyph has no row to

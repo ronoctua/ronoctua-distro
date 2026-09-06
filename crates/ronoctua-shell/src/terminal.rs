@@ -76,7 +76,7 @@ pub const APP_ID: &str = "br.ronoctua.terminal";
 /// what floats it is a niri `window-rule` matched on this string. The shell
 /// does not place windows (invariant 4): it says WHAT the window is, and the
 /// compositor decides where. With a single `app_id` the rule would float every
-/// terminal, including `LEADER b t`.
+/// terminal, including `LEADER w o`.
 pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
 
 /// The RESCUE console's `app_id` — the third identity of the same terminal.
@@ -230,6 +230,7 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
 
     let mut state = TerminalWindow {
         conn: conn.clone(),
+        handle: cycle.handle(),
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
         seats: SeatState::new(&globals, &qh),
@@ -306,6 +307,12 @@ fn cells_that_fit(width: u32, height: u32) -> (u16, u16) {
 
 struct TerminalWindow {
     conn: Connection,
+    /// The loop, for the one thing that needs it: a keyboard that REPEATS.
+    /// Holding backspace in a terminal is meant to erase several characters,
+    /// and SCTK only repeats for a keyboard made with
+    /// `get_keyboard_with_repeat` — without it, the `repeat_key` below was
+    /// dead code and the comment beside it said the opposite.
+    handle: smithay_client_toolkit::reexports::calloop::LoopHandle<'static, Self>,
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,
@@ -546,7 +553,15 @@ impl SeatHandler for TerminalWindow {
         cap: Capability,
     ) {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seats.get_keyboard(qh, &seat, None) {
+            // A KEYBOARD THAT REPEATS: holding a key here is meant to work,
+            // and SCTK only repeats for one made this way.
+            match self.seats.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.handle.clone(),
+                Box::new(|state: &mut Self, _, event| state.typed(event)),
+            ) {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
@@ -568,6 +583,28 @@ impl SeatHandler for TerminalWindow {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl TerminalWindow {
+    /// One key, from a press or from a REPEAT.
+    ///
+    /// SCTK delivers a repeat through the callback given to
+    /// `get_keyboard_with_repeat`, which has no `Connection` and no
+    /// `QueueHandle` to hand on — so the work cannot live in `press_key`, and
+    /// while it did, `repeat_key` was dead code and holding a key did it
+    /// once. The comment beside `repeat_key` said the opposite for a year.
+    fn typed(&mut self, event: KeyEvent) {
+        let Some(bytes) = key_bytes(event.keysym, event.utf8.as_deref(), self.mods.ctrl) else {
+            return;
+        };
+        if let Err(e) = self.pty.write_bytes(&bytes) {
+            tracing::warn!(error = %e, "writing to the pty failed; closing");
+            self.quit = true;
+        }
+        // It does NOT redraw here. The echo comes from the program through the pty,
+        // and drawing now would show the screen from BEFORE the key — a late frame
+        // that only shows up when one types fast.
+    }
 }
 
 impl KeyboardHandler for TerminalWindow {
@@ -602,16 +639,7 @@ impl KeyboardHandler for TerminalWindow {
         _: u32,
         event: KeyEvent,
     ) {
-        let Some(bytes) = key_bytes(event.keysym, event.utf8.as_deref(), self.mods.ctrl) else {
-            return;
-        };
-        if let Err(e) = self.pty.write_bytes(&bytes) {
-            tracing::warn!(error = %e, "writing to the pty failed; closing");
-            self.quit = true;
-        }
-        // It does NOT redraw here. The echo comes from the program through the pty,
-        // and drawing now would show the screen from BEFORE the key — a late frame
-        // that only shows up when one types fast.
+        self.typed(event);
     }
 
     fn repeat_key(

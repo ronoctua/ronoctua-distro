@@ -1355,7 +1355,7 @@ mod tests {
                 for lines in [8u16, 12, 24, 40] {
                     draw(&s, columns, lines)
                         .check()
-                        .unwrap_or_else(|e| panic!("{name} em {columns}x{lines}: {e}"));
+                        .unwrap_or_else(|e| panic!("{name} at {columns}x{lines}: {e}"));
                 }
             }
         }

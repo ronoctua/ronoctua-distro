@@ -81,16 +81,8 @@ pub fn cpu_pressure(p: &Places) -> Option<ronoctua_protocol::Pressure> {
 /// the state a long build must not start in.
 #[must_use]
 pub fn on_battery(p: &Places) -> Option<bool> {
-    let supplies = std::fs::read_dir(p.sysfs.join("class/power_supply")).ok()?;
     let mut found = None;
-    for entry in supplies.flatten() {
-        let path = entry.path();
-        // Only a battery answers this question. A `Mains` supply has a
-        // `status` too — `Unknown` — and reading it as "not discharging" would
-        // say "plugged in" on a laptop whose battery is going flat.
-        if read(&path.join("type")).as_deref().map(str::trim) != Some("Battery") {
-            continue;
-        }
+    for path in battery_supplies(p) {
         let Some(status) = read(&path.join("status")) else {
             continue;
         };
@@ -102,6 +94,36 @@ pub fn on_battery(p: &Places) -> Option<bool> {
         found = Some(false);
     }
     found
+}
+
+/// Every supply under `class/power_supply` whose `type` is `Battery`, as the
+/// directories the kernel gives them, sorted.
+///
+/// THE ONE WALK. It was the first half of [`on_battery`], and it came out on
+/// its own the day a second reader needed the same directories for different
+/// files — `ronoctua-power` reads the charge thresholds there. Two walks would
+/// be two ideas of what a battery is; the crate that is the frontier with
+/// `/sys` keeps the one and hands the paths out.
+///
+/// Only a battery answers: a `Mains` supply has a `status` too — `Unknown` —
+/// and reading it as "not discharging" would say "plugged in" on a laptop
+/// whose battery is going flat. Empty (and not `None`) when the directory is
+/// missing: a VM has a `power_supply` class with nothing of the kind in it,
+/// and "no battery" is an answer, not a failure.
+#[must_use]
+pub fn battery_supplies(p: &Places) -> Vec<std::path::PathBuf> {
+    let Ok(supplies) = std::fs::read_dir(p.sysfs.join("class/power_supply")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::path::PathBuf> = supplies
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| read(&path.join("type")).as_deref().map(str::trim) == Some("Battery"))
+        .collect();
+    // `read_dir` comes in the directory's order, which is no order: sorted,
+    // so `BAT0` is first whichever the kernel enumerated first.
+    out.sort();
+    out
 }
 
 /// Every number a tick can afford.

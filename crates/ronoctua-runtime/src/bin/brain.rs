@@ -1,4 +1,4 @@
-//! Exercises the brain's panel — `LEADER s b`.
+//! Exercises the brain's panel — `LEADER b b`.
 //!
 //! # Why a binary, and not a `#[test]` in the buffer
 //!

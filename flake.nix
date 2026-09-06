@@ -151,6 +151,7 @@
         inherit languages;
         inherit fonts;
         iconTokensFile = ./assets/tokens/icons.nix;
+        typographyFile = ./assets/tokens/typography.nix;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
         lexiconFile = ./assets/lexicon/tags.en-pt.toml;
         overlayFile = ./assets/lexicon/overlay.toml;
@@ -540,6 +541,10 @@
         # of our own. After `files.nix` because it is that view's second half
         # and nothing else in the system reads it.
         ./nix/modules/disks.nix
+        # Power — UPower, power-profiles-daemon, logind; the modeline's
+        # battery and profile marks, and `LEADER s p`.
+        ./nix/modules/power.nix
+        ./nix/modules/bluetooth.nix
         # The queue of everything that takes a while, and the unit that owns
         # it. After `files.nix` because what it runs is that crate's work.
         ./nix/modules/transfers.nix
@@ -552,6 +557,11 @@
         ./nix/modules/foreign.nix
         ./nix/modules/terminal.nix
         ./nix/modules/network.nix
+        # The two tunnels beside the network they ride on: Tailscale's socket
+        # and Tor's control socket, each with its own view section and its own
+        # modeline mark. Tor carries the one new polkit rule in the system.
+        ./nix/modules/tailscale.nix
+        ./nix/modules/tor.nix
         ./nix/modules/syncthing.nix
         ./nix/modules/secrets.nix
         ./nix/modules/persist.nix

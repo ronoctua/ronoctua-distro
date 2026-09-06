@@ -536,7 +536,7 @@ pub fn listen(
         return false;
     }
     let built = std::thread::Builder::new()
-        .name("transferencias".into())
+        .name("transfers".into())
         .spawn(move || {
             // The closure says "stop" only when the other end has gone, which
             // means the footer is already on its way out. There is nothing
@@ -633,7 +633,7 @@ pub fn listen_as_reports(
         return false;
     }
     let built = std::thread::Builder::new()
-        .name("transferencias".into())
+        .name("transfers".into())
         .spawn(move || {
             let mut before: Vec<Job> = Vec::new();
             let _ = ronoctua_transfers::client::watch(|jobs| {

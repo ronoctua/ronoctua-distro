@@ -574,8 +574,6 @@ CONTRAST_GATES = (
     ("brain.text", ("brain.background",), 90, 95),
     ("brain.dim", ("brain.background",), 44, 46),
     ("brain.countdown", ("brain.background",), 60, 70),
-    ("modeline.badgeText", ("modeline.badge",), 45, 50),
-    ("modeline.badge", ("modeline.background",), 40, 45),
     ("modeline.state.normal", ("modeline.background",), 15, 20),
     ("modeline.state.alternate", ("modeline.background",), 45, 60),
     ("notification.quiet", ("notification.background",), 43, 45),

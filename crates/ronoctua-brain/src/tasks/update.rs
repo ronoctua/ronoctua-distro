@@ -351,7 +351,11 @@ mod tests {
         );
         for (mine, theirs) in steps().iter().zip(declared::STEPS) {
             assert_eq!(mine.id, theirs.id, "the id is not the table's");
-            assert_eq!(mine.needs_root, theirs.root, "{}: root divergiu", mine.id);
+            assert_eq!(
+                mine.needs_root, theirs.root,
+                "{}: the root flag diverged",
+                mine.id
+            );
             assert_eq!(
                 mine.on_by_default, theirs.enabled,
                 "{}: the default diverged",

@@ -26,6 +26,9 @@
   # path, copies the whole directory into the store and fails with "path is not
   # valid" when the store is collected. A file path is direct and stable.
   iconTokensFile,
+  # The base and icon sizes: the chrome size of every token is MEASURED here,
+  # against the real face — see `chrome_size` in the generator.
+  typographyFile,
   trayTableFile,
   lexiconFile,
   # The languages, from `assets/i18n/languages.nix`. The tags are built
@@ -51,6 +54,7 @@ let
   # writing one would be reimplementing Nix logic (invariant 5).
   iconTokensJson = writeText "icon-tokens.json" (builtins.toJSON (import iconTokensFile));
   trayJson = writeText "tray-glyphs.json" (builtins.toJSON (import trayTableFile));
+  typographyJson = writeText "typography.json" (builtins.toJSON (import typographyFile));
 
   mkGen =
     {
@@ -82,6 +86,7 @@ let
                 --glyphnames ${glyphnames} \
                 --tokens ${tokens} \
                 --tray ${trayJson} \
+                --typography ${typographyJson} \
                 --lexicon ${lexiconFile} \
                 --languages ${lib.escapeShellArgs languages} \
                 --overlay ${overlayFile} \

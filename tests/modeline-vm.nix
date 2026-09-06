@@ -150,10 +150,12 @@ pkgs.testers.runNixOSTest {
         # There used to be a `*scratch*` there, inherited from Emacs — where the
         # scratch is a REAL buffer. Here there is nothing behind it: the modeline
         # announced an open buffer that was never implemented. With no window,
-        # the segment disappears, and the only one left is the counter.
+        # the segment disappears — and with nothing unread the bell is not
+        # there either, so the line is EMPTY. Nothing at rest is the owner's
+        # rule for this line, and this is where it is measured.
         journal = machine.succeed("journalctl -u footer --no-pager")
         assert "scratch" not in journal and "rascunho" not in journal, journal
-        assert "segments=1" in journal, journal
+        assert "segments=0" in journal, journal
 
     with subtest("opening a window changes the modeline"):
         machine.succeed(
@@ -240,10 +242,10 @@ pkgs.testers.runNixOSTest {
         # Proof that the daemon's state SHRINKS, and does not only grow: an
         # `State` that only accumulates would pass everything above.
         machine.succeed("systemctl stop client")
-        # Back to ONE segment: only the notification counter. With no focused
-        # window there is no name and no mode to show.
+        # Back to NO segment: with no focused window there is no name and no
+        # mode to show, and with nothing unread there is no bell.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | tail -20 | grep -q 'segments=1'",
+            "journalctl -u footer --no-pager | tail -20 | grep -q 'segments=0'",
             timeout=60,
         )
   '';

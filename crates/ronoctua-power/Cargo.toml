@@ -1,0 +1,37 @@
+[package]
+name = "ronoctua-power"
+description = "The one boundary with UPower, power-profiles-daemon and logind: batteries, the charger, the profile, sleep."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# zbus only enters the three proxy modules (`upower.rs`, `profiles.rs`,
+# `login.rs`). The rules — which rung a percentage is, when the modeline shows
+# a glyph, which profile is the top one a daemon offers, what counts as a
+# transition worth a notification — live in `lib.rs` and do not import them:
+# that is what makes them testable against property maps copied off a real
+# machine, with no bus, no battery and no root.
+#
+# NO `[[bin]]`: nothing here is a daemon. The footer raises the threads.
+
+[dependencies]
+zbus.workspace = true
+anyhow.workspace = true
+# The watching threads outlive whoever asked for them, and when a daemon goes
+# away there is nobody to return an error to — so they say so to the log.
+tracing.workspace = true
+# `power.json`, the person's chosen profile — one field, read without a
+# derive so that a hand-edited file with one wrong key still names it.
+serde_json.workspace = true
+# Where `power.json` lives, and how it is written without a torn read.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# THE ONE WALK OF `/sys/class/power_supply`. The brain's `on_battery` and the
+# charge thresholds read different files of the same directories; the walk is
+# `ronoctua-memory`'s, which is the declared frontier with `/sys` and `/proc`,
+# and this crate reads its files through the paths it hands back.
+ronoctua-memory = { path = "../ronoctua-memory" }
+
+[lints]
+workspace = true

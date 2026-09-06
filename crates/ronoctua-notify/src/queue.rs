@@ -542,6 +542,66 @@ impl Queue {
         self.history.iter().filter(|r| r.counts()).count()
     }
 
+    /// How many a filter kept off the screen.
+    ///
+    /// The other half of what the pointer says over the bell: "three unread,
+    /// one filtered out". It is the same partition the manager's right-hand
+    /// column draws, counted here so the modeline does not build the lists to
+    /// learn a number.
+    #[must_use]
+    pub fn suppressed(&self) -> usize {
+        self.history
+            .iter()
+            .filter(|r| matches!(r.presentation.show, Show::Hidden))
+            .count()
+    }
+
+    /// The whole history, oldest first.
+    #[must_use]
+    /// Takes what ANOTHER process wrote to the history file.
+    ///
+    /// # Why this exists
+    ///
+    /// The manager has two doors, and the window is a process of its own: it
+    /// marks records read and forgets them by writing the file. The footer
+    /// read that file ONCE, at start-up, and wrote its whole vector over it
+    /// on every change — so a record forgotten in the window came back the
+    /// moment any notification arrived, and the window's next reread showed
+    /// it returned. One store, two writers, and the last one won.
+    ///
+    /// The reconciliation is by ID and in one direction only: what the file
+    /// says about a record the queue HAS is taken (read, and gone), and what
+    /// the queue has and the file does not is taken as forgotten. Records the
+    /// file has and the queue does not are NOT added back — the queue is
+    /// what is live, and a record it has already pruned is not news.
+    ///
+    /// It returns whether anything moved, so the caller can decide to paint.
+    pub fn took_from_disk(&mut self, disk: &[Record]) -> bool {
+        use std::collections::HashMap;
+        let theirs: HashMap<u32, bool> = disk.iter().map(|r| (r.notification.id, r.read)).collect();
+        // ONLY WHAT ARRIVED BEFORE THE FILE WAS WRITTEN can be judged missing
+        // from it: anything newer simply had not been written yet, and
+        // dropping it would delete a notification nobody dismissed.
+        let newest = disk.iter().map(|r| r.notification.at).max();
+        let mut moved = false;
+        let before = self.history.len();
+        self.history.retain(|r| {
+            let known = theirs.contains_key(&r.notification.id);
+            known || newest.is_none_or(|t| r.notification.at > t)
+        });
+        moved |= self.history.len() != before;
+        for r in &mut self.history {
+            if let Some(read) = theirs.get(&r.notification.id)
+                && *read
+                && !r.read
+            {
+                r.read = true;
+                moved = true;
+            }
+        }
+        moved
+    }
+
     /// The whole history, oldest first.
     #[must_use]
     pub fn history(&self) -> &[Record] {
@@ -595,7 +655,7 @@ mod tests {
             id,
             "app".into(),
             None,
-            format!("resumo {id}"),
+            format!("summary {id}"),
             String::new(),
             Urgency::Normal,
         )
@@ -658,6 +718,74 @@ mod tests {
         f.enqueue(n(1), p(50, Life::Quick), t0);
         f.tick(t0 + Duration::from_secs(10));
         assert_eq!(f.unread(), 1);
+    }
+
+    #[test]
+    fn what_the_hover_counts_is_the_column_the_manager_draws() {
+        // `suppressed()` is what the bell's hover reads, and it has to be the
+        // same number as the manager's right-hand column: one is the
+        // pointer's answer to "how many were filtered out", the other is the
+        // list of them. It is deliberately NOT the shape of `unread()` —
+        // that one empties as things are read, and this one counts what a
+        // filter kept out over the whole history, read or not.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        assert_eq!(f.suppressed(), 0);
+        let mut hidden = p(50, Life::Normal);
+        hidden.show = Show::Hidden;
+        f.enqueue(n(1), hidden.clone(), t0);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+        f.enqueue(n(3), hidden, t0);
+        assert_eq!(f.suppressed(), 2, "two were filtered out");
+        assert_eq!(f.unread(), 1, "and only the one that was shown counts");
+        // AND READING DOES NOT MOVE IT: a suppressed one was never shown, so
+        // there is nothing to read, and the number the hover says is about
+        // the filter and not about attention.
+        f.mark_read(2);
+        assert_eq!(f.suppressed(), 2);
+        assert_eq!(f.unread(), 0);
+    }
+
+    #[test]
+    fn what_another_process_wrote_is_taken_and_not_overwritten() {
+        // The window forgets a record and marks another read by writing the
+        // file. The footer used to read that file once, at start-up, and
+        // write its whole vector over it on the next change — so the
+        // window's `d` came undone the moment anything arrived.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        for id in 1..=3_u32 {
+            let mut one = n(id);
+            one.at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(id));
+            f.enqueue(one, p(50, Life::Normal), t0);
+        }
+        assert_eq!(f.history().len(), 3);
+
+        // WHAT THE OTHER DOOR WROTE: 2 is gone, 1 is read.
+        let mut disk = f.history().to_vec();
+        disk.retain(|r| r.notification.id != 2);
+        for r in &mut disk {
+            if r.notification.id == 1 {
+                r.read = true;
+            }
+        }
+        assert!(f.took_from_disk(&disk));
+        let ids: Vec<u32> = f.history().iter().map(|r| r.notification.id).collect();
+        assert_eq!(ids, vec![1, 3]);
+        assert!(f.history()[0].read);
+        // AND TWICE IS NOT TWICE AS MUCH: nothing moved the second time, so
+        // the door does not paint and does not write back — which is what
+        // keeps two processes from answering each other's inotify for ever.
+        assert!(!f.took_from_disk(&disk));
+
+        // AND WHAT ARRIVED AFTER THE FILE WAS WRITTEN SURVIVES IT. Without
+        // this, a notification landing while the window had the file open
+        // would be deleted by the window's next save.
+        let mut later = n(9);
+        later.at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(99);
+        f.enqueue(later, p(50, Life::Normal), t0);
+        assert!(!f.took_from_disk(&disk));
+        assert!(f.history().iter().any(|r| r.notification.id == 9));
     }
 
     #[test]

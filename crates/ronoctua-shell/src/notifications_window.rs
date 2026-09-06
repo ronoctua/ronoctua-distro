@@ -27,7 +27,7 @@ use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
-    reexports::calloop::{EventLoop, channel, timer},
+    reexports::calloop::{self, EventLoop, channel, timer},
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -59,12 +59,15 @@ pub const APP_ID: &str = "br.ronoctua.notifications";
 /// `BTN_LEFT`, from `linux/input-event-codes.h`.
 const LEFT_BUTTON: u32 = 0x110;
 
-/// The first line of the list. Above it: the title, and the message line.
+/// The first line of the list. Above it: the hint line, and nothing else.
 ///
-/// The same arrangement as the footer — two lines glued, content below — and
-/// repeated here deliberately: a person should not have to learn a second shape
-/// for the same thing.
-const FIRST_OF_LIST: u16 = 2;
+/// It was two — a title saying which pane and how many were unread, then the
+/// keys — and the owner asked for the title gone: the pane is named by its
+/// heading one row down, the count is what the bell's own hover says, and a
+/// line that repeats both is a line the footer does not have. One line above
+/// the list, the same one the footer's minibuffer draws — the file manager's
+/// window has the same shape, and for the same reason.
+const FIRST_OF_LIST: u16 = 1;
 
 /// The margin inside the window, in cells.
 ///
@@ -102,7 +105,7 @@ pub fn host_it() -> Result<()> {
     let texts = std::rc::Rc::new(ronoctua_i18n::Texts::from_env());
     // `*name*` is Emacs's convention for a buffer that is not a file, the same
     // one the modeline already uses for `*scratch*`.
-    window.set_title(format!("*{}*", texts.t(ronoctua_i18n::key::NOTIF_HISTORY)));
+    window.set_title(format!("*{}*", texts.t(ronoctua_i18n::key::NOTIF_TITLE)));
     window.set_app_id(APP_ID);
     window.commit();
 
@@ -137,6 +140,7 @@ pub fn host_it() -> Result<()> {
 
     let mut state = NotificationsWindow {
         conn: conn.clone(),
+        handle: handle.clone(),
         _theme_watch,
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
@@ -154,7 +158,6 @@ pub fn host_it() -> Result<()> {
         owed: false,
         gpu: None,
         text: None,
-        quads: None,
         view: crate::notifications::View::fresh(),
         records: Vec::new(),
         book: ronoctua_notify::Book::distro(),
@@ -186,6 +189,13 @@ pub fn host_it() -> Result<()> {
 /// The window.
 struct NotificationsWindow {
     conn: Connection,
+    /// The loop, for the ONE thing that needs it here: a keyboard that
+    /// REPEATS. SCTK only generates repeat events for a keyboard made with
+    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
+    /// carried rather than reached for. Without it `repeat_key` below is dead
+    /// code and holding an arrow moves exactly one row, which is the trap
+    /// CLAUDE.md records and which five windows inherited.
+    handle: calloop::LoopHandle<'static, Self>,
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
@@ -217,7 +227,6 @@ struct NotificationsWindow {
     owed: bool,
     gpu: Option<ronoctua_render::gpu::Gpu>,
     text: Option<ronoctua_render::Text>,
-    quads: Option<ronoctua_render::quad::Quads>,
     view: crate::notifications::View,
     /// The history, as it was last read off disk.
     records: Vec<ronoctua_notify::Record>,
@@ -273,6 +282,18 @@ impl NotificationsWindow {
         if room == 0 {
             return;
         }
+        // THE SHEET IS NOT A LIST, and its rows are not the cursor's.
+        //
+        // With an entry open the drawn rows are the KNOBS — eight of them —
+        // while `View::cursor()` is still the CATALOGUE's index, which can be
+        // thirty. In a short window that pinned the sheet to its last rows,
+        // and moving between knobs scrolled nothing at all. The sheet is
+        // short by construction, so there is nothing to follow: the offset
+        // goes home and stays there.
+        if self.view.in_sheet() {
+            self.offset = 0;
+            return;
+        }
         // PLUS THE HEADING, which is row zero of what is drawn. Without it the
         // scrolling aims one line above the focused one — the same adjustment
         // the footer's own `list_cursor` makes.
@@ -296,7 +317,15 @@ impl NotificationsWindow {
             }
             // THE WINDOW WRITES THE SAME FILES THE FOOTER READS. It is not a
             // second store: `store::write_history` is one function, and the
-            // footer picks the change up on its next write or restart.
+            // footer WATCHES both files by inotify — the same "the file is
+            // the broadcast" the theme uses — so a record forgotten here is
+            // forgotten there within the event loop's next turn.
+            //
+            // It used to say the footer picked the change up "on its next
+            // write or restart", and that was the opposite of what happened:
+            // the footer read the history once, at start-up, and wrote its
+            // whole vector over the file on every change, so this door's `d`
+            // came undone the moment any notification arrived.
             Errand::Read(id) => {
                 for r in self.records.iter_mut().filter(|r| r.notification.id == id) {
                     r.read = true;
@@ -304,8 +333,14 @@ impl NotificationsWindow {
                 self.save_history();
             }
             Errand::ReadAll => {
+                // NOT THE SUPPRESSED ONES, for the footer's reason: they are
+                // already off the count, `SPC` refuses them one at a time,
+                // and marking them read here would be the two doors
+                // disagreeing about one word.
                 for r in &mut self.records {
-                    r.read = true;
+                    if !matches!(r.presentation.show, ronoctua_notify::Show::Hidden) {
+                        r.read = true;
+                    }
                 }
                 self.save_history();
             }
@@ -319,7 +354,18 @@ impl NotificationsWindow {
             // clipboard; a second implementation here is exactly the second
             // door disagreeing with the first.
             Errand::Act(_, _) => {
-                self.message = Some(self.texts.t(ronoctua_i18n::key::NOTIF_ACT_IN_THE_FOOTER));
+                // THE KEYS ARE AN ARGUMENT, read from the same constant the
+                // keymap binds: a sentence that carried `n h` as text went
+                // stale the day the key moved.
+                // `leader()` and not `leader_chord()`: the sequence is typed
+                // after the LEADER (`SPC`, or `CTRL ALT SPC` in the nested
+                // loop); the chord's label is the modifier held for the
+                // arrows, and in the nested loop the two are not the same.
+                let keys = format!("{} {}", crate::leader(), crate::leader::NOTIF_OPEN_KEYS);
+                self.message = Some(self.texts.t_with(
+                    ronoctua_i18n::key::NOTIF_ACT_IN_THE_FOOTER,
+                    &[("keys", &keys)],
+                ));
             }
             Errand::Adjusted(id, verdict) => {
                 match verdict {
@@ -391,11 +437,28 @@ impl NotificationsWindow {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
         }
-        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
-            Ok(q) => self.quads = Some(q),
-            Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
-        }
         self.gpu = Some(g);
+    }
+
+    /// One key, from a press or from a REPEAT.
+    ///
+    /// Both doors of every view take this path: SCTK delivers a repeat
+    /// through the callback given to `get_keyboard_with_repeat`, which has no
+    /// `Connection` and no `QueueHandle` to hand on — so the work cannot live
+    /// in `press_key`, and while it did, `repeat_key` was dead code and
+    /// holding an arrow moved exactly one row.
+    fn typed(&mut self, event: KeyEvent) {
+        let Some(press) = press_of(&event) else {
+            return;
+        };
+        // A key clears the last message: it answered something that is no
+        // longer what is being done.
+        self.message = None;
+        let errand = {
+            let lists = crate::notifications::Lists::of(&self.records, &self.book);
+            self.view.key(press, &lists, &self.book)
+        };
+        self.apply(errand);
     }
 
     /// Asks for a frame. It is drawn when the event queue empties.
@@ -426,76 +489,72 @@ impl NotificationsWindow {
         let margin = CONTENT_MARGIN;
         // THE LISTS ARE BUILT AND DROPPED before `follow` moves the offset:
         // they borrow the records, and the scroll is a write.
-        let (rows, unread) = {
+        let rows = {
             let lists = crate::notifications::Lists::of(&self.records, &self.book);
-            let rows = self
-                .view
-                .rows(&lists, &self.book, self.columns, &self.texts);
-            let unread = lists.happened.iter().filter(|r| !r.read).count();
-            (rows, unread)
+            self.view
+                .rows(&lists, &self.book, self.columns, &self.texts)
         };
         self.follow(rows.len());
 
         let mut spans: Vec<ronoctua_render::Span> = Vec::new();
-        let mut quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
 
-        // LINE 0: which pane, and how many are unread.
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: self.texts.t_args(
-                ronoctua_i18n::key::NOTIF_WINDOW_TITLE,
-                &[
-                    // WHICH PANE, because the window shows one at a time when
-                    // it is narrow and `TAB` is the only thing that says so.
-                    (
-                        "pane",
-                        ronoctua_i18n::Arg::Text(&self.texts.t(self.view.pane().heading())),
-                    ),
-                    (
-                        "n",
-                        ronoctua_i18n::Arg::Number(i64::try_from(unread).unwrap_or(0)),
-                    ),
-                ],
-            ),
-            column: margin,
-            line: 0,
-            color: tokens::color::TEXT_PRIMARY,
-            edge: false,
-            foot: false,
-        });
+        // LINE 0: what the last action said, the focused row's own note, or
+        // the keys — the footer's minibuffer, through the other door.
+        //
+        // The message and the note win over the keys for the reason the footer
+        // gives on its own line: they are what the manager has to SAY about
+        // something just done, and the keys are always there to come back to.
+        // The note is the same source as the footer's — the reason a switch
+        // does nothing — so the two doors say the same sentence in the same
+        // place.
+        let said = self.message.clone().or_else(|| self.view.note(&self.texts));
+        // THE ROOM IS THE WHOLE OF `columns`, and that is not the mistake it
+        // looks like: `recount` already took BOTH margins off the width before
+        // counting cells, so `columns` is what lies between them and a line
+        // that starts `margin` in and runs `columns` wide ends `margin` short
+        // of the edge. The file manager's window counts the same way.
+        let room = self.columns;
+        if let Some(text) = said {
+            spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(size),
+                text: ronoctua_render::layout::elide_end(&text, room),
+                column: margin,
+                line: 0,
+                // THE SAME REGISTER AS THE HINT that shares this line, and as
+                // the footer's minibuffer, which is the same line through the
+                // other door. See `text.subtle`.
+                color: tokens::color::TEXT_SUBTLE_STRONG,
+                edge: false,
+                foot: false,
+            });
+        } else {
+            // THE KEYS, in two registers, from the SAME table and the SAME
+            // painter as the footer's minibuffer — `chrome::hint_spans` is what
+            // stops either door colouring a key on its own. It was one flat
+            // span of a `.ftl` sentence here, in a colour the rest of the
+            // system does not use for a key, which the owner reported.
+            // AND WHERE IN THE LIST THE CURSOR IS. This window draws no
+            // rectangle — text and a colour, one render pass — so it has no
+            // scrollbar, and with a fortnight of records there was no sign
+            // that anything lay below the last drawn row.
+            let lists = crate::notifications::Lists::of(&self.records, &self.book);
+            let place = Some((self.view.cursor(), lists.len(self.view.pane())));
+            spans.extend(crate::chrome::hint_spans(
+                &self.view.hint_of(place, &self.texts),
+                ronoctua_render::Size::Px(size),
+                margin,
+                0,
+                room,
+            ));
+        }
 
-        // LINE 1: what the last action said, or the keys.
-        let second = self
-            .message
-            .clone()
-            // The focused row's own note — the reason a switch does nothing.
-            // The same source as the footer's, so the two doors say the same
-            // sentence in the same place.
-            .or_else(|| self.view.hint(&self.texts))
-            .unwrap_or_else(|| self.texts.t(ronoctua_i18n::key::NOTIF_WINDOW_KEYS));
-        spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::Px(size),
-            text: ronoctua_render::layout::elide_end(&second, self.columns),
-            column: margin,
-            line: 1,
-            color: tokens::color::TEXT_SECONDARY,
-            edge: false,
-            foot: false,
-        });
-
-        let line_px = tokens::metrics::line_height(size);
-        let cell_px = tokens::metrics::cell_width(size);
+        // THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
+        // draws for these rows, and the one `record_line` argues for: with
+        // two columns on screen a band across the row would say the two
+        // items on it were one thing. The window drew a band as well, which
+        // was the one thing the two doors did differently; it went.
         for (i, row) in rows.iter().skip(self.offset).take(self.room()).enumerate() {
             let y = FIRST_OF_LIST + u16::try_from(i).unwrap_or(0);
-            if row.focused {
-                quads.push(ronoctua_render::quad::Quad {
-                    x: 0.0,
-                    y: f32::from(y) * line_px,
-                    width: self.width as f32,
-                    height: line_px,
-                    color: tokens::color::SURFACE_SELECTION,
-                });
-            }
             for f in &row.fields {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::Px(size),
@@ -508,7 +567,6 @@ impl NotificationsWindow {
                 });
             }
         }
-        let _ = cell_px;
 
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
@@ -524,22 +582,10 @@ impl NotificationsWindow {
             tracing::error!(error = %e, "preparing the text failed");
             return;
         }
-        if let Some(q) = self.quads.as_mut() {
-            q.prepare(
-                &gpu.device,
-                &gpu.queue,
-                gpu.config.width,
-                gpu.config.height,
-                &quads,
-            );
-        }
-        let quads_ref = self.quads.as_ref();
-        if let Err(e) = gpu.frame(|pass| {
-            if let Some(q) = quads_ref {
-                q.draw(pass);
-            }
-            text.draw(ronoctua_render::Atlas::Pinned, pass)
-        }) {
+        // TEXT ONLY: this window draws no rectangle. The focus is a colour
+        // (see the paint loop), there is no scrollbar, and the hint line is
+        // text — so there is no quad pipeline here, and a frame is one pass.
+        if let Err(e) = gpu.frame(|pass| text.draw(ronoctua_render::Atlas::Pinned, pass)) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
@@ -587,7 +633,10 @@ fn press_of(event: &KeyEvent) -> Option<crate::notifications::Press> {
     Some(match event.keysym {
         Keysym::Escape => Press::Escape,
         Keysym::Return | Keysym::KP_Enter => Press::Enter,
-        Keysym::Tab | Keysym::ISO_Left_Tab => Press::Tab,
+        Keysym::Tab => Press::Tab,
+        // `ISO_Left_Tab` IS `S-TAB`: xkb has already applied the shift, and
+        // this is the one keysym it gives back for it.
+        Keysym::ISO_Left_Tab => Press::BackTab,
         Keysym::space => Press::Space,
         Keysym::Left => Press::Left,
         Keysym::Right => Press::Right,
@@ -633,7 +682,16 @@ impl SeatHandler for NotificationsWindow {
         cap: Capability,
     ) {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seats.get_keyboard(qh, &seat, None) {
+            // A KEYBOARD THAT REPEATS — see the `handle` field. The rate and
+            // the delay are the COMPOSITOR's, arriving as `RepeatInfo`;
+            // nothing here invents either.
+            match self.seats.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.handle.clone(),
+                Box::new(|state: &mut Self, _, event| state.typed(event)),
+            ) {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
@@ -703,17 +761,7 @@ impl KeyboardHandler for NotificationsWindow {
         _: u32,
         event: KeyEvent,
     ) {
-        let Some(press) = press_of(&event) else {
-            return;
-        };
-        // A key clears the last message: it answered something that is no
-        // longer what is being done.
-        self.message = None;
-        let errand = {
-            let lists = crate::notifications::Lists::of(&self.records, &self.book);
-            self.view.key(press, &lists, &self.book)
-        };
-        self.apply(errand);
+        self.typed(event);
     }
 
     fn repeat_key(
@@ -826,9 +874,12 @@ impl PointerHandler for NotificationsWindow {
             self.ask_paint();
             return;
         }
-        if before != self.row_under_pointer {
-            self.ask_paint();
-        }
+        // NO FRAME FOR A POINTER THAT CHANGED NOTHING. Nothing on this
+        // screen is drawn from `row_under_pointer` — the click reads it, and
+        // the paint does not — so repainting when it moved spent a GPU frame
+        // per row crossed, on an identical picture. The footer's own hover
+        // band IS drawn, which is why it repaints there and not here.
+        let _ = before;
     }
 }
 impl CompositorHandler for NotificationsWindow {

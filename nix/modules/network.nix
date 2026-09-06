@@ -71,6 +71,31 @@ in
       '';
     };
 
+    # WITHOUT THIS, THE DAEMON CANNOT TELL A WAY OUT FROM A DEAD END.
+    #
+    # NetworkManager answers `Connectivity = FULL` for any route at all when
+    # it has no URI to check — so a hotel's login page and a router whose
+    # uplink is down both read as "the internet is there", and the modeline's
+    # mark could never appear. The check is one HTTP GET every five minutes
+    # to a host whose whole purpose is answering it.
+    #
+    # THE COST IS WRITTEN DOWN because it is real: it is a request that says
+    # this machine is on, to a server the person did not choose. Turning it
+    # off is a supported answer, and what it costs is the mark.
+    connectivityCheck = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Let NetworkManager check, every five minutes, whether the way out
+        actually leads anywhere — one small HTTP request to
+        `nmcheck.gnome.org`. It is what separates "connected" from
+        "connected to a login page", and the footer's `no way out` mark
+        cannot exist without it: with the check off the daemon answers
+        `full` for any route at all. Off means one fewer request and one
+        fewer thing on screen.
+      '';
+    };
+
     regulatoryDomain = lib.mkOption {
       type = lib.types.str;
       default = "BR";
@@ -109,11 +134,44 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # WHO MADE THE THING AT A HARDWARE ADDRESS — `nmap`'s own table, which is
+    # a text file this system already has (`nix/modules/cli.nix`). The view
+    # reads it to put a maker beside each machine on the local network.
+    #
+    # FROM THE ENVIRONMENT AND NOT BAKED INTO THE BINARY: a store path in
+    # `option_env!` is a reference the BINARY carries, so a nmap release would
+    # rebuild the whole Rust workspace for a table nothing else reads — the
+    # measured trap `RONOCTUA_ICONS` carries a comment about. `nmap` is in
+    # both profiles (`nix/modules/cli.nix`), so what this buys is the rebuild
+    # and not the closure; unset, the column is blank, which is what an
+    # unregistered prefix looks like anyway.
+    #
+    # BOTH PLACES, for the reason `media.nix` gives: `sessionVariables`
+    # reaches a login shell, and the footer is a systemd USER UNIT, which
+    # inherits the manager's environment rather than the shell's.
+    environment.sessionVariables.RONOCTUA_NMAP_MAC_PREFIXES = "${pkgs.nmap}/share/nmap/nmap-mac-prefixes";
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_NMAP_MAC_PREFIXES =
+      "${pkgs.nmap}/share/nmap/nmap-mac-prefixes";
+
     # -------------------------------------------------------------------
     # NetworkManager
     # -------------------------------------------------------------------
     networking.networkmanager = {
       enable = true;
+
+      # THE CHECK, and the daemon's own default interval spelled out: five
+      # minutes is what upstream uses, and writing it here is what makes the
+      # cost of the option legible where the option is.
+      #
+      # `settings.connectivity` AND NOT `connectivity`: the nixpkgs module has
+      # no option of that name — what it has is `settings`, which is written
+      # straight into `NetworkManager.conf` as its own `[connectivity]`
+      # section. The wrong one fails at EVALUATION, with a "did you mean"
+      # naming three options that have nothing to do with it.
+      settings.connectivity = lib.mkIf cfg.connectivityCheck {
+        uri = "http://nmcheck.gnome.org/check_network_status.txt";
+        interval = 300;
+      };
 
       # THE SINGLE BIGGEST WIN ON THE RADIO, and the easiest to miss.
       #

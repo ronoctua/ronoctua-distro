@@ -120,7 +120,7 @@ mod key {
 /// # There is deliberately no `working`
 ///
 /// Waiting for a disk to be written was a fourth screen in the first draft, and
-/// it had to go: every state a buffer declares is offered under `SPC b s`, and
+/// it had to go: every state a buffer declares is offered under `SPC w s`, and
 /// a `working` somebody could pick would put "writing to the disk" on the
 /// modeline with nothing being written. `states-driven` is what said so, by
 /// refusing a state that cannot be entered from the base.
@@ -1315,7 +1315,7 @@ impl State {
             // exhaustive and the WIT is shared by seven components: an `input`
             // case added for one of them has to be answered by all, and here
             // "answered" is "this screen has no use for it".
-            // THE HOST ASKS FOR A SCREEN BY NAME — `SPC b s`, or the modeline
+            // THE HOST ASKS FOR A SCREEN BY NAME — `SPC w s`, or the modeline
             // clicked. Answering it is what makes a declared state a state
             // somebody can reach; a buffer that ignored it would leave the
             // modeline offering screens nobody enters, which is the failure

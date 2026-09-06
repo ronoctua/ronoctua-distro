@@ -91,7 +91,7 @@
     # THIS FILE HAS NOW BEEN WRITTEN ABOUT THIS DEFECT THREE TIMES, which is why
     # it gets said plainly: a glyph flush against a border does not read as a
     # glyph at the edge, it reads as a glyph that was CUT OFF. `modeline.edgeRight`
-    # says it about the unread counter; `files.edgeRight` says it about the date
+    # says it about the bell and the marks beside it; `files.edgeRight` says it about the date
     # column; and the sidebar still shipped with its icon at cell zero and its
     # eject glyph against the rule. The window door never had the defect only
     # because it pays `buffer.marginX` on top of everything.
@@ -384,8 +384,19 @@
   # Eighty is the narrow terminal every layout here is checked against, and it
   # is the width at which a sentence plus a filter's name stops fitting beside a
   # second list.
+  #
+  # AND WHERE THE CUT FALLS, as a percentage of the width. `split_at` used to
+  # be `columns * 3 / 5` written in Rust, eleven lines under a doc comment
+  # saying the cut comes from a token — invariant 9 names proportion and
+  # spacing, and `files.sidebarFrom`/`panelsFrom` are the precedent for
+  # putting a layout number here.
+  #
+  # Sixty is not a taste: the left column holds SENTENCES — a summary and a
+  # body — and the right one holds what a filter kept out, which is a
+  # reference list read rarely and never at length.
   notifications = {
     twoColumnsFrom = 80;
+    splitAtPct = 60;
   };
 
   # THE RULE'S THICKNESS, and this is the SECOND block in this file measured in

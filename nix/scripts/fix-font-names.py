@@ -243,7 +243,7 @@ def main() -> int:
         families = {r["typo_family"] for r in rows}
         if families != {args.family}:
             print(f"ERROR: expected 1 typographic family ({args.family!r}),", file=sys.stderr)
-            print(f"      achei {len(families)}: {sorted(families)}", file=sys.stderr)
+            print(f"      found {len(families)}: {sorted(families)}", file=sys.stderr)
             return 1
 
     pairs = Counter((r["typo_family"], r["typo_subfamily"]) for r in rows)

@@ -142,6 +142,12 @@ fn resolver_current_color(svg: &str, color: tokens::Color) -> String {
 /// The state of the window hosting a buffer.
 struct Host {
     conn: Connection,
+    /// The loop, for the one thing that needs it here: a keyboard that
+    /// REPEATS. SCTK only sends repeat events for a keyboard made with
+    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — without it
+    /// the `repeat_key` below is dead code, and holding the arrow in a buffer
+    /// moved exactly one row while the comment beside it said otherwise.
+    handle: smithay_client_toolkit::reexports::calloop::LoopHandle<'static, Self>,
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     /// The component is told nothing: it never had a value (invariant 11).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
@@ -830,7 +836,11 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .then(Brain::fresh);
 
     let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // THE LOOP FIRST, because the state carries its handle: a keyboard that
+    // REPEATS is made with `get_keyboard_with_repeat`, and that wants one.
+    let mut cycle: EventLoop<Host> = EventLoop::try_new().context("calloop")?;
     let mut state = Host {
+        handle: cycle.handle(),
         system,
         queue,
         disks,
@@ -869,7 +879,6 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         _runtime: runtime,
     };
 
-    let mut cycle: EventLoop<Host> = EventLoop::try_new().context("calloop")?;
     WaylandSource::new(conn, events)
         .insert(cycle.handle())
         .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
@@ -2558,7 +2567,15 @@ impl SeatHandler for Host {
         cap: Capability,
     ) {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seats.get_keyboard(qh, &seat, None) {
+            // A KEYBOARD THAT REPEATS: holding a key here is meant to work,
+            // and SCTK only repeats for one made this way.
+            match self.seats.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.handle.clone(),
+                Box::new(|state: &mut Self, _, event| state.typed(event)),
+            ) {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => tracing::warn!(error = %e, "no keyboard; the buffer takes no input"),
             }
@@ -2595,48 +2612,15 @@ impl SeatHandler for Host {
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 }
 
-impl KeyboardHandler for Host {
-    /// Focus arrives — and whatever was held before it belongs to the OTHER
-    /// window.
+impl Host {
+    /// One key, from a press or from a REPEAT.
     ///
-    /// `CLAUDE.md` records this as a trap with a name: a modifier held across a
-    /// focus change kills the keymap, and the fix is to discount what was
-    /// already down both on gaining focus and on starting a sequence. Here it is
-    /// `Esc`: alt-tabbing into a buffer while it is down would leave this window
-    /// believing it is choosing a state, and every key would vanish.
-    fn enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-        _: &[u32],
-        _: &[Keysym],
-    ) {
-        self.escape = Escape::default();
-    }
-
-    /// Focus leaves, and so does the release this window will never see.
-    fn leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
-        _: u32,
-    ) {
-        self.escape = Escape::default();
-    }
-
-    fn press_key(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
-        _: u32,
-        event: KeyEvent,
-    ) {
+    /// SCTK delivers a repeat through the callback given to
+    /// `get_keyboard_with_repeat`, which has no `Connection` and no
+    /// `QueueHandle` to hand on — so the work cannot live in `press_key`, and
+    /// while it did, `repeat_key` was dead code and holding a key did it
+    /// once. The comment beside `repeat_key` said the opposite for a year.
+    fn typed(&mut self, event: KeyEvent) {
         // `Esc` IS A KEY AND A MODIFIER, and which of the two is decided by what
         // happens before it comes back up. See [`Escape`].
         //
@@ -2707,6 +2691,52 @@ impl KeyboardHandler for Host {
             return;
         };
         self.deliver(&e);
+    }
+}
+
+impl KeyboardHandler for Host {
+    /// Focus arrives — and whatever was held before it belongs to the OTHER
+    /// window.
+    ///
+    /// `CLAUDE.md` records this as a trap with a name: a modifier held across a
+    /// focus change kills the keymap, and the fix is to discount what was
+    /// already down both on gaining focus and on starting a sequence. Here it is
+    /// `Esc`: alt-tabbing into a buffer while it is down would leave this window
+    /// believing it is choosing a state, and every key would vanish.
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+        self.escape = Escape::default();
+    }
+
+    /// Focus leaves, and so does the release this window will never see.
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        self.escape = Escape::default();
+    }
+
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.typed(event);
     }
 
     fn repeat_key(
@@ -3124,7 +3154,7 @@ mod tests {
         let resolved = resolver_current_color(LUCIDE, tokens::color::TEXT_PRIMARY);
         assert!(
             !resolved.contains("currentColor"),
-            "o `currentColor` sobreviveu: {resolved}"
+            "the `currentColor` survived: {resolved}"
         );
         let [r, g, b, _] = tokens::color::TEXT_PRIMARY.to_rgba8();
         assert!(

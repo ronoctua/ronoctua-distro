@@ -1033,7 +1033,7 @@ interface types {
     // be `normal`, and `Esc` is what returns to it.
     record buffer-state {
         id: string,
-        // The key that selects it directly under `SPC b s`. Unique within the
+        // The key that selects it directly under `SPC w s`. Unique within the
         // buffer — the host refuses a repeat at load, because two states on the
         // same letter is a menu where one of them is unreachable.
         letter: char,
@@ -1164,7 +1164,7 @@ interface types {
         // GO TO THIS STATE — the host's half of the state contract.
         //
         // It arrives when somebody pressed `Esc`, held it and used an arrow, or
-        // chose a state under `SPC b s`. The buffer is told the id it declared,
+        // chose a state under `SPC w s`. The buffer is told the id it declared,
         // never a key: the same rule as `command`, and for the same reason —
         // the component does not capture keys (invariant 11 and section 7.9).
         //

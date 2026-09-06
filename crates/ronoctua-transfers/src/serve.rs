@@ -240,8 +240,14 @@ mod tests {
     }
 
     /// Waits for a job to reach a stage, or gives up saying what it saw.
+    ///
+    /// THIRTY SECONDS, and the number is about the MACHINE and not the code:
+    /// these tests run inside `nix build`, beside a VM and a dozen `rustc`s,
+    /// and a daemon thread that gets no processor for ten seconds is not a
+    /// daemon that ignored the ask. It failed exactly that way once, saying
+    /// `expected Paused and saw Some(Running)`.
     fn until(socket: &Path, id: u64, stage: Stage) -> crate::job::Job {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let jobs = jobs_now(socket);
             let job = jobs.iter().find(|j| j.id == id).cloned();
@@ -313,14 +319,14 @@ mod tests {
         // bites, and the queue reports between each.
         let size = ronoctua_files::watch::CHUNK * 3;
         std::fs::write(root.join("large.bin"), vec![7u8; size]).unwrap();
-        std::fs::create_dir(root.join("destino")).unwrap();
+        std::fs::create_dir(root.join("into")).unwrap();
 
         let Say::Took { id } = crate::client::ask_at(
             &socket,
             &Ask::Add {
                 work: Work::Paste {
                     paths: vec![root.join("large.bin")],
-                    into: root.join("destino"),
+                    into: root.join("into"),
                     moves: false,
                 },
             },
@@ -339,7 +345,7 @@ mod tests {
         until(&socket, id, Stage::Cancelled);
 
         assert_eq!(
-            std::fs::read_dir(root.join("destino")).unwrap().count(),
+            std::fs::read_dir(root.join("into")).unwrap().count(),
             0,
             "a piece was left at the destination after the cancellation"
         );

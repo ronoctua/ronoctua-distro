@@ -52,11 +52,85 @@ use crate::files::{Field, Hit as FilesHit};
 /// notification and does not fire `LEADER d`, the same way `d` in the clipboard
 /// removes an entry. The `C-` family belongs to the file manager, where a bare
 /// letter is a QUERY and cannot also be a command.
-pub const OF_THE_VIEW: &[(&str, &str)] = &[
-    ("SPC", "notif-read"),
-    ("d", "notif-forget"),
-    ("r", "notif-read-all"),
-    ("RET", "notif-act"),
+///
+/// # And why the arrows and `TAB` are in it
+///
+/// Because THE HINT LINE IS THIS TABLE — `View::hint` is generated from it,
+/// the way the file manager's is from its own. The window used to carry a
+/// sentence of its own in the `.ftl` (`TAB pane · ↑↓ move …`) and the footer
+/// carried nothing, which the owner photographed: two doors, two answers. A
+/// gesture the line teaches has to be a row the line can read, so the walking
+/// keys are here with an id each, and the ORDER is the order the line teaches.
+/// WHICH COLUMN a key means something in.
+///
+/// The line is generated from the table, and the table used to be flat: all
+/// three columns taught `SPC read`, `d forget` and `RET run its action`. On
+/// **Filtered out**, `SPC` returns `Nothing` on purpose — a suppressed
+/// notification is already off the count — and `RET` has nothing to run. On
+/// the **catalogue**, `SPC` and `d` do nothing and `RET` opens the entry's
+/// sheet, which is not "run its action".
+///
+/// So the line taught, on two of the three columns, keys that do nothing —
+/// against this file's own rule, written over [`OF_THE_SHEET`]: one key, one
+/// meaning per level, and the line says which level it is on by teaching only
+/// that level's keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    /// Every column: the arrows, `TAB`, and `r`, which is about the queue and
+    /// not about the row under the cursor.
+    Anywhere,
+    /// What happened — the only column whose rows can be read or run.
+    Happened,
+    /// What happened, and what a filter kept out: both hold records, and both
+    /// can forget one.
+    ARecord,
+    /// The catalogue, where a row is a KIND of notification and not one.
+    Catalogue,
+}
+
+impl Column {
+    /// Does a key of this kind mean anything in that column?
+    const fn shown(self, pane: Pane) -> bool {
+        match self {
+            Self::Anywhere => true,
+            Self::Happened => matches!(pane, Pane::Happened),
+            Self::ARecord => matches!(pane, Pane::Happened | Pane::Suppressed),
+            Self::Catalogue => matches!(pane, Pane::Catalogue),
+        }
+    }
+}
+
+pub const OF_THE_VIEW: &[(&str, &str, Column)] = &[
+    ("<down>", "notif-down", Column::Anywhere),
+    ("<up>", "notif-up", Column::Anywhere),
+    ("TAB", "notif-pane-next", Column::Anywhere),
+    // `S-TAB` is the keysym `ISO_Left_Tab`, which is what xkb produces for
+    // it — the same "xkb has already applied it" both doors' key readers
+    // rely on when they refuse to count Shift. See `files::OF_THE_VIEW`.
+    ("S-TAB", "notif-pane-previous", Column::Anywhere),
+    ("SPC", "notif-read", Column::Happened),
+    ("d", "notif-forget", Column::ARecord),
+    ("r", "notif-read-all", Column::Anywhere),
+    ("RET", "notif-act", Column::Happened),
+    // THE SAME KEY, THE OTHER MEANING. On the catalogue `RET` opens the
+    // entry's sheet, and calling that "run its action" was the label lying at
+    // one of the two levels — the same reason `notif-restore` exists.
+    ("RET", "notif-adjust", Column::Catalogue),
+];
+
+/// The SHEET's keys — what the line teaches while one entry is being adjusted.
+///
+/// A second table and not a second half of the first, because two of its keys
+/// mean something else here: `r` puts the distro's default back rather than
+/// marking everything read, and the arrows turn a knob rather than doing
+/// nothing. One key, one meaning per level, and the line says which level it
+/// is on by teaching only that level's keys.
+pub const OF_THE_SHEET: &[(&str, &str)] = &[
+    ("<down>", "notif-down"),
+    ("<up>", "notif-up"),
+    ("<right>", "notif-knob-next"),
+    ("<left>", "notif-knob-previous"),
+    ("r", "notif-restore"),
 ];
 
 /// Which list has the cursor.
@@ -89,6 +163,16 @@ impl Pane {
             Self::Happened => Self::Suppressed,
             Self::Suppressed => Self::Catalogue,
             Self::Catalogue => Self::Happened,
+        }
+    }
+
+    /// The one before, cycling. It is what `S-TAB` does.
+    #[must_use]
+    pub const fn previous(self) -> Self {
+        match self {
+            Self::Happened => Self::Catalogue,
+            Self::Suppressed => Self::Happened,
+            Self::Catalogue => Self::Suppressed,
         }
     }
 }
@@ -175,9 +259,17 @@ impl Knob {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// The pieces, left to right, already placed in cells.
+    ///
+    /// # Why there is no `focused` beside them
+    ///
+    /// There was, and NEITHER door read it: the footer's `manager_rows` takes
+    /// `r.fields` and the window takes `f.color`. What says the cursor is
+    /// here is the colour of the FIELD — `record_line` paints the focused row
+    /// in the accent — and a second answer that no pixel comes from is a
+    /// second answer that can be wrong without anybody noticing. It was: the
+    /// only assertion about it read `!rows[1].focused` and called that "the
+    /// cursor lights nothing", which is not what a person sees.
     pub fields: Vec<Field>,
-    /// Is the cursor on it?
-    pub focused: bool,
 }
 
 /// What the manager wants done, after a key or a click.
@@ -244,11 +336,19 @@ impl<'a> Lists<'a> {
         // the same thing at two ages.
         let mut happened: Vec<&Record> = shown.iter().copied().filter(|r| !r.read).collect();
         happened.extend(shown.iter().copied().filter(|r| r.read));
+        // THE DISTRO'S ENTRIES, THE DISTRO'S RULES, AND THE PERSON'S RULES.
+        //
+        // `book.mine` was missing, and it is the half a person can actually
+        // change: a suppressed row names the rule that hid it
+        // (`NOTIF_SUPPRESSED_BY`), and if that rule was one of theirs the
+        // catalogue could neither show it nor adjust it — the screen named
+        // something the screen could not reach.
         let catalogue = book
             .entries
             .iter()
             .map(|e| (e.id.clone(), false))
             .chain(book.rules.iter().map(|r| (r.id.clone(), true)))
+            .chain(book.mine.iter().map(|r| (r.id.clone(), true)))
             .collect();
         Self {
             happened,
@@ -287,16 +387,30 @@ impl<'a> Lists<'a> {
 ///
 /// The gap is `space.modeline.segmentGap`, which is the number this system
 /// already uses for "two things on one line are two things". The right pane
-/// stops one cell short of the screen for the same reason its band does.
+/// stops `space.files.edgeRight` short of the screen for the reason that
+/// token gives: a glyph against the edge reads as a glyph that was cut off.
+///
+/// # In the ROW's cells, not the screen's
+///
+/// Both doors draw a row `chrome::FIELDS_LEAD` in and take the same lead off
+/// under the pointer, so what the row itself carries is only the GUTTER —
+/// the cell a file row begins at. It used to carry the whole inset, and the
+/// two doors added the lead on top: every notification landed three cells
+/// in, one more than every file, which the owner reported as content sitting
+/// "far from the corners". `both_doors_put_content_in_the_same_place` is the
+/// arithmetic; [`tests::the_rows_land_where_the_file_managers_do`] is this
+/// file's half of it.
 #[must_use]
 pub fn extent_of(pane: Pane, columns: u16) -> (u16, u16) {
-    let left = crate::chrome::INSET;
+    let left = crate::chrome::INSET.saturating_sub(crate::chrome::FIELDS_LEAD);
+    // The lead is only on the LEFT; the air at the right end is the row's.
+    let end = columns.saturating_sub(crate::chrome::FIELDS_LEAD + tokens::space::FILES_EDGERIGHT);
     if pane == Pane::Catalogue || !two_columns(columns) {
-        return (left, columns.saturating_sub(left * 2));
+        return (left, end.saturating_sub(left));
     }
     let split = split_at(columns);
     match pane {
-        Pane::Suppressed => (split, columns.saturating_sub(split + left)),
+        Pane::Suppressed => (split, end.saturating_sub(split)),
         _ => (
             left,
             split.saturating_sub(left + tokens::space::MODELINE_SEGMENTGAP),
@@ -321,7 +435,7 @@ pub const fn two_columns(columns: u16) -> bool {
 /// filtered out — which is a reference list, read rarely and never at length.
 #[must_use]
 pub fn split_at(columns: u16) -> u16 {
-    columns * 3 / 5
+    columns * tokens::space::NOTIFICATIONS_SPLITATPCT / 100
 }
 
 impl View {
@@ -331,7 +445,29 @@ impl View {
         Self::default()
     }
 
-    /// Which pane has the cursor.
+    /// Keeps the cursor on a row that EXISTS.
+    ///
+    /// # Why it is not enough to clamp when the arrows move
+    ///
+    /// Because the list shrinks under the cursor without anybody pressing an
+    /// arrow: `d` forgets the focused record, and a notification arriving or
+    /// expiring changes the length too. With two records and the cursor on
+    /// the second, `d` left the cursor at 1 over a list of length 1: no row
+    /// was lit, and `d`, `SPC` and `RET` were all dead until an arrow was
+    /// pressed. Nothing on screen said why.
+    ///
+    /// Both doors call it after anything that can change the lists, which is
+    /// the same shape `bluetooth::View::settle` has for the same reason.
+    pub fn settle(&mut self, lists: &Lists<'_>) {
+        let there = lists.len(self.pane);
+        if there == 0 {
+            self.set_cursor(0);
+            return;
+        }
+        self.set_cursor(self.cursor().min(there - 1));
+    }
+
+    /// Which column has the keyboard.
     #[must_use]
     pub const fn pane(&self) -> Pane {
         self.pane
@@ -345,6 +481,25 @@ impl View {
             Pane::Suppressed => self.suppressed,
             Pane::Catalogue => self.catalogue,
         }
+    }
+
+    /// Can this row be marked read AT ALL?
+    ///
+    /// # Why the column decides and not the record
+    ///
+    /// A suppressed record is stored `read: false` — it never reached the
+    /// band, so nothing could have read it — and the envelope used to be
+    /// drawn for any record that was not read. But `Press::Space` refuses it
+    /// on that column ON PURPOSE: it is already off the count, so marking it
+    /// read is a gesture with no effect.
+    ///
+    /// So the mouse did what the keyboard would not, and it did more than
+    /// nothing: in the footer it reached `dbus::notification_was_closed(id,
+    /// ByHand)`, telling an application the person had dismissed a
+    /// notification they were never shown. "The click only does what the key
+    /// does" is the rule; this is the one place it was broken.
+    const fn can_be_read(pane: Pane) -> bool {
+        matches!(pane, Pane::Happened)
     }
 
     /// Puts the cursor on row `n`, and acts if the click landed on a target.
@@ -365,7 +520,37 @@ impl View {
         lists: &Lists<'_>,
         columns: u16,
     ) -> Errand {
-        self.set_cursor(n);
+        // THE SHEET IS NOT A LIST, and a click in it moves nothing.
+        //
+        // With an entry open the drawn rows are the SHEET's — one per knob —
+        // and this function went on writing `self.catalogue`, which is the
+        // index that says WHICH ENTRY is being adjusted. So clicking the
+        // sheet's fourth row silently switched the sheet to the fourth entry
+        // of the catalogue: the title changed, and `←`/`→` then wrote the
+        // adjustment onto a notification kind nobody had opened. The errand
+        // was `Nothing`, so nothing on screen said a click had done anything
+        // at all.
+        if self.knob.is_some() {
+            return Errand::Nothing;
+        }
+        // WHICH COLUMN WAS CLICKED decides which pane the cursor goes to. With
+        // two columns on screen a click in the right one used to move the
+        // LEFT pane's cursor, and the right column's envelope and bin were
+        // out of reach for the mouse until `TAB` had been pressed — the cell
+        // fell outside the left pane's extent and no target answered. Found
+        // by the review of the two-column screen; "a click selects" is the
+        // rule, and it has to mean the thing under the pointer.
+        if self.pane != Pane::Catalogue && two_columns(columns) {
+            self.pane = match cell {
+                Some(c) if c >= split_at(columns) => Pane::Suppressed,
+                _ => Pane::Happened,
+            };
+        }
+        // CLAMPED to the pane that was just chosen: the rows run to the
+        // longer of the two columns, so a click below the shorter one's last
+        // item names a row that pane does not have — and a cursor past the
+        // end lights nothing until an arrow brings it back.
+        self.set_cursor(n.min(lists.len(self.pane).saturating_sub(1)));
         let (at, room) = self.row_extent(columns);
         let Some(hit) = cell.and_then(|c| target_at(c, at, room)) else {
             return Errand::Nothing;
@@ -377,7 +562,8 @@ impl View {
         };
         let Some(id) = id else { return Errand::Nothing };
         match hit {
-            Hit::MarkRead => Errand::Read(id),
+            Hit::MarkRead if Self::can_be_read(self.pane) => Errand::Read(id),
+            Hit::MarkRead => Errand::Nothing,
             Hit::Delete => Errand::Forget(id),
         }
     }
@@ -385,11 +571,87 @@ impl View {
     /// What the message line says about the focused row.
     ///
     /// `None` when there is nothing to add. Today it is the reason a switch
-    /// does nothing — see the note in `sheet_rows`.
+    /// does nothing — see the note in `sheet_rows`. It is NOT the hint line:
+    /// that is [`View::hint`], and this wins over it on the same line, the
+    /// way a pointer's explanation wins over the keys everywhere else.
     #[must_use]
-    pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    pub fn note(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
         let knob = self.knob?;
         Some(texts.t(Knob::ALL.get(knob)?.inert()?))
+    }
+
+    /// The hint line, as pieces the two doors paint identically — and WHERE
+    /// IN THE LIST the cursor is.
+    ///
+    /// GENERATED from the level's table (`OF_THE_VIEW` on a list,
+    /// `OF_THE_SHEET` with an entry open), for the reason `files::View::hint`
+    /// gives at length: a sentence kept by hand beside the table is a
+    /// sentence that falls behind, and this one had — the window taught six
+    /// keys out of a `.ftl` value and the footer taught none.
+    ///
+    /// # Why the counter is on the line
+    ///
+    /// The footer's region draws a scrollbar when the content is taller than
+    /// the page (`Footer::has_bar`). The window draws no rectangle at all —
+    /// it is text and a colour, one render pass — so with four hundred
+    /// records in the history it gave no sign there was anything below the
+    /// last drawn row. Both doors pass it, because "the two doors show the
+    /// same thing" is the owner's requirement and a counter on one of them is
+    /// two answers again.
+    ///
+    /// A COUNTER AND NOT A BAR: adding a quad pipeline to this window for one
+    /// rectangle is a lot of machinery for "there is more", and the band's
+    /// own `2/5` is the convention this system already has for saying it in
+    /// text. Both doors call this, so the line reads the same in each.
+    #[must_use]
+    pub fn hint_of(
+        &self,
+        of: Option<(usize, usize)>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<crate::chrome::Piece> {
+        let mut out = self.taught(texts);
+        // MORE THAN ONE, or there is nothing to place: the band's rule, and
+        // the same reason — `1/1` is a column spent saying nothing.
+        if let Some((at, total)) = of.filter(|(_, total)| *total > 1) {
+            out.push(crate::chrome::Piece::separator());
+            out.push(crate::chrome::Piece::prose(texts.t_args(
+                ronoctua_i18n::key::NOTIF_WHERE,
+                &[
+                    (
+                        "at",
+                        ronoctua_i18n::Arg::Number(i64::try_from(at + 1).unwrap_or(1)),
+                    ),
+                    (
+                        "total",
+                        ronoctua_i18n::Arg::Number(i64::try_from(total).unwrap_or(0)),
+                    ),
+                ],
+            )));
+        }
+        out
+    }
+
+    /// The keys the level teaches, and nothing else.
+    fn taught(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
+        if self.knob.is_some() {
+            return crate::chrome::hint_of(OF_THE_SHEET, texts);
+        }
+        let here: Vec<(&str, &str)> = OF_THE_VIEW
+            .iter()
+            .filter(|(_, _, c)| c.shown(self.pane))
+            .map(|(k, id, _)| (*k, *id))
+            .collect();
+        crate::chrome::hint_of(&here, texts)
+    }
+
+    /// Is an entry's sheet open?
+    ///
+    /// Read by the door that has to know whether `notif-restore` has anything
+    /// to restore: outside the sheet the same letter marks everything read,
+    /// and a command run by name must not do the other thing.
+    #[must_use]
+    pub const fn in_sheet(&self) -> bool {
+        self.knob.is_some()
     }
 
     /// Where the focused pane's rows begin and how wide they are.
@@ -553,6 +815,7 @@ fn record_line(
     at: u16,
     room: u16,
     focused: bool,
+    readable: bool,
     texts: &ronoctua_i18n::Texts,
 ) -> Vec<Field> {
     let tone = if focused {
@@ -602,8 +865,15 @@ fn record_line(
     // An UNREAD one gets the envelope; a read one does not, because marking
     // read what is already read is a gesture with no effect, and a control that
     // does nothing is worse than one that is not offered.
+    //
+    // AND A SUPPRESSED ONE NEVER GETS IT (`readable`), although it is stored
+    // unread: it never reached the band, so nothing could have read it, and
+    // `Press::Space` refuses that column for exactly that reason. Drawn, the
+    // envelope was a control the keyboard would not press and the mouse
+    // would — and pressing it told the application the person had dismissed
+    // something they were never shown.
     let end = at + room;
-    if !r.read {
+    if readable && !r.read {
         out.push(piece(
             end.saturating_sub(3),
             tokens::icon::NOTIFICATION_MARK_READ.to_string(),
@@ -685,6 +955,8 @@ pub enum Press {
     Right,
     /// Next pane.
     Tab,
+    /// Previous pane — `S-TAB`, which xkb delivers as its own keysym.
+    BackTab,
     /// Act on the focused row.
     Enter,
     /// Mark the focused notification read.
@@ -711,8 +983,11 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        let left = crate::chrome::INSET;
-        let room = columns.saturating_sub(left * 2);
+        // ONE ANSWER TO "WHERE DOES A ROW BEGIN": the full-width extent, which
+        // is what the catalogue and the sheet and the stacked panes all take.
+        // It used to be worked out again here as the whole inset, and the two
+        // doors added their lead on top — see `extent_of`.
+        let (left, room) = extent_of(Pane::Catalogue, columns);
 
         // THE SHEET takes the whole region: it is one thing being adjusted, and
         // a list beside it would be a second place for the eye to be.
@@ -728,52 +1003,84 @@ impl View {
         }
 
         let split = split_at(columns);
+        // THE HEADING OF THE COLUMN THAT HAS THE KEYBOARD IS LIT.
+        //
+        // Both used to be `TEXT_GROUP` always, and the only sign of which
+        // column the keyboard was on was the OTHER column's row losing its
+        // accent. On an empty column there is no row to lose it: `TAB` onto
+        // "Filtered out" with nothing filtered left the screen saying
+        // "nothing here" in the dim tone, no cursor anywhere, and — before
+        // the hint line learned its column — four keys taught that did
+        // nothing. Three ways of saying nothing, and no way of saying where.
+        //
+        // The file manager solved the same thing with `chrome::divider_lit`;
+        // there is no rule here, so what carries it is the heading, which is
+        // the one thing a column always has.
+        let heading = |pane: Pane| {
+            if self.pane == pane {
+                tokens::color::STATE_ACCENT
+            } else {
+                tokens::color::TEXT_GROUP
+            }
+        };
         let mut out = vec![Row {
             fields: vec![
                 piece(
                     left,
                     texts.t(Pane::Happened.heading()),
-                    tokens::color::TEXT_GROUP,
+                    heading(Pane::Happened),
                 ),
                 piece(
                     split,
                     texts.t(Pane::Suppressed.heading()),
-                    tokens::color::TEXT_GROUP,
+                    heading(Pane::Suppressed),
                 ),
             ],
-            focused: false,
         }];
-        let tall = lists.happened.len().max(lists.suppressed.len());
+        // AT LEAST ONE ROW UNDER THE HEADINGS, so that an EMPTY column can say
+        // so — in ITS column. It used to say it only when both were empty, and
+        // only under the left heading: with three notifications received and
+        // none filtered, the right-hand column was blank, which the owner
+        // reported as a column that had lost its "nothing here". An empty
+        // region is indistinguishable from a key that did not work.
+        let tall = lists.happened.len().max(lists.suppressed.len()).max(1);
         for i in 0..tall {
             let mut fields = Vec::new();
             // THE CURSOR IS IN ONE PANE, and only that pane's half lights up.
             // Lighting the whole row would say the two items were one thing —
             // and they are two different notifications, in two lists.
-            let here = self.cursor() == i;
-            if let Some(r) = lists.happened.get(i) {
-                let focused = here && self.pane == Pane::Happened;
-                let (at, room) = extent_of(Pane::Happened, columns);
-                fields.extend(record_line(r, at, room, focused, texts));
+            //
+            // And an empty pane has no row to light: the cursor sits at zero
+            // there with nothing under it, and lighting the "nothing here" as
+            // if it were an item would promise a key that does nothing.
+            let here = self.cursor() == i && lists.len(self.pane) > i;
+            for pane in [Pane::Happened, Pane::Suppressed] {
+                let (at, room) = extent_of(pane, columns);
+                let record = match pane {
+                    Pane::Happened => lists.happened.get(i),
+                    _ => lists.suppressed.get(i),
+                };
+                match record {
+                    Some(r) => {
+                        let focused = here && self.pane == pane;
+                        fields.extend(record_line(
+                            r,
+                            at,
+                            room,
+                            focused,
+                            View::can_be_read(pane),
+                            texts,
+                        ));
+                    }
+                    None if i == 0 => fields.push(piece(
+                        at,
+                        texts.t(ronoctua_i18n::key::NOTIF_NOTHING_HERE),
+                        tokens::color::TEXT_DIM,
+                    )),
+                    None => {}
+                }
             }
-            if let Some(r) = lists.suppressed.get(i) {
-                let focused = here && self.pane == Pane::Suppressed;
-                let (at, room) = extent_of(Pane::Suppressed, columns);
-                fields.extend(record_line(r, at, room, focused, texts));
-            }
-            out.push(Row {
-                fields,
-                focused: here,
-            });
-        }
-        if tall == 0 {
-            out.push(Row {
-                fields: vec![piece(
-                    left,
-                    texts.t(ronoctua_i18n::key::NOTIF_NOTHING_HERE),
-                    tokens::color::TEXT_DIM,
-                )],
-                focused: false,
-            });
+            out.push(Row { fields });
         }
         out
     }
@@ -794,20 +1101,33 @@ impl View {
                 texts.t(self.pane.heading()),
                 tokens::color::TEXT_GROUP,
             )],
-            focused: false,
         }];
         let n = lists.len(self.pane);
         for i in 0..n {
             let focused = self.cursor() == i;
             let fields = match self.pane {
-                Pane::Happened => record_line(lists.happened[i], left, room, focused, texts),
-                Pane::Suppressed => record_line(lists.suppressed[i], left, room, focused, texts),
+                Pane::Happened => record_line(
+                    lists.happened[i],
+                    left,
+                    room,
+                    focused,
+                    Self::can_be_read(Pane::Happened),
+                    texts,
+                ),
+                Pane::Suppressed => record_line(
+                    lists.suppressed[i],
+                    left,
+                    room,
+                    focused,
+                    Self::can_be_read(Pane::Suppressed),
+                    texts,
+                ),
                 Pane::Catalogue => {
                     let (id, rule) = &lists.catalogue[i];
                     catalogue_line(id, *rule, book, left, room, focused, texts)
                 }
             };
-            out.push(Row { fields, focused });
+            out.push(Row { fields });
         }
         if n == 0 {
             out.push(Row {
@@ -816,7 +1136,6 @@ impl View {
                     texts.t(ronoctua_i18n::key::NOTIF_NOTHING_HERE),
                     tokens::color::TEXT_DIM,
                 )],
-                focused: false,
             });
         }
         out
@@ -854,7 +1173,6 @@ impl View {
                     tokens::color::TEXT_DIM,
                 ),
             ],
-            focused: false,
         }];
         for (i, k) in Knob::ALL.iter().enumerate() {
             // THE FOCUSED KNOB IS THE ONE THE ARROWS TURN, and it says so in
@@ -888,7 +1206,7 @@ impl View {
                 piece(left, texts.t(k.label()), label),
                 piece(left + room / 3, value_of(&p, *k, texts), value),
             ];
-            out.push(Row { fields, focused });
+            out.push(Row { fields });
         }
         out
     }
@@ -909,8 +1227,12 @@ impl View {
                 self.set_cursor((self.cursor() + 1).min(n.saturating_sub(1)));
                 Errand::Nothing
             }
-            Press::Tab => {
-                self.pane = self.pane.next();
+            Press::Tab | Press::BackTab => {
+                self.pane = if press == Press::Tab {
+                    self.pane.next()
+                } else {
+                    self.pane.previous()
+                };
                 // THE NEW PANE MAY BE SHORTER. Each pane keeps its own cursor —
                 // coming back to a list should come back to where you were —
                 // but a cursor past the end would light a row that is not there
@@ -1014,7 +1336,9 @@ impl View {
             // same" are different answers to "who decided this?", and the
             // manager draws the difference.
             Press::Letter('r') => Errand::Adjusted(id.clone(), None),
-            Press::Tab | Press::Enter | Press::Space | Press::Letter(_) => Errand::Nothing,
+            Press::Tab | Press::BackTab | Press::Enter | Press::Space | Press::Letter(_) => {
+                Errand::Nothing
+            }
         }
     }
 }
@@ -1163,7 +1487,7 @@ mod tests {
         let t = texts();
         let mut r = record(1, Show::Hidden, false);
         r.presentation.by = Some("my-rule".into());
-        let fields = record_line(&r, 0, 120, false, &t);
+        let fields = record_line(&r, 0, 120, false, true, &t);
         let text: String = fields.iter().map(|f| f.text.as_str()).collect();
         assert!(text.contains("my-rule"), "{text}");
     }
@@ -1310,17 +1634,343 @@ mod tests {
             label: ronoctua_notify::Label::Text("open".into()),
             doing: ronoctua_notify::Doing::Invoke,
         }];
-        let records = vec![r];
+        // THREE, so that from the middle row both `<up>` and `<down>` have
+        // somewhere to go — and the middle one is the one with the action,
+        // because that is the row the cursor stands on.
+        //
+        // AND THREE SUPPRESSED ONES BESIDE THEM, for the same reason on the
+        // other column: this test walks every column the line teaches a key
+        // on, and an empty column would make every key there look dead.
+        let records = vec![
+            record(2, Show::Brief, false),
+            r,
+            record(3, Show::Brief, false),
+            record(4, Show::Hidden, false),
+            record(5, Show::Hidden, false),
+            record(6, Show::Hidden, false),
+        ];
         let lists = Lists::of(&records, &b);
-        for (key, id) in OF_THE_VIEW {
-            let press = match *key {
-                "SPC" => Press::Space,
-                "RET" => Press::Enter,
-                k => Press::Letter(k.chars().next().unwrap()),
-            };
+        let press_of = |k: &str| match k {
+            "SPC" => Press::Space,
+            "RET" => Press::Enter,
+            "TAB" => Press::Tab,
+            "S-TAB" => Press::BackTab,
+            "<up>" => Press::Up,
+            "<down>" => Press::Down,
+            "<left>" => Press::Left,
+            "<right>" => Press::Right,
+            k => Press::Letter(k.chars().next().unwrap()),
+        };
+        // ON EVERY COLUMN THE LINE TEACHES IT. A walking key answers
+        // `Nothing` and MOVES instead, so "does something" is either an
+        // errand or a cursor that is not where it was — from row one, so that
+        // `<up>` has somewhere to go.
+        //
+        // THE COLUMN IS THE POINT. This used to start from `View::fresh()`
+        // every time, which is `Pane::Happened` and nothing else — so it
+        // could not see that `SPC` and `RET` do nothing on the other two,
+        // which is exactly what the line was teaching there.
+        for (key, id, column) in OF_THE_VIEW {
+            for pane in [Pane::Happened, Pane::Suppressed, Pane::Catalogue] {
+                if !column.shown(pane) {
+                    continue;
+                }
+                let mut v = View::fresh();
+                v.pane = pane;
+                let _ = v.key(Press::Down, &lists, &b);
+                let (was, cursor) = (v.pane, v.cursor());
+                let did = v.key(press_of(key), &lists, &b);
+                assert!(
+                    did != Errand::Nothing
+                        || (v.pane, v.cursor()) != (was, cursor)
+                        || v.knob.is_some(),
+                    "`{key}` ({id}) does nothing on {pane:?}, and the line teaches it there"
+                );
+            }
+        }
+        // AND IN THE SHEET, where the same keys mean the sheet's things.
+        for (key, id) in OF_THE_SHEET {
             let mut v = View::fresh();
-            let did = v.key(press, &lists, &b);
-            assert_ne!(did, Errand::Nothing, "`{key}` ({id}) does nothing");
+            v.pane = Pane::Catalogue;
+            let _ = v.key(Press::Enter, &lists, &b);
+            let _ = v.key(Press::Down, &lists, &b);
+            let before = v.knob;
+            let did = v.key(press_of(key), &lists, &b);
+            assert!(
+                did != Errand::Nothing || v.knob != before,
+                "`{key}` ({id}) does nothing in the sheet"
+            );
+        }
+    }
+
+    #[test]
+    fn every_id_the_line_teaches_has_a_short_text_and_a_label() {
+        // The hint line reads the id as a TEXT KEY (`notif-read` → "read"),
+        // the way the file manager's does; the manual and which-key read
+        // `cmd-<id>`. Both have to exist, in the base language at least — the
+        // `i18n-complete` check carries it to every other.
+        let t = texts();
+        let every = OF_THE_VIEW
+            .iter()
+            .map(|(_, id, _)| *id)
+            .chain(OF_THE_SHEET.iter().map(|(_, id)| *id));
+        for id in every {
+            for key in [id.to_owned(), format!("cmd-{id}")] {
+                // `[key]` is what a missing one resolves to; comparing
+                // against the key itself could never fail.
+                assert!(!t.t(&key).starts_with('['), "`{key}` has no text");
+            }
+        }
+    }
+
+    #[test]
+    fn the_hint_line_teaches_the_level_it_is_on() {
+        // One table per level, and the line is whichever the cursor is on:
+        // with the sheet open `r` is "back to the distro's" and not "all
+        // read", and the arrows turn a knob rather than doing nothing.
+        let t = texts();
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        let (pane, restore) = (t.t("notif-pane-next"), t.t("notif-restore"));
+        let on_list: String = v
+            .hint_of(None, &t)
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect();
+        assert!(on_list.contains(&pane), "{on_list}");
+        assert!(!on_list.contains(&restore), "{on_list}");
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Enter, &lists, &b);
+        let in_sheet: String = v
+            .hint_of(None, &t)
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect();
+        assert!(in_sheet.contains(&restore), "{in_sheet}");
+        assert!(!in_sheet.contains(&pane), "{in_sheet}");
+        // And the separator between shortcuts is the code's, never a value's.
+        assert!(
+            v.hint_of(None, &t)
+                .iter()
+                .any(|p| p.register == crate::chrome::Register::Separator)
+        );
+        // EVERY ID REACHES THE LINE: `chrome::hint_of` skips a notation it
+        // cannot parse, so a typo in a table would vanish from the screen in
+        // silence. Three pieces per id — key, words, and the separator before
+        // every one but the first.
+        let count = |ids: Vec<&str>| {
+            let mut seen: Vec<&str> = Vec::new();
+            for id in ids {
+                if !seen.contains(&id) {
+                    seen.push(id);
+                }
+            }
+            seen.len()
+        };
+        assert_eq!(
+            v.hint_of(None, &t).len(),
+            3 * count(OF_THE_SHEET.iter().map(|(_, id)| *id).collect()) - 1
+        );
+        // AND ON A COLUMN, only that column's keys — which is what the line
+        // teaches now, and is the reason this is not the whole table.
+        for pane in [Pane::Happened, Pane::Suppressed, Pane::Catalogue] {
+            let mut one = View::fresh();
+            one.pane = pane;
+            let here: Vec<&str> = OF_THE_VIEW
+                .iter()
+                .filter(|(_, _, c)| c.shown(pane))
+                .map(|(_, id, _)| *id)
+                .collect();
+            assert_eq!(one.hint_of(None, &t).len(), 3 * count(here) - 1, "{pane:?}");
+        }
+    }
+
+    #[test]
+    fn the_cursor_is_inside_the_list_after_the_row_it_was_on_is_forgotten() {
+        // Two records, the cursor on the second, and the second forgotten.
+        // The list is one long and the cursor was at 1: no row lit, and `d`,
+        // `SPC` and `RET` all dead until an arrow was pressed.
+        let b = Book::distro();
+        let records = vec![record(1, Show::Brief, false), record(2, Show::Brief, false)];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.key(Press::Down, &lists, &b);
+        assert_eq!(v.cursor(), 1);
+        drop(lists);
+        let shorter = vec![record(1, Show::Brief, false)];
+        let lists = Lists::of(&shorter, &b);
+        v.settle(&lists);
+        assert_eq!(
+            v.cursor(),
+            0,
+            "the cursor points at a row that is not there"
+        );
+    }
+
+    #[test]
+    fn a_click_in_the_sheet_does_not_change_which_entry_is_open() {
+        // The sheet's rows are the knobs, and this used to write the
+        // CATALOGUE's index: clicking the sheet's fourth row switched the
+        // sheet to the fourth entry, and the next `←` adjusted a kind nobody
+        // had opened.
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Enter, &lists, &b);
+        assert!(v.in_sheet());
+        let was = v.cursor();
+        let did = v.clicked(3, Some(4), &lists, 120);
+        assert_eq!(did, Errand::Nothing);
+        assert_eq!(v.cursor(), was, "the click moved which entry is open");
+    }
+
+    #[test]
+    fn a_suppressed_row_has_no_envelope_because_the_key_refuses_it() {
+        // `Press::Space` on that column returns `Nothing` on purpose. The
+        // envelope was drawn anyway, and clicking it told the application the
+        // person had dismissed a notification they were never shown.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![record(1, Show::Hidden, false)];
+        let lists = Lists::of(&records, &b);
+        let rows = View::fresh().rows(&lists, &b, 120, &t);
+        let envelope = tokens::icon::NOTIFICATION_MARK_READ.to_string();
+        assert!(
+            !rows
+                .iter()
+                .flat_map(|r| &r.fields)
+                .any(|f| f.text == envelope),
+            "a suppressed row draws a control the keyboard refuses"
+        );
+        // AND THE CLICK REFUSES IT TOO, wherever the drawing came from.
+        let mut v = View::fresh();
+        v.pane = Pane::Suppressed;
+        let (at, room) = v.row_extent(120);
+        assert_eq!(
+            v.clicked(0, Some(at + room - 3), &lists, 120),
+            Errand::Nothing
+        );
+    }
+
+    #[test]
+    fn each_empty_column_says_so() {
+        // Reported from the screen: with something received and nothing
+        // filtered, the right-hand column was blank — "nothing here" only came
+        // when BOTH were empty, and only under the left heading.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![record(1, Show::Brief, false)];
+        let lists = Lists::of(&records, &b);
+        let rows = View::fresh().rows(&lists, &b, 120, &t);
+        assert_eq!(rows.len(), 2);
+        let nothing = t.t(ronoctua_i18n::key::NOTIF_NOTHING_HERE);
+        let (right, _) = extent_of(Pane::Suppressed, 120);
+        assert!(
+            rows[1]
+                .fields
+                .iter()
+                .any(|f| f.at == right && f.text == nothing),
+            "the empty column does not say so: {:?}",
+            rows[1].fields
+        );
+        // And the other way round: the left column says it, the right draws.
+        let records = vec![record(2, Show::Hidden, false)];
+        let lists = Lists::of(&records, &b);
+        let rows = View::fresh().rows(&lists, &b, 120, &t);
+        let (left, _) = extent_of(Pane::Happened, 120);
+        assert!(
+            rows[1]
+                .fields
+                .iter()
+                .any(|f| f.at == left && f.text == nothing)
+        );
+        assert!(rows[1].fields.iter().any(|f| f.at >= right));
+    }
+
+    #[test]
+    fn the_column_with_the_keyboard_says_so_even_when_it_is_empty() {
+        // `TAB` onto a column with nothing in it used to leave no positive
+        // mark anywhere: the only sign was the OTHER column's row losing its
+        // accent, and with both columns empty there was no sign at all.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![record(1, Show::Brief, false)];
+        let lists = Lists::of(&records, &b);
+        let (left, _) = extent_of(Pane::Happened, 120);
+        let split = split_at(120);
+
+        let lit = |v: &View, at: u16| {
+            v.rows(&lists, &b, 120, &t)[0]
+                .fields
+                .iter()
+                .find(|f| f.at == at)
+                .map(|f| f.color)
+                .expect("a heading at that column")
+        };
+        let mut v = View::fresh();
+        assert_eq!(lit(&v, left), tokens::color::STATE_ACCENT);
+        assert_eq!(lit(&v, split), tokens::color::TEXT_GROUP);
+
+        // AND ON THE EMPTY ONE, which is the case that had nothing to show.
+        let _ = v.key(Press::Tab, &lists, &b);
+        assert_eq!(v.pane, Pane::Suppressed);
+        assert_eq!(lit(&v, split), tokens::color::STATE_ACCENT);
+        assert_eq!(lit(&v, left), tokens::color::TEXT_GROUP);
+    }
+
+    #[test]
+    fn the_rows_land_where_the_file_managers_do() {
+        // Both doors draw a row `chrome::FIELDS_LEAD` in, so what the row
+        // carries has to be the gutter and no more — or every notification
+        // lands one cell further in than every file, which is what the owner
+        // photographed.
+        let (at, _) = extent_of(Pane::Happened, 120);
+        assert_eq!(
+            at + crate::chrome::FIELDS_LEAD,
+            crate::chrome::INSET,
+            "a notification row does not begin at the inset"
+        );
+        let (at, _) = extent_of(Pane::Catalogue, 50);
+        assert_eq!(at + crate::chrome::FIELDS_LEAD, crate::chrome::INSET);
+        // And every path of `rows` — stacked, two columns, the sheet — draws
+        // its first field there, not one cell further.
+        let t = texts();
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        for (columns, pane) in [
+            (50_u16, Pane::Happened),
+            (120, Pane::Happened),
+            (120, Pane::Catalogue),
+        ] {
+            let mut v = View::fresh();
+            v.pane = pane;
+            for row in v.rows(&lists, &b, columns, &t) {
+                let first = row.fields.iter().map(|f| f.at).min().unwrap();
+                assert_eq!(
+                    first + crate::chrome::FIELDS_LEAD,
+                    crate::chrome::INSET,
+                    "{pane:?} at {columns}"
+                );
+            }
+            let _ = v.key(Press::Enter, &lists, &b);
+            for row in v.rows(&lists, &b, columns, &t) {
+                let first = row.fields.iter().map(|f| f.at).min().unwrap();
+                assert_eq!(
+                    first + crate::chrome::FIELDS_LEAD,
+                    crate::chrome::INSET,
+                    "sheet at {columns}"
+                );
+            }
+        }
+        // And the right end leaves the file manager's air, in both layouts.
+        for columns in [50_u16, 120] {
+            let (at, room) = extent_of(Pane::Suppressed, columns);
+            assert_eq!(
+                at + room + crate::chrome::FIELDS_LEAD + tokens::space::FILES_EDGERIGHT,
+                columns
+            );
         }
     }
 
@@ -1428,6 +2078,74 @@ mod tests {
     }
 
     #[test]
+    fn a_click_in_the_right_column_reaches_it() {
+        // Two columns, the cursor on the left, a click on the right column's
+        // bin: the pane follows the pointer, and the bin answers.
+        let b = Book::distro();
+        let records = vec![
+            record(1, Show::Brief, false),
+            record(2, Show::Hidden, false),
+        ];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let (at, room) = extent_of(Pane::Suppressed, 120);
+        assert_eq!(
+            v.clicked(0, Some(at + room - 1), &lists, 120),
+            Errand::Forget(2),
+            "the right column's bin did not answer"
+        );
+        assert_eq!(v.pane, Pane::Suppressed);
+        // And a click back on the left column brings the cursor home.
+        assert_eq!(v.clicked(0, Some(3), &lists, 120), Errand::Nothing);
+        assert_eq!(v.pane, Pane::Happened);
+        // Stacked, there is one column and the pane stays where `TAB` put it.
+        v.pane = Pane::Suppressed;
+        let _ = v.clicked(0, Some(3), &lists, 50);
+        assert_eq!(v.pane, Pane::Suppressed);
+        // And a click BELOW the shorter column's last item lands on that
+        // item, not on a row the column does not have.
+        let records = vec![
+            record(1, Show::Brief, false),
+            record(2, Show::Brief, false),
+            record(3, Show::Brief, false),
+            record(4, Show::Hidden, false),
+        ];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let _ = v.clicked(2, Some(at), &lists, 120);
+        assert_eq!((v.pane, v.cursor()), (Pane::Suppressed, 0));
+    }
+
+    #[test]
+    fn the_bells_sentence_says_none_and_not_one_for_zero() {
+        // Portuguese's `one` plural category covers 0 as well, so without an
+        // exact `[0]` branch "0 filtradas" came out as "uma filtrada" — a
+        // sentence claiming a notification was filtered when none was. Found
+        // by the review; measured against the locked `intl_pluralrules`.
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = ronoctua_i18n::Texts::fresh(language).unwrap();
+            let zero = t.t_args(
+                ronoctua_i18n::key::HINT_NOTIF_BELL,
+                &[
+                    ("unread", ronoctua_i18n::Arg::Number(2)),
+                    ("filtered", ronoctua_i18n::Arg::Number(0)),
+                ],
+            );
+            // THE SAME SENTENCE WITH ONE FILTERED: the two differ only in
+            // that half, so "they are the same" is exactly the defect — and
+            // in pt-BR they were.
+            let one = t.t_args(
+                ronoctua_i18n::key::HINT_NOTIF_BELL,
+                &[
+                    ("unread", ronoctua_i18n::Arg::Number(2)),
+                    ("filtered", ronoctua_i18n::Arg::Number(1)),
+                ],
+            );
+            assert_ne!(zero, one, "{language}: zero filtered reads as one");
+        }
+    }
+
+    #[test]
     fn d_forgets_the_focused_one() {
         // The keyboard's half of the bin. The generator refuses an action that
         // asks for `d`, so nothing can shadow it.
@@ -1454,13 +2172,13 @@ mod tests {
         v.pane = Pane::Catalogue;
         let _ = v.key(Press::Enter, &lists, &b);
         // The first knob works, so it has nothing to add.
-        assert_eq!(v.hint(&t), None);
+        assert_eq!(v.note(&t), None);
         // Walk down to `vibrate`.
         let dead = Knob::ALL.iter().position(|k| k.inert().is_some()).unwrap();
         for _ in 0..dead {
             let _ = v.key(Press::Down, &lists, &b);
         }
-        assert!(v.hint(&t).is_some(), "the dead switch stayed silent");
+        assert!(v.note(&t).is_some(), "the dead switch stayed silent");
         // And the row itself carries no third column any more.
         let rows = v.rows(&lists, &b, 200, &t);
         for (i, r) in rows.iter().enumerate().skip(1) {
@@ -1484,12 +2202,12 @@ mod tests {
         assert_eq!(v.cursor(), 4);
         // The suppressed list is empty here.
         let _ = v.key(Press::Tab, &lists, &b);
-        assert_eq!(v.pane(), Pane::Suppressed);
+        assert_eq!(v.pane, Pane::Suppressed);
         assert_eq!(v.cursor(), 0);
         // And the one it left is where it was.
         let _ = v.key(Press::Tab, &lists, &b);
         let _ = v.key(Press::Tab, &lists, &b);
-        assert_eq!(v.pane(), Pane::Happened);
+        assert_eq!(v.pane, Pane::Happened);
         assert_eq!(v.cursor(), 4);
     }
 

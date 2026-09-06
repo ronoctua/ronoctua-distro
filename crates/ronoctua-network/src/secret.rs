@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn the_name_is_the_ssid_in_hex() {
-        assert_eq!(name("casa"), "63617361");
+        assert_eq!(name("a house"), "6120686f757365");
         assert_eq!(name(""), "");
     }
 
@@ -246,7 +246,7 @@ mod tests {
         // byte in an SSID, and `../../etc/passwd` as a network name would write
         // outside the directory. In hex there is neither slash nor dot.
         let c = path("../../etc/passwd");
-        assert!(c.starts_with(DIRECTORY), "escapou: {}", c.display());
+        assert!(c.starts_with(DIRECTORY), "it escaped: {}", c.display());
         let file = c.file_name().unwrap().to_string_lossy().into_owned();
         assert!(!file.contains('/'), "a slash was left over: {file}");
         assert!(!file.contains(".."), "a dot-dot was left over: {file}");

@@ -96,6 +96,24 @@ pkgs.testers.runNixOSTest {
             "${pkgs.tesseract}/bin/tesseract /tmp/expansion.png stdout --psm 6 2>/dev/null"
         ).strip()
 
+    def footer_height_above(floor, attempts=20):
+        """The first height above `floor`, waited for.
+
+        Between one height and the next there is a frame with NO buffer —
+        `apply_geometry` commits the new size, and the swapchain is rebuilt
+        before anything is drawn again — and a shot taken there reads 0 px:
+        neither at rest nor expanded, and the assertion that fired on it said
+        "the same as at rest" about a 0. The log proves the footer asked; only
+        the pixels, polled, prove the compositor agreed.
+        """
+        seen = None
+        for _ in range(attempts):
+            seen = footer_height()
+            if seen > floor:
+                return seen
+            machine.sleep(1)
+        return seen
+
     def footer_height():
         """How many px from the bottom up differ from niri's background.
 
@@ -241,12 +259,16 @@ pkgs.testers.runNixOSTest {
             "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
 
-        expanded = footer_height()
+        expanded = footer_height_above(FOOTER)
         print(f"height with the leader: {expanded} px")
-        # Four groups in the default keymap (f, b, g, q), one line each, below the
-        # footer's two.
+        # THE FIRST LEVEL, one line per row, below the footer's two. What is
+        # asserted is that the surface GREW — the exact number of rows is the
+        # keymap's business and moves with it, and a count written here was
+        # stale within a month (it said four groups, named `g`, which has not
+        # existed for a long time, and `b`, which is now the brain and not the
+        # buffer).
         assert expanded > FOOTER, (
-            f"the leader did not expand the surface: {expanded} px, the same as at rest"
+            f"the leader did not expand the surface: {expanded} px against {FOOTER} px at rest"
         )
 
         journal = machine.succeed("journalctl -u footer --no-pager")
@@ -286,7 +308,10 @@ pkgs.testers.runNixOSTest {
         # reached the screen raw and invariant 8 is broken at the last link — the
         # only one no unit test covers.
         lowered = read_back.lower()
-        assert "buffer" in lowered, (
+        # `janela` — the `w` group's label, which the root list always has.
+        # It was `buffer`, until the buffer commands moved under `w` and
+        # the `b` prefix became the brain's.
+        assert "janela" in lowered, (
             f"the which-key list is not on screen in pt-BR; OCR read {read_back!r}"
         )
         assert "group-" not in lowered, (
@@ -317,7 +342,10 @@ pkgs.testers.runNixOSTest {
         assert "LEADER i-" in journal, journal
 
         w, h, x, y = niri_geometry()
-        alt = footer_height()
+        # POLLED, like every other read of a height that has just changed:
+        # `press_key` returns before the compositor has composed, and a 0 here
+        # would put the crop's origin off the window and fail inside magick.
+        alt = footer_height_above(FOOTER)
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         # THE FOOTER'S SECOND LINE, counting from its top — and not the last one
         # on the screen.
@@ -392,9 +420,8 @@ pkgs.testers.runNixOSTest {
             "journalctl -u footer --no-pager | grep -q 'command=\"mx-open\"'",
             timeout=30,
         )
-        machine.sleep(2)
         _, h, _, _ = niri_geometry()
-        with_mx = footer_height()
+        with_mx = footer_height_above(FOOTER)
         print(f"height with M-x open: {with_mx} px of {h} px of screen")
         assert with_mx > FOOTER, "M-x did not expand"
         assert with_mx <= h / 2, (
@@ -495,12 +522,7 @@ pkgs.testers.runNixOSTest {
         # THE LIST IS ON SCREEN when the region is taller than the two lines at
         # rest. Measured and not assumed: the log proves it was asked for, and
         # the pixels prove niri agreed.
-        opened = None
-        for _ in range(20):
-            opened = footer_height()
-            if opened > FOOTER:
-                break
-            machine.sleep(1)
+        opened = footer_height_above(FOOTER)
         assert opened is not None and opened > FOOTER, (
             f"the manager did not expand: {opened} px, at rest it is {FOOTER}"
         )

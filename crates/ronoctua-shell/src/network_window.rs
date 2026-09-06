@@ -1,0 +1,1068 @@
+//! The network view's SECOND door — a window of its own.
+//!
+//! # Why there are two, and why they are one implementation
+//!
+//! The footer's expanded region has a twelve-line ceiling (`space.expansion`,
+//! invariant 14), and this view has four sections: a glance at what is
+//! connected fits the footer, reading every address, every resolver and every
+//! network in range does not. So this exists — and everything it knows lives
+//! in [`crate::network::View`], which the footer draws from too. What this
+//! module holds is a window, a GPU and the events of both; what it decides is
+//! nothing. It is the arrangement `power_window.rs` and `bluetooth_window.rs`
+//! share, and the same header.
+//!
+//! # Where its data comes from
+//!
+//! From NetworkManager, on threads of its own (`ronoctua_network::watch` and
+//! `watch_scan`): a window has no clock, and the bus says when something
+//! changed. Orders go to the daemon directly — a radio, an aeroplane, a
+//! tunnel are the same call from any process, and NetworkManager keeps no
+//! per-client state.
+//!
+//! # Except a password, which is typed in the footer
+//!
+//! A window has no minibuffer. A secured network with no stored profile
+//! needs a password typed, so here the row says where to type it instead of
+//! opening a prompt that cannot exist — the arrangement the Bluetooth
+//! window's pairing questions already have.
+
+use anyhow::{Context as _, Result};
+use ronoctua_tokens as tokens;
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    output::{OutputHandler, OutputState},
+    reexports::calloop::{self, EventLoop, channel},
+    reexports::calloop_wayland_source::WaylandSource,
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+    },
+    shell::{
+        WaylandSurface as _,
+        xdg::{
+            XdgShell,
+            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
+        },
+    },
+};
+use wayland_client::{
+    Connection, Proxy as _, QueueHandle,
+    globals::registry_queue_init,
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+};
+
+/// The window's `app_id`.
+pub const APP_ID: &str = "br.ronoctua.network";
+
+/// `BTN_LEFT`, from `linux/input-event-codes.h`.
+const LEFT_BUTTON: u32 = 0x110;
+
+/// The first line of the list. Above it: the hint line, and nothing else —
+/// the arrangement the notification window has, for the reason it gives.
+const FIRST_OF_LIST: u16 = 1;
+
+/// The margin inside the window, in cells — see `chrome::FIELDS_LEAD`.
+const CONTENT_MARGIN: u16 = crate::chrome::FIELDS_LEAD;
+
+/// Opens the network view in a window.
+///
+/// # Errors
+///
+/// When there is no Wayland compositor, or the compositor offers no
+/// `xdg_shell`.
+pub fn host_it() -> Result<()> {
+    let conn = Connection::connect_to_env()
+        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
+    let (globals, queue) = registry_queue_init(&conn).context("Wayland's registry")?;
+    let qh: QueueHandle<NetworkWindow> = queue.handle();
+
+    let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
+    let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
+
+    let surface_of = compositor.create_surface(&qh);
+    let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
+    let texts = std::rc::Rc::new(ronoctua_i18n::Texts::from_env());
+    window.set_title(format!("*{}*", texts.t(ronoctua_i18n::key::NETWORK_TITLE)));
+    window.set_app_id(APP_ID);
+    window.commit();
+
+    let mut cycle: EventLoop<NetworkWindow> = EventLoop::try_new().context("calloop")?;
+    let handle = cycle.handle();
+
+    // THE THEME'S FILE, watched, so a choice made in the footer recolours this
+    // window without it being reopened.
+    let (theme_sender, theme_changed) = channel::channel::<()>();
+    let _theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    handle
+        .insert_source(theme_changed, |event, (), state: &mut NetworkWindow| {
+            if let channel::Event::Msg(()) = event
+                && crate::theme::reload()
+            {
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
+    // THE DAEMON, on a thread of this process — the bus is the clock.
+    let (net_sender, net_changes) = channel::channel::<ronoctua_network::Snapshot>();
+    if let Err(e) = ronoctua_network::watch(move |s| {
+        let _ = net_sender.send(s);
+    }) {
+        tracing::warn!(error = %e, "no NetworkManager; the window opens with nothing to read");
+    }
+    handle
+        .insert_source(net_changes, |event, (), state: &mut NetworkWindow| {
+            if let channel::Event::Msg(s) = event {
+                state.net_arrived(s);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the network channel: {e}"))?;
+
+    // AND THE SCAN, which is a different clock: `RequestScan` returns at once
+    // and the radio answers seconds later. Without this the list would sit
+    // still until somebody pressed something.
+    let (scan_sender, scans) = channel::channel::<()>();
+    if let Err(e) = ronoctua_network::watch_scan(move || {
+        let _ = scan_sender.send(());
+    }) {
+        tracing::debug!(error = %e, "no scan watcher; the list only rereads on request");
+    }
+    handle
+        .insert_source(scans, |event, (), state: &mut NetworkWindow| {
+            if let channel::Event::Msg(()) = event {
+                state.wire.reread();
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the scan channel: {e}"))?;
+
+    // THE ONE CLOCK ANY WINDOW OF THIS SYSTEM HAS, and it is here because
+    // this view has a section that MEASURES: a rate is a difference over a
+    // time, and the bus's signals do not arrive on a schedule. One second is
+    // the same coarse beat the footer uses, for the same reason — the
+    // resolution that matters is "it is moving", not the exact byte.
+    handle
+        .insert_source(
+            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+            |_, (), state: &mut NetworkWindow| {
+                state.watch.sample();
+                let rows = state.rows();
+                state.view.settle(&rows);
+                state.ask_paint();
+                calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("could not hang the second: {e}"))?;
+
+    let wire = crate::network::Wire::fresh();
+    let net = wire.look();
+    let mut watch = crate::network::Watch::default();
+    watch.sample();
+
+    // THE LOCAL NETWORK'S SWEEP, a thread per press — see the footer's own.
+    let (lan_sender, lan_answers) = channel::channel::<ronoctua_lan::Found>();
+    handle
+        .insert_source(lan_answers, |event, (), state: &mut NetworkWindow| {
+            if let channel::Event::Msg(found) = event {
+                state.watch.found(found);
+                let rows = state.rows();
+                state.view.settle(&rows);
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the sweep channel: {e}"))?;
+
+    // AND THE TWO TUNNELS, on this window's own thread — the same arrangement
+    // as the footer's, and for the reason the module header gives: neither
+    // daemon signals, so somebody has to ask.
+    let (tunnel_sender, tunnel_events) = channel::channel::<ronoctua_tunnel::Event>();
+    let hand = match ronoctua_tunnel::watch(
+        ronoctua_tunnel::Places::default(),
+        std::path::PathBuf::from(crate::network::SYSTEMCTL),
+        move |e| {
+            let _ = tunnel_sender.send(e);
+        },
+    ) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            tracing::warn!(error = %e, "no tunnel thread; the two sections stay empty");
+            None
+        }
+    };
+    handle
+        .insert_source(tunnel_events, |event, (), state: &mut NetworkWindow| {
+            if let channel::Event::Msg(e) = event {
+                state.tunnel_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the tunnel channel: {e}"))?;
+    let mut state = NetworkWindow {
+        conn: conn.clone(),
+        handle: handle.clone(),
+        _theme_watch,
+        registry: RegistryState::new(&globals),
+        outputs: OutputState::new(&globals, &qh),
+        seats: SeatState::new(&globals, &qh),
+        _compositor: compositor,
+        keyboard: None,
+        pointer: None,
+        window,
+        width: 0,
+        height: 0,
+        columns: 80,
+        lines: 24,
+        quit: false,
+        owed: false,
+        gpu: None,
+        text: None,
+        view: crate::network::View::fresh(),
+        wire,
+        net,
+        watch,
+        lan_sender: Some(lan_sender),
+        tunnels: ronoctua_tunnel::Scene::default(),
+        hand,
+        texts,
+        row_under_pointer: None,
+        offset: 0,
+        message: None,
+    };
+
+    WaylandSource::new(conn, queue)
+        .insert(cycle.handle())
+        .map_err(|e| anyhow::anyhow!("could not hang Wayland: {e}"))?;
+
+    let signal = cycle.get_signal();
+    cycle
+        .run(None, &mut state, |e| {
+            e.settle();
+            if e.quit {
+                signal.stop();
+            }
+        })
+        .context("event loop")?;
+    Ok(())
+}
+
+/// The window.
+struct NetworkWindow {
+    conn: Connection,
+    /// The loop, for the ONE thing that needs it here: a keyboard that
+    /// REPEATS. SCTK only generates repeat events for a keyboard made with
+    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
+    /// carried rather than reached for. Without it `repeat_key` below is dead
+    /// code and holding an arrow moves exactly one row, which is the trap
+    /// CLAUDE.md records and which five windows inherited.
+    handle: calloop::LoopHandle<'static, Self>,
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
+    registry: RegistryState,
+    outputs: OutputState,
+    seats: SeatState,
+    _compositor: CompositorState,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
+    window: Window,
+    width: u32,
+    height: u32,
+    columns: u16,
+    lines: u16,
+    quit: bool,
+    /// Whether a frame is owed — see `notifications_window`'s field of the
+    /// same name for why nothing here paints straight away.
+    owed: bool,
+    gpu: Option<ronoctua_render::gpu::Gpu>,
+    text: Option<ronoctua_render::Text>,
+    view: crate::network::View,
+    /// This window's own telephone to the daemon, and the access points it
+    /// has seen.
+    wire: crate::network::Wire,
+    /// The last reading, from this process's own thread.
+    net: ronoctua_network::Snapshot,
+    /// What `/proc` says: the sockets and the interface counters, sampled on
+    /// this window's own second.
+    watch: crate::network::Watch,
+    /// Where a finished sweep of the local network reports.
+    lan_sender: Option<channel::Sender<ronoctua_lan::Found>>,
+    /// What the two tunnels say, from this window's own thread.
+    tunnels: ronoctua_tunnel::Scene,
+    /// The thread that reads them and carries out their orders.
+    hand: Option<ronoctua_tunnel::Hand>,
+    texts: std::rc::Rc<ronoctua_i18n::Texts>,
+    row_under_pointer: Option<usize>,
+    /// The first visible row. A window has no page: it scrolls.
+    offset: usize,
+    message: Option<String>,
+}
+
+impl NetworkWindow {
+    /// A fresh reading of the daemon's whole state.
+    fn net_arrived(&mut self, s: ronoctua_network::Snapshot) {
+        // THE VIEW FOLLOWS THE NEW ROWS, the footer's reason: a cable plugged
+        // in brings six facts, a tunnel coming up brings a row, and a cursor
+        // past the end focuses nothing.
+        self.net = s;
+        let rows = self.rows();
+        self.view.settle(&rows);
+        self.ask_paint();
+    }
+
+    /// A fresh reading of the two tunnels, or the end of an order.
+    fn tunnel_event(&mut self, e: ronoctua_tunnel::Event) {
+        match e {
+            ronoctua_tunnel::Event::Scene(scene) => {
+                self.tunnels = *scene;
+                let rows = self.rows();
+                self.view.settle(&rows);
+                self.ask_paint();
+            }
+            ronoctua_tunnel::Event::Done { refused, .. } => {
+                if let Some(words) = refused {
+                    self.message = Some(self.texts.t_with(
+                        ronoctua_i18n::key::ECHO_NETWORK_REFUSED,
+                        &[("error", &words)],
+                    ));
+                    self.ask_paint();
+                }
+            }
+            // THE LOGIN'S PAGE, opened with whatever the person's desktop
+            // opens links with — this window has no browser of its own.
+            ronoctua_tunnel::Event::Login(url) => {
+                let _ = std::process::Command::new(crate::network::OPEN)
+                    .arg(&url)
+                    .spawn();
+                self.message = Some(
+                    self.texts
+                        .t_with(ronoctua_i18n::key::ECHO_NETWORK_LOGIN, &[("url", &url)]),
+                );
+                self.ask_paint();
+            }
+        }
+    }
+
+    /// How many rows fit under the hint line.
+    const fn room(&self) -> usize {
+        self.lines.saturating_sub(FIRST_OF_LIST) as usize
+    }
+
+    /// Keeps the cursor on screen, starting to scroll two rows before the edge.
+    fn follow(&mut self, rows: usize) {
+        const MARGIN: usize = 2;
+        let room = self.room();
+        if room == 0 {
+            return;
+        }
+        let cursor = self.view.cursor();
+        if cursor < self.offset + MARGIN {
+            self.offset = cursor.saturating_sub(MARGIN);
+        } else if cursor + MARGIN >= self.offset + room {
+            self.offset = cursor + MARGIN + 1 - room;
+        }
+        self.offset = self.offset.min(rows.saturating_sub(room));
+    }
+
+    /// Carries out what the view asked for.
+    ///
+    /// EVERY ORDER RE-READS: the watch thread would bring the same reading a
+    /// moment later, and this is what makes the screen answer the key that
+    /// was just pressed rather than a quarter of a second afterwards.
+    fn apply(&mut self, errand: crate::network::Errand) {
+        use crate::network::Errand;
+        use ronoctua_i18n::key;
+        let refused = |e: &anyhow::Error, texts: &ronoctua_i18n::Texts| {
+            texts.t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())])
+        };
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.quit = true;
+                return;
+            }
+            // A PATH IS TYPED IN THE MINIBUFFER, which this window has not
+            // got — the pairing question's own arrangement, and its reason.
+            Errand::Ask => {
+                self.message = Some(
+                    self.texts
+                        .t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER),
+                );
+            }
+            Errand::Bring(path, kind) => {
+                let name = ronoctua_network::vpn::name_of(&path);
+                self.message = Some(match self.wire.import(&path, kind) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_IMPORTED, &[("network", &name)]),
+                    Err(e) => self.texts.t_with(
+                        key::ECHO_NETWORK_IMPORT_FAILED,
+                        &[("file", &name), ("reason", &e.to_string())],
+                    ),
+                });
+            }
+            // BECOMING THE NETWORK, from this door too: NetworkManager keeps
+            // no per-client state, so the second telephone is not a second
+            // truth.
+            Errand::Hotspot(true) => {
+                let name = crate::network::hostname();
+                self.message = Some(
+                    match ronoctua_network::hotspot_password()
+                        .and_then(|word| self.wire.hotspot(&name, &word).map(|()| word))
+                    {
+                        Ok(word) => {
+                            self.view.sharing(Some(word.clone()));
+                            self.texts.t_with(
+                                key::ECHO_NETWORK_HOTSPOT,
+                                &[("network", &name), ("password", &word)],
+                            )
+                        }
+                        Err(e) => self.texts.t_with(
+                            key::ECHO_NETWORK_HOTSPOT_FAILED,
+                            &[("reason", &e.to_string())],
+                        ),
+                    },
+                );
+            }
+            Errand::Hotspot(false) => {
+                self.view.sharing(None);
+                self.message = Some(
+                    self.texts.t(
+                        if self
+                            .wire
+                            .disconnect(ronoctua_network::Medium::Radio)
+                            .is_ok()
+                        {
+                            key::ECHO_NETWORK_DISCONNECTED
+                        } else {
+                            key::ECHO_NETWORK_UNAVAILABLE
+                        },
+                    ),
+                );
+            }
+            Errand::Scan => self.wire.scan(),
+            // THE SWEEP GOES ON A THREAD HERE TOO, and this window's own:
+            // it takes a second, and a window that froze for it would be a
+            // window whose title bar stopped answering.
+            Errand::Discover => {
+                self.watch.read_vendors();
+                let address = crate::network::carrying(&self.net)
+                    .and_then(|l| l.address.clone())
+                    .or_else(|| self.net.links.iter().find_map(|l| l.address.clone()));
+                match (address, self.lan_sender.clone()) {
+                    (Some(address), Some(echo)) => {
+                        self.watch.sweeping(true);
+                        if let Err(e) = std::thread::Builder::new()
+                            .name("lan-sweep".to_owned())
+                            .spawn(move || {
+                                let found = ronoctua_lan::sweep(&address).unwrap_or_default();
+                                let _ = echo.send(found);
+                            })
+                        {
+                            tracing::warn!(error = %e, "no thread for the sweep");
+                            self.watch.sweeping(false);
+                        }
+                    }
+                    _ => self.message = Some(self.texts.t(key::ECHO_NETWORK_NO_LINK)),
+                }
+            }
+            Errand::Radio(on) => {
+                self.message = Some(self.texts.t(match self.wire.radio(on) {
+                    Ok(()) if on => key::ECHO_NETWORK_RADIO_ON,
+                    Ok(()) => key::ECHO_NETWORK_RADIO_OFF,
+                    Err(_) => key::ECHO_NETWORK_UNAVAILABLE,
+                }));
+            }
+            Errand::Airplane(on) => {
+                if let Err(e) = self.wire.airplane(on) {
+                    self.message = Some(refused(&e, &self.texts));
+                }
+            }
+            Errand::Disconnect(medium) => {
+                self.message = Some(self.texts.t(if self.wire.disconnect(medium).is_ok() {
+                    key::ECHO_NETWORK_DISCONNECTED
+                } else {
+                    key::ECHO_NETWORK_UNAVAILABLE
+                }));
+            }
+            Errand::Facts => {
+                self.message = Some(match crate::network::carrying(&self.net) {
+                    Some(l) if l.medium == ronoctua_network::Medium::Wired => self.texts.t_with(
+                        key::ECHO_NETWORK_LINK_WIRED,
+                        &[
+                            ("network", &l.interface),
+                            ("rate", &crate::network::rate_of(l, &self.texts)),
+                        ],
+                    ),
+                    Some(l) => self.texts.t_with(
+                        key::ECHO_NETWORK_LINK,
+                        &[
+                            ("network", l.network.as_deref().unwrap_or(&l.interface)),
+                            ("band", &crate::network::band_text(l.band, &self.texts)),
+                            ("rate", &crate::network::rate_of(l, &self.texts)),
+                            ("signal", &format!("{}%", l.signal)),
+                        ],
+                    ),
+                    None => self.texts.t(key::ECHO_NETWORK_NO_LINK),
+                });
+            }
+            Errand::Forget(ssid) => {
+                self.message = Some(if self.wire.forget(&ssid).is_ok() {
+                    self.texts
+                        .t_with(key::ECHO_NETWORK_FORGOTTEN, &[("network", &ssid)])
+                } else {
+                    self.texts.t(key::ECHO_NETWORK_UNAVAILABLE)
+                });
+            }
+            // A PASSWORD IS TYPED IN THE FOOTER, which this window has not
+            // got. A network that is saved or open joins from here; the one
+            // that needs typing says where, rather than looking broken.
+            Errand::Connect(target) => {
+                if target.secured && !target.saved {
+                    self.message = Some(
+                        self.texts
+                            .t(ronoctua_i18n::key::NETWORK_ANSWER_IN_THE_FOOTER),
+                    );
+                } else {
+                    self.message = Some(match self.wire.connect(&target.ssid, None, false) {
+                        Ok(()) => self
+                            .texts
+                            .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &target.ssid)]),
+                        Err(e) => self.texts.t_with(
+                            key::ECHO_NETWORK_FAILED,
+                            &[("network", &target.ssid), ("reason", &e.to_string())],
+                        ),
+                    });
+                }
+            }
+            Errand::Drop(at) => {
+                let name = name_of(
+                    self.net.active.iter().find(|a| a.at == at).map(|a| &a.id),
+                    &at,
+                );
+                self.message = Some(match self.wire.drop_it(&at) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_TUNNEL_DOWN, &[("network", &name)]),
+                    Err(e) => refused(&e, &self.texts),
+                });
+            }
+            Errand::Raise(at) => {
+                let name = name_of(
+                    self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
+                    &at,
+                );
+                self.message = Some(match self.wire.raise(&at) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_TUNNEL_UP, &[("network", &name)]),
+                    Err(e) => refused(&e, &self.texts),
+                });
+            }
+            // THE TUNNEL ORDERS GO TO THIS WINDOW'S OWN THREAD: neither
+            // daemon keeps per-client state, so a second telephone to them
+            // is not a second truth.
+            Errand::Tunnel(order) => match self.hand.as_ref() {
+                Some(h) => h.send(order),
+                None => {
+                    self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                }
+            },
+            Errand::Delete(at) => {
+                let name = name_of(
+                    self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
+                    &at,
+                );
+                self.message = Some(match self.wire.delete(&at) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_DELETED, &[("network", &name)]),
+                    Err(e) => refused(&e, &self.texts),
+                });
+            }
+        }
+        self.net = self.wire.look();
+        let rows = self.rows();
+        self.view.settle(&rows);
+        self.ask_paint();
+    }
+
+    /// Columns and rows from the size in pixels.
+    fn recount(&mut self) {
+        let size = tokens::font::SIZE_BASE;
+        let cell = tokens::metrics::cell_width(size);
+        let line = tokens::metrics::line_height(size);
+        let usable = (self.width as f32) - 2.0 * cell * f32::from(CONTENT_MARGIN);
+        self.columns = tokens::metrics::columns(usable.max(0.0), size);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lines = (self.height as f32 / line).floor().max(0.0) as u16;
+        self.lines = lines;
+    }
+
+    fn assemble_gpu(&mut self) {
+        use raw_window_handle::{
+            RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
+        };
+        let (Some(disp), Some(surf)) = (
+            std::ptr::NonNull::new(self.conn.backend().display_ptr().cast()),
+            std::ptr::NonNull::new(self.window.wl_surface().id().as_ptr().cast()),
+        ) else {
+            tracing::error!("null Wayland pointers");
+            return;
+        };
+        // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
+        // handles do not outlive what produced them.
+        #[allow(unsafe_code)]
+        let gpu = unsafe {
+            ronoctua_render::gpu::Gpu::new(
+                RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
+                RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
+                self.width,
+                self.height,
+            )
+        };
+        let Ok(g) = gpu else {
+            tracing::error!("no usable GPU; the window will not draw");
+            return;
+        };
+        match ronoctua_render::Text::new(
+            &g.device,
+            &g.queue,
+            g.config.format,
+            tokens::font::SIZE_BASE,
+        ) {
+            Ok(t) => self.text = Some(t),
+            Err(e) => tracing::error!(error = %e, "assembling the text failed"),
+        }
+        self.gpu = Some(g);
+    }
+
+    /// One key, from a press or from a REPEAT.
+    ///
+    /// Both doors of every view take this path: SCTK delivers a repeat
+    /// through the callback given to `get_keyboard_with_repeat`, which has no
+    /// `Connection` and no `QueueHandle` to hand on — so the work cannot live
+    /// in `press_key`, and while it did, `repeat_key` was dead code and
+    /// holding an arrow moved exactly one row.
+    fn typed(&mut self, event: KeyEvent) {
+        let Some(press) = press_of(&event) else {
+            return;
+        };
+        self.message = None;
+        let errand = {
+            let mut view = std::mem::take(&mut self.view);
+            let errand = view.key(press, &self.facts(), &self.texts);
+            self.view = view;
+            errand
+        };
+        self.apply(errand);
+    }
+
+    /// Asks for a frame. It is drawn when the event queue empties.
+    const fn ask_paint(&mut self) {
+        self.owed = true;
+    }
+
+    /// Draws the owed frame, if one is owed.
+    fn settle(&mut self) {
+        if std::mem::take(&mut self.owed) {
+            self.paint();
+        }
+    }
+
+    fn rows(&self) -> Vec<crate::network::Row> {
+        self.view.rows(&self.facts(), self.columns, &self.texts)
+    }
+
+    /// Everything the rows are drawn from — see `network::Facts`.
+    fn facts(&self) -> crate::network::Facts<'_> {
+        crate::network::Facts {
+            net: &self.net,
+            seen: self.wire.seen(),
+            watch: &self.watch,
+            tunnels: &self.tunnels,
+        }
+    }
+
+    fn paint(&mut self) {
+        if self.width == 0 {
+            return;
+        }
+        if self.gpu.is_none() {
+            self.assemble_gpu();
+        }
+        let size = tokens::font::SIZE_BASE;
+        let margin = CONTENT_MARGIN;
+        let rows = self.rows();
+        self.follow(rows.len());
+
+        let mut spans: Vec<ronoctua_render::Span> = Vec::new();
+
+        // LINE 0: what the last order said, or the keys — the footer's
+        // minibuffer, through the other door. `columns` is already net of both
+        // margins (`recount`), so the whole of it is the room.
+        let room = self.columns;
+        if let Some(text) = self.message.clone() {
+            spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(size),
+                text: ronoctua_render::layout::elide_end(&text, room),
+                column: margin,
+                line: 0,
+                color: tokens::color::TEXT_SUBTLE_STRONG,
+                edge: false,
+                foot: false,
+            });
+        } else {
+            spans.extend(crate::chrome::hint_spans(
+                &self.view.hint(&self.texts),
+                ronoctua_render::Size::Px(size),
+                margin,
+                0,
+                room,
+            ));
+        }
+
+        // THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
+        // draws for these rows.
+        for (i, row) in rows.iter().skip(self.offset).take(self.room()).enumerate() {
+            let y = FIRST_OF_LIST + u16::try_from(i).unwrap_or(0);
+            for f in &row.fields {
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::Px(size),
+                    text: f.text.clone(),
+                    column: margin + f.at,
+                    line: y,
+                    color: f.color,
+                    edge: false,
+                    foot: false,
+                });
+            }
+        }
+
+        let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
+            return;
+        };
+        if let Err(e) = text.prepare(
+            &gpu.device,
+            &gpu.queue,
+            gpu.config.width,
+            gpu.config.height,
+            ronoctua_render::Atlas::Pinned,
+            &spans,
+        ) {
+            tracing::error!(error = %e, "preparing the text failed");
+            return;
+        }
+        if let Err(e) = gpu.frame(|pass| text.draw(ronoctua_render::Atlas::Pinned, pass)) {
+            tracing::error!(error = %e, "drawing the frame failed");
+            return;
+        }
+        if let Err(e) = self.conn.flush() {
+            tracing::warn!(error = %e, "the flush failed");
+        }
+    }
+
+    /// Which drawn row is at height `y`.
+    fn row_at(&self, y: f64) -> Option<usize> {
+        let line = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        if line <= 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let which = (y / line) as usize;
+        which
+            .checked_sub(usize::from(FIRST_OF_LIST))
+            .map(|i| i + self.offset)
+    }
+}
+
+/// The name of a thing, or its path when the daemon has forgotten it between
+/// the keypress and the sentence.
+fn name_of(found: Option<&String>, at: &str) -> String {
+    found.cloned().unwrap_or_else(|| at.to_owned())
+}
+
+/// A `KeyEvent` as the view sees it — the same mapping the footer does.
+fn press_of(event: &KeyEvent) -> Option<crate::network::Press> {
+    use crate::network::Press;
+    Some(match event.keysym {
+        Keysym::Escape => Press::Escape,
+        Keysym::Return | Keysym::KP_Enter => Press::Enter,
+        Keysym::Up => Press::Up,
+        Keysym::Down => Press::Down,
+        // AND THE BARE LETTERS, out of the view's own table — the footer
+        // reads it the same way, so the two doors cannot teach different
+        // keys. A letter with no press there is a letter that does nothing,
+        // and the test beside `network_words` is what says so.
+        _ => {
+            let typed = event.utf8.as_deref()?;
+            let id = crate::network::OF_THE_VIEW
+                .iter()
+                .find(|(notation, _)| *notation == typed)
+                .map(|(_, id)| *id)?;
+            crate::network_words::press_of(id)?
+        }
+    })
+}
+
+impl WindowHandler for NetworkWindow {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
+        self.quit = true;
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &Window,
+        cfg: WindowConfigure,
+        _: u32,
+    ) {
+        self.width = cfg.new_size.0.map_or(900, std::num::NonZeroU32::get);
+        self.height = cfg.new_size.1.map_or(600, std::num::NonZeroU32::get);
+        if let Some(g) = self.gpu.as_mut() {
+            g.resize(self.width, self.height);
+        }
+        self.recount();
+        self.ask_paint();
+    }
+}
+
+impl SeatHandler for NetworkWindow {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seats
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        cap: Capability,
+    ) {
+        if cap == Capability::Keyboard && self.keyboard.is_none() {
+            // A KEYBOARD THAT REPEATS — see the `handle` field. The rate and
+            // the delay are the COMPOSITOR's, arriving as `RepeatInfo`;
+            // nothing here invents either.
+            match self.seats.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.handle.clone(),
+                Box::new(|state: &mut Self, _, event| state.typed(event)),
+            ) {
+                Ok(k) => self.keyboard = Some(k),
+                Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
+            }
+        }
+        if cap == Capability::Pointer && self.pointer.is_none() {
+            match self.seats.get_pointer(qh, &seat) {
+                Ok(p) => self.pointer = Some(p),
+                Err(e) => tracing::warn!(error = %e, "no pointer; keyboard only"),
+            }
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        cap: Capability,
+    ) {
+        if cap == Capability::Keyboard
+            && let Some(k) = self.keyboard.take()
+        {
+            k.release();
+        }
+        if cap == Capability::Pointer
+            && let Some(p) = self.pointer.take()
+        {
+            p.release();
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for NetworkWindow {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
+
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.typed(event);
+    }
+
+    fn repeat_key(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        kb: &wl_keyboard::WlKeyboard,
+        serial: u32,
+        event: KeyEvent,
+    ) {
+        self.press_key(conn, qh, kb, serial, event);
+    }
+
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+    }
+}
+
+impl PointerHandler for NetworkWindow {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        let before = self.row_under_pointer;
+        let mut clicked: Option<usize> = None;
+        let mut wheel = 0.0f64;
+        for e in events {
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.row_under_pointer = self.row_at(e.position.1);
+                }
+                PointerEventKind::Leave { .. } => self.row_under_pointer = None,
+                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    self.row_under_pointer = self.row_at(e.position.1);
+                    clicked = self.row_under_pointer;
+                }
+                PointerEventKind::Axis { vertical, .. } => wheel += vertical.absolute,
+                _ => {}
+            }
+        }
+        // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
+        // and `RET` is what joins, drops and brings up.
+        if let Some(row) = clicked {
+            let rows = self.rows();
+            self.view.clicked(row, &rows);
+            self.ask_paint();
+            return;
+        }
+        if wheel.abs() >= 1.0 {
+            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+            #[allow(clippy::cast_possible_truncation)]
+            let by = (wheel / line_px.max(1.0)) as i64 * 3;
+            let rows = self.rows().len();
+            let last = rows.saturating_sub(self.room());
+            self.offset = usize::try_from(
+                i64::try_from(self.offset)
+                    .unwrap_or(0)
+                    .saturating_add(by)
+                    .max(0),
+            )
+            .unwrap_or(0)
+            .min(last);
+            self.ask_paint();
+            return;
+        }
+        // NO FRAME FOR A POINTER THAT CHANGED NOTHING. Nothing on this
+        // screen is drawn from `row_under_pointer` — the click reads it, and
+        // the paint does not — so repainting when it moved spent a GPU frame
+        // per row crossed, on an identical picture. The footer's own hover
+        // band IS drawn, which is why it repaints there and not here.
+        let _ = before;
+    }
+}
+
+impl CompositorHandler for NetworkWindow {
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: i32,
+    ) {
+    }
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for NetworkWindow {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.outputs
+    }
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+}
+
+impl ProvidesRegistryState for NetworkWindow {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+smithay_client_toolkit::delegate_registry!(NetworkWindow);
+smithay_client_toolkit::delegate_dispatch2!(NetworkWindow);

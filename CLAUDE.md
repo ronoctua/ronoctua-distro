@@ -53,7 +53,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 ## Como funciona
 
 - **O rodapé é o desktop.** `wlr-layer-shell` embaixo: modeline e minibuffer COLADAS, expansão com teto e página abaixo, **faixa de notificação acima**, e nenhuma chrome (inv. 14). Ancorado embaixo, crescer para cima não move a modeline. Clique só faz o que tecla faz.
-- **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER b s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
+- **Todo buffer tem ESTADO, e o primeiro é `normal`** — recusado no load se não for. `Esc` sozinho volta UM nível (o buffer é que anda, e relata); **segurar `Esc` + setas gira**; `LEADER w s` escolhe; clique na modeline gira. O toque-contra-retenção é resolvido NO HOST do buffer (keyd pegaria o `Esc` do vim), que avisa o rodapé pelo socket de controle — e o rodapé PERGUNTA na troca de foco. Estrangeira não tem estado. Id inglês, tela por `state-<id>`; `normal` discreto, todo o resto num token SÓ.
 - **A fronteira com o niri é só IPC** — `ronoctua-niri` é o único crate que fala `niri-ipc`. **E a
   leader vem de FORA**: em repouso o rodapé não captura teclado, senão nenhum buffer receberia tecla.
   Quem a vê é o niri, que roda `ronoctua-shell leader` no socket de controle
@@ -65,7 +65,14 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
   quem impede é `keyboard-layout-exists`.
 - **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
-- **São NOVE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14). O localizador (`a`) varre o XDG na PARTIDA em thread; a rede (`r r`) lê o CACHE do NetworkManager.
+- **São ONZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
+  **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das dez
+  portas. Isso não era verdade e três revisores acharam o mesmo defeito em três vistas: cada um
+  lia o PRÓPRIO campo, as ordens divergiam, e clicar no sino com a energia aberta dava o teclado a
+  uma e a tela à outra. Com todos perguntando, no máximo um ramo casa e a ORDEM em que eles estão
+  escritos deixa de ser resposta; cobra o `the-footer-draws-what-the-keyboard-drives`. A pergunta do
+  minibuffer é a única exceção, e é deliberada — pergunta é LINHA, não região. O localizador (`a`)
+  varre o XDG na PARTIDA em thread; a rede (`s n n`) lê o CACHE do NetworkManager.
 - **`LEADER .` (e `f f`) é o gerenciador, DUAS portas** — rodapé (teto de 12) e janela (`f w`), UMA
   `files::View`; só o `ronoctua-files` toca o disco. **Letra é QUERY** e vai no FIM do caminho;
   comandos da vista sob `C-` — **nunca `M-`, que é a família dos acordes do compositor**;
@@ -229,7 +236,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   assento anuncia o teclado e o `LoopHandle` já tem de existir. Ritmo e atraso são do COMPOSITOR.
 - **A barra lateral é uma SEÇÃO** (`files::Section`), com extensão, deslocamento e conteúdo próprios — como a listagem, a prévia e os fatos. `sidebar_columns` a RETIRA quando não cabe (`space.files.sidebarFrom`); a marca vai em `layout.from`, nunca em 0; e `header` usa o MESMO `split` das linhas. Padrões por CHAVE (`nix/files-sidebar.nix` sobre `nix/user-dirs.nix` — **uma fonte para as dez pastas**, e de lá sai também o `screenshot-path` do niri, que sem isso escrevia em `~/Pictures`). O ajuste do dono vence, em `$XDG_CONFIG_HOME`: padrão da distro OCULTA (volta), o dele REMOVE — e as frases diferem. `C-l` esconde, `C-e` desmonta, `C-u` tira, `s` do menu e `C-s` do localizador fixam: **LETRAS, porque Ctrl DIREITO com seta é paginar e a janela não o rastreia**. **Atravessar é o anel do `Tab`, e só ele** — `C-o` era um segundo caminho e saiu a pedido do dono.
 - **Só o `ronoctua-disks` fala udisks2, e ele NÃO escreve regra polkit** — a do upstream já separa removível (`allow_active: yes`) de sistema (`auth_admin_keep`) pelo `HintSystem`, e uma nossa só poderia ALARGAR. **Não há agente polkit na sessão** (só `pkttyagent`, no resgate): toda chamada leva `auth.no_user_interaction`. E a razão é do DONO, não do desenho: ele nem sempre vê o pedido de digital, ou está longe do laptop — pedido não visto vira recusa no relatório, sobre algo que ninguém viu. **Nada que o sistema faça sozinho pode PERGUNTAR**, e volume de SISTEMA não oferece montar — manda ao terminal root. `HintIgnore` vira `quiet` e anda no `C-h` dos dotfiles. O `override` tira só o `xfsprogs` (538,3 → 343,2 MiB; 258 eram Python do `xfs_scrub`, e montar XFS é do KERNEL). Sinal do `ObjectManager` numa thread, mandando o `Rack` INTEIRO — o relógio do rodapé só bate com a vista aberta, e a janela não tem relógio nenhum.
-- **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC b s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.
+- **`LEADER s f` é formatar, e são TRÊS perguntas** (`buffers/format`, `capability::disks`): qual disco, para que serve, tem certeza. Linguagem de gente — o vfat diz *"abre em qualquer computador"*, não FAT32, e **o XFS aparece DESABILITADO dizendo que falta o programa**, alcançável e recusando. **Toda linha tem DOIS registros**: o rótulo, e uma linha discreta SOB O CURSOR com o nome real e os limites (na lista, o tamanho em bytes; no confirmar, o gesto inteiro). Nome técnico é CHAVE, nunca literal no componente. Duas recusas que o hospedeiro não enxerga (de fora, recusa e componente morto são o mesmo "nenhum plano"), e por isso são do `format-driven`: disco que o sistema precisa é DESENHADO e o `Enter` nele não anda; e o primeiro `Enter` do confirmar VOLTA, porque `não` é a primeira linha. **Sem estado `working`** — o `SPC w s` o ofereceria e mentiria; a espera é na lista. O alvo é id que o buffer RECEBEU, reconferido contra o `Rack` mandado **e contra `needed()` de novo**. Disco inteiro é `dos` até 2 TiB (`gpt` acima) mais UMA partição, com `update-partition-type` — sem ele o vfat sai tipado `0x83` e o Windows não abre o pendrive, sem nada dizendo por quê.
 - **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
   lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um por USUÁRIO. `t t` no
   rodapé, `t w` no buffer wasip2 — e o cursor é o **id**, que a lista reordena. `t a`/`t v`/`t u`/`t l`
@@ -244,8 +251,48 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **A extensão não deixa rastro em página nenhuma**: zero `web_accessible_resources`,
   `content_scripts`, `externally_connectable`, `host_permissions` e `declarativeNetRequest` — as
   cinco vias de detecção, e há check. Injeta só sob `activeTab`; a chave que dá o id nasce NA máquina (inv. 13). **O app não depende dela** — cada coisa do popup tem tecla, e há check dos DOIS lados.
-- **`LEADER n` é notificação, e TUDO sai de `assets/notifications.nix`** — catálogo, filtros e as chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações); **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e envelope na BORDA DIREITA para marcar lida; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade. Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide — o gerenciador diz qual. Suprimida não aparece **e não conta**. Clicar no sino abre; `n h` no rodapé (duas colunas), `n w` em janela, uma `View` só; na lista, envelope e lixeira por linha (`Espaço` e `d`, que o gerador recusa como letra de ação). 15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
-- **`LEADER r` é rede e Syncthing.** Só o `ronoctua-network` fala NetworkManager; `overrideFolders` FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo: `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
+- **O arquivo da notificação também é BROADCAST** (o precedente do `theme.json`): o rodapé vigia o
+  histórico e as preferências por inotify e RECONCILIA por id (`Queue::took_from_disk`), em vez de
+  reler. Sem isso a janela era um segundo escritor e o rodapé passava por cima dela na notificação
+  seguinte: um `d` na janela voltava atrás sozinho. O que chegou DEPOIS do arquivo sobrevive — senão
+  a janela apagaria o que acabou de chegar.
+- **`LEADER n` é notificação, e TUDO sai de `assets/notifications.nix`** — catálogo, filtros e as chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações); **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e envelope na BORDA DIREITA para marcar lida; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade. Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide — o gerenciador diz qual. Suprimida não aparece **e não conta**. **O sino só existe com não lida** (sem número — o hover diz quantas, não lidas e filtradas); clicar abre; `n n` no rodapé (duas colunas), `n w` em janela, uma `View` só, **dica GERADA de `OF_THE_VIEW` nas duas portas** (`chrome::hint_of`); na lista, envelope e lixeira por linha (`Espaço` e `d`, que o gerador recusa como letra de ação). 15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
+- **A modeline diz se há SAÍDA** (`ronoctua_network::Snapshot`, um `watch` desde a partida): `net-off`
+  quando um link se acha conectado e o caminho não leva a lugar nenhum (portal, uplink morto — e a
+  marca só existe porque `ronoctua.network.connectivityCheck` liga o teste do NM, senão ele responde
+  `full` para qualquer rota), `airplane` quando a rede está desligada (clique VOLTA, `s n a`), `vpn`
+  quando há túnel de pé (`Vpn` OU `wireguard`, que responde `false` ali). Nada conectado = marca
+  nenhuma: não estar na rede não é defeito. As três abrem `s n n`, e a vista repete o que a marca
+  disse.
+- **Tecla NUNCA é texto no `.ftl`** (`keys-are-never-text`): a sequência vem de uma constante ao
+  lado do binding mais o `crate::leader()`, num `{ $keys }`. Escrita, ela envelhece no dia em que a
+  tecla anda (`n h` ensinou `n h` por semanas depois de virar `n n`) e a palavra "LEADER" não é
+  tecla de ninguém — em produção é `SUPER`, no aninhado é `CTRL ALT SPC`.
+- **`LEADER s n` é rede; `LEADER s s`, Syncthing** (os dois moraram em `r`, que morreu — rede é do SISTEMA, ao lado de memória e disco). Só o `ronoctua-network` fala NetworkManager; `overrideFolders` FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo: `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
+- **A rede é UMA `View` com DUAS portas** (`s n n` rodapé, `s n w` janela) e NOVE seções como
+  linhas, no molde da energia: relance (a saída e o avião), enlaces (endereço, gateway, DNS, taxa),
+  Wi-Fi (rádio, redes, hotspot), túneis, tailnet, Tor, portas, esta rede e monitor. **Dica GERADA da
+  `OF_THE_VIEW`**; senha e caminho se digitam no RODAPÉ, e a janela DIZ isso (molde da pergunta de
+  pareamento). **Cinco marcas na modeline** — `airplane`, `net-off`, `vpn`, `tailscale`, `tor` —, e
+  todas somem em repouso: uma máquina conectada, sem túnel e fora do avião não desenha nada.
+  Clicar numa abre a vista NA LINHA dela.
+- **`ronoctua-tunnel` é a fronteira dos dois túneis que não são do NM**: Tailscale pelo local API
+  (HTTP sobre socket, `--operator=<user>` é o que dispensa root; toda preferência vai MASCARADA, ou
+  o daemon zera o resto) e Tor pelo socket de controle (cookie em `/run/tor`, **`CookieAuthFile`
+  não é opcional** — sem ele o cookie nasce em `/var/lib/tor` a 0700 e ninguém do grupo entra).
+  Nenhum dos dois sinaliza: uma thread pergunta a cada 10 s. **Tor não sobe no boot** e a ÚNICA
+  regra polkit nova do sistema é `start`/`stop` de `tor.service` (`tor-polkit-is-narrow`).
+- **`ronoctua-memory::net` é a fronteira do `/proc/net`** (sockets, ARP) e o `ronoctua-lan` faz a
+  varredura ICMP **sem privilégio nenhum** (`SOCK_DGRAM`+`IPPROTO_ICMP`, `ping_group_range`). Duas
+  medições viraram desenho: o endereço em `/proc/net/tcp` é LITTLE-ENDIAN (lido ao contrário,
+  `127.0.0.1` vira `1.0.0.127`), e o prazo da varredura começa DEPOIS dos envios — o primeiro
+  pacote a um vizinho desconhecido espera o ARP, três segundos medidos, e o prazo começado antes
+  achava zero máquinas numa rede com cinco. **Porta sem dono DIZ que não é nossa**: `/proc/<pid>/fd`
+  de outro usuário não se lê, e uma coluna vazia leria como "não tem ninguém ali".
+- **VPN se traz de arquivo, e se LÊ antes** (`s n v`): `AllowedIPs = 0.0.0.0/0` manda tudo por outra
+  máquina e uma linha `DNS` muda todo nome que se procura — as duas viram frase na tela antes do
+  `RET`. Quem importa é o `nmcli` (a tradução são trinta ajustes que o upstream mantém); a chave
+  privada NUNCA sai do arquivo para a prévia.
 - **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix`, `*.ftl`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9. **Layout é aritmética de inteiros**, em duas fases: preferência, e "nada vaza da tela".
 - **Cor NENHUMA é escrita à mão: `colors.nix` é RECEITA** (`text.primary = "neutral.text-strong"`) e o valor sai de `nix/scripts/gen-theme.py`, por tema, das SEMENTES em `assets/themes/<id>.nix` (matiz, croma relativo, shift, torção) — a lista é `assets/themes/themes.nix`, o primeiro é o padrão, e nenhum outro sítio nomeia um tema (inv. 16). A escada é a paleta do owl feita regra; toda relação que era prosa é GATE (contraste APCA, distância ΔE_ok, matiz ≥ 14°, faixa protan 158–172°), e o owl gerado é comparado chave a chave com `owl.reference.nix` (≤ 0,03, ou `deviations` com motivo). `nix build .#themes` deixa o `report.md`. **Mexer no gerador reconstrói o workspace** (o caminho do `tokens.rs` muda): itere com `python3 nix/scripts/gen-theme.py --report-only` no scratchpad.
 - **`LEADER s t` escolhe o tema, e mover o cursor PRÉ-VISUALIZA só no rodapé**; `RET` grava `$XDG_CONFIG_HOME/ronoctua/theme.json`, `Esc` volta ao gravado. A lista mostra SÓ o id. **A segunda coluna (`←/→`) é o FUNDO do compositor — preto ou `surface.backdrop`, o degrau neutro ABAIXO do chrome no matiz da semente `backdrop`** —, e a prévia dele é o próprio niri: o fragmento é escrito ao mover o cursor e reescrito no `Esc`; `RET` grava o PAR. **O arquivo É o broadcast**: as cinco portas vigiam `theme.json` por inotify (`Notice::on_file`) e repintam; `RONOCTUA_THEME` (opção `ronoctua.theme`) é o piso, o primeiro tema é o chão. O rodapé COPIA os fragmentos do tema (`$RONOCTUA_THEMES/<id>/`): `niri-theme.kdl` (borda E fundo — `window-rule` mais `layout { background-color }`, que o niri FUNDE ao incluir; dois `layout` no MESMO arquivo ele recusa; o config o inclui `optional=true` no FIM e recarrega) e `ghostty-theme.conf` (`config-file = ?…`, processo novo — e a entrada `.desktop` é REESCRITA sem o `--gtk-single-instance=true` do upstream: flag vence arquivo). **O Ghostty só lê `~/.config/ghostty/config`** — `/etc/xdg` ele NÃO lê —, e é lá que o home-manager põe o config do módulo. GTK/Qt vestem o MODO escuro (Qt só no perfil `full`: custa 591 MiB); a extensão, o padrão do build.
@@ -272,7 +319,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   posiciona o niri (inv. 4); não conhecem Wayland, cor nem idioma (inv. 11). Estado vive na
   `Instance`. Cinco primitivas: texto, régua, grade, seleção e **`svg`** (TRAVA `vector`), e **campo
   de record cruza por POSIÇÃO** e só depois pelo nome.
-- **`LEADER s b` é o cérebro** (`ronoctua-brain`), o daemon que decide QUANDO a máquina mexe em si
+- **`LEADER b b` é o cérebro** (`ronoctua-brain`; `b a`/`b p` são as duas respostas da faixa — o `b` era o grupo BUFFER, e buffer é janela (inv. 4), então os dois grupos viraram `w`: `w w` troca, `w n` próximo, `w d` fecha, `w s` estado, `w o`/`w O` terminal), o daemon que decide QUANDO a máquina mexe em si
   mesma — molde do `ronoctua-transfers`: unidade de usuário, `session.slice`, socket JSON por linha,
   estado inteiro e nunca delta. A porta para features novas é o `trait Task`, e ela é uma promessa de
   CINCO lugares: `src/tasks/<id>.rs`, uma linha em `tasks()`, duas chaves nos dois idiomas, uma linha
@@ -299,6 +346,41 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ffmpeg decodifica os planos lineares e sai quase preto. Todo caminho externo devolve imagem no
   **stdout** e quem decodifica é o `image`: `Rgba` nasce num lugar só. **Recusa é VALOR, não ausência** — painel em branco e painel recusado são
   iguais na tela, e só um tem frase. GPS não é mostrado, e a linha DIZ que o arquivo o carrega.
+- **`LEADER s b` é o Bluetooth** (`ronoctua-bluetooth`, a fronteira com o BlueZ): uma `View`
+  (`bluetooth.rs`), duas portas (`s b b`/`s b w`), três níveis (lista → dispositivo → rádio) e
+  LETRAS NUAS lidas da `OF_THE_VIEW` pelas duas. Tudo por `GetManagedObjects` (propriedade opcional
+  ausente é ausência, e `Get` nela é ERRO); regra de sinal por INTERFACE, porque `InterfacesAdded`
+  sai de `/`; QUATRO threads (sinais e `NameOwnerChanged` → bandeira → leitura ≤4×/s → ordens, que
+  também servem o agente de pareamento). **Nenhuma regra polkit e nem grupo** — a política do próprio bluez já abre a porta
+  (`bluetooth-bus-policy-is-open`) —, e o agente NÃO reivindica nome. Modeline: até quatro marcas
+  (`bt-1..4`), uma por CONECTADO, glifo do que a coisa é (classe/aparência, nunca o nome), `%` só a
+  ≤30 e perigo a ≤15; clique abre aquele dispositivo. `Esc` na pergunta de pareamento responde NÃO — e quando a vista não pode abrir (o
+  gerenciador está no rodapé), a pergunta vira NOTIFICAÇÃO com os dois botões — e o corpo NOMEIA as
+  duas teclas, porque o cartão vive 20 s e o agente segura a pergunta 55.
+  **O AGENTE MORA NA THREAD QUE OUVE O `NameOwnerChanged`** e se reinscreve a cada troca de dono do
+  nome: registrado uma vez só, um `nixos-rebuild` que toque o `main.conf` reiniciava o `bluetoothd` e
+  o rodapé passava o resto da sessão sem conseguir PERGUNTAR — dizendo "o outro lado disse não". O
+  loop aninhado não registra (`RONOCTUA_NESTED`): o `RequestDefaultAgent` dá as perguntas ao ÚLTIMO,
+  e ele as roubava da sessão real sem devolver. **A dica ensina o NÍVEL** (`Where`), porque a tela do
+  rádio não tem dispositivo e ensinava seis teclas mortas — o dono fotografou.
+  **O PERFIL DE ÁUDIO É DO PIPEWIRE** (`audio.rs`): o `MediaTransport1` diz o que ESTÁ tocando e não
+  o que a coisa PODE fazer, então A2DP contra HFP sai do `pw-dump` e entra pelo `wpctl` — os dois já
+  em `sw/bin` pelo `services.pipewire`, medido com `nix path-info -r` (o `pactl` arrastaria o cliente
+  do PulseAudio). A placa casa pelo ENDEREÇO (`bluez_card.AA_BB_…`); o caminho do BlueZ não existe lá.
+- **Uma pergunta que aparece sozinha responde NÃO no `RET`.** O pareamento do Bluetooth desenha o
+  `não` PRIMEIRO e o cursor nasce nele (molde do formatar): a pergunta abre por cima do que estava na
+  tela, e a tecla seguinte não pode parear um dispositivo desconhecido. **Perigo é COR, não desenho**
+  — a bateria a ≤15% continua mostrando o glifo de carregando quando está na tomada; trocar o desenho
+  escondia justamente a pergunta que importa aos 9%.
+- **Uma vista só toma o rodapé se ele estiver livre** (`region_is_free`), e são DEZ portas: com
+  qualquer vista aberta as outras recusam **e DIZEM**. Eram seis portas perguntando sobre UMA vista
+  (o gerenciador de arquivos), o que fazia a promessa valer para um décimo dos casos — clicar na
+  bateria com o rádio aberto construía uma segunda vista viva DEBAIXO da desenhada, e os dois `Esc`
+  para sair eram o único sinal. A **dica** sai do mesmo `Footer::view()`, um lugar só.
+- **Todo teclado repete** (`get_keyboard_with_repeat`), e nenhum repetia: SCTK só repete para um
+  teclado criado assim, então sete janelas tinham `repeat_key` como código morto — segurar seta andava
+  uma linha. Cobra o `every-window-repeats`; o rodapé é a exceção escrita (repetir leader é erro).
+- **`LEADER s p` é energia** (`ronoctua-power`, a fronteira com UPower, power-profiles-daemon e logind — molde do `ronoctua-disks`, três threads e o snapshot inteiro): uma `View` (`power.rs`), duas portas (`s p p`/`s p w`), oito seções como linhas. **Modeline em repouso é muda**: bateria só abaixo de 99% e fora de `FullyCharged` (limite de carga a 80% diz `FullyCharged` para sempre), `%` só a ≤30, `state.error` a ≤15 (regra literal, carregando ou não); perfil só quando NÃO é o topo que o daemon oferece — **o padrão da distro é `performance`** (`ronoctua.power.profile`, piso; `power.json` vence; aplicado UMA vez por sessão, nunca sobre um hold e **nunca quando ninguém nomeou** — o `nix run .#dev` não mexe no perfil do dono). Limites de carga escrevem no sysfs por regra udev (grupo `users`); as travas de sono/tampa são fds na thread de ordens do RODAPÉ (a janela encaminha `power-keep-*`); `q s/h/r/p` abrem a vista ARMADA e `RET` confirma. **Nenhuma regra polkit nossa** (logind e PPD já dão `yes`; há check). Alarmes `battery-low/critical/charged` por TRANSIÇÃO (`alarms`), pelo catálogo.
 - **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava: o host amostra
   (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer desenha e pede
   por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread.

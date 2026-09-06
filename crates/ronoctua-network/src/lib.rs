@@ -22,6 +22,7 @@
 pub mod agent;
 pub mod nm;
 pub mod secret;
+pub mod vpn;
 
 use std::collections::HashMap;
 
@@ -64,16 +65,22 @@ impl Band {
         }
     }
 
-    /// How it appears on screen. **It is not UI text** — it is a number with a
-    /// unit, the same in both languages, and that is why it does not go through the `.ftl`
-    /// (invariant 8 holds for sentences, not for "5 GHz").
+    /// How many gigahertz, for whoever draws it. `None` for a frequency
+    /// outside the known bands.
+    ///
+    /// A NUMBER AND NOT A STRING, because 2,4 GHz is a DECIMAL and a decimal
+    /// belongs to a language: this used to hand back `"2,4 GHz"` with a
+    /// Portuguese comma in it, and an otherwise entirely English screen drew
+    /// `band  2,4 GHz`. The crate has no language (the same rule that keeps a
+    /// buffer from translating); `ronoctua_i18n::Arg::Fraction` is what turns
+    /// this into text, in `shell::network`.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub const fn gigahertz(self) -> Option<f64> {
         match self {
-            Self::Ghz24 => "2,4 GHz",
-            Self::Ghz5 => "5 GHz",
-            Self::Ghz6 => "6 GHz",
-            Self::Other => "—",
+            Self::Ghz24 => Some(2.4),
+            Self::Ghz5 => Some(5.0),
+            Self::Ghz6 => Some(6.0),
+            Self::Other => None,
         }
     }
 }
@@ -159,32 +166,236 @@ pub struct Link {
     pub signal: u8,
     /// The band, radio only.
     pub band: Band,
+    /// The address this device HAS, with its prefix — `192.168.1.4/24`.
+    /// `None` while it has none, which is what a device that is up without a
+    /// lease looks like.
+    pub address: Option<String>,
+    /// The way out through this device.
+    pub gateway: Option<String>,
+    /// The resolvers this device was given.
+    pub dns: Vec<String>,
+    /// Is this radio BEING an access point rather than using one? It is the
+    /// only way to tell a hotspot from a connection: the active connection's
+    /// type is `802-11-wireless` either way.
+    pub serving: bool,
 }
 
 impl Link {
-    /// The rate, readable. `1921500` becomes `1,9 Gb/s`.
+    /// The rate, in the unit that does not lie about it. `None` with no link.
     ///
-    /// One decimal place and not two: the negotiated rate wobbles every second,
-    /// and the second place would be noise flickering on screen.
+    /// One decimal place and not two: the negotiated rate wobbles every
+    /// second, and the second place would be noise flickering on screen.
     #[must_use]
-    pub fn rate(&self) -> String {
+    pub fn rate(&self) -> Option<Rate> {
         readable_rate(self.rate_kbps)
+    }
+}
+
+/// What the daemon believes about the way OUT.
+///
+/// BELIEVES, and does not measure — with `connectivity.uri` unset the daemon
+/// answers [`Way::Full`] for any route at all, so a dead uplink and a captive
+/// portal both look like the internet. `nix/modules/network.nix` turns the
+/// check on, and the two middle answers are the reason it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Way {
+    /// The daemon has not decided yet.
+    #[default]
+    Unknown,
+    /// No way out at all.
+    None,
+    /// Something answered, and it was not what was asked for: a captive
+    /// portal, the hotel's login page.
+    Portal,
+    /// A route exists and the check did not complete: the uplink is up and
+    /// the internet is not reachable through it.
+    Limited,
+    /// The check went out and came back.
+    Full,
+}
+
+impl Way {
+    /// NetworkManager's own numbers.
+    #[must_use]
+    pub const fn of(state: u32) -> Self {
+        match state {
+            1 => Self::None,
+            2 => Self::Portal,
+            3 => Self::Limited,
+            4 => Self::Full,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// The kebab-case word behind `network-way-<id>`.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::None => "none",
+            Self::Portal => "portal",
+            Self::Limited => "limited",
+            Self::Full => "full",
+        }
+    }
+
+    /// Is this a way out that WORKS? Only one of the five is.
+    #[must_use]
+    pub const fn out(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+/// A connection that is up — the Wi-Fi, the cable, a VPN.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Active {
+    /// Its object path, for the order that takes it down.
+    pub at: String,
+    /// What the person called the profile.
+    pub id: String,
+    /// `802-11-wireless`, `vpn`, `wireguard`, …
+    pub kind: String,
+    /// NetworkManager's own `Vpn` flag — true for the plugin kinds, and
+    /// FALSE for WireGuard, which is a device.
+    pub vpn: bool,
+    /// Is it fully up?
+    pub activated: bool,
+}
+
+impl Active {
+    /// Is this a tunnel, in the sense a person means?
+    ///
+    /// Two things have to be read, and reading one is the bug: `Vpn` is true
+    /// for NetworkManager's plugins (OpenVPN, OpenConnect) and false for
+    /// WireGuard, which NM models as a DEVICE — and WireGuard is what most
+    /// people mean today.
+    #[must_use]
+    pub fn tunnel(&self) -> bool {
+        self.activated && (self.vpn || self.kind == "wireguard")
+    }
+}
+
+/// A connection profile the daemon has STORED — a Wi-Fi network connected to
+/// before, a VPN imported once.
+///
+/// It is not a connection: it is the recipe for one, and the difference is
+/// what lets the view offer "bring this up" beside "take that down".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Saved {
+    /// The profile's object path — what activating it needs.
+    pub at: String,
+    /// The name the person gave it.
+    pub id: String,
+    /// `802-11-wireless`, `vpn`, `wireguard`.
+    pub kind: String,
+}
+
+impl Saved {
+    /// Is this profile a tunnel?
+    ///
+    /// The same two words [`Active::tunnel`] reads, and for its reason:
+    /// WireGuard is a `wireguard` connection and never a `vpn` one, so a test
+    /// on the one word alone misses half of them.
+    #[must_use]
+    pub fn tunnel(&self) -> bool {
+        self.kind == "vpn" || self.kind == "wireguard"
+    }
+}
+
+/// The whole of what NetworkManager knows, as of one reading.
+///
+/// A SNAPSHOT and never a delta, the shape `ronoctua-disks`, `-power` and
+/// `-bluetooth` all use: the modeline draws from it with no view open, and a
+/// delta would have to be replayed in order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Snapshot {
+    /// What the daemon believes about the way out.
+    pub way: Way,
+    /// Is networking on at all? False is the aeroplane.
+    pub networking: bool,
+    /// Is the radio on?
+    pub radio: bool,
+    /// Every link, cable and radio.
+    pub links: Vec<Link>,
+    /// Every connection that is up.
+    pub active: Vec<Active>,
+    /// Did the daemon answer at all?
+    pub daemon: bool,
+    /// The profiles it has stored — every medium, so the view can say which
+    /// tunnels exist as well as which are up.
+    pub saved: Vec<Saved>,
+}
+
+impl Snapshot {
+    /// The aeroplane: networking off, by somebody's decision.
+    #[must_use]
+    pub const fn airplane(&self) -> bool {
+        self.daemon && !self.networking
+    }
+
+    /// A tunnel that is up, and what it is called.
+    #[must_use]
+    pub fn tunnel(&self) -> Option<&Active> {
+        self.active.iter().find(|a| a.tunnel())
+    }
+
+    /// Is there a link that believes it is connected?
+    #[must_use]
+    pub fn linked(&self) -> bool {
+        self.links.iter().any(|l| l.state == State::Connected)
+    }
+
+    /// Is something WRONG with the way out — a mark the modeline draws?
+    ///
+    /// Not "there is no internet": a laptop with the cable out and the radio
+    /// off has no way out and nothing is wrong, which is why this asks for a
+    /// link that thinks it is connected. What it catches is the case that
+    /// looks fine and is not — the hotel's portal, the router with no
+    /// uplink — and that is the one worth a glyph.
+    #[must_use]
+    pub fn adrift(&self) -> bool {
+        // `Unknown` IS NOT A FAULT — it is the daemon saying it has not
+        // measured yet, which is every machine for the first seconds after
+        // boot and any machine whose `Connectivity` read failed. Counting it
+        // as adrift put the "no way out" mark on a healthy laptop at every
+        // login, which is the one thing this mark must never do.
+        self.daemon
+            && self.networking
+            && self.linked()
+            && self.way != Way::Unknown
+            && !self.way.out()
     }
 }
 
 /// `kb/s` -> `340 Mb/s` or `1,9 Gb/s`.
 #[must_use]
-pub fn readable_rate(kbps: u32) -> String {
+pub fn readable_rate(kbps: u32) -> Option<Rate> {
     match kbps {
-        0 => "—".to_owned(),
+        // NO LINK IS NO NUMBER, and the door draws the sentence for it: this
+        // used to answer an em dash, which is a visual value written into a
+        // crate that has no tokens (invariant 9).
+        0 => None,
         // Below 1 Mb/s the smaller unit is the only one that does not lie.
-        1..=999 => format!("{kbps} kb/s"),
-        1_000..=999_999 => format!("{} Mb/s", kbps / 1_000),
-        _ => {
-            let tenth = (kbps + 50_000) / 100_000;
-            format!("{},{} Gb/s", tenth / 10, tenth % 10)
-        }
+        1..=999 => Some(Rate::Kilobits(kbps)),
+        1_000..=999_999 => Some(Rate::Megabits(kbps / 1_000)),
+        // A DECIMAL, AND THEREFORE A NUMBER: `1,9` and `1.9` are the same
+        // rate in two languages, and only the door knows which.
+        _ => Some(Rate::Gigabits(f64::from(kbps) / 1_000_000.0)),
     }
+}
+
+/// A link's speed, in the unit that does not lie about it.
+///
+/// THE UNIT IS THE CRATE'S AND THE FORMATTING IS THE DOOR'S: `Mb/s` is the
+/// same in every language, a decimal separator is not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rate {
+    /// Under a megabit.
+    Kilobits(u32),
+    /// Whole megabits.
+    Megabits(u32),
+    /// Gigabits, with one decimal place.
+    Gigabits(f64),
 }
 
 /// NetworkManager's `psk-flags`, according to whether the person wants to remember.
@@ -248,14 +459,29 @@ fn profile_ssid(cfg: &Configuration) -> Option<String> {
 /// mesh advertises from each node. Without this the list shows the same network four
 /// times, and the person picks the wrong row — which is the weakest, because the
 /// order came from the bus.
+///
+/// # `dedup_by` only removes NEIGHBOURS
+///
+/// Which is why the first sort is BY NAME. It used to be by signal, with the
+/// active one first, and that reads like "strongest first, so `dedup` keeps
+/// it" — but two access points of one name are only adjacent under that order
+/// when nothing else sorts between them, and something usually does. On a
+/// screen with six networks in range, THREE of them were listed twice: the
+/// one in use sorts to the top and its own second band stays down among the
+/// neighbours, where the deduplication never sees it.
+/// Grouping by name first makes the duplicates neighbours by construction;
+/// the tie-breaks inside a name are what decides WHICH of them survives, and
+/// the display order is the second sort's job.
 #[must_use]
 pub fn group_by_ssid(mut networks: Vec<Network>) -> Vec<Network> {
-    // Strongest first, so `dedup_by` keeps it.
+    // BY NAME FIRST, then the best of that name: `dedup_by` keeps the first
+    // of each run, so the run has to be the name and its head the best.
     networks.sort_by(|a, b| {
-        b.active_one
-            .cmp(&a.active_one)
+        a.ssid
+            .cmp(&b.ssid)
+            .then(b.active_one.cmp(&a.active_one))
+            .then(b.saved.cmp(&a.saved))
             .then(b.signal.cmp(&a.signal))
-            .then(a.ssid.cmp(&b.ssid))
     });
     networks.dedup_by(|a, b| a.ssid == b.ssid);
     // The final order is the viewer's: the active one on top, then the saved ones,
@@ -270,6 +496,55 @@ pub fn group_by_ssid(mut networks: Vec<Network>) -> Vec<Network> {
     });
     networks
 }
+
+/// A password for a hotspot: twelve characters somebody can read off a
+/// screen and type on a phone.
+///
+/// FROM `/dev/urandom`, and out of an alphabet with no `0`/`O` and no
+/// `1`/`l`/`I` in it: the person reading it is typing it on a small keyboard
+/// from across a room, and a character nobody can tell apart is a password
+/// that does not work for a reason nobody can see.
+///
+/// # Errors
+///
+/// The kernel's own randomness was not readable, which is a machine with
+/// bigger problems than a hotspot.
+pub fn hotspot_password() -> Result<String> {
+    use std::io::Read as _;
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const LENGTH: usize = 12;
+    // A BOUNDED READ, and the bound is the whole point.
+    //
+    // `fs::read` on `/dev/urandom` NEVER RETURNS: it is a character device
+    // with no end, so `read_to_end` grows a `Vec` until the kernel kills the
+    // process — and this is called on the door's own event-loop thread, so
+    // what dies is the footer, and `systemd-oomd` takes the whole cgroup with
+    // it (the trap CLAUDE.md records). Eight bytes per character is room for
+    // the rejection sampling below to throw some away.
+    let mut bytes = vec![0u8; LENGTH * 8];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .context("no randomness to make a password out of")?;
+    // REJECTION SAMPLING, so every letter is as likely as every other: `%`
+    // over a byte favours the front of the alphabet, which is a smaller
+    // password than it looks.
+    let ceiling = 256 - (256 % ALPHABET.len());
+    let out: String = bytes
+        .iter()
+        .filter(|b| usize::from(**b) < ceiling)
+        .take(LENGTH)
+        .map(|b| char::from(ALPHABET[usize::from(*b) % ALPHABET.len()]))
+        .collect();
+    anyhow::ensure!(out.len() == LENGTH, "not enough randomness");
+    Ok(out)
+}
+
+/// `nmcli`, by PATH and never by name: inside a systemd unit the `PATH` is
+/// minimal, and the failure would show up far from its cause.
+const NMCLI: &str = match option_env!("RONOCTUA_NMCLI") {
+    Some(p) => p,
+    None => "nmcli",
+};
 
 /// The conversation with NetworkManager.
 pub struct Manager {
@@ -286,6 +561,11 @@ impl Manager {
         let connection = zbus::blocking::Connection::system()
             .context("no system bus to talk to NetworkManager")?;
         Ok(Self { connection })
+    }
+
+    /// The connection itself, for a match rule that is not a proxy's.
+    pub const fn bus(&self) -> &zbus::blocking::Connection {
+        &self.connection
     }
 
     fn manager(&self) -> Result<nm::ManagerProxyBlocking<'_>> {
@@ -311,6 +591,20 @@ impl Manager {
         let fresh = !g.wireless_enabled()?;
         g.set_wireless_enabled(fresh)?;
         Ok(fresh)
+    }
+
+    /// Turns the radio on, or off.
+    ///
+    /// The state WANTED, and not a flip: two doors read the same snapshot and
+    /// a flip sent from a stale one turns the radio back to where it already
+    /// was — the switch that does nothing when pressed twice by two screens.
+    ///
+    /// # Errors
+    ///
+    /// The bus did not answer, or polkit refused.
+    pub fn set_radio(&self, on: bool) -> Result<()> {
+        self.manager()?.set_wireless_enabled(on)?;
+        Ok(())
     }
 
     /// Asks every radio on the machine to scan.
@@ -431,6 +725,65 @@ impl Manager {
         Ok(group_by_ssid(output))
     }
 
+    /// The whole of it, in one reading. INFALLIBLE: a daemon that is not
+    /// there answers an empty snapshot, which is what the screen draws.
+    #[must_use]
+    pub fn look(&self) -> Snapshot {
+        let Ok(manager) = self.manager() else {
+            return Snapshot::default();
+        };
+        let mut out = Snapshot {
+            daemon: true,
+            way: Way::of(manager.connectivity().unwrap_or(0)),
+            networking: manager.networking_enabled().unwrap_or(true),
+            radio: manager.wireless_enabled().unwrap_or(false),
+            links: self.links().unwrap_or_default(),
+            active: Vec::new(),
+            saved: self.saved_profiles().unwrap_or_default(),
+        };
+        for at in manager.active_connections().unwrap_or_default() {
+            let Ok(active) = nm::ActiveProxyBlocking::builder(&self.connection)
+                .path(at.clone())
+                .and_then(zbus::blocking::proxy::Builder::build)
+            else {
+                continue;
+            };
+            out.active.push(Active {
+                at: at.as_str().to_owned(),
+                id: active.id().unwrap_or_default(),
+                kind: active.type_().unwrap_or_default(),
+                vpn: active.vpn().unwrap_or(false),
+                // 2 is `ACTIVATED`; anything else is on its way somewhere.
+                activated: active.state().unwrap_or(0) == 2,
+            });
+        }
+        out
+    }
+
+    /// Turns every device off, or back on — the aeroplane.
+    ///
+    /// # Errors
+    ///
+    /// The daemon is not there, or it refused. It does NOT refuse for want
+    /// of permission: the person is in `networkmanager`, and NM's own polkit
+    /// rules answer `yes` to that group for every action this crate uses.
+    pub fn set_networking(&self, on: bool) -> Result<()> {
+        self.manager()?.enable(on)?;
+        Ok(())
+    }
+
+    /// Takes one connection down — a VPN, a link.
+    ///
+    /// # Errors
+    ///
+    /// The daemon is not there, the path is not one of its own, or it
+    /// refused.
+    pub fn deactivate(&self, at: &str) -> Result<()> {
+        let path = zbus::zvariant::ObjectPath::try_from(at)?;
+        self.manager()?.deactivate_connection(&path)?;
+        Ok(())
+    }
+
     /// The state of each device, cable and radio.
     ///
     /// # Errors
@@ -451,6 +804,10 @@ impl Manager {
             let state = State::from_nm(d.state().unwrap_or(0));
             let interface = d.interface().unwrap_or_default();
 
+            let serving = medium == Medium::Radio
+                && self
+                    .radio(&path)
+                    .is_ok_and(|r| r.mode().unwrap_or(0) == nm::RADIO_IS_AP);
             let (network, rate_kbps, signal, band) = if medium == Medium::Radio {
                 self.radio_detail(&path)
             } else {
@@ -466,6 +823,7 @@ impl Manager {
                 )
             };
 
+            let (address, gateway, dns) = self.ip_facts(&path);
             output.push(Link {
                 medium,
                 interface,
@@ -474,9 +832,158 @@ impl Manager {
                 rate_kbps,
                 signal,
                 band,
+                address,
+                gateway,
+                dns,
+                serving,
             });
         }
         Ok(output)
+    }
+
+    /// The address, the gateway and the resolvers of one device.
+    ///
+    /// INFALLIBLE, like every other reading here: a device with no
+    /// configuration is the ordinary case (a cable with no carrier, a radio
+    /// that has not associated), and it answers three empties rather than an
+    /// error the screen would have to word.
+    fn ip_facts(&self, device: &OwnedObjectPath) -> (Option<String>, Option<String>, Vec<String>) {
+        let empty = (None, None, Vec::new());
+        let Ok(d) = self.device(device) else {
+            return empty;
+        };
+        let Ok(at) = d.ip4_config() else {
+            return empty;
+        };
+        // `/` IS HOW NETWORKMANAGER SAYS "NONE", and building a proxy on it
+        // fails with a path error — which would be diagnosed as a dead bus.
+        // The same trap `radio_detail` carries, for the same reason.
+        if at.as_str() == "/" {
+            return empty;
+        }
+        let Ok(ip) = nm::Ip4ProxyBlocking::builder(&self.connection)
+            .path(at)
+            .and_then(zbus::blocking::proxy::Builder::build)
+        else {
+            return empty;
+        };
+        let address = ip
+            .address_data()
+            .unwrap_or_default()
+            .into_iter()
+            .find_map(|e| {
+                let a = e
+                    .get("address")
+                    .and_then(|v| String::try_from(v.clone()).ok())?;
+                match e.get("prefix").and_then(|v| u32::try_from(v.clone()).ok()) {
+                    Some(prefix) => Some(format!("{a}/{prefix}")),
+                    None => Some(a),
+                }
+            });
+        let gateway = ip.gateway().ok().filter(|g| !g.is_empty());
+        let dns = ip
+            .nameserver_data()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| {
+                e.get("address")
+                    .and_then(|v| String::try_from(v.clone()).ok())
+            })
+            .collect();
+        (address, gateway, dns)
+    }
+
+    /// Every profile the daemon has stored.
+    ///
+    /// # Errors
+    ///
+    /// The bus did not answer. A profile that will not read is SKIPPED and
+    /// not an error: one unreadable recipe must not empty the list.
+    pub fn saved_profiles(&self) -> Result<Vec<Saved>> {
+        let profiles = nm::ProfilesProxyBlocking::new(&self.connection)?;
+        let mut out = Vec::new();
+        for path in profiles.list_connections()? {
+            let Ok(cfg) = self.profile(&path)?.get_settings() else {
+                continue;
+            };
+            let Some(section) = cfg.get("connection") else {
+                continue;
+            };
+            let text = |field: &str| {
+                section
+                    .get(field)
+                    .and_then(|v| String::try_from(v.clone()).ok())
+                    .unwrap_or_default()
+            };
+            out.push(Saved {
+                at: path.as_str().to_owned(),
+                id: text("id"),
+                kind: text("type"),
+            });
+        }
+        // BY NAME, and not in the daemon's order: that one is the order the
+        // profiles were created in, which nobody remembers.
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
+    }
+
+    /// Brings a file in as a profile, through NetworkManager's OWN importer.
+    ///
+    /// `nmcli` AND NOT A TRANSLATION OF OUR OWN: a WireGuard file becomes
+    /// thirty NetworkManager settings, upstream maintains that mapping, and
+    /// a second one here would be a second thing to keep in step with a
+    /// format somebody else defines.
+    ///
+    /// THE PATH GOES IN `argv` AND THE SECRET DOES NOT: the key stays in the
+    /// file, which `nmcli` reads itself, and nothing secret crosses a command
+    /// line where every process on the machine could read it.
+    ///
+    /// # Errors
+    ///
+    /// There is no `nmcli`, or it refused — its own words come back.
+    pub fn import(&self, path: &str, kind: vpn::Kind) -> Result<()> {
+        let out = std::process::Command::new(NMCLI)
+            .args(["connection", "import", "type", kind.id(), "file", path])
+            .output()
+            .with_context(|| format!("could not run {NMCLI}"))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        anyhow::bail!(if said.is_empty() {
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        } else {
+            said
+        })
+    }
+
+    /// Brings a stored profile up — a tunnel, a network connected to before.
+    ///
+    /// The device is left to the daemon (`/`): a profile carries the medium
+    /// it belongs to, and naming a device here would be this crate deciding
+    /// something NetworkManager already knows.
+    ///
+    /// # Errors
+    ///
+    /// The daemon is not there, the path is not one of its profiles, or it
+    /// refused.
+    pub fn activate(&self, at: &str) -> Result<()> {
+        let path = zbus::zvariant::ObjectPath::try_from(at)?;
+        let none = zbus::zvariant::ObjectPath::try_from("/")?;
+        self.manager()?.activate_connection(&path, &none, &none)?;
+        Ok(())
+    }
+
+    /// Deletes a stored profile.
+    ///
+    /// # Errors
+    ///
+    /// The daemon is not there, the path is not one of its profiles, or it
+    /// refused.
+    pub fn delete(&self, at: &str) -> Result<()> {
+        let path = OwnedObjectPath::try_from(at)?;
+        self.profile(&path)?.delete()?;
+        Ok(())
     }
 
     fn radio_detail(&self, path: &OwnedObjectPath) -> (Option<String>, u32, u8, Band) {
@@ -635,6 +1142,71 @@ impl Manager {
         Ok(None)
     }
 
+    /// Turns the radio into an access point the other things in the room can
+    /// join.
+    ///
+    /// # What it costs, and why the row says so
+    ///
+    /// A LAPTOP WITH ONE RADIO CANNOT DO BOTH. The card leaves the network it
+    /// was on and starts answering as an access point, so the machine sharing
+    /// its connection is sharing the CABLE, and a machine with no cable is
+    /// sharing nothing. That is a sentence on the row, not a surprise
+    /// afterwards.
+    ///
+    /// # The password IS stored, and that is not the Wi-Fi rule
+    ///
+    /// Joining somebody's network keeps nothing on disk (`psk-flags=2`, the
+    /// TPM agent). This is the other direction: NetworkManager has to hand
+    /// the key to `wpa_supplicant` on every activation, so it lives in the
+    /// profile — root-owned, `0600`, in `/etc/NetworkManager`. A hotspot
+    /// whose password nobody could give out is not one.
+    ///
+    /// # Errors
+    ///
+    /// There is no radio, or NetworkManager refused.
+    pub fn hotspot(&self, ssid: &str, password: &str) -> Result<()> {
+        let device = self
+            .devices_of_kind(nm::WIFI_KIND)?
+            .into_iter()
+            .next()
+            .context("this machine has no Wi-Fi radio")?;
+        let mut connection: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+        connection.insert(
+            "connection",
+            HashMap::from([
+                ("id", Value::from(ssid)),
+                ("type", Value::from("802-11-wireless")),
+                // NOT ON ITS OWN, EVER: a hotspot that came back at every
+                // boot would be a machine quietly answering to the room.
+                ("autoconnect", Value::from(false)),
+            ]),
+        );
+        connection.insert(
+            "802-11-wireless",
+            HashMap::from([
+                ("ssid", Value::from(ssid.as_bytes())),
+                ("mode", Value::from("ap")),
+                // 2.4 GHz: it is what every phone and every old thing in the
+                // room can see, and range beats speed for something one turns
+                // on to hand somebody a connection.
+                ("band", Value::from("bg")),
+            ]),
+        );
+        connection.insert(
+            "802-11-wireless-security",
+            HashMap::from([
+                ("key-mgmt", Value::from("wpa-psk")),
+                ("psk", Value::from(password)),
+            ]),
+        );
+        connection.insert("ipv4", HashMap::from([("method", Value::from("shared"))]));
+        connection.insert("ipv6", HashMap::from([("method", Value::from("ignore"))]));
+        let none = zbus::zvariant::ObjectPath::try_from("/")?;
+        self.manager()?
+            .add_and_activate_connection(connection, &device.as_ref(), &none)?;
+        Ok(())
+    }
+
     /// Takes down whatever is active on the first device of the given medium.
     ///
     /// # Errors
@@ -703,6 +1275,55 @@ impl Manager {
 /// # Errors
 ///
 /// There is no bus, or the machine has no radio.
+pub fn watch<F>(on_change: F) -> Result<()>
+where
+    F: Fn(Snapshot) + Send + 'static,
+{
+    let manager = Manager::fresh()?;
+    std::thread::Builder::new()
+        .name("net-watch".to_owned())
+        .spawn(move || {
+            // THE MATCH RULE BEFORE THE FIRST READING, the lesson the power
+            // and the disks crates both carry: a cable plugged during the
+            // reading would announce itself before the rule landed.
+            let rule = (|| {
+                Ok::<_, zbus::Error>(
+                    zbus::MatchRule::builder()
+                        .msg_type(zbus::message::Type::Signal)
+                        .sender(nm::SERVICE)?
+                        .interface("org.freedesktop.DBus.Properties")?
+                        .build(),
+                )
+            })();
+            let Ok(rule) = rule else {
+                tracing::warn!("no NetworkManager rule; the marks will not reread");
+                return;
+            };
+            let Ok(messages) =
+                zbus::blocking::MessageIterator::for_match_rule(rule, manager.bus(), None)
+            else {
+                tracing::warn!("no NetworkManager stream; the marks will not reread");
+                return;
+            };
+            on_change(manager.look());
+            let mut last = std::time::Instant::now();
+            for _ in messages {
+                // A FLOOR BETWEEN READINGS. NetworkManager talks constantly
+                // while a link comes up — every property of every device —
+                // and the modeline has five marks to draw.
+                if last.elapsed() < std::time::Duration::from_millis(250) {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                last = std::time::Instant::now();
+                on_change(manager.look());
+            }
+            tracing::info!("the NetworkManager stream ended; no automatic reread");
+        })
+        .context("could not start the network thread")?;
+    Ok(())
+}
+
+/// The scan's own watch — `LastScan` changes when there is something new.
 pub fn watch_scan<F>(on_scan: F) -> Result<()>
 where
     F: Fn() + Send + 'static,
@@ -737,6 +1358,175 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_aeroplane_is_networking_off_and_nothing_else() {
+        let mut s = Snapshot {
+            daemon: true,
+            networking: true,
+            ..Snapshot::default()
+        };
+        assert!(!s.airplane());
+        s.networking = false;
+        assert!(s.airplane());
+        // A DAEMON THAT IS NOT THERE is not an aeroplane: it is a machine
+        // with nothing to say, and the mark would be a lie.
+        s.daemon = false;
+        assert!(!s.airplane());
+    }
+
+    #[test]
+    fn a_hotspot_password_comes_back_at_all() {
+        // THE DEFECT THIS EXISTS FOR: `fs::read` on `/dev/urandom` never
+        // returns — a character device has no end — so this function grew a
+        // `Vec` until the kernel killed the process, ON THE DOOR'S OWN EVENT
+        // LOOP. The test that would have found it is this one: call it.
+        let word = hotspot_password().expect("no randomness");
+        assert_eq!(word.chars().count(), 12);
+        // AND IT IS TYPEABLE FROM ACROSS A ROOM: no `0`/`O`, no `1`/`l`/`I`.
+        for c in word.chars() {
+            assert!(c.is_ascii_alphanumeric(), "{word}");
+            assert!(!"0O1lI".contains(c), "an ambiguous character: {word}");
+        }
+        // AND IT IS NOT THE SAME PASSWORD EVERY TIME.
+        assert_ne!(word, hotspot_password().unwrap());
+    }
+
+    #[test]
+    fn a_stored_tunnel_is_either_word() {
+        // WIREGUARD IS NEVER A `vpn` CONNECTION. NetworkManager gives it a
+        // type of its own, and a test on the one word would have listed half
+        // the tunnels this machine can have.
+        let of = |kind: &str| Saved {
+            at: "/s/1".to_owned(),
+            id: "a tunnel".to_owned(),
+            kind: kind.to_owned(),
+        };
+        assert!(of("vpn").tunnel());
+        assert!(of("wireguard").tunnel());
+        assert!(!of("802-11-wireless").tunnel());
+        assert!(!of("802-3-ethernet").tunnel());
+    }
+
+    #[test]
+    fn not_yet_measured_is_not_a_fault() {
+        // THE MARK THIS PREVENTS: `Unknown` is what NetworkManager answers
+        // before its first connectivity check and what a failed read falls
+        // back to (`Way::of` takes `unwrap_or(0)`), so counting it as adrift
+        // drew "no way out" on a healthy machine at every login.
+        let waiting = Snapshot {
+            daemon: true,
+            networking: true,
+            way: Way::Unknown,
+            links: vec![Link {
+                medium: Medium::Radio,
+                interface: "wlan0".to_owned(),
+                network: Some("a network".to_owned()),
+                state: State::Connected,
+                rate_kbps: 0,
+                signal: 60,
+                band: Band::Other,
+                address: None,
+                gateway: None,
+                dns: Vec::new(),
+                serving: false,
+            }],
+            active: Vec::new(),
+            radio: true,
+            saved: Vec::new(),
+        };
+        assert!(!waiting.adrift(), "a mark before the first measurement");
+    }
+
+    #[test]
+    fn adrift_is_a_link_that_leads_nowhere() {
+        let linked = |way: Way| Snapshot {
+            daemon: true,
+            networking: true,
+            way,
+            links: vec![Link {
+                medium: Medium::Radio,
+                interface: "wlan0".to_owned(),
+                network: Some("a network".to_owned()),
+                state: State::Connected,
+                rate_kbps: 0,
+                signal: 60,
+                band: Band::Other,
+                address: None,
+                gateway: None,
+                dns: Vec::new(),
+                serving: false,
+            }],
+            active: Vec::new(),
+            radio: true,
+            saved: Vec::new(),
+        };
+        // The two that look fine and are not.
+        assert!(linked(Way::Portal).adrift());
+        assert!(linked(Way::Limited).adrift());
+        assert!(linked(Way::None).adrift());
+        // The one that works.
+        assert!(!linked(Way::Full).adrift());
+        // AND NOTHING CONNECTED IS NOT ADRIFT: a laptop with the cable out
+        // and the radio off has no way out and nothing is wrong.
+        let mut alone = linked(Way::None);
+        alone.links.clear();
+        assert!(!alone.adrift());
+        // Nor is the aeroplane, which is somebody's decision.
+        let mut off = linked(Way::None);
+        off.networking = false;
+        assert!(!off.adrift());
+    }
+
+    #[test]
+    fn a_tunnel_is_the_plugin_flag_or_wireguard() {
+        let up = |kind: &str, vpn: bool| Active {
+            at: "/a/1".to_owned(),
+            id: "a tunnel".to_owned(),
+            kind: kind.to_owned(),
+            vpn,
+            activated: true,
+        };
+        // NetworkManager's own plugins say so.
+        assert!(up("vpn", true).tunnel());
+        // WireGuard does NOT — it is a device, and it is what most people
+        // mean today. Reading only `Vpn` was the bug this pins.
+        assert!(up("wireguard", false).tunnel());
+        // The Wi-Fi carrying it is not a tunnel.
+        assert!(!up("802-11-wireless", false).tunnel());
+        // And one that is still coming up is not up.
+        let mut coming = up("wireguard", false);
+        coming.activated = false;
+        assert!(!coming.tunnel());
+    }
+
+    #[test]
+    fn the_ways_out_are_the_daemons_own_numbers() {
+        for (n, way) in [
+            (0, Way::Unknown),
+            (1, Way::None),
+            (2, Way::Portal),
+            (3, Way::Limited),
+            (4, Way::Full),
+            (99, Way::Unknown),
+        ] {
+            assert_eq!(Way::of(n), way, "{n}");
+        }
+        assert!(Way::Full.out());
+        for way in [Way::Unknown, Way::None, Way::Portal, Way::Limited] {
+            assert!(!way.out(), "{way:?} is not a way out");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for way in [
+            Way::Unknown,
+            Way::None,
+            Way::Portal,
+            Way::Limited,
+            Way::Full,
+        ] {
+            assert!(seen.insert(way.id()), "{way:?} shares an id");
+        }
+    }
 
     #[test]
     fn transition_mode_stays_on_wpa_psk() {
@@ -804,7 +1594,7 @@ mod tests {
         // and not in the signal's.
         let networks = vec![
             Network {
-                ssid: "casa".into(),
+                ssid: "a house".into(),
                 signal: 40,
                 band: Band::Ghz24,
                 secured: true,
@@ -814,7 +1604,7 @@ mod tests {
                 max_rate_kbps: 144_000,
             },
             Network {
-                ssid: "casa".into(),
+                ssid: "a house".into(),
                 signal: 85,
                 band: Band::Ghz5,
                 secured: true,
@@ -831,10 +1621,49 @@ mod tests {
     }
 
     #[test]
+    fn one_name_survives_however_the_others_sort_between_its_two_points() {
+        // THE DEFECT THIS PREVENTS, and it was on the owner's screen: the
+        // active point of a name sorts to the top and its twin stays down
+        // among the neighbours, so `dedup_by` — which only removes
+        // NEIGHBOURS — never sees the pair. Three names, six points, and one
+        // of each has to come back.
+        let point = |ssid: &str, signal: u8, active: bool| Network {
+            ssid: ssid.into(),
+            signal,
+            band: if signal > 50 { Band::Ghz5 } else { Band::Ghz24 },
+            secured: true,
+            wpa3_only: false,
+            saved: active,
+            active_one: active,
+            max_rate_kbps: 0,
+        };
+        let networks = vec![
+            point("a house", 90, true),
+            point("a neighbour", 70, false),
+            point("a street", 60, false),
+            point("a house", 40, false),
+            point("a neighbour", 30, false),
+            point("a street", 20, false),
+        ];
+        let names: Vec<_> = group_by_ssid(networks)
+            .into_iter()
+            .map(|r| (r.ssid, r.signal))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("a house".to_owned(), 90),
+                ("a neighbour".to_owned(), 70),
+                ("a street".to_owned(), 60)
+            ]
+        );
+    }
+
+    #[test]
     fn the_active_comes_before_the_saved_and_the_saved_before_the_strong_neighbour() {
         let networks = vec![
             Network {
-                ssid: "vizinho".into(),
+                ssid: "a neighbour".into(),
                 signal: 99,
                 band: Band::Ghz24,
                 secured: true,
@@ -844,7 +1673,7 @@ mod tests {
                 max_rate_kbps: 0,
             },
             Network {
-                ssid: "salva".into(),
+                ssid: "a saved one".into(),
                 signal: 30,
                 band: Band::Ghz5,
                 secured: true,
@@ -868,7 +1697,7 @@ mod tests {
             .into_iter()
             .map(|r| r.ssid)
             .collect();
-        assert_eq!(names, ["current", "salva", "vizinho"]);
+        assert_eq!(names, ["current", "a saved one", "a neighbour"]);
     }
 
     #[test]
@@ -889,10 +1718,29 @@ mod tests {
 
     #[test]
     fn the_rate_changes_unit_without_losing_the_magnitude() {
-        assert_eq!(readable_rate(0), "—");
-        assert_eq!(readable_rate(540), "540 kb/s");
-        assert_eq!(readable_rate(340_000), "340 Mb/s");
-        assert_eq!(readable_rate(1_921_500), "1,9 Gb/s");
-        assert_eq!(readable_rate(2_401_900), "2,4 Gb/s");
+        // NUMBERS AND UNITS, never a rendered decimal: `1,9` and `1.9` are
+        // the same rate in two languages, and this crate has no language.
+        assert_eq!(readable_rate(0), None, "no link is no number");
+        assert_eq!(readable_rate(540), Some(Rate::Kilobits(540)));
+        assert_eq!(readable_rate(340_000), Some(Rate::Megabits(340)));
+        let Some(Rate::Gigabits(fast)) = readable_rate(1_921_500) else {
+            panic!("a gigabit link came back in the wrong unit");
+        };
+        assert!((fast - 1.9215).abs() < 0.001, "{fast}");
+        // AND ONE DECIMAL PLACE IS THE DOOR'S ROUNDING, not a truncation
+        // here: 2 401 900 is 2,4 and not 2,401900.
+        let Some(Rate::Gigabits(other)) = readable_rate(2_401_900) else {
+            panic!("wrong unit");
+        };
+        assert!((other - 2.4019).abs() < 0.001, "{other}");
+    }
+
+    #[test]
+    fn a_band_is_a_number_and_not_a_language() {
+        // IT USED TO ANSWER `"2,4 GHz"` — with a Portuguese comma — and an
+        // otherwise entirely English screen drew it that way.
+        assert_eq!(Band::Ghz24.gigahertz(), Some(2.4));
+        assert_eq!(Band::Ghz5.gigahertz(), Some(5.0));
+        assert_eq!(Band::Other.gigahertz(), None);
     }
 }

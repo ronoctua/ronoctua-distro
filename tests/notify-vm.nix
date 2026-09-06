@@ -69,6 +69,22 @@ pkgs.testers.runNixOSTest {
     WITH_TWO = ${toString (heightOf 4)}
 
 
+    def footer_height_above(floor, attempts=20):
+        """The first height above `floor`, waited for.
+
+        Between one height and the next there is a frame with NO buffer, and
+        a shot taken there reads 0 px — neither at rest nor expanded. The log
+        proves the footer asked; only the pixels, polled, prove the
+        compositor agreed. (`leader-vm` records the failure that taught it.)
+        """
+        seen = None
+        for _ in range(attempts):
+            seen = footer_height()
+            if seen > floor:
+                return seen
+            machine.sleep(1)
+        return seen
+
     def footer_height():
         """The surface's real height on screen, in px."""
         w, h, x, y = niri_geometry()
@@ -302,8 +318,8 @@ pkgs.testers.runNixOSTest {
         assert 'icon="file:///root/an-image.png"' in got, got
 
     with subtest("the manager opens BELOW the minibuffer, on the SAME surface"):
-        control("notif-history")
-        expanded = footer_height()
+        control("notif-open")
+        expanded = footer_height_above(FOOTER)
         assert expanded > FOOTER, f"the manager did not expand: {expanded} px"
 
         c = layers()
@@ -329,7 +345,7 @@ pkgs.testers.runNixOSTest {
         )
 
     with subtest("closing the manager gives the two lines back"):
-        control("notif-history")
+        control("notif-open")
         wait_for_height(FOOTER)
 
     with subtest("the history survives the footer restarting"):

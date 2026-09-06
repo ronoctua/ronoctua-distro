@@ -278,7 +278,7 @@ mod tests {
             assert_eq!(
                 decoded(&encoded(original)),
                 original,
-                "quebrou em {original}"
+                "it broke on {original}"
             );
         }
         // The separator stays legible, which is what makes a note readable by

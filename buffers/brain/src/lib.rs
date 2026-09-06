@@ -1,4 +1,4 @@
-//! The brain's screen — `LEADER s b`, and a window of its own.
+//! The brain's screen — `LEADER b b`, and a window of its own.
 //!
 //! # What it is for
 //!
@@ -1139,7 +1139,7 @@ mod tests {
 
     #[test]
     fn every_state_is_reachable_by_name() {
-        // The host sends an id the descriptor declared — `SPC b s`, or the
+        // The host sends an id the descriptor declared — `SPC w s`, or the
         // modeline clicked. A state that could only be reached by a key would
         // leave the modeline offering a screen nobody enters.
         let mut s = a_state();

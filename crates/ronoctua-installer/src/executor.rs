@@ -406,7 +406,7 @@ mod tests {
                 );
                 assert!(
                     !arg.contains(&r.passphrase),
-                    "passphrase em argv: {:?}",
+                    "the passphrase reached argv: {:?}",
                     p.command
                 );
             }

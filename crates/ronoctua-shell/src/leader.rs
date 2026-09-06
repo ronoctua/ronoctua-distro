@@ -393,7 +393,7 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
     tracing::info!(path = %path.display(), "control socket opened");
 
     thread::Builder::new()
-        .name("controle".into())
+        .name("control".into())
         .spawn(move || {
             for connection in listener.incoming() {
                 let Ok(stream) = connection else { continue };
@@ -642,13 +642,59 @@ impl Leader {
 /// sequence that lived in the table and again in the drawing would be two
 /// answers to "which key stops it", with the wrong one on screen.
 ///
-/// `s` is the SYSTEM group — what the machine is doing to itself — and `a` is
-/// the letter the brain's own buffer already uses for the same verb under its
-/// local leader (`m a`). One letter, two prefixes, one meaning.
-pub const BRAIN_ABORT_KEYS: &str = "s a";
+/// `b` is the BRAIN's own prefix — the machine's agenda, at the first level by
+/// the owner's decision — and `a` is the letter the brain's own buffer already
+/// uses for the same verb under its local leader (`m a`). One letter, two
+/// prefixes, one meaning.
+pub const BRAIN_ABORT_KEYS: &str = "b a";
 
 /// The same, for `brain-proceed`. `p`, as in the buffer's `m p`.
-pub const BRAIN_PROCEED_KEYS: &str = "s p";
+pub const BRAIN_PROCEED_KEYS: &str = "b p";
+
+/// The prefix the buffer's STATE chooser hangs off — `w`, the window's letter,
+/// where the buffer commands live — and the key under it.
+///
+/// Two constants and not two literals, because the footer decides this in TWO
+/// places: the which-key list grafts the row (`apply_leader_effect_with`) and
+/// the key opens it (`state_key`). When the buffer commands moved from `b` to
+/// `w`, one site moved and the other did not: `SPC b` listed a row that did
+/// nothing and `SPC w` listed nothing that worked. One name, two readers.
+pub const STATE_PREFIX: &str = "w";
+
+/// The key that opens the state chooser under [`STATE_PREFIX`].
+pub const STATE_KEY: &str = "s";
+
+/// The sequence that opens the notification manager in the footer.
+///
+/// A constant for the reason the two above are: the window's door SAYS it
+/// ("the action runs from the footer: …") and a sentence that carried the
+/// keys as text went stale the day the key moved from `n h` to `n n`.
+pub const NOTIF_OPEN_KEYS: &str = "n n";
+
+/// The two sequences that take and drop the sleep locks, in the footer.
+///
+/// The power window's message says where the lock lives, and it used to say it
+/// as TEXT in both `.ftl` files: "LEADER s p k, or LEADER s p l". Two things
+/// were wrong with that at once — the sequences would go stale the day either
+/// key moved, exactly as `n h` did; and the word "LEADER" is nobody's key.
+/// `nix/modules/niri.nix` sets `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix`
+/// to `CTRL ALT SPC`, and every other surface in this system renders
+/// `crate::leader()` — the one place that knows.
+pub const KEEP_AWAKE_KEYS: &str = "s p k";
+
+/// The two sequences that answer a pairing question from anywhere.
+///
+/// The card that carries the question lives twenty seconds and the question
+/// lives fifty-five, so the body names these — and names them as ARGUMENTS,
+/// resolved through `crate::leader()`, for the reason [`NOTIF_OPEN_KEYS`]
+/// gives.
+pub const PAIRING_YES_KEYS: &str = "s b y";
+
+/// The refusal's half of [`PAIRING_YES_KEYS`].
+pub const PAIRING_NO_KEYS: &str = "s b n";
+
+/// The lid's half of [`KEEP_AWAKE_KEYS`].
+pub const KEEP_LID_KEYS: &str = "s p l";
 
 /// The default keymap and the commands it references.
 ///
@@ -673,7 +719,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "buffer-next",
             label: key::CMD_BUFFER_NEXT,
         },
-        // `LEADER b b` — the buffer SELECTOR, with completion.
+        // `LEADER w w` — the buffer SELECTOR, with completion.
         //
         // It had been taken out of the keymap because it promised something that
         // did not exist: the locator only knew how to list `&'static str` from
@@ -689,10 +735,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // was free: `.` appears only at the second level (`TAB .`), and the
         // tree branches on the first key.
         //
-        // A manager and not a picker: `f f` above hands a path to the editor
-        // and stops there. This one lists everything a directory holds —
-        // permissions, owner, group, size, date, and a glyph for what each
-        // thing is — and acts on it.
+        // A MANAGER AND NOT A PICKER, and `f f` IS this manager: the key
+        // used to open the editor's file picker — hand a path over and stop
+        // there — and it was given to the manager, which lists everything a
+        // directory holds (permissions, owner, group, size, date, and a glyph
+        // for what each thing is) and acts on it. This comment used to say
+        // `f f` was still the picker, eight hundred lines above the binding
+        // that says otherwise.
         Command {
             id: "files-open",
             label: key::CMD_FILES_OPEN,
@@ -765,7 +814,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "memory-open",
             label: key::CMD_MEMORY_OPEN,
         },
-        // `LEADER s b` — what the machine does BY ITSELF. The panel's own
+        // `LEADER b b` — what the machine does BY ITSELF. The panel's own
         // commands are not here either: they live in the buffer's descriptor,
         // under `SPC m`, and its host resolves them while it holds the
         // keyboard.
@@ -788,6 +837,180 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "brain-proceed",
             label: key::CMD_BRAIN_PROCEED,
+        },
+        // `LEADER s p` — POWER: the battery, the charger, the profile, sleep.
+        // The view's own rows do the rest; these are the things worth a key
+        // without opening it — a profile, the two locks, the four actions.
+        Command {
+            id: "power-open",
+            label: key::CMD_POWER_OPEN,
+        },
+        Command {
+            id: "power-window",
+            label: key::CMD_POWER_WINDOW,
+        },
+        Command {
+            id: "power-profile-performance",
+            label: key::CMD_POWER_PROFILE_PERFORMANCE,
+        },
+        Command {
+            id: "power-profile-balanced",
+            label: key::CMD_POWER_PROFILE_BALANCED,
+        },
+        Command {
+            id: "power-profile-saver",
+            label: key::CMD_POWER_PROFILE_SAVER,
+        },
+        Command {
+            id: "power-keep-awake",
+            label: key::CMD_POWER_KEEP_AWAKE,
+        },
+        Command {
+            id: "power-keep-lid",
+            label: key::CMD_POWER_KEEP_LID,
+        },
+        Command {
+            id: "power-thresholds",
+            label: key::CMD_POWER_THRESHOLDS,
+        },
+        // THE FOUR THAT EMPTY THE SCREEN, under `q` beside `q q`. None acts
+        // blind: each opens the view on its row, ARMED, and `RET` confirms —
+        // one confirm mechanism, and nothing floats (invariant 14).
+        Command {
+            id: "power-suspend",
+            label: key::CMD_POWER_SUSPEND,
+        },
+        Command {
+            id: "power-hibernate",
+            label: key::CMD_POWER_HIBERNATE,
+        },
+        Command {
+            id: "power-reboot",
+            label: key::CMD_POWER_REBOOT,
+        },
+        Command {
+            id: "power-off",
+            label: key::CMD_POWER_OFF,
+        },
+        // AND THE VIEW'S OWN GESTURES, reached through `power::OF_THE_VIEW`:
+        // the hint line is generated from that table, and a key it teaches
+        // has to be a command the manual can name.
+        Command {
+            id: "power-enter",
+            label: key::CMD_POWER_ENTER,
+        },
+        Command {
+            id: "power-less",
+            label: key::CMD_POWER_LESS,
+        },
+        Command {
+            id: "power-more",
+            label: key::CMD_POWER_MORE,
+        },
+        Command {
+            id: "power-up",
+            label: key::CMD_POWER_UP,
+        },
+        Command {
+            id: "power-down",
+            label: key::CMD_POWER_DOWN,
+        },
+        // `LEADER s b` — THE RADIO, beside the machine's other hardware.
+        //
+        // `b` under `s` and not at the first level: what is under `s` is what
+        // the MACHINE is doing (its memory, its disks, its power, its
+        // network), and a radio with a keyboard on it is exactly that. The
+        // group's own key is `s b b`, doubled the way `s n n`, `t t` and
+        // `f f` are — a prefix cannot also be a command, and the tree refuses
+        // it. (`r r` was the network's, and the same change that made this
+        // group killed the first-level `r`.)
+        // THE AUDIO PROFILE'S TWO, which are the view's own arrows. They are
+        // in the registry for the reason every view key is: the hint line is
+        // generated from the table that names them, and a key the line
+        // teaches has to be a command the manual can name.
+        Command {
+            id: "bluetooth-audio-next",
+            label: key::CMD_BLUETOOTH_AUDIO_NEXT,
+        },
+        Command {
+            id: "bluetooth-audio-previous",
+            label: key::CMD_BLUETOOTH_AUDIO_PREVIOUS,
+        },
+        Command {
+            id: "bluetooth-open",
+            label: key::CMD_BLUETOOTH_OPEN,
+        },
+        Command {
+            id: "bluetooth-window",
+            label: key::CMD_BLUETOOTH_WINDOW,
+        },
+        Command {
+            id: "bluetooth-scan",
+            label: key::CMD_BLUETOOTH_SCAN,
+        },
+        Command {
+            id: "bluetooth-power",
+            label: key::CMD_BLUETOOTH_POWER,
+        },
+        Command {
+            id: "bluetooth-discoverable",
+            label: key::CMD_BLUETOOTH_DISCOVERABLE,
+        },
+        Command {
+            id: "bluetooth-reconnect",
+            label: key::CMD_BLUETOOTH_RECONNECT,
+        },
+        Command {
+            id: "bluetooth-disconnect-all",
+            label: key::CMD_BLUETOOTH_DISCONNECT_ALL,
+        },
+        Command {
+            id: "bluetooth-accept",
+            label: key::CMD_BLUETOOTH_ACCEPT,
+        },
+        Command {
+            id: "bluetooth-refuse",
+            label: key::CMD_BLUETOOTH_REFUSE,
+        },
+        Command {
+            id: "bluetooth-device",
+            label: key::CMD_BLUETOOTH_DEVICE,
+        },
+        Command {
+            id: "bluetooth-connect",
+            label: key::CMD_BLUETOOTH_CONNECT,
+        },
+        Command {
+            id: "bluetooth-pair",
+            label: key::CMD_BLUETOOTH_PAIR,
+        },
+        Command {
+            id: "bluetooth-forget",
+            label: key::CMD_BLUETOOTH_FORGET,
+        },
+        Command {
+            id: "bluetooth-trust",
+            label: key::CMD_BLUETOOTH_TRUST,
+        },
+        Command {
+            id: "bluetooth-block",
+            label: key::CMD_BLUETOOTH_BLOCK,
+        },
+        Command {
+            id: "bluetooth-rename",
+            label: key::CMD_BLUETOOTH_RENAME,
+        },
+        Command {
+            id: "bluetooth-unnamed",
+            label: key::CMD_BLUETOOTH_UNNAMED,
+        },
+        Command {
+            id: "bluetooth-up",
+            label: key::CMD_BLUETOOTH_UP,
+        },
+        Command {
+            id: "bluetooth-down",
+            label: key::CMD_BLUETOOTH_DOWN,
         },
         // `LEADER s u` — THE WHOLE UPDATE, BY HAND, WITH NO BRAIN IN IT.
         //
@@ -928,12 +1151,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         },
         // THE NOTIFICATION MANAGER, and its second door.
         //
-        // `notif-history` keeps its id because it keeps its key: `n h` is what
-        // the hand already does, and the thing it opens simply grew from a list
-        // one reads into a view one uses.
+        // `notif-open`, the verb every other footer view answers to —
+        // `memory-open`, `network-open`, `theme-open`. It was `notif-history`
+        // for as long as its key was `n h`; the owner moved the key to `n n`
+        // (the doubled letter every prefix's own view uses) and the id followed.
         Command {
-            id: "notif-history",
-            label: key::CMD_NOTIF_HISTORY,
+            id: "notif-open",
+            label: key::CMD_NOTIF_OPEN,
         },
         // The same manager in a window of its own — the same `View`, and the
         // same reason the file manager has two doors: the footer's region has a
@@ -963,6 +1187,50 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "notif-act",
             label: key::CMD_NOTIF_ACT,
+        },
+        // `RET` ON THE CATALOGUE: the entry's sheet. A command of its own for
+        // `notif-restore`'s reason — the same key means the other thing on
+        // the other column, and one id with two meanings is one label that
+        // lies at one of the two levels.
+        Command {
+            id: "notif-adjust",
+            label: key::CMD_NOTIF_ADJUST,
+        },
+        // AND THE SIX THAT WALK IT. They are gestures — arrows, `TAB` — and
+        // they are in the registry for the reason the three above are: the
+        // manager's hint line is GENERATED from `notifications::OF_THE_VIEW`,
+        // and a key the line teaches is a key the manual and the orphan check
+        // have to be able to name.
+        Command {
+            id: "notif-up",
+            label: key::CMD_NOTIF_UP,
+        },
+        Command {
+            id: "notif-down",
+            label: key::CMD_NOTIF_DOWN,
+        },
+        Command {
+            id: "notif-pane-next",
+            label: key::CMD_NOTIF_PANE_NEXT,
+        },
+        Command {
+            id: "notif-pane-previous",
+            label: key::CMD_NOTIF_PANE_PREVIOUS,
+        },
+        Command {
+            id: "notif-knob-next",
+            label: key::CMD_NOTIF_KNOB_NEXT,
+        },
+        Command {
+            id: "notif-knob-previous",
+            label: key::CMD_NOTIF_KNOB_PREVIOUS,
+        },
+        // `r` in the sheet: back to the distro's default. A command of its own
+        // because the same letter on a list marks everything read, and one id
+        // with two meanings is one label that lies at one of the two levels.
+        Command {
+            id: "notif-restore",
+            label: key::CMD_NOTIF_RESTORE,
         },
         // THE TRANSFER QUEUE. `transfers-open` has a key in the tree
         // (`LEADER t t`); the keys that act on a row live INSIDE the view
@@ -1106,11 +1374,21 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `network-open` is the list; the others act with no list because there is nothing
         // to choose. `network-connect` and `network-forget` do NOT have a key in the
         // tree: they act on the focused row, and that is why their key
-        // is from INSIDE the view — they come in through `OF_NETWORK_VIEW`.
+        // is from INSIDE the view — they come in through `network::OF_THE_VIEW`.
         // ---------------------------------------------------------------
+        // THE AEROPLANE, which is the one thing on the way-out marks that
+        // is a switch rather than a door: `s n a`, and a click on the mark.
+        Command {
+            id: "network-airplane",
+            label: key::CMD_NETWORK_AIRPLANE,
+        },
         Command {
             id: "network-open",
             label: key::CMD_NETWORK_OPEN,
+        },
+        Command {
+            id: "network-window",
+            label: key::CMD_NETWORK_WINDOW,
         },
         Command {
             id: "network-scan",
@@ -1151,6 +1429,25 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "network-link",
             label: key::CMD_NETWORK_LINK,
+        },
+        // AND THE VIEW'S OWN GESTURES, reached through `network::OF_THE_VIEW`:
+        // the hint line is generated from that table, and a key it teaches
+        // has to be a command the manual can name.
+        Command {
+            id: "network-up",
+            label: key::CMD_NETWORK_UP,
+        },
+        Command {
+            id: "network-down",
+            label: key::CMD_NETWORK_DOWN,
+        },
+        Command {
+            id: "network-lan",
+            label: key::CMD_NETWORK_LAN,
+        },
+        Command {
+            id: "network-import",
+            label: key::CMD_NETWORK_IMPORT,
         },
         // SYNCTHING. It ships with the distro (nix/modules/
         // syncthing.nix), and a service the distro installs needs a
@@ -1209,6 +1506,19 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("w a", "window-consume", None),
         ("w e", "window-expel", None),
         ("w t", "window-float", None),
+        // AND THE BUFFER'S OWN, under the same letter, by the owner's
+        // decision: a buffer IS a window of the compositor (invariant 4), and
+        // "buffer" and "window" were two groups for one thing. `w w` switches
+        // (the doubled letter, the convention of every prefix's own view),
+        // `n` next, `d` closes — Doom's `SPC w d` —, `s` chooses the state
+        // (grafted at runtime, see `Footer::state_key`), `o` opens a terminal
+        // and `O` one outside the compositor's tiling. The `b` they used to
+        // hang off is the brain's now.
+        ("w w", "buffer-switch", None),
+        ("w n", "buffer-next", None),
+        ("w d", "buffer-close", None),
+        ("w o", "buffer-terminal", None),
+        ("w O", "buffer-terminal-external", None),
         // ---------------------------------------------------------------
         // WORKSPACE — `TAB`, and not `e`.
         //
@@ -1247,7 +1557,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         //
         // It costs the clipboard one keystroke (`c` became `c c`), and that is
         // the convention this keymap already uses everywhere a prefix gained a
-        // second item — `r r`, `f f`, `TAB TAB`.
+        // second item — `s n n`, `f f`, `TAB TAB`.
         ("c c", "clipboard-open", None),
         ("c s", "screen-capture", None),
         // `a` for APPLICATIONS, at the first level. It was free, and an
@@ -1255,7 +1565,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // keys, the person goes back to opening everything through the terminal.
         ("a", "apps-open", None),
         // `LEADER t` IS THE TRANSFER QUEUE. `t t` opens the panel in the
-        // footer's region, doubling the key the way `r r` and `f f` already do
+        // footer's region, doubling the key the way `s n n` and `f f` already do
         // — because `t` is a PREFIX, and hanging a command off a prefix is the
         // collision `PrefixWithCommand` exists to flag.
         ("t t", "transfers-open", None),
@@ -1299,9 +1609,6 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // because that is how often it is used. A manager that costs two keys
         // is a manager people go back to the terminal for.
         (".", "files-open", None),
-        ("b b", "buffer-switch", None),
-        ("b n", "buffer-next", None),
-        ("b k", "buffer-close", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
         // first collection, and others are going to come in — the group is born with the
         // name of what it is going to hold, and not with the first item's.
@@ -1316,33 +1623,69 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // SYSTEM's hardware and sits beside the memory panel, and `f` is free
         // there: the file manager's `f` is a prefix of its own, one level up.
         ("s f", "format-open", None),
-        // `LEADER s b` — the brain's screen. `b` for brain, and it is free
-        // here: the first-level `b` is the buffer group, one level up.
-        ("s b", "brain-open", None),
-        // AND THE TWO THE BAND DRAWS. They are not under `s b` because that is
-        // a COMMAND, and hanging a sequence off a command is the collision
-        // `PrefixWithCommand` exists to flag. They sit beside it instead, which
-        // is where they belong anyway: they act on what the machine ANNOUNCED,
-        // and one does not have to open a screen to answer it.
+        // `LEADER b` IS THE BRAIN, at the first level, by the owner's
+        // decision: the machine's own agenda is looked at often enough to
+        // earn one letter, and the buffer commands that held `b` moved under
+        // `w` — a buffer IS a window of the compositor (invariant 4), and the
+        // two groups were one thing spelled twice.
+        //
+        // `b b` and not `b` alone: `b` is a PREFIX, and hanging a command off
+        // a prefix is the collision `PrefixWithCommand` exists to flag.
+        // Doubling the letter is the convention `s n n`, `t t`, `f f` and `n n`
+        // already follow.
+        ("b b", "brain-open", None),
+        // AND THE TWO THE BAND DRAWS, beside the screen under the same prefix:
+        // they act on what the machine ANNOUNCED, and one does not have to
+        // open a screen to answer it. The band draws these two sequences.
         (BRAIN_ABORT_KEYS, "brain-abort", None),
         (BRAIN_PROCEED_KEYS, "brain-proceed", None),
         // `LEADER s u` — `u` for update, under the SYSTEM group, beside the
         // memory panel and the disk formatter. It was free, and it is where
         // somebody looks for "do something to this machine".
-        //
-        // It is NOT under `s b`, which is a command: hanging a sequence off a
-        // command is the collision `PrefixWithCommand` exists to flag, and it
-        // is the same reason the countdown's two answers sit beside the brain's
-        // screen rather than under it.
         ("s u", "system-update", None),
-        // `s w` — `w` for WINDOW, the letter the file manager, the transfer
-        // queue and the notification manager already use for their second
-        // door. Four views, one letter.
+        // `LEADER s p` — POWER, a group under SYSTEM. `s p p` opens the view
+        // (the doubled letter) and `s p w` the window; the three profiles are
+        // `e` (pErformance — `p` is the prefix itself), `b` balanced and `s`
+        // saver; `k` keeps the machine awake, `l` ignores the lid, `t` opens
+        // the view on the thresholds.
+        ("s p p", "power-open", None),
+        ("s p w", "power-window", None),
+        ("s p e", "power-profile-performance", None),
+        ("s p b", "power-profile-balanced", None),
+        ("s p s", "power-profile-saver", None),
+        ("s p k", "power-keep-awake", None),
+        ("s p l", "power-keep-lid", None),
+        ("s p t", "power-thresholds", None),
+        // THE RADIO. Nine keys, and the nine are the ones that act on the
+        // machine rather than on a row: everything about ONE device is a
+        // letter inside the view, where the row under the cursor says which
+        // device the letter is about.
+        ("s b b", "bluetooth-open", None),
+        ("s b w", "bluetooth-window", None),
+        ("s b s", "bluetooth-scan", None),
+        ("s b p", "bluetooth-power", None),
+        ("s b d", "bluetooth-discoverable", None),
+        ("s b c", "bluetooth-reconnect", None),
+        ("s b x", "bluetooth-disconnect-all", None),
+        // THE TWO ANSWERS, reachable from anywhere: a pairing question can
+        // arrive while one is somewhere else entirely, and the two keys that
+        // answer it are the brain's `b a`/`b p` arrangement.
+        ("s b y", "bluetooth-accept", None),
+        ("s b n", "bluetooth-refuse", None),
+        // `s w` — `w` for WINDOW, the letter every view with a second door
+        // already uses: `t w`, `f w`, `n w`, `s n w`, `s p w`, `s b w`. Seven
+        // doors, one letter, and this is the seventh.
         ("s w", "update-watch", None),
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
         // any one buffer's: the same drawer as memory, format and the brain.
         ("s t", "theme-open", None),
         ("q q", "session-quit", None),
+        // THE MACHINE'S FOUR WAYS OUT, beside the session's own. Each opens
+        // the power view on its row, armed — `RET` confirms, `Esc` cancels.
+        ("q s", "power-suspend", None),
+        ("q h", "power-hibernate", None),
+        ("q r", "power-reboot", None),
+        ("q p", "power-off", None),
         // `LEADER :` — `M-x`'s key in Doom, which is where the concept
         // comes from. It used to be `x`, which in Doom is the scratch buffer and not the locator.
         // One key only: with both, the list showed the same thing on two
@@ -1351,16 +1694,18 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `x` TOO, at the owner's request. The two coexist because they are two
         // different reflexes: `:` is Doom's, `x` is Emacs's `M-x`.
         ("x", "mx-open", None),
-        ("b t", "buffer-terminal", None),
-        ("b T", "buffer-terminal-external", None),
         // NOTIFICATIONS. Both were socket orders with no key at all: the
         // history only opened through `ronoctua-shell history`, typed in a
         // terminal. A feature with no path is a feature nobody
         // finds.
-        ("n h", "notif-history", None),
+        //
+        // `n n` — the doubled letter, which is what `s n n`, `t t` and `f f`
+        // already do for the view that belongs to a prefix. It was `n h` for
+        // "history", and the owner asked for the convention instead.
+        (NOTIF_OPEN_KEYS, "notif-open", None),
         ("n d", "notif-dismiss", None),
-        // `w` for WINDOW, the same letter the file manager and the transfer
-        // queue already use for their second door. Three views, one letter.
+        // `w` for WINDOW, the same letter every view with a second door uses
+        // — see the note over `s w`, which lists all seven.
         ("n w", "notif-window", None),
         ("n r", "notif-read-all", None),
         // `h` for help, as in Doom. A group with a single item is the honest
@@ -1368,23 +1713,40 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // exists to receive it.
         ("h s", "help-shortcuts", None),
         // ---------------------------------------------------------------
-        // NETWORK. `r r` opens the list, and the others act directly.
+        // NETWORK, under SYSTEM — `s n`, by the owner's decision: the radio
+        // is the machine's, beside its memory, its disks and its power, and
+        // the first-level `r` it used to hold was one more letter to learn.
+        // `s n n` opens the list, and the others act directly.
         //
-        // `r r` and not just `r` because `r` is a PREFIX: hanging a command off it
-        // is having the collision `PrefixWithCommand` exists to flag.
-        // Doubling the key is the convention `TAB TAB` already uses here.
+        // `s n n` and not `s n` alone because `s n` is a PREFIX: hanging a
+        // command off it is having the collision `PrefixWithCommand` exists
+        // to flag. Doubling the key is the convention `TAB TAB` already uses.
+        // `s` scans, `r` is the RADIO — `w` was Wi-Fi, but `w` is the second
+        // door's letter everywhere else in this keymap.
         // ---------------------------------------------------------------
-        ("r r", "network-open", None),
-        ("r v", "network-scan", None),
-        ("r w", "network-wifi-toggle", None),
-        ("r d", "network-disconnect", None),
+        ("s n n", "network-open", None),
+        // AND `w` IS THE WINDOW, as it is for the files, the notifications,
+        // the power and the radio: the same view, through the other door.
+        ("s n w", "network-window", None),
+        ("s n a", "network-airplane", None),
+        ("s n s", "network-scan", None),
+        ("s n r", "network-wifi-toggle", None),
+        ("s n d", "network-disconnect", None),
         // `i` for INFORMATION. It shows band, rate and signal in the minibuffer —
         // it is the answer to "why is this slow?" without leaving the screen.
-        ("r i", "network-link", None),
-        ("r s a", "syncthing-open", None),
-        ("r s s", "syncthing-state", None),
-        ("r s p", "syncthing-pause", None),
-        ("r s r", "syncthing-resume", None),
+        ("s n i", "network-link", None),
+        // `l` FOR THE OTHERS ON THIS NETWORK. It takes a second on a thread
+        // and the row says so while it runs.
+        ("s n l", "network-lan", None),
+        // `v` FOR A VPN FROM A FILE. It reads the file, says what it would do,
+        // and only then offers to bring it in.
+        ("s n v", "network-import", None),
+        // SYNCTHING is `s s` — its own prefix under SYSTEM, beside the
+        // network it rides on, and no longer inside it.
+        ("s s a", "syncthing-open", None),
+        ("s s s", "syncthing-state", None),
+        ("s s p", "syncthing-pause", None),
+        ("s s r", "syncthing-resume", None),
     ];
 
     /// The digits as `&'static str`, so the binding can carry them.
@@ -1394,7 +1756,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     const DIGITS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
     const GROUPS: &[(&str, &str)] = &[
-        ("b", key::GROUP_BUFFER),
+        // `b` FOR BRAIN — the buffer commands it used to hold live under `w`.
+        ("b", key::GROUP_BRAIN),
         // `f` HAD NO LABEL until now. `f f` existed and the group it hangs off
         // showed up in which-key with `keymap.no-label` — a prefix that says
         // nothing about where it leads. It has two items now, and a name.
@@ -1419,13 +1782,14 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("n", key::GROUP_NOTIFICATION),
         ("h", key::GROUP_HELP),
         ("q", key::GROUP_QUIT),
-        ("r", key::GROUP_NETWORK),
-        ("r s", key::GROUP_SYNCTHING),
         // `s` for SYSTEM — what the machine is doing to itself, as opposed to
-        // what one is doing with it. It starts with one item, which is the
-        // honest beginning: the group is born with the name of what it will
-        // hold, not with the first thing in it.
+        // what one is doing with it: memory, disks, the update, the theme —
+        // and the network and Syncthing, which moved in from the first level.
         ("s", key::GROUP_SYSTEM),
+        ("s n", key::GROUP_NETWORK),
+        ("s s", key::GROUP_SYNCTHING),
+        ("s p", key::GROUP_POWER),
+        ("s b", key::GROUP_BLUETOOTH),
     ];
 
     let mut registry = Registry::fresh();
@@ -1514,15 +1878,15 @@ pub fn default_of() -> Result<(Tree, Registry)> {
     Ok((tree, registry))
 }
 
-/// Every command SOME key in the system reaches.
+/// The launcher's own key: put the focused application on the file manager's
+/// sidebar.
 ///
-/// # Why the three places
-///
-/// The keymap resolves sequences, but it is not the system's only source of
-/// keys: the **chords** live in the compositor's config (the footer never
-/// sees them — §7.4) and the **emergency** binds live outside the leader on purpose.
-/// Asking "does this have a shortcut?" of the keymap alone answers wrongly for two thirds
-/// of the shortcuts.
+/// `C-` and not a bare letter, for the reason the manager's own table gives at
+/// length: in a list of NAMES the letter is query, so anything that is a
+/// command has to be something a name never is. In the manager's MENU the same
+/// idea is a bare `s`, because a menu row is not a list of names.
+pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
+
 /// The commands the clipboard VIEW reaches, with each one's key.
 ///
 /// They are not in the leader's tree because the view captures the whole
@@ -1533,15 +1897,6 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 ///
 /// Declared as DATA, and not hidden in a `match`, for the same reason as the
 /// chords: the list is what the manual and the check read.
-/// The launcher's own key: put the focused application on the file manager's
-/// sidebar.
-///
-/// `C-` and not a bare letter, for the reason the manager's own table gives at
-/// length: in a list of NAMES the letter is query, so anything that is a
-/// command has to be something a name never is. In the manager's MENU the same
-/// idea is a bare `s`, because a menu row is not a list of names.
-pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
-
 pub const OF_CLIPBOARD_VIEW: &[(&str, &str)] = &[
     ("RET", "clipboard-copy-of-new"),
     ("d", "clipboard-remove"),
@@ -1551,25 +1906,6 @@ pub const OF_CLIPBOARD_VIEW: &[(&str, &str)] = &[
     ("c", "clipboard-clipcascade-configure"),
 ];
 
-/// The commands the NETWORK VIEW reaches, with each one's key.
-///
-/// The same reason as the clipboard list: while the view is open it
-/// captures the whole keyboard, so `f` there is "forget this network" and not
-/// `LEADER f`. They **are** commands with keys, and without this list the orphan
-/// check would flag them — rightly, because a command with no path at all is a
-/// command nobody uses.
-///
-/// `RET` and `f` act on the FOCUSED ROW, and that is why they cannot have a
-/// key in the leader's tree: outside the list there is no focused row to
-/// act on.
-pub const OF_NETWORK_VIEW: &[(&str, &str)] = &[
-    ("RET", "network-connect"),
-    ("f", "network-forget"),
-    ("r", "network-scan"),
-    ("w", "network-wifi-toggle"),
-    ("d", "network-disconnect"),
-];
-
 /// The commands the THEME CHOOSER reaches, with each one's key — one. `RET`
 /// applies the pair under the two cursors; `<up>`/`<down>` preview,
 /// `<left>`/`<right>` cross between the themes and the desk, and `Esc` puts
@@ -1577,6 +1913,26 @@ pub const OF_NETWORK_VIEW: &[(&str, &str)] = &[
 /// as in every other list.
 pub const OF_THEME_VIEW: &[(&str, &str)] = &[("RET", "theme-apply")];
 
+/// Every command SOME key in this system reaches.
+///
+/// # Why it is not the keymap alone
+///
+/// The keymap resolves SEQUENCES, and sequences are not the only source of
+/// keys here. The **chords** live in the compositor's config (the footer never
+/// sees them — §7.4); the **emergency** binds live outside the leader on
+/// purpose; and every VIEW that takes the keyboard has a table of its own,
+/// because `d` in a list removes and is not `LEADER d`.
+///
+/// So this unions ten sources: the tree, the chords, the emergency binds, the
+/// launcher's, the clipboard's, the theme chooser's, and the five views that
+/// declare an `OF_THE_VIEW` — the notifications manager, its sheet, the power
+/// view, the radio and the network. Asking "does this have a shortcut?" of the
+/// keymap alone answers wrongly for most of them, which is what the orphan
+/// check would then report.
+///
+/// The header used to say "the three places" and sat, with no blank line, on
+/// top of two other items' documentation — so `OF_CLIPBOARD_VIEW` and this
+/// function were both undocumented and a reader met the wrong text over each.
 #[must_use]
 pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     let mut out: std::collections::BTreeSet<&'static str> =
@@ -1591,8 +1947,15 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     );
     out.extend(OF_LAUNCHER_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_CLIPBOARD_VIEW.iter().map(|(_, id)| *id));
-    out.extend(crate::notifications::OF_THE_VIEW.iter().map(|(_, id)| *id));
-    out.extend(OF_NETWORK_VIEW.iter().map(|(_, id)| *id));
+    out.extend(
+        crate::notifications::OF_THE_VIEW
+            .iter()
+            .map(|(_, id, _)| *id),
+    );
+    out.extend(crate::notifications::OF_THE_SHEET.iter().map(|(_, id)| *id));
+    out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
     out
 }
@@ -2092,10 +2455,13 @@ mod tests {
         // And the arrows, in both.
         for sym in [Sym::Up, Sym::Down] {
             let key = Key::simple(sym);
-            assert!(matches!(ir(&[tab, key]), Effect::Run(..)), "{sym:?} em TAB");
+            assert!(
+                matches!(ir(&[tab, key]), Effect::Run(..)),
+                "{sym:?} after TAB"
+            );
             assert!(
                 matches!(ir(&[tab, m, key]), Effect::Run(..)),
-                "{sym:?} em TAB m"
+                "{sym:?} after TAB m"
             );
         }
     }
@@ -2145,15 +2511,61 @@ mod tests {
         // adding a binding with no action BREAKS something.
         const WITH_ACTION: &[&str] = &[
             "session-quit",
-            "notif-history",
+            "notif-open",
             "notif-window",
             "notif-read-all",
             "notif-dismiss",
-            // The three that reach the manager's focused row, through the same
+            // The nine that reach the manager's focused row, through the same
             // `View::key` the keyboard uses — see `Footer::manager_press`.
             "notif-read",
             "notif-forget",
             "notif-act",
+            "notif-adjust",
+            "notif-up",
+            "notif-down",
+            "notif-pane-next",
+            "notif-pane-previous",
+            "notif-knob-next",
+            "notif-knob-previous",
+            "notif-restore",
+            "power-open",
+            "power-window",
+            "power-profile-performance",
+            "power-profile-balanced",
+            "power-profile-saver",
+            "power-keep-awake",
+            "power-keep-lid",
+            "power-thresholds",
+            "power-suspend",
+            "power-hibernate",
+            "power-reboot",
+            "power-off",
+            "power-enter",
+            "power-less",
+            "power-more",
+            "power-up",
+            "power-down",
+            "bluetooth-audio-next",
+            "bluetooth-audio-previous",
+            "bluetooth-open",
+            "bluetooth-window",
+            "bluetooth-scan",
+            "bluetooth-power",
+            "bluetooth-discoverable",
+            "bluetooth-reconnect",
+            "bluetooth-disconnect-all",
+            "bluetooth-accept",
+            "bluetooth-refuse",
+            "bluetooth-device",
+            "bluetooth-connect",
+            "bluetooth-pair",
+            "bluetooth-forget",
+            "bluetooth-trust",
+            "bluetooth-block",
+            "bluetooth-rename",
+            "bluetooth-unnamed",
+            "bluetooth-up",
+            "bluetooth-down",
             "keyboard-restore",
             "help-shortcuts",
             "mx-open",
@@ -2215,12 +2627,18 @@ mod tests {
             // row and that is why they only have keys INSIDE the view; the others
             // have keys in the tree.
             "network-open",
+            "network-airplane",
             "theme-open",
             "theme-apply",
             "network-scan",
             "network-connect",
             "network-disconnect",
             "network-forget",
+            "network-window",
+            "network-up",
+            "network-down",
+            "network-lan",
+            "network-import",
             "network-wifi-toggle",
             "network-link",
             "syncthing-open",

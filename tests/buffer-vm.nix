@@ -213,7 +213,7 @@ pkgs.testers.runNixOSTest {
             f"`Ctrl+V` did not hand the text to the buffer; expected {target_path!r} in the log:\n"
             + journal[-2000:]
         )
-        print(f"Ctrl+V entregou: {pasted!r}")
+        print(f"Ctrl+V handed over: {pasted!r}")
 
     with subtest("the format buffer draws disks that came from the BUS"):
         # THE ONE CHAIN NO OTHER TEST CLOSES, and the reason it is worth a

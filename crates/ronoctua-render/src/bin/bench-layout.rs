@@ -34,14 +34,16 @@ fn segments(name: &str) -> Vec<Segment> {
             shrink: Shrink::Cut,
             removable: false,
         },
+        // The bell as the modeline draws it now: one glyph, no count, and
+        // only there while something is unread.
         Segment {
             id: "notif",
-            text: format!("{} 3", tokens::icon::NOTIFICATION),
+            text: tokens::icon::NOTIFICATION_PENDING.to_string(),
             priority: 2,
-            min_cols: 3,
+            min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
-            removable: false,
+            removable: true,
         },
         Segment {
             id: "buffer",

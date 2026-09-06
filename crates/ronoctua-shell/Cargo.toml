@@ -80,6 +80,18 @@ rustix = { workspace = true, features = [ "event" ] }
 # a binary that runs as root, and would give that crate a second border. The
 # host owns both and splices the device rows into the sidebar.
 ronoctua-disks = { path = "../ronoctua-disks" }
+# THE POWER BORDER — UPower, power-profiles-daemon, logind — for the modeline's
+# battery and profile marks, the power view and the three battery alarms.
+ronoctua-power = { path = "../ronoctua-power" }
+ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
+# THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the
+# modeline's two marks and the network view's two sections. Neither daemon
+# signals, so the crate polls on a thread of its own; a machine with neither
+# installed pays one `connect` that fails.
+ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+# WHO ELSE IS ON THIS NETWORK: the unprivileged ICMP sweep and the vendor
+# behind a hardware address. No daemon and no privilege — see the crate.
+ronoctua-lan = { path = "../ronoctua-lan" }
 # The queue. The shell asks it for work and listens for the list; it never
 # copies anything itself.
 ronoctua-transfers = { path = "../ronoctua-transfers" }

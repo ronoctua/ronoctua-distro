@@ -35,6 +35,15 @@
   coreutils,
   util-linux,
   xdg-utils,
+  # `nmcli`, for importing a WireGuard or OpenVPN file — the one network
+  # thing the bus does not do. It comes with NetworkManager, which this
+  # system already installs.
+  networkmanager,
+  # WirePlumber's client, for the ONE thing BlueZ cannot answer: which audio
+  # profile a device can be put in. See `RONOCTUA_WPCTL` below.
+  wireplumber,
+  # PipeWire's own dump, for reading what those profiles ARE.
+  pipewire,
   systemd,
   btop,
   bottom,
@@ -207,10 +216,30 @@ let
     # `keyboard-restore`'s `systemctl`. It runs from inside a user unit, where
     # PATH is minimal — see `crates/.../keyboard.rs`.
     RONOCTUA_SYSTEMCTL = "${systemd}/bin/systemctl";
-    # The URL opener, for Syncthing's interface (`LEADER r s a`).
+    # The URL opener, for Syncthing's interface (`LEADER s s a`).
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.
     RONOCTUA_XDG_OPEN = "${xdg-utils}/bin/xdg-open";
+    # `nmcli`, for the ONE thing the bus cannot do: importing a WireGuard or
+    # OpenVPN file. The translation from those formats to a NetworkManager
+    # profile is thirty settings that upstream maintains, and `nmcli` is where
+    # it lives — a second one here would be a second thing to keep in step
+    # with a format somebody else defines. It comes with NetworkManager, which
+    # this system already has, so the closure gains nothing.
+    RONOCTUA_NMCLI = "${networkmanager}/bin/nmcli";
+    # `wpctl` AND `pw-dump`, for the audio profile — and the closure gains
+    # NOTHING, which is the measurement this waited on.
+    #
+    # WHO KNOWS THE PROFILE IS PIPEWIRE, not BlueZ. `MediaTransport1` says
+    # what is PLAYING; it cannot say what a device could be put in, so the
+    # switch between "music in stereo" (A2DP) and "a call with the
+    # microphone" (HFP) is not on the bus this crate speaks. The choice was
+    # `pactl` — which drags `pkgs.pulseaudio` in for its client alone — or
+    # these two, and `nix path-info -r` on the system's own toplevel answers
+    # it: `wpctl` and `pw-dump` are already in `sw/bin`, because
+    # `services.pipewire` puts them there. `pactl` is not.
+    RONOCTUA_WPCTL = "${wireplumber}/bin/wpctl";
+    RONOCTUA_PW_DUMP = "${pipewire}/bin/pw-dump";
     # `RONOCTUA_EMACSCLIENT` IS NOT SET HERE, and its absence is the point —
     # the same point `RONOCTUA_ICONS` makes below, learned twice.
     #

@@ -373,12 +373,8 @@ mod tests {
         for columns in [10_u16, 20, 40, 80, 200] {
             // A long invitation with a short budget, and a counter at the end.
             let budget = columns.saturating_sub(12).max(1);
-            let clipped = elide_to_budget(
-                "Digite para buscar um glifo das Nerd Fonts",
-                budget,
-                2,
-                columns,
-            );
+            let clipped =
+                elide_to_budget("Type to search for a Nerd Fonts glyph", budget, 2, columns);
             let width = ronoctua_render::layout::width(&clipped);
             assert!(
                 width <= budget,

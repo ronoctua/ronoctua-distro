@@ -2290,7 +2290,7 @@ impl State {
                 //
                 // It cancels what is under way — the search — and stops there. It is
                 // what Esc does in Doom: it undoes the transient state, it never
-                // destroys the buffer. Closing is a NAMED command (`SPC b k`),
+                // destroys the buffer. Closing is a NAMED command (`SPC w d`),
                 // because destroying work has to be deliberate and cannot depend on
                 // a key one presses by reflex on leaving anything at all.
                 //

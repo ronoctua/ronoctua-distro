@@ -27,8 +27,6 @@
     };
     modeline = {
       background = "0x1E1E1EFF";
-      badge = "0xF7768EFF";
-      badgeText = "0x000000FF";
       state = {
         alternate = "0x9ECE6AFF";
         normal = "0x6E6656FF";

@@ -99,7 +99,7 @@ pub struct Line {
 pub struct Words<'a> {
     /// Where the sentences come from.
     pub texts: &'a ronoctua_i18n::Texts,
-    /// How `brain-abort` is typed, leader included — `SPC s a`.
+    /// How `brain-abort` is typed, leader included — `SPC b a`.
     ///
     /// It comes from OUTSIDE because whoever knows it is whoever defines the
     /// bind (`crate::leader`) and the label of the leader itself is the
@@ -665,11 +665,19 @@ mod tests {
         }
     }
 
+    // FROM THE CONSTANTS THE KEYMAP BINDS, so that the day the keys move the
+    // fixture moves with them: written as literals, this test went on proving
+    // that `SPC s a` was drawn for a fortnight after `s a` stopped existing.
+    static ABORT: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("SPC {}", crate::leader::BRAIN_ABORT_KEYS));
+    static PROCEED: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("SPC {}", crate::leader::BRAIN_PROCEED_KEYS));
+
     fn bundle(t: &ronoctua_i18n::Texts) -> Words<'_> {
         Words {
             texts: t,
-            abort_keys: "SPC s a",
-            proceed_keys: "SPC s p",
+            abort_keys: &ABORT,
+            proceed_keys: &PROCEED,
         }
     }
 
@@ -734,8 +742,8 @@ mod tests {
         // AND THE SEQUENCES ARE ON THE LINE, in brackets: a control whose key
         // is only in the manual is a control nobody presses.
         let drawn: String = line.pieces.iter().map(|p| p.text.as_str()).collect();
-        assert!(drawn.contains("[SPC s a]"), "{drawn}");
-        assert!(drawn.contains("[SPC s p]"), "{drawn}");
+        assert!(drawn.contains(&format!("[{}]", *ABORT)), "{drawn}");
+        assert!(drawn.contains(&format!("[{}]", *PROCEED)), "{drawn}");
         // The margin carries the mark, and it is not a control.
         let first = line.pieces.first().unwrap();
         assert_eq!(first.at, tokens::space::MODELINE_EDGELEFT);

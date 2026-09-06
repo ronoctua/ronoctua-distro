@@ -218,7 +218,7 @@ fn main() -> Result<()> {
         bail!("the descriptor does not pass the section 7.9 guard: {e}");
     }
     // THREE STATES, AND THERE IS DELIBERATELY NO `working`. Every state a
-    // buffer declares is offered under `SPC b s`, so a fourth one would put
+    // buffer declares is offered under `SPC w s`, so a fourth one would put
     // "writing to the disk" on the modeline with nothing being written. The
     // wait happens on the list, where the row is about to change.
     let states: Vec<&str> = d.states.iter().map(|s| s.id.as_str()).collect();

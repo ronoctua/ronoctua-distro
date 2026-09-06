@@ -15,7 +15,7 @@ adds would never appear, and one it removes would become a key that answers
 
 - `spawn` and `spawn-sh`: the default config calls `alacritty`, `fuzzel`,
   `swaylock`, `wpctl`. Those are the choices of whoever wrote the example, and we have
-  our own (`LEADER b t` opens our terminal, in our scope).
+  our own (`LEADER w o` opens our terminal, in our scope).
 - `show-hotkey-overlay`: it is NIRI's shortcut list, a second window
   competing with our manual (`LEADER h s`). Two shortcut lists are the
   problem this project spent months undoing.
@@ -55,15 +55,15 @@ def binds(path: str) -> list[tuple[str, str, str]]:
     with open(path, encoding="utf-8") as f:
         raw_text = f.read()
 
-    dentro = False
+    inside = False
     not_in = []
     for line in raw_text.split("\n"):
         if line.startswith("binds {"):
-            dentro = True
+            inside = True
             continue
-        if dentro and line.startswith("}"):
+        if inside and line.startswith("}"):
             break
-        if not dentro:
+        if not inside:
             continue
         # A whole-line comment, and the `//` the example uses to
         # show alternatives.

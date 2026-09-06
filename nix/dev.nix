@@ -281,6 +281,14 @@ let
       # are `SUPER` and the distinction disappears; here it has to show.
       export RONOCTUA_LEADER_CHORD="ALT"
 
+      # THE NESTED LOOP DOES NOT TAKE THE PAIRING QUESTIONS.
+      #
+      # `RequestDefaultAgent` gives them to the LAST caller, and this footer is
+      # the second one on this machine: without this it took the questions away
+      # from the owner's real session, and closing it gave them back to nobody.
+      # A device asking to pair while the loop was up went unanswered.
+      export RONOCTUA_NESTED=1
+
       # Useful logging by default; `RUST_LOG` from the environment wins.
       #
       # It is NOT exported: niri uses the SAME `EnvFilter`, and a filter that only
@@ -289,7 +297,7 @@ let
       # And the compositor gets its own, explicitly, so the log stays useful.
       export RUST_LOG=niri=info
 
-      echo "  Ctrl+Alt+Space      leader (toque: abre a lista)"
+      echo "  Ctrl+Alt+Space      leader (tapped: opens the list)"
       echo "  Alt+<key>           a chord (HELD: the Alt alone, without the Space)"
       echo "  Ctrl+Alt+L          an alternative leader, if the one above fails"
       echo "  Ctrl+Shift+L        restores the keyboard"

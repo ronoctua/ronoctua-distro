@@ -32,6 +32,10 @@ members = [
   "crates/ronoctua-network",
   "crates/ronoctua-disks",
   "crates/ronoctua-memory",
+  "crates/ronoctua-power",
+  "crates/ronoctua-bluetooth",
+  "crates/ronoctua-tunnel",
+  "crates/ronoctua-lan",
   "crates/ronoctua-brain",
   "crates/ronoctua-files",
   "crates/ronoctua-inspect",
@@ -149,6 +153,14 @@ rustix = { version = "1.1", features = [ "pty", "termios", "process", "stdio", "
 # per event source, and a second concurrency model inside it
 # would cost more than the thread it already has.
 zbus = { version = "5", features = [ "blocking-api" ] }
+# THE PAIRING AGENT'S THREE, and only its. bluetoothd asks a question and
+# waits sixty seconds for the answer; the handler that waits has to park a
+# TASK and not the connection's executor, or the same connection's own calls
+# — `CancelPairing` among them — would be stuck behind the question. All
+# three are already under zbus in the lock, so nothing new is fetched.
+futures-channel = "0.3"
+futures-lite = "2"
+async-io = "2"
 
 # --- i18n (section 22 of the summary: Fluent, not gettext) -------------
 # Plural, gender and argument order belong to the LANGUAGE. In Fluent those rules

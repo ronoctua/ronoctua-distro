@@ -827,14 +827,18 @@ where
     std::thread::Builder::new()
         .name("ronoctua-disks".to_owned())
         .spawn(move || {
-            match manager.read() {
-                Ok(rack) => on_change(rack),
-                Err(e) => tracing::warn!(error = %e, "the first reading of the disks failed"),
-            }
+            // THE MATCH RULE BEFORE THE FIRST READING: a stick plugged in
+            // while the first reading is on the wire emits its signal before
+            // the rule lands, and the list would miss it until the next
+            // unrelated one. The same order `ronoctua-power` records.
             let Ok(messages) = manager.signals() else {
                 tracing::warn!("no udisks2 stream; the list will not reread on its own");
                 return;
             };
+            match manager.read() {
+                Ok(rack) => on_change(rack),
+                Err(e) => tracing::warn!(error = %e, "the first reading of the disks failed"),
+            }
             for _ in messages {
                 match manager.read() {
                     Ok(rack) => on_change(rack),

@@ -51,7 +51,7 @@ use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
-    reexports::calloop::{EventLoop, channel, timer},
+    reexports::calloop::{self, EventLoop, channel, timer},
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -895,6 +895,7 @@ pub fn host_it() -> Result<()> {
 
     let mut state = UpdateWindow {
         conn: conn.clone(),
+        handle: handle.clone(),
         _theme_watch,
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
@@ -952,6 +953,13 @@ pub fn host_it() -> Result<()> {
 /// The window.
 struct UpdateWindow {
     conn: Connection,
+    /// The loop, for the ONE thing that needs it here: a keyboard that
+    /// REPEATS. SCTK only generates repeat events for a keyboard made with
+    /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
+    /// carried rather than reached for. Without it `repeat_key` below is dead
+    /// code and holding an arrow moves exactly one row, which is the trap
+    /// CLAUDE.md records and which five windows inherited.
+    handle: calloop::LoopHandle<'static, Self>,
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
@@ -1197,6 +1205,19 @@ impl UpdateWindow {
             Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
         }
         self.gpu = Some(g);
+    }
+
+    /// One key, from a press or from a REPEAT.
+    ///
+    /// Both doors of every view take this path: SCTK delivers a repeat
+    /// through the callback given to `get_keyboard_with_repeat`, which has no
+    /// `Connection` and no `QueueHandle` to hand on — so the work cannot live
+    /// in `press_key`, and while it did, `repeat_key` was dead code and
+    /// holding an arrow moved exactly one row.
+    fn typed(&mut self, event: KeyEvent) {
+        if let Some(k) = key_of(&event, self.mods) {
+            self.press(&k);
+        }
     }
 
     /// Asks for a frame. It is drawn when the event queue empties.
@@ -1481,7 +1502,16 @@ impl SeatHandler for UpdateWindow {
         cap: Capability,
     ) {
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seats.get_keyboard(qh, &seat, None) {
+            // A KEYBOARD THAT REPEATS — see the `handle` field. The rate and
+            // the delay are the COMPOSITOR's, arriving as `RepeatInfo`;
+            // nothing here invents either.
+            match self.seats.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.handle.clone(),
+                Box::new(|state: &mut Self, _, event| state.typed(event)),
+            ) {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
@@ -1551,9 +1581,7 @@ impl KeyboardHandler for UpdateWindow {
         _: u32,
         event: KeyEvent,
     ) {
-        if let Some(k) = key_of(&event, self.mods) {
-            self.press(&k);
-        }
+        self.typed(event);
     }
 
     fn repeat_key(
@@ -1815,7 +1843,7 @@ mod tests {
         }
         // AND AN UNKNOWN WORD IS NOT A VERDICT. Turning it into one is how a
         // screen comes to say "it worked" about something else.
-        assert_eq!(verdict_of("rodou"), None);
+        assert_eq!(verdict_of("nonsense"), None);
         assert_eq!(verdict_of("skipped-"), None);
         assert_eq!(verdict_of(""), None);
     }

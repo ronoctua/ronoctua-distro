@@ -19,7 +19,7 @@
 //! - **The Wi-Fi is already up.** The sealed blob answered, which is the normal
 //!   path, and there is nothing to ask.
 //! - **Somebody is logged in graphically.** Then the question has a better place
-//!   to be asked — `LEADER r r`, on a screen that can draw — and a prompt on a
+//!   to be asked — `LEADER s n n`, on a screen that can draw — and a prompt on a
 //!   TTY nobody is looking at would be a password typed into the void.
 //! - **There is no known network in range.** Asking for the password of a
 //!   network that is not there teaches nothing and cannot succeed.

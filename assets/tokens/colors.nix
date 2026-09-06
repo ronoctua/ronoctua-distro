@@ -40,7 +40,6 @@
 # NESTED, and never camelCase: the generator lowercases a key before it splits
 # it, so `subtleStrong` would reach the WIT as `text-subtlestrong`. Two levels
 # give `text-subtle-strong`, which is the name a person would have guessed.
-# (`modeline.badgeText` predates the rule and its Rust name is load-bearing.)
 {
   # -------------------------------------------------------------------
   # Surfaces
@@ -460,12 +459,6 @@
     # difference in background is what separates them with no rule and no
     # box (invariant 15).
     background = "neutral.chrome-raised";
-    # Badge counting pending notifications (4.2), and the text on it: the
-    # ground if it reads on the badge, else the strongest text — the ladder's
-    # `on-solid` decides per theme.
-    badge = "error.solid";
-    badgeText = "error.on-solid";
-
     # -----------------------------------------------------------------
     # The buffer's STATE — two tokens, and the second is one on purpose
     # -----------------------------------------------------------------

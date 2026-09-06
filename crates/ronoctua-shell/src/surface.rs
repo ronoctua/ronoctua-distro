@@ -354,7 +354,7 @@ struct Footer {
     /// It is pruned against the compositor's window list, so it holds at most
     /// one entry per open window. See [`Footer::states_arrived`].
     states: std::collections::HashMap<u32, String>,
-    /// `SPC b s` is open and the next key picks a state.
+    /// `SPC w s` is open and the next key picks a state.
     ///
     /// A flag and not a pending sequence, because the level is exactly ONE deep:
     /// a buffer declares a handful of states and each has a letter.
@@ -523,14 +523,87 @@ struct Footer {
     /// twenty-two lines to draw six.
     apps: Option<crate::apps::Finder>,
 
-    // --- network (`LEADER r r`) ---
+    // --- network (`LEADER s n n`) ---
     /// The network view, when open.
     ///
     /// Same design as the app finder, and for the same reason: the `Option` **is**
     /// the open/closed, and there is no parallel boolean that can disagree with it.
-    network: Option<crate::network::ViewState>,
+    network: Option<crate::network::View>,
+    /// The conversation with NetworkManager, and the access points it has
+    /// seen — kept beside the view and not inside it, because the view is
+    /// drawn by two doors and the bus is each door's own. It is born at the
+    /// first network command: a machine whose owner never opens the list
+    /// pays no connection for it.
+    network_wire: Option<crate::network::Wire>,
+    /// What `/proc` says: the sockets and the interface counters. It is
+    /// sampled on the footer's one-second clock while the view is open, and
+    /// never otherwise — a rate nobody is looking at is four pseudo-files a
+    /// second for nothing.
+    network_watch: crate::network::Watch,
+    /// Where a finished sweep of the local network reports.
+    lan_sender: Option<channel::Sender<ronoctua_lan::Found>>,
+    /// What the two tunnels say. Kept with the view closed, because the
+    /// modeline draws a mark for each — and empty on a machine that has
+    /// neither, which is what draws nothing.
+    tunnels: ronoctua_tunnel::Scene,
+    /// The thread that reads them and carries out their orders.
+    tunnel_hand: Option<ronoctua_tunnel::Hand>,
     /// `LEADER s t`, while it is open. The cursor previews; `RET` commits.
     theme_chooser: Option<crate::theme_chooser::View>,
+    /// The last reading of the machine's power — kept with the view closed,
+    /// because the modeline draws its two marks from it.
+    power_snapshot: Option<ronoctua_power::Snapshot>,
+    /// The orders thread, when the daemons were there at start.
+    power_orders: Option<ronoctua_power::Handle>,
+    /// The power view, when open — `LEADER s p p`.
+    power: Option<crate::power::View>,
+    /// The profile the person chose (`power.json`), or the distro's floor.
+    power_wanted: ronoctua_power::Profile,
+    /// Did a FILE or the ENVIRONMENT name that wish, or is it just the
+    /// ground? Only a named wish is applied to the daemon — see
+    /// [`Footer::power_arrived`].
+    power_named: bool,
+    /// Whether the chosen profile was applied once this session — on the
+    /// first reading that finds the daemon, and never again.
+    power_applied: bool,
+    /// The watch on `power.json`: a choice made in the window reaches here.
+    _power_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on the notification history, so that what the WINDOW wrote
+    /// is not overwritten by the next thing that arrives here.
+    _notes_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on the notification preferences, for the same reason: an
+    /// adjustment made in the window used to reach the band only after the
+    /// footer restarted.
+    _book_watch: Option<ronoctua_files::notice::Notice>,
+    /// The last reading of the radio — kept with the view CLOSED, because
+    /// the modeline draws a mark per connected device from it.
+    bluetooth_scene: ronoctua_bluetooth::Scene,
+    /// The orders thread, when bluetoothd was there at start.
+    bluetooth_orders: Option<ronoctua_bluetooth::Hand>,
+    /// The bluetooth view, when open — `LEADER s b b`.
+    bluetooth: Option<crate::bluetooth::View>,
+    /// The device a name is being typed for, while the minibuffer asks.
+    bluetooth_renaming: Option<String>,
+    /// The pairing question's own door — NOT the orders thread. See
+    /// [`ronoctua_bluetooth::Watch::questions`] for why it cannot be.
+    bluetooth_questions: Option<ronoctua_bluetooth::agent::Questions>,
+    /// The last reading of the way out — kept with the view CLOSED, because
+    /// the modeline's three marks are drawn from it.
+    net: ronoctua_network::Snapshot,
+    /// The id the next locally raised notification takes. It counts DOWN
+    /// from the top, so it can never meet the bus daemon's, which counts up
+    /// from one — see [`Footer::arrived`].
+    locally_raised: u32,
+    /// The pairing question that is standing, wherever it is being shown.
+    ///
+    /// The VIEW holds it to draw it; this holds it so that `LEADER s b y`
+    /// and the notification's own `y` know whether it wants DIGITS — a
+    /// bare yes to a PIN question sends the other side an empty PIN — and
+    /// so the card can be taken back when the question is.
+    bluetooth_asked: Option<ronoctua_bluetooth::agent::Question>,
+    /// The devices already told about, so a battery that wanders across the
+    /// danger number does not raise a line each time it crosses back.
+    bluetooth_alarmed: std::collections::BTreeSet<String>,
 
     // --- file manager (`LEADER .`) ---
     /// The file manager, when open. Same design, same reason.
@@ -655,6 +728,14 @@ enum ViewState {
     /// and it yields to everything above because a cursor over a few rows
     /// holds nothing a person built by hand.
     Themes,
+    /// The power view. Modal, and ranked like the theme chooser: its key
+    /// branch runs before the manager's, and a cursor over a list of facts
+    /// holds nothing a person built by hand.
+    Power,
+    /// The bluetooth view. Modal, and ABOVE the power view for one reason
+    /// only: a pairing question is the one thing on this list that the other
+    /// side is waiting on, and a view that yields would leave it waiting.
+    Bluetooth,
     /// The `M-x`. Modal.
     Commands,
     /// A leader sequence under way.
@@ -870,12 +951,21 @@ enum Click {
     Transfers(usize),
     /// Put the focus on line `n` of the notification manager.
     ///
-    /// FOCUS and not act, for the same reason the transfer panel gives: every
-    /// action up there — marking read, editing a capture, adjusting a filter —
-    /// is a thing one meant to do. The keys act; the mouse aims.
+    /// FOCUS, and the two DRAWN targets — the envelope and the bin. This is
+    /// not the transfer panel's rule and it says so here, because it used to
+    /// claim it was: the panel's rule is about a click on the ROW, where
+    /// nothing on screen says which of five destructive things it would run.
+    /// Each of these two is a control with a glyph that says what it does and
+    /// a key that does the same, so clicking one is not a guess. `View::clicked`
+    /// carries the argument at length; a click anywhere else on the row still
+    /// only aims.
     Notifications(usize),
     /// Focus — and so preview — the theme at index `n`.
     Theme(usize),
+    /// A row of the power view: the cursor goes there, `RET` acts.
+    Power(usize),
+    /// A row of the bluetooth view.
+    Bluetooth(usize),
     /// Put the focus on line `n` of the network list.
     ///
     /// Its own variant for the same reason as `Application`: the lists share the
@@ -887,21 +977,6 @@ enum Click {
     /// fires a password prompt by accident is worse than a click that does
     /// nothing; the `Enter` is still the one that acts.
     Network(usize),
-}
-
-/// The signal's glyph, in four steps.
-///
-/// Converting a number into a step belongs to `crate::network::bars`; here
-/// only the token is chosen. Two places deciding the same range would give a
-/// bar that does not match the other part of the screen.
-const fn signal_bars(signal: u8) -> char {
-    match crate::network::bars(signal) {
-        0 => tokens::icon::WIFI_NONE,
-        1 => tokens::icon::WIFI_WEAK,
-        2 => tokens::icon::WIFI_FAIR,
-        3 => tokens::icon::WIFI_GOOD,
-        _ => tokens::icon::WIFI_STRONG,
-    }
 }
 
 impl ExpansionRow {
@@ -1322,6 +1397,38 @@ fn grid_for(widths: &[Measure], screen_columns: u16, ceiling: usize, in_columns:
 /// compares the two.
 pub const MEMORY_KILLED: &str = "memory-killed";
 
+/// The pairing question's tag, for the times the view cannot be opened to
+/// ask it — the file manager holding the footer. The two actions are the
+/// catalogue's, and they run the same two commands `s b y`/`s b n` do.
+pub const BLUETOOTH_PAIRING: &str = "bluetooth-pairing";
+
+/// A device came back. Brief and quick: it confirms something that was asked
+/// for, and the mark on the modeline says it too.
+pub const BLUETOOTH_CONNECTED: &str = "bluetooth-connected";
+
+/// A device DROPPED, which is the one worth a sentence.
+///
+/// The owner's keyboard is Bluetooth: when it goes, the machine stops
+/// answering keys, and what says so on the modeline is a glyph that has just
+/// DISAPPEARED. Reading an absence is not something a person can do.
+pub const BLUETOOTH_DISCONNECTED: &str = "bluetooth-disconnected";
+
+/// A device's own battery crossed the number the modeline turns red at.
+///
+/// The machine's battery had a second voice (`BATTERY_LOW`) and the devices
+/// had none: a mark that changes colour is not something one notices while
+/// typing.
+pub const BLUETOOTH_BATTERY_LOW: &str = "bluetooth-battery-low";
+
+/// The battery's three alarms — the same strings `ronoctua_power::Alarm::id`
+/// answers, written here so the tag check can read them off this file, and
+/// tied to the crate's by a test so the two cannot drift.
+pub const BATTERY_LOW: &str = "battery-low";
+/// See [`BATTERY_LOW`].
+pub const BATTERY_CRITICAL: &str = "battery-critical";
+/// See [`BATTERY_LOW`].
+pub const BATTERY_CHARGED: &str = "battery-charged";
+
 /// The footer's two fixed lines: the modeline and the minibuffer.
 ///
 /// They are the only two that always exist (section 4.1). Everything else on
@@ -1618,7 +1725,30 @@ pub fn run() -> Result<()> {
         launch_sender: None,
         apps: None,
         network: None,
+        network_wire: None,
+        network_watch: crate::network::Watch::default(),
+        lan_sender: None,
+        tunnels: ronoctua_tunnel::Scene::default(),
+        tunnel_hand: None,
         theme_chooser: None,
+        power_snapshot: None,
+        power_orders: None,
+        power: None,
+        power_wanted: ronoctua_power::Profile::Performance,
+        power_named: false,
+        power_applied: false,
+        _power_watch: None,
+        _notes_watch: None,
+        _book_watch: None,
+        bluetooth_scene: ronoctua_bluetooth::Scene::default(),
+        bluetooth_orders: None,
+        bluetooth: None,
+        bluetooth_renaming: None,
+        bluetooth_questions: None,
+        bluetooth_asked: None,
+        bluetooth_alarmed: std::collections::BTreeSet::new(),
+        locally_raised: u32::MAX,
+        net: ronoctua_network::Snapshot::default(),
         files: None,
         files_sender: None,
         files_looking: None,
@@ -1768,7 +1898,7 @@ pub fn run() -> Result<()> {
     // THE END OF A RADIO SCAN.
     //
     // The channel is built here and always: what is lazy is the THREAD, raised
-    // by `watch_scans` on the first `LEADER r`. Building the source on demand
+    // by `watch_scans` on the first `LEADER s n`. Building the source on demand
     // would mean touching the loop from inside a key handler, which does not
     // have the handle.
     let (scan_sender, scans) = channel::channel::<()>();
@@ -1910,7 +2040,7 @@ pub fn run() -> Result<()> {
         // of channel because zbus does not know calloop and vice versa; the bridge
         // is a thread that only forwards.
         std::thread::Builder::new()
-            .name("ponte-notif".into())
+            .name("notify-bridge".into())
             .spawn(move || {
                 while let Ok(e) = raw_rx.recv() {
                     if notify_sender.send(e).is_err() {
@@ -1956,6 +2086,194 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the brain: {e}"))?;
+
+    // EIGHTH SOURCE: the power daemons — the battery, the profile, logind.
+    //
+    // Started EAGERLY, unlike the disks: the modeline draws the battery at
+    // rest, before any view is opened, so the first reading has to be there
+    // before anybody asks. The threads send whole snapshots; see
+    // `ronoctua_power::watch`.
+    let (power_sender, power_events) = channel::channel::<ronoctua_power::Event>();
+    match ronoctua_power::watch(move |e| {
+        let _ = power_sender.send(e);
+    }) {
+        Ok(h) => state.power_orders = Some(h),
+        Err(e) => tracing::warn!(error = %e, "no power daemons; the modeline draws no battery"),
+    }
+    handle
+        .insert_source(power_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.power_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the power channel: {e}"))?;
+    // THE WAY OUT, on a thread of its own — EAGERLY, and for the reason the
+    // battery is: a mark that says the network leads nowhere is drawn with
+    // no view open, and it is the first question the line answers.
+    let (net_sender, net_changes) = channel::channel::<ronoctua_network::Snapshot>();
+    if let Err(e) = ronoctua_network::watch(move |s| {
+        let _ = net_sender.send(s);
+    }) {
+        tracing::warn!(error = %e, "no NetworkManager; the modeline draws no way out");
+    }
+    handle
+        .insert_source(net_changes, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(s) = event {
+                state.net_arrived(s);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the network channel: {e}"))?;
+
+    // THE LOCAL NETWORK'S SWEEP, which is a thread per press and not a
+    // thread that lives: it asks 254 addresses, waits a second and ends.
+    let (lan_sender, lan_answers) = channel::channel::<ronoctua_lan::Found>();
+    state.lan_sender = Some(lan_sender);
+    handle
+        .insert_source(lan_answers, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(found) = event {
+                state.network_watch.found(found);
+                state.network_settle();
+                state.apply_geometry(state.interactivity());
+                state.draw_and_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the sweep channel: {e}"))?;
+
+    // THE TWO TUNNELS, on one thread — EAGERLY, and for the same reason as
+    // the radio: the modeline draws a mark for each of them with no view
+    // open. Neither daemon signals, so this one polls; on a machine with
+    // neither installed the poll is a `connect` that fails, ten seconds
+    // apart.
+    let (tunnel_sender, tunnel_events) = channel::channel::<ronoctua_tunnel::Event>();
+    state.tunnel_hand = match ronoctua_tunnel::watch(
+        ronoctua_tunnel::Places::default(),
+        std::path::PathBuf::from(crate::network::SYSTEMCTL),
+        move |e| {
+            let _ = tunnel_sender.send(e);
+        },
+    ) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            tracing::warn!(error = %e, "no tunnel thread; the marks will not appear");
+            None
+        }
+    };
+    handle
+        .insert_source(tunnel_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.tunnel_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the tunnel channel: {e}"))?;
+
+    // THE RADIO, on its own four threads — EAGERLY, for the power crate's
+    // reason: the modeline draws a mark per connected device, and it draws it
+    // with the view closed. The pairing agent is registered by the same call.
+    let (bt_sender, bt_events) = channel::channel::<ronoctua_bluetooth::Event>();
+    // THE FOOTER IS THE DOOR THAT REGISTERS THE PAIRING AGENT. It outlives
+    // every window, and only one door may register one.
+    //
+    // EXCEPT IN THE NESTED LOOP, where this is the SECOND footer on the
+    // machine. `RequestDefaultAgent` gives the questions to the last caller,
+    // so `nix run .#dev` took them away from the owner's real session and
+    // gave them back to nobody when it exited: a device asking to pair went
+    // unanswered until the real footer restarted. `nix/dev.nix` is the one
+    // place that knows it is nested, so it is the one place that says so.
+    let session = std::env::var_os("RONOCTUA_NESTED").is_none();
+    match ronoctua_bluetooth::watch(
+        move |e| {
+            let _ = bt_sender.send(e);
+        },
+        session,
+    ) {
+        Ok(w) => {
+            state.bluetooth_orders = Some(w.hand);
+            state.bluetooth_questions = Some(w.questions);
+        }
+        Err(e) => tracing::warn!(error = %e, "no bluetooth; the modeline draws no device"),
+    }
+    handle
+        .insert_source(bt_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.bluetooth_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the bluetooth channel: {e}"))?;
+    // AND `power.json`, watched: a profile chosen in the window, or by hand,
+    // reaches the daemon through this door — the theme's arrangement.
+    let (power_file_sender, power_file) = channel::channel::<()>();
+    // THE WISH, AND WHO NAMED IT. The complaints are logged here and not
+    // swallowed by a struct literal: a `power.json` that does not parse is a
+    // thing the person wrote, and silence about it is the worst answer.
+    let (wanted, source, complaints) = ronoctua_power::prefs::resolve_in(
+        ronoctua_power::prefs::home().as_deref(),
+        std::env::var(ronoctua_power::prefs::ENV).ok().as_deref(),
+    );
+    for c in complaints {
+        tracing::warn!(%c, "power.json");
+    }
+    state.power_wanted = wanted;
+    state.power_named = source != ronoctua_power::prefs::Source::Default;
+    state._power_watch = ronoctua_power::prefs::home().and_then(|dir| {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(error = %e, "no configuration directory to watch power.json in");
+            return None;
+        }
+        ronoctua_files::notice::Notice::on_file(&dir, ronoctua_power::prefs::FILE, move || {
+            power_file_sender.send(()).is_ok()
+        })
+        .ok()
+    });
+    handle
+        .insert_source(power_file, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.power_file_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the power.json watch: {e}"))?;
+
+    // THE NOTIFICATION FILES, watched for the same reason and by the same
+    // means (`theme.json`'s precedent: the file IS the broadcast).
+    //
+    // THE DEFECT THIS CLOSES: the manager has two doors and the window is a
+    // process of its own, writing the history and the preferences directly.
+    // The footer read both ONCE, at start-up, and wrote its whole vector over
+    // the history on every change — so `d` in the window came undone the
+    // moment any notification arrived, and an adjustment made there did not
+    // reach the band at all until the footer restarted.
+    let (notes_changed, notes_file) = channel::channel::<()>();
+    let (book_changed, book_file) = channel::channel::<()>();
+    let notes_where = ronoctua_notify::store::Where::of_env();
+    state._notes_watch = notes_where.state.clone().and_then(|dir| {
+        ronoctua_files::notice::Notice::on_file(
+            &dir,
+            ronoctua_notify::store::HISTORY_FILE,
+            move || notes_changed.send(()).is_ok(),
+        )
+        .ok()
+    });
+    state._book_watch = notes_where.config.and_then(|dir| {
+        ronoctua_files::notice::Notice::on_file(
+            &dir,
+            ronoctua_notify::store::PREFERENCES_FILE,
+            move || book_changed.send(()).is_ok(),
+        )
+        .ok()
+    });
+    handle
+        .insert_source(notes_file, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.history_file_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the history watch: {e}"))?;
+    handle
+        .insert_source(book_file, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.book_file_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the preferences watch: {e}"))?;
 
     // A timer to expire the notification on screen.
     //
@@ -2018,7 +2336,7 @@ pub fn run() -> Result<()> {
                 // means the drawing changes on most ticks, and a band whose
                 // countdown only moves when something else happens is a countdown
                 // that lies.
-                let na_faixa = state.notifications.showing().is_some();
+                let on_the_band = state.notifications.showing().is_some();
                 // AND THE BRAIN'S COUNTDOWN RIDES THE SAME CLOCK, for the reason
                 // written just above about the pie: the brain sends the warning
                 // ONCE and the number on screen is `deadline - now`, so a line
@@ -2026,6 +2344,16 @@ pub fn run() -> Result<()> {
                 // countdown that lies. A timer of its own would wake the loop twice
                 // in the same second for one effect.
                 let counting = state.brain_rows() > 0;
+                // AND THE NETWORK'S SOCKETS AND COUNTERS RIDE THE SAME CLOCK,
+                // and only while the view is open: a rate is a difference
+                // over a time, so the numbers on that screen cannot come from
+                // the bus's signals — and four pseudo-files a second for a
+                // screen nobody has open would be the wake this footer spends
+                // its whole design avoiding.
+                let watching = state.network.is_some();
+                if watching {
+                    state.network_watch.sample();
+                }
                 // AND THE UPDATE'S MARK RIDES IT TOO, one frame per tick. The
                 // counter always advances — it is a `u64` add — but the REDRAW is
                 // asked for only while something is actually running, so a machine
@@ -2049,7 +2377,15 @@ pub fn run() -> Result<()> {
                     // may have taken it. The height changes with it, and so does
                     // the record on disk.
                     state.after_the_queue_moved();
-                } else if won || changed || bar || blinking || na_faixa || counting || updating {
+                } else if won
+                    || changed
+                    || bar
+                    || blinking
+                    || on_the_band
+                    || counting
+                    || updating
+                    || watching
+                {
                     state.draw_and_paint();
                 }
                 calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
@@ -2096,6 +2432,9 @@ impl Footer {
         // screen reads `state-<id>` (invariants 8 and 18). The buffer's NAME is
         // the exception, and stays the exception — it comes from the
         // application, and translating an open file's name would be absurd.
+        // THE POOL, RESOLVED ONCE: it is a `Vec`, so it is bound before the
+        // call rather than borrowed inside the struct literal.
+        let devices = crate::bluetooth::modeline(&self.bluetooth_scene);
         let state = self
             .state_now()
             .map(|id| self.texts.t(&format!("state-{id}")))
@@ -2114,13 +2453,51 @@ impl Footer {
             // person asked never to see is a badge that cannot be brought to
             // zero. See `Record::counts`.
             self.notifications.unread(),
-            crate::transfers::segment(&self.jobs).as_deref(),
-            // THE UPDATE'S MARK, out of the mind the footer already watches —
-            // never a second subscription and never a schedule of its own. It
-            // is `None` with nothing in flight, and the segment then does not
-            // exist at all.
-            crate::update_window::mark(self.brain.as_ref(), self.update_tick).as_deref(),
+            &crate::Marks {
+                transfer: crate::transfers::segment(&self.jobs).as_deref(),
+                // THE UPDATE'S MARK, out of the mind the footer already
+                // watches — never a second subscription and never a schedule
+                // of its own. It is `None` with nothing in flight, and the
+                // segment then does not exist at all.
+                update: crate::update_window::mark(self.brain.as_ref(), self.update_tick)
+                    .as_deref(),
+                // THE BATTERY AND THE PROFILE, out of the last reading — absent
+                // at rest by the owner's rule (`ronoctua_power::mark`,
+                // `profile_mark`), so both are `None` on a desktop at its
+                // default.
+                battery: self.battery_segment().as_deref(),
+                profile: self.profile_segment().as_deref(),
+                devices: &devices,
+                adrift: self.net.adrift(),
+                airplane: self.net.airplane(),
+                tunnel: self.net.tunnel().is_some(),
+                // RUNNING, and not installed: a tailnet nobody has logged
+                // into and a Tor that is not started draw nothing.
+                tailscale: self.tunnels.on_tailnet(),
+                tor: self.tunnels.through_tor(),
+            },
         )
+    }
+
+    /// The battery's segment text, when there is one to draw.
+    fn battery_segment(&self) -> Option<String> {
+        let s = self.power_snapshot.as_ref()?;
+        ronoctua_power::mark(s.display.as_ref(), s.adapter_online())
+            .map(|m| crate::power::battery_segment(&m))
+    }
+
+    /// The profile's glyph, only off the machine's top profile.
+    fn profile_segment(&self) -> Option<String> {
+        let p = self.power_snapshot.as_ref()?.profiles.as_ref()?;
+        ronoctua_power::profile_mark(p).map(|p| crate::power::profile_glyph(p).to_string())
+    }
+
+    /// Is the battery at the danger level? The paint asks once per frame.
+    fn battery_danger(&self) -> bool {
+        let Some(s) = self.power_snapshot.as_ref() else {
+            return false;
+        };
+        ronoctua_power::mark(s.display.as_ref(), s.adapter_online()).is_some_and(|m| m.danger)
     }
 
     /// Windows changed: prune the state map and ask the focused buffer.
@@ -2241,7 +2618,7 @@ impl Footer {
     /// # The mouse reaches nothing the keyboard does not
     ///
     /// The circle is `notif-dismiss`, which has a key (`n d`). An action is
-    /// pressed by its letter in the manager, which is one key away (`n h`) and
+    /// pressed by its letter in the manager, which is one key away (`n n`) and
     /// where the keyboard actually is — the footer at rest does not capture it,
     /// or no buffer would ever receive one.
     fn band_clicked(&mut self, hit: crate::band::Hit) {
@@ -2298,21 +2675,23 @@ impl Footer {
     /// TWO segments answer, and each has a key. On the `state`, left is the
     /// next state and right the previous — exactly what holding `Esc` and
     /// pressing an arrow does. On the `notif`, either button opens the manager,
-    /// which is what `LEADER n h` does.
+    /// which is what `LEADER n n` does.
     ///
     /// That is the rule invariant 14 turns into for a pointer: the mouse is a
     /// second way to the same door, and never a door of its own.
     fn segment_clicked(&mut self, id: &str, forward: bool) {
-        // THE BELL AND ITS COUNT OPEN THE MANAGER.
+        // THE BELL TOGGLES THE MANAGER.
         //
         // It is the one thing on that line the eye goes to when it wants to
-        // know what it missed, and until now clicking it did nothing — a mark
-        // that says "there are six" and answers nothing when asked.
+        // know what it missed, and it is only there while something is unread
+        // — so a click on it is never a click on nothing. The SECOND click
+        // closes it again (`toggle_manager`), which is what makes the mark a
+        // switch rather than a one-way door.
         //
         // Both buttons, because there is only one thing to do here: a second
         // meaning for the right button would be a menu nobody asked for.
         if id == "notif" {
-            self.run_command("notif-history");
+            self.run_command("notif-open");
             return;
         }
         // THE UPDATE'S MARK OPENS THE WINDOW THAT WATCHES IT.
@@ -2328,6 +2707,72 @@ impl Footer {
         // keyboard cannot.
         if id == "update" {
             self.run_command("update-watch");
+            return;
+        }
+        // THE BATTERY AND THE PROFILE OPEN THE POWER VIEW — the same command
+        // `LEADER s p p` runs. Two `if`s and not one with an `||`, because the
+        // check that keeps the mouse honest reads them one by one.
+        if id == "battery" {
+            self.run_command("power-open");
+            return;
+        }
+        if id == "profile" {
+            self.run_command("power-open");
+            return;
+        }
+        // THE WAY OUT'S THREE. Two of them open the network view — the same
+        // command `LEADER s n n` runs — and the aeroplane TOGGLES, because
+        // the one thing to do about aeroplane mode is to leave it.
+        // TWO `if`s AND NOT ONE WITH AN `||`, the reason written above the
+        // battery's pair: the check that keeps the mouse honest reads these
+        // one by one, and an `||` hides the second id from it.
+        if id == "net-off" {
+            self.run_command("network-open");
+            return;
+        }
+        if id == "vpn" {
+            // AND THE TUNNEL'S MARK OPENS ON THE TUNNEL. A mark that opened a
+            // list and left the person to find the row it was about would be
+            // a door onto the right building and the wrong floor.
+            let at = self.net.tunnel().map(|a| a.at.clone());
+            match at {
+                Some(at) => self.open_network_at(&crate::network::Target::Tunnel(at)),
+                None => self.run_command("network-open"),
+            }
+            return;
+        }
+        if id == "airplane" {
+            self.run_command("network-airplane");
+            return;
+        }
+        // AND THE OTHER TWO TUNNELS' MARKS OPEN THE VIEW ON THEIR OWN
+        // SECTION, the same way the VPN's does: a mark is a door onto the
+        // thing it is about, and its section is where every switch is.
+        if id == "tailscale" {
+            self.open_network_at(&crate::network::Target::Tunnels(
+                crate::network::Switch::Tailnet,
+                false,
+            ));
+            return;
+        }
+        if id == "tor" {
+            self.open_network_at(&crate::network::Target::Tunnels(
+                crate::network::Switch::Tor,
+                false,
+            ));
+            return;
+        }
+        // A DEVICE'S MARK OPENS THAT DEVICE, whole — the owner's words: every
+        // piece of information and every option for the one that was clicked.
+        // It is the command `RET` on its row runs, with the path as the
+        // argument, so the mouse reaches no door the keyboard cannot.
+        if let Some(i) = crate::bluetooth::POOL.iter().position(|p| *p == id) {
+            let at = crate::bluetooth::modeline(&self.bluetooth_scene)
+                .get(i)
+                .map(|shown| shown.at.clone());
+            if let Some(at) = at {
+                self.run_with("bluetooth-device", Some(&at));
+            }
             return;
         }
         if id != "state" {
@@ -2354,12 +2799,134 @@ impl Footer {
     /// the buffer's name is the buffer's name — and a sentence explaining each
     /// of them would be a tooltip in everything but the surface it is drawn on.
     fn segment_hint(&self) -> Option<String> {
+        // A DEVICE'S MARK, by its place in the pool: which thing it is, what
+        // it is called, and the percentage when there is one — the same two
+        // numbers the mark itself draws by.
+        if let Some(i) = crate::bluetooth::POOL
+            .iter()
+            .position(|p| Some(*p) == self.segment_under_pointer)
+        {
+            let shown = crate::bluetooth::modeline(&self.bluetooth_scene);
+            let at = shown.get(i)?;
+            let d = self.bluetooth_scene.device(&at.at)?;
+            let kind = self.texts.t(&format!("bluetooth-kind-{}", d.kind.id()));
+            return Some(match d.battery {
+                Some(p) => self.texts.t_args(
+                    ronoctua_i18n::key::HINT_BLUETOOTH_DEVICE_BATTERY,
+                    &[
+                        ("kind", ronoctua_i18n::Arg::Text(&kind)),
+                        ("name", ronoctua_i18n::Arg::Text(&d.label)),
+                        ("percent", ronoctua_i18n::Arg::Number(i64::from(p))),
+                    ],
+                ),
+                None => self.texts.t_with(
+                    ronoctua_i18n::key::HINT_BLUETOOTH_DEVICE,
+                    &[("kind", &kind), ("name", &d.label)],
+                ),
+            });
+        }
         match self.segment_under_pointer? {
-            "notif" => Some(self.texts.t(ronoctua_i18n::key::HINT_NOTIF_BELL)),
+            // A LINK THAT LEADS NOWHERE says WHICH nowhere: a login page in
+            // the way is a different thing to do about it than an uplink
+            // that is down, and the mark cannot say which.
+            "net-off" => Some(
+                self.texts
+                    .t(if self.net.way == ronoctua_network::Way::Portal {
+                        ronoctua_i18n::key::HINT_NET_PORTAL
+                    } else {
+                        ronoctua_i18n::key::HINT_NET_OFF
+                    }),
+            ),
+            "airplane" => Some(self.texts.t(ronoctua_i18n::key::HINT_AIRPLANE)),
+            "tailscale" => {
+                let t = self.tunnels.tailscale.as_ref()?;
+                let name = if t.tailnet.is_empty() {
+                    t.name.clone()
+                } else {
+                    t.tailnet.clone()
+                };
+                Some(
+                    self.texts
+                        .t_with(ronoctua_i18n::key::HINT_TAILSCALE, &[("tailnet", &name)]),
+                )
+            }
+            "tor" => Some(self.texts.t(ronoctua_i18n::key::HINT_TOR)),
+            "vpn" => {
+                let name = self.net.tunnel().map(|t| t.id.clone())?;
+                Some(
+                    self.texts
+                        .t_with(ronoctua_i18n::key::HINT_VPN, &[("name", &name)]),
+                )
+            }
+            // HOW MANY, on the line under the pointer and nowhere else. The
+            // number left the modeline at the owner's request; this is where it
+            // went — with the other half the badge never said, how many a
+            // filter kept off the screen.
+            "notif" => Some(self.texts.t_args(
+                ronoctua_i18n::key::HINT_NOTIF_BELL,
+                &[
+                    (
+                        "unread",
+                        ronoctua_i18n::Arg::Number(
+                            i64::try_from(self.notifications.unread()).unwrap_or(0),
+                        ),
+                    ),
+                    (
+                        "filtered",
+                        ronoctua_i18n::Arg::Number(
+                            i64::try_from(self.notifications.suppressed()).unwrap_or(0),
+                        ),
+                    ),
+                ],
+            )),
             // The third clickable thing on this line, and it explains itself
             // on the message line like the other two — never in a tooltip,
             // which would be a surface of its own (invariant 14).
             "update" => Some(self.texts.t(ronoctua_i18n::key::HINT_UPDATE_MARK)),
+            // THE BATTERY'S SENTENCE: the number the segment stopped carrying
+            // above 30%, the state, the time, the rate — everything the glyph
+            // stands for, on the line the pointer already explains things on.
+            "battery" => {
+                let s = self.power_snapshot.as_ref()?;
+                let b = s.display.as_ref()?;
+                let state = self.texts.t(&format!("power-state-{}", b.state.id()));
+                // THE SAME ANSWER THE VIEW'S ROW GIVES — see `power::time_left`
+                // for what the two used to disagree about. It cannot come back
+                // empty here: empty is `FullyCharged`, and at that state
+                // `mark()` returns `None`, so there is no segment to point at.
+                let time = crate::power::time_left(b, &self.texts);
+                // NO RATE, NO "0 W": UPower reports zero while it has not
+                // measured, and the view hides that row for the same reason.
+                let percent = ronoctua_i18n::Arg::Number(i64::from(b.percent()));
+                Some(if b.rate_w > 0.0 {
+                    self.texts.t_args(
+                        ronoctua_i18n::key::HINT_BATTERY,
+                        &[
+                            ("percent", percent),
+                            ("state", ronoctua_i18n::Arg::Text(&state)),
+                            ("time", ronoctua_i18n::Arg::Text(&time)),
+                            ("rate", ronoctua_i18n::Arg::Fraction(b.rate_w)),
+                        ],
+                    )
+                } else {
+                    self.texts.t_args(
+                        ronoctua_i18n::key::HINT_BATTERY_NO_RATE,
+                        &[
+                            ("percent", percent),
+                            ("state", ronoctua_i18n::Arg::Text(&state)),
+                            ("time", ronoctua_i18n::Arg::Text(&time)),
+                        ],
+                    )
+                })
+            }
+            "profile" => {
+                let p = self.power_snapshot.as_ref()?.profiles.as_ref()?;
+                let name = self.texts.t(&format!("power-profile-{}", p.active.id()));
+                Some(
+                    self.texts
+                        .t_with(ronoctua_i18n::key::HINT_PROFILE, &[("profile", &name)]),
+                )
+            }
             "state" => {
                 let now = self.state_now()?;
                 Some(self.texts.t_with(
@@ -2490,7 +3057,7 @@ impl Footer {
     ///
     /// # Why the refusal is spoken and not swallowed
     ///
-    /// Because `LEADER s a` with nothing about to happen is a key that appears
+    /// Because `LEADER b a` with nothing about to happen is a key that appears
     /// in which-key and does nothing — indistinguishable from a key that did
     /// not register, which is how five mute commands went unnoticed once
     /// already.
@@ -2876,7 +3443,7 @@ impl KeyboardHandler for Footer {
         event: KeyEvent,
     ) {
         // A repeat inside a leader sequence would be typing the same key twice by
-        // accident. But `SPC b b b` does not exist, so a repeat is always an error
+        // accident. But `SPC w w w` does not exist, so a repeat is always an error
         // here — we let it through to the same path, which ends by unknown
         // sequence instead of piling up state.
         self.typed(event);
@@ -2947,30 +3514,37 @@ impl Footer {
         match effect {
             Effect::Continue { inputs } => {
                 self.inputs = inputs;
-                // THE STATE ROW, grafted onto `SPC b` the same way the focused
+                // THE STATE ROW, grafted onto `SPC w` the same way the focused
                 // buffer's row is grafted onto the root. It cannot be in the
                 // tree: the states come from whatever window has the focus, and
                 // the tree's bindings are `&'static str`.
                 //
                 // It appears only when there is a CHOICE — see
                 // `refresh_buffer_keymap`.
-                if !self.state_menu.is_empty()
-                    && ronoctua_keymap::notation(self.leader.typed()) == "b"
-                    && let Ok(key) = ronoctua_keymap::Key::parse("s")
-                {
-                    self.inputs.push(ronoctua_keymap::Entry {
-                        key: "s".to_owned(),
-                        sym: key,
-                        label: ronoctua_i18n::key::WHICH_STATE.to_owned(),
-                        command: None,
-                        is_group: true,
-                    });
+                if let Some(row) = state_row(
+                    &ronoctua_keymap::notation(self.leader.typed()),
+                    !self.state_menu.is_empty(),
+                ) {
+                    // IN ITS ALPHABETICAL PLACE, not at the end.
+                    //
+                    // The tree's own rows come out in `BTreeMap<Key>` order,
+                    // so a grafted row pushed on the back sat LAST — under
+                    // the old five-entry `b` group nobody noticed, and on
+                    // `w`'s nineteen it is a row somewhere else entirely from
+                    // where the eye looks for `s`. It is one insert, and the
+                    // list is already sorted.
+                    let at = self
+                        .inputs
+                        .iter()
+                        .position(|r| r.key > row.key)
+                        .unwrap_or(self.inputs.len());
+                    self.inputs.insert(at, row);
                 }
                 self.first_page();
                 tracing::info!(
                     inputs = self.inputs.len(),
                     prefix = %self.leader.prefix(&self.leader_label),
-                    "which-key estreitou"
+                    "which-key narrowed"
                 );
                 self.echo = None;
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -3737,7 +4311,112 @@ impl Footer {
                 });
                 self.quit = true;
             }
-            "notif-history" => self.toggle_manager(),
+            // POWER — the view's two doors, the profile, the two locks and the
+            // four actions. Everything goes through `power_errand`, the same
+            // door a key in the view takes, so the two cannot disagree.
+            // BLUETOOTH. The view's own letters run through `View::key`, the
+            // same door the keyboard uses: a second path to "what does `c` do
+            // here" is a second answer waiting to disagree.
+            // THE AEROPLANE IS A SWITCH, and the one thing to do about it is
+            // to leave it: the press reads what is and writes the other. It
+            // goes through `View::key` like every other network gesture, so
+            // the mark's click, the leader's `s n a` and the view's `a` are
+            // one path and cannot disagree.
+            "network-airplane" => self.network_press(crate::network::Press::Airplane),
+            "bluetooth-open" => self.open_bluetooth(None),
+            "bluetooth-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["bluetooth".to_owned()], None);
+                }
+            }
+            "bluetooth-device" => match argument {
+                // A CLICK ON A MODELINE MARK carries the device's path, and
+                // opens the view on it — the same screen `RET` opens.
+                Some(at) => self.open_bluetooth(Some(at)),
+                None => self.bluetooth_press(crate::bluetooth::Press::Enter),
+            },
+            "bluetooth-scan" => self.bluetooth_errand_of(crate::bluetooth::Press::Scan),
+            // THE AUDIO PROFILE'S RING. It acts on the OPEN view's card, so
+            // with the view closed it does nothing — the honest answer, and
+            // the same one every other row key gives.
+            "bluetooth-audio-next" => self.bluetooth_press(crate::bluetooth::Press::Right),
+            "bluetooth-audio-previous" => self.bluetooth_press(crate::bluetooth::Press::Left),
+            "bluetooth-power" => self.bluetooth_errand_of(crate::bluetooth::Press::Power),
+            "bluetooth-discoverable" => {
+                self.bluetooth_errand_of(crate::bluetooth::Press::Discoverable);
+            }
+            "bluetooth-reconnect" => self.bluetooth_reconnect(),
+            "bluetooth-disconnect-all" => self.bluetooth_disconnect_all(),
+            // THE TWO ANSWERS. `bluetooth-accept` also carries the digits
+            // when the other side asked for a PIN — the minibuffer sends
+            // them back as this command's argument.
+            "bluetooth-accept" => self.bluetooth_answer(true, argument.unwrap_or_default()),
+            "bluetooth-refuse" => self.bluetooth_answer(false, ""),
+            "bluetooth-connect" => self.bluetooth_press(crate::bluetooth::Press::Connect),
+            "bluetooth-pair" => self.bluetooth_press(crate::bluetooth::Press::Pair),
+            "bluetooth-forget" => self.bluetooth_press(crate::bluetooth::Press::Forget),
+            "bluetooth-trust" => self.bluetooth_press(crate::bluetooth::Press::Trust),
+            "bluetooth-block" => self.bluetooth_press(crate::bluetooth::Press::Block),
+            "bluetooth-rename" => match argument {
+                Some(name) if !name.is_empty() => {
+                    // AN EMPTY PATH IS THIS MACHINE. The radio level's alias
+                    // row asks for a name the same way a device's does, and
+                    // the two answers come back through this one door — the
+                    // path is what says which.
+                    match self.bluetooth_renaming.take() {
+                        Some(at) if at.is_empty() => {
+                            self.bluetooth_errand(crate::bluetooth::Errand::Order(
+                                ronoctua_bluetooth::Ask::AdapterAlias(name.to_owned()),
+                            ));
+                        }
+                        Some(at) => {
+                            self.bluetooth_errand(crate::bluetooth::Errand::Order(
+                                ronoctua_bluetooth::Ask::Rename(at, name.to_owned()),
+                            ));
+                        }
+                        None => {}
+                    }
+                }
+                // AN EMPTY ANSWER IS A NO: the minibuffer was closed with
+                // nothing typed, and a device keeps the name it had.
+                Some(_) => self.bluetooth_renaming = None,
+                None => self.bluetooth_press(crate::bluetooth::Press::Rename),
+            },
+            "bluetooth-unnamed" => self.bluetooth_press(crate::bluetooth::Press::Unnamed),
+            "bluetooth-up" => self.bluetooth_press(crate::bluetooth::Press::Up),
+            "bluetooth-down" => self.bluetooth_press(crate::bluetooth::Press::Down),
+            "power-open" => self.open_power(None, None),
+            "power-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["power".to_owned()], None);
+                }
+            }
+            "power-profile-performance" => {
+                self.power_choose(ronoctua_power::Profile::Performance);
+            }
+            "power-profile-balanced" => self.power_choose(ronoctua_power::Profile::Balanced),
+            "power-profile-saver" => self.power_choose(ronoctua_power::Profile::PowerSaver),
+            // THE TWO LOCKS TOGGLE, read from what logind says is held and
+            // never from memory — a footer that restarted holds nothing.
+            "power-keep-awake" => self.power_toggle(ronoctua_power::Keep::Sleep),
+            "power-keep-lid" => self.power_toggle(ronoctua_power::Keep::Lid),
+            "power-thresholds" => self.open_power(
+                Some(crate::power::Target::Threshold(crate::power::Which::End)),
+                None,
+            ),
+            // THE FOUR THAT EMPTY THE SCREEN open the view on their row,
+            // ARMED: `RET` confirms, `Esc` cancels. None acts on the key alone.
+            "power-suspend" => self.open_power(None, Some(ronoctua_power::Action::Suspend)),
+            "power-hibernate" => self.open_power(None, Some(ronoctua_power::Action::Hibernate)),
+            "power-reboot" => self.open_power(None, Some(ronoctua_power::Action::Reboot)),
+            "power-off" => self.open_power(None, Some(ronoctua_power::Action::PowerOff)),
+            // The view's own gestures, by name.
+            "power-enter" => self.power_press(crate::power::Press::Enter),
+            "power-less" => self.power_press(crate::power::Press::Left),
+            "power-more" => self.power_press(crate::power::Press::Right),
+            "power-up" => self.power_press(crate::power::Press::Up),
+            "power-down" => self.power_press(crate::power::Press::Down),
+            "notif-open" => self.toggle_manager(),
             // THE SECOND DOOR, in a window of its own — the same `View`, and
             // the same reason the file manager has two: the footer's region has
             // a twelve-line ceiling (invariant 14), which is right for a footer
@@ -3747,10 +4426,16 @@ impl Footer {
                     self.open_foreign(&me.to_string_lossy(), &["notifications".to_owned()], None);
                 }
             }
+            // THROUGH THE ERRAND, and not through the queue directly.
+            //
+            // The command used to call `Queue::mark_all_read`, which marks
+            // suppressed records too and tells no application anything —
+            // while `Errand::Read` closes each one on the bus and `Space`
+            // refuses the suppressed column outright. One word, three
+            // contracts. The errand is now the only way in, so `r` in the
+            // manager, this command and the mouse all do the same thing.
             "notif-read-all" => {
-                let n = self.notifications.mark_all_read();
-                tracing::info!(marked = n, "notifications marked as read");
-                self.after_the_queue_moved();
+                self.manager_errand(crate::notifications::Errand::ReadAll);
             }
             // THE THREE THAT ACT ON THE MANAGER'S FOCUSED ROW.
             //
@@ -3765,9 +4450,37 @@ impl Footer {
             "notif-read" => self.manager_press(crate::notifications::Press::Space),
             "notif-forget" => self.manager_press(crate::notifications::Press::Letter('d')),
             "notif-act" => self.manager_press(crate::notifications::Press::Enter),
+            // THE SAME KEY, THE OTHER COLUMN. `RET` on the catalogue opens the
+            // entry's sheet; the id is separate so the label does not lie at
+            // one of the two levels, and the door is the same `Enter` —
+            // `notifications::View::key` already knows which column it is on.
+            "notif-adjust" => self.manager_press(crate::notifications::Press::Enter),
+            // AND THE SIX THAT WALK IT, by the same door. They exist as
+            // commands because the hint line is generated from the table that
+            // names them, and a key the line teaches has to be a command the
+            // manual can name.
+            "notif-up" => self.manager_press(crate::notifications::Press::Up),
+            "notif-down" => self.manager_press(crate::notifications::Press::Down),
+            "notif-pane-next" => self.manager_press(crate::notifications::Press::Tab),
+            "notif-pane-previous" => self.manager_press(crate::notifications::Press::BackTab),
+            "notif-knob-next" => self.manager_press(crate::notifications::Press::Right),
+            "notif-knob-previous" => self.manager_press(crate::notifications::Press::Left),
+            // `r` IS TWO THINGS AT TWO LEVELS — all read on a list, the
+            // distro's default in the sheet — so the command that names the
+            // second one only presses when the sheet is open. Run by name
+            // with no sheet, it would mark everything read, which is not what
+            // its label promises.
+            "notif-restore" => {
+                if self.manager.in_sheet() {
+                    self.manager_press(crate::notifications::Press::Letter('r'));
+                }
+            }
             // THE CLIPBOARD. Like the manual, it keeps the keyboard while it is
             // open: without that the arrows would go to the buffers.
             "clipboard-open" => {
+                if !self.region_is_free("clipboard-open") {
+                    return;
+                }
                 tracing::info!(inputs = self.clipboard.how_many(), "clipboard opened");
                 self.clipboard_open = true;
                 self.clip_cursor = 0;
@@ -3867,6 +4580,9 @@ impl Footer {
             // THE MANUAL. It keeps the keyboard while open, like the `M-x`:
             // without that the arrows would go to the buffers and scroll nothing.
             "help-shortcuts" => {
+                if !self.region_is_free("help-shortcuts") {
+                    return;
+                }
                 self.manual = true;
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -3879,7 +4595,7 @@ impl Footer {
             // THE APP FINDER. It opens with the catalogue ALREADY READY: the sweep
             // ran at startup, in a thread, and what happens here is a copy of an
             // `Arc` and a filter over memory.
-            // `LEADER b b` — choose a buffer by name, with completion.
+            // `LEADER w w` — choose a buffer by name, with completion.
             //
             // It is the SAME locator as `M-x`: same filter, same keys, same
             // rendering. What changes is only where the list came from — see
@@ -3900,7 +4616,7 @@ impl Footer {
             }
             // `LEADER .` — the file manager, in the footer's expanded region.
             "files-open" => self.open_files(),
-            // `LEADER f m` — the same manager, in a window of its own.
+            // `LEADER f w` — the same manager, in a window of its own.
             //
             // A WINDOW AND NOT A SECOND IMPLEMENTATION: it re-execs this binary
             // with `files`, and what draws there is the same `files::View` this
@@ -3922,6 +4638,9 @@ impl Footer {
             // while it is open: without that the arrows would go to the
             // buffers and `C-c` would never reach the row it is aimed at.
             "transfers-open" => {
+                if !self.region_is_free("transfers-open") {
+                    return;
+                }
                 let mut view = crate::transfers::View::fresh_one();
                 // THE LIST IT ALREADY HAS, immediately. The daemon will send
                 // another within the frame, but a panel that opens empty and
@@ -3935,6 +4654,9 @@ impl Footer {
                 self.draw_and_paint();
             }
             "apps-open" => {
+                if !self.region_is_free("apps-open") {
+                    return;
+                }
                 self.rescan_if_changed();
                 tracing::info!(apps = self.catalogue.len(), "finder opened");
                 self.apps = Some(crate::apps::Finder::fresh(self.catalogue.clone()));
@@ -3961,8 +4683,7 @@ impl Footer {
                 // region with the strip painted under them. The manager holds
                 // state a person built by hand; a cursor over a few rows can
                 // wait until it closes.
-                if self.files.is_some() {
-                    tracing::info!("theme-open refused: the file manager is open in the footer");
+                if !self.region_is_free("theme-open") {
                     return;
                 }
                 // Opened twice — the socket door does not know the list is up —
@@ -4000,162 +4721,53 @@ impl Footer {
                     }
                 }
             }
-            "network-open" => {
-                self.watch_scans();
-                self.network = Some(crate::network::ViewState::fresh_one());
-                self.first_page();
-                self.apply_geometry(KeyboardInteractivity::Exclusive);
-            }
-            "network-scan" => {
-                self.watch_scans();
-                match self.network.as_mut() {
-                    Some(v) => {
-                        v.scan();
-                        self.first_page();
-                    }
-                    // Outside the view the key still holds: it asks for the scan and
-                    // OPENS the list, which is where the result shows up. Asking
-                    // without showing would be a key that does nothing visible.
-                    None => {
-                        let mut v = crate::network::ViewState::fresh_one();
-                        v.scan();
-                        self.network = Some(v);
-                        self.first_page();
-                        self.apply_geometry(KeyboardInteractivity::Exclusive);
-                    }
+            // THE NETWORK — one view, two doors, and every gesture through
+            // `View::key`. The command ids exist because the manual names
+            // them and `M-x` reaches them; what they do is press a key in the
+            // view, which is the only place that knows what the cursor is on.
+            "network-open" => self.open_network(),
+            "network-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["network".to_owned()], None);
                 }
             }
-            "network-wifi-toggle" => {
-                let fresh = match self.network.as_mut() {
-                    Some(v) => v.toggle_radio(),
-                    None => crate::network::ViewState::fresh_one().toggle_radio(),
-                };
-                let key = match fresh {
-                    Some(true) => ronoctua_i18n::key::ECHO_NETWORK_RADIO_ON,
-                    Some(false) => ronoctua_i18n::key::ECHO_NETWORK_RADIO_OFF,
-                    // polkit may refuse. Saying "on" when it did not turn on
-                    // would be the screen lying about the hardware.
-                    None => ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE,
-                };
-                let m = self.texts.t(key);
-                self.echo_message(m);
-            }
-            "network-disconnect" => {
-                let mut v = match self.network.take() {
-                    Some(v) => v,
-                    None => crate::network::ViewState::fresh_one(),
-                };
-                // THE ACTIVE MEDIUM, and not "the Wi-Fi": with the cable
-                // plugged in, disconnecting the radio would change nothing and
-                // the key would look broken.
-                let medium = v
-                    .active()
-                    .map_or(ronoctua_network::Medium::Radio, |e| e.medium);
-                let key = if v.disconnect(medium).is_ok() {
-                    ronoctua_i18n::key::ECHO_NETWORK_DISCONNECTED
-                } else {
-                    ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE
-                };
-                let m = self.texts.t(key);
-                self.echo_message(m);
-            }
-            // THE LINK, in the minibuffer: band, rate and signal. It is the answer
-            // to "why is this slow?" without leaving the screen — and it was by
-            // measuring exactly that that this project found a 16x difference
-            // between two bands of the same router.
-            "network-link" => {
-                let v = crate::network::ViewState::fresh_one();
-                let m = match v.active() {
-                    Some(e) if e.medium == ronoctua_network::Medium::Wired => self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_LINK_WIRED,
-                        &[("network", &e.interface), ("rate", &e.rate())],
-                    ),
-                    Some(e) => self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_LINK,
-                        &[
-                            ("network", e.network.as_deref().unwrap_or(&e.interface)),
-                            ("band", e.band.label()),
-                            ("rate", &e.rate()),
-                            ("signal", &format!("{}%", e.signal)),
-                        ],
-                    ),
-                    None => self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_NO_LINK),
-                };
-                self.echo_message(m);
-            }
+            "network-scan" => self.network_press(crate::network::Press::Scan),
+            "network-wifi-toggle" => self.network_press(crate::network::Press::Radio),
+            "network-disconnect" => self.network_press(crate::network::Press::Disconnect),
+            "network-link" => self.network_press(crate::network::Press::Facts),
+            // WHO ELSE IS ON THIS NETWORK — the sweep. It had a key
+            // (`LEADER s n l`), a command in the registry, a `Press` and a
+            // working letter INSIDE the view, and no arm here: from the
+            // leader it printed "network-lan does nothing yet" and logged a
+            // command with no action. It is the one binding of this whole
+            // keymap that led nowhere, and the hand-kept `WITH_ACTION` list
+            // is what let it through — see `run-command-handles-every-key`,
+            // which now reads this `match` instead of a list.
+            "network-lan" => self.network_press(crate::network::Press::Discover),
+            "network-forget" => self.network_press(crate::network::Press::Forget),
+            // THE FILE IS READ AND LOOKED AT FIRST, and imported only after
+            // somebody answered the reading — see `ronoctua_network::vpn`.
+            "network-import" => match argument {
+                Some(path) => self.network_looked_at(path.to_owned()),
+                None => self.network_press(crate::network::Press::Import),
+            },
+            "network-up" => self.network_press(crate::network::Press::Up),
+            "network-down" => self.network_press(crate::network::Press::Down),
             // CONNECT TO THE FOCUSED NETWORK.
             //
-            // Three paths, and the difference between them is what the person does
-            // NOT have to do: a saved network reuses the profile, an open network
-            // has no password, and a secured network with no profile opens the
-            // prompt. Treating the three alike would ask for a password from
-            // someone who connected yesterday.
-            "network-connect" => {
-                let Some(target) = self
-                    .network
-                    .as_ref()
-                    .and_then(crate::network::ViewState::focused_network)
-                else {
-                    return;
-                };
-                if target.secured && !target.saved && argument.is_none() {
-                    // The password comes in through the minibuffer, and comes back
-                    // here as an argument of this same command.
-                    self.mx.request("network-connect", true);
-                    self.apply_geometry(KeyboardInteractivity::Exclusive);
-                    return;
-                }
-                // IT CONNECTS WITHOUT STORING, and asks afterwards.
-                //
-                // `remember = false` here means `psk-flags=2`: nothing is
-                // persisted while the person has not said they want it. If they
-                // do say so, the answer's branch reconnects with `psk-flags=1`
-                // and seals. The opposite — storing and deleting if they refuse
-                // — would leave the password on disk in the meantime.
-                let result = self
-                    .network
-                    .as_mut()
-                    .map(|v| v.connect(&target.ssid, argument, false));
-                if let (Some(Ok(())), Some(s)) = (&result, argument)
-                    && target.secured
-                {
-                    self.network_remember = Some((target.ssid.clone(), s.to_owned()));
-                }
-                let m = match result {
-                    Some(Ok(())) => self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_CONNECTED,
-                        &[("network", &target.ssid)],
-                    ),
-                    Some(Err(e)) => self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_FAILED,
-                        &[("network", &target.ssid), ("reason", &e.to_string())],
-                    ),
-                    None => self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE),
-                };
-                self.echo_message(m);
-            }
-            "network-forget" => {
-                let Some(target) = self
-                    .network
-                    .as_ref()
-                    .and_then(crate::network::ViewState::focused_network)
-                else {
-                    return;
-                };
-                let ok = self
-                    .network
-                    .as_mut()
-                    .is_some_and(|v| v.forget(&target.ssid).is_ok());
-                let m = if ok {
-                    self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_FORGOTTEN,
-                        &[("network", &target.ssid)],
-                    )
-                } else {
-                    self.texts.t(ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE)
-                };
-                self.echo_message(m);
-            }
+            // Three paths, and the difference between them is what the person
+            // does NOT have to do: a saved network reuses the profile, an open
+            // network has no password, and a secured network with no profile
+            // opens the prompt. Treating the three alike would ask for a
+            // password from someone who connected yesterday.
+            //
+            // The password comes back here as this same command's ARGUMENT,
+            // which is why the two cases are told apart on the argument and
+            // not on a flag: the minibuffer answers into `run_command`.
+            "network-connect" => match argument {
+                Some(password) => self.network_join(Some(password.to_owned())),
+                None => self.network_press(crate::network::Press::Enter),
+            },
             // ---------------------------------------------------------
             // SYNCTHING. It comes installed with the distro, and a service
             // the distro installs needs a path through the leader.
@@ -4678,7 +5290,7 @@ impl Footer {
         // THE THREAD'S NAME shows up in `perf` and in `gdb`. An anonymous thread
         // stuck in `wait4` for hours is exactly what nobody identifies.
         let born = std::thread::Builder::new()
-            .name("ronoctua-lancar".to_owned())
+            .name("shell-launch".to_owned())
             .spawn(move || {
                 let verdict = crate::foreign::launch(&scope, &direct, &cmd);
                 // A closed channel = the footer left. Nothing to report.
@@ -4696,7 +5308,7 @@ impl Footer {
     ///
     /// It costs a connection to NetworkManager and, on a machine with no radio,
     /// a warning in the log about something nobody asked for. Raising it when
-    /// `LEADER r` is first pressed ties the cost to the interest.
+    /// `LEADER s n` is first pressed ties the cost to the interest.
     ///
     /// # Why a thread and not a timer
     ///
@@ -4712,7 +5324,7 @@ impl Footer {
             return;
         };
         // Marked BEFORE knowing whether it worked: on a machine with no radio it
-        // fails every time, and retrying on every `LEADER r` would give a bus
+        // fails every time, and retrying on every `LEADER s n` would give a bus
         // round trip and a warning per keypress.
         self.scan_watching = true;
         if let Err(e) = ronoctua_network::watch_scan(move || {
@@ -4727,13 +5339,482 @@ impl Footer {
     /// The radio has finished a scan: re-read, if the list is on screen.
     ///
     /// Re-reading with the view closed would spend a round trip on the bus to
-    /// fill a state nobody is looking at — and which `fresh_one` rebuilds at
-    /// opening anyway.
+    /// fill a state nobody is looking at — and which opening rebuilds anyway.
     fn rescanned(&mut self) {
-        if let Some(v) = self.network.as_mut() {
-            v.reread();
-            self.draw_and_paint();
+        if self.network.is_none() {
+            return;
         }
+        if let Some(w) = self.network_wire.as_mut() {
+            w.reread();
+        }
+        self.draw_and_paint();
+    }
+
+    /// Opens the network view, with the bus and the scan watcher behind it.
+    fn open_network(&mut self) {
+        self.open_network_with(crate::network::View::fresh());
+    }
+
+    /// The same, with the cursor already on the row a mark was about.
+    fn open_network_at(&mut self, want: &crate::network::Target) {
+        self.watch_scans();
+        self.network_wired();
+        if let Some(w) = self.network_wire.as_mut() {
+            w.reread();
+        }
+        self.network_reread();
+        let wire = self.network_wire.take();
+        let seen: &[ronoctua_network::Network] =
+            wire.as_ref().map_or(&[], crate::network::Wire::seen);
+        let facts = crate::network::Facts {
+            net: &self.net,
+            seen,
+            watch: &self.network_watch,
+            tunnels: &self.tunnels,
+        };
+        let view = crate::network::View::fresh_at(&facts, want, &self.texts);
+        self.network_wire = wire;
+        self.open_network_with(view);
+    }
+
+    fn open_network_with(&mut self, view: crate::network::View) {
+        // THE SAME GUARD THE OTHER FIVE HAVE — see `region_is_free`.
+        if !self.region_is_free("network-open") {
+            return;
+        }
+        self.watch_scans();
+        self.network_wired();
+        if let Some(w) = self.network_wire.as_mut() {
+            w.reread();
+        }
+        self.network_reread();
+        // THE FIRST SAMPLE IS TAKEN AT OPENING, not on the first tick: the
+        // clock runs once a second, so without this the first frame drew "no
+        // ports", an empty neighbour list and an empty monitor for a whole
+        // second — three sections that are simply wrong, on the frame
+        // somebody is looking at hardest.
+        //
+        // AND THE RATES START HERE TOO. `Watch` is a field of the footer that
+        // outlives the view, so a second opening an hour later would have
+        // divided the bytes since the last sample by an hour and called it a
+        // rate.
+        self.network_watch.restart();
+        self.network_watch.sample();
+        self.network = Some(view);
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+    }
+
+    /// Makes sure there is a conversation with NetworkManager.
+    ///
+    /// LAZY on purpose: a machine whose owner never opens the list pays no
+    /// bus connection for it. The snapshot the modeline draws from arrives on
+    /// its own thread and needs nothing from here.
+    fn network_wired(&mut self) {
+        if self.network_wire.is_none() {
+            self.network_wire = Some(crate::network::Wire::fresh());
+        }
+    }
+
+    /// Re-reads the whole snapshot, right after an order.
+    ///
+    /// The watch thread would bring the same reading a moment later; this is
+    /// what makes the screen answer the key that was just pressed instead of
+    /// a quarter of a second afterwards.
+    fn network_reread(&mut self) {
+        if let Some(w) = self.network_wire.as_ref() {
+            self.net = w.look();
+        }
+    }
+
+    /// One key of the network view, wherever it came from.
+    ///
+    /// IT WORKS WITH THE VIEW CLOSED, and that is not an accident: `LEADER s
+    /// n s`, `s n r`, `s n d`, `s n i` and `s n a` are keys of the leader's
+    /// tree, and none of them needs a list on screen. A scratch view answers
+    /// for them; the ones that DO need a row (`RET`, `f`) find nothing under
+    /// the cursor of a view nobody opened, and do nothing.
+    fn network_press(&mut self, press: crate::network::Press) {
+        self.network_wired();
+        let open = self.network.is_some();
+        let mut view = self
+            .network
+            .take()
+            .unwrap_or_else(crate::network::View::fresh);
+        let wire = self.network_wire.take();
+        let seen: &[ronoctua_network::Network] =
+            wire.as_ref().map_or(&[], crate::network::Wire::seen);
+        let facts = crate::network::Facts {
+            net: &self.net,
+            seen,
+            watch: &self.network_watch,
+            tunnels: &self.tunnels,
+        };
+        let errand = view.key(press, &facts, &self.texts);
+        self.network_wire = wire;
+        if open {
+            self.network = Some(view);
+        }
+        // THE REGION FOLLOWS THE CURSOR, as it does for the power and the
+        // radio. Without this the cursor walked off the twelve lines and the
+        // page stayed on the first section: on this machine the view is some
+        // eighty rows, and holding `<down>` past the eleventh drew the same
+        // screen for ever — the ports, the neighbours and the monitor were
+        // unreachable from the keyboard.
+        self.follow_cursor();
+        self.network_errand(errand);
+    }
+
+    /// Carries out what the network view asked for.
+    ///
+    /// EVERY ORDER RE-READS, and says what happened on the message line: the
+    /// bus can refuse — polkit, a daemon on its way down — and a screen that
+    /// said "radio on" when it did not turn on would be the footer lying
+    /// about the hardware.
+    fn network_errand(&mut self, errand: crate::network::Errand) {
+        use ronoctua_i18n::key;
+        let Some(mut wire) = self.network_wire.take() else {
+            return;
+        };
+        let said = match errand {
+            crate::network::Errand::Nothing => None,
+            crate::network::Errand::Close => {
+                self.network = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                None
+            }
+            // THE SWEEP GOES ON A THREAD, and takes a second: it sends 254
+            // packets and waits for the slowest answer, which is a second
+            // the footer's one loop must not spend — the `systemd-run
+            // --scope` trap CLAUDE.md records.
+            crate::network::Errand::Discover => {
+                self.network_watch.read_vendors();
+                let address = crate::network::carrying(&self.net)
+                    .and_then(|l| l.address.clone())
+                    .or_else(|| self.net.links.iter().find_map(|l| l.address.clone()));
+                match (address, self.lan_sender.clone()) {
+                    (Some(address), Some(echo)) => {
+                        self.network_watch.sweeping(true);
+                        if let Err(e) = std::thread::Builder::new()
+                            .name("lan-sweep".to_owned())
+                            .spawn(move || {
+                                let found = ronoctua_lan::sweep(&address).unwrap_or_default();
+                                let _ = echo.send(found);
+                            })
+                        {
+                            tracing::warn!(error = %e, "no thread for the sweep");
+                            self.network_watch.sweeping(false);
+                        }
+                        None
+                    }
+                    // NO ADDRESS IS NO NETWORK TO SWEEP, and saying so beats
+                    // a key that looks broken.
+                    _ => Some(self.texts.t(key::ECHO_NETWORK_NO_LINK)),
+                }
+            }
+            // THE PATH IS TYPED IN THE MINIBUFFER, and comes back as this
+            // command's argument — the password's own path, and the only
+            // place anything is typed in this system.
+            crate::network::Errand::Ask => {
+                self.network_wire = Some(wire);
+                // NOT A SECRET: a path is typed to be READ back — the dots
+                // are for the password, and a person who cannot see what
+                // they typed cannot correct it.
+                self.mx.request("network-import", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            crate::network::Errand::Bring(path, kind) => {
+                let name = ronoctua_network::vpn::name_of(&path);
+                Some(match wire.import(&path, kind) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_IMPORTED, &[("network", &name)]),
+                    Err(e) => self.texts.t_with(
+                        key::ECHO_NETWORK_IMPORT_FAILED,
+                        &[("file", &name), ("reason", &e.to_string())],
+                    ),
+                })
+            }
+            // BECOMING THE NETWORK, and stopping. The password is made here,
+            // shown on the row and never stored by the footer: what keeps it
+            // is the profile NetworkManager wrote.
+            crate::network::Errand::Hotspot(true) => {
+                let name = crate::network::hostname();
+                match ronoctua_network::hotspot_password()
+                    .and_then(|word| wire.hotspot(&name, &word).map(|()| word))
+                {
+                    Ok(word) => {
+                        if let Some(v) = self.network.as_mut() {
+                            v.sharing(Some(word.clone()));
+                        }
+                        Some(self.texts.t_with(
+                            key::ECHO_NETWORK_HOTSPOT,
+                            &[("network", &name), ("password", &word)],
+                        ))
+                    }
+                    Err(e) => Some(self.texts.t_with(
+                        key::ECHO_NETWORK_HOTSPOT_FAILED,
+                        &[("reason", &e.to_string())],
+                    )),
+                }
+            }
+            crate::network::Errand::Hotspot(false) => {
+                if let Some(v) = self.network.as_mut() {
+                    v.sharing(None);
+                }
+                Some(self.texts.t(
+                    if wire.disconnect(ronoctua_network::Medium::Radio).is_ok() {
+                        key::ECHO_NETWORK_DISCONNECTED
+                    } else {
+                        key::ECHO_NETWORK_UNAVAILABLE
+                    },
+                ))
+            }
+            crate::network::Errand::Scan => {
+                self.watch_scans();
+                wire.scan();
+                self.first_page();
+                None
+            }
+            crate::network::Errand::Radio(on) => Some(self.texts.t(match wire.radio(on) {
+                Ok(()) if on => key::ECHO_NETWORK_RADIO_ON,
+                Ok(()) => key::ECHO_NETWORK_RADIO_OFF,
+                Err(_) => key::ECHO_NETWORK_UNAVAILABLE,
+            })),
+            crate::network::Errand::Airplane(on) => match wire.airplane(on) {
+                Ok(()) => {
+                    tracing::info!(airplane = on, "aeroplane mode");
+                    None
+                }
+                Err(e) => Some(
+                    self.texts
+                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                ),
+            },
+            crate::network::Errand::Disconnect(medium) => {
+                Some(self.texts.t(if wire.disconnect(medium).is_ok() {
+                    key::ECHO_NETWORK_DISCONNECTED
+                } else {
+                    key::ECHO_NETWORK_UNAVAILABLE
+                }))
+            }
+            // THE LINK'S FACTS, on the message line: band, rate and signal.
+            // It is the answer to "why is this slow?" without leaving the
+            // screen — and it was by measuring exactly that that this project
+            // found a 16x difference between two bands of the same router.
+            crate::network::Errand::Facts => Some(match crate::network::carrying(&self.net) {
+                Some(e) if e.medium == ronoctua_network::Medium::Wired => self.texts.t_with(
+                    key::ECHO_NETWORK_LINK_WIRED,
+                    &[
+                        ("network", &e.interface),
+                        ("rate", &crate::network::rate_of(e, &self.texts)),
+                    ],
+                ),
+                Some(e) => self.texts.t_with(
+                    key::ECHO_NETWORK_LINK,
+                    &[
+                        ("network", e.network.as_deref().unwrap_or(&e.interface)),
+                        ("band", &crate::network::band_text(e.band, &self.texts)),
+                        ("rate", &crate::network::rate_of(e, &self.texts)),
+                        ("signal", &format!("{}%", e.signal)),
+                    ],
+                ),
+                None => self.texts.t(key::ECHO_NETWORK_NO_LINK),
+            }),
+            crate::network::Errand::Forget(ssid) => Some(if wire.forget(&ssid).is_ok() {
+                self.texts
+                    .t_with(key::ECHO_NETWORK_FORGOTTEN, &[("network", &ssid)])
+            } else {
+                self.texts.t(key::ECHO_NETWORK_UNAVAILABLE)
+            }),
+            crate::network::Errand::Connect(target) => {
+                self.network_wire = Some(wire);
+                self.network_offer(&target);
+                return;
+            }
+            crate::network::Errand::Drop(at) => {
+                let name = Self::name_of_active(&self.net, &at);
+                Some(match wire.drop_it(&at) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_TUNNEL_DOWN, &[("network", &name)]),
+                    Err(e) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                })
+            }
+            crate::network::Errand::Raise(at) => {
+                let name = Self::name_of_saved(&self.net, &at);
+                Some(match wire.raise(&at) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_TUNNEL_UP, &[("network", &name)]),
+                    Err(e) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                })
+            }
+            // THE TUNNEL ORDERS GO TO THEIR OWN THREAD, which is where the
+            // sockets live: a `PATCH` to Tailscale and a `systemctl start`
+            // both take longer than a frame, and the footer's loop is one
+            // thread — the `systemd-run --scope` trap, again.
+            crate::network::Errand::Tunnel(order) => {
+                match self.tunnel_hand.as_ref() {
+                    Some(h) => h.send(order),
+                    None => {
+                        let said = self.texts.t(key::ECHO_NETWORK_UNAVAILABLE);
+                        self.echo_message(said);
+                    }
+                }
+                None
+            }
+            crate::network::Errand::Delete(at) => {
+                let name = Self::name_of_saved(&self.net, &at);
+                Some(match wire.delete(&at) {
+                    Ok(()) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_DELETED, &[("network", &name)]),
+                    Err(e) => self
+                        .texts
+                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                })
+            }
+        };
+        self.network_wire = Some(wire);
+        self.network_reread();
+        if let Some(m) = said {
+            self.echo_message(m);
+        }
+        self.draw_and_paint();
+    }
+
+    /// The name of one connection that is up — for the sentence about it.
+    fn name_of_active(net: &ronoctua_network::Snapshot, at: &str) -> String {
+        net.active
+            .iter()
+            .find(|a| a.at == at)
+            .map_or_else(|| at.to_owned(), |a| a.id.clone())
+    }
+
+    /// The name of one stored profile — for the sentence about it.
+    fn name_of_saved(net: &ronoctua_network::Snapshot, at: &str) -> String {
+        net.saved
+            .iter()
+            .find(|s| s.at == at)
+            .map_or_else(|| at.to_owned(), |s| s.id.clone())
+    }
+
+    /// Reads a file that might be a tunnel, and shows what it would do.
+    ///
+    /// A CEILING ON THE READ: a `.conf` is a page and an `.ovpn` with an
+    /// inline certificate is a few, so anything past a quarter of a megabyte
+    /// is not one of them — and reading a whole disk image into the footer's
+    /// memory to look for `[Interface]` in it is the defect this line is.
+    fn network_looked_at(&mut self, path: String) {
+        const CEILING: u64 = 256 * 1024;
+        let path = match path.strip_prefix("~/") {
+            Some(rest) => match std::env::var("HOME") {
+                Ok(home) => format!("{home}/{rest}"),
+                Err(_) => path,
+            },
+            None => path,
+        };
+        let name = ronoctua_network::vpn::name_of(&path);
+        let small = std::fs::metadata(&path).is_ok_and(|m| m.len() <= CEILING);
+        let text = small
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten()
+            .unwrap_or_default();
+        match ronoctua_network::vpn::preview(&path, &text) {
+            Some(preview) => {
+                if self.network.is_none() {
+                    self.open_network();
+                }
+                if let Some(v) = self.network.as_mut() {
+                    v.looked_at(path, preview);
+                }
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // NEITHER KIND IS A REFUSAL WITH A REASON, and not an import left
+            // to fail inside `nmcli` with a message about somebody else's
+            // parser.
+            None => {
+                let said = self.texts.t_with(
+                    ronoctua_i18n::key::ECHO_NETWORK_NOT_A_TUNNEL,
+                    &[("file", &name)],
+                );
+                self.echo_message(said);
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// `RET` on a network: ask for the password, or join.
+    ///
+    /// A SECURED NETWORK WITH NO PROFILE is the only one that asks, and it
+    /// asks in the minibuffer — which is why the window cannot do this and
+    /// says so instead. The answer comes back as `network-connect`'s
+    /// argument, into [`Self::network_join`].
+    fn network_offer(&mut self, target: &ronoctua_network::Network) {
+        if target.secured && !target.saved {
+            self.mx.request("network-connect", true);
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        self.network_join(None);
+    }
+
+    /// Joins the focused network, with the password when one was typed.
+    fn network_join(&mut self, password: Option<String>) {
+        use ronoctua_i18n::key;
+        let wire = self.network_wire.take();
+        let target = {
+            let seen: &[ronoctua_network::Network] =
+                wire.as_ref().map_or(&[], crate::network::Wire::seen);
+            let facts = crate::network::Facts {
+                net: &self.net,
+                seen,
+                watch: &self.network_watch,
+                tunnels: &self.tunnels,
+            };
+            self.network
+                .as_ref()
+                .and_then(|v| v.focused_network(&facts, &self.texts))
+        };
+        self.network_wire = wire;
+        let (Some(target), Some(wire)) = (target, self.network_wire.as_mut()) else {
+            return;
+        };
+        // IT CONNECTS WITHOUT STORING, and asks afterwards.
+        //
+        // `remember = false` here means `psk-flags=2`: nothing is persisted
+        // while the person has not said they want it. If they do say so, the
+        // answer's branch reconnects with `psk-flags=1` and seals. The
+        // opposite — storing and deleting if they refuse — would leave the
+        // password on disk in the meantime.
+        let result = wire.connect(&target.ssid, password.as_deref(), false);
+        if let (Ok(()), Some(typed)) = (&result, &password)
+            && target.secured
+        {
+            self.network_remember = Some((target.ssid.clone(), typed.clone()));
+        }
+        let m = match result {
+            Ok(()) => self
+                .texts
+                .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &target.ssid)]),
+            Err(e) => self.texts.t_with(
+                key::ECHO_NETWORK_FAILED,
+                &[("network", &target.ssid), ("reason", &e.to_string())],
+            ),
+        };
+        self.network_reread();
+        self.echo_message(m);
+        self.draw_and_paint();
     }
 
     fn launched(&mut self, v: crate::foreign::Launch) {
@@ -4794,7 +5875,7 @@ impl Footer {
 
         // THE STATES, from the same socket and in the same breath.
         //
-        // `SPC b s` only exists with MORE THAN ONE: a submenu offering the one
+        // `SPC w s` only exists with MORE THAN ONE: a submenu offering the one
         // state the buffer is already in is a key that teaches there is a choice
         // and then makes none — the same reason a window that publishes no
         // keymap has no `SPC m` row at all.
@@ -4829,7 +5910,7 @@ impl Footer {
             .collect()
     }
 
-    /// Handles a key inside `SPC b s`, and says whether it did.
+    /// Handles a key inside `SPC w s`, and says whether it did.
     ///
     /// Mirrors [`Self::buffer_key`], and for the same reason: the rows are built
     /// at runtime from what the focused window published, so they cannot live in
@@ -4838,10 +5919,14 @@ impl Footer {
         let typed = ronoctua_keymap::notation(&[key]);
 
         if !self.state_pending {
-            // Opening it: exactly `b` typed so far, `s` now, and a buffer with
-            // more than one state in focus.
-            let after_b = ronoctua_keymap::notation(self.leader.typed()) == "b";
-            if !(after_b && typed == "s" && !self.state_menu.is_empty()) {
+            // Opening it: exactly the prefix typed so far, the key now, and a
+            // buffer with more than one state in focus. The prefix is `w`,
+            // because the buffer's commands live under the window's letter —
+            // and it is read from the SAME constant the which-key row is
+            // grafted with (see `state_row`).
+            let after_prefix =
+                ronoctua_keymap::notation(self.leader.typed()) == crate::leader::STATE_PREFIX;
+            if !(after_prefix && typed == crate::leader::STATE_KEY && !self.state_menu.is_empty()) {
                 return false;
             }
             self.state_pending = true;
@@ -5036,6 +6121,16 @@ impl Footer {
 
     /// One notification, from arrival to the band.
     fn arrived(&mut self, mut n: ronoctua_notify::Notification, now: std::time::Instant) {
+        // AN ID OF ITS OWN, for the ones WE raise. The bus's daemon counts up
+        // from 1; a local one that kept the zero it was built with would be
+        // the same notification as every other local one, and `dismiss(id)`,
+        // `mark_read(id)` and an action's lookup all find by id — so a
+        // battery warning and a pairing question would answer each other's
+        // buttons. Counting DOWN from the top keeps the two ranges apart.
+        if n.id == 0 {
+            self.locally_raised = self.locally_raised.saturating_sub(1).max(1);
+            n.id = self.locally_raised;
+        }
         let p = self.book.decide(&n);
         // OUR SENTENCE, on a notification that arrived in English.
         //
@@ -5268,9 +6363,34 @@ impl Footer {
             return;
         }
 
-        // THE CLIPBOARD intercepts before the manual: with it open, the whole
-        // keyboard is its — `d` removes, and does not fire `LEADER d`.
-        if self.clipboard_open {
+        // THE MINIBUFFER'S QUESTION IS ABOVE EVERY VIEW.
+        //
+        // It is the ONE place where the region and the keyboard part company
+        // on purpose, and it is deliberate: joining a network asks for the
+        // password on the minibuffer LINE while the region keeps drawing the
+        // list somebody is joining. A question is a line, not a region.
+        //
+        // Four views used to carry `&& self.mx.asking_for().is_none()` to let
+        // the question win, and the other seven did not — so with the
+        // clipboard, the manual or the file manager open the question was
+        // drawn and could not be answered. One guard, at the top, for all of
+        // them.
+        if self.mx.asking_for().is_some() {
+            self.minibuffer_key(key);
+            return;
+        }
+
+        // FROM HERE ON EVERY BRANCH ASKS `view()`, and that is the whole
+        // point: `view()` is the one place the precedence is written, so two
+        // branches can never both match and the ORDER of the branches in this
+        // file stops being a second answer to the same question. Reading
+        // `self.clipboard_open` here — as this did — meant the clipboard took
+        // the keyboard while the region drew whatever `view()` ranked above
+        // it, which is the defect `ViewState` exists to prevent.
+        //
+        // THE CLIPBOARD: with it open, the whole keyboard is its — `d`
+        // removes, and does not fire `LEADER d`.
+        if self.view() == ViewState::Clipboard {
             self.clipboard_key(key.sym);
             return;
         }
@@ -5278,15 +6398,15 @@ impl Footer {
         // THE TRANSFER PANEL intercepts for the same reason: with it open the
         // whole keyboard is its, and `C-c` gives a transfer up rather than
         // reaching whatever `C-c` would otherwise mean.
-        if self.transfers.is_some() {
+        if self.view() == ViewState::Transfers {
             self.transfers_key(key);
             return;
         }
 
         // THE NOTIFICATION MANAGER intercepts for the same reason as the other
         // modals: with it open the whole keyboard is its, and `r` marks
-        // everything read rather than firing `SPC r`.
-        if self.notifications_open {
+        // everything read rather than starting a leader sequence.
+        if self.view() == ViewState::Notifications {
             self.manager_key(key);
             return;
         }
@@ -5294,7 +6414,7 @@ impl Footer {
         // THE APPLICATIONS intercept for the same reason as the other modals:
         // with the list open the whole keyboard is its — typing `f` filters, and
         // does not fire `SPC f`.
-        if self.apps.is_some() {
+        if self.view() == ViewState::Applications {
             self.apps_key(key);
             return;
         }
@@ -5319,41 +6439,30 @@ impl Footer {
         // there is no conflict, because with the list open and the password
         // prompt asking, whoever answers is the `M-x`. That is why the test of
         // the prompt comes first.
-        if self.network.is_some() && self.mx.asking_for().is_none() {
+        if self.view() == ViewState::Network {
             use ronoctua_keymap::Sym;
-            match key.sym {
-                Sym::Esc => {
-                    self.network = None;
-                    self.first_page();
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Sym::Down | Sym::Up => {
-                    let step = if key.sym == Sym::Down { 1 } else { -1 };
-                    if let Some(v) = self.network.as_mut() {
-                        v.move_by(step);
-                    }
-                    self.draw_and_paint();
-                }
-                // THE VIEW'S KEYS come out of the SAME table the manual reads and
-                // that the orphan check consults — `leader::OF_NETWORK_VIEW`.
-                // A `match` written by hand here would be the second truth this
-                // project has already paid not to have.
+            // THE VIEW'S KEYS come out of the SAME table the manual reads,
+            // that the hint line is generated from and that the orphan check
+            // consults — `network::OF_THE_VIEW`. A `match` written by hand
+            // here would be the second truth this project has already paid
+            // not to have. A key outside the table does nothing and does NOT
+            // close the view: closing on a wrong key would lose the place in
+            // the list.
+            let press = match key.sym {
+                Sym::Esc => Some(crate::network::Press::Escape),
+                Sym::Up => Some(crate::network::Press::Up),
+                Sym::Down => Some(crate::network::Press::Down),
+                Sym::Enter => Some(crate::network::Press::Enter),
                 otherwise => {
-                    // THE SAME NOTATION the table uses, by the same path as the
-                    // clipboard. A key outside the table does nothing and does NOT
-                    // close the view: closing on a wrong key would lose the place
-                    // in the list.
                     let notation = ronoctua_keymap::Key::simple(otherwise).notation();
-                    if let Some((_, id)) = crate::leader::OF_NETWORK_VIEW
+                    crate::network::OF_THE_VIEW
                         .iter()
                         .find(|(t, _)| *t == notation)
-                    {
-                        self.run_command(id);
-                    }
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
+                        .and_then(|(_, id)| crate::network_words::press_of(id))
                 }
+            };
+            if let Some(press) = press {
+                self.network_press(press);
             }
             return;
         }
@@ -5362,7 +6471,7 @@ impl Footer {
         // moving the cursor is a PREVIEW, so the theme is set on the way and put
         // back on `Esc`. See `theme_chooser.rs` for why the preview is this
         // door's alone.
-        if self.theme_chooser.is_some() && self.mx.asking_for().is_none() {
+        if self.view() == ViewState::Themes {
             use ronoctua_keymap::Sym;
             match key.sym {
                 Sym::Esc => {
@@ -5417,6 +6526,53 @@ impl Footer {
             return;
         }
 
+        // THE BLUETOOTH VIEW: the arrows, `RET`, `Esc` and TWELVE BARE
+        // LETTERS — nothing is typed here, so a letter is free. The letters
+        // are read out of `bluetooth::OF_THE_VIEW` by NOTATION, which is
+        // what keeps the table and the keyboard from drifting apart: a row
+        // added there is a key that works, and a key here that is not there
+        // is a key nothing teaches.
+        if self.view() == ViewState::Bluetooth {
+            use ronoctua_keymap::Sym;
+            let press = match key.sym {
+                Sym::Esc => Some(crate::bluetooth::Press::Escape),
+                Sym::Up => Some(crate::bluetooth::Press::Up),
+                Sym::Down => Some(crate::bluetooth::Press::Down),
+                Sym::Enter => Some(crate::bluetooth::Press::Enter),
+                otherwise => {
+                    let notation = ronoctua_keymap::Key::simple(otherwise).notation();
+                    crate::bluetooth::OF_THE_VIEW
+                        .iter()
+                        .find(|(t, _, _)| *t == notation)
+                        .and_then(|(_, id, _)| crate::bluetooth_words::press_of(id))
+                }
+            };
+            if let Some(press) = press {
+                self.bluetooth_press(press);
+            }
+            return;
+        }
+
+        // THE POWER VIEW: five gestures, all of them the view's — see
+        // `power::OF_THE_VIEW`. A key outside the table is swallowed, as every
+        // modal swallows the keyboard it holds.
+        if self.view() == ViewState::Power {
+            use ronoctua_keymap::Sym;
+            let press = match key.sym {
+                Sym::Esc => Some(crate::power::Press::Escape),
+                Sym::Up => Some(crate::power::Press::Up),
+                Sym::Down => Some(crate::power::Press::Down),
+                Sym::Left => Some(crate::power::Press::Left),
+                Sym::Right => Some(crate::power::Press::Right),
+                Sym::Enter => Some(crate::power::Press::Enter),
+                _ => None,
+            };
+            if let Some(press) = press {
+                self.power_press(press);
+            }
+            return;
+        }
+
         // THE FILE MANAGER intercepts before the leader, and before the rest of
         // the modals for the same reason `view()` ranks it first: it holds a
         // directory somebody navigated to, a set of marks and possibly an armed
@@ -5427,7 +6583,7 @@ impl Footer {
         // keys are NOT commands of the registry — they navigate a listing. The
         // table that a check reads is `files::OF_THE_VIEW`, and the unit test
         // beside it presses every key in it.
-        if self.files.is_some() {
+        if self.view() == ViewState::Files {
             let step = self
                 .files
                 .as_mut()
@@ -5440,7 +6596,7 @@ impl Footer {
         // SCROLL, and an arrow that fell into the keymap would end the leader
         // by unknown sequence — the manual would close by itself on the first
         // gesture of reading.
-        if self.manual {
+        if self.view() == ViewState::Manual {
             use ronoctua_keymap::Sym;
             match key.sym {
                 Sym::Esc => {
@@ -5466,49 +6622,10 @@ impl Footer {
             return;
         }
 
-        // The `M-x` intercepts BEFORE the leader: with it open, the whole
-        // keyboard is its — typing `f` filters, and does not fire `SPC f`.
-        if self.mx.active() {
-            use crate::minibuffer::Action;
-            match self.mx.key(key, &self.command_registry) {
-                Action::Nothing => {}
-                Action::Changed => {
-                    // REDRAW HERE, AND NOT ONLY RE-COMMIT THE SIZE.
-                    //
-                    // THE DEFECT THIS WAS: `apply_geometry` only asks for the
-                    // size; whoever paints is the `configure` that comes back — and
-                    // the compositor only sends it when the height CHANGES. With the
-                    // list at the ceiling, filtering from 172 down to 40 candidates
-                    // changes no height at all, and moving the cursor does not
-                    // either. Result: typing did not filter on screen and the arrow
-                    // did not go down, and everything showed up at once when the
-                    // mouse moved — which is the only other thing that painted.
-                    self.follow_cursor();
-                    self.apply_geometry(KeyboardInteractivity::Exclusive);
-                    self.draw_and_paint();
-                }
-                Action::Closed => {
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Action::Run(id) => {
-                    tracing::info!(command = id, "command run by the finder");
-                    self.run_command(&id);
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Action::Selected(id) => {
-                    self.select_item(&id);
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-                Action::RunWith(id, arg) => {
-                    tracing::info!(command = id, argument = %arg, "a command with an argument");
-                    self.run_with(&id, Some(&arg));
-                    self.apply_geometry(self.interactivity());
-                    self.draw_and_paint();
-                }
-            }
+        // THE `M-x` FINDER, when it is what `view()` ranks: with it open the
+        // whole keyboard is its — typing `f` filters, and does not fire `SPC f`.
+        if self.view() == ViewState::Commands {
+            self.minibuffer_key(key);
             return;
         }
 
@@ -5528,9 +6645,9 @@ impl Footer {
         // two or three keys deep.
         // THE STATE SUBMENU, before the buffer's keymap and before the tree.
         //
-        // Before the tree because `b s` is not in it — the rows come from what
+        // Before the tree because `w s` is not in it — the rows come from what
         // the focused window declared. Before `buffer_key` because that one only
-        // opens at the ROOT of the sequence, and this one opens after `b`; the
+        // opens at the ROOT of the sequence, and this one opens after `w`; the
         // order costs nothing and keeps each check about its own level.
         if self.state_key(key) {
             self.draw_and_paint();
@@ -5544,6 +6661,60 @@ impl Footer {
         let effect = self.leader.key(&self.tree, key);
         self.apply_leader_effect_with(effect, Some(&attempt), key.sym);
         self.draw_and_paint();
+    }
+
+    /// The `M-x` finder's key — and the minibuffer's question's.
+    ///
+    /// # Why it is a method and not a branch
+    ///
+    /// Because it is reached from TWO places, and they are not the same
+    /// question. `view()` returning [`ViewState::Commands`] means the
+    /// finder owns the region; `mx.asking_for()` being `Some` means a
+    /// view already owns the region and the minibuffer is asking a
+    /// question on its line — joining a network asks for the password
+    /// while the list stays drawn. Both give the keyboard to this, and
+    /// writing it twice would be two answers for one keystroke.
+    fn minibuffer_key(&mut self, key: ronoctua_keymap::Key) {
+        use crate::minibuffer::Action;
+        match self.mx.key(key, &self.command_registry) {
+            Action::Nothing => {}
+            Action::Changed => {
+                // REDRAW HERE, AND NOT ONLY RE-COMMIT THE SIZE.
+                //
+                // THE DEFECT THIS WAS: `apply_geometry` only asks for the
+                // size; whoever paints is the `configure` that comes back — and
+                // the compositor only sends it when the height CHANGES. With the
+                // list at the ceiling, filtering from 172 down to 40 candidates
+                // changes no height at all, and moving the cursor does not
+                // either. Result: typing did not filter on screen and the arrow
+                // did not go down, and everything showed up at once when the
+                // mouse moved — which is the only other thing that painted.
+                self.follow_cursor();
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            Action::Closed => {
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            Action::Run(id) => {
+                tracing::info!(command = id, "command run by the finder");
+                self.run_command(&id);
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            Action::Selected(id) => {
+                self.select_item(&id);
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            Action::RunWith(id, arg) => {
+                tracing::info!(command = id, argument = %arg, "a command with an argument");
+                self.run_with(&id, Some(&arg));
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+        }
     }
 
     /// Starts, or stops, the thread that draws a shape.
@@ -5755,9 +6926,9 @@ impl Footer {
         };
         let m = if yes {
             match self
-                .network
+                .network_wire
                 .as_mut()
-                .map(|v| v.connect(&ssid, Some(&password), true))
+                .map(|w| w.connect(&ssid, Some(&password), true))
             {
                 Some(Ok(())) => self.texts.t_with(
                     ronoctua_i18n::key::ECHO_NETWORK_STORED,
@@ -5777,6 +6948,54 @@ impl Footer {
         self.draw_and_paint();
     }
 
+    /// May another view take the footer's region right now?
+    ///
+    /// ONE ANSWER FOR SIX DOORS, and it says NO for the same reason each
+    /// time: whoever holds the region holds state a person built by hand — a
+    /// search, a selection, a menu, an armed confirmation — and the region's
+    /// height, grid and pointer arithmetic are its while it is open. A second
+    /// view drawn over that is a keyboard stolen from a listing that stays on
+    /// screen.
+    ///
+    /// AND IT SAYS SO ON THE MESSAGE LINE. Four of these doors used to
+    /// `return` after a `tracing::info!`, which from the outside is a click
+    /// that did nothing at all — no pixel, no sentence, nothing to look up.
+    ///
+    /// # Why it asks about EVERY view, and not only the file manager
+    ///
+    /// It used to be `self.files.is_none()`, which made the promise above true
+    /// of exactly one of the ten. Everything else could be opened underneath
+    /// anything else: clicking the battery mark with the radio's view up built
+    /// a second live view under the drawn one, and the two `Esc`es it then
+    /// took to leave were the only sign. `view()` is the one place the
+    /// precedence is written, so it is the one place this can ask.
+    ///
+    /// [`ViewState::Leader`] and [`ViewState::NoneOf`] are not holders: the
+    /// leader is a sequence being typed, and every one of these doors is
+    /// reached BY that sequence — refusing there would refuse every key in
+    /// the keymap. [`ViewState::Commands`] is the same gesture through
+    /// `M-x`.
+    fn region_is_free(&mut self, what: &str) -> bool {
+        let holder = match self.view() {
+            ViewState::NoneOf | ViewState::Leader | ViewState::Commands => return true,
+            held => held,
+        };
+        tracing::info!(
+            view = what,
+            held = ?holder,
+            "refused: another view is open in the footer"
+        );
+        // THE SENTENCE IS ABOUT "ANOTHER VIEW", and it used to name the file
+        // manager — true while that was the only view this refused for, and
+        // false the day it refused for the other nine. Naming WHICH one would
+        // be a text key per view to keep in step with the enum; what a person
+        // needs is the same in every case, and it is `Esc`.
+        let said = self.texts.t(ronoctua_i18n::key::ECHO_VIEW_BUSY);
+        self.echo_message(said);
+        self.draw_and_paint();
+        false
+    }
+
     /// Opens or closes the notification manager.
     ///
     /// It uses THE surface, in the expanded region — below the modeline +
@@ -5791,7 +7010,18 @@ impl Footer {
     /// a cursor nobody can move is a view that only the mouse reaches, which is
     /// the one thing this footer refuses.
     fn toggle_manager(&mut self) {
+        // THE SAME GUARD THE OTHER FIVE HAVE. Without it, clicking the bell
+        // with the file manager open put the manager's keyboard over a
+        // listing that stayed on screen: `d` forgot a NOTIFICATION, `r`
+        // marked everything read, and the arrows moved a cursor nobody could
+        // see. Closing is always allowed — that is the way out.
+        if !self.notifications_open && !self.region_is_free("notif-open") {
+            return;
+        }
         self.notifications_open = !self.notifications_open;
+        // ITS OWN FIELD, and not `view()`: this runs while the leader's
+        // sequence is still on screen, so `view()` answers `Leader` here and
+        // the manager would keep the cursor of the last time it was open.
         if self.notifications_open {
             self.manager = crate::notifications::View::fresh();
         }
@@ -5840,6 +7070,9 @@ impl Footer {
             Sym::Down => Press::Down,
             Sym::Left => Press::Left,
             Sym::Right => Press::Right,
+            // `S-TAB` arrives as `Tab` with the shift the key reader kept —
+            // `key_of` counts it for the one keysym that IS the shift applied.
+            Sym::Tab if key.mods.shift => Press::BackTab,
             Sym::Tab => Press::Tab,
             Sym::Enter => Press::Enter,
             Sym::Space => Press::Space,
@@ -5859,6 +7092,16 @@ impl Footer {
     /// Carries out what the manager asked for.
     fn manager_errand(&mut self, errand: crate::notifications::Errand) {
         use crate::notifications::Errand;
+        // THE LISTS CAN SHRINK UNDER THE CURSOR — `d` forgets the row it is
+        // on — so whatever this does, the cursor is put back on a row that
+        // exists and the region is scrolled to it. Doing it at the end covers
+        // every arm at once, including the ones that arrive from the mouse.
+        let settle = |me: &mut Self| {
+            let records = me.notifications.history().to_vec();
+            let lists = crate::notifications::Lists::of(&records, &me.book);
+            me.manager.settle(&lists);
+            me.follow_cursor();
+        };
         match errand {
             Errand::Nothing => {}
             Errand::Read(id) => {
@@ -5881,7 +7124,36 @@ impl Footer {
                 self.after_the_queue_moved();
             }
             Errand::ReadAll => {
-                self.notifications.mark_all_read();
+                // THE SAME SENTENCE, ONE AT A TIME.
+                //
+                // `Errand::Read` tells the application `NotificationClosed(
+                // ByHand)`; this used to tell it nothing at all, so "mark this
+                // one read" and "mark them all read" were two different
+                // contracts for one word. An application that clears its own
+                // badge on that signal cleared it for one and not for twenty.
+                //
+                // AND IT NEVER MARKS A SUPPRESSED ONE, which is the other half
+                // of the same disagreement: `Space` refuses that column
+                // because a suppressed record is already off the count, and
+                // this used to sweep it in anyway — closing, on the bus, a
+                // notification the person was never shown.
+                let ids: Vec<u32> = self
+                    .notifications
+                    .history()
+                    .iter()
+                    .filter(|r| {
+                        !r.read && !matches!(r.presentation.show, ronoctua_notify::Show::Hidden)
+                    })
+                    .map(|r| r.notification.id)
+                    .collect();
+                for id in ids {
+                    if self.notifications.mark_read(id) {
+                        ronoctua_notify::dbus::notification_was_closed(
+                            id,
+                            ronoctua_notify::dbus::Closed::ByHand,
+                        );
+                    }
+                }
                 self.after_the_queue_moved();
             }
             Errand::Forget(id) => {
@@ -5907,8 +7179,12 @@ impl Footer {
                 tracing::info!(id = %id, "notification preference saved");
                 self.draw_and_paint();
             }
-            Errand::Close => self.toggle_manager(),
+            Errand::Close => {
+                self.toggle_manager();
+                return;
+            }
         }
+        settle(self);
     }
 
     /// Runs action `which` of the notification with this id.
@@ -6103,6 +7379,14 @@ impl Footer {
             ViewState::Network
         } else if self.theme_chooser.is_some() {
             ViewState::Themes
+        } else if self.bluetooth.is_some() {
+            // ABOVE THE POWER VIEW, and the key branch says the same: a
+            // pairing question is the one thing on this list that another
+            // machine is waiting on, and the two rankings have to agree or
+            // the footer draws one view while the keyboard drives the other.
+            ViewState::Bluetooth
+        } else if self.power.is_some() {
+            ViewState::Power
         } else if self.files.is_some() {
             // ABOVE THE LOCATOR AND THE LEADER, because it holds state a
             // person built by hand: a directory navigated to, a set of marks,
@@ -6852,10 +8136,18 @@ impl Footer {
                 .collect();
         }
 
-        // THE FILE MANAGER FIRST, matching `view()`'s own order — the one place
-        // the precedence is written. A branch here that disagreed with that
-        // function is exactly the divergence `ViewState` exists to prevent.
-        if self.files.is_some() {
+        // THE FILE MANAGER, ASKED OF `view()` — the one place the precedence
+        // is written. This used to read its own field, and "first, matching
+        // `view()`'s own order" was a promise the branch ORDER kept by hand:
+        // `view()` ranks the clipboard, the panel, the manual, the locator,
+        // the network and the theme chooser ABOVE the manager, and every one
+        // of them was written BELOW this line. With the clipboard open and the
+        // manager open the keyboard was the clipboard's and the region drew
+        // the manager.
+        //
+        // Now every branch in this function asks `view()`, so at most one can
+        // match and the order they appear in stops being an answer at all.
+        if self.view() == ViewState::Files {
             // THROUGH THE SAME BUILDER THE DRAWING USES.
             //
             // This branch had a second copy of it — chrome chained in front of
@@ -6909,7 +8201,7 @@ impl Footer {
         }
         // THE CLIPBOARD beats everything else: like the manual and the `M-x`, it
         // captured the whole keyboard, and the region is its while it is open.
-        if self.clipboard_open {
+        if self.view() == ViewState::Clipboard {
             if self.clipboard.how_many() == 0 {
                 return vec![ExpansionRow {
                     text: self.texts.t("clipboard-empty"),
@@ -6959,7 +8251,7 @@ impl Footer {
                 .collect();
         }
         // THE MANUAL wins: it captured the whole keyboard, like the `M-x`.
-        if self.manual {
+        if self.view() == ViewState::Manual {
             return crate::manual::assemble(&self.texts, &crate::leader_chord())
                 .into_iter()
                 .map(|l| ExpansionRow {
@@ -6982,7 +8274,11 @@ impl Footer {
         // columns: the glyph, the name (with the search highlight) and the
         // description — which the drawing elides, because `Comment` is prose and
         // does not fit.
-        if let Some(l) = &self.apps {
+        if let Some(l) = self
+            .apps
+            .as_ref()
+            .filter(|_| self.view() == ViewState::Applications)
+        {
             if l.total() == 0 {
                 // THE SWEEP HAS NOT ARRIVED YET (or found nothing). Saying that
                 // is better than an empty region, which is indistinguishable
@@ -7050,12 +8346,20 @@ impl Footer {
         // THE NETWORK. It comes after the finder and before the `M-x` — the
         // precedence of the views lives only in `Footer::view()`, and this
         // order here only follows it.
-        if let Some(v) = &self.network {
+        if let Some(v) = self
+            .network
+            .as_ref()
+            .filter(|_| self.view() == ViewState::Network)
+        {
             // THE QUESTION COMES AT THE TOP, with the list below it.
             //
             // In the list's place, and not over it: whoever has just connected
-            // needs to see which network is being talked about. A question alone
-            // on an empty screen would lose the context the line itself gives.
+            // needs to see which network is being talked about. A question
+            // alone on an empty screen would lose the context the line gives.
+            //
+            // IT IS THE FOOTER'S AND NOT THE VIEW'S: the password it is about
+            // lives here for the span of one key, and a view drawn by two
+            // doors must not carry it. The window says where to answer.
             let mut header = Vec::new();
             if let Some((ssid, _)) = &self.network_remember {
                 header.push(ExpansionRow {
@@ -7067,91 +8371,41 @@ impl Footer {
                     ..ExpansionRow::empty_one()
                 });
             }
-            let lines = v.lines();
-            if lines.is_empty() {
-                // THREE DIFFERENT EMPTIES, and not one generic "no networks".
-                //
-                // Node bus, no radio and radio switched off have different fixes:
-                // the first has none, the second none either, and the third is
-                // one key. A single text for all three would send the person
-                // looking in the wrong place.
-                let key = if !v.available() {
-                    ronoctua_i18n::key::ECHO_NETWORK_UNAVAILABLE
-                } else if !v.tem_radio() {
-                    ronoctua_i18n::key::NETWORK_NO_ADAPTER
-                } else if v.radio_on() {
-                    ronoctua_i18n::key::NETWORK_EMPTY
-                } else {
-                    ronoctua_i18n::key::NETWORK_RADIO_OFF
-                };
-                header.push(ExpansionRow {
-                    text: self.texts.t(key),
-                    text_color: tokens::color::TEXT_DIM,
-                    ..ExpansionRow::empty_one()
-                });
-                return header;
-            }
-            header.extend(lines.into_iter().enumerate().map(|(i, l)| {
-                let focus = i == v.cursor();
-                let (icon, key, text) = match &l {
-                    crate::network::Line::Wired {
-                        interface,
-                        state,
-                        rate_kbps,
-                    } => (
-                        tokens::icon::ETHERNET,
-                        interface.clone(),
-                        if *state == ronoctua_network::State::Connected {
-                            format!(
-                                "{} · {}",
-                                self.texts.t(ronoctua_i18n::key::NETWORK_WIRED),
-                                ronoctua_network::readable_rate(*rate_kbps)
-                            )
-                        } else {
-                            self.texts.t(ronoctua_i18n::key::NETWORK_WIRED)
-                        },
-                    ),
-                    crate::network::Line::Wireless(r) => {
-                        // THE PADLOCK ONLY ON THE SECURED ONE. An open network gets
-                        // the absence of a padlock, and not an open padlock: the
-                        // column already says so by being empty.
-                        let mut parts = vec![r.band.label().to_owned()];
-                        if r.active_one {
-                            parts.push(self.texts.t(ronoctua_i18n::key::NETWORK_CONNECTING));
-                        } else if r.saved {
-                            parts.push(self.texts.t(ronoctua_i18n::key::NETWORK_SAVED));
-                        } else if !r.secured {
-                            parts.push(self.texts.t(ronoctua_i18n::key::NETWORK_OPEN));
-                        }
-                        (signal_bars(r.signal), r.ssid.clone(), parts.join(" · "))
-                    }
-                };
-                ExpansionRow {
-                    icon: Some(icon),
-                    key,
-                    text,
-                    key_flush_right: false,
-                    // Node `:` between name and detail: the column already separates
-                    // them, and the `:` would assert a relation that does not exist.
-                    separator: false,
-                    click: Some(Click::Network(i)),
-                    key_color: if focus {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        tokens::color::TEXT_PRIMARY
-                    },
-                    text_color: if focus {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        tokens::color::TEXT_DIM
-                    },
-                    ..ExpansionRow::empty_one()
-                }
-            }));
+            // AND THE VIEW'S ROWS, as `fields` — the power view's arrangement,
+            // and for its reason: two columns of its own.
+            let width = self.screen_columns();
+            let wire = self.network_wire.as_ref();
+            let seen: &[ronoctua_network::Network] = wire.map_or(&[], crate::network::Wire::seen);
+            let facts = crate::network::Facts {
+                net: &self.net,
+                seen,
+                watch: &self.network_watch,
+                tunnels: &self.tunnels,
+            };
+            header.extend(
+                v.rows(&facts, width, &self.texts)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, r)| ExpansionRow {
+                        click: (!r.heading).then_some(Click::Network(n)),
+                        fields: r.fields,
+                        foot: false,
+                        ..ExpansionRow::empty_one()
+                    }),
+            );
             return header;
         }
 
-        if let Some(id) = self.mx.asking_for() {
+        // THE ARGUMENT'S QUESTION, and ONLY when the finder is what `view()`
+        // ranks. Without the guard this branch caught every question in the
+        // system: a network's password, a device's new name, a path to import
+        // — each of them asked while ANOTHER view owned the region — and drew
+        // a command's description over the list somebody was reading.
+        if let Some(id) = self
+            .mx
+            .asking_for()
+            .filter(|_| self.view() == ViewState::Commands)
+        {
             // ASKING FOR AN ARGUMENT: the candidate list disappears (the choice
             // has already been made) and what stays in the region is the chosen
             // command's description — which is the only thing that helps decide
@@ -7165,7 +8419,7 @@ impl Footer {
                 ..ExpansionRow::empty_one()
             }];
         }
-        if self.mx.active() {
+        if self.view() == ViewState::Commands {
             return self
                 .mx
                 .candidates()
@@ -7222,7 +8476,7 @@ impl Footer {
                 })
                 .collect();
         }
-        if self.leader.active_one() {
+        if self.view() == ViewState::Leader {
             return self
                 .inputs
                 .iter()
@@ -7257,7 +8511,48 @@ impl Footer {
                 })
                 .collect();
         }
-        if self.notifications_open {
+        if self.view() == ViewState::Bluetooth
+            && let Some(v) = self.bluetooth.as_ref()
+        {
+            // THE BLUETOOTH VIEW'S ROWS, as `fields` — the power view's
+            // arrangement, and for its reason: two columns of its own.
+            let width = self.screen_columns();
+            return v
+                .rows(&self.bluetooth_scene, width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Bluetooth(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Power
+            && let Some(v) = self.power.as_ref()
+        {
+            // THE POWER VIEW'S ROWS, as `fields` — its own columns, the
+            // manager's precedent. A heading is not a row to click on.
+            let width = self.screen_columns();
+            return v
+                .rows(
+                    self.power_snapshot.as_ref(),
+                    self.power_wanted,
+                    width,
+                    &self.texts,
+                )
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Power(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Notifications {
             return self.manager_rows();
         }
         Vec::new()
@@ -7270,13 +8565,10 @@ impl Footer {
     /// same row out a second time with a different answer. It is the shape the
     /// file manager's listing already uses, for the same reason.
     fn manager_rows(&self) -> Vec<ExpansionRow> {
-        let width = self
-            .screens
-            .iter()
-            .find(|t| t.configured && t.width > 0)
-            .map_or(80, |t| {
-                tokens::metrics::columns(t.width as f32, tokens::font::SIZE_BASE)
-            });
+        // THE SAME WIDTH EVERY OTHER VIEW ASKS FOR. This used to work it out
+        // again from the screen list — the same arithmetic in a second place,
+        // which is how two views come to lay out for different widths.
+        let width = self.screen_columns();
         let records = self.notifications.history();
         let lists = crate::notifications::Lists::of(records, &self.book);
         self.manager
@@ -7926,6 +9218,9 @@ impl Footer {
     /// in is a machine's preference (invariant 13). A name that is not there
     /// lands in the home rather than on an error.
     fn open_files(&mut self) {
+        if !self.region_is_free("files-open") {
+            return;
+        }
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let preferred = std::env::var("RONOCTUA_FILES_START").ok();
         let start = ronoctua_files::listing::start_at(home.as_deref(), preferred.as_deref());
@@ -8456,8 +9751,55 @@ impl Footer {
                 self.draw_and_paint();
             }
             Some(Click::Network(n)) => {
-                if let Some(v) = self.network.as_mut() {
-                    v.focus_on(n);
+                // THE MOUSE AIMS, THE KEYS ACT — the power view's rule, and
+                // the same reason: forgetting a network is not one click away.
+                let width = self.screen_columns();
+                let wire = self.network_wire.take();
+                let seen: &[ronoctua_network::Network] =
+                    wire.as_ref().map_or(&[], crate::network::Wire::seen);
+                let rows = self.network.as_ref().map(|v| {
+                    v.rows(
+                        &crate::network::Facts {
+                            net: &self.net,
+                            seen,
+                            watch: &self.network_watch,
+                            tunnels: &self.tunnels,
+                        },
+                        width,
+                        &self.texts,
+                    )
+                });
+                if let (Some(v), Some(rows)) = (self.network.as_mut(), rows) {
+                    v.clicked(n, &rows);
+                }
+                self.network_wire = wire;
+                self.draw_and_paint();
+            }
+            Some(Click::Bluetooth(n)) => {
+                // THE MOUSE AIMS, THE KEYS ACT — the power view's rule, and
+                // the same reason: forgetting a device is not one click away.
+                let width = self.screen_columns();
+                let scene = std::mem::take(&mut self.bluetooth_scene);
+                if let Some(v) = self.bluetooth.as_mut() {
+                    let rows = v.rows(&scene, width, &self.texts);
+                    v.clicked(n, &rows);
+                }
+                self.bluetooth_scene = scene;
+                self.draw_and_paint();
+            }
+            Some(Click::Power(n)) => {
+                // THE MOUSE AIMS, THE KEYS ACT: a click puts the cursor on the
+                // row, and `RET` is what applies, arms and confirms — the four
+                // things here that empty the screen are not one click away.
+                let width = self.screen_columns();
+                if let Some(v) = self.power.as_mut() {
+                    let rows = v.rows(
+                        self.power_snapshot.as_ref(),
+                        self.power_wanted,
+                        width,
+                        &self.texts,
+                    );
+                    v.clicked(n, &rows);
                     self.draw_and_paint();
                 }
             }
@@ -8607,7 +9949,7 @@ impl Footer {
     // NOT `const` any more: `asking_for` now returns `Option<&str>` over an owned
     // `String`, because the locator's items are dynamic — a buffer's id is not a
     // `&'static str`. A `const fn` cannot deref that, and the alternative would be
-    // keeping the whole locator on static ids, which is what kept `LEADER b b`
+    // keeping the whole locator on static ids, which is what kept `LEADER w w`
     // from existing.
     fn list_cursor(&self) -> Option<usize> {
         match self.view() {
@@ -8632,6 +9974,8 @@ impl Footer {
                 .theme_chooser
                 .as_ref()
                 .map(crate::theme_chooser::View::row),
+            ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
+            ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
             // The manager's cursor, so the region scrolls with it — the same
             // `scrolloff` the locator uses. A listing that does not follow its
             // own cursor is a listing where holding `j` walks off the bottom.
@@ -9063,7 +10407,7 @@ impl Footer {
         let files_frame = self.files.as_ref().and_then(crate::files::View::live_frame);
 
         let segments = self.segments_now();
-        let mini_repouso = crate::minibuffer_at_rest();
+        let mini_at_rest = crate::minibuffer_at_rest();
         // THE PROMPT OF THE MINIBUFFER'S LINE, from either of the two
         // finders.
         //
@@ -9079,7 +10423,7 @@ impl Footer {
         // has to add is what was typed.
         let prompt_mx = match &self.apps {
             Some(l) => Some(l.query().to_owned()),
-            None => self.mx.active().then(|| self.mx.prompt()),
+            None => self.mx.active().then(|| self.mx.asking(&self.texts)),
         };
 
         // AND THE HINT, WHICH IS NOT A PROMPT — its own thing, on the same line.
@@ -9119,20 +10463,56 @@ impl Footer {
             &self.theme_chooser,
             &self.texts,
         );
+        let (notifications_open, manager) = (self.notifications_open, &self.manager);
+        // THE LISTS THE COUNTER MEASURES, taken here with the rest: the
+        // closure below borrows and cannot reach back into `self`.
+        let (records, book) = (self.notifications.history(), &self.book);
+        let power = &self.power;
+        let bluetooth = &self.bluetooth;
+        let network = &self.network;
+        // AND WHICH VIEW IS ON SCREEN, decided in the ONE place that decides
+        // it. The chain below used to ask in its own order — power, then the
+        // radio, then the network — while `Footer::view()` ranks them the
+        // other way about, so with two open at once the region drew one view
+        // and the line above it taught another's keys. A pairing question
+        // arriving over the power view was enough.
+        let showing = self.view();
         let hint = move || {
-            files
-                .as_ref()
-                .filter(|v| v.plain() && !v.filtering())
-                .map(|v| v.hint(texts))
-                // AND THE TRANSFER PANEL'S, for the same reason: its keys are
-                // chords that nothing on the row spells out, and a panel whose
-                // only way to find `C-c` is the manual is a panel where nobody
-                // ever stops anything.
-                .or_else(|| transfers.as_ref().map(|v| v.hint(texts)))
-                // AND THE THEME CHOOSER'S: `RET` applies, `Esc` goes back, and
+            match showing {
+                // THE FILE MANAGER teaches its own keys, and only while it is
+                // plain: filtering and the menu have their own lines.
+                ViewState::Files => files
+                    .as_ref()
+                    .filter(|v| v.plain() && !v.filtering())
+                    .map(|v| v.hint(texts)),
+                // THE TRANSFER PANEL: its keys are chords that nothing on the
+                // row spells out, and a panel whose only way to find `C-c` is
+                // the manual is a panel where nobody ever stops anything.
+                ViewState::Transfers => transfers.as_ref().map(|v| v.hint(texts)),
+                // THE THEME CHOOSER: `RET` applies, `Esc` goes back, and
                 // nothing on its rows says so.
-                .or_else(|| theme_chooser.as_ref().map(|v| v.hint(texts)))
-                .filter(|h| !h.is_empty())
+                ViewState::Themes => theme_chooser.as_ref().map(|v| v.hint(texts)),
+                // THE NOTIFICATION MANAGER — the same table the window draws
+                // on ITS first line, so the two doors teach the same keys in
+                // the same colours. The footer used to teach none of them,
+                // which the owner reported from the screen.
+                // THE SAME LINE, counter included: the window has no
+                // scrollbar and says where it is in text, and "the two doors
+                // show the same thing" is the owner's own requirement — a
+                // counter on one and not the other is two answers again.
+                ViewState::Notifications => notifications_open.then(|| {
+                    let lists = crate::notifications::Lists::of(records, book);
+                    manager.hint_of(Some((manager.cursor(), lists.len(manager.pane()))), texts)
+                }),
+                ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
+                // THE RADIO AND THE NETWORK, whose tables are bare letters:
+                // without the line there is nothing on screen that says `c`
+                // connects or `f` forgets.
+                ViewState::Bluetooth => bluetooth.as_ref().map(|v| v.hint(texts)),
+                ViewState::Network => network.as_ref().map(|v| v.hint(texts)),
+                _ => None,
+            }
+            .filter(|h| !h.is_empty())
         };
 
         // THE VISIBLE PAGE of the expanded region.
@@ -9210,7 +10590,7 @@ impl Footer {
         // message line, when the pointer passes over it. It is Doom's split: the
         // list is to be swept with the eye, and the description only when it is
         // asked for — and pointing with the mouse is the question.
-        let sob_o_cursor = self
+        let explanation = self
             // THE BAND'S CONTROL WINS, and it can: no two of these can be under
             // the pointer at once, because each is a different `y`. The order
             // is the screen's, from the top down — the band, then the modeline,
@@ -9228,7 +10608,7 @@ impl Footer {
             // so it moved to the line this footer already explains things on.
             .or_else(|| {
                 self.notifications_open
-                    .then(|| self.manager.hint(&self.texts))
+                    .then(|| self.manager.note(&self.texts))
                     .flatten()
             })
             .or_else(|| {
@@ -9468,6 +10848,15 @@ impl Footer {
             let state_is_base = self
                 .state_now()
                 .is_none_or(|s| s == ronoctua_protocol::BASE_STATE);
+            let battery_danger = self.battery_danger();
+            // WHICH DEVICE MARKS ARE ALARMED, once per frame: the pool is
+            // resolved again here because `placed` only carries ids.
+            let alarmed: Vec<&'static str> = crate::bluetooth::modeline(&self.bluetooth_scene)
+                .iter()
+                .enumerate()
+                .filter(|(_, shown)| shown.alarmed)
+                .filter_map(|(i, _)| crate::bluetooth::POOL.get(i).copied())
+                .collect();
             self.modeline_placed = placed
                 .iter()
                 .map(|c| (c.id, c.column, ronoctua_render::layout::width(&c.text)))
@@ -9479,7 +10868,7 @@ impl Footer {
                         &c.text,
                         c.column,
                         modeline_line,
-                        segment_color(c.id, with_keyboard, state_is_base),
+                        segment_color(c.id, with_keyboard, state_is_base, battery_danger, &alarmed),
                         c.edge,
                     )
                 })
@@ -9633,14 +11022,14 @@ impl Footer {
             } else {
                 let text = if let Some(e) = &echo {
                     e.clone()
-                } else if let Some(d) = &sob_o_cursor {
+                } else if let Some(d) = &explanation {
                     d.clone()
                 } else if let Some(p) = &prompt_mx {
                     p.clone()
                 } else if let Some(p) = &pending {
                     p.clone()
                 } else {
-                    mini_repouso.clone()
+                    mini_at_rest.clone()
                 };
                 vec![crate::chrome::Piece::prose(text)]
             };
@@ -9653,7 +11042,7 @@ impl Footer {
             let mini_room = plain_room.saturating_sub(if opens { crate::fold::WIDTH } else { 0 });
             let (mini, mini_color) = if let Some(e) = &echo {
                 (e.clone(), tokens::color::TEXT_SUBTLE_STRONG)
-            } else if let Some(d) = &sob_o_cursor {
+            } else if let Some(d) = &explanation {
                 (d.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             } else if let Some(p) = &prompt_mx {
                 (p.clone(), tokens::color::TEXT_SUBTLE_STRONG)
@@ -9671,7 +11060,7 @@ impl Footer {
             } else if let Some(p) = &pending {
                 (p.clone(), tokens::color::STATE_ACCENT)
             } else {
-                (mini_repouso.clone(), tokens::color::TEXT_SUBTLE_STRONG)
+                (mini_at_rest.clone(), tokens::color::TEXT_SUBTLE_STRONG)
             };
             // WHILE IT IS OPEN the drawer draws this line too, from the wrap.
             if !mini.is_empty() && !held.open {
@@ -9698,13 +11087,14 @@ impl Footer {
             });
             self.fold_control = opens.then_some(columns.saturating_sub(1));
             if let Some(at) = self.fold_control {
+                let chevron = if held.open {
+                    tokens::icon::COLLAPSE
+                } else {
+                    tokens::icon::EXPAND
+                };
                 spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::OnTheCell(tokens::font::SIZE_ICON),
-                    text: if held.open {
-                        tokens::icon::COLLAPSE.to_string()
-                    } else {
-                        tokens::icon::EXPAND.to_string()
-                    },
+                    size: ronoctua_render::Size::OnTheCell(tokens::icon::chrome_size(chevron)),
+                    text: chevron.to_string(),
                     column: at,
                     line: mini_line,
                     // WITH THE KEYBOARD ON IT, the accent — the same colour
@@ -10746,7 +12136,7 @@ impl Footer {
             if first_paint && index == 0 {
                 tracing::info!(
                     shaping_ms = shaping_of.as_secs_f64() * 1000.0,
-                    desenho_ms = t.elapsed().as_secs_f64() * 1000.0,
+                    drawing_ms = t.elapsed().as_secs_f64() * 1000.0,
                     "start-up: painting"
                 );
             }
@@ -10981,15 +12371,28 @@ fn usable_actions(
         .collect()
 }
 
+/// The measured size of a run's leading glyph — [`tokens::icon::chrome_size`]
+/// over the first character; the icon size when there is none.
+fn chrome_size(glyph: &str) -> f32 {
+    glyph
+        .chars()
+        .next()
+        .map_or(tokens::font::SIZE_ICON, tokens::icon::chrome_size)
+}
+
 /// One piece of chrome text becomes ONE OR TWO runs.
 ///
 /// # Why the glyph cannot be in the same run as the text
 ///
-/// Because it is drawn BIGGER. In the real face the ink of `cod-bell` is 600
-/// units tall against 751 for the digit `0`, so a bell at the text's size comes
-/// out a fifth shorter than the number beside it and reads as a different,
-/// smaller thing — which is exactly how it was reported from the screen. The
-/// fix is `font.size.icon`, and a size belongs to a run.
+/// Because it is drawn at ANOTHER SIZE. In the real face the ink of `cod-bell`
+/// is 600 units tall against 751 for the digit `0`, so a bell at the text's
+/// size comes out a fifth shorter than the number beside it and reads as a
+/// different, smaller thing — which is exactly how it was reported from the
+/// screen. The fix was `font.size.icon`; and the vertical battery, 908 units
+/// tall, showed the other half of the same rule — at 22 px it stood 48% above
+/// the digit. So the size is the glyph's own, MEASURED by the glyph generator
+/// ([`tokens::icon::chrome_size`]): the icon size for the small drawing, and
+/// less for the tall one. A size belongs to a run.
 ///
 /// The glyph is centred on its cell ([`ronoctua_render::Size::OnTheCell`]) and
 /// the text beside it stays on the grid, so the LAYOUT never learns that two
@@ -11016,7 +12419,7 @@ fn glyph_and_text(
         }];
     };
     let mut out = vec![ronoctua_render::Span {
-        size: ronoctua_render::Size::OnTheCell(tokens::font::SIZE_ICON),
+        size: ronoctua_render::Size::OnTheCell(chrome_size(glyph)),
         text: glyph.to_owned(),
         column,
         line,
@@ -11040,10 +12443,1086 @@ fn glyph_and_text(
     out
 }
 
+impl Footer {
+    /// What the power threads sent.
+    fn power_event(&mut self, e: ronoctua_power::Event) {
+        match e {
+            ronoctua_power::Event::Snapshot(s) => self.power_arrived(*s),
+            ronoctua_power::Event::Done { order, refused } => {
+                if let Some((why, words)) = refused {
+                    let said = crate::power_words::refused(&order, why, &words, &self.texts);
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                }
+            }
+        }
+    }
+
+    /// A fresh reading of the machine's power.
+    ///
+    /// Three things happen here and nowhere else: the three alarms are raised
+    /// on a CROSSING (`ronoctua_power::alarms` compares the two readings), the
+    /// chosen profile is applied ONCE — on the first reading that finds the
+    /// daemon —, and the screen repaints only when one of the two marks
+    /// changed or the view is open: UPower polls every thirty seconds, and a
+    /// frame for a reading that draws the same pixels is a frame wasted.
+    fn power_arrived(&mut self, s: ronoctua_power::Snapshot) {
+        let before = self.power_snapshot.take();
+        let now = std::time::Instant::now();
+        let mut raised = false;
+        for alarm in ronoctua_power::alarms(before.as_ref(), &s) {
+            if let Some(b) = s.display.as_ref() {
+                let n = self.power_notification(alarm, b, &s);
+                self.arrived(n, now);
+                raised = true;
+            }
+        }
+        // NOBODY NAMED IT, NOBODY TOUCHES IT. The installed system always
+        // names the wish — `nix/modules/power.nix` puts
+        // `RONOCTUA_POWER_PROFILE` on the footer's unit and in the session —
+        // so this only ever holds where there is no distro underneath: the
+        // nested loop of `nix run .#dev`, which runs on the owner's own
+        // machine and must not switch the profile the owner is using.
+        if !self.power_applied
+            && self.power_named
+            && let Some(p) = s.profiles.as_ref()
+        {
+            self.power_applied = true;
+            let wanted = self.power_wanted;
+            let target = if p.offered.contains(&wanted) {
+                wanted
+            } else {
+                ronoctua_power::top(&p.offered).unwrap_or(p.active)
+            };
+            // NOT OVER A HOLD: a game holding `performance` is a hand on the
+            // knob, and the distro's default gives way to it.
+            if p.holds.is_empty() && p.active != target {
+                tracing::info!(profile = target.id(), "applying the chosen power profile");
+                if let Some(h) = &self.power_orders {
+                    h.send(ronoctua_power::Order::SetProfile(target));
+                }
+            }
+            if target != wanted {
+                let said = self.texts.t_with(
+                    ronoctua_i18n::key::ECHO_POWER_PROFILE_NOT_OFFERED,
+                    &[
+                        (
+                            "wanted",
+                            &self.texts.t(&format!("power-profile-{}", wanted.id())),
+                        ),
+                        (
+                            "applied",
+                            &self.texts.t(&format!("power-profile-{}", target.id())),
+                        ),
+                    ],
+                );
+                tracing::info!(%said, "the chosen power profile is not offered here");
+                self.echo_message(said);
+            }
+        }
+        let marks_before = (
+            before.as_ref().and_then(|b| {
+                ronoctua_power::mark(b.display.as_ref(), b.adapter_online())
+                    .map(|m| crate::power::battery_segment(&m))
+            }),
+            before
+                .as_ref()
+                .and_then(|b| b.profiles.as_ref())
+                .and_then(ronoctua_power::profile_mark),
+        );
+        // THE OPEN VIEW FOLLOWS THE NEW ROWS: a peripheral that switched off
+        // took its row with it, and a pair written elsewhere makes the one
+        // the arrows were moving a lie.
+        let thresholds_moved =
+            before.as_ref().map(|b| b.thresholds.clone()) != Some(s.thresholds.clone());
+        self.power_snapshot = Some(s);
+        // The width is read BEFORE the view is borrowed — `screen_columns`
+        // is a method on `&self`, and the fields below are disjoint, which
+        // the borrow checker sees on its own.
+        let columns = self.screen_columns();
+        let wanted = self.power_wanted;
+        if let Some(v) = self.power.as_mut() {
+            if thresholds_moved {
+                v.forget_pending();
+            }
+            let rows = v.rows(self.power_snapshot.as_ref(), wanted, columns, &self.texts);
+            v.settle(&rows);
+        }
+        let marks_after = (
+            self.battery_segment(),
+            self.power_snapshot
+                .as_ref()
+                .and_then(|b| b.profiles.as_ref())
+                .and_then(ronoctua_power::profile_mark),
+        );
+        if raised || marks_before != marks_after || self.power.is_some() {
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+        if raised {
+            self.after_the_queue_moved();
+        }
+    }
+
+    /// `power.json` changed under the footer: the profile it names is applied
+    /// — the window's door, and a hand-edited file, both come in here.
+    /// Another process wrote the history — the window, marking read or
+    /// forgetting.
+    ///
+    /// IT DOES NOT REPLACE THE QUEUE: what is live here is the band, the
+    /// pending ones and the arrival order, and none of that is in the file.
+    /// `Queue::took_from_disk` takes what the file DECIDED about records this
+    /// process holds, and nothing else.
+    ///
+    /// AND IT DOES NOT WRITE BACK. `after_the_queue_moved` would save, which
+    /// would stir the watch again, which would read again: a loop between two
+    /// processes, each answering the other's inotify event.
+    fn history_file_changed(&mut self) {
+        let disk = self.notes.history();
+        if !self.notifications.took_from_disk(&disk) {
+            return;
+        }
+        tracing::info!(
+            records = disk.len(),
+            unread = self.notifications.unread(),
+            "the history changed under us"
+        );
+        if self.notifications_open {
+            let records = self.notifications.history().to_vec();
+            let lists = crate::notifications::Lists::of(&records, &self.book);
+            self.manager.settle(&lists);
+        }
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Another process wrote the preferences — the window, adjusting a kind.
+    ///
+    /// The book is a settings file with no live half, so it is simply read
+    /// again. What changes on screen is which notifications the band shows
+    /// and what the catalogue's rows say.
+    fn book_file_changed(&mut self) {
+        let prefs = self.notes.preferences();
+        // THE SAME TWO HALVES the start-up builds it from, in one place
+        // rather than two: the distro's catalogue, plus the person's rules
+        // and adjustments.
+        let mut book = ronoctua_notify::Book::distro();
+        book.mine = prefs.rules;
+        book.adjustments = prefs.adjustments;
+        // WHAT CHANGED is the person's half — the distro's catalogue is
+        // compiled in and cannot move under us — so that is what is compared.
+        if book.mine == self.book.mine && book.adjustments == self.book.adjustments {
+            return;
+        }
+        tracing::info!(
+            rules = book.mine.len(),
+            adjustments = book.adjustments.len(),
+            "the notification preferences changed under us"
+        );
+        self.book = book;
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    fn power_file_changed(&mut self) {
+        let (wanted, source, complaints) = ronoctua_power::prefs::resolve_in(
+            ronoctua_power::prefs::home().as_deref(),
+            std::env::var(ronoctua_power::prefs::ENV).ok().as_deref(),
+        );
+        for c in complaints {
+            tracing::warn!(%c, "power.json");
+        }
+        // Deleting the file can drop the wish back to the ground, and the
+        // ground is nobody's word: it is applied to nothing.
+        //
+        // BUT THE SCREEN STILL HAS TO SAY SO. The view marks the row the file
+        // asks for ("(your choice)"), and returning here left that mark on the
+        // old row until some unrelated event happened to draw a frame — a
+        // screen that had stopped being true, which is the one thing the
+        // watch exists to prevent.
+        self.power_named = source != ronoctua_power::prefs::Source::Default;
+        if !self.power_named {
+            let moved = self.power_wanted != wanted;
+            self.power_wanted = wanted;
+            if moved && self.power.is_some() {
+                self.draw_and_paint();
+            }
+            return;
+        }
+        // OUR OWN WRITE COMING BACK — `Errand::Choose` set the wish before
+        // it wrote the file — or a change to the same value: nothing to do.
+        // Without this, one choice was two orders, two rereads, two echoes.
+        if wanted == self.power_wanted {
+            return;
+        }
+        self.power_wanted = wanted;
+        let Some(p) = self
+            .power_snapshot
+            .as_ref()
+            .and_then(|s| s.profiles.as_ref())
+        else {
+            return;
+        };
+        if p.holds.is_empty() && p.active != wanted && p.offered.contains(&wanted) {
+            if let Some(h) = &self.power_orders {
+                h.send(ronoctua_power::Order::SetProfile(wanted));
+            }
+        } else if self.power.is_some() {
+            self.draw_and_paint();
+        }
+    }
+
+    /// The radio's three alarms, raised on a CROSSING and never on a state.
+    ///
+    /// The machine's own battery does this in `ronoctua_power::alarms`, which
+    /// is a pure function over two readings; this one compares two SCENES the
+    /// same way. A device that sits at 12% for an afternoon is one line and
+    /// not a hundred, and a keyboard that drops says so once.
+    ///
+    /// # Why the low one remembers, and the other two do not
+    ///
+    /// Connecting and disconnecting are edges by construction: the device is
+    /// in one list and then the other. A battery is a NUMBER that wanders —
+    /// 16, 14, 15, 14 — so "it crossed" has to be remembered, and what
+    /// remembers is `bluetooth_alarmed`. A device leaving takes its memory
+    /// with it, so plugging the same mouse back in at 12% says so again.
+    fn radio_alarms(&mut self, was: &ronoctua_bluetooth::Scene) {
+        use std::collections::BTreeSet;
+        let now = std::time::Instant::now();
+        let named = |d: &ronoctua_bluetooth::Device| d.label.clone();
+        // THE THREE LISTS ARE DECIDED FIRST, and only then is anything
+        // raised. `arrived` takes `&mut self`, and the scene lives in `self`
+        // — so walking the scene while raising borrows it twice. This is the
+        // same shape `power_arrived` has for the same reason.
+        let before: BTreeSet<String> = was.connected().iter().map(|d| d.at.clone()).collect();
+        let there: BTreeSet<String> = self
+            .bluetooth_scene
+            .connected()
+            .iter()
+            .map(|d| d.at.clone())
+            .collect();
+        let came: Vec<(String, Option<u8>)> = self
+            .bluetooth_scene
+            .connected()
+            .iter()
+            .filter(|d| !before.contains(&d.at))
+            .map(|d| (named(d), None))
+            .collect();
+        // WHAT WENT is read from the OLD scene, because the new one no longer
+        // has it — that is the whole reason the two are compared.
+        let went: Vec<(String, Option<u8>)> = was
+            .connected()
+            .iter()
+            .filter(|d| !there.contains(&d.at))
+            .map(|d| (named(d), None))
+            .collect();
+        // AND THE ONES THAT ARE RUNNING OUT, on the crossing of the same
+        // number the modeline turns red at.
+        let mut running_out: Vec<(String, Option<u8>)> = Vec::new();
+        let mut told: BTreeSet<String> = std::mem::take(&mut self.bluetooth_alarmed);
+        for d in self.bluetooth_scene.connected() {
+            let Some(pct) = d.battery else { continue };
+            let low = pct <= ronoctua_bluetooth::DANGER_FROM;
+            if low && !told.contains(&d.at) {
+                told.insert(d.at.clone());
+                running_out.push((named(d), Some(pct)));
+            } else if !low {
+                // IT CHARGED. Forgetting is what lets it say so again.
+                told.remove(&d.at);
+            }
+        }
+        // A DEVICE THAT LEFT TAKES ITS MEMORY WITH IT.
+        told.retain(|at| there.contains(at));
+        self.bluetooth_alarmed = told;
+
+        let mut raised = false;
+        for (tag, who) in [
+            (BLUETOOTH_CONNECTED, came),
+            (BLUETOOTH_DISCONNECTED, went),
+            (BLUETOOTH_BATTERY_LOW, running_out),
+        ] {
+            for (name, pct) in who {
+                let n = self.radio_notification(tag, &name, pct);
+                self.arrived(n, now);
+                raised = true;
+            }
+        }
+        if raised {
+            self.after_the_queue_moved();
+        }
+    }
+
+    /// One of the radio's three, in the shape the catalogue recognises.
+    fn radio_notification(
+        &self,
+        tag: &str,
+        device: &str,
+        percent: Option<u8>,
+    ) -> ronoctua_notify::Notification {
+        let body = self.texts.t_args(
+            &format!("notif-{tag}-body"),
+            &[
+                ("device", ronoctua_i18n::Arg::Text(device)),
+                (
+                    "percent",
+                    ronoctua_i18n::Arg::Number(i64::from(percent.unwrap_or_default())),
+                ),
+            ],
+        );
+        let summary = self.texts.t_args(
+            &format!("notif-{tag}-summary"),
+            &[
+                ("device", ronoctua_i18n::Arg::Text(device)),
+                (
+                    "percent",
+                    ronoctua_i18n::Arg::Number(i64::from(percent.unwrap_or_default())),
+                ),
+            ],
+        );
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            0,
+            self.texts.t(ronoctua_i18n::key::NOTIF_BLUETOOTH_APP),
+            None,
+            summary,
+            body,
+            ronoctua_notify::Urgency::Normal,
+        );
+        n.tags = vec![tag.to_owned()];
+        n
+    }
+
+    /// One of the three alarms, as a notification the catalogue recognises
+    /// by its tag — the `oom_notification` shape.
+    fn power_notification(
+        &self,
+        alarm: ronoctua_power::Alarm,
+        battery: &ronoctua_power::Battery,
+        s: &ronoctua_power::Snapshot,
+    ) -> ronoctua_notify::Notification {
+        // THE DAEMON'S WORD, spoken: "will hibernate", not "will Hibernate".
+        // And with no action known there is no sentence to put a word in, so
+        // the critical body has a second key that says the machine will act.
+        let action = s
+            .critical_action
+            .as_deref()
+            .map(|w| crate::power_words::daemon_word(w, &self.texts));
+        let ignores = s
+            .critical_action
+            .as_deref()
+            .is_some_and(|w| w.eq_ignore_ascii_case("ignore"));
+        let body_key = match (alarm, &action) {
+            (ronoctua_power::Alarm::Critical, None) => {
+                ronoctua_i18n::key::NOTIF_BATTERY_CRITICAL_BODY_UNSET.to_owned()
+            }
+            // "The machine will do nothing on its own" is a sentence with the
+            // wrong emphasis: with `Ignore`, nothing is going to save it.
+            (ronoctua_power::Alarm::Critical, Some(_)) if ignores => {
+                ronoctua_i18n::key::NOTIF_BATTERY_CRITICAL_BODY_IGNORE.to_owned()
+            }
+            _ => format!("notif-{}-body", alarm.id()),
+        };
+        let action = action.unwrap_or_default();
+        let body = self.texts.t_args(
+            &body_key,
+            &[
+                (
+                    "percent",
+                    ronoctua_i18n::Arg::Number(i64::from(battery.percent())),
+                ),
+                ("action", ronoctua_i18n::Arg::Text(&action)),
+            ],
+        );
+        let urgency = match alarm {
+            ronoctua_power::Alarm::Low => ronoctua_notify::Urgency::Normal,
+            ronoctua_power::Alarm::Critical => ronoctua_notify::Urgency::Critical,
+            ronoctua_power::Alarm::Charged => ronoctua_notify::Urgency::Low,
+        };
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            0,
+            self.texts.t(ronoctua_i18n::key::NOTIF_POWER_APP),
+            None,
+            self.texts.t(&format!("notif-{}-summary", alarm.id())),
+            body,
+            urgency,
+        );
+        // THE TAG IS THIS FILE'S CONSTANT, and the test beside them says it is
+        // the crate's word too: three readers, one string.
+        n.tags = vec![
+            match alarm {
+                ronoctua_power::Alarm::Low => BATTERY_LOW,
+                ronoctua_power::Alarm::Critical => BATTERY_CRITICAL,
+                ronoctua_power::Alarm::Charged => BATTERY_CHARGED,
+            }
+            .to_owned(),
+        ];
+        n
+    }
+
+    /// Opens the power view — on a row, armed, or plainly.
+    fn open_power(
+        &mut self,
+        at: Option<crate::power::Target>,
+        arm: Option<ronoctua_power::Action>,
+    ) {
+        // ALREADY OPEN AND NOTHING ASKED FOR: leave it exactly as it is.
+        //
+        // This used to build a `View::fresh()` every time, which threw away
+        // whatever the view was in the middle of. The way in was the MOUSE:
+        // `LEADER q p` arms "power off", the pointer brushes the battery
+        // glyph, `segment_clicked` runs `power-open`, and the armed question
+        // is gone with nothing on screen saying so. The bell's mark toggles
+        // for the same class of reason (`toggle_manager`), and this is the
+        // same rule: a door onto a room you are already in does not
+        // rearrange the furniture.
+        //
+        // WITH A TARGET IT STILL MOVES, because then somebody asked for a
+        // row: `s p t` opens on the thresholds whether or not the view was
+        // up, and `q s` arms suspend.
+        if self.power.is_some() && at.is_none() && arm.is_none() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("power-open") {
+            return;
+        }
+        let can = arm.map(|a| {
+            self.power_snapshot
+                .as_ref()
+                .map_or(ronoctua_power::Can::NotAvailable, |s| s.sleep.can(a))
+        });
+        let want = at.or_else(|| {
+            arm.zip(can)
+                .map(|(a, c)| crate::power::Target::Action(a, c))
+        });
+        let mut v = match want {
+            Some(t) => crate::power::View::fresh_at(
+                self.power_snapshot.as_ref(),
+                self.power_wanted,
+                t,
+                &self.texts,
+            ),
+            None => crate::power::View::fresh(),
+        };
+        if let Some((a, c)) = arm.zip(can) {
+            v.arm(a, c);
+        }
+        self.power = Some(v);
+        self.first_page();
+        // `LEADER q s` lands on "suspend", armed — and that row is the
+        // thirtieth: the region has to be on the page that shows it.
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// What the radio's threads sent.
+    fn bluetooth_event(&mut self, e: ronoctua_bluetooth::Event) {
+        use ronoctua_bluetooth::Event;
+        match e {
+            Event::Scene(scene) => self.bluetooth_arrived(*scene),
+            Event::Done { ask, refused } => {
+                if let Some((why, words)) = refused {
+                    let said = crate::bluetooth_words::refused(&ask, why, &words, &self.texts);
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                }
+            }
+            // A QUESTION OPENS THE VIEW, because nothing pairs until it is
+            // answered and a question nobody sees is a pairing that fails
+            // sixty seconds later with no explanation.
+            //
+            // AND WHEN THE VIEW CANNOT OPEN — the file manager is in the
+            // footer, holding a directory somebody navigated to — the
+            // question goes to the NOTIFICATION instead, with its two
+            // actions. It is the one path that neither steals the screen
+            // nor loses the question.
+            Event::Asked(question) => {
+                self.bluetooth_asked = Some(question.clone());
+                if self.bluetooth.is_none() {
+                    self.open_bluetooth(None);
+                }
+                match self.bluetooth.as_mut() {
+                    Some(v) => v.asked(question),
+                    None => {
+                        let now = std::time::Instant::now();
+                        let n = self.bluetooth_notification(&question);
+                        self.arrived(n, now);
+                        self.after_the_queue_moved();
+                    }
+                }
+                self.draw_and_paint();
+            }
+            Event::Unasked => {
+                self.bluetooth_unasked();
+                self.draw_and_paint();
+            }
+        }
+    }
+
+    /// A fresh reading of the way out.
+    ///
+    /// Repaints only when one of the three MARKS changed, or a view is open:
+    /// NetworkManager talks constantly while a link settles, and a frame for
+    /// a reading that draws the same pixels is a frame wasted.
+    fn net_arrived(&mut self, s: ronoctua_network::Snapshot) {
+        let before = (
+            self.net.adrift(),
+            self.net.airplane(),
+            self.net.tunnel().is_some(),
+        );
+        self.net = s;
+        let after = (
+            self.net.adrift(),
+            self.net.airplane(),
+            self.net.tunnel().is_some(),
+        );
+        if before != after || self.network.is_some() {
+            // AND THE CURSOR FOLLOWS THE ROWS THAT ARE LEFT — a cable
+            // unplugged takes six facts away under the cursor's feet.
+            self.network_settle();
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+    }
+
+    /// Keeps the network view's cursor on a row that exists.
+    ///
+    /// Its own method because three arrivals change the rows underneath it:
+    /// the daemon's snapshot, the tunnels' scene and a finished sweep.
+    fn network_settle(&mut self) {
+        let width = self.screen_columns();
+        let wire = self.network_wire.take();
+        let rows = self.network.as_ref().map(|v| {
+            v.rows(
+                &crate::network::Facts {
+                    net: &self.net,
+                    seen: wire.as_ref().map_or(&[], crate::network::Wire::seen),
+                    watch: &self.network_watch,
+                    tunnels: &self.tunnels,
+                },
+                width,
+                &self.texts,
+            )
+        });
+        self.network_wire = wire;
+        if let (Some(v), Some(rows)) = (self.network.as_mut(), rows) {
+            v.settle(&rows);
+        }
+        self.follow_cursor();
+    }
+
+    /// A fresh reading of the two tunnels, or the end of an order.
+    ///
+    /// Repaints only when one of the two MARKS changed, or a view is open:
+    /// the thread reads every ten seconds and most readings draw the same
+    /// pixels.
+    fn tunnel_event(&mut self, e: ronoctua_tunnel::Event) {
+        match e {
+            ronoctua_tunnel::Event::Scene(scene) => {
+                let before = (self.tunnels.on_tailnet(), self.tunnels.through_tor());
+                self.tunnels = *scene;
+                let after = (self.tunnels.on_tailnet(), self.tunnels.through_tor());
+                if before != after || self.network.is_some() {
+                    // THE CURSOR FOLLOWS THE ROWS THAT ARE LEFT. A tailnet
+                    // going down takes its whole section away, and a cursor
+                    // parked in the peer list then points past the end: the
+                    // arrows' first step is out of range too, so the view
+                    // draws with no focused row and only `Esc` answers.
+                    self.network_settle();
+                    self.apply_geometry(self.interactivity());
+                    self.draw_and_paint();
+                }
+            }
+            // A REFUSAL IS A SENTENCE, and the daemon's own words are what
+            // says why: there are no error names here worth a table of their
+            // own, and a silent failure would be a switch that does nothing.
+            ronoctua_tunnel::Event::Done { refused, .. } => {
+                if let Some(words) = refused {
+                    let said = self.texts.t_with(
+                        ronoctua_i18n::key::ECHO_NETWORK_REFUSED,
+                        &[("error", &words)],
+                    );
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                }
+            }
+            // THE LOGIN IS A PAGE IN A BROWSER, which is the only place a
+            // tailnet's login can happen: the daemon hands back an address
+            // and whoever is at the machine has to open it.
+            ronoctua_tunnel::Event::Login(url) => {
+                self.open_foreign(crate::network::OPEN, std::slice::from_ref(&url), None);
+                let said = self
+                    .texts
+                    .t_with(ronoctua_i18n::key::ECHO_NETWORK_LOGIN, &[("url", &url)]);
+                self.echo_message(said);
+                self.draw_and_paint();
+            }
+        }
+    }
+
+    /// The pairing question, as a notification the catalogue recognises by
+    /// its tag — the `power_notification` shape, and the plan's own answer to
+    /// "a question that arrives while one is somewhere else".
+    fn bluetooth_notification(
+        &self,
+        question: &ronoctua_bluetooth::agent::Question,
+    ) -> ronoctua_notify::Notification {
+        use ronoctua_bluetooth::agent::Asked;
+        let name = self
+            .bluetooth_scene
+            .device(&question.device)
+            .map_or_else(|| question.device.clone(), |d| d.label.clone());
+        let body = match &question.asked {
+            Asked::Confirm(code) => self.texts.t_with(
+                ronoctua_i18n::key::BLUETOOTH_PAIRING_CONFIRM,
+                &[("name", &name), ("code", code)],
+            ),
+            Asked::Passkey(code) => self.texts.t_with(
+                ronoctua_i18n::key::BLUETOOTH_PAIRING_PASSKEY,
+                &[("name", &name), ("code", code)],
+            ),
+            Asked::Pin => self.texts.t_with(
+                ronoctua_i18n::key::BLUETOOTH_PAIRING_PIN,
+                &[("name", &name)],
+            ),
+            Asked::Typed => self.texts.t_with(
+                ronoctua_i18n::key::BLUETOOTH_PAIRING_PASSKEY_HERE,
+                &[("name", &name)],
+            ),
+            Asked::Authorize => self.texts.t_with(
+                ronoctua_i18n::key::BLUETOOTH_PAIRING_AUTHORIZE,
+                &[("name", &name)],
+            ),
+            Asked::Service(uuid) => {
+                let service = ronoctua_bluetooth::profile_key(uuid)
+                    .map_or_else(|| uuid.clone(), |k| self.texts.t(k));
+                self.texts.t_with(
+                    ronoctua_i18n::key::BLUETOOTH_PAIRING_SERVICE,
+                    &[("name", &name), ("service", &service)],
+                )
+            }
+        };
+        // AND THE TWO KEYS, on a line of their own.
+        //
+        // The card lives twenty seconds (`long`, and there is no longer one)
+        // while the agent holds the question for fifty-five — so for
+        // thirty-five seconds the two BUTTONS are gone and the question is
+        // not. The keys work for the whole time, and this is where somebody
+        // reads them. They are arguments and never text in the `.ftl`, which
+        // `keys-are-never-text` holds to.
+        let leader = crate::leader();
+        let body = format!(
+            "{body}\n{}",
+            self.texts.t_with(
+                ronoctua_i18n::key::NOTIF_BLUETOOTH_PAIRING_KEYS,
+                &[
+                    (
+                        "yes",
+                        &format!("{leader} {}", crate::leader::PAIRING_YES_KEYS)
+                    ),
+                    (
+                        "no",
+                        &format!("{leader} {}", crate::leader::PAIRING_NO_KEYS)
+                    ),
+                ],
+            )
+        );
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            0,
+            self.texts.t(ronoctua_i18n::key::BLUETOOTH_TITLE),
+            None,
+            self.texts
+                .t(ronoctua_i18n::key::NOTIF_BLUETOOTH_PAIRING_SUMMARY),
+            body,
+            ronoctua_notify::Urgency::Critical,
+        );
+        n.tags = vec![BLUETOOTH_PAIRING.to_owned()];
+        n
+    }
+
+    /// A fresh reading of the radio.
+    ///
+    /// The screen repaints only when the modeline's marks changed or the view
+    /// is open: a scan changes something four times a second, and a frame for
+    /// a reading that draws the same pixels is a frame wasted.
+    fn bluetooth_arrived(&mut self, scene: ronoctua_bluetooth::Scene) {
+        let before = crate::bluetooth::modeline(&self.bluetooth_scene);
+        let was = std::mem::replace(&mut self.bluetooth_scene, scene);
+        let after = crate::bluetooth::modeline(&self.bluetooth_scene);
+        self.radio_alarms(&was);
+        // A QUESTION THAT ONLY TOLD ends when the device pairs: nothing
+        // calls the agent back for those, and a sentence left on the screen
+        // about a pairing that finished is a screen that stopped being true.
+        //
+        // IT IS ASKED OF `bluetooth_asked` AND NOT OF THE VIEW. It used to be
+        // asked of the view alone, so a passkey shown while the file manager
+        // was open — where there IS no bluetooth view, and the question is a
+        // critical card on the band — was never withdrawn: `DisplayPasskey`
+        // registers no answer channel, so no timeout and no `Cancel` ever
+        // arrive, and the card told the owner to type a code they had
+        // already typed, for the rest of the session.
+        let asking_about = self
+            .bluetooth_asked
+            .as_ref()
+            .map(|q| q.device.clone())
+            .or_else(|| {
+                self.bluetooth
+                    .as_ref()
+                    .and_then(crate::bluetooth::View::asking_about)
+                    .map(str::to_owned)
+            });
+        let paired = asking_about
+            .as_deref()
+            .and_then(|at| self.bluetooth_scene.device(at))
+            .is_some_and(|d| d.paired);
+        if let Some(v) = self.bluetooth.as_mut() {
+            let width = self.screens.iter().find(|t| t.configured).map_or(80, |t| {
+                tokens::metrics::columns(t.width as f32, tokens::font::SIZE_BASE)
+            });
+            let rows = v.rows(&self.bluetooth_scene, width, &self.texts);
+            v.settle(&rows);
+        }
+        if paired {
+            // THE VIEW, THE FIELD AND THE BAND, in one call — the three places
+            // a standing question lives.
+            self.bluetooth_unasked();
+        }
+        if before != after || self.bluetooth.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+    }
+
+    /// Opens the view, on the list or on one device.
+    fn open_bluetooth(&mut self, at: Option<&str>) {
+        // ALREADY OPEN AND NO DEVICE ASKED FOR: leave it where it is — the
+        // power view's reason, written out over `open_power`. A device's mark
+        // on the modeline is one click away from the cursor somebody put on a
+        // row, and rebuilding the view would take the level, the cursor and
+        // any standing question with it.
+        if self.bluetooth.is_some() && at.is_none() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("bluetooth-open") {
+            return;
+        }
+        self.bluetooth = Some(match at {
+            Some(at) => crate::bluetooth::View::fresh_at(at),
+            None => crate::bluetooth::View::fresh(),
+        });
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// One press, for the bluetooth view.
+    fn bluetooth_press(&mut self, press: crate::bluetooth::Press) {
+        let scene = std::mem::take(&mut self.bluetooth_scene);
+        let errand = self
+            .bluetooth
+            .as_mut()
+            .map(|v| v.key(press, &scene, &self.texts));
+        self.bluetooth_scene = scene;
+        self.follow_cursor();
+        if let Some(errand) = errand {
+            self.bluetooth_errand(errand);
+        }
+    }
+
+    /// The same, for a key that acts on the RADIO whether the view is open
+    /// or not — `LEADER s b s` looks for devices from anywhere.
+    ///
+    /// ONLY THE RADIO'S THREE: scan, power and discoverable read the adapter
+    /// and nothing else, so a throwaway view answers them exactly as the
+    /// open one would. A press that acts on the row under the cursor must
+    /// NOT come through here — a fresh view's cursor is on the radio's own
+    /// row, and it would act on the wrong thing.
+    fn bluetooth_errand_of(&mut self, press: crate::bluetooth::Press) {
+        if self.bluetooth.is_some() {
+            self.bluetooth_press(press);
+            return;
+        }
+        let mut aside = crate::bluetooth::View::fresh();
+        let scene = std::mem::take(&mut self.bluetooth_scene);
+        let errand = aside.key(press, &scene, &self.texts);
+        self.bluetooth_scene = scene;
+        self.bluetooth_errand(errand);
+    }
+
+    /// The question is over — answered, taken back, or timed out.
+    ///
+    /// It leaves the view AND the band: a critical card with two buttons
+    /// that answer nothing is worse than no card at all.
+    fn bluetooth_unasked(&mut self) {
+        self.bluetooth_asked = None;
+        if let Some(v) = self.bluetooth.as_mut() {
+            v.answered();
+        }
+        let standing: Vec<u32> = self
+            .notifications
+            .history()
+            .iter()
+            .filter(|r| r.notification.tags.iter().any(|t| t == BLUETOOTH_PAIRING))
+            .map(|r| r.notification.id)
+            .collect();
+        let now = std::time::Instant::now();
+        let mut moved = false;
+        for id in standing {
+            moved |= self.notifications.dismiss(id, now);
+        }
+        if moved {
+            self.after_the_queue_moved();
+        }
+    }
+
+    /// Answers a pairing question from anywhere — `LEADER s b y`/`s b n`,
+    /// and the notification's two actions.
+    ///
+    /// STRAIGHT TO THE AGENT, never through the orders thread: `Pair` is
+    /// blocking that thread while the question stands.
+    fn bluetooth_answer(&mut self, yes: bool, typed: &str) {
+        // A YES WITH NOTHING TYPED, to a question that wants digits, is an
+        // empty PIN sent to the other side — a pairing that fails for a
+        // reason nobody could see. The view is opened on it instead, which
+        // is where digits are typed.
+        if yes
+            && typed.is_empty()
+            && self
+                .bluetooth_asked
+                .as_ref()
+                .is_some_and(|q| q.asked.typed())
+        {
+            if self.bluetooth.is_none() {
+                self.open_bluetooth(None);
+            }
+            if let (Some(v), Some(q)) = (self.bluetooth.as_mut(), self.bluetooth_asked.clone()) {
+                v.asked(q);
+            }
+            self.bluetooth_errand(crate::bluetooth::Errand::Type);
+            return;
+        }
+        self.bluetooth_asked = None;
+        if let Some(v) = self.bluetooth.as_mut() {
+            v.answered();
+        }
+        match &self.bluetooth_questions {
+            Some(q) => q.answer(yes, typed),
+            None => {
+                let said = self.texts.t(ronoctua_i18n::key::BLUETOOTH_NO_DAEMON);
+                self.echo_message(said);
+            }
+        }
+        self.bluetooth_unasked();
+        self.draw_and_paint();
+    }
+
+    /// Connects everything trusted that is not connected.
+    fn bluetooth_reconnect(&mut self) {
+        let ask: Vec<ronoctua_bluetooth::Ask> = self
+            .bluetooth_scene
+            .paired()
+            .into_iter()
+            .filter(|d| d.trusted && !d.connected && !d.blocked)
+            .map(|d| ronoctua_bluetooth::Ask::Connect(d.at.clone()))
+            .collect();
+        for one in ask {
+            self.bluetooth_errand(crate::bluetooth::Errand::Order(one));
+        }
+    }
+
+    /// Drops every link — the one gesture for "I am leaving the desk".
+    fn bluetooth_disconnect_all(&mut self) {
+        let ask: Vec<ronoctua_bluetooth::Ask> = self
+            .bluetooth_scene
+            .connected()
+            .into_iter()
+            .map(|d| ronoctua_bluetooth::Ask::Disconnect(d.at.clone()))
+            .collect();
+        for one in ask {
+            self.bluetooth_errand(crate::bluetooth::Errand::Order(one));
+        }
+    }
+
+    /// Carries out what the bluetooth view asked for.
+    fn bluetooth_errand(&mut self, errand: crate::bluetooth::Errand) {
+        use crate::bluetooth::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                // A NAME NOBODY FINISHED TYPING is not a name waiting for
+                // the next device: closing the view drops it.
+                self.bluetooth_renaming = None;
+                self.bluetooth = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+            Errand::Order(ask) => match &self.bluetooth_orders {
+                Some(h) => h.send(ask),
+                None => {
+                    let said = self.texts.t(ronoctua_i18n::key::BLUETOOTH_NO_DAEMON);
+                    self.echo_message(said);
+                }
+            },
+            // THE PROFILE IS PIPEWIRE'S, so it does not go through the
+            // orders thread — that one holds a BlueZ connection. `wpctl` is
+            // a process that answers in milliseconds and is spawned WITHOUT
+            // waiting, the same shape the window's forwarding takes: a wait
+            // inside the loop is a frozen door.
+            Errand::Audio(card, profile) => {
+                if let Err(e) = ronoctua_bluetooth::audio::choose(card, profile) {
+                    tracing::warn!(error = %e, "the audio profile did not change");
+                }
+                // AND THE CARD IS READ AGAIN, because what is true is what
+                // PipeWire says and not what was asked — the same rule the
+                // power orders follow.
+                let scene = std::mem::take(&mut self.bluetooth_scene);
+                if let Some(v) = self.bluetooth.as_mut() {
+                    v.look_at_the_card(&scene);
+                }
+                self.bluetooth_scene = scene;
+            }
+            Errand::Answer(yes) => self.bluetooth_answer(yes, ""),
+            // THE DIGITS COME IN THROUGH THE MINIBUFFER, and come back as
+            // the argument of `bluetooth-accept` — the network password's
+            // path, and the only place anything is typed.
+            Errand::Type => {
+                self.mx.request("bluetooth-accept", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // THE NAME IS TYPED IN THE MINIBUFFER, which is where every
+            // other name in this system is typed. It comes back as the
+            // argument of this same command — the network password's path.
+            Errand::Rename(at) => {
+                self.bluetooth_renaming = Some(at);
+                self.mx.request("bluetooth-rename", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// One press, for the power view.
+    fn power_press(&mut self, press: crate::power::Press) {
+        let Some(v) = self.power.as_mut() else {
+            return;
+        };
+        let errand = v.key(
+            press,
+            self.power_snapshot.as_ref(),
+            self.power_wanted,
+            &self.texts,
+        );
+        // THE REGION FOLLOWS THE CURSOR, as every list here does. Without
+        // this the cursor walked off the twelve lines and the page stayed
+        // on the battery: twenty-six presses, the same screen.
+        self.follow_cursor();
+        self.power_errand(errand);
+    }
+
+    /// A profile chosen by key — applied, and written down as the choice.
+    fn power_choose(&mut self, profile: ronoctua_power::Profile) {
+        self.power_errand(crate::power::Errand::Choose(profile));
+    }
+
+    /// One of the two locks, flipped from what logind says is held.
+    fn power_toggle(&mut self, keep: ronoctua_power::Keep) {
+        let held = self
+            .power_snapshot
+            .as_ref()
+            .is_some_and(|s| s.held().contains(&keep));
+        self.power_errand(crate::power::Errand::Order(
+            ronoctua_power::Order::KeepAwake(keep, !held),
+        ));
+    }
+
+    /// Carries out what the view asked for.
+    fn power_errand(&mut self, errand: crate::power::Errand) {
+        use crate::power::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.power = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+            Errand::Order(order) => match &self.power_orders {
+                Some(h) => h.send(order),
+                None => {
+                    let said = self.texts.t(ronoctua_i18n::key::POWER_NO_DAEMON);
+                    self.echo_message(said);
+                }
+            },
+            // A CHOICE is the order AND the file. `power_wanted` is set
+            // first, so that the file's own notice — inotify sees our write
+            // like anybody's — finds nothing new and does not apply it twice.
+            Errand::Choose(profile) => {
+                self.power_wanted = profile;
+                match &self.power_orders {
+                    Some(h) => h.send(ronoctua_power::Order::SetProfile(profile)),
+                    None => {
+                        let said = self.texts.t(ronoctua_i18n::key::POWER_NO_DAEMON);
+                        self.echo_message(said);
+                    }
+                }
+                if let Some(dir) = ronoctua_power::prefs::home()
+                    && let Err(e) = ronoctua_power::prefs::persist(&dir, profile)
+                {
+                    tracing::warn!(error = %e, "could not write power.json");
+                }
+            }
+        }
+        self.draw_and_paint();
+    }
+}
+
+/// The state chooser's row for the which-key list, when it belongs there.
+///
+/// PURE, and in one place, because the list and the key used to decide this
+/// separately — and when the buffer commands moved from `b` to `w`, the key
+/// moved and the list did not: `SPC b` offered a row that did nothing, and
+/// `SPC w` offered nothing that worked. `typed` is the sequence so far as a
+/// notation; the row exists only under [`crate::leader::STATE_PREFIX`], and only
+/// when the focused buffer declared more than one state.
+fn state_row(typed: &str, has_choice: bool) -> Option<ronoctua_keymap::Entry> {
+    if !has_choice || typed != crate::leader::STATE_PREFIX {
+        return None;
+    }
+    let sym = ronoctua_keymap::Key::parse(crate::leader::STATE_KEY).ok()?;
+    Some(ronoctua_keymap::Entry {
+        key: crate::leader::STATE_KEY.to_owned(),
+        sym,
+        label: ronoctua_i18n::key::WHICH_STATE.to_owned(),
+        command: None,
+        is_group: true,
+    })
+}
+
 /// Each segment's color — emphasis by COLOR AND WEIGHT, never by a container
 /// (section 5.1).
-fn segment_color(id: &str, footer_with_keyboard: bool, state_is_base: bool) -> tokens::Color {
+fn segment_color(
+    id: &str,
+    footer_with_keyboard: bool,
+    state_is_base: bool,
+    battery_danger: bool,
+    alarmed: &[&'static str],
+) -> tokens::Color {
     match id {
+        // A DEVICE'S BATTERY AT THE DANGER LEVEL, by the same rule and the
+        // same number as the machine's own: the drawing has already changed,
+        // and the colour is what is seen before the drawing is read.
+        _ if alarmed.contains(&id) => tokens::color::STATE_ERROR,
+        // THE BATTERY AT THE DANGER LEVEL — 15% and below, the owner's number —
+        // is the one thing on this line that changes colour by VALUE: the
+        // glyph already changed drawing, and the colour is what is seen before
+        // the drawing is read.
+        "battery" if battery_danger => tokens::color::STATE_ERROR,
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
         // only thing next to the name; now the state sits beside it saying what
         // is HAPPENING, and between "this is an icon browser" and "it is showing
@@ -11125,6 +13604,58 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_battery_tags_are_the_crates() {
+        // The catalogue recognises a tag; the crate names the alarm; this
+        // file writes the tag down for the check. One string, three readers.
+        assert_eq!(super::BATTERY_LOW, ronoctua_power::Alarm::Low.id());
+        assert_eq!(
+            super::BATTERY_CRITICAL,
+            ronoctua_power::Alarm::Critical.id()
+        );
+        assert_eq!(super::BATTERY_CHARGED, ronoctua_power::Alarm::Charged.id());
+        // AND THE CATALOGUE KNOWS THE THREE, by the same id — the generated
+        // table out of `assets/notifications.nix`. Without this, renaming
+        // an entry there left the tag raised here recognised by nobody.
+        let book = ronoctua_notify::Book::distro();
+        for id in [
+            super::BATTERY_LOW,
+            super::BATTERY_CRITICAL,
+            super::BATTERY_CHARGED,
+            // AND THE RADIO'S FOUR, which are raised the same way and were
+            // the same kind of promise: a tag written here that the
+            // catalogue does not know is a notification nothing draws.
+            super::BLUETOOTH_PAIRING,
+            super::BLUETOOTH_CONNECTED,
+            super::BLUETOOTH_DISCONNECTED,
+            super::BLUETOOTH_BATTERY_LOW,
+            super::MEMORY_KILLED,
+        ] {
+            let entry = book
+                .entry(id)
+                .unwrap_or_else(|| panic!("no catalogue entry `{id}`"));
+            assert!(
+                entry.tags.iter().any(|t| t == id),
+                "the entry `{id}` does not carry its own tag"
+            );
+        }
+    }
+
+    #[test]
+    fn the_state_row_hangs_off_the_window_prefix_only() {
+        // ONE CONSTANT, TWO READERS. The which-key row and the key that opens
+        // the chooser used to compare different letters, and the row showed
+        // under a prefix where the key did nothing.
+        let row = super::state_row(crate::leader::STATE_PREFIX, true).expect("the row");
+        assert_eq!(row.key, crate::leader::STATE_KEY);
+        assert!(row.is_group);
+        assert!(super::state_row("b", true).is_none(), "the old prefix");
+        assert!(super::state_row("", true).is_none(), "the root");
+        assert!(
+            super::state_row(crate::leader::STATE_PREFIX, false).is_none(),
+            "no choice, no row"
+        );
+    }
 
     /// THE BAR'S TRACK STARTS AT THE EXPANSION, and not at the top of the
     /// surface.
@@ -11210,7 +13741,7 @@ mod tests {
         assert_eq!(under_f.len(), 2);
         assert!(
             under_f.iter().all(|e| !e.is_group),
-            "`m f s` e `m f r` terminam"
+            "`m f s` and `m f r` both end"
         );
 
         assert!(

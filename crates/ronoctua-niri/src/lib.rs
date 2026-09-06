@@ -406,7 +406,7 @@ impl State {
 
     /// Every window the compositor knows about, in its own order.
     ///
-    /// The buffer selector (`LEADER b b`) lists these: a "buffer" of this system
+    /// The buffer selector (`LEADER w w`) lists these: a "buffer" of this system
     /// IS a window of the compositor (invariant 4), so there is no second list
     /// to keep in step.
     #[must_use]

@@ -1097,10 +1097,15 @@ mod tests {
         for (i, a) in TABLE.iter().enumerate() {
             for b in TABLE.iter().skip(i + 1) {
                 for t in a.types {
-                    assert!(!b.types.contains(t), "{t} esta em {} e em {}", a.id, b.id);
+                    assert!(!b.types.contains(t), "{t} is in both {} and {}", a.id, b.id);
                 }
                 for m in a.media {
-                    assert!(!b.media.contains(m), "{m}/* esta em {} e em {}", a.id, b.id);
+                    assert!(
+                        !b.media.contains(m),
+                        "{m}/* is in both {} and {}",
+                        a.id,
+                        b.id
+                    );
                 }
             }
         }

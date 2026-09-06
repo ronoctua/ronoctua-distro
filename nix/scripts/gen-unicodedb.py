@@ -127,7 +127,7 @@ def check_version(ucd: pathlib.Path, expected: str) -> None:
         print("", file=sys.stderr)
         print("       The symbol browser's database comes from here. Raising the version", file=sys.stderr)
         print("       changes which characters exist and what they are called —", file=sys.stderr)
-        print("       atualize a constante em nix/unicodegen.nix de proposito,", file=sys.stderr)
+        print("       update the constant in nix/unicodegen.nix on purpose,", file=sys.stderr)
         print("       and check the translation coverage afterwards.", file=sys.stderr)
         sys.exit(1)
     print(f"OK: Unicode {expected} — the UCD and the flake agree")

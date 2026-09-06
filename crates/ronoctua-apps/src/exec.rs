@@ -172,7 +172,7 @@ mod tests {
         // measured entries.
         for line in ["code %F", "vlc %U", "gedit %f", "eog %u"] {
             let (_, args) = assemble(line, CTX).expect("there is a program");
-            assert!(args.is_empty(), "`{line}` deixou {args:?}");
+            assert!(args.is_empty(), "`{line}` left {args:?} behind");
         }
     }
 

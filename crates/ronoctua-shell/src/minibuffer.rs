@@ -22,7 +22,7 @@
 ///
 /// The locator listed `&'static str` — command ids — and resolved the
 /// description through the registry. That works for exactly one kind of list,
-/// and it is why `LEADER b b` never existed: a buffer has no entry in the
+/// and it is why `LEADER w w` never existed: a buffer has no entry in the
 /// command registry, so there was nowhere for its name to come from.
 ///
 /// With the label carried here, the same list serves commands and buffers. An
@@ -148,7 +148,40 @@ impl Minibuffer {
         self.cursor = 0;
     }
 
-    /// What appears on the minibuffer's line.
+    /// What appears on the minibuffer's line, in the person's own language.
+    ///
+    /// THE COMMAND'S ID IS NOT A SENTENCE. It used to be drawn raw —
+    /// `network-connect: •••••` — which is a UI string that no `.ftl` carries
+    /// and that says nothing to somebody who did not write it. What is drawn
+    /// now is the question the command's own text keys give: `ask-<id>` when
+    /// there is one (a real question, "Password for this network"), and the
+    /// command's own label otherwise, which every command has in both
+    /// languages by construction.
+    #[must_use]
+    pub fn asking(&self, texts: &ronoctua_i18n::Texts) -> String {
+        let Some(id) = self.asking_for.as_deref() else {
+            return self.prompt();
+        };
+        let said = |key: &str| {
+            let text = texts.t(key);
+            // A KEY NOBODY WROTE resolves to `[key]` (`Texts::t_marked`), and
+            // that is how this asks whether it exists at all.
+            (!text.starts_with('[')).then_some(text)
+        };
+        let question = said(&format!("ask-{id}"))
+            .or_else(|| said(&format!("cmd-{id}")))
+            .unwrap_or_else(|| id.to_owned());
+        if self.secret {
+            format!(
+                "{question}: {}",
+                "•".repeat(usize::from(ronoctua_render::layout::width(&self.query)))
+            )
+        } else {
+            format!("{question}: {}", self.query)
+        }
+    }
+
+    /// The same, with no localiser — the shape the tests use.
     #[must_use]
     pub fn prompt(&self) -> String {
         // While asking for an argument, the prompt is the COMMAND'S NAME — `focus-workspace:`

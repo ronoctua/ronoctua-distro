@@ -75,6 +75,16 @@ in
         "/var/lib/nixos"
         "/var/lib/systemd/coredump"
         "/var/lib/bluetooth"
+        # UPower's history: what feeds `TimeToEmpty` and the charge graph.
+        # Losing it costs accuracy for the first hours, not correctness.
+        "/var/lib/upower"
+        # TOR'S GUARDS. Without them every start picks three new entry relays,
+        # which is exactly what guards exist to prevent — and this is state
+        # that is only worth anything by being old.
+        "/var/lib/tor"
+        # THE TAILNET'S NODE KEY. Losing it makes this machine a new one on
+        # the tailnet, and the person is asked to log in again.
+        "/var/lib/tailscale"
         "/etc/NetworkManager/system-connections"
         # Section 7.2 + lanzaboote: the Secure Boot keys are local and
         # never enter the repository (section 9).

@@ -276,7 +276,7 @@ lib.fix (all: {
     src = ../buffers/transfers;
   };
 
-  # THE BRAIN — `LEADER s b`. The eighth, and the first whose data is not a
+  # THE BRAIN — `LEADER b b`. The eighth, and the first whose data is not a
   # reading of the machine but a POLICY: when a task may run, what it would
   # run, and what happened last time. It embeds nothing and reads nothing; the
   # whole `mind` arrives through `input::mind`, and what it declares is

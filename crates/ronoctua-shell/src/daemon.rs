@@ -246,6 +246,7 @@ mod tests {
         let t = texts();
         // OURS. The id is English and the screen is not — which is the whole
         // point of the split, and the reason `glifos` used to be the label.
+        // pt-BR: the VALUE of a text key, asserted — the screen's word.
         assert_eq!(mode_label(&t, "br.ronoctua.glyphs"), "glifos");
         assert_eq!(mode_label(&t, "br.ronoctua.memory"), "memória");
         // FOREIGN. Nobody can write a key for every program on earth, and
@@ -263,6 +264,7 @@ mod tests {
             with_focus(Some("*glifos*"), Some("br.ronoctua.glyphs")),
             texts(),
         );
+        // pt-BR: the VALUE of a text key, asserted — the screen's word.
         assert_eq!(buffer_mode(&e, &t), "glifos");
     }
 }

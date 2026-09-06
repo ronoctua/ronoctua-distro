@@ -218,7 +218,7 @@ mod tests {
             assert_eq!(
                 Registry::of(vec![one(bad)]).err(),
                 Some(Failure::MalformedId(bad)),
-                "aceitou `{bad}`"
+                "it accepted `{bad}`"
             );
         }
         assert!(Registry::of(vec![one("system-update")]).is_ok());

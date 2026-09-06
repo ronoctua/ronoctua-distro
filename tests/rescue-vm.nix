@@ -82,7 +82,7 @@ pkgs.testers.runNixOSTest {
           burst = machine.succeed(
               "systemctl show --property=CtrlAltDelBurstAction --value"
           ).strip()
-          assert burst == "reboot-force", f"os sete toques viraram `{burst}`"
+          assert burst == "reboot-force", f"the seven taps became `{burst}`"
 
       with subtest("one press OPENS the console, and the machine does NOT restart"):
           before = machine.succeed("cat /proc/sys/kernel/random/boot_id").strip()
@@ -122,7 +122,7 @@ pkgs.testers.runNixOSTest {
           screen = machine.succeed("tr -d '\\0' < /dev/vcs8")
           print(screen)
 
-      with subtest("e o console virtual em foco e o 8"):
+      with subtest("and the virtual console in focus is the 8th"):
           # Opening on a VT nobody is looking at is opening nothing.
           at = machine.succeed("fgconsole").strip()
           assert at == "8", f"the rescue opened on vt8 and the screen stayed on {at}"

@@ -285,7 +285,7 @@ mod tests {
     fn a_pendrive_gets_everything() {
         let stick = ids(&a_device(true, true, None));
         for wanted in ["open", "unmount", "eject", "information", "unpin", "format"] {
-            assert!(stick.contains(&wanted), "faltou {wanted}: {stick:?}");
+            assert!(stick.contains(&wanted), "{wanted} is missing: {stick:?}");
         }
         // Mounted, so mounting is not offered.
         assert!(!stick.contains(&"mount"));

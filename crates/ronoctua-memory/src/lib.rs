@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 pub mod guard;
 pub mod machine;
+pub mod net;
 pub mod scan;
 
 pub use machine::survey;

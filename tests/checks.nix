@@ -691,7 +691,16 @@ let
         bad = []
         for f in sorted(crates.rglob("*.rs")):
             body = f.read_text()
-            for m in re.finditer(r"\n(\s*)(?:pub )?(?:const )?fn (\w+)", body):
+            # `[ \t]*` AND NOT `\s*`: `\s` matches a NEWLINE, so a function
+            # preceded by a blank line — which is most of them — captured
+            # `"\n    "` as its indent, and the closing brace was then
+            # searched for as `\n\n    }\n`, which never matches. The body
+            # became THE REST OF THE FILE, and the check flagged fourteen
+            # Wayland handlers for a `config_dir()` five thousand lines below
+            # them. It went unnoticed because it only fires when something
+            # that WRITES appears after such a function, which nothing did
+            # until the network view read a file the person named.
+            for m in re.finditer(r"\n([ \t]*)(?:pub )?(?:const )?fn (\w+)", body):
                 indent, name = m.group(1), m.group(2)
                 if name in ALLOWED:
                     continue
@@ -1291,6 +1300,56 @@ let
     ronoctua-shell = rust.shell;
   };
 
+  # POWER: the daemons, the policies, the udev rule, the fallback from a
+  # profile the machine does not offer, and no battery drawing nothing.
+  # THE RADIO IN A VM: what a machine with NO controller can prove, which is
+  # the bus's door, the module's one setting and the footer drawing nothing.
+  # bluetoothd itself never starts here — its unit has a
+  # `ConditionPathIsDirectory=/sys/class/bluetooth` — and the test says so.
+  bluetoothVm = import ./bluetooth-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.shell;
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed;
+      inherit (inputs) niri;
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
+  };
+
+  # THE NETWORK IN A VM: the two tunnels, the ports and the way out on a
+  # machine with no radio. What it proves that nothing else can is the ONE
+  # polkit rule — the owner starting and stopping Tor with no agent anywhere.
+  networkVm = import ./network-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.shell;
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed;
+      inherit (inputs) niri;
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
+  };
+
+  powerVm = import ./power-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.shell;
+    # The modules' argument, as `oomVm` builds it: base.nix reads the fonts,
+    # the themes and the shell out of it.
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed;
+      inherit (inputs) niri;
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
+  };
+
   # THE 5 MS BUDGET of section 5.2, measured on the heaviest component.
   #
   # The glyph browser embeds the whole database (2.8 MB). If any component were
@@ -1565,16 +1624,31 @@ let
     if not rotates:
         gaps.append("the host's `Esc` no longer cycles: the click would be left alone")
 
-    # AND NOTHING ELSE. Three segments answer, and each has a key: the `state`
-    # rotates (what holding `Esc` and an arrow does), the `notif` opens the
-    # manager (`LEADER n h`), and the `update` opens the window that follows a
-    # run (`LEADER s w`). A fourth would be a door only the mouse knows about.
+    # AND NOTHING ELSE. Every segment that answers the mouse has a key that
+    # does the same thing: `state` rotates (what holding `Esc` and an arrow
+    # does), `notif` opens the manager (`LEADER n n`), `update` opens the
+    # window that follows a run (`LEADER s w`), `battery` and `profile` open
+    # the power view (`LEADER s p p`), `net-off` and `vpn` open the network
+    # (`LEADER s n n`), and `airplane` toggles it (`LEADER s n a`). One more
+    # would be a door only the mouse knows about.
     acted = set(re.findall(r'if id == "([a-z-]+)"', clicked))
     acted |= set(re.findall(r'if id != "([a-z-]+)"', clicked))
-    if acted != {"state", "notif", "update"}:
-        gaps.append("the click acts on " + repr(sorted(acted)) + ", outside what was agreed")
-    if '"notif-history"' not in clicked:
+    agreed = {
+        "state", "notif", "update", "battery", "profile",
+        # THE WAY OUT'S THREE MARKS AND THE TWO TUNNELS THAT ARE NOT NM'S.
+        # Each opens the view on its own row, and the aeroplane toggles.
+        "net-off", "airplane", "vpn", "tailscale", "tor",
+    }
+    if acted != agreed:
+        gaps.append(
+            "the click acts on " + repr(sorted(acted)) + ", outside " + repr(sorted(agreed))
+        )
+    if '"notif-open"' not in clicked:
         gaps.append("clicking the bell does not open the manager")
+    # THE BATTERY AND THE PROFILE open the power view — `LEADER s p p`'s own
+    # command, so the mouse reaches no door the keyboard lacks.
+    if clicked.count('"power-open"') < 2:
+        gaps.append("clicking the battery or the profile does not open the power view")
     # THE UPDATE'S MARK, and BOTH halves of it.
     #
     # The mark only exists while something is running, so a click is the
@@ -1586,6 +1660,39 @@ let
         gaps.append("clicking the update's mark does not open the window")
     if '"update-watch"' not in keymap:
         gaps.append("the update's mark has no equivalent key")
+    if '"power-open"' not in keymap:
+        gaps.append("the battery's mark has no equivalent key")
+    # THE WAY OUT'S THREE, and the keys that do the same.
+    if clicked.count('"network-open"') < 2:
+        gaps.append("the fault and the tunnel marks do not open the network view")
+    if '"network-airplane"' not in clicked:
+        gaps.append("clicking the aeroplane does not leave aeroplane mode")
+    for id in ('"network-open"', '"network-airplane"'):
+        if id not in keymap:
+            gaps.append(f"the way-out mark {id} has no equivalent key")
+    # THE TAILNET'S AND TOR'S MARKS open the view on their own section, which
+    # is the same view `LEADER s n n` opens — and every switch there is a ROW,
+    # reached by the same `RET` the keyboard presses.
+    if clicked.count("open_network_at") < 3:
+        gaps.append("a tunnel mark does not open the view on its own row")
+    # THE DEVICE MARKS, which this check cannot see the way it sees the rest.
+    #
+    # `bt-1`..`bt-4` carry a DIGIT, and the regex above reads `[a-z-]+`: a
+    # click on one of them would slip past `acted` unnoticed. So they are
+    # asserted by name — the pool is looked up rather than compared, the
+    # command it runs is the one `RET` on the row runs, and that command is
+    # in the keymap. Four devices, one door, and the keyboard reaches it too.
+    view = (shell / "bluetooth.rs").read_text()
+    if 'pub const POOL: [&str; 4] = ["bt-1", "bt-2", "bt-3", "bt-4"];' not in view:
+        gaps.append("the bluetooth pool is not the four ids this check knows")
+    if "POOL.iter().position" not in clicked:
+        gaps.append("a click on a device mark reaches nothing")
+    if '"bluetooth-device"' not in clicked:
+        gaps.append("clicking a device does not open that device")
+    if '"bluetooth-device"' not in view:
+        gaps.append("`bluetooth-device` is not what the view's own RET runs")
+    if '"bluetooth-open"' not in keymap:
+        gaps.append("the device marks have no equivalent key")
 
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #
@@ -1694,7 +1801,7 @@ let
   # through the WIT and out of the component's own memory.
   #
   # A buffer that took `enter-state` and did nothing would satisfy every check
-  # above and leave `SPC b s` offering a state nobody can enter, with the
+  # above and leave `SPC w s` offering a state nobody can enter, with the
   # modeline naming a screen that is not up. That is not hypothetical: it was
   # planted, and the first version of the driver PRINTED it and exited zero.
   #
@@ -4548,15 +4655,53 @@ let
 
         # --- and the view's key table agrees with its `match` ---------------
         #
-        # The unit test beside the table presses every key in it; this half
-        # catches the other direction — a key handled and never declared, which
-        # the manual would not list.
+        # The unit test beside the table presses every key in it. THIS half is
+        # the other direction — a key HANDLED and never declared, which the
+        # hint line would not teach and the manual would not list.
+        #
+        # It used to extract `declared` and compare it with nothing at all,
+        # printing the count on the OK line while its own comment claimed it
+        # caught that direction. A check against the criterion and not against
+        # the code closes an empty milestone, which is CLAUDE.md's own words.
         declared=$(sed -n '/^pub const OF_THE_VIEW/,/^];/p' "$view" \
           | grep -oE '^ *\("[^"]+"' | grep -oE '"[^"]+"' | tr -d '"')
         [ -n "$declared" ] || { echo "ERROR: could not find OF_THE_VIEW" >&2; exit 1; }
 
+        # AND THE TABLE IS THE ONLY DOOR, which is what makes the other
+        # direction impossible rather than merely absent.
+        #
+        # `View::key` does not `match` on a letter at all: it asks
+        # `of_the_view(t)`, which resolves the pressed key against
+        # `OF_THE_VIEW` — so a key the view answers to and the table does not
+        # declare cannot exist by construction. That is the design, and this
+        # is what holds it: the resolver has to be there, and no bare letter
+        # arm may appear beside it.
+        #
+        # `Sym::Char('s')` in the SIDEBAR is not one: `sidebar_key` is a
+        # second pane with its own table, read above as `sidekeys`.
+        # THE BODY IS TAKEN ONCE, into a variable. Piping `sed` into `grep -q`
+        # makes `grep` exit on the first match, `sed` die of a broken pipe and
+        # `pipefail` call the whole thing a failure — a check that reports the
+        # opposite of what it found.
+        body=$(sed -n '/pub fn key(&mut self/,/^    }$/p' "$view")
+        case "$body" in
+          *of_the_view\(t\)*) ;;
+          *)
+            echo "ERROR: the view no longer resolves keys through OF_THE_VIEW," >&2
+            echo "       so a key it answers to could exist with no line in the" >&2
+            echo "       table — untaught by the hint line, unnamed by the manual." >&2
+            failed=1
+            ;;
+        esac
+        loose=$(printf '%s\n' "$body" | grep -nE "Sym::Char\('.'\)" || true)
+        [ -z "$loose" ] || {
+          echo "ERROR: a letter answered outside the table:" >&2
+          echo "$loose" >&2
+          failed=1
+        }
+
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$keys" | wc -l) menu keys, $(echo "$declared" | wc -l) of the view's, and every Hit has an owner"
+        echo "OK: $(echo "$keys" | wc -l) menu keys, $(echo "$declared" | wc -l) of the view's resolved through the table, and every Hit has an owner"
       '';
 
   # THE PREVIEW'S PLAYER NEVER GUESSES A FRAME'S SIZE.
@@ -4855,6 +5000,585 @@ let
 
         [ "$failed" = 0 ] || exit 1
         echo "OK: one unit ($unit), the verb start, one user, four verbs that do not delete"
+      '';
+
+  # A KEY SEQUENCE IS NEVER TEXT IN A `.ftl`.
+  #
+  # Two things go wrong at once when it is, and both were on screen:
+  #
+  #   - THE SEQUENCE GOES STALE. `notif-act-in-the-footer` used to carry
+  #     `n h` as words, and it went on teaching `n h` after the key became
+  #     `n n`. Its fix is the shape this check demands: the keys arrive as a
+  #     `{ $keys }` argument built from a constant (`leader::NOTIF_OPEN_KEYS`).
+  #   - THE WORD "LEADER" IS NOBODY'S KEY. `nix/modules/niri.nix` sets
+  #     `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix` to `CTRL ALT SPC`; that
+  #     file's own comment says why two truths would be a screen saying `SPC`
+  #     while the key is something else. Every surface renders `crate::leader()`
+  #     — except, until this check, `power-answer-in-the-footer`, which said
+  #     the literal word in both languages.
+  #
+  # It is about VALUES and not keys: `cmd-notif-open` may say what a command
+  # does, and a value may name a key by NOTATION (`RET`, `TAB`) — what it may
+  # not do is spell out a leader sequence, which is what goes stale.
+  keys-are-never-text = mkCheck "keys-are-never-text" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    wrong = []
+    seen = 0
+    for language in "${lib.concatStringsSep " " languages}".split():
+        for line in pathlib.Path(f"${../assets/i18n}/{language}.ftl").read_text().splitlines():
+            if line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if not re.fullmatch(r"[a-z0-9][a-zA-Z0-9_-]*", key):
+                continue
+            seen += 1
+            # THE LEADER'S NAME FOLLOWED BY A SEQUENCE — a single letter, or
+            # several. The bare word is allowed and has to be: the manual's
+            # own section headings say "HOLDING THE LEADER" and "WHEN THE
+            # LEADER DOES NOT ANSWER", which name the CONCEPT and teach no
+            # key. What goes stale is `LEADER s p k`.
+            if re.search(r"\b(LEADER|SPC|SUPER)\b(\s+[A-Za-z]\b)+", value):
+                wrong.append(f"{language}: `{key}` spells a leader key: {value[:60]}")
+    if seen < 1000:
+        sys.exit(f"ERROR: only {seen} values read; the sweep is not reaching the catalogue")
+
+    if wrong:
+        print("ERROR: a key sequence written as text.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       The keys are an ARGUMENT: a constant beside the binding, plus", file=sys.stderr)
+        print("       `crate::leader()`, interpolated into a `{ $keys }`. A sequence", file=sys.stderr)
+        print("       written here goes stale the day the key moves, and the word", file=sys.stderr)
+        print("       LEADER is not a key on anybody's keyboard.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {seen} values, and none of them spells a key")
+    END
+  '';
+
+  # EVERY KEY REACHES AN ARM THAT EXISTS.
+  #
+  # `leader::reachable(&tree)` is every id some key in this system can run.
+  # What HANDLES an id is the `match` inside `surface::run_with`, plus the two
+  # generated families (`actions::kdl_of` for the compositor's mirrored
+  # actions, `actions::with_argument` for the two that carry a number).
+  #
+  # THE UNIT TEST BESIDE THE TABLE COMPARES AGAINST A HAND-KEPT LIST
+  # (`leader::WITH_ACTION`), and its own comment says the repetition is on
+  # purpose. The repetition is exactly what let `network-lan` through: the id
+  # was in the registry, in the tree, in the list — and in no arm of the
+  # `match`. `LEADER s n l` printed "network-lan does nothing yet" while the
+  # letter `l` inside the open view worked, so the feature existed and only
+  # the leader's door was dead.
+  #
+  # A list is a claim about the code. This reads the code.
+  run-command-handles-every-key = mkCheck "run-command-handles-every-key" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    surface = (shell / "surface.rs").read_text()
+    keymap = (shell / "leader.rs").read_text()
+    actions = (shell / "actions.rs").read_text()
+
+    # 1) WHAT THE `match` HANDLES. Arms are `"id" => …` and `"a" | "b" => …`,
+    #    at the arm's own indentation inside `run_with`.
+    body = re.search(r"fn run_with\(&mut self[^\n]*\n(.*?)\n    \}\n", surface, re.S)
+    if not body:
+        sys.exit("ERROR: `run_with` went away or changed shape")
+    handled = set()
+    for line in body.group(1).splitlines():
+        stripped = line.strip()
+        head = stripped.split("=>", 1)[0] if "=>" in stripped else ""
+        if not head:
+            continue
+        # Only a run of string literals joined by `|` is an arm's pattern; a
+        # `match` on something else inside the body has no bare literals here.
+        if re.fullmatch(r'(\s*"[a-z0-9-]+"\s*\|?)+', head):
+            handled |= set(re.findall(r'"([a-z0-9-]+)"', head))
+
+    if len(handled) < 100:
+        sys.exit(f"ERROR: only {len(handled)} arms found; the sweep is not reaching the match")
+
+    # 2) THE GENERATED FAMILIES, which have no arm and do not need one.
+    #
+    # `actions::all_of` is the table of the compositor's own actions, and
+    # `run_with` dispatches the whole table through `kdl_of` in one branch
+    # rather than one arm each. The pattern is `("id", json!(…))`.
+    generated = set(re.findall(r'\(\s*"([a-z0-9-]+)",\s*json!', actions))
+    # `workspace-go`/`workspace-move` carry their number in the chord's KDL;
+    # `only_a_chord_with_an_argument_escapes_the_action_table` guards that
+    # exception from the other side.
+    generated |= {"workspace-go", "workspace-move"}
+
+    # 3) AND EVERY ID THE LEADER'S TREE POINTS AT.
+    #
+    # THE TREE AND NOT `reachable()`: `reachable` also unions the views' own
+    # tables (`files-down`, `transfers-pause`), and those are answered by the
+    # VIEW's key handler while it has the keyboard — not by `run_with`, which
+    # they never reach. What has to have an arm here is what a LEADER SEQUENCE
+    # runs, because that arrives with no view open and this `match` is the
+    # only thing between it and nothing at all.
+    #
+    # Each row of `BINDINGS` is `("s n l", "network-lan", …)`.
+    bound = set(re.findall(r'^\s*\("[^"]*", "([a-z0-9-]+)"', keymap, re.M))
+    if len(bound) < 60:
+        sys.exit(f"ERROR: only {len(bound)} bindings found; the sweep is not reaching the table")
+
+    gaps = sorted(bound - handled - generated)
+    # `niri-<name>` is dispatched by prefix, not by an arm.
+    gaps = [g for g in gaps if not g.startswith("niri-")]
+    if gaps:
+        print("ERROR: a key that leads nowhere.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for g in gaps:
+            print(f"       `{g}` has a key and no arm in `surface::run_with`", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       From the leader it prints \"<id> does nothing yet\" and logs", file=sys.stderr)
+        print("       a command with no registered action. The hand-kept list in", file=sys.stderr)
+        print("       `leader::WITH_ACTION` cannot see this: it is a claim about", file=sys.stderr)
+        print("       the code, and this reads the code.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {len(bound)} ids a leader sequence runs, {len(handled)} arms, no gap")
+    END
+  '';
+
+  # THE FOOTER DRAWS WHAT THE KEYBOARD DRIVES.
+  #
+  # There are three questions about a modal view — which one gets the key,
+  # which one gets the region, and which one may open — and for a long time
+  # each was answered in a different place, in a different order:
+  #
+  #   - `Footer::view()` ranked the manual third and the notification manager
+  #     last;
+  #   - the key branch ranked the manager THIRD and the manual tenth;
+  #   - `expansion()` ranked the theme chooser first and the clipboard fourth;
+  #   - `region_is_free` asked about the file manager and nothing else.
+  #
+  # So clicking the bell with the power view up gave the keyboard to the
+  # manager and left the power view drawn: the arrows moved a cursor nobody
+  # could see, `d` forgot a notification, and `Esc` closed the invisible one.
+  # A pairing question could be drawn with `y`/`n` reaching the manager
+  # instead. Three reviewers found the same defect in three different views,
+  # which is what a rule kept by hand in three places looks like.
+  #
+  # THE FIX IS STRUCTURAL, and this is what pins it: `view()` is the ONE place
+  # the precedence is written, and every branch of the other two asks it. Then
+  # at most one branch can match and the ORDER the branches happen to appear
+  # in stops being an answer at all.
+  #
+  # Which is why this check is about the GUARDS and not about the order: it
+  # refuses any top-level branch of the two functions that reads a view's own
+  # field, and it demands that every view `view()` can return is named in both.
+  the-footer-draws-what-the-keyboard-drives =
+    mkCheck "the-footer-draws-what-the-keyboard-drives" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+        wrong = []
+
+        def body_of(signature):
+            """The lines of one method, from its signature to the closing brace at
+            its own indentation — the shape every method in this file has."""
+            lines = src.splitlines()
+            start = next(
+                (i for i, l in enumerate(lines) if l.strip().startswith(signature)),
+                None,
+            )
+            if start is None:
+                sys.exit(f"ERROR: `{signature}` went away or changed shape")
+            depth = 0
+            began = False
+            for i in range(start, len(lines)):
+                depth += lines[i].count("{") - lines[i].count("}")
+                if not began and "{" in lines[i]:
+                    began = True
+                    continue
+                if began and depth <= 0:
+                    return lines[start : i + 1]
+            sys.exit(f"ERROR: `{signature}` never closes")
+
+        # 1) THE ORDER, from the one place it is written.
+        order = re.findall(r"ViewState::([A-Z]\w*)", "\n".join(body_of("const fn view(&self)")))
+        order = [v for v in dict.fromkeys(order)]
+        if len(order) < 12:
+            wrong.append(f"`view()` ranks only {len(order)} views; it used to rank twelve")
+
+        # 2) NO BRANCH READS A VIEW'S OWN FIELD.
+        #
+        # The fields are listed rather than inferred, because that is the list that
+        # has to be maintained beside the enum, and a new view that forgets to add
+        # its field here still gets caught by check 3.
+        FIELDS = [
+            r"self\.files\.is_some\(\)",
+            r"self\.clipboard_open",
+            r"self\.transfers\.is_some\(\)",
+            r"self\.manual\b",
+            r"self\.apps\.is_some\(\)",
+            r"self\.network\.is_some\(\)",
+            r"self\.theme_chooser\.is_some\(\)",
+            r"self\.bluetooth\.is_some\(\)",
+            r"self\.power\.is_some\(\)",
+            r"self\.notifications_open",
+            r"self\.mx\.active\(\)",
+            r"self\.leader\.active_one\(\)",
+        ]
+        for signature, room in (
+            ("fn typed(&mut self, event: KeyEvent)", "the key branch"),
+            ("fn expansion(&self)", "the region"),
+        ):
+            lines = body_of(signature)
+            for n, line in enumerate(lines):
+                # Top level of the method body is eight spaces; anything deeper is
+                # inside a branch that has already asked.
+                if len(line) - len(line.lstrip()) != 8:
+                    continue
+                stripped = line.strip()
+                if not (stripped.startswith("if ") or stripped.startswith("} else if ")):
+                    continue
+                for field in FIELDS:
+                    if re.search(field, stripped):
+                        wrong.append(
+                            f"{room}: `{stripped[:60]}` reads a view's own field "
+                            "instead of asking `view()`"
+                        )
+
+        # 3) AND EVERY VIEW IS NAMED IN BOTH.
+        #
+        # A view with no branch in one of them is a view that is drawn and not
+        # driven, or driven and not drawn — the same defect from the other side.
+        keys = "\n".join(body_of("fn typed(&mut self, event: KeyEvent)"))
+        region = "\n".join(body_of("fn expansion(&self)"))
+        for view in order:
+            if view == "NoneOf":
+                continue
+            # THE LEADER IS THE TAIL, not a branch: a key that no view claimed
+            # falls through to `leader.key(&tree, key)` at the end of `typed`,
+            # which is what makes the sequence reachable from every view that
+            # does not want the key. A branch for it would be a second door.
+            if f"ViewState::{view}" not in keys and view != "Leader":
+                wrong.append(f"the key branch never names ViewState::{view}")
+            if f"ViewState::{view}" not in region:
+                wrong.append(f"the region never names ViewState::{view}")
+
+        # 4) AND THE DOOR ASKS ABOUT EVERY VIEW, not about one of them.
+        if "self.leader.key(&self.tree, key)" not in keys:
+            wrong.append(
+                "the key branch no longer falls through to the leader, so exempting "
+                "ViewState::Leader from the branch rule is no longer valid"
+            )
+
+        guard = "\n".join(body_of("fn region_is_free(&mut self, what: &str)"))
+        if "self.view()" not in guard:
+            wrong.append("`region_is_free` no longer asks `view()`")
+        if "self.files" in guard:
+            wrong.append("`region_is_free` is back to asking about the file manager alone")
+        doors = set(re.findall(r'region_is_free\("([a-z-]+)"\)', src))
+        if len(doors) < 10:
+            wrong.append(
+                f"only {len(doors)} doors ask whether the region is free: {sorted(doors)}"
+            )
+
+        if wrong:
+            print("ERROR: the footer would draw one view and drive another.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       `Footer::view()` is the one place the precedence is written.", file=sys.stderr)
+            print("       Every branch of the key dispatch and of the region asks it,", file=sys.stderr)
+            print("       so at most one can match and the order they are written in", file=sys.stderr)
+            print("       is not a second answer.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print(f"OK: {len(order)} views, one order, {len(doors)} doors that ask")
+        END
+      '';
+
+  # EVERY KEYBOARD IN THIS SYSTEM REPEATS, and none of them did.
+  #
+  # SCTK generates repeat events ONLY for a keyboard created with
+  # `get_keyboard_with_repeat`; a `repeat_key` implementation beside a plain
+  # `get_keyboard` is dead code that looks exactly like a working one. That is
+  # already recorded in CLAUDE.md as a trap found and fixed — and five windows
+  # written afterwards inherited it anyway, so holding an arrow in the power,
+  # radio, network, notification or update window moved exactly one row.
+  #
+  # The rule is structural: a file that implements `KeyboardHandler` asks for
+  # a keyboard that repeats. The footer is the ONE exception and says why in
+  # its own line — repeating a leader key is always a mistake.
+  every-window-repeats = mkCheck "every-window-repeats" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    # THE FOOTER IS THE EXCEPTION: it creates BOTH — one that repeats for
+    # the views, and a plain one for the leader — and the reason is written
+    # beside them.
+    EXCEPT = {"surface.rs"}
+    wrong = []
+    handlers = 0
+
+    for f in sorted(shell.rglob("*.rs")):
+        body = f.read_text()
+        if "impl KeyboardHandler for" not in body:
+            continue
+        handlers += 1
+        if f.name in EXCEPT:
+            continue
+        if "get_keyboard_with_repeat" not in body:
+            wrong.append(
+                f"{f.name}: implements KeyboardHandler and asks for a keyboard "
+                "that does NOT repeat"
+            )
+        if "fn repeat_key" not in body:
+            wrong.append(f"{f.name}: has no `repeat_key` at all")
+
+    # AND THE CHECK ITSELF IS NOT VACUOUS: it has to have found the windows.
+    if handlers < 6:
+        wrong.append(f"only {handlers} keyboard handlers found; the sweep is not reaching them")
+
+    if wrong:
+        print("ERROR: a keyboard that does not repeat.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       SCTK only sends repeat events for a keyboard made with", file=sys.stderr)
+        print("       `get_keyboard_with_repeat`. Without it `repeat_key` is dead", file=sys.stderr)
+        print("       code and holding an arrow moves exactly one row — which is", file=sys.stderr)
+        print("       indistinguishable, from the outside, from a list that ends.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {handlers} keyboards, and every one that drives a list repeats")
+    END
+  '';
+
+  # EVERY POLKIT RULE THIS SYSTEM HAS, counted.
+  #
+  # Six modules write one: `files`, `rescue`, `update`, `keyboard`, `memory`
+  # and `tor`. Four of them have a check of their own about how WIDE they are,
+  # and not one of them could see a SEVENTH appearing — the only sweep that
+  # existed (`disks-adds-no-polkit-rule-of-its-own`, step 3) looks for a udisks
+  # action and nothing else, and its step 4 asserted the presence of four of
+  # the six.
+  #
+  # So a module could grow `security.polkit.extraConfig` with a wide action and
+  # a `YES`, and every check in this repository would stay green. The owner's
+  # rule is "nothing asks", and a rule that returns `YES` is exactly the thing
+  # that makes something not ask — which is why the SET of them has to be
+  # named somewhere, and this is that place.
+  #
+  # IT READS THE MERGED CONFIG, not the module files: a rule smuggled in from
+  # anywhere reaches `security.polkit.extraConfig` all the same, and so does
+  # one whose `mkIf` never turns on. `tor-polkit-is-narrow` is the precedent.
+  polkit-rules-are-the-ones-we-know =
+    let
+      rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
+    in
+    mkCheck "polkit-rules-are-the-ones-we-know" [ pkgs.python3 ] ''
+      cat > rules.js <<'RULES'
+      ${rules}
+      RULES
+      python3 - <<'END'
+      import pathlib, re, sys
+
+      text = pathlib.Path("rules.js").read_text()
+
+      # THE ACTIONS EVERY RULE NAMES, and the module each belongs to. The
+      # comment is the audit: adding a line here is claiming somebody read the
+      # rule and decided the door is the right width.
+      AGREED = {
+          # OURS — five modules, and every one of them names ONE unit inside
+          # the same action. `files` and `rescue` return `AUTH_SELF_KEEP` (they
+          # ask, once, and remember); `keyboard`, `memory`, `update` and `tor`
+          # return `YES`, because nothing this system does on its own may ask.
+          # Each has a check of its own about which unit and which verbs.
+          "org.freedesktop.systemd1.manage-units":
+              "ours: files, rescue, keyboard, memory, update, tor",
+          # nix/modules/rescue.nix — the rescue console's way out, and the
+          # `-multiple-sessions` twins that logind asks separately about.
+          "org.freedesktop.login1.power-off": "ours: rescue",
+          "org.freedesktop.login1.power-off-multiple-sessions": "ours: rescue",
+          "org.freedesktop.login1.reboot": "ours: rescue",
+          "org.freedesktop.login1.reboot-multiple-sessions": "ours: rescue",
+          # UPSTREAM — nixpkgs' own `networking.networkmanager` module, and
+          # the reason `network-adds-no-nm-polkit-rule` does not exist: the
+          # rule the network view relies on is THIS one, written by nixpkgs
+          # for the `networkmanager` group, and ours would only widen it.
+          "org.freedesktop.NetworkManager.": "upstream: networkmanager",
+          "org.freedesktop.ModemManager": "upstream: networkmanager",
+      }
+
+      found = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', text))
+      found |= set(re.findall(r'action\.id\.(?:startsWith|indexOf)\("([^"]+)"', text))
+      results = set(re.findall(r"polkit\.Result\.([A-Z_]+)", text))
+      rules = len(re.findall(r"polkit\.addRule\(", text))
+
+      wrong = []
+      if not rules:
+          sys.exit("ERROR: the merged config has no rule at all; the sweep is not reaching it")
+      for action in sorted(found - set(AGREED)):
+          wrong.append(f"an action nobody audited: {action}")
+      for action in sorted(set(AGREED) - found):
+          wrong.append(f"an audited action that is gone: {action} (was {AGREED[action]})")
+      # AND NO RESULT WIDER THAN THE THREE THIS SYSTEM USES. `AUTH_ADMIN` and
+      # `AUTH_ADMIN_KEEP` ask for the ROOT password, which nothing here may.
+      for result in sorted(results - {"YES", "AUTH_SELF_KEEP", "NOT_HANDLED", "NO"}):
+          wrong.append(f"a result nobody agreed to: polkit.Result.{result}")
+
+      if wrong:
+          print("ERROR: the system's polkit posture changed.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       There is no polkit AGENT in this session, so a rule that", file=sys.stderr)
+          print("       returns YES is what makes something able to run at all —", file=sys.stderr)
+          print("       and a rule nobody read is a door nobody measured.", file=sys.stderr)
+          raise SystemExit(1)
+
+      print(f"OK: {rules} rules, {len(found)} actions, all of them audited")
+      END
+    '';
+
+  # THE ONE NEW POLKIT RULE IN THIS SYSTEM, and how wide it is.
+  #
+  # `nix/modules/tor.nix` lets the owner start and stop ONE unit. Everything
+  # about that sentence is checked here, and it is checked against the MERGED
+  # `security.polkit.extraConfig` of the whole system — not against the
+  # module's text. The difference is the point: a rule smuggled in from
+  # another module is invisible to a `grep` of one file, and so is a rule
+  # whose `mkIf` never turns on.
+  #
+  # THE FIRST VERSION OF THIS CHECK PASSED FOUR WIDENING EDITS — `YES` turned
+  # into `AUTH_ADMIN`, a second unit OR'd in, `try-restart` added, a second
+  # user OR'd in — because it grepped for the presence of words and never for
+  # the RESULT or for what else the rule allows. That is CLAUDE.md's own trap:
+  # a check against the code and not against the criterion closes an empty
+  # milestone.
+  tor-polkit-is-narrow =
+    let
+      # The merged rule text of the real system, and the crate's unit name.
+      rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
+    in
+    mkCheck "tor-polkit-is-narrow"
+      [
+        pkgs.python3
+        pkgs.gnugrep
+      ]
+      ''
+        crate=${../crates/ronoctua-tunnel/src}/tor.rs
+        unit=$(grep -oE 'pub const UNIT: &str = "[^"]+"' "$crate" | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$unit" ] || { echo "ERROR: the crate does not name the unit" >&2; exit 1; }
+        export RONOCTUA_UNIT="$unit"
+        export RONOCTUA_USER=${self.nixosConfigurations.vm.config.ronoctua.user}
+        cat > rules.js <<'RULES'
+        ${rules}
+        RULES
+        python3 - <<'END'
+        import os, re, sys
+
+        unit = os.environ["RONOCTUA_UNIT"]
+        user = os.environ["RONOCTUA_USER"]
+        text = open("rules.js").read()
+        wrong = []
+
+        # EVERY RULE OF THE WHOLE SYSTEM, split at `polkit.addRule`. The one
+        # about `manage-units` is the one this check is about; any OTHER rule
+        # that mentions our unit is a second door nobody audited.
+        rules = re.split(r"polkit\.addRule", text)[1:]
+        ours = [r for r in rules if unit in r]
+        if len(ours) != 1:
+            wrong.append(f"{len(ours)} rules mention {unit}; there may be one")
+
+        for rule in ours:
+            # 1. THE RESULT. In a session with no polkit agent, `AUTH_*` is a
+            #    refusal that looks like a bug; `YES` is the only answer that
+            #    works, and it is the one that has to be narrow.
+            results = set(re.findall(r"polkit\.Result\.(\w+)", rule))
+            if results != {"YES"}:
+                wrong.append(f"the rule answers {sorted(results)}, and may only answer YES")
+
+            # 2. THE ACTION.
+            actions = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule))
+            if actions != {"org.freedesktop.systemd1.manage-units"}:
+                wrong.append(f"the rule is about {sorted(actions)}")
+
+            # 3. THE UNITS — every literal compared against `unit`, and there
+            #    is one.
+            units = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+            if units != {unit}:
+                wrong.append(f"the rule names the units {sorted(units)}, and may name {unit}")
+
+            # 4. THE VERBS — exactly start and stop. `restart`, `reload` and
+            #    `enable` are wider doors, and `enable` survives a reboot.
+            verbs = set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule))
+            if verbs != {"start", "stop"}:
+                wrong.append(f"the rule allows the verbs {sorted(verbs)}")
+
+            # 5. THE USER — one, and ours.
+            users = set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule))
+            if users != {user}:
+                wrong.append(f"the rule is for {sorted(users)}, and may be for {user}")
+
+            # 6. AND THE CONDITION IS NOTHING BUT THOSE FOUR TESTS.
+            #
+            #    The four sets above say WHICH literals appear; this says that
+            #    nothing ELSE appears — a `subject.local`, a second action, a
+            #    group, an `isInGroup`. Every recognised comparison is struck
+            #    out and what is left has to be punctuation: if a word
+            #    survives, something was added that nobody audited.
+            #
+            #    It is written this way because "no `||`" is not the rule —
+            #    the two verbs are legitimately one — and a check that
+            #    forbade the shape rather than the WIDTH would have to be
+            #    turned off the day a second verb is wanted.
+            body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+            if not body:
+                wrong.append("the rule has no condition at all")
+            else:
+                left = body.group(1)
+                for known in (
+                    r'action\.id\s*==\s*"[^"]+"',
+                    r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+                    r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
+                    r'subject\.user\s*==\s*"[^"]+"',
+                ):
+                    left = re.sub(known, "", left)
+                leftover = re.sub(r"[\s()&|]", "", left)
+                if leftover:
+                    wrong.append(f"the condition tests something else as well: {leftover!r}")
+
+        # AND THE MODULE STILL KEEPS TOR OFF AT BOOT, and does not proxy the
+        # whole system — the two decisions the rule's width rests on.
+        module = open("${../nix/modules/tor.nix}").read()
+        if "wantedBy = lib.mkIf (!cfg.autostart)" not in module:
+            wrong.append("the module no longer keeps Tor off at boot by default")
+        if re.search(r"transparent\s*=\s*true", module):
+            wrong.append("the module turns on transparent proxying")
+
+        if wrong:
+            print("ERROR: the one polkit rule this system adds is not narrow.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("", file=sys.stderr)
+            print("       There is no polkit agent in this session, so the rule answers", file=sys.stderr)
+            print("       YES and never asks. What buys that width back is that the door", file=sys.stderr)
+            print("       is one millimetre wide: one unit, two verbs, one user.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print(f"OK: one rule, {unit}, the verbs start and stop, {user}, and YES")
+        END
       '';
 
   # THE HOST'S LIBRARIES NEVER GO ON `LD_LIBRARY_PATH` — except for NVIDIA.
@@ -6534,6 +7258,7 @@ let
       import json, sys
 
       BASE = ${toString typography.size.base}
+      TOLERANCE = ${toString typography.chromeTolerance}
       ICON = ${toString typography.size.icon}
 
       # THE ICONS THE CHROME DRAWS INLINE WITH TEXT, at `font.size.icon`.
@@ -6544,7 +7269,57 @@ let
       # of their own. What this list holds is what sits shoulder to shoulder
       # with digits on one line.
       INLINE = [
-          "notification", "notification-pending", "notification-muted",
+          "notification-pending",
+          # THE BATTERY'S LADDER AND THE PROFILE'S MARK sit beside the `NN%`
+          # digits and the rest of the line, so they are measured here too.
+          "battery-low",
+          "battery-half",
+          "battery-high",
+          "battery-full",
+          "battery-charging-empty",
+          "battery-charging-low",
+          "battery-charging-half",
+          "battery-charging-high",
+          "battery-charging-full",
+          "battery-danger",
+          "profile-power-saver",
+          "profile-balanced",
+          # THE DEVICE MARKS sit beside the same `NN%` digits, four at a time.
+          "bluetooth-device-headphones",
+          "bluetooth-device-headset",
+          "bluetooth-device-speaker",
+          "bluetooth-device-keyboard",
+          "bluetooth-device-mouse",
+          "bluetooth-device-gamepad",
+          "bluetooth-device-tablet",
+          "bluetooth-device-phone",
+          "bluetooth-device-computer",
+          "bluetooth-device-watch",
+          "bluetooth-device-camera",
+          "bluetooth-device-printer",
+          "bluetooth-device-network",
+          "bluetooth-device-display",
+          "bluetooth-device-unknown",
+          "bluetooth-connected",
+          "bluetooth-off",
+          # THE WAY OUT'S THREE, beside the same digits.
+          "no-internet",
+          "airplane",
+          "vpn",
+          "tailscale",
+          "tor",
+          # AND THE NETWORK VIEW'S ROWS, whose glyph is the first thing in the
+          # row's LABEL — shoulder to shoulder with the interface's name and
+          # the network's. It used to be a column of its own, which is why the
+          # arc-shaped `wifi_strength` family went unmeasured for so long.
+          "wifi-none",
+          "wifi-weak",
+          "wifi-fair",
+          "wifi-good",
+          "wifi-strong",
+          "wifi-off",
+          "network-secured",
+          "ethernet",
           # The two things one does to a notification with the mouse.
           "notification-mark-read", "notification-delete",
           # And the generic marks, for what nobody named a glyph for.
@@ -6553,7 +7328,7 @@ let
           "countdown-one", "countdown-two", "countdown-three", "countdown-four",
           "countdown-five", "countdown-six", "countdown-seven", "countdown-eight",
           # AND THE TWO FRAMES OF "AN UPDATE IS RUNNING", which sit in the
-          # modeline beside the buffer's name and the bell's digit. They are
+          # modeline beside the buffer's name and the marks beside it. They are
           # measured for the same reason the pie is: an animation whose frames
           # are 20% shorter than the text next to them does not read as one
           # drawing moving, it reads as the line twitching. Here the two frames
@@ -6586,6 +7361,21 @@ let
       bearing = x0 * BASE / 1000.0
       print(f"digit `0` at {BASE} px: {digit:.2f} px of ink, bearing {bearing:.2f} px")
 
+      # THE ONE SHAPE THE BAND CANNOT MEASURE, by name and with its reason.
+      #
+      # The band asks whether a drawing is as tall as the digit, because the
+      # defect it was born from was a bell with room to grow that was not
+      # using it. A WIDE drawing has no such room: its ink already spans the
+      # cell, and a size that made it as tall as the digit would push it into
+      # the character beside it. There is no square keyboard in the font, and
+      # a keyboard is what the row is about — so this one is measured by the
+      # other rule: it must FILL the cell and it must not be a sliver. The
+      # `deviations` of `owl.reference.nix`, in another file.
+      WIDE = {
+          "bluetooth-device-keyboard": "a keyboard is drawn wide and flat; nothing square in the font means keyboard",
+      }
+      FLOOR = 0.60
+
       failed = False
       for token in INLINE:
           if token not in icons:
@@ -6593,19 +7383,38 @@ let
               failed = True
               continue
           gx0, gy0, gx1, gy1 = ink(icons[token]["codepoint"])
-          h = (gy1 - gy0) * ICON / 1000.0
+          # THE SIZE THIS GLYPH IS DRAWN AT — measured by `gen-glyphdb.py`
+          # against this same face, and generated into
+          # `tokens::icon::chrome_size`. `font.size.icon` is its ceiling: a
+          # small drawing is brought up to the digit; a tall one (the vertical
+          # battery, 908 units against the digit's 751) is brought DOWN to
+          # it, and this is where a drawing of another proportion is caught
+          # instead of on somebody's screen.
+          size = float(icons[token]["chrome"])
+          if size > ICON:
+              print(f"ERROR: `{token}` is drawn at {size} px, past font.size.icon ({ICON})")
+              failed = True
+              continue
+          h = (gy1 - gy0) * size / 1000.0
           pct = 100.0 * h / digit
           # The run is placed so its ADVANCE is centred on the cell — see
           # `render::Size::OnTheCell` — and the ink rides wherever the font put
           # it inside that advance, which is not always the middle.
-          shift = (cell - ICON * 0.6) / 2.0
-          over = max(-(gx0 * ICON / 1000.0 + shift), gx1 * ICON / 1000.0 + shift - cell)
-          tall = 85.0 <= pct <= 115.0
+          shift = (cell - size * 0.6) / 2.0
+          over = max(-(gx0 * size / 1000.0 + shift), gx1 * size / 1000.0 + shift - cell)
+          ink_wide = (gx1 - gx0) * size / 1000.0
+          if token in WIDE:
+              # As large as the cell allows, and not a sliver.
+              tall = ink_wide >= cell and h >= FLOOR * digit
+              why = "  (wide: " + WIDE[token] + ")"
+          else:
+              tall = 100.0 - TOLERANCE <= pct <= 100.0 + TOLERANCE
+              why = ""
           wide = over < bearing
           mark = "ok " if tall and wide else "NO "
           print(
               f"{mark} {token:24s} {icons[token]['glyph']:28s} "
-              f"{h:5.2f} px {pct:5.1f}%  transborda {over:5.2f} px"
+              f"{size:4.0f} px -> {h:5.2f} px {pct:5.1f}%  overflows {over:5.2f} px{why}"
           )
           if not tall:
               failed = True
@@ -6617,30 +7426,42 @@ let
           print("")
           print("ERROR: a chrome icon is out of scale with the text beside it.")
           print("      Either `font.size.icon` changed, or the new glyph has a drawing")
-          print("      of another proportion — change the glyph, not the size: the")
-          print("      size holds for all the others.")
+          print("      that no size within the ceiling brings to the digit's height —")
+          print("      change the glyph, not the ceiling: it holds for all the others.")
           sys.exit(1)
       print("")
-      print(f"OK: {len(INLINE)} chrome icons at the digit's height, and none touches it")
+      # AND NOBODY WIDENS THE EXCEPTION QUIETLY: the list is named here, and
+      # a token that stops being drawn inline has to leave both lists.
+      unused = sorted(t for t in WIDE if t not in INLINE)
+      if unused:
+          print(f"ERROR: the wide exception names a glyph the chrome does not draw inline: {unused}")
+          sys.exit(1)
+      print(
+          f"OK: {len(INLINE)} chrome icons at the digit's height "
+          f"({len(WIDE)} wide by their own drawing), and none touches it"
+      )
       PY
 
-      # AND NOBODY introduces a second inline size without passing through here.
+      # AND NOBODY introduces an inline size without passing through here.
       #
-      # The list above only holds while OnTheCell is asked for with ONE size. A
-      # second one, written loose, would escape the measurement entirely — and
-      # the way to find out would again be by looking at the screen.
+      # The list above only holds while OnTheCell is asked for with the sizes
+      # this check measures: the token, or the generated `icon::chrome_size`,
+      # which is the same measurement written into the Rust. A size written
+      # loose would escape the measurement entirely — and the way to find out
+      # would again be by looking at the screen.
       #
       # The shell is the whole scope on purpose: a wasm buffer cannot ask for a
       # size in px (invariant 11 gives it a Scale, and the host resolves it), so
       # every chrome glyph in the system is drawn from here.
-      loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -v "SIZE_ICON" || true)
+      loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -v "chrome_size(" || true)
       if [ -n "$loose" ]; then
-        echo "ERROR: a glyph centred in the cell with a size outside the token:" >&2
+        echo "ERROR: a glyph centred in the cell with a size outside the measurement:" >&2
         echo "$loose" >&2
-        echo "      The chrome's icon size has ONE home: font.size.icon." >&2
+        echo "      The chrome's size has ONE rule: font.size.icon as the ceiling, and" >&2
+        echo "      icon::chrome_size for what the glyph generator measured." >&2
         exit 1
       fi
-      echo "OK: every glyph centred in a cell uses the same size token"
+      echo "OK: every glyph centred in a cell uses the measured size"
     '';
 
   # The guard of section 6.3: the Nerd Fonts version comes from the FILE ITSELF
@@ -6974,13 +7795,15 @@ let
     #      the row; the owner asked for it gone, so it moved to the message
     #      line — which means there has to be something that PUTS it there.
     #      Without this, "removed from the row" and "removed from the system"
-    #      look the same to a check.
-    if "pub fn hint(" not in manager:
+    #      look the same to a check. It is `View::note` (the hint line is
+    #      `View::hint`, generated from the key table, and the note wins
+    #      over it on the same line).
+    if "pub fn note(" not in manager:
         print("ERROR: the manager has no way of saying the reason")
         failed = True
     for door, name in (("footer", "surface.rs"), ("window", "notifications_window.rs")):
         drawn = (shell / name).read_text()
-        if "manager.hint(" not in drawn and "view.hint(" not in drawn:
+        if "manager.note(" not in drawn and "view.note(" not in drawn:
             print(f"ERROR: the {door} does not draw the reason on the message line")
             failed = True
 
@@ -7000,6 +7823,202 @@ let
         sys.exit(1)
     print("OK: every switch with no effect says on screen why it has none")
     PY
+  '';
+
+  # THE DOOR TO BLUEZ IS UPSTREAM'S, AND IT IS ALREADY OPEN.
+  #
+  # BlueZ has no polkit actions: its bus policy lets `context="default"` send
+  # to `org.bluez`, and that is the whole door. This check reads the INSTALLED
+  # file rather than trusting the sentence — the day a release narrows it, the
+  # radio would go quiet with nothing saying why, and this is what says why.
+  # It also holds our own side: no module of ours writes a bluez polkit rule
+  # (there is nothing to widen), and the crate spawns nothing privileged.
+  bluetooth-bus-policy-is-open = mkCheck "bluetooth-bus-policy-is-open" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    policy = pathlib.Path(
+      "${pkgs.bluez}/share/dbus-1/system.d/bluetooth.conf"
+    ).read_text()
+    wrong = []
+
+    # 1. ANY CLIENT MAY TALK TO THE DAEMON.
+    default = re.search(r'<policy context="default">(.*?)</policy>', policy, re.S)
+    if not default:
+        wrong.append("bluez no longer has a default policy at all")
+    elif 'send_destination="org.bluez"' not in default.group(1):
+        wrong.append("bluez stopped letting an ordinary client talk to it")
+
+    # 2. AND THE DAEMON MAY CALL BACK INTO AN AGENT OF OURS.
+    root = re.search(r'<policy user="root">(.*?)</policy>', policy, re.S)
+    if not root or 'send_interface="org.bluez.Agent1"' not in root.group(1):
+        wrong.append("bluez may no longer call an agent; pairing would answer nothing")
+
+    # 3. NOTHING OF OURS WIDENS IT, and nothing of ours asks.
+    #
+    # THE CODE, NOT THE PROSE. Every file here EXPLAINS that it writes no
+    # rule and spawns nothing, and a check that read the whole text would
+    # fail on the explanation — which is how this one first failed.
+    def code(text, marks):
+        return "\n".join(
+            l for l in text.splitlines() if not any(l.strip().startswith(m) for m in marks)
+        )
+
+    modules = pathlib.Path("${../nix/modules}")
+    bluetooth = code((modules / "bluetooth.nix").read_text(), ("#",))
+    if "polkit" in bluetooth:
+        wrong.append("nix/modules/bluetooth.nix writes a polkit rule")
+    if "hardware.bluetooth" not in bluetooth:
+        wrong.append("nix/modules/bluetooth.nix does not turn the radio on")
+    crate = pathlib.Path("${../crates/ronoctua-bluetooth/src}")
+    for f in sorted(crate.glob("*.rs")):
+        body = code(f.read_text(), ("//",))
+        for asked in ("pkexec", "pkttyagent", "sudo ", "systemd-run"):
+            if asked in body:
+                wrong.append(f"{f.name} spawns `{asked.strip()}`")
+        # AND THE AGENT ASKS FOR NO NAME: dbus's default policy refuses one,
+        # and the error reads exactly like an absent daemon. Two ways to ask
+        # — a connection BUILDER carrying `.name`, or `request_name` on a
+        # connection — and neither may appear. It looks for the builder and
+        # not for the word: a THREAD's name is another thing entirely, and
+        # both are spelled `.name(`, which is what the first version of this
+        # guard matched — it also matches the four THREAD builders in this crate.
+        if "connection::Builder" in body or "request_name" in body:
+            wrong.append(f"{f.name} asks for a well-known bus name")
+
+    if wrong:
+        for w in wrong:
+            print("ERROR: " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: bluez's own door is open, and nothing of ours touches it")
+    END
+  '';
+
+  # THE POWER MODULE WRITES NO POLKIT RULE — the disks' argument, verbatim:
+  # logind's and power-profiles-daemon's own actions already answer `yes` to
+  # an active session, and a rule of ours could only widen a door that is the
+  # right width. Both directions: the module has none, and the four that
+  # MUST have one still do.
+  power-adds-no-polkit-rule-of-its-own =
+    mkCheck "power-adds-no-polkit-rule-of-its-own" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        modules = pathlib.Path("${../nix/modules}")
+        power = (modules / "power.nix").read_text()
+        wrong = []
+
+        # 1. THE MODULE ACTUALLY TURNS THE DAEMONS ON.
+        for daemon in ("services.upower", "services.power-profiles-daemon"):
+            if daemon not in power:
+                wrong.append(f"nix/modules/power.nix does not mention {daemon}")
+
+        # 2. AND WRITES NO RULE.
+        if "polkit" in power and "extraConfig" in power:
+            wrong.append("nix/modules/power.nix writes a polkit rule")
+
+        # 3. NOR DOES ANY OTHER MODULE NAME A LOGIND, UPOWER OR PROFILE ACTION.
+        for f in sorted(modules.glob("*.nix")):
+            body = f.read_text().lower()
+            for action in ("org.freedesktop.login1.", "org.freedesktop.upower.", "powerprofiles."):
+                if action in body and "polkit.addrule" in body and f.name != "rescue.nix":
+                    wrong.append(f"{f.name} names a {action} action in a polkit rule")
+
+        # 4. AND THE RULES THAT SHOULD EXIST STILL DO.
+        for name in ["files.nix", "rescue.nix", "memory.nix", "keyboard.nix", "update.nix"]:
+            body = (modules / name).read_text()
+            if "polkit.addRule" not in body:
+                wrong.append(f"{name} lost the polkit rule it MUST have")
+
+        if wrong:
+            for w in wrong:
+                print("ERROR: " + w, file=sys.stderr)
+            sys.exit(1)
+        print("OK: the power module leaves polkit to logind and the profile daemon")
+        END
+      '';
+
+  # THE CHARGE THRESHOLDS' UDEV RULE LANDS, and it is the ONLY privileged
+  # door the power feature opens: both attribute files, on a battery, for the
+  # configured group, through store paths. Read out of the evaluated
+  # configuration, so the default the module promises is the one the machine
+  # gets.
+  power-thresholds-rule-lands =
+    let
+      rules = self.nixosConfigurations.noctua.config.services.udev.extraRules;
+      group = self.nixosConfigurations.noctua.config.ronoctua.power.thresholdsGroup;
+    in
+    mkCheck "power-thresholds-rule-lands" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import re, sys
+      rules = """${rules}"""
+      group = "${group}"
+      wrong = []
+      for attribute in ("charge_control_start_threshold", "charge_control_end_threshold"):
+          lines = [l for l in rules.splitlines() if attribute in l]
+          if not lines:
+              wrong.append(f"no udev rule for {attribute}")
+              continue
+          for l in lines:
+              if 'SUBSYSTEM=="power_supply"' not in l or 'ATTR{type}=="Battery"' not in l:
+                  wrong.append(f"the rule for {attribute} is not limited to a battery")
+              if f'TEST=="{attribute}"' not in l:
+                  wrong.append(f"the rule for {attribute} runs on a battery without the file")
+              # THE TARGET IS PART OF THE RULE. `chgrp users` with the wrong
+              # path hands nothing over, and the check would still pass:
+              # `/sys$devpath/<attribute>` is the file the crate writes.
+              target = re.escape("/sys$devpath/" + attribute)
+              if not re.search(r'RUN\+="/nix/store/[^"]*/chgrp ' + re.escape(group) + r' ' + target + r'"', l):
+                  wrong.append(f"the rule for {attribute} does not hand THAT file to `{group}` by store path")
+              if not re.search(r'RUN\+="/nix/store/[^"]*/chmod g\+w ' + target + r'"', l):
+                  wrong.append(f"the rule for {attribute} does not make THAT file group-writable")
+              if "chmod o+w" in l or "0666" in l:
+                  wrong.append(f"the rule for {attribute} opens the file to everybody")
+      if wrong:
+          for w in wrong:
+              print("ERROR: " + w, file=sys.stderr)
+          sys.exit(1)
+      print("OK: the two charge-threshold attributes are handed to the group, and nothing else")
+      END
+    '';
+
+  # NOTHING IN THE POWER CRATE ASKS. Every logind call goes with
+  # `interactive = false` — the `auth.no_user_interaction` of logind — and no
+  # `sudo`, `pkexec`, `pkttyagent` or `systemd-run` is spawned: there is no
+  # polkit agent in this session, and a call that could ask would hang. The
+  # `updates-never-ask` shape, on the crate instead of the runner.
+  power-never-asks = mkCheck "power-never-asks" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    crate = pathlib.Path("${../crates/ronoctua-power/src}")
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    wrong = []
+    login = (crate / "login.rs").read_text()
+    lib = (crate / "lib.rs").read_text()
+    # Every action method is declared with an `interactive` flag…
+    for verb in ("suspend", "hibernate", "hybrid_sleep", "suspend_then_hibernate", "power_off", "reboot"):
+        if not re.search(rf"fn {verb}\(&self, interactive: bool\)", login):
+            wrong.append(f"login.rs: `{verb}` lost its `interactive` flag")
+    # …and every call passes `false`.
+    calls = re.findall(r"manager\.(suspend|hibernate|hybrid_sleep|suspend_then_hibernate|power_off|reboot)\(([^)]*)\)", lib)
+    if not calls:
+        wrong.append("lib.rs: no logind action is called at all")
+    for verb, arg in calls:
+        if arg.strip() != "false":
+            wrong.append(f"lib.rs: `{verb}` is called with `{arg}`, which may ask")
+    for f in list(crate.glob("*.rs")) + [shell / "power.rs", shell / "power_window.rs", shell / "power_words.rs"]:
+        body = f.read_text()
+        for word in ("sudo", "pkexec", "pkttyagent", "systemd-run"):
+            for i, line in enumerate(body.splitlines(), 1):
+                if re.search(rf'"[^"]*\b{re.escape(word)}\b', line) and not line.lstrip().startswith("//"):
+                    wrong.append(f"{f.name}:{i} spawns `{word}`")
+    if wrong:
+        for w in wrong:
+            print("ERROR: " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: the power crate asks nothing of anybody — every logind call is non-interactive")
+    END
   '';
 
   # AND EVERY NOTIFICATION OF THE DISTRO EXISTS IN BOTH LANGUAGES.
@@ -7246,7 +8265,23 @@ let
       *" tcp_bbr "*) ;;
       *) echo "FAILED: tcp_bbr is not in boot.kernelModules" >&2; exit 1 ;;
     esac
-    echo "OK: powersave off, BBR+fq, slow start disarmed"
+    # AND THE CONNECTIVITY CHECK REACHES THE DAEMON'S OWN FILE.
+    #
+    # It is `settings.connectivity` and not `connectivity`: the second is not
+    # an option of the nixpkgs module, and writing it fails at EVALUATION —
+    # which is how it was found, three modules later, with an error naming
+    # three options that have nothing to do with it. This line is what stops
+    # the value being written somewhere nothing reads.
+    #
+    # Without the check the daemon answers `full` for any route at all, and
+    # the modeline's `no way out` mark could never appear.
+    expected "connectivity.uri"       "${
+      toString networkEval.networking.networkmanager.settings.connectivity.uri or ""
+    }" "http://nmcheck.gnome.org/check_network_status.txt"
+    expected "connectivity.interval"       "${
+      toString networkEval.networking.networkmanager.settings.connectivity.interval or ""
+    }" "300"
+    echo "OK: powersave off, BBR+fq, slow start disarmed, the way out measured"
   '';
 
   syncthing-tuned = mkCheck "syncthing-tuned" [ ] ''
@@ -7726,6 +8761,10 @@ let
          "executar", "expandido", "expansao", "fabrica", "falhou", "falta", "faltando",
          "familia", "fechar", "ficha", "fila", "filhos", "filtro", "fluxo",
          "fonte", "fontes", "fora", "fragmento", "frase", "frequencia",
+         # THE SIX A REVIEW FOUND that no stem and no ending caught: a local
+         # in a build script (`dentro`), and five words inside `assert!`,
+         # `bail!` and test fixtures — all of them places invariant 18 names.
+         "dentro", "toques", "viraram", "terminam", "termina", "digite",
          "fundo", "gesto", "glifo", "glifos", "grade", "grafico", "gravada",
          "grupo", "guarda", "guardar", "heranca", "hospedeiro", "icone",
          "icones", "idioma", "imagens", "impermanencia", "instalador",
@@ -7774,10 +8813,17 @@ let
     # These are the endings no English word takes — with the handful that do
     # underneath, because `avocado` and `crescendo` are English and a ruler
     # that does not know it would be a ruler nobody could keep green.
+    #
+    # `-ou` AND `-ei` ARE THE PAST TENSE, and they were missing: `escapou`
+    # sat inside an `assert!` message for weeks with every check green, which
+    # is what a ruler with a hole in it looks like. English takes both endings
+    # (`you`, `sound`, `their`), so the list underneath had to grow with them
+    # — that is the price, and it is one line per word.
     MORPH = re.compile(
         r"(?<![a-zà-ü])[a-zà-ü]{3,}"
         r"(?:ção|ções|cao|coes|mente|ência|encia|ância|ancia"
-        r"|agem|idade|ndo|ado|ada|ados|adas|ido|ida|idos|idas)"
+        r"|agem|idade|ndo|ado|ada|ados|adas|ido|ida|idos|idas"
+        r"|ou|ei|eu|iu|aram|eram|iram)"
         r"(?![a-zà-ü])"
     )
     # Adding here is cheap and each one is a word this tree really uses;
@@ -7786,6 +8832,15 @@ let
         "avocado", "tornado", "tornados", "desperado", "bravado", "aficionado",
         "dorado", "colorado", "crescendo", "innuendo", "commando", "commandos",
         "cacao", "armada", "florida", "canada", "silverado", "eldorado",
+        # THE ENGLISH WORDS THAT END IN `-ou`, `-ei`, `-eu` OR `-iu`. Every
+        # one of them is in this tree; the ruler above is worth the list.
+        "you", "your", "yours", "thou", "sou", "lieu", "milieu", "adieu",
+        "bureau", "plateau", "tableau", "trousseau", "nouveau", "queue",
+        "seiei", "their", "theirs", "seize", "seizure", "beige", "feint",
+        "neighbour", "neighbours", "weird", "either", "neither", "leisure",
+        "protein", "caffeine", "codeine", "eight", "eighth", "eighty",
+        "height", "weight", "freight", "sleigh", "veil", "vein", "reign",
+        "foreign", "sovereign", "counterfeit", "forfeit", "surfeit",
         # AND THE NAMES OF THINGS. `COLLADA` is a 3D format this tree reads,
         # and `-ada` is its last three letters by accident.
         "collada",
@@ -8146,7 +9201,17 @@ let
     # already makes: adding one is cheap, and taking one out has to be argued.
     GRAMMAR = re.compile(
         r"(?:^| )(da|das|na|nas|ao|aos|uma|umas|pelo|pela|não|nao|são|sao"
-        r"|sem|que|com|para|foi|pra|nem)(?: |$)"
+        r"|sem|que|com|para|foi|pra|nem"
+        # `em`, `dos`, `nos` and the demonstratives, added after a review
+        # found three Portuguese assertions this pass could not see: "o
+        # progresso termina EM 100%", "OS sete toques viraram". `do`, `no`
+        # and `a` stay out for the reason above — they are English words.
+        r"|dos|este|esta|isso|seus|suas)(?: |$)"
+        # `em` NEEDS ITS OWN RULE, because it is also the typographic unit:
+        # "0.600 em at the normal width" is English about a measurement. So it
+        # counts only when a NUMBER does not come before it. `nos` is left out
+        # entirely — the Unicode database has a field by that name.
+        r"|(?<![0-9])(?:^| )em(?: |$)"
     )
     VOCABULARY = re.compile(
         r"(?<![a-z])(ler|mudar|abrir|criar|gravar|apagar|mover|copiar|verbo|dono"
@@ -8157,7 +9222,11 @@ let
         r"|colar|folga|escolheu|pediu|verificado|bandeira|distingue|uso"
         r"|diferencial|fatos|resgate|passou|razao|confirmacao|subiu|desceu"
         r"|nasceu|interruptor|clicar|avancou|modificador|sumiu|ausente|diferenca"
-        r"|esperava|virou|tela|erro|linha|arquivo|pasta|qualquer)(?![a-z])"
+        r"|esperava|virou|tela|erro|linha|arquivo|pasta|qualquer"
+        # AND THE ONES A REVIEW FOUND IN ASSERTIONS. An `assert!`'s message is
+        # what a person reads when a battery goes red at three in the morning,
+        # and invariant 18 names `assert` explicitly.
+        r"|termina|terminam|progresso|toques|viraram|digite|glifo|glifos)(?![a-z])"
     )
     # The macros a message reaches a person through.
     #
@@ -8228,7 +9297,7 @@ let
 
     # `whole_call` above is what reads a sentence written on more than one
     # line, and it is how `"desenhou vetor sem declarar `Vetor`"` and
-    # `"o `SPC b s` oferece e ninguem entra"` are seen at all: the Portuguese
+    # `"o `SPC w s` oferece e ninguem entra"` are seen at all: the Portuguese
     # sat on a continuation, and a continuation is not a line matching `SPEAKS`.
     #
     # AND `buffers` READS THE SAME RULER. Pass 9 was written for `crates`, and
@@ -9673,6 +10742,12 @@ let
       disks-tools-are-pinned
       screenshots-land-in-a-declared-directory
       files-polkit-is-narrow
+      tor-polkit-is-narrow
+      every-window-repeats
+      the-footer-draws-what-the-keyboard-drives
+      run-command-handles-every-key
+      keys-are-never-text
+      polkit-rules-are-the-ones-we-know
       files-closure-has-no-mime-db
       files-columns-degrade
       transfers-unit-is-narrow
@@ -9723,6 +10798,12 @@ let
       motion-never-leaks-a-child
       motion-photo-is-found-by-bytes
       files-polkit-is-narrow
+      tor-polkit-is-narrow
+      every-window-repeats
+      the-footer-draws-what-the-keyboard-drives
+      run-command-handles-every-key
+      keys-are-never-text
+      polkit-rules-are-the-ones-we-know
       files-closure-has-no-mime-db
       files-columns-degrade
       transfers-unit-is-narrow
@@ -9753,10 +10834,17 @@ let
       screenshots-land-in-a-declared-directory
       disks-adds-no-polkit-rule-of-its-own
       disks-tools-are-pinned
+      power-adds-no-polkit-rule-of-its-own
+      power-thresholds-rule-lands
+      power-never-asks
+      bluetooth-bus-policy-is-open
       persistence-takes-its-root-as-a-parameter
       browser-has-no-keyring
       ;
     notify-vm = notifyVm;
+    power-vm = powerVm;
+    bluetooth-vm = bluetoothVm;
+    network-vm = networkVm;
     impermanence-vm = impermanenceVm;
     buffer-vm = bufferVm;
     memory-vm = memoryVm;

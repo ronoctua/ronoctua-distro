@@ -317,6 +317,19 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     let gap = tokens::space::MODELINE_SEGMENTGAP;
     let mut alive: Vec<&Segment> = segments.iter().collect();
 
+    // THE TWO EDGES ARE NOT THE LINE'S TO SPEND. The left side starts
+    // `modeline.edgeLeft` in and the right side ends `modeline.edgeRight`
+    // before the screen, so what the segments and their gaps may take is the
+    // width less both. It used to compare against the whole width, and the
+    // arithmetic only held because a right-hand segment always survived: a
+    // line whose only survivor was on the LEFT was shrunk to exactly
+    // `columns`, then drawn one cell in — one cell off the screen. The bell
+    // leaving the line at rest is what made such a line possible.
+    let budget = u32::from(
+        columns
+            .saturating_sub(tokens::space::MODELINE_EDGELEFT + tokens::space::MODELINE_EDGERIGHT),
+    );
+
     // A set's cost: the sum of the natural widths plus the gaps.
     let cost = |v: &[&Segment]| -> u32 {
         if v.is_empty() {
@@ -328,7 +341,7 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
 
     // Step 2: it drops the lowest-priority one until it fits. Whoever has
     // `removable = false` never goes — it shrinks to `min_cols` in step 3.
-    while cost(&alive) > u32::from(columns) {
+    while cost(&alive) > budget {
         let Some((idx, _)) = alive
             .iter()
             .enumerate()
@@ -345,9 +358,14 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     let mut order: Vec<usize> = (0..alive.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(alive[i].priority));
 
-    let total = |ws: &[u16], n: usize| -> u32 {
+    // A GAP ONLY BETWEEN SEGMENTS THAT ARE STILL DRAWN. One that phase B took
+    // to zero is not drawn (see below), and charging the line for the air
+    // beside a segment that is not there took the bell away at eight columns
+    // while three cells sat empty — measured, once the edges were reserved.
+    let total = |ws: &[u16]| -> u32 {
+        let live = ws.iter().filter(|&&w| w > 0).count();
         ws.iter().map(|&w| u32::from(w)).sum::<u32>()
-            + u32::from(gap) * (n.saturating_sub(1) as u32)
+            + u32::from(gap) * (live.saturating_sub(1) as u32)
     };
 
     // Phase A: shrink to the floor, from the least prioritised to the most.
@@ -358,11 +376,11 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     // phase A resolved the contradiction by making the segment disappear, which is the opposite of what
     // the declaration says. Found by the property test, not by reading.
     for &i in &order {
-        let current = total(&widths, alive.len());
-        if current <= u32::from(columns) {
+        let current = total(&widths);
+        if current <= budget {
             break;
         }
-        let excess = current - u32::from(columns);
+        let excess = current - budget;
         let can = widths[i].saturating_sub(effective_floor(alive[i]));
         widths[i] -= u16::try_from(excess).unwrap_or(u16::MAX).min(can);
     }
@@ -382,11 +400,11 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     // Without this phase, the `nothing_goes_past_the_width` test fails from
     // ~14 columns on — which is exactly how this bug showed up.
     for &i in &order {
-        let current = total(&widths, alive.len());
-        if current <= u32::from(columns) {
+        let current = total(&widths);
+        if current <= budget {
             break;
         }
-        let excess = current - u32::from(columns);
+        let excess = current - budget;
         widths[i] -= u16::try_from(excess).unwrap_or(u16::MAX).min(widths[i]);
     }
 
@@ -475,8 +493,9 @@ mod tests {
     #[test]
     fn a_leading_glyph_comes_off_the_text() {
         use super::{is_chrome_glyph, leading_glyph};
-        // The bell and its count, which is what the modeline actually draws.
-        let bell = ronoctua_tokens::icon::NOTIFICATION;
+        // A chrome glyph followed by digits — the shape a segment with a
+        // number takes (a transfer's `62%`, a device's `12%`).
+        let bell = ronoctua_tokens::icon::NOTIFICATION_PENDING;
         let line = format!("{bell}12");
         let (g, rest) = leading_glyph(&line).expect("the bell is a chrome glyph");
         assert_eq!(g, bell.to_string());
@@ -745,6 +764,35 @@ mod tests {
         let ids: Vec<_> = r.iter().map(|c| c.id).collect();
         assert!(!ids.contains(&"state"));
         assert!(ids.contains(&"buffer"));
+    }
+
+    #[test]
+    fn a_lone_segment_on_the_left_respects_the_edge() {
+        // THE CASE THE PROPERTY TEST CANNOT DRAW: it always keeps a right-hand
+        // segment alive, and with one there the arithmetic happened to hold.
+        // With the bell gone at rest the line can be one long name and nothing
+        // else, and that name was shrunk to the whole width and drawn one
+        // cell in — one cell off the screen.
+        let name = "a".repeat(300);
+        for columns in [8_u16, 20, 40, 80] {
+            let only = vec![seg(
+                "buffer",
+                &name,
+                4,
+                8,
+                Side::Left,
+                Shrink::InTheMiddle,
+                false,
+            )];
+            for c in resolve(columns, &only) {
+                assert!(
+                    c.column + width(&c.text) <= columns - tokens::space::MODELINE_EDGERIGHT,
+                    "'{}' ends at {} in a width of {columns}",
+                    c.id,
+                    c.column + width(&c.text)
+                );
+            }
+        }
     }
 
     #[test]

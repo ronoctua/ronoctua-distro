@@ -1,0 +1,38 @@
+[package]
+name = "ronoctua-bluetooth"
+description = "The one boundary with BlueZ: the radio, the devices, what each one can do, and the pairing agent."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# zbus enters `bluez.rs` and `agent.rs` only. The rules — what kind of thing a
+# device is, which of them the modeline shows, what a percentage means, how a
+# scene changes — live in `lib.rs` over plain structs, and are tested against
+# an INVENTED `GetManagedObjects` map: no bus, no adapter, no addresses.
+#
+# NO POLKIT, and no group. BlueZ's own bus policy lets `context="default"`
+# send to `org.bluez` (`bluetooth-bus-policy-is-open` pins that fact), so
+# there is nothing for this crate to ask for and nothing to configure.
+#
+# NO `[[bin]]`: nothing here is a daemon. The footer raises the threads, and
+# the agent is served on the orders thread's own connection.
+
+[dependencies]
+zbus.workspace = true
+anyhow.workspace = true
+# The watching threads outlive whoever asked for them, and when the daemon
+# goes away there is nobody to return an error to — so they say so to the log.
+tracing.workspace = true
+# The pairing agent parks a task on a question — see the module's header.
+futures-channel.workspace = true
+futures-lite.workspace = true
+async-io.workspace = true
+# `pw-dump` prints JSON, and the audio profile is the one thing BlueZ cannot
+# answer — see `audio.rs`. Reading it by hand would be a second parser for a
+# format somebody else owns.
+serde_json.workspace = true
+
+[lints]
+workspace = true

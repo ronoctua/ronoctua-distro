@@ -239,8 +239,15 @@ pub fn chords() -> Vec<Chord> {
         of_command(".", "Period", "window-expel"),
         // THE MOUSE WHEEL is a chord too: with the leader held, scrolling
         // switches workspace. It is the only shortcut in the system that is not a key.
-        of_command("roda ↓", "WheelScrollDown", "workspace-next"),
-        of_command("roda ↑", "WheelScrollUp", "workspace-previous"),
+        // THE NOTATION AND NOT A WORD. `shows` is drawn on screen by
+        // `manual.rs` (`"{chord} + {shows}"`), so these two were a hard-coded
+        // UI string (invariant 8) AND a Portuguese one (invariant 18): an
+        // English reader opening `LEADER h s` read "SUPER + roda ↓". Every
+        // other chord's `shows` is a key notation, which is language-free,
+        // and a wheel has one too — the angle brackets this system already
+        // uses for `<down>` and `<up>`.
+        of_command("<wheel-down>", "WheelScrollDown", "workspace-next"),
+        of_command("<wheel-up>", "WheelScrollUp", "workspace-previous"),
         // --- opening ---
         through_shell("RET", "Return", "buffer-terminal"),
         // THE MONITOR, held-leader plus `Esc` — and `Ctrl+Alt+Esc` in

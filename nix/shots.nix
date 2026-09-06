@@ -277,7 +277,7 @@ pkgs.testers.runNixOSTest {
         timeout=90,
     )
 
-    with subtest("the footer at rest, with the bell"):
+    with subtest("the footer at rest — two lines, and no bell"):
         shot("1-footer-at-rest", lines=2)
 
     with subtest("the discreet band, one line tall"):
@@ -357,7 +357,7 @@ pkgs.testers.runNixOSTest {
         shot("5-screenshot-with-actions", lines=5)
 
     with subtest("the manager, in two columns"):
-        control("notif-history")
+        control("notif-open")
         shot("6-manager-two-columns")
 
     with subtest("the distro's catalogue, in the third column"):
@@ -375,7 +375,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
         machine.sleep(1)
         shot("8-adjustment-sheet")
-        control("notif-history")
+        control("notif-open")
 
     with subtest("the file manager, with the preview and the facts"):
         # A PICTURE MADE IN THE VM, and nothing brought in. The owner's own

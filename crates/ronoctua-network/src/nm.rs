@@ -16,7 +16,7 @@
 //! event source, and bringing an async executor inside it
 //! would add a second concurrency model without solving anything.
 
-// `#[zbus::proxy]` GENERATES a struct per trait (`GerenteProxy`,
+// `#[zbus::proxy]` GENERATES a struct per trait (`ManagerProxy`,
 // `ManagerProxyBlocking`), and the workspace's `missing_docs` flags them. There is
 // nowhere to write their documentation: the macro creates them after expansion.
 // What can be documented — the trait and each method — is documented, and that is
@@ -44,6 +44,9 @@ pub const WIFI_KIND: u32 = 2;
 pub const STATE_ACTIVATED: u32 = 100;
 /// The range of transitional states: preparing, configuring, authenticating.
 pub const STATE_TRANSITION: std::ops::Range<u32> = 30..100;
+
+/// `NM_802_11_MODE_AP` — the radio is BEING an access point, not using one.
+pub const RADIO_IS_AP: u32 = 3;
 
 /// `NM_802_11_AP_FLAGS_PRIVACY` — the network asks for a key.
 pub const AP_PRIVACY: u32 = 0x1;
@@ -92,9 +95,59 @@ pub trait Manager {
     #[zbus(property)]
     fn wireless_enabled(&self) -> zbus::Result<bool>;
 
+    /// Is networking on AT ALL? This is the aeroplane switch: it takes every
+    /// device down, radio and cable alike, and it is what `Enable(false)`
+    /// writes. `WirelessEnabled` above is only the radio.
+    #[zbus(property)]
+    fn networking_enabled(&self) -> zbus::Result<bool>;
+
+    /// Turns every device off, or back on — the aeroplane.
+    fn enable(&self, on: bool) -> zbus::Result<()>;
+
+    /// What the daemon believes about the way OUT: 1 none, 2 portal,
+    /// 3 limited, 4 full. Believes, and does not measure — with the
+    /// connectivity check off it answers `full` for any route at all, which
+    /// is why `nix/modules/network.nix` turns the check on.
+    #[zbus(property)]
+    fn connectivity(&self) -> zbus::Result<u32>;
+
+    /// Every connection that is UP: a VPN is one of these, and so is the
+    /// Wi-Fi carrying it.
+    #[zbus(property)]
+    fn active_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+
+    /// Takes one down — a VPN, or a link.
+    fn deactivate_connection(&self, active: &zbus::zvariant::ObjectPath<'_>) -> zbus::Result<()>;
+
     /// Turns the radio on and off. It is `rfkill` in software.
     #[zbus(property)]
     fn set_wireless_enabled(&self, on: bool) -> zbus::Result<()>;
+}
+
+/// One connection that is UP.
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Connection.Active",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+pub trait Active {
+    /// `802-11-wireless`, `802-3-ethernet`, `vpn`, `wireguard`, `tun`.
+    #[zbus(property)]
+    fn type_(&self) -> zbus::Result<String>;
+
+    /// The profile's name, which is what a person called it.
+    #[zbus(property)]
+    fn id(&self) -> zbus::Result<String>;
+
+    /// Is it a VPN in NetworkManager's own sense? WireGuard is NOT: it is a
+    /// device type, and it answers `false` here while being exactly the
+    /// thing a person means by "the VPN is up". The rule that reads both is
+    /// `vpn_active`.
+    #[zbus(property)]
+    fn vpn(&self) -> zbus::Result<bool>;
+
+    /// Where it stands: 2 is activated.
+    #[zbus(property)]
+    fn state(&self) -> zbus::Result<u32>;
 }
 
 #[zbus::proxy(
@@ -114,8 +167,40 @@ pub trait Device {
     #[zbus(property)]
     fn interface(&self) -> zbus::Result<String>;
 
+    /// Where this device's IPv4 configuration lives — addresses, gateway and
+    /// resolvers. `/` while the device has none, which is how NetworkManager
+    /// says "not configured" and NOT an error.
+    #[zbus(property)]
+    fn ip4_config(&self) -> zbus::Result<OwnedObjectPath>;
+
     /// Takes down whatever is active on this device.
     fn disconnect(&self) -> zbus::Result<()>;
+}
+
+/// One device's IPv4 configuration.
+///
+/// THE ADDRESS THE MACHINE ACTUALLY HAS, and not the one a profile asks for:
+/// a DHCP lease, a link-local fallback and a static address all arrive here
+/// the same way, which is why the screen reads this and never the profile.
+/// The MAC is deliberately NOT read — the interface name already says which
+/// device a row is about, and one identifier fewer is one fewer to keep out
+/// of a screenshot.
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.IP4Config",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+pub trait Ip4 {
+    /// One entry per address, each with `address` and `prefix`.
+    #[zbus(property)]
+    fn address_data(&self) -> zbus::Result<Vec<HashMap<String, zbus::zvariant::OwnedValue>>>;
+
+    /// The way out of this device, or empty when it has none.
+    #[zbus(property)]
+    fn gateway(&self) -> zbus::Result<String>;
+
+    /// One entry per resolver, each with `address`.
+    #[zbus(property)]
+    fn nameserver_data(&self) -> zbus::Result<Vec<HashMap<String, zbus::zvariant::OwnedValue>>>;
 }
 
 #[zbus::proxy(
@@ -133,6 +218,12 @@ pub trait Radio {
     /// The access point in use, or `/` when there is none.
     #[zbus(property)]
     fn active_access_point(&self) -> zbus::Result<OwnedObjectPath>;
+
+    /// What the radio is DOING: 2 is joined to a network, 3 is BEING one.
+    /// It is the only way to tell a hotspot from a connection — the active
+    /// connection's type is `802-11-wireless` either way.
+    #[zbus(property)]
+    fn mode(&self) -> zbus::Result<u32>;
 
     /// The negotiated rate, in kb/s.
     #[zbus(property)]

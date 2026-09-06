@@ -15316,7 +15316,7 @@ mod tests {
         // band 2.80 — both under the 3:1 floor. The lift is one pass over the
         // finished fields, so it also covers the permission bits that are not
         // set, which have the same defect and which nobody reported.
-        let dir = scratch("faixa-tom");
+        let dir = scratch("band-tone");
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
         std::fs::write(dir.join("b.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 3);
@@ -15445,7 +15445,7 @@ mod tests {
         // wide window most of a row belongs to a field covering only the
         // filename's letters, and the rest answered nothing. *"As vezes o item
         // é destacado, as vezes não, e muitos nunca são destacado."*
-        let dir = scratch("faixa-vazio");
+        let dir = scratch("band-empty");
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 3);
         v.reread();
@@ -17892,7 +17892,7 @@ mod tests {
             ronoctua_tokens::color::STATE_ACCENT,
             "the last field should be the query: {crumbs:?}"
         );
-        assert!(!last.text.is_empty(), "a consulta desapareceu");
+        assert!(!last.text.is_empty(), "the query went away");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
