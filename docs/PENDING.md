@@ -169,34 +169,6 @@ GTK e Qt leem. Não há conserto óbvio que não seja reimplementar a camada. Fi
 - acabou quando: o dono decide que é aceitável e isso vira uma linha no ARCHITECTURE, ou aparece
   um caminho declarativo que os toolkits leiam a quente
 
-### 0.000019c. Duas portas escrevem pelo MESMO nome de rascunho · pequeno, e ficou carregando peso
-
-`ronoctua_xdg::write_atomically` escreve `<arquivo>.new` e renomeia. O nome é FIXO, e este
-entregável é o primeiro a dar dois escritores em dois PROCESSOS ao mesmo arquivo: as duas portas
-gravam `display.json` e `niri-display.kdl` pelo mesmo caminho. Dois `write` simultâneos abrem o
-mesmo `.new` com truncate, e o rename instala o que sair da mistura — ou o segundo recebe `ENOENT`
-e vira `Refusal::NoPlaceToWrite`. A mescla campo a campo reduziu a janela; não a fechou.
-
-Não é deste entregável (a função é anterior), mas é ele que a pôs sob duas mãos. A saída é um
-rascunho por PROCESSO (`.new.<pid>`), que é uma linha — está aqui e não consertado porque a função
-é usada por sete domínios e a mudança é do `ronoctua-xdg`, não das telas.
-
-- acabou quando: o rascunho é único por escritor, e há um teste com dois processos
-
-### 0.000019d. Fechar a porta espera 3 s pela fila inteira · pequeno
-
-`Handle::finish` manda a última ordem, larga o canal e espera `PATIENCE` (3 s) pela thread. O
-orçamento é da FILA, não de uma ordem: a thread começa com um `look(true)` PROFUNDO (que numa
-máquina com vários monitores externos anda em sonos de `BREATH`), o `Undo` custa outro `look` mais
-seis chamadas de IPC, e o `watch` toma mais uma leitura depois de cada ordem. Estourado o prazo, o
-processo sai e mata a thread onde ela estiver — possivelmente com metade dos botões de uma tela
-repostos, que é o estado que `say_what_the_file_says` diz por extenso que não pode existir.
-
-O teste que existe aponta o `sysfs` para um diretório vazio justamente para a leitura não custar
-nada, e o comentário dele admite que um estouro falharia nomeando a ordem em vez da causa.
-
-- acabou quando: ou o prazo é por ORDEM e não pela fila, ou a thread relata o que ficou por repor
-
 ### 0.000018. A disposição anda 10 px por tecla, e cada tecla recarrega o niri · médio
 
 `NUDGE` são 10 px lógicos, e a razão está escrita: um passo que a pessoa consegue segurar. O custo

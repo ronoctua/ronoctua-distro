@@ -392,6 +392,19 @@ pub enum Event {
     },
 }
 
+/// What the display thread says about its own progress.
+///
+/// TWO WORDS AND NOT ONE, because `Handle::finish` has to tell "still working"
+/// from "finished" — and a channel that only closes cannot: a thread that
+/// drained its queue and a thread that PANICKED both drop the sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Beat {
+    /// One order is done, and the thread is going round again.
+    Did,
+    /// The queue is drained and the thread is leaving.
+    Done,
+}
+
 /// The way to send orders to the thread.
 ///
 /// NOT `Clone`, since it grew the thread: two of these would be two callers
@@ -411,7 +424,7 @@ pub struct Handle {
     /// the ordinary path, so a compositor that accepts a connection and never
     /// answers would hold the thread — and a join would hold the DOOR, which
     /// is a window that will not close. `recv_timeout` gives up instead.
-    over: mpsc::Receiver<()>,
+    over: mpsc::Receiver<Beat>,
 }
 
 impl Handle {
@@ -467,15 +480,28 @@ impl Handle {
         // for a crash, and sends whoever reads the journal looking for a slow
         // monitor. A panicking thread is the one case where waiting was never
         // going to help.
-        match self.over.recv_timeout(PATIENCE) {
-            Ok(()) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                tracing::warn!(
-                    "the screens did not finish in time; a change may still be standing"
-                );
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::warn!("the screens thread is gone; a change may still be standing");
+        // AND THE DEADLINE IS PER BEAT, NOT PER QUEUE. Every order the thread
+        // finishes resets it, so a slow thread that is MAKING PROGRESS is
+        // waited for and only a stuck one is given up on. The budget used to
+        // be for the whole queue: the thread's first act is a deep reading
+        // that walks in `BREATH` sleeps, an `Undo` costs its own reading plus
+        // six IPC calls, and the watch takes another after every order — so on
+        // a docked machine it could expire on a thread doing exactly what it
+        // was asked, and expiring kills it wherever it is.
+        loop {
+            match self.over.recv_timeout(PATIENCE) {
+                // One more order done. Go round, and give it another PATIENCE.
+                Ok(Beat::Did) => {}
+                // The queue is drained. This is the ordinary end.
+                Ok(Beat::Done) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    tracing::warn!("the screens stopped answering; a change may still be standing");
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    tracing::warn!("the screens thread is gone; a change may still be standing");
+                    break;
+                }
             }
         }
     }
@@ -521,10 +547,22 @@ where
                 // the refusal beside the old numbers.
                 on_event(Event::Snapshot(Box::new(eyes.look(order.deep()))));
                 on_event(Event::Done { order, refused });
+                // AND A BEAT PER ORDER, so the deadline in `Handle::finish`
+                // measures PROGRESS instead of the whole queue. One deep
+                // reading on a docked machine walks in `BREATH` sleeps, an
+                // `Undo` costs its own reading plus six IPC calls, and the
+                // watch takes another after every order — a budget for the
+                // sum of those is a budget that expires on a thread that is
+                // working perfectly well, and expiring kills it wherever it
+                // is: possibly with three of one screen's six knobs restored,
+                // which is the state `say_what_the_file_says` says at length
+                // must never exist.
+                let _ = over.send(Beat::Did);
             }
-            // THE LAST ACT, and it is what `Handle::finish` waits for. A
-            // receiver that has gone away is the ordinary end of a session.
-            let _ = over.send(());
+            // THE LAST ACT, and it is what `Handle::finish` waits for. Said
+            // out loud rather than left to the channel closing, because a
+            // panic closes it too and the two need different words.
+            let _ = over.send(Beat::Done);
         })
         .context("could not start the display thread")?;
     Ok(Handle {
@@ -1853,5 +1891,43 @@ mod tests {
             "the fallback is what makes the settings look lost",
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finishing_waits_while_the_thread_is_still_making_progress() {
+        // THE DEADLINE MEASURES PROGRESS, NOT THE WHOLE QUEUE.
+        //
+        // It used to be one `recv_timeout` for the entire drain, and the drain
+        // is not cheap: the thread opens with a DEEP reading that walks in
+        // `BREATH` sleeps, an `Undo` costs its own reading plus six IPC calls,
+        // and the watch takes another after every order. On a docked machine
+        // that sum can pass the budget while the thread is doing exactly what
+        // it was asked — and the process then exits and kills it wherever it
+        // stands, possibly with some of one screen's knobs restored and the
+        // rest still previewed.
+        //
+        // Proved by the clock: three beats spaced out, and `finish` has to
+        // still be there for the last one. The single-`recv` version returned
+        // on the FIRST and would come back in a third of the time.
+        let (beats, over) = mpsc::channel();
+        let (orders, _inbox) = mpsc::channel::<Order>();
+        let step = std::time::Duration::from_millis(120);
+        std::thread::spawn(move || {
+            for _ in 0..2 {
+                std::thread::sleep(step);
+                let _ = beats.send(Beat::Did);
+            }
+            std::thread::sleep(step);
+            let _ = beats.send(Beat::Done);
+        });
+
+        let began = std::time::Instant::now();
+        Handle { orders, over }.finish(None);
+        let waited = began.elapsed();
+        assert!(
+            waited >= step * 2,
+            "`finish` came back after the first beat instead of waiting for the \
+             queue to drain: {waited:?}",
+        );
     }
 }

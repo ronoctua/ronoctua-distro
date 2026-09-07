@@ -427,7 +427,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   palavra é a única coisa que diz qual fato é. Verbo da dica e formato com `{ $ }` não contam.
 - **Arquivo de gente tem UM jeito de ser escrito** (`ronoctua-store`, sobre o `ronoctua-xdg`, que
   fica com ZERO dependência porque três daemons o linkam só pelas raízes): `Store<T>` é raiz +
-  escrita atômica + "lê ou cai no padrão e diz por quê". Cada domínio fica com o SEU arquivo, e não
+  escrita atômica + "lê ou cai no padrão e diz por quê". **O rascunho da escrita atômica leva o
+  PID** (`<arquivo>.<pid>.new`): era um nome só, o que bastava enquanto cada arquivo tinha um
+  escritor, e as telas acabaram com isso — duas portas são dois PROCESSOS gravando o mesmo
+  `display.json`. Dois abrindo o mesmo rascunho com truncate misturam as escritas, e o rename
+  instala a mistura; em JSON, mistura é arquivo que não parseia, e não parsear vira "nada foi
+  escolhido". **E quem escreve o arquivo inteiro de volta pergunta `parsed`, não `read`** — o
+  padrão é resposta certa para quem lê e destruição para quem escreve. Cada domínio fica com o SEU arquivo, e não
   há banco: **o arquivo É o broadcast** (um banco precisaria de um segundo canal de aviso de
   mudança), você os edita à mão, e um arquivo que não parseia custa UMA feature em vez de todas.
   A varredura que decidiu isso achou TRÊS escritas atômicas, DUAS que não eram atômicas (as do
