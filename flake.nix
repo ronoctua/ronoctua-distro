@@ -566,6 +566,11 @@
         # Power — UPower, power-profiles-daemon, logind; the modeline's
         # battery and profile marks, and `LEADER s p`.
         ./nix/modules/power.nix
+        # The screens. After `power.nix` because it is the same shape — one
+        # udev rule opening one sysfs attribute to one group, and no polkit
+        # rule at all — and because a person reading the list finds the two
+        # pieces of hardware with a brightness next to each other.
+        ./nix/modules/display.nix
         ./nix/modules/bluetooth.nix
         # The queue of everything that takes a while, and the unit that owns
         # it. After `files.nix` because what it runs is that crate's work.

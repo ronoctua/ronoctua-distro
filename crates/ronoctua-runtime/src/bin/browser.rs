@@ -335,6 +335,7 @@ fn main() -> Result<()> {
     // ---- 2. Unicode block ----
     let block = query(&mut inst, "bloco:f0")?;
     if block.total_filtered == 0 || block.total_filtered >= base.total_in_db {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("`bloco:f0` did not narrow: {}", block.total_filtered);
     }
     if let Some(bad) = block
@@ -342,6 +343,7 @@ fn main() -> Result<()> {
         .iter()
         .find(|c| !format!("{:x}", **c as u32).starts_with("f0"))
     {
+        // pt-BR: the same tag.
         bail!("`bloco:f0` let U+{:04X} through", *bad as u32);
     }
     println!("block     `bloco:f0`   -> {}", block.total_filtered);
@@ -356,6 +358,7 @@ fn main() -> Result<()> {
     // read — and that would go unnoticed in every English search.
     let tag_pt = query(&mut inst, "tag:pasta")?;
     if tag_pt.total_filtered == 0 {
+        // pt-BR: a search tag, and the sentence says so.
         bail!("`tag:pasta` found nothing: the pt-BR tags did not arrive");
     }
     println!(

@@ -5419,15 +5419,17 @@ forma — lista de rótulo e valor — e cada uma tinha escrito a colocação. E
 respostas, duas delas no MESMO arquivo: valor curto encostado na borda direita da superfície, valor
 longo caindo para o terço da linha, e fato no terço sempre. Numa janela larga a primeira põe `off` a
 cento e cinquenta colunas de `modo avião`, com nada no meio. `chrome::field_pair` é uma só, e o
-valor começa numa COLUNA (`space.view.labelCells`) — o que faz das três uma lista de definições:
+valor começa numa COLUNA (`space.view.labelCells`) — o que faz das cinco uma lista de definições:
 o olho desce uma coluna em vez de ziguezaguear. É a mesma regra que o `chrome::rule` e o
 `chrome::divider` já tinham estabelecido para separador.
 
-**Fato e controle eram desenhados idênticos.** A diferença virou um glifo na frente
-(`icon.row-acts`) e não uma cor: o acento já está gasto no cursor, os cinzas que sobram são uma
-diferença de peso que some de relance, e quem não separa bem tons ficaria sem nada. A informativa
-deixa as células vazias, então as duas alinham — um recuo que só algumas linhas pagam é uma borda
-irregular, que se lê pior do que marca nenhuma.
+**Fato e controle eram desenhados idênticos.** A diferença ia ser um glifo na frente, e o dono
+RECUSOU a marca: sobrou o TOM — `text.label-acts` no rótulo e `text.primary` no valor de quem
+responde ao `RET`, contra os tons de fato de quem não responde. O acento já está gasto no cursor,
+então a diferença é de peso e não de cor, e um leitor que não separa bem tons a lê pela posição da
+linha na seção. UM comentário no código continuou nomeando um `icon.row-acts` que nunca chegou a existir em
+token nenhum, e dois outros registravam a AUSÊNCIA da marca — o que é a razão de esta frase
+estar escrita, e de ela dizer o número certo.
 
 **Uma lista que se lê continuamente não pode ser livre para crescer.** O Wi-Fi é relido o tempo
 todo e a resposta muda: o roteador do vizinho responde, o celular de alguém aparece, o sinal
@@ -6986,6 +6988,82 @@ o kernel não conhece ESPERA o ARP — três segundos na rede do dono. Com o pra
 janela de escuta acabava antes do primeiro pacote sair e a varredura achava zero máquinas numa rede
 com cinco. E com o tempo medido desde o envio, uma máquina na sala ao lado aparecia com 3 000 ms.
 Então a varredura responde QUEM, e `ping` — um endereço de cada vez, já resolvido — responde QUANTO.
+
+### As telas — `LEADER s d`, uma `View`, duas portas, e uma pergunta que se responde sozinha
+
+O molde é o da rede e o da energia, e a razão é a mesma: o rodapé tem teto de doze linhas (inv. 14) e
+a ficha de UMA tela tem dezoito. `s d d` desenha na região; `s d w` abre a mesma `View` numa janela
+(`br.ronoctua.display`). Um crate é a fronteira (`ronoctua-display`): niri por IPC, os backlights por
+`/sys`, os monitores externos por DDC/CI escrito por nós sobre `/dev/i2c-*` — sem `ddcutil`.
+
+**O que é diferente de toda outra vista é o RELÓGIO.** Uma mudança de escala, de resolução, de taxa ou
+de giro pode deixar a tela ilegível, e quem não consegue ler a tela não consegue desfazer. Então a
+mudança é aplicada PROVISORIAMENTE (`Order::Try`), uma pergunta toma a região, o cursor nasce em
+"voltar atrás", e em quinze segundos sem resposta ela volta sozinha. O relógio é o MONOTÔNICO: com o
+de parede, um passo de NTP para trás congelava a contagem para sempre, que é exatamente o resultado
+que a constante existe para impedir.
+
+**Há DUAS naturezas de pergunta e elas têm padrões opostos.** A de cima aplica primeiro e se responde
+sozinha, porque o risco é não conseguir dizer nada. Esquecer (`d`) não aplica nada, não tem relógio e
+espera — o risco ali é perder decisões, e um relógio que responde sozinho seria a forma errada. Uma
+mudança numa tela APAGADA não é prevista de jeito nenhum: não há imagem para comparar, então é
+gravada direto.
+
+**"Manter" grava UM botão, o que foi perguntado, e o que foi PEDIDO.** Gravar os três que a leitura
+sabe (escala, modo, posição) tirava a pessoa da escolha automática do niri em todos eles na primeira
+vez que ela mexesse em qualquer um; e ler o valor de volta trocaria "escolha você" pelo número que o
+niri escolheu — a prévia e a coisa mantida deixariam de ser a mesma mudança.
+
+**O arquivo é o que sobrevive ao reboot; o IPC é o que faz o compositor concordar com ele.** Recarregar
+sozinho NÃO desfaz um transitório: o niri preserva a mudança quando o arquivo relido é igual ao
+anterior. Por isso `Order::Keep` grava e depois DIZ, botão por botão, o que o arquivo diz.
+
+**Uma frase não é uma linha, e uma ordem que não muda nada não é uma ordem.** As duas regras foram
+escritas cada uma num lugar e valiam só ali. A prosa: a pergunta mantinha suas duas frases fora do
+cursor e as outras seis da vista usavam a metade que não pulava — no primeiro quadro de uma máquina
+cujo fragmento não parseia, a mensagem de erro da própria vista acendia na cor do foco como se
+alguém a tivesse escolhido, e `RET` a copiava. Agora só existe um jeito de desenhar frase. A ordem:
+`would_move` recusava a PERGUNTA que não mudaria nada, e a fila alcançava só os botões com relógio;
+quando a posição deixou de perguntar, `a` sobre ela apagava uma posição já vazia e mandava um `Keep`
+mesmo assim — uma leitura, uma reescrita do `display.json` e seis chamadas de IPC, uma por repetição
+de tecla, redesenhando byte a byte. A regra mora em `keep_for` agora, que compara o `Wanted` que
+montou com o que está no arquivo, e vale para todo botão que grava.
+
+**Sair com uma pergunta de pé devolve a mudança primeiro.** A prévia é um transitório do IPC do
+niri, e o que a derruba é esta thread dizendo os números do arquivo de volta — `Order::Undo`. Uma
+porta que marcava `quit` e voltava largava o remetente, `main` acabava, e o processo levava a thread
+junto: a ordem enfileirada nunca era cumprida e a mudança ficava de pé até o niri reiniciar. Pior:
+`previewed` é o conjunto DAQUELA thread, então uma porta aberta depois manda um `Undo` que não envia
+nada — não havia volta de dentro do shell. `Handle::finish` manda e ESPERA (o canal entrega o que
+está na fila antes de dizer que o remetente sumiu), e as duas portas o chamam: a janela ao ser
+fechada, o rodapé ao sair. **A espera tem PRAZO — três segundos — e não é um `join`**: o
+`Niri::request` comum não tem tempo de leitura, então um compositor que aceita a conexão e nunca
+responde seguraria a thread, e um `join` seguraria a PORTA — uma janela que não fecha. O prazo é o
+que a thread pode honestamente levar: uma leitura profunda (um quinto de segundo por porta, sobre quantas
+portas a máquina tiver) mais as seis chamadas do `Undo`.
+
+**Cada porta escreve de volta só o que ELA mudou.** São duas `Eyes` — uma por porta —, e cada uma
+guarda a leitura que a última ordem dela deixou. `write` levava as telas SEMPRE, no argumento de que
+"as telas são desta thread": não são, há duas. Um `Order::Text` não tira leitura própria, então
+mexer no tamanho do texto numa janela escrevia as telas velhas dela por cima do arquivo — apagando
+do `display.json` E do fragmento uma escala que a outra porta acabara de gravar. Agora há uma
+bandeira por metade (`wrote_the_text`, `wrote_the_screens`) e a mesclagem é uma função pura,
+testável sem disco. **E o fragmento só é reescrito quando os BYTES dele mudam**: toda escrita é um
+rename, que é o que o observador de include do niri vê, e recarregar a configuração inteira a cada
+passo do tamanho do texto era um `ConfigLoaded` — e uma leitura completa em cada porta — por tecla.
+
+**E uma recusa derruba só a pergunta dela.** A resposta de uma ordem chega depois de uma ida e volta,
+e nesse meio-tempo a pergunta pode ter sido respondida e outra ter subido — `→`, `Esc`, `→` de novo
+são duas perguntas sobre a MESMA tela dentro de uma ida e volta, que é o caso que o comentário antigo
+dizia ser impossível. O conector não basta; o `Ask` também viaja na ordem e é ele que as separa.
+
+**A janela tem relógio ARMADO, e é a única assim** — quatro outras batem sempre, pela vida da
+janela, e a do gerenciador arma uma só quando o inotify falha; o do rodapé não alcança esta: são dois processos
+com duas `View`s. Ele é armado só enquanto há uma pergunta com relógio de pé e se desarma sozinho, de
+modo que em repouso a janela não acorda nenhuma vez. Ela também ouve o `wl_output` (o niri não publica
+evento nenhum sobre monitores), o `display.json` inteiro (a metade das telas, não só a do texto) e o
+`ConfigLoaded` do niri — sem esse último, a porta que ESCREVE o fragmento seria a única incapaz de
+dizer que o compositor o recusou.
 
 ### Bluetooth — `LEADER s b`, e o glifo é o que a coisa É
 

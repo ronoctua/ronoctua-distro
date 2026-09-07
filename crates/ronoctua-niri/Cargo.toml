@@ -9,7 +9,7 @@ publish.workspace = true
 
 # Dependencies deliberately MINIMAL.
 #
-# Node `niri-ipc`: pinning the types to a published version would make the
+# No `niri-ipc` node: pinning the types to a published version would make the
 # contract test against `niri-next` vacuous — see the comment at the top of
 # `src/lib.rs`. And no async runtime: the event stream is one JSON line
 # at a time over a unix socket, and a thread with a blocking `read_line` handles it

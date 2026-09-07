@@ -45,6 +45,7 @@ mode-monitor = monitor
 mode-notifications = notifications
 mode-power = power
 mode-bluetooth = bluetooth
+mode-display = screens
 mode-network = network
 mode-rescue = rescue
 mode-terminal = terminal
@@ -2654,3 +2655,143 @@ bluetooth-refused-away = nobody answered
 bluetooth-refused-busy = something else is doing it
 bluetooth-refused-rejected = the other side said no
 bluetooth-refused-other = it did not work
+
+## Screens — the monitors, their pictures and their light (LEADER s d)
+
+cmd-display-open = Screens
+cmd-display-window = Screens in a window
+cmd-display-down = Down one row
+display-back = back
+cmd-display-up = Up one row
+cmd-display-less = The value under the cursor, back one
+cmd-display-more = The value under the cursor, on one
+cmd-display-enter = Open, copy or answer
+cmd-display-automatic = Let the compositor choose this setting
+cmd-display-forget = Forget what was chosen for this screen
+cmd-display-arrange = Where the screens sit
+group-display = Screens
+
+display-down = down
+display-up = up
+display-less = less
+display-more = more
+display-leftwards = leftwards
+display-rightwards = rightwards
+display-enter = open
+display-enter-answers = answer
+display-enter-copies = copy
+display-automatic = let it choose
+display-forget = forget
+display-arrange = arrange
+
+
+display-title = Screens
+display-heading-screens = Screens
+display-heading-every = All of them
+display-heading-picture = The picture
+display-heading-light = The light
+display-heading-session = The session
+display-heading-arrangement = Where they sit
+display-heading-forgetting = Forget this screen's settings?
+display-heading-keeping = Keeping this?
+
+display-nothing-here = No screen is attached.
+display-reading = Asking the compositor…
+display-no-mode = the compositor reports none
+display-no-thread-short = the screens cannot be read here
+display-no-watch = this door cannot see the file change
+display-no-thread = The screens cannot be read on this machine; nothing here will change.
+display-no-compositor = There is no compositor to ask, so there is nothing to show.
+display-went-away = That screen is gone.
+display-config-failed = The compositor could not read its configuration. What is on the screen now will not come back after a restart.
+
+display-settings-failed = `display.json` will not parse, so nothing chosen is shown here. The file is untouched — fix or remove it.
+display-one-screen-only = There is one screen, so there is nothing to arrange.
+
+display-this-one = { $name } — this one
+display-arrangement = Arrangement
+display-text-size = Size of the text
+
+display-fact-connector = Socket
+display-fact-filed = Its settings follow
+display-fact-size = Screen
+display-filed-by-itself = the monitor, wherever it is plugged in
+display-filed-silent = the socket — the monitor says nothing about itself
+display-filed-no-serial = the socket — the monitor gives no serial, so an identical one would answer for it
+
+display-on = Driven
+display-resolution = Resolution
+display-rate = Refresh rate
+display-scale = Scale
+display-turn = Turn
+display-place = Place
+display-vary = Varying refresh
+display-brightness = Brightness
+display-first = Opens focused here
+
+display-vary-cannot = the hardware cannot
+display-vary-always = always
+display-vary-on-demand = only when a window asks
+display-light-is-roots = the file belongs to root — the rule that opens it has not run here
+display-light-on-its-buttons = This monitor's brightness is on its own buttons.
+
+display-turn-and-picture = { $set } (the picture is { $picture })
+display-turn-normal = normal
+display-turn-rotated-90 = a quarter turn
+display-turn-rotated-180 = upside down
+display-turn-rotated-270 = three quarters
+display-turn-flipped = mirrored
+display-turn-flipped-90 = mirrored, a quarter turn
+display-turn-flipped-180 = flipped vertically
+display-turn-flipped-270 = mirrored, three quarters
+
+display-value-yes = yes
+display-value-no = no
+display-value-off = not driven
+display-value-automatic = the compositor chooses
+display-value-percent = { $percent }%
+display-value-rate = { $hz } Hz
+display-value-inches = { $inches } inches
+display-value-place = x={ $x } y={ $y }
+display-value-screens = { $n ->
+        [0] no screens
+        [one] one screen
+       *[other] { $n } screens
+    }
+
+display-left-of = to the left of { $other }
+display-right-of = to the right of { $other }
+display-above = above { $other }
+display-below = below { $other }
+display-arrange-how = The arrows move the screen under the cursor from side to side.
+
+display-ask = { $what } on { $screen }.
+display-ask-seconds = It goes back on its own in { $seconds }s.
+display-ask-forget = Everything chosen for { $screen } goes back to what the compositor decides.
+display-ask-nothing-yet = Nothing has changed yet.
+display-leave-it = Leave it as it is
+display-forget-it = Forget it all
+display-screen-is-dark = the compositor is not drawing on it
+display-place-and-picture = { $set } (it is at { $picture })
+display-scale-and-picture = { $set } (the picture is { $picture })
+display-screen-gone = { $screen } is not there any more; the change went with it.
+display-screen-gone-alone = { $screen } is not there any more; nothing had been changed.
+display-only-one-lit = yes — and the only screen lit
+display-dark-not-ours = no — and nothing here turned it off
+display-only-one-offered = the only one this monitor offers
+display-put-it-back = Put it back
+display-keep-it = Keep it
+display-what-power-off = The screen was turned off
+display-what-resolution = The resolution changed
+display-what-rate = The refresh rate changed
+display-what-scale = The scale changed
+display-what-turn = The picture was turned
+
+display-refused-no-compositor = there is no compositor to ask
+display-refused-no-screen = that screen is not there any more
+display-refused-no-light = this screen's brightness is on its own buttons
+display-refused-not-writable = the file belongs to root, and the rule that opens it has not run on this panel
+display-refused-nowhere = there is nowhere to write it down
+display-refused-other = it did not work
+echo-display-refused = The screens refused: { $why } ({ $words })
+echo-display-refused-plain = The screens refused: { $why }

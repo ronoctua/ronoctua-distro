@@ -54,10 +54,14 @@ mod chrome;
 mod clipboard;
 mod daemon;
 mod disks;
+mod display;
+mod display_window;
+mod display_words;
 mod files;
 mod files_window;
 mod fold;
 mod foreign;
+mod hidpi;
 mod keyboard;
 mod leader;
 mod manual;
@@ -79,6 +83,7 @@ mod terminal;
 // WHICH THEME THIS PROCESS DRAWS IN, and how the doors hear about a change.
 mod theme;
 mod theme_chooser;
+mod toolkits;
 mod transfers;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
@@ -108,6 +113,11 @@ fn main() -> Result<()> {
     // the windows, a buffer's host — draws through the same three sources,
     // read once here. The short-lived subcommands pay one file read.
     theme::resolve_at_start();
+    // AND THE SIZE OF THE TEXT, on the same footing and for the same reason.
+    // It is not the theme's business — a palette and a size are two choices —
+    // but they are read at the same moment because they are both properties
+    // of the process rather than of any one door.
+    toolkits::resolve_at_start();
 
     match std::env::args().nth(1).as_deref() {
         // It tells an ALREADY-RUNNING footer. It is the compositor that sees the
@@ -256,6 +266,11 @@ fn main() -> Result<()> {
         // row — the footer's twelve lines are a glance, not a reading.
         Some("bluetooth") => {
             return bluetooth_window::host_it().context("host the bluetooth view");
+        }
+        // THE SCREENS' SECOND DOOR, one monitor to a sheet of eighteen rows —
+        // the footer's twelve lines are a glance, not a reading.
+        Some("display") => {
+            return display_window::host_it().context("host the screens view");
         }
         Some("power") => {
             return power_window::host_it().context("host the power view");
@@ -418,10 +433,10 @@ fn main() -> Result<()> {
 
     tracing::info!(
         face = tokens::font::FAMILY_MONO,
-        size = tokens::font::SIZE_BASE,
-        cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE),
-        line = tokens::metrics::line_height(tokens::font::SIZE_BASE),
-        footer = tokens::metrics::footer_height(tokens::font::SIZE_BASE),
+        size = tokens::text::size(),
+        cell = tokens::metrics::cell_width(tokens::text::size()),
+        line = tokens::metrics::line_height(tokens::text::size()),
+        footer = tokens::metrics::footer_height(tokens::text::size()),
         "bringing the footer up"
     );
 

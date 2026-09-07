@@ -66,7 +66,11 @@ use crate::paint::{cell, quads_of, spans_of, token_color};
 
 /// A vector drawing request, with the area already in pixels.
 struct VectorDrawing {
-    /// The SVG's string, which is also the cache key.
+    /// The cache key — see [`svg_key`], which says what is in it and why.
+    ///
+    /// NOT the SVG's string, though it used to be and this line used to say
+    /// so. The document is what is DRAWN; the key has to carry everything the
+    /// raster depends on, which is also the size and the ink.
     key: String,
     /// Where it fits, already fitted without stretching.
     area: ronoctua_render::image::Area,
@@ -108,15 +112,37 @@ fn rasterize_preview(
     })
 }
 
-/// The cache key of a rasterised SVG: the theme's position, then the document.
+/// The cache key of a rasterised SVG: the size, the theme's position, then the
+/// document.
 ///
 /// The document alone was the key, and it was exact for the drawing — the
 /// icon and the five adjustments are all in it. What it did not carry was the
 /// ink: `currentColor` is resolved to the CURRENT theme's value below, and a
 /// key without the theme kept the old ink on the GPU after a switch, because
 /// the upload only happens for a key the cache is missing.
-fn svg_key(theme_position: usize, svg: &str) -> String {
-    format!("{theme_position}:{svg}")
+///
+/// AND IT DID NOT CARRY THE SIZE EITHER, which the day `pixmap_side` and the
+/// cell stopped naming the anchor made a second way for the same defect to
+/// happen: the raster is `side` pixels square, `side` comes from the cell,
+/// and the cell asks `text::size()`. The same document at 200% is a different
+/// picture, and a cache that could not tell them apart kept the small one —
+/// which `Area::centre` then draws at its natural size inside a doubled box.
+///
+/// AND THE TOKEN IS THE OTHER HALF OF THE INK. The theme was put in on the
+/// argument that it is what makes the key carry the colour, and that is only
+/// half true: the ink is `theme x token`, and `resolver_current_color` takes
+/// BOTH. Two `Command::Svg` with the same document and different tokens — one
+/// drawing `TextPrimary` in a row and `StateError` in a warning, or the same
+/// drawing selected and unselected — spell one key, and the second is served
+/// the first's raster in the first's colour. No later change can repair it,
+/// because the key never moves. Latent while the one buffer that draws an SVG
+/// emits exactly one with a fixed token, and the WIT permits any number.
+fn svg_key(side: u32, theme_position: usize, token: tokens::Color, svg: &str) -> String {
+    // The token is a ROLE, and `name` is what identifies it — `text.dim`,
+    // not the bytes it happens to resolve to in this theme. Two roles that
+    // share bytes in one theme are still two roles, which is what `Color`'s
+    // own equality means, and a key built from the VALUE would merge them.
+    format!("{side}:{theme_position}:{}:{svg}", token.name())
 }
 
 /// The SVG's `currentColor` resolved to a value.
@@ -151,6 +177,8 @@ struct Host {
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     /// The component is told nothing: it never had a value (invariant 11).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
+    /// `display.json`, for the size of the text.
+    _size_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,
@@ -160,8 +188,31 @@ struct Host {
     pointer: Option<wl_pointer::WlPointer>,
     mods: Modifiers,
     window: Window,
+    /// The window's size in LOGICAL pixels — what the compositor configured
+    /// it to, what the columns are counted from, what the pointer arrives in.
     width: u32,
+    /// See the field above.
     height: u32,
+    /// The logical size the COMPOSITOR configured, before any clamp.
+    ///
+    /// `width`/`height` are what the BUFFER can show — which is what the
+    /// columns, the bars and the hit tests are laid out against; this is what
+    /// the GPU is asked for. They are the same pair on every machine anybody
+    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
+    /// only one of them is a ratchet: a window clamped once at scale 3 would
+    /// ask for the size it was cut down to and could never grow back. See
+    /// [`crate::hidpi`].
+    asked: (u32, u32),
+    /// How many physical pixels one logical pixel is on the screen this
+    /// window is on — see [`crate::hidpi`], where the rule and its
+    /// measurement live.
+    scale: i32,
+    /// What the SURFACE has been told, which lags `scale` by one frame.
+    ///
+    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
+    /// the matching size, and the only such commit is the present inside
+    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
+    scale_told: i32,
     quit: bool,
     /// The file this buffer was opened with, when there is one.
     ///
@@ -187,11 +238,21 @@ struct Host {
     /// because the WIT says it does.
     quads: Option<ronoctua_render::quad::Quads>,
     list: ronoctua_protocol::DisplayList,
-    /// The already-rasterised vector drawings, by the SVG's string.
+    /// The already-rasterised vector drawings, by [`svg_key`].
     ///
-    /// The key is the whole document, and it is exact: it carries the icon and the
-    /// five adjustments. Two keys that do not change the drawing hit the cache, and
-    /// one that does pays for a rasterisation — which is what it costs.
+    /// THE KEY IS NOT THE DOCUMENT, and the sentence that stood here — "the
+    /// key is the whole document, and it is exact: it carries the icon and the
+    /// five adjustments" — is the exact reasoning that let the theme, then the
+    /// size, then the colour token fall out of it, one at a time. It is exact
+    /// about the DRAWING and says nothing about the raster, which also depends
+    /// on how big it is and what colour it is being drawn in.
+    ///
+    /// Nothing evicts from this map; a theme change clears it whole. With the
+    /// size and the token in the key it now holds one pixmap per (document,
+    /// size, token) for the process's life — bounded in practice by a glyph
+    /// browser showing one icon at a time, and unlike the GPU's `Images` it
+    /// has no ceiling of its own. Worth a `dump()` of its own if a buffer ever
+    /// draws many.
     rasterized: std::collections::HashMap<String, ronoctua_render::image::Rgba>,
     /// What the descriptor ASKED FOR. See [`ronoctua_protocol::DisplayList::validate_it`].
     capabilities: Vec<ronoctua_protocol::Capability>,
@@ -862,6 +923,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         window,
         width: 0,
         height: 0,
+        asked: (0, 0),
+        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE — see `crate::hidpi`.
+        scale: 1,
+        scale_told: 1,
         quit: false,
         gpu: None,
         text: None,
@@ -870,6 +935,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         list,
         rasterized: std::collections::HashMap::new(),
         _theme_watch: None,
+        _size_watch: None,
         capabilities: d.capabilities,
         // THE SAME BUNDLE that resolved the title and the phrases above. It
         // used to be a second `from_env()` in the same process — two readings
@@ -902,6 +968,36 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
+    // AND THE SIZE OF THE TEXT, on the same footing. A buffer's body is what
+    // a person reads; a host that kept the old size would put the content at
+    // one size inside a footer at another.
+    let (size_sender, size_changed) = calloop_channel::channel::<()>();
+    state._size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
+    cycle
+        .handle()
+        .insert_source(size_changed, |event, (), state: &mut Host| {
+            if let calloop_channel::Event::Msg(()) = event
+                && crate::toolkits::reload()
+            {
+                if let Some(t) = state.text.as_mut() {
+                    t.draw_at(ronoctua_tokens::text::size());
+                }
+                // THE COMPONENT HAS TO BE ASKED AGAIN — and `paint` does
+                // not ask it, it draws the list it already has. `render` is
+                // what asks, and `request_redraw` is what calls it.
+                //
+                // It matters most HERE, of all ten doors: this is the one
+                // whose content comes from another process. It is told how
+                // many cells it has, and 100% to 200% on a 1280 px window
+                // takes that from 118 columns to 59 — so its elisions, its
+                // column positions and the cells it reserved by scale are all
+                // for a grid that no longer exists. Invariant 11 is what
+                // makes it invisible from this side.
+                state.request_redraw();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
 
     // THE KEYMAP AND THE STATES GO OUT, AND ORDERS COME BACK IN.
     //
@@ -1396,13 +1492,16 @@ impl Host {
                 tracing::error!(token = color.as_str(), "an invalid colour in an svg");
                 continue;
             };
-            let key = svg_key(tokens::theme::current().position(), svg);
+            // THE SIDE IS COMPUTED FIRST, because it is part of the key now —
+            // see `svg_key`.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let side = (f32::from(*columns) * cell_px)
+                .min(f32::from(*lines) * line_height)
+                .max(1.0) as u32;
+            let key = svg_key(side, tokens::theme::current().position(), token, svg);
             if !self.rasterized.contains_key(&key) {
                 // THE SIDE IN PIXELS comes from the rectangle of CELLS the buffer
                 // asked for — it does not know pixels.
-                let side = (f32::from(*columns) * cell_px)
-                    .min(f32::from(*lines) * line_height)
-                    .max(1.0) as u32;
                 match rasterize_preview(svg, token, side) {
                     Some(r) => {
                         self.rasterized.insert(key.clone(), r);
@@ -1450,9 +1549,19 @@ impl Host {
         let spans = spans_of(&self.list, &self.texts, columns);
         let vector_ones = self.vector_ones();
         let selections = self.selections();
+        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
+        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
+        // and nothing else in this function may borrow `self` by then. See
+        // `crate::hidpi::told_before_present`.
+        let surface = self.window.wl_surface().clone();
+        let scale = self.scale;
+        let told = &mut self.scale_told;
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
+        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
+        // buffer can show, so there is one number and this is it.
+        let (logical_w, logical_h) = (self.width, self.height);
         if let Err(e) = text.prepare(
             &gpu.device,
             &gpu.queue,
@@ -1476,33 +1585,30 @@ impl Host {
                     (v.key, v.area)
                 })
                 .collect();
-            im.prepare(&gpu.queue, gpu.config.width, gpu.config.height, &batch);
+            im.prepare(&gpu.queue, logical_w, logical_h, &batch);
         }
         if let Some(q) = self.quads.as_mut() {
-            q.prepare(
-                &gpu.device,
-                &gpu.queue,
-                gpu.config.width,
-                gpu.config.height,
-                &selections,
-            );
+            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &selections);
         }
         let images = self.images.as_ref();
         let quads = self.quads.as_ref();
-        if let Err(e) = gpu.frame(|pass| {
-            // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
-            // after it stays on top. Drawing it last would hide the very text it
-            // exists to highlight.
-            if let Some(q) = quads {
-                q.draw(pass);
-            }
-            // THE DRAWING BELOW THE TEXT, as in the footer: what is written
-            // over it has to stay legible.
-            if let Some(im) = images {
-                im.draw(pass);
-            }
-            text.draw(ronoctua_render::Atlas::Pinned, pass)
-        }) {
+        if let Err(e) = gpu.frame(
+            || crate::hidpi::told_before_present(scale, told, &surface),
+            |pass| {
+                // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
+                // after it stays on top. Drawing it last would hide the very text it
+                // exists to highlight.
+                if let Some(q) = quads {
+                    q.draw(pass);
+                }
+                // THE DRAWING BELOW THE TEXT, as in the footer: what is written
+                // over it has to stay legible.
+                if let Some(im) = images {
+                    im.draw(pass);
+                }
+                text.draw(ronoctua_render::Atlas::Pinned, pass)
+            },
+        ) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
@@ -1531,48 +1637,68 @@ impl Host {
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
         // handles do not outlive what produced them.
+        // ONE CALL, not the same one twice: two calls to a pure
+        // function are two places the arguments can be edited apart.
+        let first = crate::hidpi::physical(self.asked, self.scale);
         #[allow(unsafe_code)]
         let gpu = unsafe {
             ronoctua_render::gpu::Gpu::new(
                 RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                self.width,
-                self.height,
+                first.0,
+                first.1,
             )
         };
         match gpu {
-            Ok(g) => match ronoctua_render::Text::new(
-                &g.device,
-                &g.queue,
-                g.config.format,
-                // THE SYSTEM'S ONE SIZE. This used to be `SIZE_LARGE`, on the
-                // argument that "the footer is peripheral reference, the
-                // buffer is what one reads". The owner asked for one measure
-                // instead, from a photograph of the file manager's two doors:
-                // see `font.size.base` and `chrome::SIZE`.
-                tokens::font::SIZE_BASE,
-            ) {
-                Ok(t) => {
-                    // THE IMAGE PIPELINE is born along with the text one, and its
-                    // failure does NOT take the buffer down: without it what is lost
-                    // is the vector preview, and the text goes on drawing.
-                    match ronoctua_render::image::Images::new(&g.device, g.config.format) {
-                        Ok(im) => self.images = Some(im),
-                        Err(e) => tracing::error!(error = %e, "the image pipeline failed"),
-                    }
-                    // THE QUAD PIPELINE, for `Command::Selection`. Same rule as
-                    // the image one: its failure costs the highlight, not the
-                    // buffer.
-                    match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
-                        Ok(q) => self.quads = Some(q),
-                        Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
-                    }
-                    self.text = Some(t);
-                    self.gpu = Some(g);
-                    tracing::info!("the buffer's graphics context is ready");
+            Ok(mut g) => {
+                // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at
+                // the GPU's ceiling like `resize` does, and the first frame
+                // sends the scale — see `crate::hidpi::resized`.
+                let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
+                self.width = shown_w;
+                self.height = shown_h;
+                // AND THE COMPONENT IS ASKED AGAIN IF THE FIRST BUFFER CAME
+                // BACK SMALLER. `configure` rendered against the size the
+                // compositor gave, before there was a GPU to clamp anything —
+                // see `scale_factor_changed` for the whole of why a repaint is
+                // not enough here.
+                if (shown_w, shown_h) != self.asked {
+                    self.re_render();
                 }
-                Err(e) => tracing::error!(error = %e, "the renderer failed"),
-            },
+                match ronoctua_render::Text::new(
+                    &g.device,
+                    &g.queue,
+                    g.config.format,
+                    self.scale,
+                    // THE SYSTEM'S ONE SIZE. This used to be `SIZE_LARGE`, on the
+                    // argument that "the footer is peripheral reference, the
+                    // buffer is what one reads". The owner asked for one measure
+                    // instead, from a photograph of the file manager's two doors:
+                    // see `font.size.base` and `ronoctua_tokens::text::size`.
+                    tokens::text::size(),
+                ) {
+                    Ok(t) => {
+                        // THE IMAGE PIPELINE is born along with the text one, and its
+                        // failure does NOT take the buffer down: without it what is lost
+                        // is the vector preview, and the text goes on drawing.
+                        match ronoctua_render::image::Images::new(&g.device, g.config.format) {
+                            Ok(im) => self.images = Some(im),
+                            Err(e) => tracing::error!(error = %e, "the image pipeline failed"),
+                        }
+                        // THE QUAD PIPELINE, for `Command::Selection`. Same rule as
+                        // the image one: its failure costs the highlight, not the
+                        // buffer.
+                        match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
+                            Ok(q) => self.quads = Some(q),
+                            Err(e) => tracing::error!(error = %e, "the quad pipeline failed"),
+                        }
+                        self.text = Some(t);
+                        self.gpu = Some(g);
+                        tracing::info!("the buffer's graphics context is ready");
+                    }
+                    Err(e) => tracing::error!(error = %e, "the renderer failed"),
+                }
+            }
             Err(e) => tracing::error!(error = %e, "no graphics context"),
         }
     }
@@ -1647,18 +1773,21 @@ impl Host {
     /// diverge, the buffer reserves one number of cells and the run occupies
     /// another — which was exactly the clipped-glyph defect.
     fn heights() -> ronoctua_protocol::Heights {
-        ronoctua_protocol::Heights::from_sizes(
-            tokens::font::SIZE_SMALL,
-            tokens::font::SIZE_BASE,
-            tokens::font::SIZE_BASE,
-            tokens::font::SIZE_XLARGE,
-            tokens::font::SIZE_XXLARGE,
-            tokens::font::LINE_HEIGHT,
-        )
+        crate::paint::heights()
     }
 
     /// Asks the component for a new frame and redraws.
     fn request_redraw(&mut self) {
+        self.re_render();
+        self.paint();
+    }
+
+    /// Asks the component for a new frame and keeps it, without drawing.
+    ///
+    /// SPLIT OUT FOR `assemble_gpu`, which runs INSIDE `paint`: asking there
+    /// and then painting would paint twice on the first frame, and the first
+    /// frame is what the 200 ms budget is measured over.
+    fn re_render(&mut self) {
         let (columns, lines) = self.context_of();
         match self.instance.render(columns, lines, Self::heights()) {
             // THE GATE HOLDS ON EVERY FRAME, and not only the first.
@@ -1673,15 +1802,12 @@ impl Host {
                 Ok(()) => self.list = l,
                 Err(e) => {
                     tracing::error!(error = %e, "frame refused: a primitive with no capability");
-                    return;
                 }
             },
             Err(e) => {
                 tracing::error!(error = %e, "the component's render failed");
-                return;
             }
         }
-        self.paint();
     }
 
     /// Delivers a key to the component and runs what it ASKS for.
@@ -2818,10 +2944,27 @@ impl WindowHandler for Host {
     ) {
         // A `None` size = "you choose". 640x400 is a reasonable guess for
         // a buffer that does not know its content yet.
-        self.width = cfg.new_size.0.map_or(640, std::num::NonZeroU32::get);
-        self.height = cfg.new_size.1.map_or(400, std::num::NonZeroU32::get);
+        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
+        // buffer can show is what comes back below — see `asked`. It is
+        // taken from the CONFIGURE and from nothing else: built out of
+        // the door's own fields it would be the size `resized` last
+        // answered, which can only ever shrink.
+        self.asked = (
+            cfg.new_size.0.map_or(640, std::num::NonZeroU32::get),
+            cfg.new_size.1.map_or(400, std::num::NonZeroU32::get),
+        );
+        self.width = self.asked.0;
+        self.height = self.asked.1;
+        let asked = self.asked;
+        let scale = self.scale;
         if let Some(g) = self.gpu.as_mut() {
-            g.resize(self.width, self.height);
+            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
+            // ceiling that is exactly what the compositor configured; above
+            // it, laying out against the bigger number would put the columns
+            // and the bars in a space the buffer does not have.
+            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
+            self.width = shown_w;
+            self.height = shown_h;
         }
         // IT RE-RENDERS with the actual size. The first `render` used a
         // guessed 80x24; without this the component would draw for a window
@@ -2832,13 +2975,44 @@ impl WindowHandler for Host {
 }
 
 impl CompositorHandler for Host {
+    /// The window moved to a screen of another scale — or was told its first.
+    ///
+    /// It was EMPTY here and in eight other doors, which is what made every
+    /// one of them blurry on a HiDPI screen. The rule and the measurement are
+    /// in [`crate::hidpi`].
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
+        // it is told its scale inside the frame, which is the only commit that
+        // carries a matching buffer — see `crate::hidpi::told_before_present`.
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if let Some((w, h)) = crate::hidpi::followed(
+            &mut self.scale,
+            factor,
+            surface,
+            self.gpu.as_mut(),
+            self.text.as_mut(),
+            self.asked,
+        ) {
+            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
+            // GPU's ceiling this is what the compositor configured;
+            // above it, going on with the old number lays the picture
+            // out in a space the buffer does not have.
+            self.width = w;
+            self.height = h;
+            // AND THE COMPONENT IS ASKED AGAIN, not merely repainted. `paint`
+            // draws the list it already has, and that list was rendered
+            // against the previous grid — which the scale moves whenever the
+            // buffer comes back clamped, because what this door keeps is what
+            // the buffer can SHOW. The eight doors with a `recount` do that; this is the
+            // one whose content comes from another process, and the argument
+            // is already written beside `text_size_changed`.
+            self.request_redraw();
+        }
     }
     fn transform_changed(
         &mut self,
@@ -3143,10 +3317,25 @@ mod tests {
     /// result: it looks as if nothing was done.
     #[test]
     fn the_svg_key_changes_with_the_theme() {
+        let ink = tokens::color::TEXT_PRIMARY;
         // Two themes, one document: two keys, so the GPU cache cannot serve
         // the old theme's ink for the new one.
-        assert_ne!(svg_key(0, LUCIDE), svg_key(1, LUCIDE));
-        assert!(svg_key(0, LUCIDE).ends_with(LUCIDE));
+        assert_ne!(svg_key(16, 0, ink, LUCIDE), svg_key(16, 1, ink, LUCIDE));
+        assert!(svg_key(16, 0, ink, LUCIDE).ends_with(LUCIDE));
+        // AND THE SIZE, for the same reason: the raster is `side` pixels
+        // square, and `side` moves with the size a person chose.
+        assert_ne!(svg_key(16, 0, ink, LUCIDE), svg_key(32, 0, ink, LUCIDE));
+        // AND THE TOKEN, which is the OTHER half of the ink.
+        //
+        // The theme was put in the key on the argument that it is what carries
+        // the colour; the colour is `theme x token`, and this half was left
+        // out. One document drawn `text.primary` in a row and `state.error` in
+        // a warning spelled ONE key, and the second was served the first's
+        // raster in the first's colour — for ever, since the key never moves.
+        assert_ne!(
+            svg_key(16, 0, tokens::color::TEXT_PRIMARY, LUCIDE),
+            svg_key(16, 0, tokens::color::STATE_ERROR, LUCIDE),
+        );
     }
 
     #[test]

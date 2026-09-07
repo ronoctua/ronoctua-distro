@@ -84,6 +84,8 @@ ronoctua-disks = { path = "../ronoctua-disks" }
 # THE POWER BORDER — UPower, power-profiles-daemon, logind — for the modeline's
 # battery and profile marks, the power view and the three battery alarms.
 ronoctua-power = { path = "../ronoctua-power" }
+# The screens: what they can do, how bright they are, and how big the text is.
+ronoctua-display = { path = "../ronoctua-display" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
 # THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the
 # modeline's two marks and the network view's two sections. Neither daemon

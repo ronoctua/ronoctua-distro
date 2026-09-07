@@ -236,6 +236,52 @@ def main() -> int:
         A(f"    /// `font.size.{k}`, in logical px.")
         A(f"    pub const SIZE_{k.upper()}: f32 = {float(v)};")
     A("")
+    # THE RANGE THE PERSON MAY MOVE THE BASE IN, in percent. `u16` and not
+    # `f32`: a percentage of a size is a whole number of steps, and a float
+    # here would invite a scale nobody can arrive at by pressing a key.
+    #
+    # AND THE THREE HAVE TO AGREE WITH EACH OTHER, which nothing else checks:
+    #
+    #   - a floor above the ceiling makes `u16::clamp` PANIC, and it panics
+    #     inside `resolve_at_start`, so the shell does not come up at all;
+    #   - a step of zero divides by zero;
+    #   - an end that is not a multiple of the step is an end the arrows
+    #     cannot leave: `stepped` snaps back to it for ever, and the person
+    #     is stuck at a size they can see and not change.
+    #
+    # None of those is a wrong PIXEL, which is what makes them worth refusing
+    # here rather than finding on a screen.
+    scale = typo["scale"]
+    floor, ceiling, step = (int(scale[k]) for k in ("floor", "ceiling", "step"))
+    if step < 1:
+        raise SystemExit(f"font.scale.step is {step}; a step of nothing divides by zero")
+    # A FLOOR OF ZERO PASSES EVERY OTHER GATE HERE — `0 % 5` is 0 and 100 is
+    # still inside `0..200` — and a text size of zero makes a cell zero wide,
+    # which `metrics::columns` divides by. The number is a percentage of a
+    # size somebody has to read, so a quarter of the design's base is already
+    # generous.
+    if floor < 25:
+        raise SystemExit(
+            f"font.scale.floor is {floor}; below a quarter of the base the text "
+            "stops being text, and a floor of zero divides the cell by nothing"
+        )
+    if floor > ceiling:
+        raise SystemExit(f"font.scale.floor {floor} is above the ceiling {ceiling}")
+    for name, end in (("floor", floor), ("ceiling", ceiling)):
+        if end % step:
+            raise SystemExit(
+                f"font.scale.{name} is {end}, which is not a multiple of the step "
+                f"{step} — the arrows would not be able to leave it"
+            )
+    if not floor <= 100 <= ceiling or 100 % step:
+        raise SystemExit(
+            f"100% is not reachable in {floor}..{ceiling} by steps of {step}, "
+            "so the design's own size would not be a size anybody can return to"
+        )
+    for k, v in sorted(typo["scale"].items()):
+        A(f"    /// `font.scale.{k}`, in percent of `font.size.base`.")
+        A(f"    pub const SCALE_{k.upper()}: u16 = {int(v)};")
+    A("")
     A("    /// Cell width, as a fraction of the font size.")
     A("    ///")
     A("    /// **Measured, not assumed**: the 135 faces have ONE advance per width,")

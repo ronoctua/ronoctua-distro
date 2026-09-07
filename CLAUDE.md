@@ -67,8 +67,8 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
   quem impede é `keyboard-layout-exists`.
 - **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
-- **São ONZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
-  **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das dez
+- **São TREZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
+  **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das onze
   portas. Isso não era verdade e três revisores acharam o mesmo defeito em três vistas: cada um
   lia o PRÓPRIO campo, as ordens divergiam, e clicar no sino com a energia aberta dava o teclado a
   uma e a tela à outra. Com todos perguntando, no máximo um ramo casa e a ORDEM em que eles estão
@@ -231,6 +231,34 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   de arrasto é da `View::spin`**, que fala em ONDE A MÃO FOI (`right`/`down`): yaw maior escorrega a
   peça para a ESQUERDA, então puxar para a esquerda é yaw MENOR — escrito em dois sítios, saiu
   invertido num.
+- **Toda porta segue a ESCALA da tela em que está** (`hidpi.rs`, uma regra e dez chamadas):
+  `scale_factor_changed` estava VAZIA nas nove daquele dia, ninguém chamava `set_buffer_scale`, e num monitor que
+  o compositor dirige em escala 2 cada porta entregava um buffer do tamanho LÓGICO que o compositor
+  esticava — letra borrada, e nada na tela dizia por quê (as colunas estavam certas, o layout também;
+  lê-se como fonte ruim). Três coisas têm de concordar ou o compositor recusa ou estica: o que a
+  superfície diz que é a escala, o tamanho do buffer, e o tamanho em que os glifos são rasterizados.
+  **Só isso é físico**; `Span` é coluna e linha, `Quad` é retângulo sobre a janela, ponteiro chega em
+  lógico, e `metrics::columns` não se mexe — a mesma tela mostra as mesmas colunas nítida ou não. O
+  `Text` recebe a escala e multiplica; quem desenha retângulo ou imagem passa o viewport LÓGICO, senão
+  a barra cai a uma fração do lugar. **O `set_buffer_scale` viaja no commit que leva o buffer** — ele
+  é double-buffered, e um quadro pulado (`Occluded`, `Timeout`, `Outdated`, `Lost`) o deixaria
+  pendente para o próximo commit qualquer, aplicando escala nova sobre buffer velho: `invalid_size`, e
+  o compositor fecha a conexão sem dizer nada. Por isso vai no gancho de `Gpu::frame`, que só roda em
+  quadro que apresenta. **O rodapé tem uma escala POR MONITOR** (uma superfície por saída), casada
+  pela superfície como o `configure` já casa. **E toda porta guarda DOIS tamanhos lógicos**: `asked`,
+  o que o compositor configurou, e `width`/`height`, o que o buffer CABE mostrar — iguais em qualquer
+  máquina que exista, e diferentes exatamente onde o teto de textura da GPU corta. Um número só não
+  responde às duas perguntas: pedir à GPU é função do que o COMPOSITOR disse, e diagramar é função do
+  que o BUFFER tem; realimentar o próprio resultado é catraca (janela cortada uma vez em escala 3 pede
+  o tamanho a que foi cortada e nunca mais cresce). `followed` DEVOLVE esse tamanho (`#[must_use]`) —
+  por uma rodada ele jogou fora o que `resized` respondia, e as dez portas diagramavam contra o
+  tamanho anterior à mudança de escala, justamente no caminho para o qual o módulo existe: janela
+  arrastada entre dois monitores, sem `configure` depois. O teto do fator mora num lugar só
+  (`ronoctua_render::MOST_SCALE`), que o `render-png --scale` lê também. Medido no niri sob Xvfb com a
+  saída em `scale 2`, na coluna da janela de energia: pixels acesos 20,19% → 11,35%, pixels de tinta
+  cheia 1,27% → 2,63%, halo 93,7% → 76,9% dos acesos. Cobra o `every-window-knows-its-scale`, que
+  também LÊ o `hidpi.rs` — a varredura pulava todo arquivo sem `CompositorHandler`, e era lá que o
+  defeito estava.
 - **O teclado agora REPETE, e não repetia em porta nenhuma** — as duas criavam com `get_keyboard`, e o
   SCTK só repete com `get_keyboard_with_repeat`; o `repeat_key` das duas era código morto e segurar
   `j` nunca andou na lista. A repetição chega pelo CALLBACK, não pelo método, então cada porta tem um
@@ -352,7 +380,12 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   (HTTP sobre socket, `--operator=<user>` é o que dispensa root; toda preferência vai MASCARADA, ou
   o daemon zera o resto) e Tor pelo socket de controle (cookie em `/run/tor`, **`CookieAuthFile`
   não é opcional** — sem ele o cookie nasce em `/var/lib/tor` a 0700 e ninguém do grupo entra).
-  Nenhum dos dois sinaliza: uma thread pergunta a cada 10 s. **Tor não sobe no boot** e a ÚNICA
+  Nenhum dos dois sinaliza: uma thread pergunta a cada 10 s. **Condição de regra polkit com `&&` e
+  `||` LEVA PARÊNTESES** — o `&&` liga mais forte, então `id && user && unit==a || unit==b` lê como
+  `(id && user && unit==a) || unit==b`: tudo depois da primeira alternativa liberado para QUALQUER
+  ação e QUALQUER sujeito. O `rescue.nix` foi assim por um commit, e nada via — o
+  `polkit-rules-are-the-ones-we-know` lia id de ação e resultado, e os dois estavam na lista
+  auditada; agora ele recusa a condição. **Tor não sobe no boot** e a ÚNICA
   regra polkit nova do sistema é `start`/`stop` de `tor.service` (`tor-polkit-is-narrow`).
 - **`ronoctua-memory::net` é a fronteira do `/proc/net`** (sockets, ARP) e o `ronoctua-lan` faz a
   varredura ICMP **sem privilégio nenhum** (`SOCK_DGRAM`+`IPPROTO_ICMP`, `ping_group_range`). Duas
@@ -365,13 +398,14 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   máquina e uma linha `DNS` muda todo nome que se procura — as duas viram frase na tela antes do
   `RET`. Quem importa é o `nmcli` (a tradução são trinta ajustes que o upstream mantém); a chave
   privada NUNCA sai do arquivo para a prévia.
-- **Rótulo e valor têm UMA aritmética** (`chrome::field_pair`), e as três vistas que são lista de
+- **Rótulo e valor têm UMA aritmética** (`chrome::field_pair`), e as CINCO vistas que são lista de
   rótulo+valor a chamam. Eram três cópias com três respostas — valor curto na borda DIREITA da
   superfície, valor longo no terço, fato no terço sempre —, e numa janela larga isso punha `off` a
   cento e cinquenta colunas de `modo avião`. Agora o valor começa numa COLUNA fixa
-  (`space.view.labelCells`, limitada a metade da linha), o que faz das três uma lista de
-  definições. **Linha que responde ao `RET` ganha `icon.row-acts` na frente**; a informativa deixa
-  as células vazias, então as duas alinham — e a diferença sobrevive a quem não separa tons.
+  (`space.view.labelCells`, limitada a metade da linha), o que faz das cinco uma lista de
+  definições. **Linha que responde ao `RET` tem TOM próprio** (`text.label-acts` no rótulo, `text.primary` no
+  valor); a informativa usa os tons de fato. A marca desenhada na frente foi RECUSADA pelo dono e a
+  diferença é só cor — um comentário dizia que havia um `icon.row-acts`, e ele nunca existiu.
   **Item de LISTA inverte os pesos** do fato: o nome da coisa é a metade forte. **Ar antes de todo
   título** (`chrome::AIR`, um `heading` sem campos), e o título recua para fora das linhas dele.
 - **Toda janela que rola desenha a barra dela** (`chrome::list_bar`, e o `on_the_list_bar` +
@@ -493,15 +527,69 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   tela, e a tecla seguinte não pode parear um dispositivo desconhecido. **Perigo é COR, não desenho**
   — a bateria a ≤15% continua mostrando o glifo de carregando quando está na tomada; trocar o desenho
   escondia justamente a pergunta que importa aos 9%.
-- **Uma vista só toma o rodapé se ele estiver livre** (`region_is_free`), e são DEZ portas: com
+- **Uma vista só toma o rodapé se ele estiver livre** (`region_is_free`), e são ONZE portas: com
   qualquer vista aberta as outras recusam **e DIZEM**. Eram seis portas perguntando sobre UMA vista
   (o gerenciador de arquivos), o que fazia a promessa valer para um décimo dos casos — clicar na
   bateria com o rádio aberto construía uma segunda vista viva DEBAIXO da desenhada, e os dois `Esc`
   para sair eram o único sinal. A **dica** sai do mesmo `Footer::view()`, um lugar só.
 - **Todo teclado repete** (`get_keyboard_with_repeat`), e nenhum repetia: SCTK só repete para um
-  teclado criado assim, então sete janelas tinham `repeat_key` como código morto — segurar seta andava
+  teclado criado assim, então nove janelas tinham `repeat_key` como código morto — segurar seta andava
   uma linha. Cobra o `every-window-repeats`; o rodapé é a exceção escrita (repetir leader é erro).
 - **`LEADER s p` é energia** (`ronoctua-power`, a fronteira com UPower, power-profiles-daemon e logind — molde do `ronoctua-disks`, três threads e o snapshot inteiro): uma `View` (`power.rs`), duas portas (`s p p`/`s p w`), oito seções como linhas. **Modeline em repouso é muda**: bateria só abaixo de 99% e fora de `FullyCharged` (limite de carga a 80% diz `FullyCharged` para sempre), `%` só a ≤30, `state.error` a ≤15 (regra literal, carregando ou não); perfil só quando NÃO é o topo que o daemon oferece — **o padrão da distro é `performance`** (`ronoctua.power.profile`, piso; `power.json` vence; aplicado UMA vez por sessão, nunca sobre um hold e **nunca quando ninguém nomeou** — o `nix run .#dev` não mexe no perfil do dono). Limites de carga escrevem no sysfs por regra udev (grupo `users`); as travas de sono/tampa são fds na thread de ordens do RODAPÉ (a janela encaminha `power-keep-*`); `q s/h/r/p` abrem a vista ARMADA e `RET` confirma. **Nenhuma regra polkit nossa** (logind e PPD já dão `yes`; há check). Alarmes `battery-low/critical/charged` por TRANSIÇÃO (`alarms`), pelo catálogo.
+- **`LEADER s d` são as telas** (`ronoctua-display`, a fronteira com o niri por IPC e com o kernel
+  por `/sys` e `/dev/i2c-*`): uma `View` (`display.rs`), DUAS portas (`s d d` rodapé, `s d w` janela),
+  três níveis (lista → ficha de uma tela → disposição), resolução, taxa, escala, giro, lugar, VRR,
+  brilho e o TAMANHO DO TEXTO. **A janela tem RELÓGIO ARMADO, e é a única assim** — QUATRO outras batem SEMPRE, pela vida da
+  janela (rede e atualização a cada segundo, notificações a cada dois, o hospedeiro de buffer a cada
+  segundo com o painel de memória aberto), e a do gerenciador arma uma só quando o inotify NÃO
+  subiu. A contagem regressiva precisa bater e o relógio do rodapé não a
+  alcança (são dois processos, duas `View`s); este é armado só enquanto uma pergunta com relógio
+  está de pé, e se desarma sozinho. **Mudança que
+  pode cegar a tela é PROVISÓRIA**: aplica, pergunta, e volta sozinha em 15 s se ninguém responder —
+  o cursor nasce em "voltar atrás" e o relógio é o MONOTÔNICO, senão um passo de NTP para trás
+  congelava a contagem para sempre. **Esquecer (`d`) é outra natureza de pergunta**: não aplica nada,
+  não tem relógio, e espera — o risco ali é perder escolhas, não perder a tela. **Ligar uma tela apagada é DECISÃO, não prévia** — é a única linha da vista cujas duas direções
+  têm naturezas diferentes, e a regra mora no braço dela. **Ordem que não muda nada não é ordem**
+  (`keep_for` compara o `Wanted` que montou com o do arquivo): `a` sobre uma posição já vazia
+  mandava um `Keep` por repetição de tecla. **E as duas linhas de round trip guardam o que pediram**
+  (`text_pending`, `place_pending`), senão segurar a seta anda um passo por ida-e-volta em vez de um
+  por tecla. **"Manter" grava UM
+  botão, o que foi perguntado** (e o que foi PEDIDO, senão sair pelo fundo da escada gravaria o
+  número que o niri escolheu no lugar de "escolha você"). **Duas portas escrevem o MESMO arquivo, e por isso `Keep` é MESCLA e não escrita** — a ordem
+  leva um `Wanted` inteiro, clonado do retrato daquela porta com um campo mudado, e o mapa era
+  escrito por cima INTEIRO: guardar uma escala numa tela apagava o que a outra porta tinha acabado
+  de guardar em OUTRA, e guardar um giro na MESMA devolvia a escala que aquela porta viu por último.
+  `Eyes` guarda a BASE (o que a porta foi mostrada) e mescla campo a campo — meu onde mudei, do
+  disco onde não. Esquecer continua limpando tudo porque aí todo campo difere da base. **E um
+  `display.json` que não parseia não é sobrescrito, **e a lista DIZ isso** (`Store::parsed`,
+  `Snapshot::settings_failed`): o `read` cai no padrão, que é certo para quem lê e fatal para quem
+  escreve — uma tecla de tamanho de texto bastava para gravar `{"screens":{}}` e esvaziar o
+  fragmento junto. Recusar salva o arquivo e não basta: com o padrão no lugar, TODA tela desenha
+  como se nada tivesse sido escolhido, e o que a pessoa vê são os ajustes dela sumidos. É a mesma
+  falha muda que o `config_failed` do niri existe para impedir, um arquivo ao lado, e sai pela mesma
+  porta — uma frase na lista. Esquecer TIRA a entrada do arquivo (`Preferences::set`, não
+  `insert`): mapa que só cresce vira arquivo listando todo monitor que já passou pela máquina, cada
+  um dizendo nada. **O bloco mais específico vem primeiro no
+  fragmento**: o niri casa saída por conector OU por descrição e fica com o PRIMEIRO, e o nosso
+  arquivo tem as duas espécies de chave — um bloco velho de `DP-1` dizendo `off` apagava o monitor
+  novo que entrou naquela porta, sem nada na vista alcançando ele. **O arquivo é o que sobrevive ao reboot e
+  o IPC é o que faz o compositor concordar com ele** — recarregar sozinho NÃO desfaz um transitório,
+  porque o niri preserva a mudança quando o arquivo relido não mudou. **E fechar a porta com uma
+  prévia de pé a devolve ANTES de sair** (`Handle::finish`, que manda e ESPERA a thread): sair sem
+  isso deixava a mudança valendo até o niri reiniciar, e uma porta nova não ajuda porque o
+  `previewed` é da thread que aplicou. Brilho interno é udev no
+  sysfs; externo é DDC/CI escrito por nós (`rustix` + `/dev/i2c-N`), sem `ddcutil`. **Cache de pixmap LEVA O TAMANHO NA CHAVE; esvaziar não alcança a GPU** — o `Rgba` é
+  rasterizado num número de PIXELS e esses números saem do `text::size()`. Esvaziar o mapa do
+  hospedeiro parece o conserto e não é: quem DESENHA é a textura em `image::Images`, que **não tem
+  remoção por chave** (o `clear()` só limpa o lote do quadro e diz que as texturas ficam; o `dump()`
+  só age acima de 39 e guarda o que está na tela). Então o ícone era redecodificado a 36 px, o
+  `missing()` respondia "já subiu" sobre o de 18, e o localizador desenhava esticado pelo resto da
+  sessão. `apps::pixmap_key` e `buffer::svg_key` carregam o lado, e o `svg_key` carrega **o token
+  também** — a tinta é `tema × token`, e só o tema estava lá. O `.clear()` que sobrou é teto de
+  memória, não correção. **O tamanho do
+  texto vale para o shell E para os apps** (`toolkits.rs`, dconf), e a aritmética do passo é do
+  token, uma só (`tokens::text::stepped`, que recebe de ONDE se parte — a vista segura o que pediu
+  até o arquivo voltar).
 - **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava: o host amostra
   (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer desenha e pede
   por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread.

@@ -201,6 +201,28 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
         .insert_source(face, |(), (), j: &mut TerminalWindow| j.paint())
         .map_err(|e| anyhow::anyhow!("hang the ping: {e}"))?;
 
+    // THE SIZE OF THE TEXT, watched. A terminal is the door somebody stares
+    // at longest, and one that kept yesterday's size while the footer moved
+    // is the exact mismatch this system decided against when it went from two
+    // sizes to one.
+    let (size_sender, size_changed) =
+        smithay_client_toolkit::reexports::calloop::channel::channel::<()>();
+    // HELD BY THE LOOP'S OWN STATE, not by this function's frame. Every
+    // other door keeps its `Notice` in its struct; a local survives here only
+    // because `cycle.run` is called inline below, and the day that moves the
+    // watch is dropped at the end of this function with nothing saying so.
+    let size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
+    cycle
+        .handle()
+        .insert_source(size_changed, |event, (), j: &mut TerminalWindow| {
+            if let smithay_client_toolkit::reexports::calloop::channel::Event::Msg(()) = event
+                && crate::toolkits::reload()
+            {
+                j.text_size_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("hang the text size channel: {e}"))?;
+
     // The PTY's thread. It touches neither Wayland nor wgpu — it only feeds the
     // engine and rings the ping.
     {
@@ -229,6 +251,7 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
     }
 
     let mut state = TerminalWindow {
+        _size_watch: size_watch,
         conn: conn.clone(),
         handle: cycle.handle(),
         registry: RegistryState::new(&globals),
@@ -240,6 +263,10 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
         window,
         width: 0,
         height: 0,
+        asked: (0, 0),
+        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE — see `crate::hidpi`.
+        scale: 1,
+        scale_told: 1,
         columns,
         lines,
         quit: false,
@@ -294,8 +321,8 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
 /// one arithmetic; this was the one that disagreed.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn cells_that_fit(width: u32, height: u32) -> (u16, u16) {
-    let cell_width_px = tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM;
-    let cell_height_px = tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT;
+    let cell_width_px = tokens::text::size() * tokens::font::CELL_WIDTH_EM;
+    let cell_height_px = tokens::text::size() * tokens::font::LINE_HEIGHT;
     let columns = ((width as f32 / cell_width_px) as u32)
         .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
         .clamp(1, u32::from(u16::MAX)) as u16;
@@ -307,6 +334,14 @@ fn cells_that_fit(width: u32, height: u32) -> (u16, u16) {
 
 struct TerminalWindow {
     conn: Connection,
+    /// `display.json`, watched — the size of the text.
+    ///
+    /// HELD HERE and not in `host_as`'s frame, which is where it started:
+    /// every other door keeps its `Notice` in its state, and a local survives
+    /// only while `cycle.run` happens to be called inline. Splitting that
+    /// function would drop the watch at its end, and nothing anywhere would
+    /// say so — the terminal would simply stop following the size.
+    _size_watch: Option<ronoctua_files::notice::Notice>,
     /// The loop, for the one thing that needs it: a keyboard that REPEATS.
     /// Holding backspace in a terminal is meant to erase several characters,
     /// and SCTK only repeats for a keyboard made with
@@ -320,8 +355,31 @@ struct TerminalWindow {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     mods: Modifiers,
     window: Window,
+    /// The window's size in LOGICAL pixels — what the compositor configured
+    /// it to, what the columns are counted from, what the pointer arrives in.
     width: u32,
+    /// See the field above.
     height: u32,
+    /// The logical size the COMPOSITOR configured, before any clamp.
+    ///
+    /// `width`/`height` are what the BUFFER can show — which is what the
+    /// columns, the bars and the hit tests are laid out against; this is what
+    /// the GPU is asked for. They are the same pair on every machine anybody
+    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
+    /// only one of them is a ratchet: a window clamped once at scale 3 would
+    /// ask for the size it was cut down to and could never grow back. See
+    /// [`crate::hidpi`].
+    asked: (u32, u32),
+    /// How many physical pixels one logical pixel is on the screen this
+    /// window is on — see [`crate::hidpi`], where the rule and its
+    /// measurement live.
+    scale: i32,
+    /// What the SURFACE has been told, which lags `scale` by one frame.
+    ///
+    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
+    /// the matching size, and the only such commit is the present inside
+    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
+    scale_told: i32,
     columns: u16,
     lines: u16,
     quit: bool,
@@ -371,6 +429,12 @@ impl TerminalWindow {
         // The window's COLUMNS: the host guarantees that nothing leaks past the
         // edge, and a terminal line wider than the window is the common case.
         let spans = crate::paint::spans_of(&list, &texts, self.columns);
+        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
+        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes.
+        // See `crate::hidpi::told_before_present`.
+        let surface = self.window.wl_surface().clone();
+        let scale = self.scale;
+        let told = &mut self.scale_told;
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
@@ -385,7 +449,10 @@ impl TerminalWindow {
             tracing::error!(error = %e, "preparing the text failed");
             return;
         }
-        if let Err(e) = gpu.frame(|pass| text.draw(ronoctua_render::Atlas::Pinned, pass)) {
+        if let Err(e) = gpu.frame(
+            || crate::hidpi::told_before_present(scale, told, &surface),
+            |pass| text.draw(ronoctua_render::Atlas::Pinned, pass),
+        ) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
@@ -395,6 +462,21 @@ impl TerminalWindow {
         }
     }
 
+    /// The size of the text changed under this door.
+    ///
+    /// The shaper keeps a size of its own and has to hear it, or the grid
+    /// moves and the letters do not — and a terminal's grid IS its content,
+    /// so the mismatch is not cosmetic here: the engine is resized in CELLS,
+    /// and a cell that stopped matching its glyph is a wrong number of
+    /// columns handed to whatever is running.
+    fn text_size_changed(&mut self) {
+        if let Some(t) = self.text.as_mut() {
+            t.draw_at(ronoctua_tokens::text::size());
+        }
+        self.recount();
+        self.paint();
+    }
+
     /// Recomputes columns and rows from the size in pixels.
     ///
     /// **Integer arithmetic, without measuring text**: the cell is exactly
@@ -402,6 +484,18 @@ impl TerminalWindow {
     /// Measuring here would be trading one calculation for a shaping call on
     /// every `configure`.
     fn recount(&mut self) {
+        // A WINDOW WITH NO SIZE HAS NO GRID. `cells_that_fit` floors at one
+        // cell rather than declining to answer, so at 0x0 this told the engine
+        // AND the pty that the terminal was one column by one row — a
+        // `SIGWINCH` of 1x1 to a shell that has just started, which is exactly
+        // what `host_as`'s 80x24 guess exists to prevent.
+        //
+        // It is reachable before the first `configure`: the scale can arrive
+        // first, and the size watch on `display.json` is installed before it
+        // too. Both call this.
+        if self.width == 0 || self.height == 0 {
+            return;
+        }
         let (columns, lines) = cells_that_fit(self.width, self.height);
         if (columns, lines) == (self.columns, self.lines) {
             return;
@@ -438,32 +532,49 @@ impl TerminalWindow {
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
         // handles do not outlive what they came from.
+        // ONE CALL, not the same one twice: two calls to a pure
+        // function are two places the arguments can be edited apart.
+        let first = crate::hidpi::physical(self.asked, self.scale);
         #[allow(unsafe_code)]
         let gpu = unsafe {
             ronoctua_render::gpu::Gpu::new(
                 RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                self.width,
-                self.height,
+                first.0,
+                first.1,
             )
         };
         match gpu {
-            Ok(g) => match ronoctua_render::Text::new(
-                &g.device,
-                &g.queue,
-                g.config.format,
-                // THE SYSTEM'S ONE SIZE — see `chrome::SIZE`. It used to be
-                // `SIZE_LARGE`, until the owner asked for the footer's measure
-                // everywhere.
-                tokens::font::SIZE_BASE,
-            ) {
-                Ok(t) => {
-                    self.text = Some(t);
-                    self.gpu = Some(g);
-                    tracing::info!("the terminal's graphics context is ready");
+            Ok(mut g) => {
+                // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at
+                // the GPU's ceiling like `resize` does, and the first frame
+                // sends the scale — see `crate::hidpi::resized`.
+                let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
+                self.width = shown_w;
+                self.height = shown_h;
+                // AND THE COLUMNS ARE COUNTED AGAIN. `configure` counts them before the
+                // GPU exists, against the size the compositor gave; if the buffer came
+                // back smaller than that, the count that is on file is for a picture
+                // wider than the one this door draws into.
+                self.recount();
+                match ronoctua_render::Text::new(
+                    &g.device,
+                    &g.queue,
+                    g.config.format,
+                    self.scale,
+                    // THE SYSTEM'S ONE SIZE — see `ronoctua_tokens::text::size`. It used to be
+                    // `SIZE_LARGE`, until the owner asked for the footer's measure
+                    // everywhere.
+                    tokens::text::size(),
+                ) {
+                    Ok(t) => {
+                        self.text = Some(t);
+                        self.gpu = Some(g);
+                        tracing::info!("the terminal's graphics context is ready");
+                    }
+                    Err(e) => tracing::error!(error = %e, "the renderer failed"),
                 }
-                Err(e) => tracing::error!(error = %e, "the renderer failed"),
-            },
+            }
             Err(e) => tracing::error!(error = %e, "no graphics context"),
         }
     }
@@ -529,10 +640,27 @@ impl WindowHandler for TerminalWindow {
         cfg: WindowConfigure,
         _: u32,
     ) {
-        self.width = cfg.new_size.0.map_or(640, std::num::NonZeroU32::get);
-        self.height = cfg.new_size.1.map_or(400, std::num::NonZeroU32::get);
+        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
+        // buffer can show is what comes back below — see `asked`. It is
+        // taken from the CONFIGURE and from nothing else: built out of
+        // the door's own fields it would be the size `resized` last
+        // answered, which can only ever shrink.
+        self.asked = (
+            cfg.new_size.0.map_or(640, std::num::NonZeroU32::get),
+            cfg.new_size.1.map_or(400, std::num::NonZeroU32::get),
+        );
+        self.width = self.asked.0;
+        self.height = self.asked.1;
+        let asked = self.asked;
+        let scale = self.scale;
         if let Some(g) = self.gpu.as_mut() {
-            g.resize(self.width, self.height);
+            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
+            // ceiling that is exactly what the compositor configured; above
+            // it, laying out against the bigger number would put the columns
+            // and the bars in a space the buffer does not have.
+            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
+            self.width = shown_w;
+            self.height = shown_h;
         }
         self.recount();
         self.paint();
@@ -681,13 +809,47 @@ impl KeyboardHandler for TerminalWindow {
 }
 
 impl CompositorHandler for TerminalWindow {
+    /// The window moved to a screen of another scale — or was told its first.
+    ///
+    /// It was EMPTY here and in eight other doors, which is what made every
+    /// one of them blurry on a HiDPI screen. The rule and the measurement are
+    /// in [`crate::hidpi`].
+    ///
+    /// AND IT RECOUNTS, which took two rounds to get right. The number of
+    /// columns is LOGICAL and does not move with the scale — while the buffer
+    /// holds what the window asked for. Above the GPU's ceiling it does not,
+    /// and then the scale is exactly what moves it: the door keeps what the
+    /// buffer can show, so the shell would be told a width the terminal no
+    /// longer has. `recount` declines on a window with no size, which is what
+    /// makes this safe before the first `configure` — where it was not a
+    /// no-op at all but a 1x1 `SIGWINCH` to a shell that had just started.
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
+        // it is told its scale inside the frame, which is the only commit that
+        // carries a matching buffer — see `crate::hidpi::told_before_present`.
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if let Some((w, h)) = crate::hidpi::followed(
+            &mut self.scale,
+            factor,
+            surface,
+            self.gpu.as_mut(),
+            self.text.as_mut(),
+            self.asked,
+        ) {
+            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
+            // GPU's ceiling this is what the compositor configured;
+            // above it, going on with the old number lays the picture
+            // out in a space the buffer does not have.
+            self.width = w;
+            self.height = h;
+            self.recount();
+            self.paint();
+        }
     }
     fn transform_changed(
         &mut self,
@@ -834,8 +996,8 @@ mod tests {
         // The assertion is the INVERSE of what `render-png` does to work out a
         // window's size from a cell count, which is what makes the two agree by
         // construction instead of by coincidence.
-        let cell_w = tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM;
-        let cell_h = tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT;
+        let cell_w = tokens::text::size() * tokens::font::CELL_WIDTH_EM;
+        let cell_h = tokens::text::size() * tokens::font::LINE_HEIGHT;
         for width in [200_u32, 640, 800, 1280, 1920, 3840] {
             for height in [200_u32, 600, 1080] {
                 let (columns, lines) = super::cells_that_fit(width, height);

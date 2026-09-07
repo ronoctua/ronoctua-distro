@@ -5,8 +5,11 @@
 //! Section 5.2 wants the predictable repertoire in the atlas from startup; 6.5
 //! wants a browser with 10,473 glyphs. That is not solved with a single atlas:
 //!
-//! - [`Atlas::Pinned`] — ASCII, Latin-1, box-drawing, icons in use as
-//!   tokens. Populated at startup and **never subjected to `trim()`**.
+//! - [`Atlas::Pinned`] — ASCII, Latin-1, box-drawing, icons in use as tokens.
+//!   Filled lazily, on the first frame that asks for a glyph, and trimmed
+//!   only when the SIZE or the SCALE moves — the two things that make every
+//!   raster in it undrawable. It said "populated at startup and never
+//!   subjected to `trim()`", and neither half was true.
 //! - [`Atlas::Scratch`] — only the glyph browser uses it. `trim()` per frame.
 //!
 //! The browser rasterises only the visible rows (~50 glyphs), so it never
@@ -150,6 +153,21 @@ impl Size {
         }
     }
 
+    /// The same size in PHYSICAL pixels.
+    ///
+    /// A `Size::Px` and a `Size::OnTheCell` carry a number the DOOR worked
+    /// out — an icon's size, a title's — and that number is logical like
+    /// everything else the door counts in. `Size::Grid` is not touched: it
+    /// means "the renderer's own", and the renderer's own is already inked.
+    #[must_use]
+    pub fn times(self, scale: f32) -> Self {
+        match self {
+            Self::Grid => Self::Grid,
+            Self::Px(v) => Self::Px(v * scale),
+            Self::OnTheCell(v) => Self::OnTheCell(v * scale),
+        }
+    }
+
     /// How far LEFT of its cell the run starts, in px.
     ///
     /// Zero for everything but [`Size::OnTheCell`], where it is half the
@@ -162,6 +180,92 @@ impl Size {
                 (tokens::metrics::cell_width(grid) - tokens::metrics::cell_width(v)) / 2.0
             }
             _ => 0.0,
+        }
+    }
+}
+
+/// How many whole cells fit across a viewport of `physical` pixels.
+///
+/// THE DOOR'S OWN ANSWER, FROM THE DOOR'S OWN FUNCTION. `Span::edge` is placed
+/// by counting cells back from the far border, so this has to be the number
+/// the layout was resolved against, to the unit — and `Text::prepare` used to
+/// work it out as `physical width / physical cell`. That is the same value in
+/// arithmetic and not in `f32`: `(size·s)·0.600` is not `(size·0.600)·s` for
+/// every `s`. Swept over the whole size range and every width to 8192, scales
+/// 1, 2 and 4 agree — a power of two is exact — and **scale 3 disagrees on 280
+/// widths**: at 80% on 1080 logical pixels the door resolves 124 columns and
+/// the renderer resolved 125, so every right-anchored run on the modeline sat
+/// one cell out.
+///
+/// The viewport arrives PHYSICAL and is divided back rather than the cell
+/// being multiplied, because dividing is what makes the two expressions
+/// identical instead of merely equal.
+#[must_use]
+pub fn across(physical: u32, scale: f32, size: f32) -> u16 {
+    if scale <= 0.0 {
+        return 0;
+    }
+    tokens::metrics::columns(physical as f32 / scale, size)
+}
+
+/// The same, downwards: how many whole lines fit in `physical` pixels.
+///
+/// For `Span::foot`, which is `Span::edge` on the other axis. See `across`.
+#[must_use]
+pub fn down(physical: u32, scale: f32, size: f32) -> u16 {
+    let line = tokens::metrics::line_height(size);
+    if line <= 0.0 || scale <= 0.0 {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        ((physical as f32 / scale) / line).floor().max(0.0) as u16
+    }
+}
+
+/// The largest buffer scale anything in this system follows.
+///
+/// # Why the bound lives here and not in the shell
+///
+/// Because it was written in two places — the shell's `hidpi::followed`, which
+/// refuses a scale the compositor sends, and `render-png --scale`, which
+/// refuses one a person types — and each said in its own comment that it was
+/// "the same bound the other takes", with nothing making that true. This crate
+/// is what both of them already depend on, and [`rasterised_at`] right below
+/// is the part of the rule that has to draw at the number, so the bound is at
+/// home beside it.
+///
+/// EIGHT: three more than any compositor drives a screen at, and the point at
+/// which an ordinary window's buffer is past what an ordinary GPU takes — at
+/// 9, a 1920-logical window wants 17280 px against a 16384 ceiling.
+pub const MOST_SCALE: i32 = 8;
+
+/// The compositor's integer scale as this rasteriser wants it.
+///
+/// ONE CONVERSION, and it lives here because the shell had one too and the two
+/// had different policies: this end used to fall back to `1.0` on both bad
+/// values without a word, which is the branch the other end's doc warns about
+/// at length — the buffer sized by a scale the glyphs were not drawn at.
+///
+/// The type is `i32` because that is what the compositor sends and what every
+/// door holds; `u16` covers every real scale and converts to `f32` exactly.
+#[must_use]
+pub fn rasterised_at(scale: i32) -> f32 {
+    if scale <= 0 {
+        tracing::warn!(
+            scale,
+            "a buffer scale that is not positive; rasterising one to one"
+        );
+        return 1.0;
+    }
+    match u16::try_from(scale) {
+        Ok(fits) => f32::from(fits),
+        Err(_) => {
+            tracing::warn!(
+                scale,
+                "a buffer scale no screen has; rasterising one to one"
+            );
+            1.0
         }
     }
 }
@@ -305,18 +409,156 @@ pub struct Text {
     atlas_scratch: glyphon::TextAtlas,
     renderer_pinned: glyphon::TextRenderer,
     renderer_scratch: glyphon::TextRenderer,
+    /// The size in LOGICAL pixels — the one a person chose, the one the layout
+    /// counted cells with, the one a pointer's coordinates are in.
     size: f32,
+    /// How many physical pixels one logical pixel is, on the screen this
+    /// surface is currently on.
+    ///
+    /// # Why the renderer is where this lives
+    ///
+    /// Because everything else in the shell is LOGICAL and has to stay that
+    /// way: a `Span` is a column and a line, a `Quad` is a rectangle over a
+    /// logical viewport, a pointer arrives in logical coordinates, and the
+    /// number of columns is `logical width / logical cell`. Only the last
+    /// step — glyph rasters on a texture — is in physical pixels, and doing
+    /// the multiplication anywhere else would mean every door multiplying at
+    /// every site and one of them forgetting.
+    ///
+    /// So: the doors keep handing over logical everything and say what the
+    /// scale is; this is the one place it is applied.
+    scale: f32,
 }
 
 impl Text {
+    /// Draws at a new size, from the next frame on. `true` if it moved.
+    ///
+    /// # Why this is the WHOLE of the change
+    ///
+    /// The atlases, the renderers and the viewport do not depend on the size:
+    /// glyphon keys a glyph's raster by its own metrics inside its cache, and
+    /// a `Buffer` is given `Metrics::new` at shaping time. So the size is one
+    /// field, and every measurement taken from it — the cell, the line, the
+    /// nudge a run of another scale gets — is read through `self.size` when
+    /// the frame is built.
+    ///
+    /// # And why it has to exist at all
+    ///
+    /// The size is a person's choice now, not a property of the build. Without
+    /// this the shaper keeps the size the process started at while everything
+    /// AROUND it moves: the columns, the cell width, the line height, every
+    /// hit test. The result is worse than not following at all — a grid at one
+    /// size with letters at another, which reads as a broken font rather than
+    /// as a setting that did not take.
+    ///
+    /// # What is proved, and by what
+    ///
+    /// That the shaper DRAWS at the size it holds is measured, not argued:
+    /// `ronoctua-render-png --text 70/100/200` gives the same thirteen runs
+    /// on the same 60x12 grid, on surfaces of exactly 0,70x and 2,00x the
+    /// hundred-percent one. That the DOORS reach this is measured too — a
+    /// footer under Xvfb, told through its file, moved from 53 px and 118
+    /// columns to 79/79, then 105/59, then 37/169, and back to 53/118.
+    ///
+    /// This function itself has no test of its own: it needs a device, and a
+    /// device in a unit test would be a test of wgpu.
+    ///
+    /// # THE ATLASES ARE RELEASED, and `trim` is not what that word suggests
+    ///
+    /// A raster IS keyed by its metrics, so a new size is a whole new set of
+    /// entries and the old ones can never be drawn from again. The obvious
+    /// move is to trim the atlases — and the obvious reading of that word is
+    /// wrong, so it is written down here rather than assumed.
+    ///
+    /// `glyphon::TextAtlas::trim` (0.12.0, `text_atlas.rs:334`) forwards to
+    /// each inner atlas, whose whole body is `self.glyphs_in_use.clear()`
+    /// (`:219`). It frees NOTHING at the moment it runs: `glyph_cache` is an
+    /// unbounded LRU (`:57`) and the only evictions are the two `pop_lru`
+    /// calls inside `try_allocate` (`:72-105`), reached only when the atlas
+    /// texture is already full.
+    ///
+    /// What the call really buys is LAZY RECLAMATION: it takes the old size's
+    /// glyphs out of `glyphs_in_use`, so the next allocation that runs out of
+    /// room evicts them instead of growing the texture — a doubling, capped
+    /// at `max_texture_dimension_2d`. Without it the old size's rasters would
+    /// be pinned as in use for ever and the growth would be the only way out.
+    ///
+    /// SO THE RESIDENCY IS NOT RECLAIMED, and cannot be: glyphon 0.12 offers
+    /// no `clear` and no `evict`, and the only route would be building a new
+    /// `TextAtlas`. The repertoire is a few megabytes across the whole range,
+    /// so that is not worth doing — but it is worth saying, because the first
+    /// version of this comment claimed the memory came back.
+    ///
+    /// The first frame after a change pays a full re-raster either way: the
+    /// old rasters are the wrong size.
+    pub fn draw_at(&mut self, size: f32) -> bool {
+        let moved = (self.size - size).abs() > f32::EPSILON;
+        if moved {
+            self.atlas_pinned.trim();
+            self.trim_scratch();
+        }
+        self.size = size;
+        moved
+    }
+
+    /// Draws on a screen of a different scale, from the next frame on.
+    ///
+    /// `true` if it moved, and the caller has to redraw — the same contract
+    /// `draw_at` has, and for the same reason: a raster is keyed by its
+    /// metrics, so twice the scale is a whole new set of glyphs and the old
+    /// ones can never be drawn from again. Read `draw_at` for what `trim`
+    /// does and does not free.
+    ///
+    /// A scale of zero or less is REFUSED rather than clamped: the
+    /// compositor's own protocol says a buffer scale is a positive integer,
+    /// and a zero would put every glyph at zero pixels — a window that draws
+    /// nothing, which reads as a crash and is not one.
+    pub fn draw_scaled(&mut self, scale: f32) -> bool {
+        if scale <= 0.0 {
+            tracing::warn!(
+                scale,
+                "a scale that is not positive; keeping the one we had"
+            );
+            return false;
+        }
+        let moved = (self.scale - scale).abs() > f32::EPSILON;
+        if moved {
+            self.atlas_pinned.trim();
+            self.trim_scratch();
+        }
+        self.scale = scale;
+        moved
+    }
+
+    /// The size the GPU actually rasterises at.
+    fn ink(&self) -> f32 {
+        self.size * self.scale
+    }
+
     /// Builds the drawer on an already-created device.
     ///
     /// The font comes embedded ([`EMBEDDED_FONT`]) and **not** from fontconfig
     /// (section 6.4).
+    /// The scale is a PARAMETER and not a default, so that no door can build
+    /// a shaper without saying what screen it is on. Seven of the nine did:
+    /// `Text::new` started at one, `hidpi::followed` only reaches the shaper
+    /// through `text.as_mut()`, and a scale that arrived BEFORE the `Text`
+    /// existed was then never applied — `followed` short-circuits on the same
+    /// factor for ever after. The result is worse than the blur it replaces:
+    /// glyphs rasterised at logical size into a physical buffer, half-size
+    /// text in the top-left quarter of the window.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format_of: wgpu::TextureFormat,
+        // THE COMPOSITOR'S OWN TYPE, and not a second `f32` beside `size`.
+        // Two adjacent floats can be swapped and it compiles; at 100% and
+        // scale 1 the swap is even invisible, because `ink()` is 18.0 either
+        // way and the column count comes out the same — it only shows on an
+        // icon run, where the bell would be eighteen times too big. An `i32`
+        // is what `scale_factor_changed` hands over and what every door
+        // holds, so this is also one conversion fewer at eleven call sites.
+        scale: i32,
         size: f32,
     ) -> Result<Self> {
         // THE BANK IS BUILT HERE, and not by `new_with_fonts`.
@@ -408,25 +650,38 @@ impl Text {
             renderer_pinned,
             renderer_scratch,
             size,
+            // REFUSED, AND LOUDLY, the way `draw_scaled` refuses it — see
+            // `rasterised_at`, which is the one conversion.
+            scale: rasterised_at(scale),
         })
     }
 
-    /// The width of one cell, in logical px. Exact (section 4.1).
+    /// The width of one cell, in PHYSICAL px — the scale is already in it.
+    ///
+    /// It is the width the rasteriser places a glyph at, which is what the
+    /// only caller (`prepare`) wants. What a door counts columns with is the
+    /// LOGICAL cell, and that one comes from `tokens::metrics::cell_width` —
+    /// see the `scale` field for why the two live apart.
     #[must_use]
     pub fn cell_width(&self) -> f32 {
-        tokens::metrics::cell_width(self.size)
+        tokens::metrics::cell_width(self.ink())
     }
 
-    /// The height of one line, in logical px.
+    /// The height of one line, in PHYSICAL px. See [`Text::cell_width`].
     #[must_use]
     pub fn line_height(&self) -> f32 {
-        tokens::metrics::line_height(self.size)
+        tokens::metrics::line_height(self.ink())
     }
 
     /// Prunes **only** the transient atlas.
     ///
-    /// The pinned one is never pruned — it is what preserves section 5.2's guarantee
-    /// even with the glyph browser open.
+    /// The pinned one is not touched HERE — it is what preserves section
+    /// 5.2's guarantee even with the glyph browser open. Two places release
+    /// it, [`Text::draw_at`] and [`Text::draw_scaled`], and only because a
+    /// change of SIZE or of SCALE makes every raster in it undrawable. Read
+    /// `draw_at` before believing the word "trim": it marks glyphs as no
+    /// longer in use, which lets a later allocation reclaim them; it frees
+    /// nothing when it runs.
     pub fn trim_scratch(&mut self) {
         self.atlas_scratch.trim();
     }
@@ -446,12 +701,33 @@ impl Text {
 
         let cw = self.cell_width();
         let lh = self.line_height();
-        let metric = glyphon::Metrics::new(self.size, lh);
+        // TAKEN AS NUMBERS, not read through `self`: the closures below are
+        // alive while the shaper and the atlases are borrowed mutably.
+        let (ink, scale) = (self.ink(), self.scale);
+        // THE SAME COUNT THE DOOR RESOLVED THE LAYOUT AGAINST, from the same
+        // function with the same inputs.
+        //
+        // `Span::edge` and `Span::foot` are placed by counting cells back from
+        // the far border, so this number has to be the door's to the unit —
+        // and it used to be recomputed here as `physical / physical`. That is
+        // the same value in arithmetic and not in `f32`: `(size·s)·0.600` is
+        // not `(size·0.600)·s` for every `s`. Swept over the whole size range
+        // and every width up to 8192, scale 1, 2 and 4 agree (a power of two
+        // is exact) and **scale 3 disagrees on 280 widths** — at 80% and 1080
+        // logical px the door resolves 124 columns and this resolved 125, so
+        // every right-anchored run on the modeline moved one cell.
+        //
+        // The viewport arrives physical, so it is divided back rather than the
+        // cell being multiplied: dividing is what makes the two expressions
+        // identical instead of merely equal.
+        let across = f32::from(across(width, scale, self.size));
+        let down = f32::from(down(height, scale, self.size));
+        let metric = glyphon::Metrics::new(ink, lh);
         // THE METRIC OF A RUN THAT ASKS FOR ANOTHER SIZE.
         //
         // The line height follows the size: with the renderer's, a large
         // run would be clipped top and bottom by the line box.
-        let metric_of = |t: &Span| match t.size {
+        let metric_of = |t: &Span| match t.size.times(scale) {
             Size::Grid => metric,
             // A WHOLE LINE AT ANOTHER SIZE takes that size's line height too:
             // with the renderer's, a large run would be clipped top and bottom
@@ -461,7 +737,7 @@ impl Text {
             // [`line_box`], which is the same rule and the only place it is
             // written. Two expressions of it are how the box and the metric
             // come to disagree, and the disagreement moves a whole line.
-            Size::OnTheCell(px) => glyphon::Metrics::new(px, line_box(t.size, lh)),
+            Size::OnTheCell(px) => glyphon::Metrics::new(px, line_box(t.size.times(scale), lh)),
         };
 
         // In cosmic-text 0.19, `set_size` and `set_text` no longer take the
@@ -470,7 +746,7 @@ impl Text {
         // Shaping and atlas upload are costs of different natures: one is
         // rustybuzz over the font's tables, the other is swash rasterising and
         // uploading a texture. Only separated can one tell which to optimise.
-        let t_moldar = std::time::Instant::now();
+        let began_shaping = std::time::Instant::now();
         let mut buffers = Vec::with_capacity(spans.len());
         for t in spans {
             let mut b = glyphon::Buffer::new(&mut self.face, metric_of(t));
@@ -488,13 +764,13 @@ impl Text {
             buffers.push(b);
         }
 
-        let shaping = t_moldar.elapsed();
+        let shaping = began_shaping.elapsed();
 
         // EACH RUN'S BOX: it is the line height of its own metric, the same one
         // `metric_of` built. See `aligned_tops`.
         let boxes: Vec<(u16, f32)> = spans
             .iter()
-            .map(|t| (t.line, line_box(t.size, lh)))
+            .map(|t| (t.line, line_box(t.size.times(scale), lh)))
             .collect();
         let tops = aligned_tops(&boxes, lh);
 
@@ -515,18 +791,16 @@ impl Text {
                     // the run sits from the right, and that distance is exact
                     // in pixels however the remainder falls.
                     left: if t.edge {
-                        let columns = (width as f32 / cw).floor();
-                        (columns - f32::from(t.column)).mul_add(-cw, width as f32)
-                            + t.size.nudge(self.size)
+                        (across - f32::from(t.column)).mul_add(-cw, width as f32)
+                            + t.size.times(scale).nudge(ink)
                     } else {
-                        f32::from(t.column).mul_add(cw, t.size.nudge(self.size))
+                        f32::from(t.column).mul_add(cw, t.size.times(scale).nudge(ink))
                     },
                     // COUNTED UP FROM THE BOTTOM when the run is anchored
                     // there — see `Span::foot`, and `Span::edge` for the same
                     // decision on the other axis.
                     top: if t.foot {
-                        let lines = (height as f32 / lh).floor();
-                        (lines - f32::from(t.line)).mul_add(-lh, height as f32)
+                        (down - f32::from(t.line)).mul_add(-lh, height as f32)
                             + (*top - f32::from(t.line) * lh)
                     } else {
                         *top
@@ -630,10 +904,108 @@ mod tests {
         // 10,8 px to 13,2, so the run starts 1,2 px to the LEFT and the ink
         // ends up centred on the cell the layout gave it.
         let nudge = Size::OnTheCell(22.0).nudge(18.0);
-        assert!((nudge - -1.2).abs() < 0.001, "deslocamento {nudge}");
+        assert!((nudge - -1.2).abs() < 0.001, "the nudge is {nudge}");
         // A glyph SMALLER than the grid goes the other way, and that is the
         // same rule and not a second one.
         assert!(Size::OnTheCell(15.0).nudge(18.0) > 0.0);
+    }
+
+    #[test]
+    fn the_renderer_counts_the_cells_the_door_counted() {
+        // `Span::edge` is placed by counting cells back from the far border,
+        // so this number has to be the door's to the unit. It used to be
+        // `physical width / physical cell` here and `logical / logical` there
+        // — the same value in arithmetic and not in `f32`.
+        //
+        // THE SWEEP IS WHAT FOUND IT: scales 1, 2 and 4 agree because
+        // multiplying by a power of two is exact, so a test at scale 2 alone
+        // would have passed over the defect. Scale 3 is where it lives.
+        let mut apart = 0;
+        // THE RANGE COMES FROM THE TOKENS, not from three numbers typed here.
+        // They became `font.scale.{floor,ceiling,step}` in the same round this
+        // sweep was written, and `one-text-size` only reads the shell — so a
+        // copy here is a copy nothing keeps honest: move the ceiling and this
+        // sweep silently stops covering what it exists to cover.
+        for pct in (tokens::font::SCALE_FLOOR..=tokens::font::SCALE_CEILING)
+            .step_by(tokens::font::SCALE_STEP as usize)
+        {
+            let size = tokens::font::SIZE_BASE * pct as f32 / 100.0;
+            for scale in [1.0_f32, 2.0, 3.0, 4.0] {
+                for logical in (1_u32..=4096).step_by(7) {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let physical = (logical as f32 * scale) as u32;
+                    let theirs = tokens::metrics::columns(logical as f32, size);
+                    if across(physical, scale, size) != theirs {
+                        apart += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(apart, 0, "the two counts disagree on {apart} widths");
+
+        // AND THE ONE THAT WAS THERE IS STILL WRONG, which is why this is a
+        // function and not an expression: the old arithmetic, written out, on
+        // a case the sweep above found. 70% of the base size, scale 3, 3969
+        // logical pixels: the door resolves 525 columns and this resolved 524,
+        // so a run anchored to the right edge sat one cell PAST it and its
+        // last cell was clipped off the surface.
+        let size = tokens::font::SIZE_BASE * 70.0 / 100.0;
+        let (scale, logical) = (3.0_f32, 3969.0_f32);
+        let cw = tokens::metrics::cell_width(size * scale);
+        let was = ((logical * scale) / cw).floor();
+        assert_eq!(tokens::metrics::columns(logical, size), 525);
+        assert_ne!(
+            was, 525.0,
+            "the defect this guards is not reproducible; the guard may be idle",
+        );
+    }
+
+    #[test]
+    fn a_scale_no_screen_has_rasterises_one_to_one() {
+        assert!((rasterised_at(1) - 1.0).abs() < f32::EPSILON);
+        assert!((rasterised_at(2) - 2.0).abs() < f32::EPSILON);
+        assert!((rasterised_at(3) - 3.0).abs() < f32::EPSILON);
+        // THE TWO THAT ARE NOT SCALES. This answers an `f32` and so cannot
+        // refuse; what it can do is not invent one, and say so. Past `u16` it
+        // used to fall back silently, which is the branch that would leave the
+        // buffer sized by the scale and the glyphs drawn at one.
+        assert!((rasterised_at(0) - 1.0).abs() < f32::EPSILON);
+        assert!((rasterised_at(-4) - 1.0).abs() < f32::EPSILON);
+        assert!((rasterised_at(i32::MAX) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_viewport_of_nothing_counts_nothing() {
+        // A COMPOSITOR CAN CONFIGURE A WINDOW AT ZERO while it is mapping, and
+        // a scale that is not positive is refused rather than divided by.
+        let size = tokens::font::SIZE_BASE;
+        assert_eq!(across(0, 1.0, size), 0);
+        assert_eq!(down(0, 1.0, size), 0);
+        assert_eq!(across(1920, 0.0, size), 0);
+        assert_eq!(down(1080, -1.0, size), 0);
+        assert_eq!(across(1920, 1.0, 0.0), 0);
+    }
+
+    #[test]
+    fn a_screen_of_another_scale_keeps_everything_in_proportion() {
+        // THE WHOLE POINT OF `Size::times`: on a screen of scale 2 the run and
+        // the grid are BOTH twice as big, so a glyph centred on its cell is
+        // still centred on it — the nudge doubles rather than staying put.
+        //
+        // A nudge that did not scale would be the defect this guards: the bell
+        // would sit 1,2 px left of where it belongs on a HiDPI screen, which
+        // at that size is half a stem's width and reads as a wobble.
+        let one = Size::OnTheCell(22.0).nudge(18.0);
+        let two = Size::OnTheCell(22.0).times(2.0).nudge(18.0 * 2.0);
+        assert!(
+            (two - one * 2.0).abs() < 0.001,
+            "the nudge did not scale: {two}"
+        );
+
+        // AND A GRID RUN IS UNTOUCHED, because `Size::Grid` means "whatever
+        // the renderer's own size is" and the renderer's own is already inked.
+        assert_eq!(Size::Grid.times(3.0), Size::Grid);
+        assert_eq!(Size::Px(9.0).times(1.5), Size::Px(13.5));
     }
 
     #[test]

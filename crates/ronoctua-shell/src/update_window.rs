@@ -893,6 +893,23 @@ pub fn host_it() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
 
+    // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
+    // means. A size chosen anywhere moves this window without it being
+    // reopened — and without it this door would sit beside the footer at a
+    // different size, which is the photograph that made this system have one
+    // size at all.
+    let (size_sender, size_changed) = channel::channel::<()>();
+    let _size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
+    handle
+        .insert_source(size_changed, |event, (), state: &mut UpdateWindow| {
+            if let channel::Event::Msg(()) = event
+                && crate::toolkits::reload()
+            {
+                state.text_size_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
+
     let mut state = UpdateWindow {
         conn: conn.clone(),
         handle: handle.clone(),
@@ -907,6 +924,12 @@ pub fn host_it() -> Result<()> {
         window,
         width: 0,
         height: 0,
+        asked: (0, 0),
+        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE: the surface exists before
+        // the compositor has said which output it is on, and
+        // `scale_factor_changed` is what says so.
+        scale: 1,
+        scale_told: 1,
         columns: 80,
         lines: 24,
         quit: false,
@@ -960,7 +983,7 @@ struct UpdateWindow {
     /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
     /// carried rather than reached for. Without it `repeat_key` below is dead
     /// code and holding an arrow moves exactly one row, which is the trap
-    /// CLAUDE.md records and which five windows inherited.
+    /// CLAUDE.md records and which nine windows inherited.
     handle: calloop::LoopHandle<'static, Self>,
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
@@ -972,8 +995,31 @@ struct UpdateWindow {
     pointer: Option<wl_pointer::WlPointer>,
     mods: Modifiers,
     window: Window,
+    /// The window's size in LOGICAL pixels — what the compositor configured
+    /// it to, what the columns are counted from, what the pointer arrives in.
     width: u32,
+    /// See the field above.
     height: u32,
+    /// The logical size the COMPOSITOR configured, before any clamp.
+    ///
+    /// `width`/`height` are what the BUFFER can show — which is what the
+    /// columns, the bars and the hit tests are laid out against; this is what
+    /// the GPU is asked for. They are the same pair on every machine anybody
+    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
+    /// only one of them is a ratchet: a window clamped once at scale 3 would
+    /// ask for the size it was cut down to and could never grow back. See
+    /// [`crate::hidpi`].
+    asked: (u32, u32),
+    /// How many physical pixels one logical pixel is on the screen this
+    /// window is on — see [`crate::hidpi`], where the rule and its
+    /// measurement live.
+    scale: i32,
+    /// What the SURFACE has been told, which lags `scale` by one frame.
+    ///
+    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
+    /// the matching size, and the only such commit is the present inside
+    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
+    scale_told: i32,
     columns: u16,
     lines: u16,
     quit: bool,
@@ -1082,13 +1128,27 @@ impl UpdateWindow {
         self.ask_paint();
     }
 
+    /// The size of the text changed under this door.
+    ///
+    /// THE SHAPER HAS TO HEAR IT TOO. It was built with a size and keeps it;
+    /// moving everything around it — the columns, the cell, every hit test —
+    /// and leaving the letters gives a grid at one size with text at another,
+    /// which reads as a broken font rather than as a setting that took.
+    fn text_size_changed(&mut self) {
+        if let Some(t) = self.text.as_mut() {
+            t.draw_at(ronoctua_tokens::text::size());
+        }
+        self.recount();
+        self.ask_paint();
+    }
+
     /// Columns and rows from the size in pixels.
     ///
     /// Integer arithmetic, without measuring text: the cell is exactly 0.600 ×
     /// the font size, including in the Nerd Fonts.
     fn recount(&mut self) {
-        let cell = tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM;
-        let line = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+        let cell = tokens::text::size() * tokens::font::CELL_WIDTH_EM;
+        let line = tokens::metrics::line_height(tokens::text::size());
         #[allow(clippy::cast_precision_loss)]
         let width = self.width as f32 - 2.0 * cell * f32::from(CONTENT_MARGIN);
         #[allow(clippy::cast_precision_loss)]
@@ -1113,7 +1173,7 @@ impl UpdateWindow {
 
     /// Which step row a pointer position lands on, if any.
     fn at(&self, x: f64, y: f64) -> Option<usize> {
-        let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
         if line_px <= 0.0 || x < 0.0 || y < 0.0 {
             return None;
         }
@@ -1190,27 +1250,42 @@ impl UpdateWindow {
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
         // handles do not outlive what produced them.
+        // ONE CALL, not the same one twice: two calls to a pure
+        // function are two places the arguments can be edited apart.
+        let first = crate::hidpi::physical(self.asked, self.scale);
         #[allow(unsafe_code)]
         let gpu = unsafe {
             ronoctua_render::gpu::Gpu::new(
                 RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                self.width,
-                self.height,
+                first.0,
+                first.1,
             )
         };
-        let Ok(g) = gpu else {
+        let Ok(mut g) = gpu else {
             tracing::error!("no usable GPU; the window will not draw");
             return;
         };
-        // THE SYSTEM'S ONE SIZE — see `chrome::SIZE`. It used to be
+        // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at the
+        // GPU's ceiling like `resize` does, and the first frame sends the
+        // scale — see `crate::hidpi::resized`.
+        let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
+        self.width = shown_w;
+        self.height = shown_h;
+        // AND THE COLUMNS ARE COUNTED AGAIN. `configure` counts them before the
+        // GPU exists, against the size the compositor gave; if the buffer came
+        // back smaller than that, the count that is on file is for a picture
+        // wider than the one this door draws into.
+        self.recount();
+        // THE SYSTEM'S ONE SIZE — see `ronoctua_tokens::text::size`. It used to be
         // `SIZE_LARGE`, on the argument that the footer is peripheral
         // reference and this is what one reads.
         match ronoctua_render::Text::new(
             &g.device,
             &g.queue,
             g.config.format,
-            tokens::font::SIZE_BASE,
+            self.scale,
+            tokens::text::size(),
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
@@ -1258,7 +1333,7 @@ impl UpdateWindow {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let size = tokens::font::SIZE_BASE;
+        let size = tokens::text::size();
         let line_px = tokens::metrics::line_height(size);
         let margin = CONTENT_MARGIN;
         let mut spans: Vec<ronoctua_render::Span> = Vec::new();
@@ -1428,9 +1503,19 @@ impl UpdateWindow {
                 quads.push(q);
             }
         }
+        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
+        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
+        // and nothing else in this function may borrow `self` by then. See
+        // `crate::hidpi::told_before_present`.
+        let surface = self.window.wl_surface().clone();
+        let scale = self.scale;
+        let told = &mut self.scale_told;
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
+        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
+        // buffer can show, so there is one number and this is it.
+        let (logical_w, logical_h) = (self.width, self.height);
         if let Err(e) = text.prepare(
             &gpu.device,
             &gpu.queue,
@@ -1443,23 +1528,20 @@ impl UpdateWindow {
             return;
         }
         if let Some(q) = self.quads.as_mut() {
-            q.prepare(
-                &gpu.device,
-                &gpu.queue,
-                gpu.config.width,
-                gpu.config.height,
-                &quads,
-            );
+            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &quads);
         }
         let quads_ref = self.quads.as_ref();
         // QUADS AND THEN TEXT. There is no depth test: whoever draws later ends
         // up on top, and the text has to stay legible over the band.
-        if let Err(e) = gpu.frame(|pass| {
-            if let Some(q) = quads_ref {
-                q.draw(pass);
-            }
-            text.draw(ronoctua_render::Atlas::Pinned, pass)
-        }) {
+        if let Err(e) = gpu.frame(
+            || crate::hidpi::told_before_present(scale, told, &surface),
+            |pass| {
+                if let Some(q) = quads_ref {
+                    q.draw(pass);
+                }
+                text.draw(ronoctua_render::Atlas::Pinned, pass)
+            },
+        ) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
@@ -1515,10 +1597,27 @@ impl WindowHandler for UpdateWindow {
         cfg: WindowConfigure,
         _: u32,
     ) {
-        self.width = cfg.new_size.0.map_or(900, std::num::NonZeroU32::get);
-        self.height = cfg.new_size.1.map_or(600, std::num::NonZeroU32::get);
+        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
+        // buffer can show is what comes back below — see `asked`. It is
+        // taken from the CONFIGURE and from nothing else: built out of
+        // the door's own fields it would be the size `resized` last
+        // answered, which can only ever shrink.
+        self.asked = (
+            cfg.new_size.0.map_or(900, std::num::NonZeroU32::get),
+            cfg.new_size.1.map_or(600, std::num::NonZeroU32::get),
+        );
+        self.width = self.asked.0;
+        self.height = self.asked.1;
+        let asked = self.asked;
+        let scale = self.scale;
         if let Some(g) = self.gpu.as_mut() {
-            g.resize(self.width, self.height);
+            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
+            // ceiling that is exactly what the compositor configured; above
+            // it, laying out against the bigger number would put the columns
+            // and the bars in a space the buffer does not have.
+            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
+            self.width = shown_w;
+            self.height = shown_h;
         }
         self.recount();
         self.ask_paint();
@@ -1795,13 +1894,38 @@ impl PointerHandler for UpdateWindow {
 }
 
 impl CompositorHandler for UpdateWindow {
+    /// The window moved to a screen of another scale — or was told its first.
+    ///
+    /// It was EMPTY here and in eight other doors, which is what made every
+    /// one of them blurry on a HiDPI screen. The rule and the measurement are
+    /// in [`crate::hidpi`].
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
+        // it is told its scale inside the frame, which is the only commit that
+        // carries a matching buffer — see `crate::hidpi::told_before_present`.
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if let Some((w, h)) = crate::hidpi::followed(
+            &mut self.scale,
+            factor,
+            surface,
+            self.gpu.as_mut(),
+            self.text.as_mut(),
+            self.asked,
+        ) {
+            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
+            // GPU's ceiling this is what the compositor configured;
+            // above it, going on with the old number lays the picture
+            // out in a space the buffer does not have.
+            self.width = w;
+            self.height = h;
+            self.recount();
+            self.ask_paint();
+        }
     }
     fn transform_changed(
         &mut self,

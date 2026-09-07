@@ -838,6 +838,49 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "brain-proceed",
             label: key::CMD_BRAIN_PROCEED,
         },
+        // THE SCREENS — `LEADER s d`, and the gestures of the view itself,
+        // which are commands like any other so the manual and the locator can
+        // find them.
+        Command {
+            id: "display-open",
+            label: key::CMD_DISPLAY_OPEN,
+        },
+        Command {
+            id: "display-window",
+            label: key::CMD_DISPLAY_WINDOW,
+        },
+        Command {
+            id: "display-up",
+            label: key::CMD_DISPLAY_UP,
+        },
+        Command {
+            id: "display-down",
+            label: key::CMD_DISPLAY_DOWN,
+        },
+        Command {
+            id: "display-less",
+            label: key::CMD_DISPLAY_LESS,
+        },
+        Command {
+            id: "display-more",
+            label: key::CMD_DISPLAY_MORE,
+        },
+        Command {
+            id: "display-enter",
+            label: key::CMD_DISPLAY_ENTER,
+        },
+        Command {
+            id: "display-automatic",
+            label: key::CMD_DISPLAY_AUTOMATIC,
+        },
+        Command {
+            id: "display-forget",
+            label: key::CMD_DISPLAY_FORGET,
+        },
+        Command {
+            id: "display-arrange",
+            label: key::CMD_DISPLAY_ARRANGE,
+        },
         // `LEADER s p` — POWER: the battery, the charger, the profile, sleep.
         // The view's own rows do the rest; these are the things worth a key
         // without opening it — a profile, the two locks, the four actions.
@@ -1699,6 +1742,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // memory panel and the disk formatter. It was free, and it is where
         // somebody looks for "do something to this machine".
         ("s u", "system-update", None),
+        // `LEADER s d` — THE SCREENS. `s d d` opens the view (the doubled
+        // letter, the convention `s p p`, `s n n`, `t t` and `f f` already
+        // use) and `s d w` the window; everything about ONE screen is a letter
+        // INSIDE the view, where the row under the cursor says which screen
+        // the letter is about.
+        ("s d d", "display-open", None),
+        ("s d w", "display-window", None),
         // `LEADER s p` — POWER, a group under SYSTEM. `s p p` opens the view
         // (the doubled letter) and `s p w` the window; the three profiles are
         // `e` (pErformance — `p` is the prefix itself), `b` balanced and `s`
@@ -1849,6 +1899,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s", key::GROUP_SYSTEM),
         ("s n", key::GROUP_NETWORK),
         ("s s", key::GROUP_SYNCTHING),
+        ("s d", key::GROUP_DISPLAY),
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
     ];
@@ -2022,6 +2073,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .map(|(_, id)| *id),
     );
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::display::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
@@ -2606,6 +2658,16 @@ mod tests {
             "notif-draft-save",
             "notif-knob-previous",
             "notif-restore",
+            "display-open",
+            "display-window",
+            "display-up",
+            "display-down",
+            "display-less",
+            "display-more",
+            "display-enter",
+            "display-automatic",
+            "display-forget",
+            "display-arrange",
             "power-open",
             "power-window",
             "power-profile-performance",

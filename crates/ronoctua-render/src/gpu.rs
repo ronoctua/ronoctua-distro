@@ -219,7 +219,7 @@ impl Gpu {
         // error: the surface is created, the frames are presented, and the
         // compositor simply shows nothing.
         tracing::debug!(
-            formatos = ?caps.formats,
+            formats = ?caps.formats,
             alpha = ?caps.alpha_modes,
             present = ?caps.present_modes,
             "the surface's capabilities"
@@ -278,6 +278,23 @@ impl Gpu {
         })
     }
 
+    /// The largest dimension this device takes for a texture — and the
+    /// presentation surface IS a texture.
+    ///
+    /// # Why a caller wants it before asking for a size
+    ///
+    /// Because [`resize`](Self::resize) clamps, and the clamp is SILENT to
+    /// whoever asked: the surface comes back smaller than the number handed in
+    /// and nothing in the return value says so. A caller that has to keep the
+    /// buffer divisible by a scale (`crate::gpu` does not; `ronoctua-shell`'s
+    /// `hidpi` does) cannot compute the size it wants without this number, and
+    /// asking for one above it and then reading `config` back is two
+    /// reconfigurations for one size.
+    #[must_use]
+    pub const fn ceiling(&self) -> u32 {
+        self.ceiling
+    }
+
     /// Reconfigures after a resize.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -288,8 +305,8 @@ impl Gpu {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws a frame: clears with the chrome colour and lets `draw`
-    /// paint on top.
+    /// Draws a frame, and PRESENTS it — which on Wayland is the attach and the
+    /// commit. It clears with the chrome colour and lets `draw` paint on top.
     ///
     /// The clear happens EVEN when there is no text — otherwise the compositor
     /// shows rubbish on the first frame.
@@ -297,8 +314,24 @@ impl Gpu {
     /// `draw` receives the render pass already open. Passing a closure instead
     /// of returning the pass avoids having to expose wgpu's lifetimes
     /// to `ronoctua-shell`, which should not need to know them.
-    pub fn frame<F>(&mut self, draw: F) -> Result<()>
+    /// # Why there is a hook before the present
+    ///
+    /// Because `present` is the only commit this door makes that carries a
+    /// buffer, and some surface state has to travel in exactly that commit.
+    /// `wl_surface.set_buffer_scale` is the case it was written for: it is
+    /// double-buffered, so it applies on the NEXT commit whichever that is —
+    /// and this function returns `Ok(())` without presenting on `Timeout`,
+    /// `Occluded`, `Outdated` and `Lost`. Sent outside the frame, the scale
+    /// could sit pending until some other bare `commit` applied it over the
+    /// buffer that was already attached, whose size is then not a multiple of
+    /// it: `wl_surface.error.invalid_size`, which is the compositor closing
+    /// the connection with no message at all.
+    ///
+    /// So the hook runs after the texture is in hand and the drawing is
+    /// submitted, and never on a frame that is skipped.
+    pub fn frame<B, F>(&mut self, before_present: B, draw: F) -> Result<()>
     where
+        B: FnOnce(),
         F: FnOnce(&mut wgpu::RenderPass<'_>) -> Result<()>,
     {
         // wgpu 30's `get_current_texture` returns an ENUM, not a
@@ -368,6 +401,10 @@ impl Gpu {
         }
 
         self.queue.submit(Some(enc.finish()));
+
+        // IN THE SAME COMMIT AS THE BUFFER — see the doc. This is the last
+        // moment at which a request can be certain of travelling with it.
+        before_present();
 
         // PRESENTING is `Queue::present`, not dropping the `SurfaceTexture`.
         //

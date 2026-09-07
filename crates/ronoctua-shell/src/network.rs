@@ -532,7 +532,7 @@ pub struct View {
     ///
     ///   * `TAB`, which lands on a section and has to SHOW the section;
     ///   * a click on a mark in the modeline, which the owner asked to open
-    ///     the view *"com o título no topo"* — clicking the tailnet's mark
+    ///     the view with that section's title at the top — clicking the tailnet's mark
     ///     opens the network with `tailnet` at the top, not with one of its
     ///     rows somewhere in the middle.
     ///
@@ -2728,9 +2728,12 @@ mod tests {
         open_one.saved = true;
         let seen = vec![network("a house", 90), open_one];
         let rows = View::fresh().rows(&facts(&snap, &seen), 80, &t);
-        // EVERY FIELD OF THE ROW, and not the first: a row that answers `RET`
-        // wears `icon.row-acts` in front of its label now, so `fields[0]` is
-        // the mark and the padlock is one field further along.
+        // EVERY FIELD OF THE ROW, and not the first: a row is a label and a
+        // value and can carry a mark besides, so which index holds the padlock
+        // is not something a test should be spelling out. (The comment here
+        // used to name an `icon.row-acts` in front of the label; the owner
+        // refused that mark and it exists in no token — the difference between
+        // a row that acts and one that does not is COLOUR.)
         let label_of = |ssid: &str| {
             rows.iter()
                 .find(|r| matches!(&r.target, Target::Wireless(n) if n.ssid == ssid))

@@ -2610,6 +2610,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-display"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-memory",
+ "ronoctua-niri",
+ "ronoctua-store",
+ "ronoctua-tokens",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-files"
 version = "0.1.0"
 dependencies = [
@@ -2792,6 +2807,7 @@ dependencies = [
  "ronoctua-cmd",
  "ronoctua-design",
  "ronoctua-disks",
+ "ronoctua-display",
  "ronoctua-files",
  "ronoctua-i18n",
  "ronoctua-inspect",

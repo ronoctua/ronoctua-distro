@@ -1338,6 +1338,21 @@ let
     };
   };
 
+  displayVm = import ./display-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.shell;
+    # The modules' argument, as `oomVm` builds it: base.nix reads the fonts,
+    # the themes and the shell out of it.
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed;
+      inherit (inputs) niri;
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
+  };
+
   powerVm = import ./power-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
@@ -4002,6 +4017,25 @@ let
         --out "$PWD/$language.png" | tee "$PWD/$language.txt"
     done
 
+    # AND THE SAME PICTURE AT SCALE 2. `--scale` is the flag the HiDPI
+    # deliverable added so the shell's sharpness could be photographed at all,
+    # and nothing exercised it: not the `1..=MOST_SCALE` bound, not the refusal
+    # of a picture past the GPU's ceiling, and not the invariant the tool is
+    # for — the same picture with more pixels in it, and the SAME number of
+    # cells. A tool nobody tests is a proof nobody has.
+    ${rust.workspace}/bin/ronoctua-render-png \
+      ${buffers.format}/lib/ronoctua_buffer_format.wasm \
+      --columns 60 --lines 10 --language en-GB --scale 2 \
+      --out "$PWD/twice.png" | tee "$PWD/twice.txt"
+
+    # AND A SCALE NO SCREEN HAS IS REFUSED, with a sentence rather than a
+    # picture. `|| true` because a refusal is a non-zero exit, which is the
+    # point.
+    ${rust.workspace}/bin/ronoctua-render-png \
+      ${buffers.format}/lib/ronoctua_buffer_format.wasm \
+      --columns 60 --lines 10 --scale 9 --out "$PWD/never.png" \
+      >"$PWD/refused.txt" 2>&1 || true
+
     python3 - <<'END'
     import pathlib, re, struct, sys, zlib
 
@@ -4087,7 +4121,53 @@ let
         "these came out pixel for pixel identical, so the key is not being "
         f"translated before it becomes a drawing: {same}"
     )
-    print("OK: the PNG is valid, has ink in it, and the language reaches the pixel")
+    # AND THE SCALE MULTIPLIES THE PIXELS AND NOT THE CELLS.
+    twice_w, twice_h, twice_px = read("twice")
+    one_w, one_h, one_px = read("en-GB")
+    assert (twice_w, twice_h) == (one_w * 2, one_h * 2), (
+        f"--scale 2 gave {twice_w}x{twice_h} where {one_w * 2}x{one_h * 2} was asked for"
+    )
+    said = pathlib.Path("twice.txt").read_text()
+    assert "60 cells by 10" in said, (
+        f"--scale changed the number of CELLS, which is the one thing it must not: {said!r}"
+    )
+    assert "scale 2" in said, f"the tool did not say what scale it drew at: {said!r}"
+
+    # AND SOMETHING WAS DRAWN AT THE SCALE, which the three assertions above do
+    # not say. They read the HEADER and the printed line; a blank 2x canvas
+    # passes every one of them, and so does the 1x picture pasted into a corner
+    # — proved by handing this Python exactly those two files. `--scale` is the
+    # only way this repository can photograph HiDPI at all, so a silently
+    # broken one makes every later "photographed at scale 2" false.
+    def ink_of(pixels):
+        tally = {}
+        for p in pixels:
+            tally[p] = tally.get(p, 0) + 1
+        ground, _ = max(tally.items(), key=lambda kv: kv[1])
+        return (len(pixels) - tally[ground]) / len(pixels)
+
+    twice_ink, one_ink = ink_of(twice_px), ink_of(one_px)
+    print(f"scale 1: {one_ink:.2%} of ink; scale 2: {twice_ink:.2%}")
+    assert twice_ink > 0.005, (
+        f"only {twice_ink:.3%} of the doubled picture is not the background — that is a "
+        "clean screen, not a drawn buffer"
+    )
+    # THE SAME PICTURE WITH MORE PIXELS IN IT, so the SHARE of ink is about the
+    # same. A 1x drawing in the corner of a 2x canvas covers a quarter of it,
+    # which is what this band refuses.
+    assert abs(twice_ink - one_ink) < one_ink / 2, (
+        f"scale 1 lit {one_ink:.2%} of its picture and scale 2 lit {twice_ink:.2%}: that is "
+        "not the same picture at another size"
+    )
+
+    # AND THE BOUND IS THE ONE `hidpi::followed` TAKES.
+    refused = pathlib.Path("refused.txt").read_text()
+    assert not pathlib.Path("never.png").exists(), (
+        "a scale no compositor drives a screen at was photographed anyway"
+    )
+    assert "not a scale" in refused, f"--scale 9 was refused without saying why: {refused!r}"
+
+    print("OK: the PNG is valid, has ink in it, the language reaches the pixel, and the scale")
     END
   '';
 
@@ -5319,6 +5399,35 @@ let
         src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
         wrong = []
 
+        def code_of(text):
+            """The same source with `//` comments taken out.
+
+            RULE 3 BELOW SEARCHES RAW TEXT WITHOUT IT, and a rule a SENTENCE can
+            satisfy is worse than no rule: writing
+            `// ViewState::Display draws through its own window` above a branch
+            that has been turned off is enough to make the view count as named
+            in both places, while the keyboard drives it and nothing draws it.
+            Its two sibling checks — `every-window-knows-its-scale` and
+            `every-list-window-has-a-bar` — both strip first and both say in
+            prose why; this one did not.
+            """
+            out = []
+            for line in text.splitlines():
+                cut, quoted, escaped = None, False, False
+                for i, ch in enumerate(line):
+                    if escaped:
+                        escaped = False
+                        continue
+                    if ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        quoted = not quoted
+                    elif ch == "/" and not quoted and line[i : i + 2] == "//":
+                        cut = i
+                        break
+                out.append(line if cut is None else line[:cut])
+            return "\n".join(out)
+
         def body_of(signature):
             """The lines of one method, from its signature to the closing brace at
             its own indentation — the shape every method in this file has."""
@@ -5343,27 +5452,59 @@ let
         # 1) THE ORDER, from the one place it is written.
         order = re.findall(r"ViewState::([A-Z]\w*)", "\n".join(body_of("const fn view(&self)")))
         order = [v for v in dict.fromkeys(order)]
-        if len(order) < 12:
-            wrong.append(f"`view()` ranks only {len(order)} views; it used to rank twelve")
+        # NOT A FLOOR — THE ENUM ITSELF. A number written here is a number
+        # that goes stale: it said twelve for two rounds after the screens'
+        # view arrived, which was two views' worth of slack. And a floor could
+        # never have caught the shape that actually happens, which is a
+        # FIFTEENTH view added to the enum and forgotten in `view()` — the
+        # sweep below iterates `order`, so a view that never enters it is
+        # invisible to every rule in this check.
+        declared = re.findall(
+            r"^\s{4}([A-Z]\w*),",
+            "\n".join(body_of("enum ViewState")),
+            re.M,
+        )
+        missing = [v for v in declared if v not in order]
+        if missing:
+            wrong.append(
+                "`view()` does not rank " + ", ".join(missing)
+                + " — a view outside the precedence is drawn by nothing and "
+                "driven by nothing, and every rule below iterates what "
+                "`view()` names"
+            )
 
         # 2) NO BRANCH READS A VIEW'S OWN FIELD.
         #
         # The fields are listed rather than inferred, because that is the list that
         # has to be maintained beside the enum, and a new view that forgets to add
         # its field here still gets caught by check 3.
+        # BY NAME, AND NOT BY SPELLING. This list held one written-out
+        # expression per view — `self\.display\.is_some\(\)` and so on — so it
+        # matched the way the branch happened to be written that day and
+        # nothing else. `if let Some(_) = self.display.as_ref()` is the
+        # IDIOMATIC Rust for the same question, reads the view's own field at
+        # the top level of `typed`, and no entry in the old list touched it;
+        # `as_mut()` and a bare `match self.display` escaped it too.
+        #
+        # Naming the FIELD catches every spelling there can be, and it is also
+        # the shorter list to keep beside the enum.
         FIELDS = [
-            r"self\.files\.is_some\(\)",
-            r"self\.clipboard_open",
-            r"self\.transfers\.is_some\(\)",
-            r"self\.manual\b",
-            r"self\.apps\.is_some\(\)",
-            r"self\.network\.is_some\(\)",
-            r"self\.theme_chooser\.is_some\(\)",
-            r"self\.bluetooth\.is_some\(\)",
-            r"self\.power\.is_some\(\)",
-            r"self\.notifications_open",
-            r"self\.mx\.active\(\)",
-            r"self\.leader\.active_one\(\)",
+            r"self\.%s\b" % name
+            for name in (
+                "files",
+                "clipboard_open",
+                "transfers",
+                "manual",
+                "apps",
+                "network",
+                "theme_chooser",
+                "bluetooth",
+                "power",
+                "display",
+                "notifications_open",
+                "mx",
+                "leader",
+            )
         ]
         for signature, room in (
             ("fn typed(&mut self, event: KeyEvent)", "the key branch"),
@@ -5378,6 +5519,15 @@ let
                 stripped = line.strip()
                 if not (stripped.startswith("if ") or stripped.startswith("} else if ")):
                     continue
+                # THE ONE WRITTEN EXCEPTION, and it is in CLAUDE.md: the
+                # minibuffer's QUESTION is a LINE and not a region, so it is
+                # deliberately outside the precedence `view()` ranks. It is
+                # named here rather than left to a narrow pattern — the old
+                # list spelled this field `self.mx.active()`, which let
+                # `asking_for()` through by accident and would have let a real
+                # second door through the same way.
+                if "self.mx.asking_for()" in stripped:
+                    continue
                 for field in FIELDS:
                     if re.search(field, stripped):
                         wrong.append(
@@ -5389,8 +5539,8 @@ let
         #
         # A view with no branch in one of them is a view that is drawn and not
         # driven, or driven and not drawn — the same defect from the other side.
-        keys = "\n".join(body_of("fn typed(&mut self, event: KeyEvent)"))
-        region = "\n".join(body_of("fn expansion(&self)"))
+        keys = code_of("\n".join(body_of("fn typed(&mut self, event: KeyEvent)")))
+        region = code_of("\n".join(body_of("fn expansion(&self)")))
         for view in order:
             if view == "NoneOf":
                 continue
@@ -5416,7 +5566,8 @@ let
         if "self.files" in guard:
             wrong.append("`region_is_free` is back to asking about the file manager alone")
         doors = set(re.findall(r'region_is_free\("([a-z-]+)"\)', src))
-        if len(doors) < 10:
+        # ELEVEN with the screens' own door — a floor, like the one above.
+        if len(doors) < 11:
             wrong.append(
                 f"only {len(doors)} doors ask whether the region is free: {sorted(doors)}"
             )
@@ -5509,9 +5660,11 @@ let
             if what not in body:
                 wrong.append(f"{f.name}: {why} (`{what}` is not there)")
 
-    # SIX, and the number is the count with the manager in it. A guard set to
-    # exactly what the sweep found is a guard that proves nothing.
-    if windows < 6:
+    # SEVEN with the screens' own window, and it is a FLOOR rather than the
+    # count: an eighth is checked like the rest, and a window that loses its
+    # `PointerEventKind::Axis` takes the sweep below the number and says so. A
+    # guard set to exactly what the sweep found is a guard that proves nothing.
+    if windows < 7:
         wrong.append(f"only {windows} scrolling windows found; the sweep is not reaching them")
 
     if wrong:
@@ -5552,27 +5705,42 @@ let
     import pathlib, re, sys
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    ftl = pathlib.Path("${../assets/i18n}/en-GB.ftl").read_text()
+
+    # EVERY DECLARED LANGUAGE, and not English alone.
+    #
+    # This read `en-GB.ftl` only — and the defect it was written for was
+    # reported by the owner IN PORTUGUESE ("há duas labels com nome `tailnet`").
+    # Two rows can collide in one language and not in the other: `Size of the
+    # text` and `Scale` are two words in en-GB and can both be `Escala` in
+    # pt-BR, and the person reading that screen has no way to tell the two
+    # facts apart. A check that only reads the language the defect was NOT
+    # reported in is a check pointed away from its own evidence.
+    LANGUAGES = "${lib.concatStringsSep " " languages}".split()
+    i18n = pathlib.Path("${../assets/i18n}")
 
     # A VALUE MAY RUN OVER SEVERAL LINES — a Fluent selector does, and two
     # selectors share their first line by construction. Reading only the first
     # would call every plural in this tree a duplicate.
-    values, key, held = {}, None, []
-    for line in ftl.splitlines():
-        if re.match(r"^[a-z0-9-]+ = ", line):
-            if key:
-                values[key] = "\n".join(held).strip()
-            key, held = line.split(" = ", 1)[0], [line.split(" = ", 1)[1]]
-        elif key and (line.startswith((" ", "\t")) or line.strip().startswith("*[")):
-            held.append(line.strip())
-        elif not line.strip():
-            continue
-        else:
-            if key:
-                values[key] = "\n".join(held).strip()
-            key, held = None, []
-    if key:
-        values[key] = "\n".join(held).strip()
+    def values_of(path):
+        values, key, held = {}, None, []
+        for line in path.read_text().splitlines():
+            if re.match(r"^[a-z0-9-]+ = ", line):
+                if key:
+                    values[key] = "\n".join(held).strip()
+                key, held = line.split(" = ", 1)[0], [line.split(" = ", 1)[1]]
+            elif key and (line.startswith((" ", "\t")) or line.strip().startswith("*[")):
+                held.append(line.strip())
+            elif not line.strip():
+                continue
+            else:
+                if key:
+                    values[key] = "\n".join(held).strip()
+                key, held = None, []
+        if key:
+            values[key] = "\n".join(held).strip()
+        return values
+
+    tables = {lang: values_of(i18n / f"{lang}.ftl") for lang in LANGUAGES}
 
     # THE PAIRS THAT MAY SAY THE SAME THING, each with its reason.
     #
@@ -5598,13 +5766,35 @@ let
     }
 
     # THE VIEWS: one file each, and the keys are the ones IT names.
-    VIEWS = ["network.rs", "power.rs", "bluetooth.rs", "notifications.rs", "files.rs"]
+    # THE VIEWS ARE FOUND, NOT LISTED.
+    #
+    # This was six names typed out, and it only ever errored when one of the
+    # six went AWAY — never when a seventh arrived. Two already had:
+    # `transfers.rs` and `theme_chooser.rs` declare a `View` of their own and
+    # were scanned by nothing, and any view written tomorrow would be unchecked
+    # from birth while the `checked` floor stayed satisfied by the six.
+    #
+    # A view is a file that declares its own `View`, which is the same
+    # population the shell's own module layout defines.
+    #
+    # `surface.rs` AND `leader.rs` ARE NOT VIEWS and are deliberately out: the
+    # footer HOSTS several views, so its keys belong to different lists, and
+    # this rule is "two labels of ONE view". Scanning them as a unit would call
+    # two views sharing a word a defect, which the check's own header says is
+    # allowed.
+    VIEWS = sorted(
+        f.name
+        for f in shell.glob("*.rs")
+        if re.search(r"^(?:pub )?struct View\b", f.read_text(), re.M)
+    )
+    if len(VIEWS) < 8:
+        raise SystemExit(
+            f"ERROR: only {len(VIEWS)} views found ({VIEWS}); the sweep is not "
+            "finding them by their `struct View` any more"
+        )
     wrong, checked = [], 0
     for name in VIEWS:
         f = shell / name
-        if not f.is_file():
-            wrong.append(f"{name}: the view is not there any more; fix this list")
-            continue
         body = f.read_text()
         # ONLY WHAT IS DRAWN AS A LABEL. A key named inside the trailing test
         # module is an assertion about the screen, not a row on it.
@@ -5623,16 +5813,18 @@ let
         # A FORMAT IS NOT A LABEL. `{ $dbm } dBm` is the shape of a number with
         # a unit, and two different facts may well be measured in the same
         # unit — a fact about decibels, not a defect.
-        keys = [k for k in keys if k in values and "{ $" not in values[k]]
-        checked += len(keys)
-        seen = {}
-        for k in keys:
-            seen.setdefault(values[k], []).append(k)
-        for said, which in sorted(seen.items()):
-            if len(which) > 1 and tuple(sorted(which)) not in ALLOWED:
-                wrong.append(f"{name}: {which} all say {said[:48]!r}")
+        for lang, values in sorted(tables.items()):
+            here = [k for k in keys if k in values and "{ $" not in values[k]]
+            checked += len(here)
+            seen = {}
+            for k in here:
+                seen.setdefault(values[k], []).append(k)
+            for said, which in sorted(seen.items()):
+                if len(which) > 1 and tuple(sorted(which)) not in ALLOWED:
+                    wrong.append(f"{name} in {lang}: {which} all say {said[:48]!r}")
 
-    if checked < 200:
+    # THE FLOOR SCALES WITH THE LANGUAGES, since every one of them is swept.
+    if checked < 200 * len(LANGUAGES):
         wrong.append(f"only {checked} labels read; the sweep is not reaching them")
 
     if wrong:
@@ -5648,6 +5840,544 @@ let
         raise SystemExit(1)
 
     print(f"OK: {checked} labels across {len(VIEWS)} views, and no view repeats a word")
+    END
+  '';
+
+  # A DOOR THAT DOES NOT KNOW ITS SCREEN'S SCALE IS A BLURRY DOOR.
+  #
+  # `scale_factor_changed` was EMPTY in all nine of them, and nothing said so:
+  # the columns were right, the layout was right, the sizes were right, and on
+  # a screen the compositor drives at scale 2 every letter was a logical-size
+  # raster stretched over twice as many pixels. The measurement lives in
+  # `crate::hidpi`'s own header, in one place — a number kept in two is a
+  # number that disagrees with itself, which is what this comment used to do.
+  #
+  # A tenth door would inherit the hole in silence, and the symptom reads as a
+  # bad font rather than as a setting nobody wrote. This is the sibling of
+  # `every-window-repeats`, and it exists for the same reason: an empty
+  # callback compiles.
+  every-window-knows-its-scale = mkCheck "every-window-knows-its-scale" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    wrong, doors = [], 0
+
+    # COMMENTS COME OFF FIRST, for the reason `every-list-window-has-a-bar`
+    # gives: `hidpi` is named in prose in several of these files, and a check
+    # a sentence can satisfy is worse than no check.
+    #
+    # AND SO DO STRINGS, which the line-splitting version did not do — it cut a
+    # line at the first `//` even inside one, so `format!("http://{}", x)` lost
+    # its closing parentheses and every parenthesis counted after it in that
+    # file was off by two. Nothing bit yet; a `tracing::warn!` carrying a URL
+    # inside one of the spans scanned below would have made the matcher run
+    # past the call it was reading and find the word it wanted in whatever came
+    # next, which is the exact failure the matcher was written to fix.
+    def code_of(text):
+        out, i, n = [], 0, len(text)
+        while i < n:
+            c = text[i]
+            # A RAW STRING, `r"…"` or `r#"…"#`: no escapes, and it ends at the
+            # quote followed by as many `#` as it opened with.
+            if c == "r":
+                j = i + 1
+                while j < n and text[j] == "#":
+                    j += 1
+                if j < n and text[j] == '"' and (j > i + 1 or not text[i - 1 : i].isalnum()):
+                    close = '"' + "#" * (j - i - 1)
+                    end = text.find(close, j + 1)
+                    i = n if end == -1 else end + len(close)
+                    out.append('""')
+                    continue
+            if c == '"':
+                i += 1
+                while i < n:
+                    if text[i] == "\\":
+                        i += 2
+                        continue
+                    if text[i] == '"':
+                        i += 1
+                        break
+                    i += 1
+                out.append('""')
+                continue
+            # A CHARACTER, but not a LIFETIME: `'a` is not a literal, and
+            # skipping to the next `'` from one would eat the code between two
+            # lifetimes. A literal is a quote, one character or one escape,
+            # and a closing quote.
+            if c == "'":
+                m = re.match(r"'(?:\\.|[^\\'])'", text[i:])
+                if m:
+                    i += m.end()
+                    # AN UNDERSCORE AND NOT A PAIR OF SINGLE QUOTES: this
+                    # file is a Nix indented string, and such a pair closes the
+                    # fence — inside a comment as readily as in code.
+                    out.append("_")
+                    continue
+            if c == "/" and text[i : i + 2] == "//":
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            out.append(c)
+            i += 1
+        return "".join(out)
+
+    EMPTY = re.compile(r"fn scale_factor_changed\((?:[^)]*)\)\s*\{\s*\}", re.S)
+
+    def shut_at(text, opened):
+        """The text of a call, from just after its `(` to its matching `)`.
+
+        By PARENTHESES and not by a closing string: a call can end `) {` or
+        `)?` or `),` as easily as `);`, and a scan that guesses one of those
+        runs into the next function and reads whatever is there.
+        """
+        deep, at = 0, opened
+        while at < len(text):
+            if text[at] == "(":
+                deep += 1
+            elif text[at] == ")":
+                if deep == 0:
+                    return text[opened:at]
+                deep -= 1
+            at += 1
+        return text[opened:]
+
+    def body_of(text, name):
+        """A function's body, from its first `{` to the matching `}`.
+
+        By BRACES, and on text `code_of` has already taken the comments and the
+        string literals out of — a `{` inside either is not a block.
+        """
+        at = text.find(name)
+        if at == -1:
+            return ""
+        open_at = text.find("{", at)
+        if open_at == -1:
+            return ""
+        deep, i = 0, open_at
+        while i < len(text):
+            if text[i] == "{":
+                deep += 1
+            elif text[i] == "}":
+                deep -= 1
+                if deep == 0:
+                    return text[open_at : i + 1]
+            i += 1
+        return text[open_at:]
+
+    for f in sorted(shell.rglob("*.rs")):
+        body = code_of(f.read_text())
+        if "impl CompositorHandler for" not in body:
+            continue
+        doors += 1
+        if EMPTY.search(body):
+            wrong.append(f"{f.name}: `scale_factor_changed` has an empty body")
+        # THE HALVES OF THE RULE, and each was a defect in some door before the
+        # check named it.
+        for what, why in (
+            ("hidpi::followed",
+             "never takes the compositor's scale, so its buffer is never told"),
+            ("hidpi::resized",
+             "sizes its buffer without keeping it a multiple of the scale, and "
+             "without keeping what the buffer can SHOW — a clamped buffer at an "
+             "odd scale is `invalid_size`, and a door laying out against the "
+             "unclamped window draws into a space it does not have"),
+
+            ("hidpi::told_before_present",
+             "sends `set_buffer_scale` outside the commit that carries the "
+             "buffer, where a skipped frame leaves it pending for whichever "
+             "bare commit comes next"),
+        ):
+            if what not in body:
+                wrong.append(f"{f.name}: {why} (`{what}` is not there)")
+
+        # AND IT RESIZES IN BOTH PLACES, by SPAN and not by count. `Gpu::new`
+        # clamps as `resize` does, so a door that only does it on configure
+        # ships a first buffer the scale may not divide — and the first frame
+        # is what sends the scale. This was `count(…) >= 2`, which two calls in
+        # the SAME function satisfy: a door that never resized on `configure`
+        # passed it.
+        # AND `asked` IS BUILT FROM THE COMPOSITOR'S OWN NUMBER. The rule
+        # above is satisfied by the TOKEN `asked`, so a door that assigned
+        # `self.asked = (shown_w, shown_h)` after the clamp passed it — which
+        # is the ratchet the field exists to prevent, and the mistake the
+        # footer actually made. What only the compositor can say is
+        # `cfg.new_size`.
+        # OVER THE WHOLE DOOR, NOT ONLY `configure`.
+        #
+        # The scan below used to read `fn configure` alone, so the ratchet
+        # could simply be rebuilt one function over: adding `self.asked = (w, h)`
+        # beside `self.width = w; self.height = h;` in `scale_factor_changed`
+        # is precisely the feedback loop the field exists to prevent — a window
+        # clamped once at scale 3 then asks for the size it was cut down to and
+        # never grows again — and it passed.
+        #
+        # `asked` may be written from ONE place, and that place is the
+        # configure, because `cfg.new_size` is the only thing that carries the
+        # compositor's own number.
+        configured = body_of(body, "fn configure")
+        elsewhere = body.replace(configured, " ") if configured else body
+        for m in re.finditer(r"\.asked(?:\.[01])?\s*=", elsewhere):
+            wrong.append(
+                f"{f.name}: writes `asked` outside `configure`, where the only "
+                "number available is one the door computed — which is the "
+                "ratchet the field exists to prevent"
+            )
+            break
+        if configured:
+            # THE WHOLE STATEMENT, not the line: every door writes the pair
+            # over three lines, so a line-by-line scan sees `self.asked = (`
+            # and no number at all.
+            # PER AXIS TOO. The footer writes `self.screens[i].asked.0 =`,
+            # which `\.asked\s*=` never matched — so the rule was blind in the
+            # one door whose mistake its own comment names, and one keystroke
+            # of reformatting defeats it in any of the other nine.
+            for m in re.finditer(r"\.asked(?:\.[01])?\s*=\s*([^;]*);", configured, re.S):
+                # AND NOTHING OF THE DOOR'S OWN IN IT. Requiring `cfg.new_size`
+                # to APPEAR is satisfied by `cfg.new_size.0.map_or(…)
+                # .min(self.width)`, which is the ratchet spelled out — the
+                # compositor's number is there, and so is the answer that can
+                # only shrink.
+                built = m.group(1)
+                if "cfg.new_size" not in built or any(
+                    v in built for v in ("self.width", "self.height", "shown")
+                ):
+                    wrong.append(
+                        f"{f.name}: builds `asked` out of something other than the "
+                        "configure, so the size it asks the GPU for can only shrink"
+                    )
+                    break
+            # AND `configure` KEEPS THE ANSWER TOO, by the names it bound. The
+            # rule was written for `scale_factor_changed` alone, and the same
+            # defect one path over — `let (_shown_w, _shown_h) = resized(…)` —
+            # compiles past `#[must_use]` and passed.
+            bound = re.search(
+                r"let \(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\s*=\s*[^;]*hidpi::resized\(",
+                configured,
+                re.S,
+            )
+            if not bound:
+                wrong.append(
+                    f"{f.name}: `configure` does not take the size `resized` answers"
+                )
+            elif (
+                f".width = {bound.group(1)};" not in configured
+                or f".height = {bound.group(2)};" not in configured
+            ):
+                wrong.append(
+                    f"{f.name}: `configure` does not keep what the buffer can "
+                    "show, so a clamped door lays out in a space it does not have"
+                )
+
+        # AND A LOCAL CALLED `asked` COMES FROM THE FIELD. The two rules above
+        # read the CALL; this reads where the name came from, which is the
+        # third way the same ratchet can be written.
+        for span in (body_of(body, "fn configure"), body_of(body, "fn scale_factor_changed")):
+            for m in re.finditer(r"let\s+asked\s*=\s*([^;]*);", span, re.S):
+                if ".asked" not in m.group(1):
+                    wrong.append(
+                        f"{f.name}: binds `asked` to something that is not the "
+                        "field, so the name says the compositor and the value "
+                        "does not"
+                    )
+
+        built = body_of(body, "fn assemble_gpu") or body_of(body, "fn ensure_gpu")
+        for span, why in (
+            (body_of(body, "fn configure"),
+             "does not resize on `configure`, so no resize follows the size the "
+             "compositor just gave"),
+            (built,
+             "does not resize right after `Gpu::new`, which clamps too — so the "
+             "first buffer can be a size the scale does not divide"),
+        ):
+            if "hidpi::resized(" not in span:
+                wrong.append(f"{f.name}: {why}")
+        # AND NOBODY THROWS THE ANSWER AWAY. Both halves are `#[must_use]`
+        # now, so dropping one does not compile — except through `let _ =`,
+        # which is one keystroke and reads like tidiness. For one round
+        # `followed` dropped what `resized` answered and every door went on
+        # laying out against the size it had before the scale changed; the
+        # check could not see it, because the throw-away was in `hidpi.rs` and
+        # this sweep only reads files with a `CompositorHandler`.
+        if "let _ = crate::hidpi::" in body:
+            wrong.append(
+                f"{f.name}: throws away what `hidpi` answered; what the buffer "
+                "can show is the number the door has to keep"
+            )
+
+        # AND EACH HALF IS HANDED THE COMPOSITOR'S SIZE, never the door's kept
+        # one. `resized` ANSWERS what the buffer can show, so feeding its own
+        # answer back in is a ratchet: a window clamped once at scale 3 asks
+        # for the size it was cut down to and can never grow back. The
+        # compositor's number is what the door keeps in `asked`.
+        for call in ("hidpi::resized(", "hidpi::followed("):
+            at = 0
+            while (at := body.find(call, at)) != -1:
+                span = shut_at(body, at + len(call))
+                # AND `asked` IS NOT JUST A NAME. `let asked = (self.width,
+                # self.height);` above the call satisfies "the token is in the
+                # span" while handing over exactly what the field exists to
+                # keep out.
+                if "asked" not in span or any(
+                    v in span for v in ("self.width", "self.height", "shown")
+                ):
+                    wrong.append(
+                        f"{f.name}: `{call}…)` is not given the size the "
+                        "COMPOSITOR configured (`asked`); its own answer fed "
+                        "back in is a size that can only ever shrink"
+                    )
+                at += len(call)
+
+        # AND THE SCALE PATH KEEPS THE ANSWER AND COUNTS AGAIN. A door that
+        # follows the scale and leaves its size alone is the round-3 defect
+        # exactly: on a clamped buffer the scale is what moves the number of
+        # columns, and a window dragged between two monitors gets no
+        # `configure` to repair it.
+        scaled = body_of(body, "fn scale_factor_changed")
+        if scaled:
+            # AND WHAT IS KEPT IS THE ANSWER, by the NAMES the `Some((…))`
+            # bound. `.width =` alone passes `self.width = self.asked.0`,
+            # which throws the answer away exactly as the round-3 defect did
+            # and reads like tidiness.
+            bound = re.search(r"Some\(\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\)", scaled)
+            if not bound:
+                wrong.append(
+                    f"{f.name}: `scale_factor_changed` does not take the size "
+                    "`followed` answers"
+                )
+            elif (
+                f".width = {bound.group(1)};" not in scaled
+                or f".height = {bound.group(2)};" not in scaled
+            ):
+                wrong.append(
+                    f"{f.name}: `scale_factor_changed` does not keep what the "
+                    "buffer can show, so a clamped door lays out in a space it "
+                    "does not have"
+                )
+            # AND IT RE-DERIVES WHAT IT DREW FROM THE OLD SIZE. EIGHT doors
+            # `recount`; the buffer host asks its COMPONENT again
+            # (`request_redraw`), and the footer redraws (`draw`) — three verbs
+            # for one rule, and the rule is that a repaint of the list you
+            # already have is not enough. This is NOT gated on the door having
+            # a `recount`, which is how the one door without one went a whole
+            # round with only a `paint()`.
+            #
+            # `request_redraw()` IS SPELLED OUT, not left to `draw()` matching
+            # inside it: the check passed the buffer host for the wrong reason
+            # for a round, because `"draw()"` is a substring of it — so the
+            # verb the comment named was not the verb that matched.
+            if not any(
+                v in scaled
+                for v in ("recount()", "re_render()", "request_redraw()", "self.draw()")
+            ):
+                wrong.append(
+                    f"{f.name}: `scale_factor_changed` keeps a new size and "
+                    "draws what it had, so the columns are the ones taken for "
+                    "the size before it"
+                )
+        # AND SO DOES THE CONSTRUCTOR. `Gpu::new` clamps too, and `configure`
+        # counts the columns before there is a GPU to clamp anything.
+        built = body_of(body, "fn assemble_gpu") or body_of(body, "fn ensure_gpu")
+        if built and "fn recount" in body and "recount()" not in built:
+            wrong.append(
+                f"{f.name}: the GPU is assembled and the columns are not "
+                "counted again, though the first buffer can come back smaller "
+                "than the window asked for"
+            )
+
+        # `physical` AT THE CONSTRUCTOR IS RIGHT, and is not tested for:
+        # `Gpu::new` needs a size before there is a `Gpu` to hand `resized`,
+        # and `resized` runs immediately afterwards to cut and to answer. What
+        # is tested is that the second call is there at all, just above.
+
+        # AND THE TEXT GETS THE PHYSICAL VIEWPORT, which is the other half of
+        # the unit question and the one nothing asked for. A door handing
+        # `text.prepare` the logical pair draws every glyph at logical size
+        # into a physical buffer — half-size text in the top-left quarter,
+        # which `Text::new`'s own doc calls the worse-than-blur failure.
+        # EVERY OCCURRENCE, not the first. `find` answered the first one and
+        # nothing else; no door has two today, and the day one grows a second
+        # the rule stops working with no sign.
+        at = 0
+        while (at := body.find("text.prepare(", at)) != -1:
+            span = shut_at(body, at + len("text.prepare("))
+            # BOTH DIMENSIONS, IN ORDER. `"gpu.config." in span` was satisfied
+            # by handing the two the other way round, which draws the picture
+            # transposed into a viewport of the wrong shape.
+            if "gpu.config.width" not in span or "gpu.config.height" not in span:
+                wrong.append(
+                    f"{f.name}: `text.prepare(…)` is not given the PHYSICAL "
+                    "viewport, so the glyphs are placed in the window's space "
+                    "and drawn into the buffer's"
+                )
+            elif span.index("gpu.config.width") > span.index("gpu.config.height"):
+                wrong.append(
+                    f"{f.name}: `text.prepare(…)` is given its height where the "
+                    "width goes"
+                )
+            at += len("text.prepare(")
+
+        # AND THE UNITS ARE NOT MIXED. The rectangles and the pictures are
+        # measured in the window's own pixels; the text is placed in the
+        # buffer's. Handing the PHYSICAL viewport to `Quads::prepare` or
+        # `Images::prepare` puts the scrollbar at a fraction of its place on a
+        # screen the compositor scales — the defect the design is about, and
+        # one the string tests above cannot see.
+        # BY THE TYPE, NOT BY THE LOCAL'S NAME.
+        #
+        # This list was two literal spellings, `q.prepare(` and `im.prepare(`,
+        # so a door whose renderer locals are called anything else got ZERO
+        # coverage of the rule the whole HiDPI design is about — and a NEW door
+        # is unchecked from birth, with the `doors < 10` floor still satisfied.
+        # Rename one local and the scrollbar may land at a fraction of its
+        # place on every scaled screen with nothing to say so.
+        #
+        # EVERY `.prepare(` EXCEPT THE TEXT'S. Guessing the local's name from
+        # its binding was the second version of this and it was still a guess:
+        # `let Some(quads) = self.quads.as_mut()` matches no pattern for a
+        # TYPE, so the rename still escaped. There are exactly two kinds of
+        # `prepare` in a door — the text's, which is measured in the buffer's
+        # own pixels and has its own rules above, and everything else, which is
+        # measured in the window's. So scan everything else, whatever it is
+        # called, and the rule covers a door nobody has written yet.
+        calls = sorted(
+            {m.group(1) + ".prepare(" for m in re.finditer(r"\b(\w+)\.prepare\(", body)}
+            - {"text.prepare("}
+        )
+        for call in calls:
+            at = 0
+            while (at := body.find(call, at)) != -1:
+                span = shut_at(body, at + len(call))
+                if "gpu.config." in span:
+                    wrong.append(
+                        f"{f.name}: `{call}…)` is given the PHYSICAL viewport; "
+                        "a `Quad` and an `Area` are in the window's own pixels"
+                    )
+                # THE DOOR'S OWN TWO NUMBERS, which since `resized` answers
+                # what the buffer can show ARE the right ones — `self.width`
+                # and `self.height` are no longer the compositor's unclamped
+                # size. What is refused is a literal or an expression, which is
+                # a third number nobody keeps.
+                names = [n for n in ("logical_w", "logical_h", "width", "height") if n in span]
+                if not names:
+                    wrong.append(
+                        f"{f.name}: `{call}…)`'s viewport is a literal or an "
+                        "expression, not the size the door keeps"
+                    )
+                at += len(call)
+
+        # AND THE SHAPER IS BUILT WITH THE SCALE. `Text::new` takes it, so a
+        # door that leaves it out does not compile — but a door can still hand
+        # it a literal, and a scale that arrived before the shaper existed is
+        # then never applied: `followed` short-circuits on the same factor for
+        # ever after, and the window draws half-size text in its top-left
+        # quarter. What has to be there is the FIELD.
+        # THE CALL'S OWN SPAN, matched by parentheses. Every door writes
+        # `match … Text::new(…) {`, so the call closes with `) {` and never
+        # with `);` — a scan that looked for `");"` ran on past it by up to
+        # nine hundred characters, into code that happens to contain the word
+        # it was looking for. `surface.rs` carries `tailscale` twice.
+        at = 0
+        while (at := body.find("Text::new(", at)) != -1:
+            if "scale" not in shut_at(body, at + len("Text::new(")):
+                wrong.append(
+                    f"{f.name}: `Text::new(…)` is not given this door's `scale`, "
+                    "so a scale that arrived before the shaper is never applied"
+                )
+            at += len("Text::new(")
+
+        # AND `told_before_present` IS INSIDE THE FRAME. Anywhere else and it
+        # is decorative: `set_buffer_scale` is double-buffered, so sent outside
+        # the commit that carries the buffer it waits for whichever bare commit
+        # comes next — which is the whole of why `Gpu::frame` grew a hook.
+        at = 0
+        while (at := body.find("gpu.frame(", at)) != -1:
+            if "told_before_present" not in shut_at(body, at + len("gpu.frame(")):
+                wrong.append(
+                    f"{f.name}: `told_before_present` is not inside the "
+                    "`gpu.frame(…)` call, so the scale does not travel in the "
+                    "commit that carries the buffer"
+                )
+            at += len("gpu.frame(")
+
+    # AND THE MODULE ITSELF IS READ. The sweep above skips any file without a
+    # `CompositorHandler`, which is every file but the doors — so `hidpi.rs`,
+    # the one place the rule actually lives, was the one file the check never
+    # opened. That is where the round-3 defect sat: `followed` called `resized`
+    # and dropped the answer, and ten doors that each passed every rule above
+    # went on drawing against a size the buffer no longer had.
+    rule = shell / "hidpi.rs"
+    if not rule.is_file():
+        wrong.append("hidpi.rs is not there; the rule has no one place")
+    else:
+        text = code_of(rule.read_text())
+        # THE ANSWER TRAVELS. A `bool` cannot carry the number, and while it
+        # was one the number could not be kept.
+        if "-> Option<(u32, u32)>" not in text:
+            wrong.append("hidpi.rs: `followed` does not answer a size")
+        for half in ("pub fn resized", "pub fn followed"):
+            at = text.find(half)
+            if at == -1 or "#[must_use]" not in text[max(0, at - 200) : at]:
+                wrong.append(
+                    f"hidpi.rs: `{half}` is not `#[must_use]`; dropping what it "
+                    "answers is then a silent line rather than a build error"
+                )
+        # AND `followed` RESIZES AT ALL.
+        #
+        # This rule is first because without it the two below are decoration:
+        # they say the answer must not be dropped and the call must not be in
+        # statement position, and BOTH are satisfied by a `followed` that never
+        # calls `resized` — `Some(_) => asked` compiles, keeps every
+        # `#[must_use]` happy, and leaves the door laying out against the size
+        # it had before the scale changed. That is the whole defect this module
+        # exists for, passing every rule written about it.
+        inside = body_of(text, "pub fn followed")
+        if "resized(" not in inside:
+            wrong.append(
+                "hidpi.rs: `followed` never calls `resized`; it then answers a "
+                "size nothing recomputed, which is the defect the module exists "
+                "to make impossible"
+            )
+        # AND `followed` KEEPS WHAT `resized` ANSWERS. A call in statement
+        # position is one whose answer goes nowhere — which is exactly how the
+        # defect was written, and `#[must_use]` on `resized` is what makes it
+        # impossible to write again inside this file.
+        for line in inside.splitlines():
+            if re.match(r"\s*resized\(", line):
+                wrong.append(
+                    "hidpi.rs: `followed` calls `resized` and keeps nothing; the "
+                    "door then lays out against the size it had before the scale "
+                    "changed"
+                )
+        # AND THE BOUND IS NOT WRITTEN HERE. It is
+        # `ronoctua_render::MOST_SCALE`, which `render-png --scale` reads too.
+        if "MOST_SCALE" not in text:
+            wrong.append("hidpi.rs: the scale bound is written here instead of read")
+
+    # AND THE CHECK ITSELF IS NOT VACUOUS: it has to have found the doors.
+    # TEN, and it is a FLOOR rather than the count: an eleventh door is
+    # checked like the rest, and a door that loses its `CompositorHandler`
+    # takes the sweep below the number and says so. It was nine, which is the
+    # count from before the screens grew a window of their own.
+    if doors < 10:
+        wrong.append(f"only {doors} compositor handlers found; the sweep is not reaching them")
+
+    if wrong:
+        print("ERROR: a door that does not know how sharp its screen is.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Three things have to agree or the compositor stretches the", file=sys.stderr)
+        print("       buffer: what the surface says its scale is, how big the", file=sys.stderr)
+        print("       buffer is, and how big the glyphs in it are — and the", file=sys.stderr)
+        print("       first of them has to travel in the commit that carries", file=sys.stderr)
+        print("       the buffer. `crate::hidpi` is where each half lives, and", file=sys.stderr)
+        print("       a door calls them and works out nothing of its own.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: {doors} doors, and every one of them follows its screen's scale")
     END
   '';
 
@@ -5719,15 +6449,118 @@ let
   polkit-rules-are-the-ones-we-know =
     let
       rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
+      # AND EVERY OTHER WAY A RULE CAN LAND IN THAT DIRECTORY. `extraConfig`
+      # is the door this repository uses, and it was the only one this check
+      # looked at — so a module could write `environment.etc."polkit-1/rules.d/
+      # 49-….rules"` and be invisible to it. Nothing does; the point is that
+      # nothing CAN without saying so here.
+      etcRules = builtins.filter (p: builtins.match ".*polkit-1/rules\\.d/.*" p != null) (
+        builtins.attrNames self.nixosConfigurations.vm.config.environment.etc
+      );
     in
     mkCheck "polkit-rules-are-the-ones-we-know" [ pkgs.python3 ] ''
       cat > rules.js <<'RULES'
       ${rules}
       RULES
+      cat > etc.txt <<'ETC'
+      ${builtins.concatStringsSep "\n" etcRules}
+      ETC
       python3 - <<'END'
       import pathlib, re, sys
 
       text = pathlib.Path("rules.js").read_text()
+
+      # NOTHING SMUGGLES A RULE IN THROUGH `environment.etc`. The upstream
+      # packages that ship their own live in the store and are read by polkit
+      # from there; what this refuses is a rule OUR configuration writes by a
+      # route this check cannot audit.
+      # `10-nixos.rules` IS THE AUDITED ROUTE: it is the file nixpkgs writes
+      # `security.polkit.extraConfig` into, and its content is `rules.js`
+      # above. Any OTHER file is a second door.
+      # AND NO CONDITION MIXES `&&` WITH A BARE `||`.
+      #
+      # `&&` binds tighter, so `id && user && unit == a || unit == b` reads as
+      # `(id && user && unit == a) || unit == b` — every alternative after the
+      # first granted for ANY action and ANY subject. `rescue.nix` shipped
+      # exactly that: a fold wrote the disjunction and the brackets the sibling
+      # block has were not there. Nothing else could see it — this check reads
+      # action ids and result names, and both were on the audited list.
+      #
+      # THE INNER GROUPS COME OFF FIRST, repeatedly, so `action.lookup("unit")`
+      # and a properly bracketed disjunction both disappear; what is left is
+      # the condition's own top level.
+      def top_of(condition):
+          was = None
+          while was != condition:
+              was = condition
+              condition = re.sub(r"\([^()]*\)", " ", condition)
+          return condition
+
+      # EVERY CONDITION, NOT EVERY `if (`.
+      #
+      # This scan keyed on the literal `if (`, and `nixfmt` does not format
+      # JavaScript inside an indented string — so `if(` with no space, which is
+      # an unremarkable way to write it, was never looked at. Nor was a
+      # condition in `return a && b || c;` or in a `? :`, and both of those say
+      # the same thing to polkit.
+      #
+      # So: read the condition of every `if`/`while` however it is spelled, and
+      # every `return` expression, and put each through `top_of`.
+      loose = []
+      for m in re.finditer(r"\b(?:if|while)\s*\(", text):
+          deep, i = 0, m.end() - 1
+          while i < len(text):
+              if text[i] == "(":
+                  deep += 1
+              elif text[i] == ")":
+                  deep -= 1
+                  if deep == 0:
+                      break
+              i += 1
+          top = top_of(text[m.end() : i])
+          if "&&" in top and "||" in top:
+              loose.append(text[m.start() : i + 1].strip().splitlines()[0])
+      # AND A `return` THAT DECIDES BY ITSELF. `return a && b || c;` and
+      # `return a && b || c ? YES : NO;` grant exactly what the bracketed
+      # condition would, with no `if` anywhere near them.
+      for m in re.finditer(r"\breturn\b([^;]*);", text):
+          top = top_of(m.group(1))
+          if "&&" in top and "||" in top:
+              loose.append(m.group(0).strip().splitlines()[0])
+
+      if loose:
+          print(
+              "ERROR: a polkit condition mixes `&&` with an unbracketed `||`, so "
+              "everything after the first alternative is granted for any action "
+              "and any subject:",
+              file=sys.stderr,
+          )
+          print("", file=sys.stderr)
+          for l in loose:
+              print("       " + l, file=sys.stderr)
+          raise SystemExit(1)
+
+      smuggled = [
+          l.strip()
+          for l in pathlib.Path("etc.txt").read_text().splitlines()
+          if l.strip() and l.strip() != "polkit-1/rules.d/10-nixos.rules"
+      ]
+      if smuggled:
+          print(
+              "ERROR: a polkit rule is written into /etc by a route this check "
+              "cannot audit:",
+              file=sys.stderr,
+          )
+          for l in smuggled:
+              print("       /etc/" + l, file=sys.stderr)
+          print("", file=sys.stderr)
+          print(
+              "       Every rule this system adds goes through "
+              "`security.polkit.extraConfig`, so that it is read here and named "
+              "in AGREED below.",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
 
       # THE ACTIONS EVERY RULE NAMES, and the module each belongs to. The
       # comment is the audit: adding a line here is claiming somebody read the
@@ -5762,6 +6595,57 @@ let
       wrong = []
       if not rules:
           sys.exit("ERROR: the merged config has no rule at all; the sweep is not reaching it")
+
+      # AND EVERY RULE NARROWS BY ACTION AT ALL.
+      #
+      # THIS IS THE RULE THAT MAKES THE CENSUS ABOVE MEAN ANYTHING. `found` is
+      # built by looking for `action.id` written three ways, so a rule that
+      # names no action contributes NOTHING to it: the difference against
+      # AGREED is empty and the check passes. A reviewer wrote the four lines
+      #
+      #   polkit.addRule(function (action, subject) {
+      #     if (subject.isInGroup("users")) { return polkit.Result.YES; }
+      #   });
+      #
+      # into a module and watched this check print OK — every polkit action on
+      # the system granted to every member of `users`, which is the exact
+      # sentence in this check's own header about what it exists to stop.
+      #
+      # A rule may still be wide on purpose; what it may not be is wide and
+      # unexamined. Naming an action is what puts it in the census, and the
+      # census is what somebody has to sign.
+      def rule_bodies(js):
+          out = []
+          for m in re.finditer(r"polkit\.addRule\(", js):
+              opened = js.find("{", m.end())
+              if opened == -1:
+                  continue
+              depth = 0
+              for j in range(opened, len(js)):
+                  if js[j] == "{":
+                      depth += 1
+                  elif js[j] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          out.append(js[opened : j + 1])
+                          break
+          return out
+
+      bodies = rule_bodies(text)
+      if len(bodies) != rules:
+          wrong.append(
+              f"{rules} rules were counted and {len(bodies)} could be read; the "
+              "sweep below them is not seeing every rule"
+          )
+      for body in bodies:
+          if "action.id" not in body:
+              flat = " ".join(body.split())
+              wrong.append(
+                  "a rule that never looks at action.id, so it answers for EVERY "
+                  "action on the system and the census above cannot see it: "
+                  + flat[:140]
+              )
+
       for action in sorted(found - set(AGREED)):
           wrong.append(f"an action nobody audited: {action}")
       for action in sorted(set(AGREED) - found):
@@ -7809,7 +8693,12 @@ let
       # The shell is the whole scope on purpose: a wasm buffer cannot ask for a
       # size in px (invariant 11 gives it a Scale, and the host resolves it), so
       # every chrome glyph in the system is drawn from here.
-      loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -v "chrome_size(" || true)
+      # BOTH SPELLINGS OF THE ONE ANSWER. `surface::chrome_size` takes the
+      # run's text and `chrome_size_of` takes a `char` — the two chevrons hold
+      # one already, and making them build a `String` for it to be taken apart
+      # again was a cost per frame. They are the same measurement; what this
+      # refuses is a size that came from anywhere else.
+      loose=$(grep -rn "Size::OnTheCell(" ${../crates/ronoctua-shell/src} | grep -vE "chrome_size(_of)?\(" || true)
       if [ -n "$loose" ]; then
         echo "ERROR: a glyph centred in the cell with a size outside the measurement:" >&2
         echo "$loose" >&2
@@ -8292,6 +9181,688 @@ let
                 print("ERROR: " + w, file=sys.stderr)
             sys.exit(1)
         print("OK: the power module leaves polkit to logind and the profile daemon")
+        END
+      '';
+
+  # THE FRAGMENT THE COMPOSITOR IS ASKED TO READ, READ BY THE COMPOSITOR.
+  #
+  # `ronoctua-display` writes `niri-display.kdl` at runtime and niri includes
+  # it. A fragment niri cannot parse does not fail quietly on one monitor: it
+  # fails the WHOLE config load, so every other monitor's settings go with it
+  # and the person is left with a compositor on its defaults.
+  #
+  # NOTHING IN RUST CAN CATCH THAT. The grammar is niri's, it changes when
+  # niri changes, and a unit test asserting our own string against our own
+  # expectation proves only that we did not change our mind. What proves it is
+  # `niri validate`, from the SAME binary the session runs.
+  #
+  # AND THE TEXT COMES OUT OF THE SOURCE, not out of a fixture beside it. The
+  # test `the_whole_grammar_comes_out_at_once` already pins the writer's
+  # output character for character; lifting that literal is what makes the two
+  # halves impossible to drift apart — change the writer and the test's
+  # expectation changes, and this validates the new one.
+  #
+  display-fragment-validates =
+    mkCheck "display-fragment-validates"
+      [
+        pkgs.python3
+        inputs.niri.packages.${system}.niri
+      ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        source = pathlib.Path("${../crates/ronoctua-display/src}/fragment.rs").read_text()
+
+        # THE ONE LITERAL, and not every literal that happens to start with
+        # `output`. Other tests in that file pin FRAGMENTS of a block — the
+        # escaping test pins a name and nothing else — and sweeping those in
+        # would validate half a monitor's worth of KDL and call it proof. The
+        # first version of this did exactly that.
+        PINNED = "fn the_whole_grammar_comes_out_at_once"
+        at = source.find(PINNED)
+        if at < 0:
+            print(
+                f"ERROR: {PINNED} is gone from fragment.rs, so there is no "
+                "pinned fragment to validate. That test is where the writer's "
+                "output is written down; this check is the compositor reading "
+                "it.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        begin = source.find('r#"', at)
+        end = source.find('"#', begin)
+        if begin < 0 or end < 0:
+            print(f"ERROR: {PINNED} no longer pins a raw literal", file=sys.stderr)
+            sys.exit(1)
+        text = source[begin + 3 : end] + "\n"
+
+        # AND THE ESCAPED NAME GOES IN TOO, which is the one case where our own
+        # expectation proving our own string is worth nothing. `escaped()` is
+        # OUR answer to KDL's grammar; monitors really are sold with a `"` in
+        # the name, and a wrong answer takes the whole configuration load down
+        # — every monitor unapplied, from one quote. Only the compositor can
+        # say whether that answer is right, and this is the only place it is
+        # asked.
+        ESCAPED = "fn a_quote_in_a_model_name_cannot_break_the_file"
+        at = source.find(ESCAPED)
+        if at < 0:
+            print(
+                f"ERROR: {ESCAPED} is gone, so nothing pins what an escaped "
+                "name comes out as.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        # THE EXPECTATION, not the input: the `out.contains(r#"…"#)` beside it.
+        # By FINDS and not a regular expression — the literal is full of quotes
+        # and backslashes, which is the whole point of it.
+        opens = source.find('assert!(out.contains(r#"', at)
+        shuts = source.find('"#', opens + len('assert!(out.contains(r#"'))
+        if opens < 0 or shuts < 0:
+            print(f"ERROR: {ESCAPED} no longer pins the escaped output", file=sys.stderr)
+            sys.exit(1)
+        node = source[opens + len('assert!(out.contains(r#"') : shuts]
+        text += node + " {\n    focus-at-startup\n}\n"
+
+        pathlib.Path("fragment.kdl").write_text(text)
+
+        # EVERY NODE THE WRITER CAN EMIT HAS TO BE IN IT, or this would validate
+        # a file that exercises nothing. The list is `kdl_of`'s own.
+        missing = [
+            node
+            for node in (
+                "off",
+                "mode ",
+                "scale ",
+                "transform ",
+                "position ",
+                "variable-refresh-rate",
+                "focus-at-startup",
+            )
+            if node not in text
+        ]
+        if missing:
+            print(
+                "ERROR: the pinned fragment does not exercise " + ", ".join(missing),
+                file=sys.stderr,
+            )
+            print("       Validating it would prove nothing about them.", file=sys.stderr)
+            sys.exit(1)
+        print(text)
+        END
+
+        printf 'include "%s/fragment.kdl"\n' "$PWD" > with-fragment.kdl
+        if ! niri validate --config with-fragment.kdl 2>errors.txt; then
+          echo "ERROR: niri REFUSED the fragment the display view writes." >&2
+          echo "       A refused include fails the WHOLE config load, so every" >&2
+          echo "       other monitor's settings go with it." >&2
+          cat errors.txt >&2
+          exit 1
+        fi
+        echo "OK: niri reads the fragment the display view writes"
+      '';
+
+  # THE TEXT HAS ONE SIZE, AND THE PERSON CAN MOVE IT.
+  #
+  # `font.size.base` is the ANCHOR the chosen percentage is measured against,
+  # not the size to draw at. A site that reads it directly draws at a size
+  # nothing can move — and it does so silently: the pixel is right, the layout
+  # is right, and the only symptom is one piece of the screen that ignores the
+  # setting. That is a defect nobody reports as a defect, which is why it is a
+  # check and not a test.
+  #
+  # It cost every draw call in the shell to make true once. What this stops is
+  # the next one — and the count belongs HERE, printed on every build, because
+  # three comments elsewhere once carried three different numbers and none of
+  # them was right.
+  #
+  # COMMENTS MAY STILL NAME THE TOKEN — they are ABOUT it, and the story of
+  # why there is one size is worth keeping. What may not happen is a line of
+  # code reading it.
+  #
+  # And it checks the other direction too: a check that only forbade would
+  # pass on the day somebody deleted the accessor.
+  one-text-size = mkCheck "one-text-size" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    tokens = pathlib.Path("${../crates/ronoctua-tokens/src}/lib.rs").read_text()
+    wrong = []
+
+    # 1. NO CODE LINE IN THE SHELL READS THE ANCHOR.
+    def code(line):
+        # THE PROSE COMES OFF FIRST. A comment may name the anchor — it is
+        # ABOUT the anchor — and a comment at the END of a code line is still
+        # a comment. Without this, explaining the rule beside a line of code
+        # breaks the rule.
+        #
+        # AND THE STRINGS COME OFF BEFORE THE COMMENT. A `//` inside a string
+        # literal — a URL, a path — is not the start of a comment, and
+        # cutting there would hide everything after it: `let u = "http://x";
+        # let s = SIZE_BASE;` would have been invisible. It is the same class
+        # as the bare-import hole, pointing the other way.
+        bare = line.lstrip()
+        if bare.startswith(("//", "///", "//!")):
+            return ""
+        return re.sub(r'"(?:[^"\\]|\\.)*"', '""', line).split("//", 1)[0]
+
+    seen_files = 0
+    asks = 0
+    for f in sorted(shell.rglob("*.rs")):
+        seen_files += 1
+        body = f.read_text()
+        asks += body.count("tokens::text::size()")
+        for n, line in enumerate(body.splitlines(), 1):
+            # THE BARE NAME TOO. `use ronoctua_tokens::font::{self, SIZE_BASE}`
+            # and then `SIZE_BASE` reads the anchor without ever writing the
+            # path, which the first version of this let through.
+            if re.search(r"\bSIZE_BASE\b", code(line)):
+                rest = f.relative_to(shell)
+                wrong.append(
+                    f"{rest}:{n} draws at `font::SIZE_BASE`, which the person cannot move. "
+                    "Ask `ronoctua_tokens::text::size()`."
+                )
+
+    # 2. THE ACCESSOR EXISTS, AND IS THE ANCHOR SCALED.
+    if "pub mod text {" not in tokens:
+        wrong.append("ronoctua-tokens lost its `text` module")
+    if not re.search(r"pub fn scaled\(size: f32\) -> f32 \{\s*size \* f32::from\(percent\(\)\) / 100\.0", tokens):
+        wrong.append("`text::scaled` no longer moves a size by the chosen percentage")
+    if not re.search(r"pub fn size\(\) -> f32 \{\s*scaled\(super::font::SIZE_BASE\)", tokens):
+        wrong.append("`text::size` is no longer the scaled base")
+    for name in ("SCALE_FLOOR", "SCALE_CEILING", "SCALE_STEP"):
+        if name not in tokens:
+            wrong.append(f"`font::{name}` is not read by the tokens crate any more")
+
+    # 3. EVERY OTHER SIZE MOVES WITH IT, and only two files may name one.
+    #
+    #    `font.size.small` is 15 against a base of 18. Left unscaled it
+    #    becomes the TALLER of the two below 84%, a small run takes two cells
+    #    instead of one, and a picture loses runs on a grid that has not
+    #    changed — measured, thirteen at 100% and eleven at 80%. What proves
+    #    the arithmetic is a property test in the shell; what this keeps down
+    #    is the number of PLACES a fixed size can be read from at all.
+    # THE WHOLE PATH, not the file's name: keyed on the name, a new
+    # `src/anywhere/paint.rs` would have been exempt by being called that.
+    resolvers = {"paint.rs", "surface.rs"}
+    for f in sorted(shell.rglob("*.rs")):
+        body = f.read_text()
+        here = str(f.relative_to(shell))
+        names = [
+            n
+            for n, line in enumerate(body.splitlines(), 1)
+            if re.search(r"\bfont::SIZE_", code(line))
+        ]
+        if names and here not in resolvers:
+            wrong.append(
+                f"{f.relative_to(shell)}:{names[0]} reads a fixed size. Only "
+                + " and ".join(sorted(resolvers))
+                + " resolve one, and they scale it."
+            )
+        # AND IN A RESOLVER, EVERY MENTION IS INSIDE A `text::scaled(` CALL.
+        # The test was "the file says `text::scaled` somewhere", which a
+        # 13 000-line `surface.rs` always does: a bare
+        # `const _BIG: f32 = tokens::font::SIZE_XXLARGE;` added to it passed.
+        # By PARENTHESES and not by line, because a resolver may spread the
+        # call over five of them.
+        if names and here in resolvers:
+            text = "\n".join(code(l) for l in body.splitlines())
+            depth, scaled_at = 0, []
+            at = 0
+            while at < len(text):
+                if text.startswith("text::scaled(", at):
+                    at += len("text::scaled(")
+                    scaled_at.append(depth)
+                    depth += 1
+                    continue
+                if text[at] == "(":
+                    depth += 1
+                elif text[at] == ")":
+                    depth -= 1
+                    if scaled_at and scaled_at[-1] == depth:
+                        scaled_at.pop()
+                elif text.startswith("font::SIZE_", at) and not scaled_at:
+                    line = text.count("\n", 0, at) + 1
+                    wrong.append(
+                        f"{f.relative_to(shell)}:{line} names a fixed size outside a "
+                        "`text::scaled(…)`, so it does not move with the size"
+                    )
+                at += 1
+        if names and "text::scaled" not in body:
+            wrong.append(f"{f.name} reads a fixed size and never scales one")
+
+        # AND EVERY DOOR ASKS. Rule 1 forbids reading the ANCHOR; nothing
+        # required a door to read the SIZE — so replacing every
+        # `tokens::text::size()` in one door with a literal `18.0` passed, and
+        # the only net left was the global floor, which has twenty sites of
+        # slack against a door that has five. That is the defect this check
+        # names in its own error string: "one piece of the screen that ignores
+        # the setting".
+        #
+        # A DOOR IS A FILE WITH A `CompositorHandler`, the same population
+        # `every-window-knows-its-scale` sweeps — ten of them, each asking five
+        # or six times today, so the rule costs nothing and catches a door that
+        # stops.
+        # AGAINST THE CODE, not the prose. These two read `body` raw for a
+        # round, so a door could replace every real call with a literal and
+        # keep a doc line naming the accessor — a check about the CRITERION
+        # and not about the CODE, inside a check written to refuse exactly
+        # that.
+        without_prose = "\n".join(code(l) for l in body.splitlines())
+        if "impl CompositorHandler for" in body and "tokens::text::size()" not in without_prose:
+            wrong.append(
+                f"{f.name} draws a whole door and never asks for the size, so "
+                "everything in it ignores the setting"
+            )
+        # AND EVERY DOOR HEARS THE SIZE MOVE. Asking once at start-up is a door
+        # that is right until somebody changes the size, and then wrong beside
+        # the nine that are not — which `toolkits.rs` records as the first
+        # version of this, and calls "worse than no watch at all". An absent
+        # call compiles, which is the shape three other checks in this file
+        # exist for.
+        # AND A PIXMAP CACHE IS EMPTIED WHERE THE SIZE CHANGES. An `Rgba` is
+        # rasterised at a number of PIXELS, and every one of those numbers now
+        # comes from `text::size()` — so a cache the size cannot reach keeps
+        # the old texture on the GPU, which is the defect the theme's own cache
+        # key exists for, on a second axis: a finder opened before a change to
+        # 200% and again after it drew 18 px textures over 36 px boxes for the
+        # life of the footer.
+        #
+        # A MAP OF THEM, not any mention: a channel carrying an `Rgba` and a
+        # function answering one are not caches, and three files have those.
+        #
+        # INSIDE THE FUNCTION THAT RESHAPES THE TEXT, not anywhere in the file.
+        # The first version asked for a `.clear()` somewhere, and a
+        # 13 000-line file always has one — so deleting the real one passed.
+        #
+        # THE OTHER ANSWER is putting the size in the KEY, which `buffer.rs`
+        # does: it has no size reaction to hang a clear on. What proves that
+        # half is `the_svg_key_changes_with_the_theme`, which asserts two sizes
+        # give two keys and goes red the moment the size leaves the format
+        # string — a check cannot tell a key that carries a number from one
+        # that names a variable, and a test can.
+        #
+        # AND A MISSING ANCHOR IS AN ERROR, NOT A SKIP. `at == -1` made `opens`
+        # `-1` and the whole rule fell through in silence — so hoisting the
+        # call (`let wanted = tokens::text::size(); … t.draw_at(wanted);`),
+        # which is an ordinary refactor with no clippy complaint, turned this
+        # rule off and the `.clear()` could then simply be deleted.
+        if re.search(r"HashMap<[^>]*image::Rgba", without_prose):
+            at = without_prose.find("draw_at(tokens::text::size())")
+            # THE OTHER ANSWER, AND IT IS THE ONE THE FOOTER USES NOW: the key
+            # carries the side. A file that builds its keys through such a
+            # function needs no reaction to hang a clear on.
+            keyed = "pixmap_key(" in without_prose or "svg_key(" in without_prose
+            if at == -1 and not keyed:
+                wrong.append(
+                    f"{f.name} caches a rasterised pixmap, does not build its "
+                    "key through one of the size-carrying key functions, and "
+                    "has no `draw_at(tokens::text::size())` for this rule to "
+                    "anchor on — so it was being skipped in silence"
+                )
+            opens = max(
+                without_prose.rfind("\n    fn ", 0, at),
+                without_prose.rfind("\n    pub fn ", 0, at),
+            ) if at != -1 else -1
+            if at != -1 and opens == -1 and not keyed:
+                wrong.append(
+                    f"{f.name}: the size reaction is not inside a method, so "
+                    "this rule cannot read it"
+                )
+            if opens != -1:
+                depth, i, reacts = 0, without_prose.find("{", opens), ""
+                j = i
+                while j < len(without_prose):
+                    if without_prose[j] == "{":
+                        depth += 1
+                    elif without_prose[j] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            reacts = without_prose[i : j + 1]
+                            break
+                    j += 1
+                if ".clear()" not in reacts and not keyed:
+                    wrong.append(
+                        f"{f.name} caches a rasterised pixmap and neither empties "
+                        "it where the size changes nor keys it by the size"
+                    )
+
+        if "impl CompositorHandler for" in body and "toolkits::watch(" not in without_prose:
+            wrong.append(
+                f"{f.name} never watches `display.json`, so it keeps the size "
+                "it started with while the rest of the shell moves"
+            )
+
+        # AND NOBODY PASSES A NUMBER WHERE THE SIZE GOES.
+        #
+        # Rule 3 forbids reading the ANCHOR (`font::SIZE_`) and requires each
+        # door to ask for the SIZE at least ONCE — and neither of those reaches
+        # a bare `18.0`. So replacing four of a door's five
+        # `tokens::text::size()` with a literal left that door mostly ignoring
+        # the setting, and the only net was the global floor, which has twenty
+        # sites of slack against a door that has five. "One piece of the screen
+        # that ignores the setting" is this check's own error string.
+        #
+        # What CONSUMES a size is a short closed list, and a number is never
+        # the right argument to any of them: the whole point is that the number
+        # comes from one place.
+        for fn in (
+            "metrics::line_height",
+            "metrics::cell_width",
+            "metrics::footer_height",
+            "draw_at",
+            "text::scaled",
+        ):
+            for m in re.finditer(
+                re.escape(fn) + r"\(\s*([0-9][0-9_]*(?:\.[0-9_]*)?)(?:f32|f64)?\s*\)",
+                without_prose,
+            ):
+                wrong.append(
+                    f"{f.relative_to(shell)}: `{fn}({m.group(1)})` puts a number "
+                    "where the chosen size goes, so that piece of the screen "
+                    "ignores the setting"
+                )
+
+    # 3b. AND EVERY PIXMAP CACHE KEY CARRIES THE SIDE.
+    #
+    #     This is the rule the one above could not state. An `Rgba` is
+    #     rasterised at a number of PIXELS and those numbers come from
+    #     `text::size()`, so the same picture at 100% and at 200% is two
+    #     pictures — and the GPU's own cache (`ronoctua_render::image::Images`)
+    #     has NO per-key removal at all: its `clear()` empties the frame's
+    #     batch and leaves the textures, its `dump()` only acts above a ceiling
+    #     and then keeps what is on screen. Emptying a host-side map therefore
+    #     cannot reach it. Only a key it has not seen can.
+    #
+    #     That is exactly how the first fix here failed: `icons.clear()` was
+    #     added, this check's shape rule went green, and the finder went on
+    #     drawing 18 px textures stretched into 36 px boxes for the life of the
+    #     footer — the sentence the rule above describes, surviving the rule
+    #     above.
+    for where, fn in (("apps.rs", "pixmap_key"), ("buffer.rs", "svg_key")):
+        src = (shell / where).read_text()
+        m = re.search(r"fn " + fn + r"\(([^)]*)\)", "\n".join(code(l) for l in src.splitlines()))
+        if not m:
+            wrong.append(
+                f"{where}: `{fn}` is gone, and it is what puts the size into the "
+                "cache key that reaches the GPU"
+            )
+        elif "side" not in m.group(1):
+            wrong.append(
+                f"{where}: `{fn}` does not take a side, so one drawing at two "
+                "sizes spells one key and the GPU keeps the first — which "
+                "nothing downstream can undo"
+            )
+
+    # 4. ONE SHELL SOURCE SETS THE SIZE, for the reason `theme::set` carries:
+    #    it is process-wide and the tests run in parallel, so a second one
+    #    changes it under the first — and the failure is a FLAKE, which is the
+    #    worst kind to hand somebody.
+    setters = len(re.findall(r"\btext::set\(", tokens))
+    if setters == 0:
+        wrong.append("nothing ever sets the text size, so the range is untested")
+    #    IT IS ABOUT TESTS, not about production code. The footer sets the
+    #    size when the file says so, and must — the check counts only what
+    #    comes AFTER a `#[cfg(test)]`, which is where a racing setter would
+    #    be. `src/bin/` is exempt for a different reason: each of those is a
+    #    SEPARATE PROCESS with its own atomic, so `render-png`'s `--text`
+    #    cannot race anything at all.
+    def setters_in_tests(body):
+        # FROM THE LAST `#[cfg(test)]`, not the first. This repository puts the
+        # test module at the END of a file, and a `#[cfg(test)]` HELPER
+        # somewhere above — an ordinary thing in a fourteen-thousand-line
+        # source — would otherwise sweep the production setters below it into
+        # the count and accuse them of being a second test.
+        at = body.rfind("#[cfg(test)]")
+        return 0 if at < 0 else len(re.findall(r"\btext::set\(", body[at:]))
+
+    loud = sorted(
+        f.name
+        for f in shell.rglob("*.rs")
+        if "bin/" not in str(f.relative_to(shell)) and setters_in_tests(f.read_text())
+    )
+    if len(loud) > 1:
+        wrong.append(
+            "more than one shell TEST sets the text size, and the tests run in "
+            "parallel: " + ", ".join(loud)
+        )
+
+    # 5. VACUITY. A rename of the accessor would leave this passing over a
+    #    shell that reads the anchor everywhere under another name.
+    if seen_files < 20:
+        wrong.append(f"only {seen_files} shell sources were read; the glob is wrong")
+    # THE FLOOR IS CLOSE TO THE REAL COUNT, not a quarter of it: at 60 a
+    # regression could delete a fifth of the call sites and still pass. It is
+    # a floor and not an equality because adding a draw call is ordinary and
+    # should not fail a check about something else.
+    if asks < 75:
+        wrong.append(
+            f"only {asks} sites ask for the size, and the shell asks far more "
+            "often than that — something stopped asking"
+        )
+
+    if wrong:
+        for w in wrong:
+            print("ERROR: " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {asks} sites in {seen_files} shell sources ask for one size, and it moves")
+    END
+  '';
+
+  # THE FRAGMENT'S NAME IS WRITTEN IN FOUR PLACES AND NOTHING TIED THEM.
+  #
+  # `fragment::FILE` is what the shell WRITES; `nix/modules/niri.nix` and
+  # `nix/dev.nix` are what the compositor INCLUDES; `tests/display-vm.nix`
+  # writes its own config with its own copy. Renaming the constant left the
+  # real machine including a file nobody writes — the feature stops persisting,
+  # and every test stays green, because the VM includes its own hand-written
+  # line rather than the one the module generates.
+  #
+  # `display-fragment-validates` cannot see it: it validates the CONTENT.
+  # `niri-config-valid` cannot either: it proves the generated config parses,
+  # and an include of a file that is not there is `optional=true` and parses
+  # fine. This is the same shape `MOST_SCALE` was given one home for.
+  display-fragment-has-one-name = mkCheck "display-fragment-has-one-name" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    rust = pathlib.Path("${../crates/ronoctua-display/src/fragment.rs}").read_text()
+    m = re.search(r'pub const FILE: &str = "([^"]+)";', rust)
+    if not m:
+        print("ERROR: `fragment::FILE` is not there to compare against.", file=sys.stderr)
+        raise SystemExit(1)
+    name = m.group(1)
+
+    # AN `include` LINE, not a mention. `niri-display.kdl` appears in
+    # `nix/modules/niri.nix` twice — once inside an error message and once in
+    # the real include — so deleting the include left the compositor reading
+    # nothing while this check stayed green on the sentence. Same shape in the
+    # VM test, where one of the two is a comment.
+    # AND THE LINE IS CODE, NOT PROSE.
+    #
+    # The header above says "an `include` LINE, not a mention" and then read
+    # raw text, so the sentence was not enforced: deleting the real include and
+    # leaving `# we used to include niri-display.kdl here` kept this green,
+    # which is exactly the state the error message below describes.
+    def code_of(text):
+        out = []
+        for line in text.splitlines():
+            cut = line.find("#")
+            out.append(line if cut < 0 else line[:cut])
+        return out
+
+    # AND THE WHOLE PATH, NOT THE BASENAME.
+    #
+    # `name` is `niri-display.kdl`, and the shell writes it into
+    # `ronoctua_store::config_dir()`. An include of the same basename in ANOTHER
+    # directory — `~/.config/niri/` is the plausible one, since the theme
+    # fragment lives there — matches on the basename and reads a file nobody
+    # writes. So the directory the shell writes to has to be in the line too.
+    # THE SEGMENT, JOINED TO THE NAME, and not the word on its own: these
+    # lines interpolate `config.ronoctua.user`, so a path through
+    # `.config/niri/` still has "ronoctua" somewhere in it and a bare word
+    # test passes over exactly the swap it is meant to catch.
+    where_written = "ronoctua/" + name
+    wrong = []
+    for label, path in (
+        ("nix/modules/niri.nix", "${../nix/modules/niri.nix}"),
+        ("nix/dev.nix", "${../nix/dev.nix}"),
+        ("tests/display-vm.nix", "${../tests/display-vm.nix}"),
+    ):
+        lines = [
+            l
+            for l in code_of(pathlib.Path(path).read_text())
+            if "include" in l and name in l
+        ]
+        if not lines:
+            wrong.append(label)
+        elif not any(where_written in l for l in lines):
+            wrong.append(
+                label + f" (includes `{name}` from a directory that is not the "
+                f"one the shell writes to, which has `{where_written}` in it)"
+            )
+
+    # AND THE WRITER USES THE CONSTANT. Proving the constant exists says
+    # nothing about the file the shell actually opens: a literal at the one
+    # `write_atomically` reproduces the whole defect with every name in place.
+    #
+    # ASKED OF THE CALL, not of the file. `"fragment::FILE" in crate` is true
+    # while the constant is merely MENTIONED — in the read-back one line above
+    # the write, or in a comment — so swapping the write itself for a literal
+    # left this green, and a later rename then writes one name and includes
+    # another. That is the one scenario this whole check exists for.
+    crate = pathlib.Path("${../crates/ronoctua-display/src}/lib.rs").read_text()
+    writes = re.findall(r"write_atomically\(([^;]*?)\)\s*(?:\.|;|$)", crate, re.S)
+    frag = [w for w in writes if "fragment::FILE" in w]
+    if not writes:
+        wrong.append("crates/ronoctua-display/src/lib.rs (no `write_atomically` to read)")
+    elif not frag:
+        wrong.append(
+            "crates/ronoctua-display/src/lib.rs (no `write_atomically` names "
+            "`fragment::FILE`, so the fragment is written under some other name)"
+        )
+
+    if wrong:
+        print(f"ERROR: the shell writes `{name}` and these do not include it:", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A rename that misses one of them leaves the compositor", file=sys.stderr)
+        print("       including a file nobody writes: every setting is saved,", file=sys.stderr)
+        print("       nothing survives a restart, and no other check can see it", file=sys.stderr)
+        print("       — `display-fragment-validates` reads the CONTENT, and", file=sys.stderr)
+        print("       `niri-config-valid` is happy with an `optional=true`", file=sys.stderr)
+        print("       include of a file that is not there.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"OK: `{name}` is the name the shell writes and all three configs include")
+    END
+  '';
+
+  # THE PANEL'S BRIGHTNESS RULE LANDS, and it is the only privileged door the
+  # display feature opens for a BUILT-IN screen. Read out of the evaluated
+  # configuration, so the default the module promises is the one the machine
+  # gets — the same shape as `power-thresholds-rule-lands` below, and for the
+  # same reason: `GROUP=`/`MODE=` do not reach a sysfs attribute, so the rule
+  # is a `RUN` of store paths, and getting the TARGET PATH wrong hands nothing
+  # over while still looking like a rule.
+  #
+  # AND THE OTHER HALF OF THE FEATURE: an external monitor answers over I2C,
+  # which needs `i2c-dev` loaded. It is checked here because it is the same
+  # promise — "the brightness on this screen can be moved" — and because a
+  # module that quietly stopped loading it would leave the view saying every
+  # external monitor has its brightness on its own buttons.
+  #
+  # WHAT THIS CANNOT SAY, and `display-vm.nix` is where it is said: that the
+  # module READS its own option. Both halves here compare the rule against the
+  # same evaluated configuration the module wrote, and the option's default is
+  # `users` — so a module that ignored `brightnessGroup` and hardcoded the
+  # literal would pass. Proving it read would mean evaluating a second NixOS
+  # configuration with an override, which is minutes against this check's
+  # milliseconds. The VM node sets `brightnessGroup = "video"` instead, and
+  # asserts the rule says so.
+  display-brightness-rule-lands =
+    let
+      rules = self.nixosConfigurations.noctua.config.services.udev.extraRules;
+      group = self.nixosConfigurations.noctua.config.ronoctua.display.brightnessGroup;
+      i2c = self.nixosConfigurations.noctua.config.hardware.i2c.enable;
+      modules = builtins.concatStringsSep " " self.nixosConfigurations.noctua.config.boot.kernelModules;
+    in
+    mkCheck "display-brightness-rule-lands" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import re, sys
+      rules = """${rules}"""
+      group = "${group}"
+      wrong = []
+
+      lines = [l for l in rules.splitlines() if "SUBSYSTEM==\"backlight\"" in l]
+      if not lines:
+          wrong.append("no udev rule for a backlight")
+      for l in lines:
+          # A RULE THAT FIRES ON A DEVICE WITHOUT THE FILE runs `chgrp` on a
+          # path that is not there, once per boot, for nothing.
+          if 'TEST=="brightness"' not in l:
+              wrong.append("the backlight rule runs on a device with no `brightness`")
+          # `change` AND `add`: a laptop that suspends comes back with the
+          # ownership reset, and the symptom is a key that worked this morning.
+          if 'ACTION=="add|change"' not in l:
+              wrong.append("the backlight rule does not survive a resume")
+          target = re.escape("/sys$devpath/brightness")
+          if not re.search(r'RUN\+="/nix/store/[^"]*/chgrp ' + re.escape(group) + r' ' + target + r'"', l):
+              wrong.append(f"the backlight rule does not hand THAT file to `{group}` by store path")
+          if not re.search(r'RUN\+="/nix/store/[^"]*/chmod g\+w ' + target + r'"', l):
+              wrong.append("the backlight rule does not make THAT file group-writable")
+
+      # THE EXTERNAL HALF.
+      if "${builtins.toString i2c}" != "1":
+          wrong.append("hardware.i2c is off, so no external monitor's brightness can be reached")
+      if "i2c-dev" not in "${modules}".split():
+          wrong.append("`i2c-dev` is not loaded, so /dev/i2c-* never appears")
+
+      if wrong:
+          for w in wrong:
+              print("ERROR: " + w, file=sys.stderr)
+          sys.exit(1)
+      print("OK: the backlight rule and the I2C door both land")
+      END
+    '';
+
+  # THE DISPLAY MODULE WRITES NO POLKIT RULE — power's argument, verbatim, and
+  # it applies here for a sharper reason: there is no daemon to ask. A panel's
+  # brightness is a file, and a monitor's is a wire. A rule could only be a
+  # door onto something that is not a service.
+  display-adds-no-polkit-rule-of-its-own =
+    mkCheck "display-adds-no-polkit-rule-of-its-own" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, sys
+
+        modules = pathlib.Path("${../nix/modules}")
+        display = (modules / "display.nix").read_text()
+        wrong = []
+
+        # 1. THE MODULE ACTUALLY OPENS THE TWO DOORS.
+        for what in ("services.udev.extraRules", "hardware.i2c.enable"):
+            if what not in display:
+                wrong.append(f"nix/modules/display.nix does not mention {what}")
+
+        # 2. AND WRITES NO RULE.
+        if "polkit" in display.lower() and "addrule" in display.lower():
+            wrong.append("nix/modules/display.nix writes a polkit rule")
+
+        # 3. NOR DOES IT REACH FOR ROOT ANOTHER WAY. The session has no polkit
+        #    agent, so any of these is a prompt nobody sees.
+        for reach in ("pkexec", "sudo ", "systemd-run"):
+            if reach in display:
+                wrong.append(f"nix/modules/display.nix reaches for root with `{reach.strip()}`")
+
+        if wrong:
+            for w in wrong:
+                print("ERROR: " + w, file=sys.stderr)
+            sys.exit(1)
+        print("OK: the display module takes one file and one kernel module, and no authority")
         END
       '';
 
@@ -9194,6 +10765,11 @@ let
         r"(?<![a-zà-ü])[a-zà-ü]{3,}"
         r"(?:ção|ções|cao|coes|mente|ência|encia|ância|ancia"
         r"|agem|idade|ndo|ado|ada|ados|adas|ido|ida|idos|idas"
+        # `-MENTO`, one of the commonest noun endings in the language, and it
+        # was not here. `deslocamento` sat in an assertion in the renderer and
+        # the ruler read straight past it — found the day the check learned to
+        # read a MESSAGE, which is the only reason anybody looked.
+        r"|mento|mentos"
         # THE PLURALS OF THE THREE ABOVE, which were not: the group ends in
         # `(?![a-zà-ü])`, so the `s` blocks the singular from ever matching.
         # `ocorrencias` sat in a generator through every green battery for
@@ -9593,6 +11169,18 @@ let
     #     correct English about a Portuguese thing. Backticks and double quotes
     #     come out before the ruler is applied.
     #
+    #     AND THAT IS A REAL HOLE, measured: a whole Portuguese SENTENCE in
+    #     quotes walks through it, and three did for a round — a rule quoted
+    #     out of `CLAUDE.md`, which has an English statement available and now
+    #     carries it. It is left open deliberately. 113 comment runs in this
+    #     repository quote the OWNER verbatim, and those words are evidence:
+    #     "ela acaba desaparecendo e mudando de tamanho" is what a person said
+    #     about a picture, and translating it would destroy the thing the
+    #     comment exists to record. A ruler that told a citation from a
+    #     sentence would have to know which, and nothing here can. What is
+    #     asked of a writer instead: cite a RULE in English and a PERSON in
+    #     their own words.
+    #
     # The comment marker is per LANGUAGE, not shared: a `#` at the start of a
     # line inside a Rust string is not a comment, and `plan.rs` writes exactly
     # that — the header of the generated `host.nix`, in Portuguese, which is a
@@ -9657,10 +11245,88 @@ let
                 if hit:
                     gaps.append(f"comment: {f.relative_to(root_dir)}:{first}: {hit}")
 
+            # AND THE TAIL OF A LINE THAT ALSO HAS CODE ON IT.
+            #
+            # The rule above anchors at `^\s*`, so it reads a comment only when
+            # the whole line is one. A trailing comment is stripped by every
+            # other pass in this check and read by none — so a line of code
+            # with a Portuguese sentence after `//` on the end of it went
+            # through the whole battery green, and invariant 18 names `//`
+            # explicitly. (Written out rather than shown: an example here is a
+            # comment in this file, and this rule reads those.)
+            #
+            # `//` MARKERS ONLY. In Nix, Python, TOML and shell the marker is
+            # `#`, which appears inside interpolations, attributes and strings
+            # often enough that a line-tail scan there would cry wolf; those
+            # files keep the whole-line rule. Rust and WGSL are where the
+            # invariant actually gets broken.
+            if mark != "//":
+                continue
+            for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+                if line_is.match(line):
+                    continue
+                quoted, escaped, tail = False, False, None
+                for i, ch in enumerate(line):
+                    if escaped:
+                        escaped = False
+                        continue
+                    if ch == chr(92):
+                        escaped = True
+                    elif ch == '"':
+                        quoted = not quoted
+                    elif not quoted and line.startswith("//", i):
+                        # `https://` is a scheme, not a comment.
+                        if i and line[i - 1] == ":":
+                            continue
+                        tail = line[i + 2 :]
+                        break
+                if tail is None:
+                    continue
+                prose = re.sub(r"`[^`]*`", " ", tail)
+                prose = re.sub(r'"[^"]*"', " ", prose)
+                hit = comment_is_portuguese(prose.lower())
+                if hit:
+                    gaps.append(f"comment: {f.relative_to(root_dir)}:{n}: {hit}")
+
     # 8) THE DESCRIPTOR'S ids — the last Portuguese name that reached a screen
     #
     # A buffer's `name` and `mode` are STRING LITERALS inside the component, and
     # no rule above sees a string on the right of a colon. They became the window
+    # 8) WHAT A MESSAGE SAYS OUT LOUD
+    #
+    # Invariant 18 names `assert`, `bail!` and `.context` by hand, and no pass
+    # above reads one: every rule here is about a NAME, and a message is a
+    # sentence. So an assertion reading `deslocamento {nudge}` sat in the
+    # renderer through every green battery — one word, in the one file whose
+    # failures a person reads when a glyph is in the wrong place.
+    #
+    # THE PROSE RULERS, not the name one, for the reason section 7 gives: a
+    # message is written the way a comment is. And the same escape hatch, for
+    # the same kinds of Portuguese that belong in code — an assertion whose
+    # SUBJECT is the accent is correct, and says so with a `pt-BR:` note.
+    #
+    # THE STRING HAS TO BE THE MESSAGE and not an argument. `panic!`, `bail!`,
+    # `.context`, `.expect`, `unreachable!` and `todo!` take one and nothing
+    # else, so their first string is it; an `assert*` takes the message LAST,
+    # after the values it compares, so only a trailing one counts. Reading
+    # every literal on the line would have flagged the three fixtures whose
+    # subject IS the accent — `fold('Configurações')` and its two neighbours.
+    SPEAKS = re.compile(r'(?:panic!|bail!|unreachable!|todo!|anyhow!)\s*\(\s*"([^"\\]{6,})"')
+    ASKS = re.compile(r'\.(?:context|expect)\(\s*"([^"\\]{6,})"')
+    CLAIMS = re.compile(r'assert(?:_eq|_ne)?!\s*\(.*,\s*"([^"\\]{6,})"\s*[,)]')
+    for rs in sorted((root_dir / "crates").rglob("*.rs")):
+        if "target" in rs.parts:
+            continue
+        lines = rs.read_text(errors="replace").splitlines()
+        for n, line in enumerate(lines, 1):
+            if line.lstrip().startswith("//"):
+                continue
+            for ruler in (SPEAKS, ASKS, CLAIMS):
+                for m in ruler.finditer(line):
+                    hit = comment_is_portuguese(m.group(1))
+                    if hit and not allowed_at(lines, n - 1):
+                        gaps.append(f"message: {rs.relative_to(root_dir)}:{n}: {hit}")
+
     # TITLE and the `app_id`, both drawn raw — so `glifos`, `memoria`, `exemplo`
     # and `transferencias` went through the whole identifier refactor untouched
     # and were the only Portuguese left on a running screen, in every language.
@@ -9864,8 +11530,12 @@ let
     SHOWN = re.compile(
         r"\becho\s|\bprintf\s|\bprint\(|\bdie\(|\bcomplain\(|\bsys\.exit\("
         r"|\bsubtest\(|\bassert\s|\bhelp=|\bmkEnableOption\s|\bdescription\s*="
-        r"|\bsay\s"
+        r"|\bsay\s|\.append\("
     )
+    # `.append(` IS HOW A CHECK SAYS WHAT IS WRONG. This file holds 249 of them
+    # against 58 `print(…, file=sys.stderr)` summaries — so the HEADLINE of
+    # every check was measured and the sentence naming the actual defect was
+    # not. That is the half a person reads.
     # SINGLE QUOTES COUNT TOO. A VM test writes Python INSIDE a Nix string, so
     # its own assertions have to use the other quote — `f'sem resposta: …'` sat
     # in `tests/extension-vm.nix` for exactly that reason.
@@ -11247,6 +12917,7 @@ let
       files-polkit-is-narrow
       tor-polkit-is-narrow
       every-window-repeats
+      every-window-knows-its-scale
       every-list-window-has-a-bar
       labels-of-a-view-are-distinct
       the-footer-draws-what-the-keyboard-drives
@@ -11305,6 +12976,7 @@ let
       files-polkit-is-narrow
       tor-polkit-is-narrow
       every-window-repeats
+      every-window-knows-its-scale
       every-list-window-has-a-bar
       labels-of-a-view-are-distinct
       the-footer-draws-what-the-keyboard-drives
@@ -11344,12 +13016,18 @@ let
       power-adds-no-polkit-rule-of-its-own
       power-thresholds-rule-lands
       power-never-asks
+      display-brightness-rule-lands
+      display-adds-no-polkit-rule-of-its-own
+      display-fragment-validates
+      display-fragment-has-one-name
+      one-text-size
       bluetooth-bus-policy-is-open
       persistence-takes-its-root-as-a-parameter
       browser-has-no-keyring
       ;
     notify-vm = notifyVm;
     power-vm = powerVm;
+    display-vm = displayVm;
     bluetooth-vm = bluetoothVm;
     network-vm = networkVm;
     impermanence-vm = impermanenceVm;

@@ -166,6 +166,38 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Default> Store<T> {
         }
     }
 
+    /// The same read, but saying whether the answer came from the FILE.
+    ///
+    /// `None` means exactly one thing: there is a file, and it does not parse.
+    /// Not "no file" and not "no directory" — both of those are ordinary, and
+    /// both answer `Some(T::default())`, because a machine on its first
+    /// morning has no file and is not in trouble.
+    ///
+    /// # Who has to ask this instead of [`Store::read`]
+    ///
+    /// Whoever is about to WRITE THE WHOLE VALUE BACK. This store's promise is
+    /// that a file which will not parse costs ONE feature and says so; that
+    /// holds while the fallback is only read. The moment a caller reads the
+    /// fallback, lays its own change over it and writes, the promise inverts:
+    /// one unparseable byte plus one keystroke and the file's contents are
+    /// gone for good — and, where something else is derived from it, so is
+    /// that. A reader degrades. A writer must refuse.
+    #[must_use]
+    pub fn parsed(&self) -> Option<T> {
+        let Some(path) = self.path() else {
+            return Some(T::default());
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(T::default()),
+            // UNREADABLE IS NOT UNPARSEABLE. A permission error says nothing
+            // about the contents, and writing is what will fail next anyway,
+            // with its own message.
+            Err(_) => return Some(T::default()),
+        };
+        serde_json::from_slice(&bytes).ok()
+    }
+
     /// Writes it whole, atomically. A store that keeps nothing writes nothing.
     ///
     /// # Errors
@@ -288,6 +320,38 @@ mod tests {
         // Hand-edited into nonsense: the default, and a loud line in the log.
         std::fs::write(dir.join("x.json"), b"{ not json").unwrap();
         assert!(s.read().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_writer_can_tell_a_broken_file_from_a_missing_one() {
+        // THE DISTINCTION A WRITER NEEDS, and the one `read` cannot make: it
+        // answers the same empty value for "no file yet" and for "a file I
+        // could not understand". A reader may treat those alike and degrade. A
+        // caller that reads, changes and writes back must not: laying its own
+        // change over the fallback and writing turns one unparseable byte into
+        // the permanent loss of everything the file held.
+        let dir = scratch("parsed");
+        let s: Store<Vec<String>> = Store::at(Some(dir.clone()), "y.json");
+
+        // NO FILE is not trouble — it is every machine's first morning.
+        assert_eq!(s.parsed(), Some(Vec::new()));
+
+        // A GOOD FILE comes back as itself.
+        s.write(&vec!["one".to_owned()]).unwrap();
+        assert_eq!(s.parsed(), Some(vec!["one".to_owned()]));
+
+        // A BROKEN FILE is the one case that answers `None` — while `read`
+        // still degrades, because the two have different jobs.
+        std::fs::write(dir.join("y.json"), b"{ not json").unwrap();
+        assert_eq!(s.parsed(), None);
+        assert!(s.read().is_empty());
+
+        // AND A STORE THAT KEEPS NOTHING is not "broken" either: there is no
+        // file to lose, so a writer may proceed and write nowhere.
+        let nowhere: Store<Vec<String>> = Store::at(None, "y.json");
+        assert_eq!(nowhere.parsed(), Some(Vec::new()));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

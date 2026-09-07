@@ -348,7 +348,7 @@ mod tests {
         let off = z.offset_at(1_755_000_000);
         assert!(
             (-50_400..=50_400).contains(&off),
-            "deslocamento absurdo: {off}s"
+            "an impossible offset: {off}s"
         );
     }
 }

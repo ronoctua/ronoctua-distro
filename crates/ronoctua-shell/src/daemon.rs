@@ -237,6 +237,7 @@ mod tests {
     #[test]
     fn a_window_with_no_title_and_no_app_id_still_has_a_name() {
         let (e, t) = (with_focus(None, None), texts());
+        // pt-BR: a pt-BR VALUE, which is what this asserts arrives.
         assert_eq!(buffer_name(&e, &t), "*sem nome*");
         assert_eq!(buffer_mode(&e, &t), t.t(ronoctua_i18n::key::MODE_UNKNOWN));
     }

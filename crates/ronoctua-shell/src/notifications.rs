@@ -3703,7 +3703,7 @@ mod tests {
     #[test]
     fn the_bells_sentence_says_none_and_not_one_for_zero() {
         // Portuguese's `one` plural category covers 0 as well, so without an
-        // exact `[0]` branch "0 filtradas" came out as "uma filtrada" — a
+        // exact `[0]` branch, which reads `0 filtered`, came out as the ONE form — a
         // sentence claiming a notification was filtered when none was. Found
         // by the review; measured against the locked `intl_pluralrules`.
         for language in ronoctua_i18n::LANGUAGES {

@@ -39,6 +39,8 @@
   # thing the bus does not do. It comes with NetworkManager, which this
   # system already installs.
   networkmanager,
+  # The settings portal's own store, for the foreign toolkits' text size.
+  dconf,
   # WirePlumber's client, for the ONE thing BlueZ cannot answer: which audio
   # profile a device can be put in. See `RONOCTUA_WPCTL` below.
   wireplumber,
@@ -238,6 +240,23 @@ let
     # with a format somebody else defines. It comes with NetworkManager, which
     # this system already has, so the closure gains nothing.
     RONOCTUA_NMCLI = "${networkmanager}/bin/nmcli";
+    # `dconf`, for telling foreign applications how big the text is.
+    #
+    # MEASURED, and the first version of this comment measured the wrong
+    # thing. It said "the closure gains nothing" because
+    # `programs.dconf.enable` is already on for the settings portal — which is
+    # true of the installed SYSTEM and says nothing about this DERIVATION,
+    # and `rust.shell` is seeded into the ISO. `nix why-depends` shows the
+    # binary really does reference it.
+    #
+    # The honest number is `0,4 MiB on a 1735,9 MiB closure`: glib is already
+    # there, so dconf brings only its own two outputs (82 KiB and 323 KiB).
+    #
+    # What it buys is the one layer a GTK 4 application, Chromium and
+    # Electron all read WHILE RUNNING — the two `settings.ini` files
+    # `nix/modules/foreign.nix` writes are in the store and read-only, so they
+    # are the machine's floor and not the person's choice.
+    RONOCTUA_DCONF = "${dconf}/bin/dconf";
     # `wpctl` AND `pw-dump`, for the audio profile — and the closure gains
     # NOTHING, which is the measurement this waited on.
     #

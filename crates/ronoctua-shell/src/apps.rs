@@ -367,7 +367,31 @@ fn superpack() -> Option<String> {
 /// cells the layout reserves (`18 px` of drawing in `21.6 px` of zone).
 #[must_use]
 pub fn pixmap_side() -> f32 {
-    tokens::font::SIZE_BASE
+    tokens::text::size()
+}
+
+/// The cache key of one app's pixmap: the name AND the side it was drawn at.
+///
+/// # Why the side is in the key
+///
+/// Because an `Rgba` is rasterised at a NUMBER OF PIXELS, and `pixmap_side`
+/// asks `text::size()` — so the same `Icon=` is a different picture at 100%
+/// and at 200%. Keyed by the name alone, the second one can never be uploaded:
+/// the renderer's `Images::missing` is `!uploads.contains_key`, and nothing in
+/// it removes a key — `clear()` empties the frame's batch and leaves the
+/// textures, and `dump()` only acts above its ceiling. Emptying the host's own
+/// map does NOT reach that, so the old texture went on being drawn, stretched
+/// into the new box, for the life of the footer.
+///
+/// It is the rule the theme's key already follows for anything a child painted
+/// with a token's VALUE, on a second axis — and the one `buffer::svg_key`
+/// follows for the same reason on the other side of the process.
+#[must_use]
+pub fn pixmap_key(icon: &str, side: u32) -> String {
+    // `\u{1}` because an `Icon=` is a theme name or an absolute PATH, and a
+    // path can hold any byte a filename can — a separator that can appear in
+    // one would let two different pairs spell the same key.
+    format!("{icon}\u{1}{side}")
 }
 
 /// A pixmap request for the thread.
@@ -382,8 +406,14 @@ pub struct Request {
 /// What the thread returns.
 #[derive(Debug, Clone)]
 pub struct Painting {
-    /// The `Icon=` requested — it is the cache key on this side.
+    /// The `Icon=` requested.
     pub icon: String,
+    /// The side it was actually drawn at — half of the cache key.
+    ///
+    /// It travels BACK rather than being read from `pixmap_side()` on arrival,
+    /// because the size can move while a request is in flight: read on arrival,
+    /// a picture rasterised at 18 would be filed as if it were 36.
+    pub side: u32,
     /// The pixels, or `None` when there is no icon for this name.
     ///
     /// `None` is an ANSWER, and not a silent failure: it is what stops
@@ -427,7 +457,14 @@ pub fn painter(
             while let Ok(p) = requests.recv() {
                 let rgba = ronoctua_notify::icon::rasterize(root.as_deref(), &p.icon, p.side)
                     .map(for_renderer);
-                if sender.send(Painting { icon: p.icon, rgba }).is_err() {
+                if sender
+                    .send(Painting {
+                        icon: p.icon,
+                        side: p.side,
+                        rgba,
+                    })
+                    .is_err()
+                {
                     // A closed channel = the footer left.
                     return;
                 }
@@ -525,7 +562,7 @@ pub fn command_for(
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Finder, glyph_of};
+    use super::{Action, Finder, glyph_of, pixmap_key};
     use ronoctua_apps::DesktopEntry;
     use ronoctua_keymap::{Key, Mods, Sym};
     use std::sync::Arc;
@@ -757,5 +794,22 @@ mod tests {
         let ff = input_of("firefox", "Firefox", &["Network", "WebBrowser"]);
         let otherwise = input_of("anything", "Anything", &["Network", "WebBrowser"]);
         assert_ne!(glyph_of(&ff), glyph_of(&otherwise));
+    }
+
+    #[test]
+    fn the_pixmap_key_changes_with_the_side() {
+        // THE WHOLE POINT: one name, two sizes, two keys. Equal keys here mean
+        // the renderer is asked "is this already up?" about a picture of the
+        // other size, answers yes, and draws it stretched — and no later call
+        // can undo that, because `Images` has no per-key removal.
+        assert_ne!(pixmap_key("firefox", 18), pixmap_key("firefox", 36));
+        // And one side, two names, two keys — the half that was never broken.
+        assert_ne!(pixmap_key("firefox", 18), pixmap_key("thunderbird", 18));
+        // The same pair is the same key, or nothing would ever be cached.
+        assert_eq!(pixmap_key("firefox", 18), pixmap_key("firefox", 18));
+        // AND NO PAIR SPELLS ANOTHER PAIR'S KEY. An `Icon=` can be an absolute
+        // path, so the separator has to be a byte a filename cannot hold: with
+        // a printable one, ("a", 1) and ("a<SEP>1", ...) collide.
+        assert_ne!(pixmap_key("a\u{1}1", 8), pixmap_key("a", 18));
     }
 }

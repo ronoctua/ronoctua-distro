@@ -573,6 +573,13 @@ struct Footer {
     power_orders: Option<ronoctua_power::Handle>,
     /// The power view, when open — `LEADER s p p`.
     power: Option<crate::power::View>,
+    /// The screens' view, when it is open.
+    display: Option<crate::display::View>,
+    /// The last reading of the screens. It is kept whether or not the view is
+    /// open, because a brightness key acts without one.
+    display_snapshot: ronoctua_display::Snapshot,
+    /// The way to ask the screens for something.
+    display_orders: Option<ronoctua_display::Handle>,
     /// The profile the person chose (`power.json`), or the distro's floor.
     power_wanted: ronoctua_power::Profile,
     /// Did a FILE or the ENVIRONMENT name that wish, or is it just the
@@ -584,6 +591,9 @@ struct Footer {
     power_applied: bool,
     /// The watch on `power.json`: a choice made in the window reaches here.
     _power_watch: Option<ronoctua_files::notice::Notice>,
+    /// `display.json`, watched. The size of the text lives there, and a
+    /// person may put a number in it by hand.
+    _display_watch: Option<ronoctua_files::notice::Notice>,
     /// The watch on the notification history, so that what the WINDOW wrote
     /// is not overwritten by the next thing that arrives here.
     _notes_watch: Option<ronoctua_files::notice::Notice>,
@@ -695,14 +705,18 @@ struct Footer {
     apps_stamp: Vec<Option<std::time::SystemTime>>,
     /// Where the sweeping thread hands back the catalogue.
     catalogue_sender: Option<calloop::channel::Sender<crate::apps::Catalogue>>,
-    /// The already decoded icon pixmaps, by their `Icon=`.
+    /// The already decoded icon pixmaps, by `apps::pixmap_key` — name AND side.
     ///
     /// `Some(None)` is an ANSWER — "this name has no file" —, and not the absence
     /// of one. Without telling the two apart, an icon that does not exist would be
     /// asked for again on every frame, and the thread would sweep 335 thousand
     /// files sixty times a second.
+    ///
+    /// The side is half the key because the same key reaches the GPU, and a
+    /// picture drawn at one size is a different picture at another; `pixmap_key`
+    /// carries the whole argument.
     icons: std::collections::HashMap<String, Option<ronoctua_render::image::Rgba>>,
-    /// What has already been asked for and has not come back yet.
+    /// What has already been asked for and has not come back yet, by the same key.
     icons_requested: std::collections::HashSet<String>,
     /// The icon thread's queue.
     icon_queue: Option<std::sync::mpsc::Sender<crate::apps::Request>>,
@@ -754,6 +768,16 @@ enum ViewState {
     /// branch runs before the manager's, and a cursor over a list of facts
     /// holds nothing a person built by hand.
     Power,
+    /// The screens. Modal, and BELOW the radio, which IS the pairing
+    /// question — the one thing on this list another machine is waiting on,
+    /// and the reason the radio outranks everything here.
+    ///
+    /// A screen changed provisionally is waiting too, and it looks like the
+    /// same argument. It is not: that wait is INSIDE this view, and the view
+    /// is already the one on screen while it runs. Yielding to a pairing
+    /// question costs the countdown nothing — it goes back by itself, which
+    /// is the whole point of it.
+    Display,
     /// The bluetooth view. Modal, and ABOVE the power view for one reason
     /// only: a pairing question is the one thing on this list that the other
     /// side is waiting on, and a view that yields would leave it waiting.
@@ -805,6 +829,17 @@ struct Screen {
     layer: LayerSurface,
     width: u32,
     height: u32,
+    /// The logical size the COMPOSITOR configured this surface at, before any
+    /// clamp.
+    ///
+    /// `width`/`height` are what the BUFFER can show — which is what the
+    /// columns, the bars and the hit tests are laid out against; this is what
+    /// the GPU is asked for. They are the same pair on every machine anybody
+    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
+    /// only one of them is a ratchet: a surface clamped once at scale 3 would
+    /// ask for the size it was cut down to and could never grow back. See
+    /// [`crate::hidpi`].
+    asked: (u32, u32),
     /// The MONITOR's height, not the surface's.
     ///
     /// The expansion's ceiling is a percentage of the screen, and the surface does
@@ -812,6 +847,16 @@ struct Screen {
     /// ceiling would only be the absolute one in lines — which on a short screen
     /// is half the screen.
     output_height: u32,
+    /// How many physical pixels one logical pixel is on THIS monitor.
+    ///
+    /// PER SCREEN, and that is the whole difference between this door and the
+    /// nine windows: the footer has one surface per output, and two monitors
+    /// of different scales are the ordinary case a laptop with an external
+    /// display is. The rule itself is one — see [`crate::hidpi`].
+    scale: i32,
+    /// What this SURFACE has been told, which lags `scale` by one frame —
+    /// see [`crate::hidpi::told_before_present`].
+    scale_told: i32,
     configured: bool,
     /// Assembled on the first `configure`, when there is a size. They stay `None`
     /// if there is no usable GPU — the footer still resolves the layout and logs,
@@ -986,6 +1031,8 @@ enum Click {
     Theme(usize),
     /// A row of the power view: the cursor goes there, `RET` acts.
     Power(usize),
+    /// A row of the screens' view.
+    Display(usize),
     /// A row of the bluetooth view.
     Bluetooth(usize),
     /// Put the focus on line `n` of the network list.
@@ -1563,7 +1610,7 @@ pub fn wheel_arrived(
     if vertical.stop || horizontal.stop {
         *left = 0.0;
     }
-    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+    let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
     *left += axis_lines(vertical, line_px) + axis_lines(horizontal, line_px);
 }
 
@@ -1708,7 +1755,7 @@ pub fn run() -> Result<()> {
          and working around that would violate the invariant.",
     )?;
 
-    let footer_height = tokens::metrics::footer_height(tokens::font::SIZE_BASE).ceil() as u32;
+    let footer_height = tokens::metrics::footer_height(tokens::text::size()).ceil() as u32;
 
     // The keymap is assembled BEFORE the surface comes up. A collision here is a
     // program error, and failing at startup is better than failing on the first leader.
@@ -1824,10 +1871,14 @@ pub fn run() -> Result<()> {
         power_snapshot: None,
         power_orders: None,
         power: None,
+        display: None,
+        display_snapshot: ronoctua_display::Snapshot::default(),
+        display_orders: None,
         power_wanted: ronoctua_power::Profile::Performance,
         power_named: false,
         power_applied: false,
         _power_watch: None,
+        _display_watch: None,
         _notes_watch: None,
         _book_watch: None,
         bluetooth_scene: ronoctua_bluetooth::Scene::default(),
@@ -1938,6 +1989,14 @@ pub fn run() -> Result<()> {
     // And the fragments beside it made to agree with the choice, before the
     // watch: a rebuild may have moved the generator's output.
     crate::theme::sync_with_file();
+    // AND THE FOREIGN APPLICATIONS TOLD how big the text is, once, here.
+    //
+    // dconf remembers between sessions, so this is usually writing what is
+    // already there — and it is worth it anyway: `display.json` is a file a
+    // person may edit by hand, and without this the shell would follow the
+    // edit while Firefox went on at yesterday's size. The file is the
+    // broadcast; this is what makes it reach the applications too.
+    crate::toolkits::tell_them(ronoctua_tokens::text::percent());
     let (theme_sender, theme_changed) = channel::channel::<()>();
     state._theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
     handle
@@ -2041,6 +2100,16 @@ pub fn run() -> Result<()> {
     handle
         .insert_source(receiving, |event, (), state: &mut Footer| {
             if let channel::Event::Msg(e) = event {
+                // THE COMPOSITOR RE-READ ITS CONFIGURATION, and the screens
+                // are the only thing that cares. It is how the display view
+                // learns that the fragment it wrote was read — and whether it
+                // PARSED, which is the difference between a change that did
+                // not take and a change that silently did nothing.
+                if let ronoctua_niri::Event::ConfigLoaded { failed } = e
+                    && let Some(h) = state.display_orders.as_ref()
+                {
+                    h.send(ronoctua_display::Order::Reloaded { failed });
+                }
                 state.niri.apply_to(&e);
                 state.states_arrived();
                 // Redrawing on every event is cheap because the layout is integer
@@ -2074,6 +2143,12 @@ pub fn run() -> Result<()> {
                     // the keyboard the other needs. See `leader::yield_the_place`.
                     Order::Quit => {
                         tracing::info!("another footer took this display; leaving");
+                        // AND THIS ONE TOO. It is the third of three quit
+                        // paths and the only one that did not — the very path
+                        // `put_a_preview_back`'s own doc names, since the
+                        // footer taking over starts a thread whose `previewed`
+                        // is empty and can never undo what this one applied.
+                        state.put_a_preview_back();
                         state.quit = true;
                     }
                     // A BUFFER SAYS WHICH STATE IT IS IN. It only draws when the
@@ -2198,6 +2273,31 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the power channel: {e}"))?;
+
+    // THE SCREENS, on a thread of their own — the arrangement above, and its
+    // reason. A reading walks `/sys/class/drm` and asks the compositor twice,
+    // and a monitor that answers over DDC/CI takes a fifth of a second: none
+    // of that may happen on the frame's thread.
+    //
+    // AND THE CRATE HAS NOTHING TO SUBSCRIBE TO. niri publishes no event
+    // about outputs at all — nineteen variants and not one of them is about a
+    // monitor. What tells us a screen arrived is WAYLAND, which this process
+    // already hears as a client: `OutputHandler` below turns it into a
+    // reading.
+    let (display_sender, display_events) = channel::channel::<ronoctua_display::Event>();
+    match ronoctua_display::watch(move |e| {
+        let _ = display_sender.send(e);
+    }) {
+        Ok(h) => state.display_orders = Some(h),
+        Err(e) => tracing::warn!(error = %e, "no screen thread; the display view will be empty"),
+    }
+    handle
+        .insert_source(display_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.display_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the screens' channel: {e}"))?;
     // THE WAY OUT, on a thread of its own — EAGERLY, and for the reason the
     // battery is: a mark that says the network leads nowhere is drawn with
     // no view open, and it is the first question the line answers.
@@ -2322,6 +2422,25 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the power.json watch: {e}"))?;
+
+    // `display.json`, WATCHED, for the reason the theme's file is: the file
+    // IS the broadcast. The size of the text is written there — by the
+    // display view, and by a person with an editor — and without hearing it
+    // the shell would follow a change only after a restart while the foreign
+    // applications, which dconf tells at once, had already moved.
+    let (display_file_sender, display_file) = channel::channel::<()>();
+    // THROUGH `toolkits::watch`, which is where the directory is found once
+    // — see the note on its `HOME`. Finding it here as well would make `run`
+    // a function that both writes and decides where, which
+    // `persistence-takes-its-root-as-a-parameter` refuses.
+    state._display_watch = crate::toolkits::watch(move || display_file_sender.send(()).is_ok());
+    handle
+        .insert_source(display_file, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.display_file_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the display.json watch: {e}"))?;
 
     // THE NOTIFICATION FILES, watched for the same reason and by the same
     // means (`theme.json`'s precedent: the file IS the broadcast).
@@ -2479,6 +2598,11 @@ pub fn run() -> Result<()> {
                 {
                     state.draw_and_paint();
                 }
+                // THE CLOCK ON A PROVISIONAL CHANGE, on the second the footer
+                // already beats. A view does not get a timer of its own, and
+                // this one is the reason the rule has an exception written
+                // beside it nowhere: it does not need one.
+                state.display_tick();
                 calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
             },
         )
@@ -2656,7 +2780,7 @@ impl Footer {
     /// The modeline is on line [`Footer::modeline_line`], in the same top-down
     /// coordinates the band and the expansion use.
     fn segment_at(&self, x: f64, y: f64) -> Option<&'static str> {
-        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         if line_height <= 0.0 {
             return None;
         }
@@ -2668,7 +2792,7 @@ impl Footer {
         if y < top || y >= top + line_height {
             return None;
         }
-        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
         if cell <= 0.0 || x < 0.0 {
             return None;
         }
@@ -2689,8 +2813,8 @@ impl Footer {
     /// `Motion` arrives per pixel of movement, and two calculations of one
     /// position are two chances to point at the wrong thing.
     fn band_at(&self, x: f64, y: f64) -> Option<&crate::band::Piece> {
-        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
         if line_height <= 0.0 || cell <= 0.0 || x < 0.0 || y < 0.0 {
             return None;
         }
@@ -2729,8 +2853,8 @@ impl Footer {
     /// From what was DRAWN (`brain_placed`), and not from a second layout — the
     /// same rule the modeline's segments and the band already follow.
     fn brain_at(&self, x: f64, y: f64) -> Option<&crate::brain::Piece> {
-        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
-        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
         if line_height <= 0.0 || cell <= 0.0 || x < 0.0 || y < 0.0 || self.brain_rows() == 0 {
             return None;
         }
@@ -3204,7 +3328,7 @@ impl Footer {
             return;
         };
         let (width, height) = (t.width, t.height);
-        let columns = tokens::metrics::columns(width as f32, tokens::font::SIZE_BASE);
+        let columns = tokens::metrics::columns(width as f32, tokens::text::size());
         let placed = layout::resolve(columns, &self.segments_now());
 
         tracing::info!(
@@ -3229,6 +3353,7 @@ impl Footer {
 impl LayerShellHandler for Footer {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
         tracing::info!("the compositor closed the footer's surface");
+        self.put_a_preview_back();
         self.quit = true;
     }
 
@@ -3253,16 +3378,38 @@ impl LayerShellHandler for Footer {
 
         // Width 0 in the configure means "you choose" — but we asked for full
         // width via the anchor, so the compositor sends the actual one.
-        self.screens[i].width = cfg.new_size.0;
-        if cfg.new_size.1 != 0 {
-            self.screens[i].height = cfg.new_size.1;
+        //
+        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the buffer
+        // can show is what comes back below — see `Screen::asked`. It is set
+        // BEFORE `ensure_gpu`, which asks the GPU for a buffer of this size.
+        //
+        // AND IT IS BUILT FROM THE CONFIGURE AND NOTHING ELSE. It was built
+        // from the door's own kept fields, which is the ratchet the field
+        // exists to prevent — on a zero the kept field is what `resized`
+        // answered, and that is a size that can only ever shrink. On a zero
+        // axis the LAST THING THE COMPOSITOR SAID is kept instead, which is
+        // the only other number that is its and not ours. The footer is the
+        // one door that can be handed a zero: the nine others take
+        // `Option<NonZeroU32>`.
+        if cfg.new_size.0 != 0 {
+            self.screens[i].asked.0 = cfg.new_size.0;
         }
+        if cfg.new_size.1 != 0 {
+            self.screens[i].asked.1 = cfg.new_size.1;
+        }
+        self.screens[i].width = self.screens[i].asked.0;
+        self.screens[i].height = self.screens[i].asked.1;
         self.screens[i].configured = true;
 
         self.ensure_gpu(i);
-        let (l, a) = (self.screens[i].width, self.screens[i].height);
+        let asked = self.screens[i].asked;
+        let scale = self.screens[i].scale;
         if let Some(g) = self.screens[i].gpu.as_mut() {
-            g.resize(l, a);
+            // AND THE SCREEN KEEPS WHAT THE BUFFER CAN SHOW — see
+            // `crate::hidpi::resized`.
+            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
+            self.screens[i].width = shown_w;
+            self.screens[i].height = shown_h;
         }
 
         self.draw();
@@ -3272,13 +3419,50 @@ impl LayerShellHandler for Footer {
 }
 
 impl CompositorHandler for Footer {
+    /// One of the footer's surfaces moved to a screen of another scale.
+    ///
+    /// It was EMPTY here and in eight other doors, which is what made every
+    /// one of them blurry on a HiDPI screen. The rule and the measurement are
+    /// in [`crate::hidpi`].
+    ///
+    /// WHICH SCREEN, matched by the surface: the footer has one per output and
+    /// a laptop beside an external monitor is two different scales at once —
+    /// `configure` matches the same way and for the same reason.
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _factor: i32,
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        let Some(i) = self
+            .screens
+            .iter()
+            .position(|t| t.layer.wl_surface() == surface)
+        else {
+            return;
+        };
+        let asked = self.screens[i].asked;
+        let t = &mut self.screens[i];
+        let Some((shown_w, shown_h)) = crate::hidpi::followed(
+            &mut t.scale,
+            factor,
+            surface,
+            t.gpu.as_mut(),
+            t.text.as_mut(),
+            asked,
+        ) else {
+            return;
+        };
+        // AND THE SCREEN KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
+        // ceiling this is what the compositor configured; above it, going on
+        // with the old number lays the footer out in a space the buffer does
+        // not have. The columns are derived per paint here, so `draw` below is
+        // the recount.
+        t.width = shown_w;
+        t.height = shown_h;
+        self.draw();
+        self.paint();
     }
 
     fn transform_changed(
@@ -3327,6 +3511,7 @@ impl OutputHandler for Footer {
     // at startup there may be no output at all — see the comment in `run`.
     fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: wl_output::WlOutput) {
         self.ensure_screens(qh);
+        self.screens_changed();
     }
     // Here too, and not only in `new_output`: SCTK announces `new_output` as
     // soon as the global appears, but only fills in the output's information
@@ -3371,6 +3556,7 @@ impl OutputHandler for Footer {
                 screens = self.screens.len(),
                 "output removed; surface closed"
             );
+            self.screens_changed();
         }
     }
 }
@@ -4245,7 +4431,12 @@ impl Footer {
             layer,
             width: 0,
             height: self.requested_height,
+            asked: (0, self.requested_height),
             output_height,
+            // ONE TO ONE UNTIL THE COMPOSITOR SAYS OTHERWISE — see
+            // `crate::hidpi`.
+            scale: 1,
+            scale_told: 1,
             configured: false,
             gpu: None,
             text: None,
@@ -4430,6 +4621,7 @@ impl Footer {
                         "Quit": { "skip_confirmation": true }
                     }))
                 });
+                self.put_a_preview_back();
                 self.quit = true;
             }
             // POWER — the view's two doors, the profile, the two locks and the
@@ -4506,6 +4698,23 @@ impl Footer {
             "bluetooth-unnamed" => self.bluetooth_press(crate::bluetooth::Press::Unnamed),
             "bluetooth-up" => self.bluetooth_press(crate::bluetooth::Press::Up),
             "bluetooth-down" => self.bluetooth_press(crate::bluetooth::Press::Down),
+            "display-open" => self.open_display(),
+            "display-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["display".to_owned()], None);
+                }
+            }
+            // THE VIEW'S OWN GESTURES, reachable by NAME as well as by key —
+            // which is what `LEADER :` needs and what the manual lists. They
+            // do nothing when the view is not open, exactly as the key does.
+            "display-up" => self.display_press(crate::display::Press::Up),
+            "display-down" => self.display_press(crate::display::Press::Down),
+            "display-less" => self.display_press(crate::display::Press::Less),
+            "display-more" => self.display_press(crate::display::Press::More),
+            "display-enter" => self.display_press(crate::display::Press::Enter),
+            "display-automatic" => self.display_press(crate::display::Press::Automatic),
+            "display-forget" => self.display_press(crate::display::Press::Forget),
+            "display-arrange" => self.display_press(crate::display::Press::Arrange),
             "power-open" => self.open_power(None, None),
             "power-window" => {
                 if let Ok(me) = std::env::current_exe() {
@@ -5194,8 +5403,13 @@ impl Footer {
     /// the GPU whether the texture is already up, and walking around with a
     /// reference to the pixels would hold the borrow until the end of the painting.
     fn pixmap_ready(&self, icon: &str) -> Option<String> {
-        match self.icons.get(icon) {
-            Some(Some(_)) => Some(icon.to_owned()),
+        // THE KEY CARRIES THE SIDE, and it is the same key the GPU is asked
+        // about: `crate::apps::pixmap_key` says why at length. Built here from
+        // the LIVE side, so a change of text size asks a question the cache has
+        // not been asked before, instead of finding yesterday's answer.
+        let key = crate::apps::pixmap_key(icon, crate::apps::pixmap_side().ceil() as u32);
+        match self.icons.get(&key) {
+            Some(Some(_)) => Some(key),
             _ => None,
         }
     }
@@ -5219,14 +5433,20 @@ impl Footer {
         let Some(l) = self.apps.as_ref() else {
             return;
         };
+        let side = crate::apps::pixmap_side().ceil() as u32;
+        // ASKED FOR BY THE SAME KEY IT WILL BE FILED UNDER, side included:
+        // asking by the bare name would find the picture of another size
+        // already there and never request this one.
         let missing_ones: Vec<String> = (offset..offset + per_page)
             .filter_map(|i| l.at(i))
             .map(|e| e.icon.clone())
             .filter(|n| {
-                !n.is_empty() && !self.icons.contains_key(n) && !self.icons_requested.contains(n)
+                let key = crate::apps::pixmap_key(n, side);
+                !n.is_empty()
+                    && !self.icons.contains_key(&key)
+                    && !self.icons_requested.contains(&key)
             })
             .collect();
-        let side = crate::apps::pixmap_side().ceil() as u32;
         for icon in missing_ones {
             // A closed queue means the thread died. Registering the request
             // anyway would leave the name stuck in "requested" forever, and
@@ -5241,17 +5461,23 @@ impl Footer {
                 self.icon_queue = None;
                 return;
             }
-            self.icons_requested.insert(icon);
+            self.icons_requested
+                .insert(crate::apps::pixmap_key(&icon, side));
         }
     }
 
     /// A decoded pixmap, coming from the thread.
     fn painted(&mut self, p: crate::apps::Painting) {
-        self.icons_requested.remove(&p.icon);
+        // FILED UNDER THE SIDE IT WAS DRAWN AT, which travels back in the
+        // message: reading `pixmap_side()` here instead would file a picture
+        // rasterised at the old size under the new one, whenever the size moved
+        // while the request was in flight.
+        let key = crate::apps::pixmap_key(&p.icon, p.side);
+        self.icons_requested.remove(&key);
         let found = p.rgba.is_some();
         // The `None` GOES INTO THE MAP. It is the answer "it does not exist", and
         // it is what stops the request from coming back on every frame.
-        self.icons.insert(p.icon, p.rgba);
+        self.icons.insert(key, p.rgba);
         // It only redraws when there is something new to show, and only with the
         // list open: an icon that arrives after the view closes must not cost a
         // frame.
@@ -5631,6 +5857,10 @@ impl Footer {
         // eighty rows, and holding `<down>` past the eleventh drew the same
         // screen for ever — the ports, the neighbours and the monitor were
         // unreachable from the keyboard.
+        //
+        // AND THE SURFACE FIRST — see `region_resized`. This view has ten
+        // sections and they are not the same length.
+        self.region_resized();
         self.follow_cursor();
         self.network_errand(errand);
     }
@@ -6754,6 +6984,33 @@ impl Footer {
             return;
         }
 
+        // THE SCREENS: the arrows, `RET`, `Esc` and three bare letters, read
+        // out of `display::OF_THE_VIEW` by NOTATION for the reason the radio
+        // gives just above — a row added there is a key that works, and a key
+        // here that is not there is a key nothing teaches.
+        if self.view() == ViewState::Display {
+            use ronoctua_keymap::Sym;
+            let press = match key.sym {
+                Sym::Esc => Some(crate::display::Press::Escape),
+                Sym::Up => Some(crate::display::Press::Up),
+                Sym::Down => Some(crate::display::Press::Down),
+                Sym::Left => Some(crate::display::Press::Less),
+                Sym::Right => Some(crate::display::Press::More),
+                Sym::Enter => Some(crate::display::Press::Enter),
+                otherwise => {
+                    let notation = ronoctua_keymap::Key::simple(otherwise).notation();
+                    crate::display::OF_THE_VIEW
+                        .iter()
+                        .find(|(t, _, _)| *t == notation)
+                        .and_then(|(_, id, _)| crate::display_words::press_of(id))
+                }
+            };
+            if let Some(press) = press {
+                self.display_press(press);
+            }
+            return;
+        }
+
         // THE POWER VIEW: five gestures, all of them the view's — see
         // `power::OF_THE_VIEW`. A key outside the table is swallowed, as every
         // modal swallows the keyboard it holds.
@@ -7151,7 +7408,7 @@ impl Footer {
 
     /// May another view take the footer's region right now?
     ///
-    /// ONE ANSWER FOR SIX DOORS, and it says NO for the same reason each
+    /// ONE ANSWER FOR ELEVEN DOORS, and it says NO for the same reason each
     /// time: whoever holds the region holds state a person built by hand — a
     /// search, a selection, a menu, an armed confirmation — and the region's
     /// height, grid and pointer arithmetic are its while it is open. A second
@@ -7165,7 +7422,7 @@ impl Footer {
     /// # Why it asks about EVERY view, and not only the file manager
     ///
     /// It used to be `self.files.is_none()`, which made the promise above true
-    /// of exactly one of the ten. Everything else could be opened underneath
+    /// of exactly one of the eleven. Everything else could be opened underneath
     /// anything else: clicking the battery mark with the radio's view up built
     /// a second live view under the drawn one, and the two `Esc`es it then
     /// took to leave were the only sign. `view()` is the one place the
@@ -7620,9 +7877,10 @@ impl Footer {
     ///
     /// The count used to be written into this sentence, and it rotted: this
     /// line said EIGHT, the network's comment below said seven, and
-    /// [`ViewState`] has nine of them plus `NoneOf`. A number in prose is a
-    /// second copy of something the enum already says exactly, so there is no
-    /// number here any more.
+    /// A number in prose is a second copy of something [`ViewState`] already
+    /// says exactly, so there is none here — and the sentence that used to be
+    /// here proved its own point by saying "nine" for years after the tenth
+    /// arrived.
     ///
     /// **The precedence order is written HERE, and only here.** Whoever is in
     /// the middle of something wins: the four modals captured the whole
@@ -7649,6 +7907,8 @@ impl Footer {
             ViewState::Bluetooth
         } else if self.power.is_some() {
             ViewState::Power
+        } else if self.display.is_some() {
+            ViewState::Display
         } else if self.files.is_some() {
             // ABOVE THE LOCATOR AND THE LEADER, because it holds state a
             // person built by hand: a directory navigated to, a set of marks,
@@ -7803,7 +8063,7 @@ impl Footer {
         let lines =
             u32::from(FOOTER_LINES + self.band_rows() + self.fold_rows() + self.brain_rows())
                 + u32::try_from(self.expansion_rows()).unwrap_or(0);
-        (tokens::metrics::line_height(tokens::font::SIZE_BASE) * lines as f32).ceil() as u32
+        (tokens::metrics::line_height(tokens::text::size()) * lines as f32).ceil() as u32
     }
 
     /// How far the expansion may grow, in lines.
@@ -7910,7 +8170,7 @@ impl Footer {
             .iter()
             .find(|t| t.configured && t.width > 0)
             .map_or(0, |t| t.width);
-        let columns = tokens::metrics::columns(width_px as f32, tokens::font::SIZE_BASE);
+        let columns = tokens::metrics::columns(width_px as f32, tokens::text::size());
         // THE CLIPBOARD USES ONLY THE LEFT COLUMN.
         //
         // Its list is the left panel; on the right sits the content, which is
@@ -8791,6 +9051,28 @@ impl Footer {
                 })
                 .collect();
         }
+        if self.view() == ViewState::Display
+            && let Some(v) = self.display.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(
+                    &self.display_snapshot,
+                    width,
+                    std::time::Instant::now(),
+                    &self.texts,
+                )
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Display(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
         if self.view() == ViewState::Power
             && let Some(v) = self.power.as_ref()
         {
@@ -9182,9 +9464,9 @@ impl Footer {
     /// both doors.
     #[allow(clippy::cast_possible_truncation)]
     fn bar_x(&self, width: f64) -> f64 {
-        let cell = f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE));
+        let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
         let last = width - cell;
-        let columns = tokens::metrics::columns(width as f32, tokens::font::SIZE_BASE);
+        let columns = tokens::metrics::columns(width as f32, tokens::text::size());
         self.files
             .as_ref()
             .and_then(|v| v.panes(columns).listing_bar(columns))
@@ -9268,7 +9550,7 @@ impl Footer {
         let Some((_, top, _, track)) = self.region_track(w, h) else {
             return;
         };
-        let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+        let line_height = tokens::metrics::line_height(tokens::text::size());
         let ceiling = self.expansion_ceiling();
         let total = self.expansion_len();
         // `Scroll::offset_at`, the inverse of what was DRAWN.
@@ -9318,7 +9600,7 @@ impl Footer {
         // here and by the rectangle that was drawn.
         if matches!(axis, crate::files::Axis::Across | crate::files::Axis::Time) {
             let columns = self.screen_columns();
-            let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+            let cell = tokens::metrics::cell_width(tokens::text::size());
             let edge = self
                 .screens
                 .iter()
@@ -9372,7 +9654,7 @@ impl Footer {
             }
             return;
         }
-        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let top = f64::from(self.first_of_expansion()) * line_height;
         let rooms = self.files_rooms();
         let columns = self.screen_columns();
@@ -9559,8 +9841,8 @@ impl Footer {
             .iter()
             .find(|t| t.configured && t.width > 0)
             .map(|t| f32::from(u16::try_from(t.width).unwrap_or(u16::MAX)))?;
-        let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
-        let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+        let cell = tokens::metrics::cell_width(tokens::text::size());
+        let line_height = tokens::metrics::line_height(tokens::text::size());
         self.files_bars(self.screen_columns(), cell, line_height, width)
             .into_iter()
             .find(|(_, _, r)| {
@@ -9609,8 +9891,8 @@ impl Footer {
         item_at(
             x,
             y,
-            f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE)),
-            f64::from(tokens::metrics::cell_width(tokens::font::SIZE_BASE)),
+            f64::from(tokens::metrics::line_height(tokens::text::size())),
+            f64::from(tokens::metrics::cell_width(tokens::text::size())),
             self.first_of_expansion(),
             grid,
             // THE COUNT, AND NOT THE LIST. `row_at` runs on EVERY pointer
@@ -10197,6 +10479,19 @@ impl Footer {
                 self.bluetooth_scene = scene;
                 self.draw_and_paint();
             }
+            Some(Click::Display(n)) => {
+                // THE MOUSE AIMS, THE KEYS ACT — the rule every view here
+                // follows. It moves the cursor and nothing else.
+                let columns = self.screen_columns();
+                let moment = std::time::Instant::now();
+                if let Some(v) = self.display.take() {
+                    let mut v = v;
+                    let rows = v.rows(&self.display_snapshot, columns, moment, &self.texts);
+                    v.clicked(n, &rows);
+                    self.display = Some(v);
+                }
+                self.draw_and_paint();
+            }
             Some(Click::Power(n)) => {
                 // THE MOUSE AIMS, THE KEYS ACT: a click puts the cursor on the
                 // row, and `RET` is what applies, arms and confirms — the four
@@ -10440,6 +10735,7 @@ impl Footer {
                 .as_ref()
                 .map(crate::theme_chooser::View::row),
             ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
+            ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
             // The manager's cursor, so the region scrolls with it — the same
             // `scrolloff` the locator uses. A listing that does not follow its
@@ -10763,23 +11059,29 @@ impl Footer {
         // SAFETY: `self.conn` and `self.layer` are fields of `self`, just like
         // the `Gpu` — so the handles do not outlive the objects they came from.
         // It is the contract of `Gpu::new`, now by construction.
+        // ONE CALL, not the same one twice: two calls to a pure function are
+        // two places the arguments can be edited apart.
+        let first = crate::hidpi::physical(self.screens[i].asked, self.screens[i].scale);
         #[allow(unsafe_code)]
-        let gpu = unsafe {
-            ronoctua_render::gpu::Gpu::new(
-                display,
-                window,
-                self.screens[i].width,
-                self.screens[i].height,
-            )
-        };
+        let gpu = unsafe { ronoctua_render::gpu::Gpu::new(display, window, first.0, first.1) };
 
         match gpu {
-            Ok(g) => {
+            Ok(mut g) => {
+                // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at
+                // the GPU's ceiling like `resize` does, and the first frame
+                // sends the scale — see `crate::hidpi::resized`.
+                let (shown_w, shown_h) =
+                    crate::hidpi::resized(&mut g, self.screens[i].asked, self.screens[i].scale);
+                self.screens[i].width = shown_w;
+                self.screens[i].height = shown_h;
                 match ronoctua_render::Text::new(
                     &g.device,
                     &g.queue,
                     g.config.format,
-                    tokens::font::SIZE_BASE,
+                    // THE SIZE STAYS LOGICAL AND THE SCALE IS SAID SEPARATELY
+                    // — see `crate::hidpi`.
+                    self.screens[i].scale,
+                    tokens::text::size(),
                 ) {
                     Ok(t) => {
                         match ronoctua_render::quad::Quads::new(&g.device, g.config.format) {
@@ -10942,6 +11244,10 @@ impl Footer {
         // closure below borrows and cannot reach back into `self`.
         let (records, book) = (self.notifications.history(), &self.book);
         let power = &self.power;
+        let display = &self.display;
+        // THE READING TOO, because this view's hint depends on whether the
+        // screen its level is about is still there — see `display::View::hint`.
+        let screens = &self.display_snapshot;
         let bluetooth = &self.bluetooth;
         let network = &self.network;
         // AND WHICH VIEW IS ON SCREEN, decided in the ONE place that decides
@@ -10983,6 +11289,9 @@ impl Footer {
                     )
                 }),
                 ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
+                ViewState::Display => display
+                    .as_ref()
+                    .map(|v| v.hint(screens, std::time::Instant::now(), texts)),
                 // THE RADIO AND THE NETWORK, whose tables are bare letters:
                 // without the line there is nothing on screen that says `c`
                 // connects or `f` forgets.
@@ -11289,7 +11598,7 @@ impl Footer {
             #[allow(clippy::cast_precision_loss)]
             let bottom = self.screens[index].height as f32;
             // PER SCREEN: a narrow monitor elides what the wide one shows.
-            let columns = tokens::metrics::columns(width as f32, tokens::font::SIZE_BASE);
+            let columns = tokens::metrics::columns(width as f32, tokens::text::size());
             let placed = layout::resolve(columns, &segments);
 
             // THE ORDER OF THE FOUR REGIONS, from top to bottom:
@@ -11571,7 +11880,7 @@ impl Footer {
                     tokens::icon::EXPAND
                 };
                 spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::OnTheCell(tokens::icon::chrome_size(chevron)),
+                    size: ronoctua_render::Size::OnTheCell(chrome_size_of(chevron)),
                     text: chevron.to_string(),
                     column: at,
                     line: mini_line,
@@ -11826,7 +12135,7 @@ impl Footer {
             // two columns is a rule, which is the only separation the project uses.
             let mut qr_quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
             let mut preview: Option<ronoctua_render::image::Area> = None;
-            let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+            let line_height = tokens::metrics::line_height(tokens::text::size());
 
             // THE FILE MANAGER'S PICTURE, fitted into the preview panel's box.
             //
@@ -11870,7 +12179,7 @@ impl Footer {
                 // more, so nothing is drawn until the player produces a frame,
                 // and the player is not started until the box is known.
                 if let Some((at, room)) = panes.preview_box(columns) {
-                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                    let cell = tokens::metrics::cell_width(tokens::text::size());
                     #[allow(clippy::cast_possible_truncation)]
                     let (top, tall) = crate::files::panel_band(
                         first_of_expansion,
@@ -11943,7 +12252,7 @@ impl Footer {
             // THE APPLICATIONS' PIXMAPS, one per visible line that already has
             // its own. The ones that do not have it drew the glyph in the loop
             // above, and that is what makes the list wait for nobody.
-            let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+            let cell = tokens::metrics::cell_width(tokens::text::size());
             let side = crate::apps::pixmap_side();
             let mut pixmaps: Vec<(String, ronoctua_render::image::Area)> = Vec::new();
             for (i, line) in visible.iter().enumerate() {
@@ -11988,8 +12297,7 @@ impl Footer {
                     let available = f32::from(alto) * line_height;
                     let side = m.side as f32;
                     let modulo = (available / (side + 2.0)).floor().max(1.0);
-                    let x0 =
-                        f32::from(start) * tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                    let x0 = f32::from(start) * tokens::metrics::cell_width(tokens::text::size());
                     let y0 = f32::from(first_of_expansion) * line_height + modulo;
                     // THE QUIET ZONE around it is part of the code: without it the
                     // camera does not find the edges. That is why the background is a
@@ -12020,7 +12328,7 @@ impl Footer {
                     // stretching. It is a TEXTURED QUAD on the SAME surface — there
                     // is no window and no popup (invariant 14), and there is no
                     // border, radius or shadow (invariant 15).
-                    let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                    let cell = tokens::metrics::cell_width(tokens::text::size());
                     preview = Some(
                         ronoctua_render::image::Area {
                             x: f32::from(start) * cell,
@@ -12224,7 +12532,7 @@ impl Footer {
                 ));
             }
             if let Some((base, grid_y)) = focused_row {
-                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                let cell = tokens::metrics::cell_width(tokens::text::size());
                 #[allow(clippy::cast_precision_loss)]
                 let (band_at, band_wide) = self.files.as_ref().map_or_else(
                     || (f32::from(base) * cell, f32::from(grid.width) * cell),
@@ -12248,7 +12556,7 @@ impl Footer {
                 });
             }
             if let Some((base, grid_y)) = resting_row {
-                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                let cell = tokens::metrics::cell_width(tokens::text::size());
                 #[allow(clippy::cast_precision_loss)]
                 let (band_at, band_wide) = self.files.as_ref().map_or_else(
                     || (f32::from(base) * cell, f32::from(grid.width) * cell),
@@ -12272,7 +12580,7 @@ impl Footer {
                 });
             }
             if let Some((base, grid_y)) = under_the_pointer {
-                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                let cell = tokens::metrics::cell_width(tokens::text::size());
                 // AND IT STOPS AT THE SIDEBAR'S EDGE.
                 //
                 // The manager's row is ONE grid column holding two lists, so a
@@ -12332,7 +12640,7 @@ impl Footer {
             // QR's modules. Both are quads — the same kind of thing as the
             // modeline's background, inside the SAME surface.
             if self.clipboard_open {
-                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                let cell = tokens::metrics::cell_width(tokens::text::size());
                 let x = f32::from(list_columns(columns).saturating_add(1)) * cell;
                 backgrounds.push(crate::chrome::divider(
                     x,
@@ -12347,7 +12655,7 @@ impl Footer {
             // Separation by whitespace and a rule, never by a container
             // (invariant 15) — there is no panel here, only a line.
             if let Some(v) = self.files.as_ref() {
-                let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+                let cell = tokens::metrics::cell_width(tokens::text::size());
                 let panes = v.panes(columns);
                 // AND IT PAYS THE FIELDS' LEAD, which it did not.
                 //
@@ -12560,6 +12868,15 @@ impl Footer {
             let Some(screen) = self.screens.get_mut(index) else {
                 continue;
             };
+            // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
+            // `set_buffer_scale` has to travel in the commit `Gpu::frame`
+            // makes. See `crate::hidpi::told_before_present`.
+            let surface = screen.layer.wl_surface().clone();
+            let scale = screen.scale;
+            // THIS SCREEN'S OWN PIXELS — `resized` already made them what the
+            // buffer can show, so there is one number and this is it.
+            let (logical_w, logical_h) = (screen.width, screen.height);
+            let told = &mut screen.scale_told;
             let (Some(gpu), Some(text)) = (screen.gpu.as_mut(), screen.text.as_mut()) else {
                 continue;
             };
@@ -12607,7 +12924,7 @@ impl Footer {
                         im.upload_it(&gpu.device, &gpu.queue, key, rgba);
                     }
                 }
-                im.prepare(&gpu.queue, gpu.config.width, gpu.config.height, &batch);
+                im.prepare(&gpu.queue, logical_w, logical_h, &batch);
             }
             // THE FILM'S CONTROLS, LAST AND ON TOP.
             //
@@ -12620,13 +12937,7 @@ impl Footer {
             let under = backgrounds.len() as u32;
             backgrounds.extend(transport_now);
             if let Some(q) = screen.quads.as_mut() {
-                q.prepare(
-                    &gpu.device,
-                    &gpu.queue,
-                    gpu.config.width,
-                    gpu.config.height,
-                    &backgrounds,
-                );
+                q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &backgrounds);
             }
 
             // Two phases, timed separately: `prepare` is text shaping plus atlas
@@ -12657,20 +12968,23 @@ impl Footer {
             // are the panel's three footer lines — which have to be legible even
             // with a light capture underneath.
             let images = screen.images.as_ref();
-            if let Err(e) = gpu.frame(|pass| {
-                if let Some(q) = quads {
-                    q.draw_range(pass, 0, under);
-                }
-                if let Some(im) = images {
-                    im.draw(pass);
-                }
-                // AND THE FEW THAT GO ON TOP OF IT: the film's transport, which
-                // is drawn ON the film by design.
-                if let Some(q) = quads {
-                    q.draw_range(pass, under, u32::MAX);
-                }
-                text.draw(ronoctua_render::Atlas::Pinned, pass)
-            }) {
+            if let Err(e) = gpu.frame(
+                || crate::hidpi::told_before_present(scale, told, &surface),
+                |pass| {
+                    if let Some(q) = quads {
+                        q.draw_range(pass, 0, under);
+                    }
+                    if let Some(im) = images {
+                        im.draw(pass);
+                    }
+                    // AND THE FEW THAT GO ON TOP OF IT: the film's transport, which
+                    // is drawn ON the film by design.
+                    if let Some(q) = quads {
+                        q.draw_range(pass, under, u32::MAX);
+                    }
+                    text.draw(ronoctua_render::Atlas::Pinned, pass)
+                },
+            ) {
                 tracing::error!(error = %e, screen = index, "drawing the frame failed");
                 continue;
             }
@@ -12742,7 +13056,7 @@ fn region_track_of(
 }
 
 fn expansion_ceiling(screen_height: Option<u32>, fixed: usize) -> usize {
-    let line_height = tokens::metrics::line_height(tokens::font::SIZE_BASE);
+    let line_height = tokens::metrics::line_height(tokens::text::size());
     let per_screen = screen_height.map_or(usize::MAX, |h| {
         let px = f64::from(h) * f64::from(tokens::space::EXPANSION_MAXFOOTERPCT) / 100.0;
         // MINUS WHAT IS FIXED: the percentage belongs to the whole footer, and
@@ -12917,11 +13231,26 @@ fn usable_actions(
 
 /// The measured size of a run's leading glyph — [`tokens::icon::chrome_size`]
 /// over the first character; the icon size when there is none.
-fn chrome_size(glyph: &str) -> f32 {
-    glyph
-        .chars()
-        .next()
-        .map_or(tokens::font::SIZE_ICON, tokens::icon::chrome_size)
+///
+/// SCALED, like every other size the host draws at. A glyph's measured size
+/// is measured AGAINST THE DIGIT beside it (`chrome-icons-match-the-text`
+/// re-measures it on every build), so a glyph that stayed put while the text
+/// moved would be the very mismatch that check exists to refuse.
+pub fn chrome_size(glyph: &str) -> f32 {
+    tokens::text::scaled(
+        glyph
+            .chars()
+            .next()
+            .map_or(tokens::font::SIZE_ICON, tokens::icon::chrome_size),
+    )
+}
+
+/// The same, for a caller that already holds the character.
+///
+/// The two chevrons do, and making them build a `String` per frame to have it
+/// taken apart again was a cost this introduced and nothing asked for.
+pub fn chrome_size_of(glyph: char) -> f32 {
+    tokens::text::scaled(tokens::icon::chrome_size(glyph))
 }
 
 /// One piece of chrome text becomes ONE OR TWO runs.
@@ -13169,6 +13498,133 @@ impl Footer {
         self.book = book;
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
+    }
+
+    /// The size of the text changed under us, in the file.
+    ///
+    /// THE FOOTER'S OWN HEIGHT MOVES WITH IT, which is the part that is easy
+    /// to miss: two lines of taller text is a taller footer, and the layer's
+    /// size and its exclusive zone are both computed from the size. Leaving
+    /// them would give a surface that draws text it has no room for, and a
+    /// desktop whose windows keep the old gap at the bottom.
+    fn display_file_changed(&mut self) {
+        // THE HEIGHT IS TAKEN BEFORE THE SIZE MOVES. `wanted_height` reads
+        // the size live, so asking it after the reload compares two values
+        // that are both the NEW one — a guard that always says "no configure
+        // is coming" and always draws. It was measured doing exactly that:
+        // one frame per change at the old height with the new columns, laid
+        // out for 79 columns into a 53-pixel surface.
+        let was = self.wanted_height();
+        // THE FILE CARRIES TWO THINGS, and this guard only ever asked about
+        // one. `display.json` holds the size of the text AND every screen's
+        // `Wanted` — the source of every number the screens view draws — and
+        // it is a file this repository says a person may edit by hand. A block
+        // changed there produced nothing at all: the size had not moved, so
+        // this returned, and the view went on showing the old scale until an
+        // order or a hotplug forced a reading.
+        //
+        // AND ONLY WITH THE VIEW OPEN. This file is the one every `Order::Keep`
+        // rewrites, so unconditionally the shell asked for a reading of its
+        // OWN writes — a walk of `/sys/class/drm` and two connections to niri,
+        // on top of the one the order itself takes, up to twice a second while
+        // an arrow is held (`Notice` absorbs the rest of the burst). With the
+        // view shut nothing would draw the answer: `open_display` takes a DEEP
+        // reading of its own, so a hand edit made while it was closed is on
+        // the screen the moment it opens. `Order::Bright`'s doc removed a
+        // third reading on this same repeating path for the same reason.
+        if self.display.is_some()
+            && let Some(h) = self.display_orders.as_ref()
+        {
+            h.send(ronoctua_display::Order::Look { deep: false });
+        }
+        if !crate::toolkits::reload() {
+            return;
+        }
+        let now = tokens::text::percent();
+        tracing::info!(percent = now, "the text size changed");
+        // THE FOREIGN APPLICATIONS TOO, and only from HERE. They hear dconf
+        // and not this file, and doing it from every door would spawn one
+        // `dconf` per open window for one change.
+        crate::toolkits::tell_them(now);
+
+        // THE SHAPERS HAVE TO HEAR IT. Each was built with a size and keeps
+        // it: moving the columns, the cell and every hit test while the
+        // letters stay is a grid at one size with text at another, which
+        // reads as a broken font rather than as a setting that took.
+        for screen in &mut self.screens {
+            if let Some(t) = screen.text.as_mut() {
+                t.draw_at(tokens::text::size());
+            }
+        }
+
+        // AND THE PIXMAPS GO — BUT THAT IS A MEMORY BOUND, NOT THE FIX.
+        //
+        // What makes a size change correct is that `apps::pixmap_key` carries
+        // the side, so the new size asks the caches a question they have not
+        // been asked. Emptying these two maps cannot do it and it is worth
+        // writing down why, because for one round it was what stood here: the
+        // picture that is DRAWN lives on the GPU, in `Images::uploads`, and
+        // that map has no per-key removal at all — its `clear()` empties the
+        // frame's batch and says "the textures stay", and its `dump()` only
+        // acts above a ceiling of 39 and then keeps whatever is on screen. So
+        // the host re-decoded at 36 px, `missing()` answered "already up"
+        // about the 18 px texture, and the finder drew it stretched into the
+        // new box for the life of the footer — the exact defect the clearing
+        // was written to remove.
+        //
+        // What the clearing IS for: without it these two maps would hold one
+        // entry per (icon, side) for every size the session passes through.
+        // The GPU side is bounded by `dump()`; this side would not be.
+        self.icons.clear();
+        self.icons_requested.clear();
+
+        // AND THE HEIGHT A NEW SCREEN IS BORN AT. `apply_geometry` reads
+        // `wanted_height()` live, so the surfaces that exist are already
+        // covered by the call below; what this field is read for is
+        // `create_screen`, and without it a monitor plugged in AFTER the
+        // change would come up two lines of yesterday's size tall.
+        // AND THE HEIGHT COMPARED IS THE ONE THAT IS SENT. `requested_height`
+        // is the two fixed lines; what `apply_geometry` commits is
+        // `wanted_height()`, which is those plus the band, the fold, the
+        // brain's line and the expansion. They happen to move together for
+        // every step of the range — both are `ceil(line_height x n)` — so
+        // comparing the wrong one gave the right answer by coincidence, and a
+        // coincidence is not a guard.
+        self.requested_height = tokens::metrics::footer_height(tokens::text::size()).ceil() as u32;
+        self.apply_geometry(self.interactivity());
+
+        // AND THE FRAME WAITS FOR THE CONFIGURE. Committing a new layer size
+        // and painting in the same breath paints into a texture the
+        // compositor has not resized yet: at 200% the footer wants twice the
+        // height and the surface is still the old one, so the minibuffer's
+        // line lands off it for one frame. When the height did NOT change
+        // there is no configure coming, and then this is the only chance to
+        // draw.
+        // AND THE TWO THREADS THAT DRAW INTO THE PANEL, ALWAYS — before the
+        // branch, because the branch is not taken on the ordinary path.
+        //
+        // `wanted_height()` is `ceil(line_height x n)`, so a change of text
+        // size MOVES it and the `if` below is false: the frame waits for the
+        // configure. And `Footer::configure` calls `draw()` and `paint()`, not
+        // `draw_and_paint()` — so `look_again`, `follow_the_motion` and
+        // `follow_the_turn` were skipped on exactly the path a size change
+        // takes. The window door calls all three by name and its comment says
+        // why: a change of size resizes the panel WITHOUT a `configure` (the
+        // pixels did not move, the cells did), which is a way in that
+        // enumerating the others always misses.
+        //
+        // What it looked like: the manager open in the footer with a shape or
+        // a film under the cursor, the size stepped from the display window,
+        // and the stage still rendering into the old box — a piece sitting
+        // small and centred in a panel that had grown, until any key or
+        // pointer event reached the footer. A running film healed on its next
+        // frame; a still shape did not.
+        self.look_again();
+        self.follow_the_motion();
+        self.follow_the_turn();
+        if self.wanted_height() == was {
+            self.draw_and_paint();
+        }
     }
 
     fn power_file_changed(&mut self) {
@@ -13739,7 +14195,7 @@ impl Footer {
             .is_some_and(|d| d.paired);
         if let Some(v) = self.bluetooth.as_mut() {
             let width = self.screens.iter().find(|t| t.configured).map_or(80, |t| {
-                tokens::metrics::columns(t.width as f32, tokens::font::SIZE_BASE)
+                tokens::metrics::columns(t.width as f32, tokens::text::size())
             });
             let rows = v.rows(&self.bluetooth_scene, width, &self.texts);
             v.settle(&rows);
@@ -13794,6 +14250,9 @@ impl Footer {
             .as_mut()
             .map(|v| v.key(press, &scene, &self.texts));
         self.bluetooth_scene = scene;
+        // THE SURFACE FIRST, THEN THE CURSOR — see `region_resized`, and
+        // `display_resized` for the measurement that found it.
+        self.region_resized();
         self.follow_cursor();
         if let Some(errand) = errand {
             self.bluetooth_errand(errand);
@@ -14033,6 +14492,396 @@ impl Footer {
         self.draw_and_paint();
     }
 
+    /// A monitor arrived or left, and Wayland is the one that said so.
+    ///
+    /// niri publishes NO event about outputs — so this is the only signal
+    /// there is, and it costs nothing: the footer is a Wayland client and
+    /// hears the global appear and go away anyway. The reading is SHALLOW:
+    /// asking every monitor over DDC/CI on a hotplug would be a fifth of a
+    /// second per port, over as many ports as the machine offers.
+    fn screens_changed(&mut self) {
+        if let Some(h) = self.display_orders.as_ref() {
+            h.send(ronoctua_display::Order::Look { deep: false });
+        }
+    }
+
+    /// Opens the screens' view.
+    fn open_display(&mut self) {
+        // A DOOR ONTO A ROOM ONE IS ALREADY IN just gives the keyboard back —
+        // `open_power`'s shape, and its reason: pressing the key twice should
+        // not throw away where one had walked to.
+        if self.display.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("display-open") {
+            return;
+        }
+        // AND THE READING IS ASKED FOR, not waited on. The view opens on
+        // whatever the last one said — which on a fresh footer is nothing —
+        // and the answer redraws it a moment later. Waiting here would hold
+        // the frame for a walk of `/sys` and two round trips to niri.
+        let mut view = crate::display::View::fresh();
+        match self.display_orders.as_ref() {
+            Some(h) => h.send(ronoctua_display::Order::Look { deep: true }),
+            // AND A VIEW WITH NO READER SAYS SO. Without this the empty
+            // screen blamed the compositor, which is a different fact with a
+            // different answer — see `display::View::list`.
+            None => view.without_a_reader(),
+        }
+        // AND THE FOOTER HAS ALREADY BEEN READ TO, all but the first time.
+        // Its reader starts at login and every hotplug refreshes it, so the
+        // snapshot on hand is current — and a `View::fresh()` says otherwise
+        // by default, which drew "Asking the compositor…" as row 1 over a
+        // complete list, with the cursor on a heading and nothing lit, for as
+        // long as the deep reading below takes. The window's door has no such
+        // snapshot and correctly waits for one.
+        if !self.display_snapshot.screens.is_empty() || self.display_snapshot.compositor {
+            view.saw_a_reading();
+        }
+        // AND A FOOTER THAT COULD NOT WATCH `display.json` does not step the
+        // size of the text either — see `display::View::blind`. The window's
+        // door says the same thing at its own construction.
+        if self._display_watch.is_none() {
+            view.without_a_watch();
+        }
+        self.display = Some(view);
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A key the screens' view answers to.
+    fn display_press(&mut self, press: crate::display::Press) {
+        let Some(v) = self.display.as_mut() else {
+            return;
+        };
+        let errand = v.key(
+            press,
+            &self.display_snapshot,
+            std::time::Instant::now(),
+            &self.texts,
+        );
+        self.display_resized();
+        self.follow_cursor();
+        self.display_errand(errand);
+    }
+
+    /// Gives the surface the height this view's rows now need.
+    ///
+    /// # Why this view needs it and most do not
+    ///
+    /// Because the height is asked for only when the geometry is applied, and
+    /// every door but the theme chooser applied it when the view OPENED and
+    /// then on nothing else. For a view whose levels are all about the same
+    /// length that is invisible. This view's are not: the list of screens is
+    /// six rows and one screen's sheet is eighteen, so the footer opened at
+    /// six lines and stayed there — entering a sheet drew its first six rows,
+    /// `RET` and the arrows went on acting on rows nobody could see, and the
+    /// scale, the turn and the place could not be reached at all while every
+    /// test passed. Measured: cursor 8 of 18 rows, a ceiling of 10, six lines
+    /// on the glass, and `follow_cursor` settling the page on offset 1.
+    ///
+    /// FOUR CALLERS, because the rows can change four ways: a key, a reading
+    /// arriving, a tick of the countdown, and an order coming back refused —
+    /// that last one takes a question down with nobody pressing anything. The
+    /// tick calls it on EVERY second, not only the one that runs out, because
+    /// the seconds on the screen are a row's text and the row is redrawn
+    /// either way; the geometry it asks for is the same on all but the last.
+    ///
+    /// The key's call also has to come BEFORE `follow_cursor`, which measures
+    /// against `expansion_ceiling` — the room the region MAY take — so the
+    /// page it scrolls has to be the one about to be drawn.
+    ///
+    /// AND THE THREE SIBLING VIEWS DO THE SAME, through `region_resized`: the
+    /// defect is not this view's, it was only found here first.
+    fn display_resized(&mut self) {
+        if self.view() == ViewState::Display {
+            self.apply_geometry(self.interactivity());
+        }
+    }
+
+    /// Gives the surface the height the view on it now needs.
+    ///
+    /// # Why every levelled view needs this and nobody had it
+    ///
+    /// Because the height is asked for only when the geometry is applied, and
+    /// every door but the theme chooser applied it when the view OPENED and
+    /// then on nothing else. For a view whose levels are all about the same
+    /// length that is invisible; for one whose levels are not, the region
+    /// keeps the first level's height for ever — the rows below are drawn off
+    /// the bottom, the keyboard goes on acting on them, and nothing says so.
+    ///
+    /// The screens view is where it was found (its list is six rows and one
+    /// screen's sheet eighteen), but the radio has the same shape: a device
+    /// list of two rows and a device sheet of thirty. This is the same call
+    /// with the same reason, for the views that reach it through their own
+    /// press path.
+    fn region_resized(&mut self) {
+        self.apply_geometry(self.interactivity());
+    }
+
+    /// What the view asked for.
+    fn display_errand(&mut self, errand: crate::display::Errand) {
+        match errand {
+            crate::display::Errand::Nothing => {}
+            // AN INFORMATIVE ROW COPIES ITSELF — `chrome::information_of`,
+            // and `chrome::copied` for the one sentence the doors share.
+            crate::display::Errand::Copy(what) => {
+                let said = crate::chrome::copied(&what, &self.texts);
+                self.echo_message(said);
+            }
+            // THE SCREEN WENT AWAY under a standing question. The door says
+            // so and puts the rest back where the file says them — see
+            // `display::Target::KeepIt`.
+            crate::display::Errand::Gone(at, applied) => {
+                let said = crate::display_words::went_away(&at, applied, &self.texts);
+                self.echo_message(said);
+                // AND ONLY WHEN SOMETHING WAS APPLIED — see `Errand::Gone`.
+                if applied && let Some(h) = self.display_orders.as_ref() {
+                    h.send(ronoctua_display::Order::Undo);
+                }
+            }
+            crate::display::Errand::Close => {
+                self.display = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+            // AND WITH NO THREAD IT SAYS SO, which the window's door already
+            // did and this one did not — the module whose whole point is that
+            // the two cannot say a refusal two ways had one of them say
+            // nothing at all. It is unreachable today, because `no_thread`
+            // refuses both rows of the only level one can reach; it is closed
+            // because that is an argument about the view and this is the door.
+            crate::display::Errand::Order(order) => match self.display_orders.as_ref() {
+                Some(h) => h.send(*order),
+                None => {
+                    let said = self.texts.t(ronoctua_i18n::key::DISPLAY_NO_THREAD);
+                    self.echo_message(said);
+                }
+            },
+            // IN THE ORDER THEY WERE MADE, because the last one is the change
+            // the person actually asked for — see `display::Target::First`.
+            crate::display::Errand::Orders(orders) => {
+                if self.display_orders.is_none() {
+                    let said = self.texts.t(ronoctua_i18n::key::DISPLAY_NO_THREAD);
+                    self.echo_message(said);
+                }
+                if let Some(h) = self.display_orders.as_ref() {
+                    for order in orders {
+                        h.send(order);
+                    }
+                }
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// A reading of the screens arrived, or an order finished.
+    fn display_event(&mut self, event: ronoctua_display::Event) {
+        match event {
+            ronoctua_display::Event::Snapshot(now) => {
+                self.display_snapshot = *now;
+                let columns = self.screen_columns();
+                // AND THE VIEW KNOWS IT HAS BEEN READ TO — see
+                // `display::View::looked`. The footer's reader starts at
+                // login, so this is all but always true before the view can
+                // be opened; the window's door is where it shows.
+                // ARRIVAL CLAMPS, a person's key follows — `settle_region`'s
+                // rule. A reading that moved the page back to the cursor
+                // would undo a scroll somebody made while it was in flight.
+                if let Some(v) = self.display.as_mut() {
+                    v.saw_a_reading();
+                    let rows = v.rows(
+                        &self.display_snapshot,
+                        columns,
+                        std::time::Instant::now(),
+                        &self.texts,
+                    );
+                    v.settle(&self.display_snapshot, &rows);
+                }
+                // A MONITOR ARRIVING IS A ROW ARRIVING, and the surface has to
+                // grow for it — the radio's own arrival does this. Without it
+                // the last row fell off the bottom until the next keypress.
+                self.display_resized();
+                self.settle_region();
+            }
+            ronoctua_display::Event::Done { order, refused } => {
+                // WHETHER A QUESTION CAME DOWN, which is whether the page has
+                // any reason to move. Set inside the `Try` arm and read after
+                // the message line, because the geometry for both is one call.
+                let mut followed = false;
+                if let Some(why) = refused {
+                    // A PREVIEW THAT DID NOT HAPPEN TAKES ITS QUESTION WITH
+                    // IT. The question is armed the moment `Order::Try` is
+                    // handed over, because the answer to an order is not
+                    // proof that it happened — that is the crate's own rule.
+                    // But a refusal IS proof that it did not, and without
+                    // this the message line said "the screens refused" while
+                    // a question sat above it for fifteen seconds saying the
+                    // scale had changed, ending in an `Undo` for nothing.
+                    if let ronoctua_display::Order::Try { at, ask } = &order
+                        && self.display.is_some()
+                    {
+                        let ask = *ask;
+                        let at = at.clone();
+                        let columns = self.screen_columns();
+                        let moment = std::time::Instant::now();
+                        followed = self.display.as_mut().is_some_and(|v| {
+                            let took = v.never_mind(&at, ask);
+                            // AND THE CURSOR SETTLES ON THE ROWS THAT COME
+                            // BACK. `never_mind` restores what the cursor was
+                            // ON, and only `key` settles that against a list —
+                            // which this path does not go through. Without it
+                            // the sheet came back with the question's index
+                            // still in the cursor: the screen lit the third
+                            // fact while the next arrow moved the scale.
+                            if took {
+                                let rows =
+                                    v.rows(&self.display_snapshot, columns, moment, &self.texts);
+                                v.settle(&self.display_snapshot, &rows);
+                            }
+                            took
+                        });
+                    }
+                    // AND A TEXT SIZE THAT NEVER LANDED IS LET GO OF. The
+                    // row shows what was asked for until the file says it
+                    // arrived; a refusal means it never will, and the row
+                    // would have gone on showing a percentage the shell is
+                    // not drawing at for the life of the view.
+                    if matches!(order, ronoctua_display::Order::Text(_))
+                        && let Some(v) = self.display.as_mut()
+                    {
+                        v.text_never_landed();
+                    }
+                    // AND A PLACE THAT NEVER LANDED, for the same reason: the
+                    // arrangement's row shows what was asked for until the
+                    // reading says it arrived, and a refusal means it never
+                    // will — the row would hold a place the file does not have
+                    // for the life of the view, and the next arrow would step
+                    // from it.
+                    if let ronoctua_display::Order::Keep { at, wanted } = &order
+                        && let Some(v) = self.display.as_mut()
+                    {
+                        v.place_never_landed(at, wanted);
+                    }
+                    let said = crate::display_words::refused(&why, &self.texts);
+                    self.echo_message(said);
+                    // ONE GEOMETRY FOR THE WHOLE ARM. The message line is a
+                    // row too, so this branch asks for a size whether a
+                    // question came down or not — and it used to ask twice,
+                    // once for the rows and once for the message.
+                    self.display_resized();
+                    // AND THE PAGE FOLLOWS — but only where a question
+                    // actually came down, which is the only way the rows
+                    // change here. A refusal for a `Try` whose question was
+                    // already answered matches nothing, and following there
+                    // pulled the page back to the cursor while somebody was
+                    // reading the bottom of a sheet: a daemon's arrival does
+                    // NOT follow the cursor, which `display_tick` guards the
+                    // same way. AFTER the resize, which is what it measures
+                    // against — see `display_resized`.
+                    if followed {
+                        self.follow_cursor();
+                    }
+                }
+            }
+        }
+        if self.view() == ViewState::Display || self.display.is_some() {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Puts a standing preview back before this process ends.
+    ///
+    /// THE WINDOW'S DOOR CARRIES THE WHOLE REASON (`DisplayWindow::leave`): a
+    /// preview is a transient over niri's IPC, and only this process's own
+    /// thread can take it down. The footer usually quits because the session
+    /// is going down and niri is going with it — but not always: `nix run
+    /// .#dev` restarts the footer under a compositor that keeps running, the
+    /// rescue quits, and a second footer taking this display sends
+    /// `Order::Quit`. There the change would stand with nothing left that
+    /// could undo it.
+    ///
+    /// AND IT WAITS FOR WHATEVER WAS SENT, not only for a question that is
+    /// still standing — the window's door carries that reason too, and it is
+    /// the one the first version of both of these got wrong.
+    fn put_a_preview_back(&mut self) {
+        let Some(h) = self.display_orders.take() else {
+            return;
+        };
+        let standing = self
+            .display
+            .as_ref()
+            .and_then(crate::display::View::asking)
+            .is_some_and(crate::display::Asking::on_the_clock);
+        if standing {
+            tracing::info!("quitting over a standing preview; putting it back first");
+        }
+        h.finish(standing.then_some(ronoctua_display::Order::Undo));
+    }
+
+    /// The clock on a provisional change, one second at a time.
+    ///
+    /// IT IS THE FOOTER'S OWN SECOND, the one it already beats for the
+    /// battery and the brain — a view does not get a timer of its own.
+    fn display_tick(&mut self) {
+        let Some(v) = self.display.as_mut() else {
+            return;
+        };
+        // ONLY A QUESTION WITH A CLOCK. A forget question stands until
+        // somebody answers it — nothing on it counts down — so ticking for it
+        // is a repaint a second, for ever, on a footer whose whole rule is
+        // that at rest it wakes up for nothing.
+        if !v.asking().is_some_and(crate::display::Asking::on_the_clock) {
+            return;
+        }
+        let errand = v.ran_out(std::time::Instant::now());
+        if !matches!(errand, crate::display::Errand::Nothing) {
+            // AND IT SAYS SO. The window's door logs the same line, and the
+            // VM reads it there — this door had nothing to read at all, so
+            // deleting the one call that drives this clock (the 1 s timer's
+            // `state.display_tick()`) took the whole safety net out of the
+            // PRIMARY door with every test still green.
+            tracing::info!("the countdown ran out; putting the change back");
+        }
+        // THE SECONDS ON THE SCREEN COUNT DOWN whether or not it ran out, so
+        // the frame is drawn either way: a question that says "15s" for
+        // fifteen seconds is a question nobody believes.
+        //
+        // AND THE SURFACE FOLLOWS. The question is five rows and the sheet
+        // under it is eighteen: without this the sheet came back into a
+        // region still sized for the question — which is the failure this
+        // whole countdown exists to rescue somebody from, reproduced by the
+        // rescue itself.
+        // AND THE CURSOR SETTLES ON THE ROWS THAT COME BACK. `ran_out` calls
+        // `answered`, which restores the remembered TARGET; only `key` settles
+        // an INDEX, and this path does not go through it. Without this the
+        // sheet came back with the question's row 3 still in the cursor — the
+        // frame lit a fact four rows above the knob the hand had turned, and
+        // `follow_cursor` scrolled the page to it. This is the one moment the
+        // whole countdown exists for.
+        let columns = self.screen_columns();
+        let moment = std::time::Instant::now();
+        if let Some(v) = self.display.as_mut() {
+            let rows = v.rows(&self.display_snapshot, columns, moment, &self.texts);
+            v.settle(&self.display_snapshot, &rows);
+        }
+        self.display_resized();
+        // THE PAGE FOLLOWS ONLY WHEN THE ROWS CHANGED, which for a tick means
+        // the countdown ran out and the sheet came back — `settle_region`'s
+        // rule that arrival clamps and a person's key follows. A tick that is
+        // only redrawing a second would otherwise pull the page back to the
+        // cursor while somebody was scrolling it.
+        if matches!(errand, crate::display::Errand::Order(_)) {
+            self.follow_cursor();
+        }
+        self.display_errand(errand);
+    }
+
     /// One press, for the power view.
     fn power_press(&mut self, press: crate::power::Press) {
         let Some(v) = self.power.as_mut() else {
@@ -14044,6 +14893,8 @@ impl Footer {
             self.power_wanted,
             &self.texts,
         );
+        // THE SURFACE FIRST, THEN THE CURSOR — see `region_resized`.
+        self.region_resized();
         // THE REGION FOLLOWS THE CURSOR, as every list here does. Without
         // this the cursor walked off the twelve lines and the page stayed
         // on the battery: twenty-six presses, the same screen.
@@ -14432,7 +15283,7 @@ mod tests {
         // five list windows each wrote `(pixels / line) as i64 * 3`, which
         // throws the fraction away and then multiplies what is left by three:
         // nothing, nothing, nothing, three lines.
-        let line = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let mut left = 0.0;
         let mut moved = 0;
         // A finger crossing four lines, a fifth of a line at a time.
@@ -14715,7 +15566,7 @@ mod tests {
         // INVARIANT 14 as a number: the footer has to go on being a footer. On a
         // short screen, the absolute ceiling of 12 lines on its own would go past
         // half of it — and the list would stop having content behind it.
-        let line_height = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
         for height in [600_u32, 720, 800, 900, 1080, 1440, 2160] {
             let lines = expansion_ceiling(Some(height), usize::from(FOOTER_LINES));
             // THE WHOLE FOOTER: the two fixed lines count for whoever is looking.

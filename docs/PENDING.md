@@ -19,6 +19,254 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.00001. O tamanho do texto: o que ele ainda não alcança · pequeno cada
+
+O texto do shell anda de 70% a 200%, **tudo** que o host desenha anda junto, e as dez portas
+ouvem o arquivo mudar — há check (`one-text-size`) e teste de propriedade. Três coisas ficam de fora, e cada uma por um motivo
+diferente.
+
+- **Ninguém verificou os apps que não são GTK 4.** O shell escreve
+  `/org/gnome/desktop/interface/text-scaling-factor` no dconf, que é a camada de onde o portal
+  responde. Que o GTK 4 siga **ao vivo** é conhecido (ele mapeia essa chave em `gtk-xft-dpi`). Que o
+  Chromium e o Electron sigam é o que se diz por aí e **não foi medido aqui** — sem um app desses
+  aberto numa sessão com portal, não dá para afirmar. **Como saber que acabou:** abrir um Chromium e
+  um Electron numa sessão de verdade, mudar o tamanho e olhar; e escrever na tela o que
+  segue ao vivo e o que espera reabrir, em vez de prometer.
+
+- **O Ghostty tem tamanho próprio.** `nix/modules/terminal.nix` fixa `font-size = 11`, e o Ghostty lê
+  o config dele — nem o atômico nem o `text-scaling-factor` o alcançam. Então o terminal fica no
+  tamanho de ontem enquanto o resto anda, que é o buraco visível de "a pessoa mexeu no texto".
+  **Como saber que acabou:** o `theme.rs` já reescreve `ghostty-theme.conf` quando o tema muda; o
+  tamanho entra pelo mesmo caminho, e o Ghostty relê em processo novo.
+
+- **O terminal não ouve o tema.** Achado ao dar a ele o vigia do tamanho: `terminal.rs` tem laço
+  próprio e **não instala `theme::watch`** — as outras NOVE portas instalam. Então escolher um tema
+  no rodapé recolore tudo menos o terminal, que fica no tema de quando foi aberto. Não é do tamanho
+  do texto; apareceu no caminho. **Como saber que acabou:** as seis linhas que toda porta tem, e o
+  `paint()` no lugar do `ask_paint()` que ele não tem.
+
+- **Dois valores em pixel não escalam.** `space.rule.thickness` é 1 px, e é defensável — uma régua é
+  uma linha, e uma linha é um pixel lógico em qualquer tamanho. Já `space.files.pictureAir` são 6 px
+  e a justificativa dele está escrita **em células** ("uma célula inteira — 10,8 px no rodapé — é
+  mais do que o vão precisa"): a 200% a célula tem 21,6 px e 6 deixa de ser a fração que o
+  argumento supunha. **Como saber que acabou:** ou o ar da figura vira fração de célula, ou o
+  comentário passa a dizer por que 6 px vale em toda a faixa.
+
+### 0.000013. As telas não se empilham na vertical · pequeno
+
+A disposição (`s d d` → `m`) move a tela sob o cursor com `←`/`→` e grava só o `x`
+(`display.rs`, `Target::Place`). O `beside_said` sabe DIZER que uma tela está acima ou abaixo de
+outra (`display-above` / `display-below`, as duas usadas), então a vista descreve uma relação que
+não sabe criar. A frase da tela diz que as setas movem de um lado para o outro, o que é honesto;
+o gesto do outro eixo é que falta.
+
+`↑`/`↓` são o cursor, então precisa de um terceiro — `S-<setas>` é a família "mesma tecla, outro
+sentido" que o sistema já usa no gerenciador e está livre nesse nível. **Como saber que acabou:**
+duas telas empilhadas na foto, e o `y=` no fragmento.
+
+### 0.000014. As LETRAS ficaram nítidas; os DESENHOS não · médio
+
+As dez portas seguem a escala da tela e o texto é rasterizado nela (`hidpi.rs`), mas toda TEXTURA
+continua nascendo em pixel lógico e é esticada pelo mesmo fator: o ícone do localizador
+(`apps::pixmap_side`, tamanho lógico), a prévia do clipboard, os painéis do gerenciador (`Fit` medido
+em lógico) e o `Command::Svg` dos buffers (`buffer.rs`, lado tirado de `paint::cell()`).
+
+O `hidpi.rs` declara essa fronteira ("só duas coisas são físicas"), então é um limite escrito e não
+uma contradição — mas o entregável se chama "o shell desenha nítido", e agora que a letra ao lado
+está nítida a diferença aparece MAIS do que antes, não menos.
+
+**O SVG é o que custa nada**: ele é rasterizado por nós, com o lado que a gente escolhe. Bastaria
+multiplicar o lado pela escala e desenhar na caixa lógica. **O ícone custa uma CHAVE**: o cache do
+localizador é indexado pelo nome nu do `Icon=` (`surface.rs`, `im.missing(key)`), e
+`request_visible_icons` filtra o que já está em `self.icons` — então uma vez decodificado a 18 px ele
+nunca é pedido de novo, nem numa troca de escala nem numa troca de tamanho do texto. É a mesma classe
+que o CLAUDE.md já registra para o tema ("leva o tema na CHAVE do cache"), com `scale` e `size`
+faltando; o `files::Stamp::key()` já carrega o passo de decodificação e está certo por isso.
+
+**Como saber que acabou:** uma foto do localizador numa saída em `scale 2` com o ícone e a letra ao
+lado, e o `render-png --scale 2` de um buffer com `Command::Svg`.
+
+### 0.000015. A escala fracionária é arredondada pelo compositor · pequeno, e é uma decisão
+
+As dez portas seguem a escala da tela (`hidpi.rs`, check `every-window-knows-its-scale`), e a
+escala que elas seguem é a INTEIRA: `wl_surface::set_buffer_scale` só aceita inteiro. Numa saída que
+o niri dirige em 1,5, o compositor diz 2 ao cliente e reduz o resultado — o que é nítido, e é uma
+reamostragem a mais.
+
+O protocolo tem a resposta (`wp_fractional_scale_v1` + `wp_viewporter`): o cliente pede a escala
+fracionária, desenha nela e diz por `wp_viewport` que tamanho lógico aquele buffer ocupa. São dois
+globals novos em dez portas, e a aritmética de `hidpi::physical` deixa de ser inteira.
+
+**Não foi feito porque não foi medido**: a diferença entre "2 e o compositor reduz" e "1,5 exato" é
+sub-pixel numa fonte monoespaçada, e o dono não tem monitor em escala fracionária para fotografar a
+diferença. **Como saber que acabou:** uma foto dos dois caminhos na mesma saída em 1,5, e o número
+de energia de borda que a nota do `hidpi.rs` já usa; se a diferença não aparecer, a decisão vira
+"fica inteiro" escrita no `hidpi.rs`, e este item sai.
+
+### 0.000016. Nove tamanhos de janela escritos como número · invariante 9
+
+Nove dos dez `configure` caem num padrão quando o compositor não dá tamanho:
+`cfg.new_size.0.map_or(900, NonZeroU32::get)` nas sete janelas de vista, `640`/`400` no hospedeiro de
+buffer e no terminal. São medidas em pixels escritas à mão, e o invariante 9 diz que valor visual
+nenhum é literal — cor, fonte, tamanho, espaçamento e codepoint saem de token.
+
+**Oito dos nove são anteriores ao `hidpi.rs`; o nono é deste entregável** — a janela das telas
+(`display_window.rs`) nasceu aqui e escreveu `900`/`600` como os outros, porque não há
+`space.window` para ela ler. A frase que estava aqui dizia que TODOS eram herdados, e não era
+verdade: uma nota que absolve o entregável de um número que ele acabou de escrever é pior que
+número nenhum, porque o próximo a ler não confere. Está aqui em vez de consertado porque
+a correção não é mecânica, é uma decisão de design sobre QUAL token. Um `space.window`
+com uma largura e uma altura para todas responde bem para as sete vistas e mal para o terminal, que
+quer um tamanho em CÉLULAS — 80×24 é a medida dele, não 640×400.
+
+- acabou quando: os nove números saem de `assets/tokens/`, e o terminal declara o dele na unidade em
+  que ele pensa
+
+### 0.000017. Os dois fragmentos do niri são incluídos por caminho literal · pequeno
+
+`nix/modules/niri.nix` escreve `include "/home/<usuário>/.config/ronoctua/niri-theme.kdl"` e o mesmo
+para `niri-display.kdl`, com o caminho montado no build. Quem escreve os dois arquivos é o shell, por
+`ronoctua_store::config_dir()` — que respeita `XDG_CONFIG_HOME`. Numa máquina onde essa variável
+aponta para outro lugar, o shell grava num caminho que o niri não abre, **em silêncio**: a vista
+mostra a escala escolhida, o arquivo existe, e o compositor nunca a lê.
+
+Não é deste entregável (o tema já era assim), mas é este que fez o arquivo carregar decisão de tela.
+A saída provavelmente é o niri aprender a incluir por variável, ou o módulo declarar o
+`XDG_CONFIG_HOME` que assume — as duas mexem em coisa que não é do shell.
+
+- acabou quando: o caminho que o niri inclui e o que o shell escreve saem da mesma fonte, ou há uma
+  frase na tela quando eles divergem
+
+### 0.000017b. A palavra de uma recusa sem nome sai em inglês nas quatro vistas · pequeno
+
+`echo-display-refused = As telas recusaram: { $why } ({ $words })` — o `$why` é traduzido, o
+`$words` não. Para as cinco recusas COM NOME isso foi consertado: a frase traduzida já diz o fato
+inteiro, e a palavra inglesa ao lado dela dizia a mesma coisa duas vezes, uma no idioma errado. Mas
+o `Refusal::Other` fica, e tem de ficar: é a recusa sem nome, e a palavra é a única coisa que diz o
+que deu errado. Ela é inglesa porque o invariante 18 exige que todo `bail!` e todo `.context` sejam.
+
+**A mesma forma existe na energia, na rede e no rádio** (`echo-power-refused`,
+`echo-network-refused`, `echo-bluetooth-refused`), então não é desta feature — mas é o invariante 8
+e está aqui em vez de escondido. Numa máquina pt-BR, um DDC/CI que responde errado lê
+"As telas recusaram: não funcionou (the monitor did not answer)".
+
+A saída provável: cada erro que pode chegar à linha de mensagem vira uma variante com nome e uma
+chave, e o `Other` deixa de ter `$words` — quatro vistas de encanamento, e uma delas não é esta.
+
+- acabou quando: nenhuma frase na linha de mensagem tem uma metade num idioma que a pessoa não
+  escolheu, nas quatro vistas
+
+### 0.000019b. O tamanho do texto dos apps vive num banco, e nada o remove · invariante 6
+
+`toolkits.rs` escreve `/org/gnome/desktop/interface/text-scaling-factor` no dconf com um `Command`.
+É estado persistente da máquina, fora do flake e fora do `ronoctua-store` — e a regra desta casa é
+que **o arquivo É o broadcast**, sem banco. Desligar `ronoctua.display.enable` não desfaz a chave.
+
+O cabeçalho do módulo defende a escolha e a defesa é honesta: os dois `settings.ini` que o
+`foreign.nix` escreve são caminhos do store, read-only, então o dconf é a única camada VIVA que
+GTK e Qt leem. Não há conserto óbvio que não seja reimplementar a camada. Fica como decisão.
+
+- acabou quando: o dono decide que é aceitável e isso vira uma linha no ARCHITECTURE, ou aparece
+  um caminho declarativo que os toolkits leiam a quente
+
+### 0.000019c. Duas portas escrevem pelo MESMO nome de rascunho · pequeno, e ficou carregando peso
+
+`ronoctua_xdg::write_atomically` escreve `<arquivo>.new` e renomeia. O nome é FIXO, e este
+entregável é o primeiro a dar dois escritores em dois PROCESSOS ao mesmo arquivo: as duas portas
+gravam `display.json` e `niri-display.kdl` pelo mesmo caminho. Dois `write` simultâneos abrem o
+mesmo `.new` com truncate, e o rename instala o que sair da mistura — ou o segundo recebe `ENOENT`
+e vira `Refusal::NoPlaceToWrite`. A mescla campo a campo reduziu a janela; não a fechou.
+
+Não é deste entregável (a função é anterior), mas é ele que a pôs sob duas mãos. A saída é um
+rascunho por PROCESSO (`.new.<pid>`), que é uma linha — está aqui e não consertado porque a função
+é usada por sete domínios e a mudança é do `ronoctua-xdg`, não das telas.
+
+- acabou quando: o rascunho é único por escritor, e há um teste com dois processos
+
+### 0.000019d. Fechar a porta espera 3 s pela fila inteira · pequeno
+
+`Handle::finish` manda a última ordem, larga o canal e espera `PATIENCE` (3 s) pela thread. O
+orçamento é da FILA, não de uma ordem: a thread começa com um `look(true)` PROFUNDO (que numa
+máquina com vários monitores externos anda em sonos de `BREATH`), o `Undo` custa outro `look` mais
+seis chamadas de IPC, e o `watch` toma mais uma leitura depois de cada ordem. Estourado o prazo, o
+processo sai e mata a thread onde ela estiver — possivelmente com metade dos botões de uma tela
+repostos, que é o estado que `say_what_the_file_says` diz por extenso que não pode existir.
+
+O teste que existe aponta o `sysfs` para um diretório vazio justamente para a leitura não custar
+nada, e o comentário dele admite que um estouro falharia nomeando a ordem em vez da causa.
+
+- acabou quando: ou o prazo é por ORDEM e não pela fila, ou a thread relata o que ficou por repor
+
+### 0.000018. A disposição anda 10 px por tecla, e cada tecla recarrega o niri · médio
+
+`NUDGE` são 10 px lógicos, e a razão está escrita: um passo que a pessoa consegue segurar. O custo
+não estava. Passar um monitor de 1920 para o outro lado do vizinho são 192 teclas, e cada uma emite
+um `Order::Keep`: uma leitura (`/sys/class/drm` mais duas conexões ao niri), uma reescrita do
+fragmento — que é um rename, logo **uma recarga inteira da configuração do compositor** —, seis
+chamadas de IPC dizendo o que o arquivo diz, e a leitura que o `watch` tira depois. Três leituras e
+uma recarga por repetição de tecla.
+
+**Duas saídas, e a escolha é do dono.** Ou as setas ENCOSTAM a tela nas bordas dos vizinhos (o
+`beside_said` já fala nessa linguagem — "à direita de eDP-1"), o que faz do gesto dois ou três
+toques em vez de 192; ou a escrita é adiada até a tecla parar, o que precisa de um relógio que a
+vista não tem. A primeira é uma decisão de desenho e por isso está aqui em vez de feita.
+
+- acabou quando: pôr um monitor ao lado do outro custa menos de dez teclas, e segurar a seta não
+  recarrega a configuração do compositor a cada repetição
+
+### 0.000019. Uma tela apagada esconde o que está gravado nela · pequeno
+
+Numa tela que o compositor não está desenhando, as quatro linhas de "A imagem" trocam o VALOR pela
+frase que diz que ela está apagada — então uma escala, um modo, um giro e um lugar que estão no
+arquivo ficam ilegíveis, e o `a` (que devolveria um deles) é recusado na ficha inteira. Sobra o `d`,
+que joga tudo fora.
+
+A linha de sessão já foi consertada (ela lia `dark` e agora lê `wanted.off`, que é o que o
+`kdl_of` realmente curto-circuita). As outras quatro precisam de uma decisão: mostrar o VALOR
+gravado com a frase de apagada ao lado custa uma coluna, e a ficha já tem a linha "Acionada"
+dizendo que a tela está apagada.
+
+- acabou quando: numa tela de tampa fechada dá para ler o que está gravado para ela sem abrir o
+  `display.json`
+
+### 0.00002. A luz noturna e o espelhamento de telas · médio o primeiro, nenhum o segundo
+
+A vista de telas mexe em modo, taxa, escala, rotação, posição, VRR e brilho. Duas coisas que as
+pessoas esperam de uma tela ficaram de fora, e por motivos diferentes.
+
+**Luz noturna** (temperatura de cor por horário). Dá para fazer: o niri implementa
+`wlr-gamma-control` e o `set_gamma` está lá. Só que **só no backend TTY** — no `winit`, que é onde
+o loop aninhado e todo teste deste repositório rodam, a chamada devolve "não suportado"
+(`src/handlers/mod.rs`: `Ok(0) => None, // Setting gamma is not supported`). Ou seja: dá para
+escrever, não dá para **provar**, e este repositório não chama de pronto o que não fotografou. O
+dono decidiu deixar de fora sabendo disso.
+
+**Como saber que acabou:** um cliente `wlr-gamma-control` nosso, a rampa calculada da temperatura em
+kelvin, hora de início e fim na ficha da tela — e a prova na máquina do dono, por olho, dita como
+prova por olho no relatório.
+
+**Espelhamento.** Não é adiamento, é ausência do compositor: o niri **não espelha telas**. Não há
+`mirror`, não há `clone`, e nenhuma `OutputAction` que diga isso. Uma linha na tela oferecendo
+espelhar seria um interruptor que não interrompe — que é justamente o que o check
+`switches-that-do-nothing-say-so` existe para recusar. **Como saber que acabou:** o dia em que o
+niri fixado tiver como espelhar, a linha entra na ficha de um monitor, ao lado da rotação.
+
+### 0.00003. A profundidade de bits da tela espera o niri fixado · minúsculo
+
+A vista de telas mexe em modo, taxa, escala, rotação, posição e VRR. **Não mexe na profundidade de
+bits**, e não é esquecimento: o `niri-next` tem `max_bpc` na saída e uma ação `MaxBpc`; o niri
+**fixado** (`v26.04`, `8ed0da4`) não tem nenhum dos dois e responde `error parsing request`.
+
+Quem descobriu isso foi o `niri-contract`, na primeira execução contra um compositor de verdade —
+que é exatamente para isso que ele existe. Uma linha na tela para um botão que o compositor que a
+gente entrega não sabe girar é linha morta, então ela não foi desenhada.
+
+`ronoctua_niri::Output` já lê a saída de um niri mais novo sem quebrar (há teste). **Como saber que
+acabou:** quando o `flake.lock` subir para um niri que tenha `MaxBpc`, voltam três coisas — o campo
+`max_bpc` em `Output`, o `Ask::MaxBpc` (o valor vai como **texto**, `"8"`, embora seja lido como
+número) e a sonda no `niri-contract`. Aí a linha entra na ficha de um monitor, ao lado do VRR.
+
+
 ### 0.00004. A rede não sabe nomes, e três coisas do plano ficaram medidas · pequeno cada
 
 A vista da rede está inteira: uma `View` com duas portas (`s n n` e `s n w`), dez seções com
@@ -145,7 +393,7 @@ teste, não decisão de teste — por isso não foi tomada.
 
 
 
-### 0.0. As nove vistas do rodapé não têm estado · pequeno, e é uma decisão
+### 0.0. As TREZE vistas do rodapé não têm estado · pequeno, e é uma decisão
 
 O estado é do BUFFER, e um buffer é uma janela do compositor (invariante 4): o `Esc` que volta ao
 base é resolvido no processo que tem o teclado, e é por isso que ele pode existir sem roubar o `Esc`

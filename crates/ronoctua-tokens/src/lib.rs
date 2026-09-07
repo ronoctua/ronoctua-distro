@@ -193,6 +193,157 @@ pub mod theme {
     }
 }
 
+/// How big the text is, as a percentage of `font::SIZE_BASE`.
+///
+/// ONE NUMBER, PROCESS-WIDE, BEHIND AN ATOMIC — the arrangement `theme` above
+/// uses, and for the same reason. The size the host draws at is asked for in
+/// every place that puts a pixel down, and threading a value through all of
+/// them would carry something only the draw call reads.
+///
+/// HOW MANY PLACES IS NOT WRITTEN HERE. Three comments once said eighty-four,
+/// eighty-three and eighty-two, and the true number was eighty-one — a count
+/// in prose is a number nobody updates. The `one-text-size` check counts them
+/// on every build and prints the total, which is the only place it can be
+/// right.
+///
+/// Everything else is already measured against the base: a cell is
+/// `size x font::CELL_WIDTH_EM`, a line is `size x font::LINE_HEIGHT`, and
+/// `metrics::columns` divides one by the other. So scaling the base scales
+/// the whole arrangement, and not one sum in the layout has to change — which
+/// is what `font.size.base`'s own note in `assets/tokens/typography.nix`
+/// promised long before anything could move it.
+pub mod text {
+    use core::sync::atomic::{AtomicU16, Ordering};
+
+    /// The size the base was measured at. A machine that has never been told
+    /// otherwise draws here.
+    pub const NORMAL: u16 = 100;
+
+    static CHOSEN: AtomicU16 = AtomicU16::new(NORMAL);
+
+    /// The percentage nearest `wanted` that the person can actually arrive at.
+    ///
+    /// Snapped to `font::SCALE_STEP` and held inside the declared range,
+    /// because a value from a hand-edited file has to land somewhere the
+    /// arrows can leave: 103% would otherwise be a number no keypress could
+    /// reach or return to.
+    #[must_use]
+    pub fn allowed(wanted: u16) -> u16 {
+        let step = super::font::SCALE_STEP.max(1);
+        let held = wanted.clamp(super::font::SCALE_FLOOR, super::font::SCALE_CEILING);
+        let snapped = ((u32::from(held) + u32::from(step) / 2) / u32::from(step)) * u32::from(step);
+        // THE SECOND CLAMP CANNOT FIRE WITH TODAY'S TOKENS, and it is here for
+        // the day they move: rounding to a step can carry a value one step
+        // past the ceiling when the ceiling is not itself a multiple of the
+        // step. The generator refuses that arrangement, so this is the wall
+        // behind the gate rather than a live branch.
+        u16::try_from(snapped)
+            .unwrap_or(super::font::SCALE_CEILING)
+            .clamp(super::font::SCALE_FLOOR, super::font::SCALE_CEILING)
+    }
+
+    /// What the host is drawing at right now.
+    #[must_use]
+    pub fn percent() -> u16 {
+        CHOSEN.load(Ordering::Relaxed)
+    }
+
+    /// Makes `wanted` the size the host draws at, process-wide.
+    ///
+    /// It is put through [`allowed`] first. `true` if it changed.
+    ///
+    /// `Relaxed` IS ENOUGH AS AN ORDERING MATTER — one self-contained word,
+    /// with nothing published alongside it, exactly as `theme::set` argues.
+    ///
+    /// WHAT KEEPS A FRAME WHOLE IS NOT THE ATOMIC. A frame reads this many
+    /// times, in its layout and again in its painting, so a `set` landing
+    /// between two of those reads would lay out on one grid and paint on
+    /// another. Nothing here prevents that; what does is WHERE the call is
+    /// made — the event loop handles a key, sets the size, and only then
+    /// draws, so the two never interleave. A caller that set this from
+    /// another thread would break a frame, and that is the rule rather than
+    /// an implementation detail.
+    pub fn set(wanted: u16) -> bool {
+        let held = allowed(wanted);
+        CHOSEN.swap(held, Ordering::Relaxed) != held
+    }
+
+    /// ANY size of the design, moved by the chosen percentage.
+    ///
+    /// EVERY size the host draws at goes through here, and not only the base.
+    /// `font.size.small` is 15 against a base of 18 — five sixths — so
+    /// leaving it fixed means that below 84% the "small" size is TALLER than
+    /// the ordinary one: a small run then occupies two cells instead of one,
+    /// and a layout that reserves cells by scale loses a line without saying
+    /// so.
+    ///
+    /// MEASURED, not reasoned: `ronoctua-buffer-memory` drawn on a 60x12
+    /// grid gave thirteen runs at 100% and ELEVEN at 80%, and the step is
+    /// between 80 and 85 — which is 15/18. Two runs vanished off a picture
+    /// whose grid had not changed. The buffer is named so the measurement can
+    /// be taken again: `ronoctua-render-png <it> --columns 60 --lines 12
+    /// --text 80`.
+    #[must_use]
+    pub fn scaled(size: f32) -> f32 {
+        size * f32::from(percent()) / 100.0
+    }
+
+    /// The size to draw at, in logical pixels.
+    ///
+    /// THIS IS WHAT THE HOST ASKS FOR, never `font::SIZE_BASE` — that
+    /// constant is the anchor the percentage is measured against, and reading
+    /// it directly is drawing at a size the person cannot move. The
+    /// `one-text-size` check is what keeps that true.
+    ///
+    /// # Why there is ONE of these, and not one per door
+    ///
+    /// There were two. The footer drew at `font.size.base` and every window
+    /// of the shell at `font.size.large`, with an enum existing so that a
+    /// test could say the doors differed in that one thing and nothing could
+    /// quietly add a second difference. The difference was deliberate — "the
+    /// footer is peripheral reference, the buffer is what one reads".
+    ///
+    /// The owner photographed the file manager's two doors side by side and
+    /// asked for the footer's size everywhere, buffers included: it is the
+    /// one he reads all day, and a system whose two halves are 10% apart
+    /// looks assembled out of parts of different origins. The enum had
+    /// nothing left to name and went; what replaced it was a constant in the
+    /// shell's `chrome`, and what replaced THAT is this — because a size the
+    /// person can move is a property of the process and not of the build.
+    #[must_use]
+    pub fn size() -> f32 {
+        scaled(super::font::SIZE_BASE)
+    }
+
+    /// One step from `from`, in the direction asked for.
+    ///
+    /// ONE ARITHMETIC FOR TWO GESTURES, so that holding a key and holding an
+    /// arrow arrive at the same numbers — including at 100 exactly, which the
+    /// step is chosen to divide.
+    ///
+    /// # Why it takes a starting point instead of reading the size
+    ///
+    /// Because the size is a process-wide atomic that only moves after a
+    /// round trip — the gesture writes `display.json`, inotify wakes the
+    /// footer, the footer sets it — and a caller pressing the key twice
+    /// inside that trip would step from the same number both times. The
+    /// display view holds what it last asked for and steps from THAT; the
+    /// keyboard's own size keys, when they exist, will pass [`percent`].
+    ///
+    /// The view had its own copy of this for exactly one commit, which is the
+    /// second arithmetic this doc was already warning about.
+    #[must_use]
+    pub fn stepped(from: u16, by: i32) -> u16 {
+        let step = i32::from(super::font::SCALE_STEP.max(1));
+        // SATURATING, both times. `by * step` with `i32::MIN` panics in debug
+        // and wraps in release — and wrapping is the worse of the two,
+        // because it turns "as small as possible" into "as large as
+        // possible" before anything has a chance to clamp it.
+        let moved = i32::from(from).saturating_add(by.saturating_mul(step));
+        allowed(u16::try_from(moved.max(0)).unwrap_or(super::font::SCALE_CEILING))
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/tokens.rs"));
 
 // The table has to hold every theme, and every theme the same number of roles;
@@ -367,4 +518,81 @@ mod tests {
         assert!(font::FAMILY_MONO.contains("Nerd Font Mono"));
         assert_eq!(font::FAMILY_MONO, font::FAMILY_UI);
     }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::text;
+
+    // ONE TEST TOUCHES `text::set`, and it is this one — the same rule
+    // `theme::set` carries. The size is process-wide and the tests run in
+    // parallel, so a second one calling it would change the size under this.
+    #[test]
+    fn the_size_moves_in_steps_a_key_can_reach_and_returns_to_a_hundred() {
+        assert_eq!(text::percent(), text::NORMAL);
+        assert!((text::size() - font::SIZE_BASE).abs() < f32::EPSILON);
+
+        // A value from a hand-edited file lands where the arrows can leave.
+        assert_eq!(text::allowed(103), 105);
+        assert_eq!(text::allowed(102), 100);
+        assert_eq!(text::allowed(0), font::SCALE_FLOOR);
+        assert_eq!(text::allowed(u16::MAX), font::SCALE_CEILING);
+        assert_eq!(text::allowed(font::SCALE_FLOOR), font::SCALE_FLOOR);
+        assert_eq!(text::allowed(font::SCALE_CEILING), font::SCALE_CEILING);
+
+        // Both ends are reachable by pressing one key, and so is the middle.
+        let mut seen = alloc_free_walk(1);
+        assert!(seen.contains(&font::SCALE_CEILING), "cannot reach the top");
+        assert!(
+            seen.contains(&text::NORMAL),
+            "cannot reach a hundred going up"
+        );
+        seen = alloc_free_walk(-1);
+        assert!(seen.contains(&font::SCALE_FLOOR), "cannot reach the bottom");
+        assert!(
+            seen.contains(&text::NORMAL),
+            "cannot reach a hundred coming down"
+        );
+
+        // And the size really does follow.
+        text::set(200);
+        assert_eq!(text::percent(), 200);
+        assert!((text::size() - font::SIZE_BASE * 2.0).abs() < 0.001);
+        // A cell and a line follow with it, which is what makes the layout
+        // need no other change.
+        assert!(
+            (super::metrics::cell_width(text::size())
+                - super::metrics::cell_width(font::SIZE_BASE) * 2.0)
+                .abs()
+                < 0.001
+        );
+        text::set(text::NORMAL);
+        assert_eq!(text::percent(), text::NORMAL);
+    }
+
+    /// Walks the range one step at a time from where it is now, collecting
+    /// every value it lands on. It restores the size before returning.
+    fn alloc_free_walk(direction: i32) -> Vec<u16> {
+        let began = text::percent();
+        let mut seen = Vec::new();
+        let mut at = if direction > 0 {
+            font::SCALE_FLOOR
+        } else {
+            font::SCALE_CEILING
+        };
+        text::set(at);
+        for _ in 0..500 {
+            seen.push(at);
+            let next = text::stepped(text::percent(), direction);
+            if next == at {
+                break;
+            }
+            text::set(next);
+            at = next;
+        }
+        text::set(began);
+        seen
+    }
+
+    use super::font;
 }

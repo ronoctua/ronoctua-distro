@@ -398,6 +398,7 @@ fn main() -> Result<()> {
     // IN PORTUGUESE. Without this the buffer is bilingual only in its labels.
     let v = query(&mut inst, "casa")?;
     if v.filtered == 0 {
+        // pt-BR: a search tag, and the sentence says so.
         bail!("`casa` finds nothing — the Portuguese tags did not arrive");
     }
     // THE PHRASE. Two words require the icon to have BOTH: matching by a
@@ -418,6 +419,7 @@ fn main() -> Result<()> {
     // --- the filter, and relevance WITHIN it -------------------------------
     let v = query(&mut inst, "categoria:arrows")?;
     if v.filtered == 0 || v.filtered >= TOTAL {
+        // pt-BR: a search tag, which is what the lexicon has to answer.
         bail!("`categoria:arrows` gave back {} of {TOTAL}", v.filtered);
     }
     let category_only = v.filtered;
@@ -425,6 +427,7 @@ fn main() -> Result<()> {
     // word: with the rest, typing with a filter active was impossible.
     let v = query(&mut inst, "categoria:arrows up")?;
     if v.filtered == 0 {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("`categoria:arrows up` gave back zero — the filter ate the free term");
     }
     if v.filtered >= category_only {

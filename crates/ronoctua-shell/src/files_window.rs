@@ -198,6 +198,23 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
 
+    // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
+    // means. A size chosen anywhere moves this window without it being
+    // reopened — and without it this door would sit beside the footer at a
+    // different size, which is the photograph that made this system have one
+    // size at all.
+    let (size_sender, size_changed) = channel::channel::<()>();
+    let _size_watch = crate::toolkits::watch(move || size_sender.send(()).is_ok());
+    handle
+        .insert_source(size_changed, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(()) = event
+                && crate::toolkits::reload()
+            {
+                state.text_size_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the text size channel: {e}"))?;
+
     // THE FRAMES OF A MOVING FILE, on a channel of their own.
     //
     // Their own, and not the reports': a frame arrives ten times a second
@@ -261,6 +278,12 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         window,
         width: 0,
         height: 0,
+        asked: (0, 0),
+        // ONE TO ONE UNTIL A SCREEN SAYS OTHERWISE: the surface exists before
+        // the compositor has said which output it is on, and
+        // `scale_factor_changed` is what says so.
+        scale: 1,
+        scale_told: 1,
         columns: 80,
         lines: 24,
         quit: false,
@@ -339,8 +362,31 @@ struct FilesWindow {
     pointer: Option<wl_pointer::WlPointer>,
     mods: Modifiers,
     window: Window,
+    /// The window's size in LOGICAL pixels — what the compositor configured
+    /// it to, what the columns are counted from, what the pointer arrives in.
     width: u32,
+    /// See the field above.
     height: u32,
+    /// The logical size the COMPOSITOR configured, before any clamp.
+    ///
+    /// `width`/`height` are what the BUFFER can show — which is what the
+    /// columns, the bars and the hit tests are laid out against; this is what
+    /// the GPU is asked for. They are the same pair on every machine anybody
+    /// has, and they come apart exactly at the GPU's texture ceiling. Keeping
+    /// only one of them is a ratchet: a window clamped once at scale 3 would
+    /// ask for the size it was cut down to and could never grow back. See
+    /// [`crate::hidpi`].
+    asked: (u32, u32),
+    /// How many physical pixels one logical pixel is on the screen this
+    /// window is on — see [`crate::hidpi`], where the rule and its
+    /// measurement live.
+    scale: i32,
+    /// What the SURFACE has been told, which lags `scale` by one frame.
+    ///
+    /// `set_buffer_scale` has to travel in the commit that carries a buffer of
+    /// the matching size, and the only such commit is the present inside
+    /// `Gpu::frame` — see [`crate::hidpi::told_before_present`].
+    scale_told: i32,
     columns: u16,
     lines: u16,
     quit: bool,
@@ -1023,6 +1069,29 @@ impl FilesWindow {
         )
     }
 
+    /// The size of the text changed under this door.
+    ///
+    /// THE SHAPER HAS TO HEAR IT TOO. It was built with a size and keeps it;
+    /// moving everything around it — the columns, the cell, every hit test —
+    /// and leaving the letters gives a grid at one size with text at another,
+    /// which reads as a broken font rather than as a setting that took.
+    fn text_size_changed(&mut self) {
+        if let Some(t) = self.text.as_mut() {
+            t.draw_at(ronoctua_tokens::text::size());
+        }
+        self.recount();
+        // AND THE TWO THREADS THAT DRAW INTO THE PANEL. `follow_the_motion`'s
+        // own comment says it: the pose changes from a key, from the wheel,
+        // from a drag and from the panel being resized, "and enumerating
+        // those is how one gets missed". A change of size resizes the panel
+        // without a `configure` — the window's pixels did not move, its cells
+        // did — so this is a fifth way in, and leaving it out would have the
+        // film keep the frame size of the old box.
+        self.follow_the_motion();
+        self.follow_the_turn();
+        self.ask_paint();
+    }
+
     fn recount(&mut self) {
         // THROUGH THE FRAME, and not through a fourth spelling of the cell.
         // This function used to say `SIZE_LARGE * CELL_WIDTH_EM` — one of the
@@ -1147,27 +1216,42 @@ impl FilesWindow {
         };
         // SAFETY: `conn` and `window` are fields of `self`, like the `Gpu` — the
         // handles do not outlive what produced them.
+        // ONE CALL, not the same one twice: two calls to a pure
+        // function are two places the arguments can be edited apart.
+        let first = crate::hidpi::physical(self.asked, self.scale);
         #[allow(unsafe_code)]
         let gpu = unsafe {
             ronoctua_render::gpu::Gpu::new(
                 RawDisplayHandle::Wayland(WaylandDisplayHandle::new(disp)),
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surf)),
-                self.width,
-                self.height,
+                first.0,
+                first.1,
             )
         };
-        let Ok(g) = gpu else {
+        let Ok(mut g) = gpu else {
             tracing::error!("no usable GPU; the window will not draw");
             return;
         };
-        // THE SYSTEM'S ONE SIZE — see `chrome::SIZE`. It used to be
+        // AND THE FIRST BUFFER IS DIVISIBLE TOO. `Gpu::new` clamps at the
+        // GPU's ceiling like `resize` does, and the first frame sends the
+        // scale — see `crate::hidpi::resized`.
+        let (shown_w, shown_h) = crate::hidpi::resized(&mut g, self.asked, self.scale);
+        self.width = shown_w;
+        self.height = shown_h;
+        // AND THE COLUMNS ARE COUNTED AGAIN. `configure` counts them before the
+        // GPU exists, against the size the compositor gave; if the buffer came
+        // back smaller than that, the count that is on file is for a picture
+        // wider than the one this door draws into.
+        self.recount();
+        // THE SYSTEM'S ONE SIZE — see `ronoctua_tokens::text::size`. It used to be
         // `SIZE_LARGE`, on the argument that the footer is peripheral
         // reference and this is what one reads.
         match ronoctua_render::Text::new(
             &g.device,
             &g.queue,
             g.config.format,
-            tokens::font::SIZE_BASE,
+            self.scale,
+            tokens::text::size(),
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
@@ -1298,9 +1382,19 @@ impl FilesWindow {
         } = painted;
         #[allow(clippy::cast_possible_truncation)]
         let under = (quads.len() - over) as u32;
+        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
+        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes,
+        // and nothing else in this function may borrow `self` by then. See
+        // `crate::hidpi::told_before_present`.
+        let surface = self.window.wl_surface().clone();
+        let scale = self.scale;
+        let told = &mut self.scale_told;
         let (Some(gpu), Some(text)) = (self.gpu.as_mut(), self.text.as_mut()) else {
             return;
         };
+        // THE WINDOW'S OWN PIXELS — `resized` already made them what the
+        // buffer can show, so there is one number and this is it.
+        let (logical_w, logical_h) = (self.width, self.height);
         if let Some(im) = self.images.as_mut() {
             im.clear();
             let batch = match picture {
@@ -1323,7 +1417,7 @@ impl FilesWindow {
                 }
                 None => Vec::new(),
             };
-            im.prepare(&gpu.queue, gpu.config.width, gpu.config.height, &batch);
+            im.prepare(&gpu.queue, logical_w, logical_h, &batch);
         }
         if let Err(e) = text.prepare(
             &gpu.device,
@@ -1337,13 +1431,7 @@ impl FilesWindow {
             return;
         }
         if let Some(q) = self.quads.as_mut() {
-            q.prepare(
-                &gpu.device,
-                &gpu.queue,
-                gpu.config.width,
-                gpu.config.height,
-                &quads,
-            );
+            q.prepare(&gpu.device, &gpu.queue, logical_w, logical_h, &quads);
         }
         let quads_ref = self.quads.as_ref();
         // QUADS, THEN IMAGES, THEN THE FEW QUADS THAT GO ON TOP, THEN TEXT.
@@ -1353,18 +1441,21 @@ impl FilesWindow {
         // legible over a light photograph — and under the film's transport,
         // which is drawn ON the film by design.
         let images_ref = self.images.as_ref();
-        if let Err(e) = gpu.frame(|pass| {
-            if let Some(q) = quads_ref {
-                q.draw_range(pass, 0, under);
-            }
-            if let Some(im) = images_ref {
-                im.draw(pass);
-            }
-            if let Some(q) = quads_ref {
-                q.draw_range(pass, under, u32::MAX);
-            }
-            text.draw(ronoctua_render::Atlas::Pinned, pass)
-        }) {
+        if let Err(e) = gpu.frame(
+            || crate::hidpi::told_before_present(scale, told, &surface),
+            |pass| {
+                if let Some(q) = quads_ref {
+                    q.draw_range(pass, 0, under);
+                }
+                if let Some(im) = images_ref {
+                    im.draw(pass);
+                }
+                if let Some(q) = quads_ref {
+                    q.draw_range(pass, under, u32::MAX);
+                }
+                text.draw(ronoctua_render::Atlas::Pinned, pass)
+            },
+        ) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
         }
@@ -1552,7 +1643,7 @@ pub(crate) struct Scene<'a> {
 
 /// One frame, as spans and rectangles. No Wayland, no wgpu, no `self`.
 pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
-    let size = tokens::font::SIZE_BASE;
+    let size = tokens::text::size();
     let margin = CONTENT_MARGIN;
     let mut spans: Vec<ronoctua_render::Span> = Vec::new();
     let mut quads: Vec<ronoctua_render::quad::Quad> = Vec::new();
@@ -1743,7 +1834,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             tokens::icon::EXPAND
         };
         spans.push(ronoctua_render::Span {
-            size: ronoctua_render::Size::OnTheCell(tokens::icon::chrome_size(chevron)),
+            size: ronoctua_render::Size::OnTheCell(crate::surface::chrome_size_of(chevron)),
             text: chevron.to_string(),
             column: at,
             line: 0,
@@ -2327,10 +2418,27 @@ impl WindowHandler for FilesWindow {
         cfg: WindowConfigure,
         _: u32,
     ) {
-        self.width = cfg.new_size.0.map_or(900, std::num::NonZeroU32::get);
-        self.height = cfg.new_size.1.map_or(600, std::num::NonZeroU32::get);
+        // WHAT THE COMPOSITOR SAID IS KEPT SEPARATELY, because what the
+        // buffer can show is what comes back below — see `asked`. It is
+        // taken from the CONFIGURE and from nothing else: built out of
+        // the door's own fields it would be the size `resized` last
+        // answered, which can only ever shrink.
+        self.asked = (
+            cfg.new_size.0.map_or(900, std::num::NonZeroU32::get),
+            cfg.new_size.1.map_or(600, std::num::NonZeroU32::get),
+        );
+        self.width = self.asked.0;
+        self.height = self.asked.1;
+        let asked = self.asked;
+        let scale = self.scale;
         if let Some(g) = self.gpu.as_mut() {
-            g.resize(self.width, self.height);
+            // AND THE WINDOW KEEPS WHAT THE BUFFER CAN SHOW. Below the GPU's
+            // ceiling that is exactly what the compositor configured; above
+            // it, laying out against the bigger number would put the columns
+            // and the bars in a space the buffer does not have.
+            let (shown_w, shown_h) = crate::hidpi::resized(g, asked, scale);
+            self.width = shown_w;
+            self.height = shown_h;
         }
         self.recount();
         self.ask_paint();
@@ -2611,7 +2719,7 @@ impl PointerHandler for FilesWindow {
                     if vertical.stop || horizontal.stop {
                         self.detents = 0.0;
                     }
-                    let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+                    let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
                     self.detents += crate::surface::axis_detents(&vertical, line_px)
                         + crate::surface::axis_detents(&horizontal, line_px);
                     // WHERE THE WHEEL WAS: line 0 belongs to no section, so
@@ -2639,7 +2747,7 @@ impl PointerHandler for FilesWindow {
             // region's top, every `y` inside them came out past the end and the
             // fraction saturated at one — the thumb jumped to the bottom and
             // stayed there, which reads exactly like a bar that does not work.
-            let line_px = f64::from(tokens::metrics::line_height(tokens::font::SIZE_BASE));
+            let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
             let chrome = self.view.chrome_rows(self.columns, &self.texts);
             let found = self
                 .view
@@ -2855,13 +2963,38 @@ impl FilesWindow {
 }
 
 impl CompositorHandler for FilesWindow {
+    /// The window moved to a screen of another scale — or was told its first.
+    ///
+    /// It was EMPTY here and in eight other doors, which is what made every
+    /// one of them blurry on a HiDPI screen. The rule and the measurement are
+    /// in [`crate::hidpi`].
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        // THE SURFACE IS NEEDED to ask its VERSION, not to tell it anything:
+        // it is told its scale inside the frame, which is the only commit that
+        // carries a matching buffer — see `crate::hidpi::told_before_present`.
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if let Some((w, h)) = crate::hidpi::followed(
+            &mut self.scale,
+            factor,
+            surface,
+            self.gpu.as_mut(),
+            self.text.as_mut(),
+            self.asked,
+        ) {
+            // AND THE DOOR KEEPS WHAT THE BUFFER CAN SHOW. Below the
+            // GPU's ceiling this is what the compositor configured;
+            // above it, going on with the old number lays the picture
+            // out in a space the buffer does not have.
+            self.width = w;
+            self.height = h;
+            self.recount();
+            self.ask_paint();
+        }
     }
     fn transform_changed(
         &mut self,

@@ -46,7 +46,8 @@
 //! doors drew text at different sizes on purpose, and the test kept it inside
 //! one cell so it could not grow back into a factor of two.
 //!
-//! The owner has since asked for ONE size across the system — see [`SIZE`] —
+//! The owner has since asked for ONE size across the system — see
+//! `ronoctua_tokens::text::size` —
 //! so the residue is zero and
 //! [`tests::both_doors_put_content_in_the_same_place`] says so exactly, with
 //! no tolerance at all.
@@ -73,24 +74,6 @@ pub const INSET: u16 = tokens::space::CONTENT_INSET;
 /// did it at all, which is exactly the defect. One constant, three readers.
 pub const FIELDS_LEAD: u16 = INSET.saturating_sub(tokens::space::FILES_GUTTER);
 
-/// The size everything this shell draws is drawn at.
-///
-/// # Why there is one of these
-///
-/// There were two. The footer drew at `font.size.base` and every window of
-/// ours at `font.size.large`, and a `Door` enum existed so that a test could
-/// say the doors differed in that one thing and nothing could quietly add a
-/// second difference. The difference itself was deliberate — "the footer is
-/// peripheral reference, the buffer is what one reads".
-///
-/// The owner photographed the file manager's two doors side by side and asked
-/// for the footer's size everywhere, buffers included: it is the one he reads
-/// all day, and a system whose two halves are 10% apart looks assembled out of
-/// parts of different origins. So the enum had nothing left to name and went,
-/// and this is what replaced it — which is smaller than the enum was, and is
-/// the point.
-pub const SIZE: f32 = tokens::font::SIZE_BASE;
-
 /// How wide a cell is, in pixels.
 ///
 /// Every hit test on every surface comes through here or through
@@ -98,7 +81,7 @@ pub const SIZE: f32 = tokens::font::SIZE_BASE;
 /// directly would be a second grid nobody named.
 #[must_use]
 pub fn cell_width() -> f32 {
-    tokens::metrics::cell_width(SIZE)
+    tokens::metrics::cell_width(tokens::text::size())
 }
 
 /// How many pixels from the surface's left edge a row of fields begins.
@@ -148,8 +131,12 @@ pub fn content_left_px() -> f32 {
 pub struct Frame {
     /// The surface, in pixels. Never a count of anything.
     pub width: f32,
-    /// The surface's height, in pixels. This is the number the compositor gave
-    /// and the shell may not argue with it (invariant 4).
+    /// The surface's height, in pixels — what the BUFFER can show, which is
+    /// the number the compositor gave except where the GPU's texture ceiling
+    /// cut it (see [`crate::hidpi::resized`]). The shell still does not choose
+    /// it (invariant 4): it is told twice over, once by the compositor and
+    /// once by the hardware, and this is where the two have already been
+    /// reconciled.
     pub height: f32,
     /// The region's first line, in the grid.
     pub first: u16,
@@ -182,7 +169,7 @@ impl Frame {
     fn rail(self) -> ronoctua_design::rails::Frame {
         ronoctua_design::rails::Frame::of(
             cell_width(),
-            tokens::metrics::line_height(SIZE),
+            tokens::metrics::line_height(tokens::text::size()),
             self.width,
             self.height,
             self.first,

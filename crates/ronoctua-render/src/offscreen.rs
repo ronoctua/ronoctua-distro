@@ -52,6 +52,14 @@ pub struct Offscreen {
     pub width: u32,
     /// The height actually used.
     pub height: u32,
+    /// The largest dimension this device takes, which is what `width` and
+    /// `height` were clamped against.
+    ///
+    /// Kept because the clamp is SILENT to whoever asked: without it a caller
+    /// that wants to refuse an over-large picture can only report the size it
+    /// GOT, and on the axis that was not clamped that number is the caller's
+    /// own request dressed up as a limit.
+    pub ceiling: u32,
     target: wgpu::Texture,
 }
 
@@ -123,6 +131,7 @@ impl Offscreen {
             queue,
             width,
             height,
+            ceiling,
             target,
         })
     }

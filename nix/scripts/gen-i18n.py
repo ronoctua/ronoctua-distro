@@ -111,6 +111,36 @@ def main() -> int:
             print(f"ERROR: `{c}` exists in {language} and is missing from {base}", file=sys.stderr)
             failed = True
 
+    # AND THE ARGUMENTS EACH VALUE TAKES ARE THE SAME IN EVERY LANGUAGE.
+    #
+    # Key parity is not value parity. `display-scale = Scale { $factor }` in
+    # en-GB beside `display-scale = Escala` in pt-BR passes every check above:
+    # the key is in both files and neither value is empty. What ships is one
+    # language silently dropping the number — the row reads "Escala" with
+    # nothing after it — or, the other way round, a value asking for an
+    # argument no caller passes, which Fluent renders as the literal
+    # `{$factor}` on screen.
+    #
+    # Nothing else in the tree looks at Fluent placeholders: the only other
+    # `{ $` in any check is `labels-of-a-view-are-distinct` using it to EXCLUDE
+    # keys. So this is the one place it can be caught.
+    def arguments_of(value):
+        return set(re.findall(r"\{\s*\$([A-Za-z][A-Za-z0-9_-]*)\s*\}", value))
+
+    for language in resto:
+        for c, v in tables[base].items():
+            other = tables[language].get(c)
+            if other is None:
+                continue
+            mine, theirs = arguments_of(v), arguments_of(other)
+            if mine != theirs:
+                print(
+                    f"ERROR: `{c}` takes {sorted(mine) or 'nothing'} in {base} "
+                    f"and {sorted(theirs) or 'nothing'} in {language}",
+                    file=sys.stderr,
+                )
+                failed = True
+
     # An empty value is worse than a missing key: it passes every set
     # check and shows up as blank space on screen.
     for language, table in tables.items():

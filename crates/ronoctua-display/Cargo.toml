@@ -1,0 +1,47 @@
+[package]
+name = "ronoctua-display"
+description = "The one boundary with the screens: niri's outputs, the kernel's backlight, and DDC/CI over I2C."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHAT THIS CRATE IS THE FRONTIER OF, and what it is not.
+#
+# It is the frontier with the SCREEN: what a monitor can do, what it is doing,
+# and how bright it is. It is NOT a second frontier with the compositor —
+# invariant 3 keeps that in `ronoctua-niri`, and everything about modes,
+# scales and positions goes through that crate's types. Nothing here writes
+# niri's JSON.
+#
+# NO `[[bin]]`: nothing here is a daemon. The footer raises the threads, the
+# same arrangement as `ronoctua-power`.
+
+[dependencies]
+anyhow.workspace = true
+# The watching threads outlive whoever asked for them, and a monitor that is
+# unplugged mid-read has nobody to return an error to.
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The compositor's side of a screen. This crate never speaks niri's protocol
+# itself; it asks with `ronoctua_niri::Ask` and reads `ronoctua_niri::Output`.
+ronoctua-niri = { path = "../ronoctua-niri" }
+# `/sys` and `/proc` have ONE declared frontier, and the roots come from there
+# so a test can point the whole crate at a directory it built.
+ronoctua-memory = { path = "../ronoctua-memory" }
+# The preference file, written atomically, degrading to the default with a
+# reason in the log.
+ronoctua-store = { path = "../ronoctua-store" }
+# THE ONE NUMBER THE TEXT SIZE IS MEASURED AGAINST, and the range it may move
+# in. The size is a screen preference, so it is stored here; what it MEANS is
+# a token, and a token has one home (invariant 9).
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+# ONE ioctl, and it is `I2C_SLAVE`. There is no way to address a device on an
+# I2C bus without it — read and write on `/dev/i2c-N` need the address set
+# first — so the `unsafe` is real, is one line, and lives in `ddc.rs` alone.
+rustix = { workspace = true, features = [ "std" ] }
+
+[lints]
+workspace = true

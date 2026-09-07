@@ -112,6 +112,7 @@ mod tests {
             "unicode-prefix-family".to_owned(),
             "familia".to_owned(),
         )]);
+        // pt-BR: the VALUE of the key, which is what this asserts arrives.
         assert_eq!(p.or("unicode-prefix-family", "family"), "familia");
     }
 

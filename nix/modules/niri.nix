@@ -268,6 +268,34 @@ let
     # overrides the static background above. Absent, both are the default
     # theme's: the substitution above.
     echo 'include "/home/${config.ronoctua.user}/.config/ronoctua/niri-theme.kdl" optional=true' >> $out
+
+    # THE PERSON'S SCREENS, on the same arrangement and for the same reason.
+    # `ronoctua-display` writes this file when somebody keeps a mode, a scale,
+    # a rotation or a place for a monitor, and niri — which watches what it
+    # includes — reloads it.
+    #
+    # THE FILE IS WHAT SURVIVES A RESTART, and the reload is NOT what applies
+    # it: niri keeps a transient output change whenever the configuration it
+    # re-reads is unchanged from the last disk load, so rewriting the same
+    # bytes preserves exactly what it looks like it would discard. That is why
+    # `ronoctua-display` says every knob out loud over the IPC after writing,
+    # and why `Order::Undo` is the IPC half alone. The crate's own header
+    # carries the whole argument; this comment used to teach the version that
+    # was discarded, and it is the first place a reader looks.
+    #
+    # AND IT HAS TO BE THE ONLY `output` NODE IN THE WHOLE CONFIGURATION.
+    # `Outputs::find` takes the FIRST block whose name matches, not the last —
+    # the opposite of `window-rule`, where the last wins. A block up here for
+    # the same monitor would quietly beat the one the person just chose, and
+    # nothing on screen would say so. The static configuration has none, and
+    # this is what keeps it that way.
+    if grep -qE '^[[:space:]]*output[[:space:]]' $out; then
+      echo "ERROR: the static niri config grew an \`output\` node." >&2
+      echo "  \`Outputs::find\` takes the FIRST match, so it would beat" >&2
+      echo "  the person's own \`niri-display.kdl\` with nothing said." >&2
+      exit 1
+    fi
+    echo 'include "/home/${config.ronoctua.user}/.config/ronoctua/niri-display.kdl" optional=true' >> $out
   '';
 in
 {

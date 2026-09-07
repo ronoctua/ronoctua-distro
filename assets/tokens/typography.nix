@@ -91,6 +91,38 @@
     xxlarge = 104.4;
   };
 
+  # HOW FAR THE PERSON MAY TAKE THE TEXT, in percent of `size.base`.
+  #
+  # The base above is what the owner reads all day; this is the room to move
+  # it, and it is a token because a size is a visual value (invariant 9) even
+  # when the person chooses it. `size.base` stays the anchor: every other size
+  # in this file is measured against it, so scaling the base scales the whole
+  # arrangement and no sum has to change.
+  #
+  # # Where the ceiling comes from, and it is arithmetic
+  #
+  # A cell is `size x 0.600`. On a 1920 px screen at 100% the cell is 10,8 px
+  # and there are 177 columns; at 200% it is 21,6 and there are 88. The
+  # notification manager and the file manager both put their second column
+  # away below 96 (`space.notifications.twoColumnsFrom`,
+  # `space.files.panelsFrom`), so 200% is where a 1920 px laptop becomes a
+  # one-column machine. That is not a defect — the layout is built to fold —
+  # but it is the point past which the screen stops being the screen the rest
+  # of this file was measured on, so it is where the range ends.
+  #
+  # The floor is the other end of the same argument: at 70% the cell is 7,6 px
+  # and a line of the footer is 18,3 px tall, so its two lines are 37. It is small, and it is meant to
+  # be — somebody with a 4K panel at arm's length asked for it once.
+  #
+  # THE STEP IS FIVE because the arrows have to arrive at 100 exactly from
+  # both directions, and every number in the range has to be reachable by
+  # pressing one key repeatedly. Five divides the distance to both ends.
+  scale = {
+    floor = 70;
+    ceiling = 200;
+    step = 5;
+  };
+
   # TYPOGRAPHIC MARKS the host punctuates WITH, rather than draws as content.
   #
   # HOW FAR FROM THE DIGIT'S HEIGHT a chrome glyph may stand, in percent, both
@@ -137,6 +169,12 @@
     #
     # The map from a key to its drawing lives in `chrome::key_text`, one place,
     # the same arrangement as `chrome::syntax_color` and `chrome::hint_spans`.
+    # THE MULTIPLICATION SIGN, for a resolution: `1920x1200` is written with
+    # U+00D7 and not with the letter x. It is a token for the reason the
+    # separator above is one — invariant 9 reaches the codepoint — and it is
+    # here rather than in a `.ftl` because a resolution is not a sentence: it
+    # is one number, a sign, and another number, in every language.
+    times = "×";
     "arrow-left" = "←";
     "arrow-right" = "→";
     "arrow-up" = "↑";

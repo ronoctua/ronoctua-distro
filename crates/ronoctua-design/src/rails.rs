@@ -39,8 +39,11 @@ pub struct Frame {
     pub line: f32,
     /// The surface's width, in pixels. Never a count of anything.
     pub width: f32,
-    /// The surface's height, in pixels. This is the number the compositor gave
-    /// and the shell may not argue with it (invariant 4).
+    /// The surface's height, in pixels — what the BUFFER can show, which is
+    /// the number the compositor gave except where the GPU's texture ceiling
+    /// cut it. The shell still does not choose it (invariant 4): it is told
+    /// twice over, once by the compositor and once by the hardware, and what
+    /// arrives here has already reconciled the two.
     pub height: f32,
     /// The region's first line, in the grid.
     pub first: u16,

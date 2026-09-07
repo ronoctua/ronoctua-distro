@@ -432,6 +432,7 @@ fn main() -> Result<()> {
     // SEARCHING IN PORTUGUESE, coming from the CLDR and not from the lexicon.
     let pt = query(&mut inst, "bandeira brasil")?;
     if pt.filtered == 0 {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("`bandeira brasil` found nothing — the CLDR keywords did not arrive");
     }
     // COPYING A SEQUENCE carries the WHOLE sequence.
@@ -495,6 +496,7 @@ fn main() -> Result<()> {
     let f = sheet(&mut inst)?;
     let focus_block = sheet_value(&f, "unicode-sheet-block").unwrap_or_default();
     if !focus_block.to_lowercase().contains("arrows") {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("`bloco:arrows` let a character of block `{focus_block}` through");
     }
     inst.event(&Input::Cancel)?;
@@ -511,6 +513,7 @@ fn main() -> Result<()> {
     // write a codepoint, invariants 9 and 11).
     let marks = query(&mut inst, "familia:marca")?;
     if marks.filtered == 0 {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("there are no combining marks in the database — did the `familia` field go away?");
     }
     let first = marks
@@ -1028,6 +1031,7 @@ fn main() -> Result<()> {
         .clone()
         .context("the pt-BR field emitted nothing on opening")?;
     if in_portuguese != "familia:emoji" {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("seeded pt-BR the buffer opened with `{in_portuguese}`, not `familia:emoji`");
     }
     if opened.filtered != initial.filtered {
@@ -1044,6 +1048,7 @@ fn main() -> Result<()> {
     let after = screen(&mut other)?;
     let left = after.field.unwrap_or_default();
     if left != "familia:emoji" {
+        // pt-BR: a search TAG, which is what the lexicon has to answer.
         bail!("`Esc` left `{left}` and not the pt-BR prefix `familia:emoji`");
     }
     println!("language  pt-BR -> `{in_portuguese}`, and Esc gives it back");

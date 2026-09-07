@@ -19,19 +19,30 @@ use ronoctua_tokens as tokens;
 
 /// How many pixels each scale is worth.
 ///
+/// IT IS ALSO WHERE THE CELL TABLE COMES FROM. `Heights::from_sizes` used to
+/// be handed the five tokens directly, in two places, with a comment in each
+/// saying they had to agree with this function or "the buffer reserves one
+/// number of cells and the run occupies another". They stopped agreeing the
+/// day the base became something a person could move — measured: thirteen
+/// runs at 100% and eleven at 80%, on a grid that had not changed. Now both
+/// call this, and agreeing is not something anybody has to remember.
+///
 /// The translation lives HERE, and not in the buffer: invariant 11 says a buffer does not
 /// receive a token value, and it is the same contract colour already fulfils.
 ///
 /// The cell grid is always `Normal`'s — a `Large` run occupies more
 /// than one cell, and what spaces it is whatever draws.
-const fn scale_in_px(scale: ronoctua_protocol::Scale) -> f32 {
+pub(crate) fn scale_in_px(scale: ronoctua_protocol::Scale) -> f32 {
     match scale {
         // `SIZE_SMALL` is the token that already existed for "smaller than the
-        // body". Everything else the host draws — the footer, its windows and
-        // a buffer's body — is `SIZE_BASE`.
-        ronoctua_protocol::Scale::Small => tokens::font::SIZE_SMALL,
+        // body", and it goes through `scaled` so it moves with the size a
+        // person chose. Everything else the host draws — the footer, its
+        // windows and a buffer's body — asks `text::size()`; naming the anchor
+        // here would be the defect `one-text-size` exists to refuse, which is
+        // why the two lines below do not.
+        ronoctua_protocol::Scale::Small => tokens::text::scaled(tokens::font::SIZE_SMALL),
         // THE SYSTEM'S SIZE — the same the footer and the minibuffer use.
-        ronoctua_protocol::Scale::Base => tokens::font::SIZE_BASE,
+        ronoctua_protocol::Scale::Base => tokens::text::size(),
         // AND THE BUFFER'S BODY, which is the same size as of the day the
         // owner asked for one measure across the system.
         //
@@ -41,10 +52,27 @@ const fn scale_in_px(scale: ronoctua_protocol::Scale) -> f32 {
         // happened to arrive at one answer, not one question asked twice.
         // Collapsing them is a change to the WIT, which rebuilds every buffer,
         // and nothing asked for it.
-        ronoctua_protocol::Scale::Normal => tokens::font::SIZE_BASE,
-        ronoctua_protocol::Scale::Large => tokens::font::SIZE_XLARGE,
-        ronoctua_protocol::Scale::Huge => tokens::font::SIZE_XXLARGE,
+        ronoctua_protocol::Scale::Normal => tokens::text::size(),
+        ronoctua_protocol::Scale::Large => tokens::text::scaled(tokens::font::SIZE_XLARGE),
+        ronoctua_protocol::Scale::Huge => tokens::text::scaled(tokens::font::SIZE_XXLARGE),
     }
+}
+
+/// The cell table, from the one place that resolves a size.
+///
+/// A run occupies as many CELLS as its scale is worth, and the buffer is told
+/// that so it can reserve them. See [`scale_in_px`] for why this is not five
+/// tokens read again here.
+pub(crate) fn heights() -> ronoctua_protocol::Heights {
+    use ronoctua_protocol::Scale;
+    ronoctua_protocol::Heights::from_sizes(
+        scale_in_px(Scale::Small),
+        scale_in_px(Scale::Base),
+        scale_in_px(Scale::Normal),
+        scale_in_px(Scale::Large),
+        scale_in_px(Scale::Huge),
+        tokens::font::LINE_HEIGHT,
+    )
 }
 
 /// Resolves the colour name that came from the buffer.
@@ -241,8 +269,8 @@ fn spans_from(
 #[must_use]
 pub fn cell() -> (f32, f32) {
     (
-        tokens::font::SIZE_BASE * tokens::font::CELL_WIDTH_EM,
-        tokens::font::SIZE_BASE * tokens::font::LINE_HEIGHT,
+        tokens::text::size() * tokens::font::CELL_WIDTH_EM,
+        tokens::text::size() * tokens::font::LINE_HEIGHT,
     )
 }
 

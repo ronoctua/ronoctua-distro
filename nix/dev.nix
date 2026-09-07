@@ -252,6 +252,16 @@ let
       cfg_themed=$(mktemp -t ronoctua-niri-XXXXXX.kdl)
       cp "$cfg" "$cfg_themed"
       echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/niri-theme.kdl\" optional=true" >> "$cfg_themed"
+      # AND THE SCREENS, so the display view's write-and-reload path is the
+      # one that gets exercised in here rather than only in production.
+      #
+      # WITH ONE DIFFERENCE THAT IS NOT A BUG: the block above pins the
+      # nested window to 1600x900, and `Outputs::find` keeps the FIRST match,
+      # so a mode or a scale kept for `winit` loses to it. That is deliberate
+      # — the nested window's size is the loop's, not the person's — and it
+      # means the two knobs to photograph in here are the ones the pinned
+      # block does not set.
+      echo "include \"''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/niri-display.kdl\" optional=true" >> "$cfg_themed"
       cfg=$cfg_themed
 
       # The renderer does NOT use fontconfig (section 6.4), but the foreign apps that
