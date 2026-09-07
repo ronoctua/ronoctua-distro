@@ -59,6 +59,12 @@ let
   # The SAME layout as production: the nested loop is where one types to test, and
   # a different keyboard here would be testing something else.
   keyboard = import ./keyboard-xkb.nix;
+  # WITH ONE DIFFERENCE, AND IT IS THE ONE THIS LOOP CANNOT DO WITHOUT: the
+  # compiled keymap below is that same layout with Super taken out of it, so a
+  # chord the HOST keeps for itself cannot leave a modifier stuck in here for
+  # the rest of the session. The whole mechanism, and the measurement, are in
+  # the header of `nix/keyboard-nested.nix`.
+  nestedKeymap = callPackage ./keyboard-nested.nix { };
 
   # WHAT THE BUILD BAKES, EXPORTED FOR THE BINARY THIS LOOP COMPILES.
   #
@@ -107,6 +113,14 @@ let
                     layout "${keyboard.layout}"
                     variant "${keyboard.variant}"
                     options "${keyboard.options}"
+                    // SUPER IS NOT A MODIFIER IN HERE — see nix/keyboard-nested.nix.
+                    //
+                    // `file` WINS over the three lines above: niri applies them
+                    // when the seat is built and then overrides with this. They
+                    // stay because they are what niri falls back to if the file
+                    // cannot be read, and because they are what the layout IS —
+                    // the file is compiled from them.
+                    file "${nestedKeymap}"
                 }
             }
             touchpad { tap; natural-scroll; }
@@ -187,6 +201,28 @@ let
             // docs/ARCHITECTURE.md. In the nested loop, the chord for the
             // direction keys stays `Alt` ON ITS OWN.
             Ctrl+Alt+Space repeat=false { spawn "${ronoctua-shell}/bin/ronoctua-shell" "leader"; }
+            // AND THE SAME CHORD WITH A SHIFT NOBODY PRESSED.
+            //
+            // niri matches a bind's modifiers by EQUALITY, so a chord survives
+            // exactly the modifiers that are already inside it. `nix/keyboard-
+            // nested.nix` takes Super out of the keymap, and Ctrl and Alt are in
+            // the chord — so of everything the host can leave stuck in here,
+            // only Shift is left, and one line covers it: with a Shift stuck,
+            // pressing the SAME `Ctrl+Alt+Space` reaches the compositor as
+            // `Ctrl+Shift+Alt+Space` and lands here.
+            //
+            // Measured on two nested niri instances: with a stray Shift and
+            // this line absent, the leader is dead; with it, it fires.
+            //
+            // It is worth a line because the FOOTER discounts what was already
+            // held (`Inheritance`, in `surface.rs`) — so once the leader opens,
+            // the sequence keys match correctly in spite of the stray. What
+            // stays broken is literal typing, which comes out shifted.
+            //
+            // AltGr and level-five could stick too, and are not covered: it
+            // would take seven lines for combinations no desktop binds, and
+            // each one is a row in the compositor's hotkey overlay.
+            Ctrl+Shift+Alt+Space repeat=false { spawn "${ronoctua-shell}/bin/ronoctua-shell" "leader"; }
     @CHORDS@
         }
   '';

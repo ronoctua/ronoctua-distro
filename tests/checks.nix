@@ -1028,6 +1028,151 @@ let
         echo "OK: Compose exists in the keymap and both Shifts toggle Caps Lock"
       '';
 
+  # AND A MODIFIER THE HOST LEAVES STUCK CANNOT TAKE THE NESTED LOOP AWAY.
+  #
+  # # What this is defending against, and why it cannot be repaired
+  #
+  # `nix run .#dev` runs niri as a WINDOW of another compositor, sharing one
+  # keyboard with it. When the host keeps a chord for itself and takes the
+  # focus away with it — `Super+Ctrl+Space` opens the wallpaper manager on the
+  # machine this was found on — the nested niri sees the modifiers go DOWN and
+  # never sees them come up: `winit` reports a lost focus as `Focused(false)`
+  # and synthesises no releases, smithay's winit backend drops synthetic key
+  # events and never forwards `ModifiersChanged` at all, and niri answers
+  # `WinitEvent::Focus(_) => ()`.
+  #
+  # A modifier stuck that way is stuck for good. libxkbcommon keeps one filter
+  # per pressed key with a reference count, so pressing it again and letting go
+  # takes the count 1 → 2 → 1; reloading the keymap does not help either,
+  # because `update_xkb_state` replays the keys smithay still believes are
+  # down. And niri matches a bind's modifiers by EQUALITY, so one stray bit
+  # kills every bind in the session — the leader included. The only cure is
+  # restarting the compositor.
+  #
+  # So the keymap is the only lever, and Super is the only modifier the nested
+  # loop can spare: it belongs to the host in there and reaches no bind of
+  # ours. `nix/keyboard-nested.nix` cuts it out.
+  #
+  # # Why the check reads the GENERATED config
+  #
+  # The derivation guards its own surgery. What it cannot guard is being
+  # WIRED IN: drop the `file` line from `nix/dev.nix` and the keymap is not
+  # even built, every guard in it goes unrun, and the loop goes back to being
+  # poisonable with nothing failing anywhere.
+  #
+  # It reads BOTH configs because the danger runs both ways. In production niri
+  # owns the seat, nothing gets between the keyboard and the compositor, and
+  # Super IS the leader (`nix/modules/keyboard.nix`) — a keymap without it
+  # there would take the leader away from the whole system.
+  nested-survives-a-stray-modifier =
+    mkCheck "nested-survives-a-stray-modifier"
+      [
+        pkgs.libxkbcommon
+        pkgs.gnugrep
+        pkgs.xkeyboard_config
+      ]
+      ''
+        export XKB_CONFIG_ROOT=${pkgs.xkeyboard_config}/share/X11/xkb
+
+        nested=${devApp.config}
+        production="${self.nixosConfigurations.vm.config.environment.etc."niri/config.kdl".source}"
+
+        # THE NESTED CONFIG POINTS AT A KEYMAP OF OURS.
+        # `|| true`: `mkCheck` runs under `set -euo pipefail`, so a grep that
+        # finds nothing takes the whole script down AT THE ASSIGNMENT — and the
+        # sentence below, which is the entire point of the check, never prints.
+        # Measured: the first version of this failed with an empty log.
+        keymap=$(grep -oP '^\s*file "\K[^"]+' "$nested" | head -1 || true)
+        if [ -z "$keymap" ]; then
+          echo "ERROR: the nested config has no \`xkb { file }\`, so the nested" >&2
+          echo "      compositor is back on the stock keymap — the one where a" >&2
+          echo "      chord the HOST swallows can leave Super stuck and take every" >&2
+          echo "      bind in the session with it, until niri is restarted." >&2
+          exit 1
+        fi
+        test -e "$keymap" || {
+          echo "ERROR: the nested config points at \`$keymap\`, which is not there." >&2
+          echo "      niri answers a keymap it cannot read with a warning in a log" >&2
+          echo "      and a silent fall back to the layout WITH Super." >&2
+          exit 1; }
+
+        # AND THAT KEYMAP GIVES SUPER TO NO KEY. Asked of the compiled keymap
+        # rather than of its spelling: `--modmaps` says what every key
+        # contributes, and the section about KEYS is the one that matters —
+        # the header above it names every modifier the format knows, Mod4
+        # included.
+        keys_of() {
+          xkbcli compile-keymap --input-format 1 --keymap "$1" --modmaps \
+            | sed -n '/Keys modifier maps/,$p'
+        }
+        if keys_of "$keymap" | grep -qE "Mod4|Super"; then
+          echo "ERROR: a key still carries Super in the nested keymap:" >&2
+          keys_of "$keymap" | grep -B 2 -E "Mod4|Super" >&2
+          exit 1
+        fi
+
+        # AND THE REST OF THE KEYBOARD SURVIVED. A cut that also took Shift or
+        # Control would leave the leader working and the typing broken, which
+        # is the half nobody would look at.
+        for real in Shift Control Mod1 Mod5; do
+          keys_of "$keymap" | grep -q "real: *$real" || {
+            echo "ERROR: no key carries \`$real\` in the nested keymap." >&2
+            echo "      Cutting Super took a modifier the loop types with." >&2
+            exit 1; }
+        done
+
+        # PRODUCTION KEEPS ITS SUPER, and this is the direction that would go
+        # unnoticed: there Super IS the leader, and a keymap without it would
+        # take the command list away from the whole system.
+        if grep -qE '^\s*file "' "$production"; then
+          echo "ERROR: the production config carries an \`xkb { file }\`." >&2
+          echo "      The nested loop's keymap has no Super, and Super is what" >&2
+          echo "      the leader IS in production." >&2
+          exit 1
+        fi
+        xkbcli compile-keymap \
+          --output-format 1 \
+          --layout ${keyboard.layout} \
+          ${lib.optionalString (keyboard.variant != "") "--variant ${keyboard.variant} "}\
+          --options "${keyboard.options}" > production.xkb
+        keys_of production.xkb | grep -q "Mod4" || {
+          echo "ERROR: the production keyboard has no Super either. The layout" >&2
+          echo "      itself lost it, so the two configs agree and both are wrong." >&2
+          exit 1; }
+
+        # AND THE LEADER ANSWERS A SHIFT NOBODY PRESSED.
+        #
+        # The keymap covers Super; Ctrl and Alt are inside the chord, so they
+        # cannot change its outcome. That leaves Shift, and one extra bind
+        # covers it: with a Shift stuck, the same `Ctrl+Alt+Space` reaches the
+        # compositor as `Ctrl+Shift+Alt+Space`. Measured on two nested niri
+        # instances — without the line the leader is dead, with it it fires.
+        #
+        # It compares the ACTIONS and not just the keys: a variant pointing at
+        # something else would be a second leader that does not lead.
+        action_of() { grep -E "^[[:space:]]*$1 " "$nested" | head -1 | sed -E 's/^[[:space:]]*[^[:space:]]+ //'; }
+        plain=$(action_of 'Ctrl\+Alt\+Space' || true)
+        shifted=$(action_of 'Ctrl\+Shift\+Alt\+Space' || true)
+        if [ -z "$plain" ]; then
+          echo "ERROR: the nested config has no \`Ctrl+Alt+Space\` leader at all." >&2
+          exit 1
+        fi
+        if [ "$shifted" != "$plain" ]; then
+          echo "ERROR: the nested leader does not answer a stray Shift." >&2
+          echo "      niri matches modifiers by EQUALITY, so a chord survives only" >&2
+          echo "      the modifiers already inside it. A host chord holding Shift" >&2
+          echo "      leaves it stuck in here for the rest of the session, and then" >&2
+          echo "      \`Ctrl+Alt+Space\` arrives as \`Ctrl+Shift+Alt+Space\` and matches" >&2
+          echo "      nothing." >&2
+          echo "      wanted: $plain" >&2
+          echo "      found:  ''${shifted:-<no such bind>}" >&2
+          exit 1
+        fi
+
+        echo "OK: no Super in the nested keymap, Super intact in production,"
+        echo "    and the leader answers a stray Shift"
+      '';
+
   # THE INSTALLER'S DEFAULTS ARE THE SYSTEM'S DEFAULTS.
   #
   # `ronoctua-installer` carries `DEFAULT_LAYOUT` and `DEFAULT_COMPOSE` as Rust
@@ -13166,6 +13311,7 @@ let
       niri-actions-translated
       keyboard-layout-exists
       keyboard-options-do-what-they-say
+      nested-survives-a-stray-modifier
       installer-defaults-match-the-keyboard
       locale-exists
       wifi-console-asks-once
