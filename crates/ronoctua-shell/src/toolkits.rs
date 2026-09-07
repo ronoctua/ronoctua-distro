@@ -20,17 +20,41 @@
 //! portal WHILE THEY ARE RUNNING; nothing has to be restarted and nothing has
 //! to be logged out of.
 //!
-//! # What this does NOT claim
+//! # What was MEASURED, and what is still argued
 //!
-//! That every foreign application follows. GTK 4 maps this key onto
-//! `gtk-xft-dpi` and moves while it is running — that much is known. Chromium
-//! and Electron are said to, and it was NOT measured here: doing so needs one
-//! of them open in a session with a portal, which no test in this repository
-//! has. Qt follows only under the `full` profile, where a platform theme is
-//! installed at all. And Ghostty follows nothing: it reads its own file.
+//! Two of the sentences that used to stand here were wrong, and both were
+//! wrong in the direction of comfort — they excused a gap that was not there
+//! and hid one that was.
 //!
-//! So this promises what it can and `docs/PENDING.md` carries the rest, named
-//! — including how to find out.
+//! - **Qt does not follow a multiplier.** `qgnomeplatform` 0.8.4, both majors,
+//!   subscribes to `changed::cursor-blink-time`, `changed::cursor-size`,
+//!   `changed::font-name`, `changed::gtk-theme`, `changed::icon-theme`,
+//!   `changed::monospace-font-name` and `changed::titlebar-font` — read out of
+//!   the shipped libraries. `text-scaling-factor` is not among them. The old
+//!   text said Qt "follows under the `full` profile"; what the profile buys is
+//!   darkness and a font NAME.
+//! - **Ghostty does follow.** Its 1.3.1 binary carries `gtk-xft-dpi`, and its
+//!   manual says under `font-size`: *"On Linux with GTK, font size is scaled
+//!   according to both display-wide and text-specific scaling factors."* The
+//!   old text said it "follows nothing".
+//!
+//! Those two facts together decided the channel. GTK renders at
+//! `points x (gtk-xft-dpi/96)` and `gtk-xft-dpi` comes from the multiplier, so
+//! writing the multiplier AND the font scales GTK twice; and there is no
+//! channel that reaches Qt without reaching GTK. So the size travels in the
+//! font description, the multiplier is put back, and Ghostty — which reads its
+//! own `font-size` — is written a file of its own and sent `SIGUSR2`.
+//!
+//! **What is measured end to end**: that the size reaches Ghostty.
+//! `ghostty-config-includes-theme` lays the file down and asks the binary for
+//! its EFFECTIVE configuration, which answered 11 -> 22 at the ceiling of the
+//! range. That is the only foreign application this repository can question
+//! without a session.
+//!
+//! **What is still argued from the binaries, not from a screen**: that GTK and
+//! Qt follow `font-name`. Both read it — the strings say so — but no test here
+//! opens one. `docs/PENDING.md` carries that, named, and the row in the display
+//! view says only what was measured.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -50,14 +74,59 @@ fn home() -> Option<&'static Path> {
     HOME.get_or_init(ronoctua_store::config_dir).as_deref()
 }
 
-/// The dconf key every toolkit that follows anything follows.
+/// The three keys a foreign toolkit reads a font from.
 ///
-/// It is a MULTIPLIER, not a size: `1.25` means "a quarter larger than
-/// whatever this application would have drawn". That is what makes it the
-/// right thing to hand a foreign application — it keeps that application's
-/// own idea of a comfortable size and moves it by the same amount the shell
-/// moved its own.
-pub const KEY: &str = "/org/gnome/desktop/interface/text-scaling-factor";
+/// # Why the FONT and not the multiplier
+///
+/// There is a multiplier — `text-scaling-factor` — and for a long time it was
+/// the only thing this module wrote. It reaches GTK 3, GTK 4 and, through
+/// GTK's `gtk-xft-dpi`, Ghostty. What it does not reach is **Qt**, and that
+/// was measured rather than assumed: `qgnomeplatform` 0.8.4, both majors,
+/// subscribes to exactly
+///
+/// ```text
+/// changed::cursor-blink-time  changed::cursor-size   changed::font-name
+/// changed::gtk-theme          changed::icon-theme    changed::monospace-font-name
+/// changed::titlebar-font
+/// ```
+///
+/// on `org.gnome.desktop.interface`. `text-scaling-factor` is not in that
+/// list. So the 591 MiB the `full` profile pays for a Qt platform theme buys
+/// darkness and a font NAME — never a scale.
+///
+/// And the two channels cannot both be used: GTK renders at
+/// `points x (gtk-xft-dpi/96)`, so scaling the font AND the multiplier scales
+/// GTK twice. There is no channel that reaches Qt and misses GTK. Therefore
+/// the size travels in the font description, the multiplier is put back to
+/// where it was found, and the one consumer that reads neither — Ghostty,
+/// which has a `font-size` of its own — is given a file (see [`SIZE_FILE`]).
+pub const FONT_KEYS: [&str; 3] = [
+    "/org/gnome/desktop/interface/font-name",
+    "/org/gnome/desktop/interface/monospace-font-name",
+    "/org/gnome/desktop/interface/document-font-name",
+];
+
+/// The multiplier, which this module now RESETS instead of writing.
+///
+/// It is not merely unused: a value left in it from an older version of this
+/// system would multiply the size that now travels in the font description,
+/// and the person would get the square of what they asked for.
+pub const SCALING_KEY: &str = "/org/gnome/desktop/interface/text-scaling-factor";
+
+/// Ghostty's own file, and why it is not the theme's.
+///
+/// Ghostty reads a `font-size` of its own (`nix/modules/terminal.nix`) and its
+/// manual says GTK's text scaling reaches it — but the multiplier is no longer
+/// what carries the size, so it has to be told directly. `terminal.nix`
+/// includes this path LAST, and in Ghostty the later file wins.
+///
+/// NOT `ghostty-theme.conf`: that one is copied WHOLE out of the store by
+/// `theme::copy_fragments`, so a size written into it would be erased by the
+/// next change of theme. One writer per file.
+pub const SIZE_FILE: &str = "ghostty-size.conf";
+
+/// Where the person's own font descriptions are kept, as they were.
+pub const UNTOUCHED_FILE: &str = "toolkits.json";
 
 /// `dconf`, by path and not by name.
 ///
@@ -68,15 +137,72 @@ const DCONF: &str = match option_env!("RONOCTUA_DCONF") {
     None => "dconf",
 };
 
-/// The multiplier a percentage is, written the way dconf reads a double.
+/// One font description split into the family and the size in points.
 ///
-/// Two decimals, and always with a point: dconf's `d` type is parsed by
-/// GVariant, which does not read `1,25` however the person's locale spells a
-/// number. `{:.2}` on an `f64` is locale-independent in Rust, and this is
-/// where that fact is being relied on rather than assumed.
+/// A GNOME font description is `"<family and style> <points>"` — `Cantarell 11`,
+/// `Noto Sans CJK JP 11`, `Cantarell Bold 12.5`. The family may hold spaces and
+/// words; the size is the LAST whitespace-separated token and is a number.
+///
+/// `None` when the last token is not a number, which is what an empty value or
+/// a hand-written oddity looks like. The caller then leaves that key alone —
+/// rewriting something we could not read is how a person loses their font.
 #[must_use]
-pub fn multiplier(percent: u16) -> String {
-    format!("{:.2}", f64::from(percent) / 100.0)
+pub fn split_font(description: &str) -> Option<(&str, f64)> {
+    let trimmed = description.trim();
+    let at = trimmed.rfind(char::is_whitespace)?;
+    let points: f64 = trimmed[at + 1..].parse().ok()?;
+    // A SIZE OF ZERO OR LESS IS NOT A SIZE, and scaling it would answer zero
+    // for every percentage — a foreign application with no text at all.
+    if !(points.is_finite() && points > 0.0) {
+        return None;
+    }
+    Some((trimmed[..at].trim_end(), points))
+}
+
+/// A font description at a percentage of its own size.
+///
+/// ALWAYS FROM THE UNTOUCHED DESCRIPTION, never from what is in dconf now:
+/// this is applied again on every change, and scaling an already-scaled value
+/// compounds. 125% twice is 156%, and nothing on the screen would say why.
+/// [`Untouched`] is what keeps the starting point.
+///
+/// One decimal, because a font description takes a fraction and dropping it
+/// makes the steps of the ladder uneven: 11 pt at 105% is 11,55 and at 110% is
+/// 12,1 — rounded to whole points both would be 12, and one press of the key
+/// would do nothing.
+#[must_use]
+pub fn font_at(description: &str, percent: u16) -> Option<String> {
+    let (family, points) = split_font(description)?;
+    let wanted = points * f64::from(percent) / 100.0;
+    Some(format!("{family} {wanted:.1}"))
+}
+
+/// The font descriptions as they were before this system first touched them.
+///
+/// # Why this is written down instead of computed
+///
+/// Because the operation is "the person's own font, at a percentage of its own
+/// size", and it is applied again every time the number moves. Reading dconf
+/// back would read what WE wrote last time, and each change would multiply the
+/// one before it. Keeping the starting point makes every write idempotent and
+/// makes 100% put back exactly what was found — which is what lets somebody
+/// turn this feature off and get their desktop back.
+///
+/// Its own small file, hand-editable, in the shape every other domain uses:
+/// the file IS the record, and there is no second channel to keep in step.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Untouched {
+    /// `font-name`, `monospace-font-name` and `document-font-name`, in the
+    /// order of [`FONT_KEYS`]. An entry is absent when that key was empty or
+    /// unreadable, and then this system leaves it alone for ever.
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, String>,
+}
+
+/// The store the untouched descriptions live in.
+#[must_use]
+pub fn untouched() -> ronoctua_store::Store<Untouched> {
+    ronoctua_store::Store::at(ronoctua_store::config_dir(), UNTOUCHED_FILE)
 }
 
 /// The chosen size, read once and set for the process.
@@ -147,57 +273,203 @@ pub fn reload() -> bool {
 /// It does not wait for the answer and does not fail loudly: dressing another
 /// application is a courtesy, and a machine without dconf is a machine where
 /// the shell's own text still moved. What it must not do is block the frame,
-/// which is why the waiting happens on a thread — the arrangement
+/// which is why the whole of it happens on a thread — the arrangement
 /// `power_window`'s forwarding uses, for the same reason it gives there.
 pub fn tell_them(percent: u16) {
-    let value = multiplier(percent);
-    match Command::new(DCONF)
-        .args(["write", KEY, &value])
+    // ALL OF IT ON ONE THREAD, and not one thread per command. Reading a key
+    // back means waiting for a child's output, and there are three keys, a
+    // reset, a file and a signal. Done here they would be six ways to stall a
+    // frame; done there they are one thread that nobody waits for.
+    let started = std::thread::Builder::new()
+        .name("toolkits".to_owned())
+        .spawn(move || dress_them(percent));
+    if let Err(e) = started {
+        // A machine that cannot spawn a thread has worse trouble than one slow
+        // frame — the judgement the old code made here for the same reason.
+        tracing::warn!(error = %e, "no thread to dress the toolkits with; doing it here");
+        dress_them(percent);
+    }
+}
+
+/// One `dconf` invocation, waited for, with its output.
+///
+/// `None` when the binary is not there or answered badly. Every caller treats
+/// that as "this machine does not do dconf", which is a machine where the
+/// shell's own text still moved.
+fn dconf(args: &[&str]) -> Option<String> {
+    let out = Command::new(DCONF)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
+/// A GVariant string literal, as `dconf write` wants it.
+///
+/// Single quotes, with any of its own doubled — a family called `Bob's Sans`
+/// is not a family anybody has, but a value that ends a quote early is a
+/// command that means something else.
+#[must_use]
+fn quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "\\'"))
+}
+
+/// The text inside a GVariant string literal, as `dconf read` answers it.
+///
+/// `None` for an empty answer, which is what an unset key gives, and for
+/// anything not wrapped in quotes — both mean "there is nothing here to keep".
+#[must_use]
+fn unquoted(said: &str) -> Option<String> {
+    let text = said.trim();
+    let inner = text.strip_prefix('\'')?.strip_suffix('\'')?;
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner.replace("\\'", "'"))
+}
+
+/// Everything a change of size owes the applications that are not ours.
+///
+/// Runs on its own thread. Every step is independently skippable: a machine
+/// with no dconf still gets the Ghostty file, and a machine with no Ghostty
+/// still gets its GTK and Qt applications dressed.
+fn dress_them(percent: u16) {
+    remember_and_dress_the_fonts(percent);
+    // AND THE MULTIPLIER GOES BACK TO WHERE IT WAS FOUND.
+    //
+    // It is not merely unused now that the size travels in the font: a value
+    // left in it by an older version of this system would multiply the size
+    // that now travels in the font description, and the person would get the
+    // SQUARE of what they asked for — 125% twice is 156%, with nothing on the
+    // screen saying why.
+    if dconf(&["reset", SCALING_KEY]).is_none() {
+        tracing::debug!("dconf would not reset the scaling factor");
+    }
+    tell_the_terminal(percent);
+}
+
+/// The three font keys, at a percentage of the size they had before this
+/// system ever touched them.
+fn remember_and_dress_the_fonts(percent: u16) {
+    let store = untouched();
+    let mut base = store.read();
+    let mut learned = false;
+
+    for key in FONT_KEYS {
+        if base.fonts.contains_key(key) {
+            continue;
+        }
+        // THE STARTING POINT IS TAKEN ONCE, and only from a value we can
+        // read. A key that is unset, empty, or does not end in a number is
+        // one this system leaves alone FOR EVER: rewriting a description we
+        // could not parse is how somebody loses their font.
+        let Some(found) = dconf(&["read", key]).as_deref().and_then(unquoted) else {
+            continue;
+        };
+        if split_font(&found).is_none() {
+            tracing::debug!(key, value = %found, "a font description this cannot read; leaving it");
+            continue;
+        }
+        base.fonts.insert((*key).to_owned(), found);
+        learned = true;
+    }
+
+    // WRITTEN BEFORE ANYTHING IS CHANGED. If the write fails, nothing has been
+    // touched yet and the next attempt starts from the same untouched values —
+    // whereas dressing first and failing to record would make the next change
+    // scale what this one already scaled.
+    if learned && let Err(e) = store.write(&base) {
+        tracing::warn!(error = %e, "could not write down the fonts as they were; leaving them alone");
+        return;
+    }
+
+    for key in FONT_KEYS {
+        let Some(had) = base.fonts.get(key) else {
+            continue;
+        };
+        let Some(want) = font_at(had, percent) else {
+            continue;
+        };
+        if dconf(&["write", key, &quoted(&want)]).is_none() {
+            tracing::debug!(key, "dconf would not take the font");
+        }
+    }
+}
+
+/// Ghostty's own size, and a nudge for the ones already running.
+fn tell_the_terminal(percent: u16) {
+    let Some(dir) = home() else {
+        return;
+    };
+    // THE SAME ARITHMETIC AS THE FONTS, on the size `nix/modules/terminal.nix`
+    // wrote — both read `font.size.terminalPoints`, so they cannot drift.
+    let points = f64::from(ronoctua_tokens::font::TERMINAL_POINTS) * f64::from(percent) / 100.0;
+    let body = format!(
+        "# GENERATED by ronoctua-shell. Do not edit — `LEADER s d` rewrites it.\n\
+         font-size = {points:.1}\n"
+    );
+    // ONLY WHEN THE BYTES MOVE. A write here is a rename, and a rename is what
+    // a config watcher sees — the rule `theme::copy_fragments` already keeps.
+    if std::fs::read(dir.join(SIZE_FILE)).is_ok_and(|had| had == body.as_bytes()) {
+        return;
+    }
+    if let Err(e) = ronoctua_xdg::write_atomically(dir, SIZE_FILE, body.as_bytes()) {
+        tracing::warn!(error = %e, "could not write the terminal's size");
+        return;
+    }
+    wake_the_terminals();
+}
+
+/// Makes every running Ghostty read its configuration again.
+///
+/// # Why a signal, and why this one
+///
+/// Ghostty has no automatic reload — its own manual says so in as many words
+/// ("Ghostty isn't capable of this yet"), so a new file reaches only the next
+/// window unless something asks. There is a documented `reload_config` keybind
+/// action, but this system binds no key of Ghostty's own, and the D-Bus route
+/// is closed here on purpose: `nix/modules/terminal.nix` sets
+/// `gtk-single-instance = false` and strips the D-Bus service, so there is no
+/// well-known name to send an action to.
+///
+/// What is left is `SIGUSR2`. It is NOT in the manual — it was read out of the
+/// 1.3.1 binary, which carries the string
+/// `received SIGUSR2, reloading configuration` under Ghostty's own
+/// `gtk_ghostty_application` log scope. `SIGUSR1` appears nowhere. So this is
+/// observed behaviour of the version this system pins, and `ghostty-reloads-on-a-signal`
+/// re-reads the binary on every build: the day the string goes, the check goes
+/// red instead of the terminal quietly keeping yesterday's size.
+///
+/// A miss is not a failure. The signal is best effort: what it saves is
+/// reopening the window.
+fn wake_the_terminals() {
+    // BY NAME AND ONLY OUR OWN. `pkill` matches the caller's own command line
+    // — the trap `CLAUDE.md` records — so the pattern is bracketed, and `-U`
+    // keeps it to this person's processes on a machine that has others.
+    let said = Command::new("pkill")
+        .args([
+            "-USR2",
+            "-U",
+            &format!("{}", rustix::process::getuid().as_raw()),
+            "-x",
+            "ghostty",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-    {
-        // REAPED ON A THREAD, and not dropped. `Child`'s `Drop` does not
-        // wait, so dropping it leaves a zombie for as long as this process
-        // lives — one per change of size, and the display view's `←`/`→` on
-        // the text row can produce one per keypress. Waiting here would block
-        // the frame, which is the thing that must not happen; a thread does
-        // neither.
-        Ok(child) => {
-            // THE CHILD IS NOT SURRENDERED UNTIL THE THREAD EXISTS.
-            //
-            // The first attempt at this moved it into the closure and logged
-            // the spawn's failure — but `Builder::spawn` DROPS the closure
-            // when it fails, taking the child with it, un-waited. So the
-            // fallback was a comment describing code that was not there,
-            // which is worse than the zombie it was written to prevent: the
-            // comment made it look handled.
-            //
-            // Sharing it means the thread takes it if it starts, and this
-            // takes it back if it does not. Blocking here is the lesser harm:
-            // a machine that cannot spawn a thread has worse trouble than one
-            // slow frame.
-            let held = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
-            let theirs = std::sync::Arc::clone(&held);
-            let started = std::thread::Builder::new()
-                .name("dconf".to_owned())
-                .spawn(move || {
-                    let taken = theirs.lock().ok().and_then(|mut c| c.take());
-                    if let Some(mut c) = taken {
-                        let _ = c.wait();
-                    }
-                });
-            if let Err(e) = started {
-                tracing::warn!(error = %e, "no thread to reap dconf with; waiting here");
-                let taken = held.lock().ok().and_then(|mut c| c.take());
-                if let Some(mut c) = taken {
-                    let _ = c.wait();
-                }
-            }
-        }
+        .status();
+    match said {
+        // 1 is `pkill`'s "nothing matched", which is a machine with no
+        // terminal open — the ordinary case, and not worth a line.
+        Ok(code) if code.success() || code.code() == Some(1) => {}
+        Ok(code) => tracing::debug!(?code, "pkill would not signal the terminals"),
         Err(e) => {
-            tracing::warn!(error = %e, "no dconf; foreign applications keep their own text size");
+            tracing::debug!(error = %e, "no pkill; open terminals keep their size until reopened")
         }
     }
 }
@@ -207,28 +479,99 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_multiplier_is_a_double_gvariant_can_read() {
-        // GVariant parses it, and it does not know what a comma means in a
-        // number — a machine whose locale writes `1,25` would hand dconf
-        // something it refuses, and the refusal would be on a child process
-        // nobody is waiting for.
-        assert_eq!(multiplier(100), "1.00");
-        assert_eq!(multiplier(125), "1.25");
-        assert_eq!(multiplier(70), "0.70");
-        assert_eq!(multiplier(200), "2.00");
-        for percent in [70u16, 75, 100, 155, 200] {
-            let m = multiplier(percent);
-            assert!(!m.contains(','), "{m}");
-            assert!(m.parse::<f64>().is_ok(), "{m}");
-        }
+    fn a_font_description_splits_into_a_family_and_a_size() {
+        // The family may hold spaces and words; the size is the last token.
+        assert_eq!(split_font("Cantarell 11"), Some(("Cantarell", 11.0)));
+        assert_eq!(
+            split_font("Noto Sans CJK JP 11"),
+            Some(("Noto Sans CJK JP", 11.0))
+        );
+        assert_eq!(
+            split_font("Cantarell Bold 12.5"),
+            Some(("Cantarell Bold", 12.5))
+        );
+        // AND WHAT CANNOT BE READ IS LEFT ALONE. Each of these makes the
+        // caller skip that key for ever rather than rewrite it — losing
+        // somebody's font is worse than not scaling it.
+        assert_eq!(split_font(""), None);
+        assert_eq!(split_font("Cantarell"), None);
+        assert_eq!(split_font("Cantarell nought"), None);
+        assert_eq!(split_font("Cantarell 0"), None);
+        assert_eq!(split_font("Cantarell -11"), None);
     }
 
     #[test]
-    fn a_hundred_percent_is_the_toolkits_own_size() {
-        // The key is a MULTIPLIER. Writing `1.0` is not "18 pixels", it is
-        // "whatever you were going to do" — which is the only honest thing to
-        // hand an application whose comfortable size is not ours to know.
-        assert_eq!(multiplier(ronoctua_tokens::text::NORMAL), "1.00");
+    fn the_size_is_always_taken_from_the_untouched_description() {
+        // THE DEFECT THIS SHAPE EXISTS AGAINST is compounding. The size is
+        // applied again on every change, so scaling what is already in dconf
+        // would multiply the last change by this one: 125% twice is 156%, and
+        // nothing on the screen would say why.
+        let had = "Cantarell 11";
+        assert_eq!(font_at(had, 100).as_deref(), Some("Cantarell 11.0"));
+        assert_eq!(font_at(had, 125).as_deref(), Some("Cantarell 13.8"));
+        assert_eq!(font_at(had, 200).as_deref(), Some("Cantarell 22.0"));
+        assert_eq!(font_at(had, 70).as_deref(), Some("Cantarell 7.7"));
+        // Applying twice from the SAME starting point answers the same thing,
+        // which is what makes the write idempotent.
+        assert_eq!(font_at(had, 125), font_at(had, 125));
+        // And going back to a hundred puts back what was found.
+        let (family, points) = split_font(had).unwrap();
+        assert_eq!(
+            font_at(had, 100).as_deref(),
+            Some(&*format!("{family} {points:.1}"))
+        );
+        // A DECIMAL SURVIVES, because the ladder steps by five: 11 pt at 105%
+        // is 11,55 and at 110% is 12,1. Rounded to whole points both are 12,
+        // and one press of the key would do nothing.
+        assert_ne!(font_at(had, 105), font_at(had, 110));
+    }
+
+    #[test]
+    fn a_gvariant_string_survives_the_round_trip() {
+        // `dconf read` answers a quoted literal and `dconf write` wants one.
+        assert_eq!(quoted("Cantarell 11"), "'Cantarell 11'");
+        assert_eq!(unquoted("'Cantarell 11'").as_deref(), Some("Cantarell 11"));
+        assert_eq!(
+            unquoted("'Cantarell 11'\n").as_deref(),
+            Some("Cantarell 11")
+        );
+        // AN UNSET KEY ANSWERS NOTHING, and nothing is not a font.
+        assert_eq!(unquoted(""), None);
+        assert_eq!(unquoted("\n"), None);
+        assert_eq!(unquoted("''"), None);
+        // A quote inside the value must not end the literal early.
+        assert_eq!(quoted("Bob's Sans 11"), "'Bob\\'s Sans 11'");
+        assert_eq!(
+            unquoted(&quoted("Bob's Sans 11")).as_deref(),
+            Some("Bob's Sans 11")
+        );
+    }
+
+    #[test]
+    fn the_terminal_is_scaled_by_the_same_arithmetic() {
+        // Ghostty takes POINTS, and the base is the token both this and
+        // `nix/modules/terminal.nix` read — so the terminal cannot end up at a
+        // different size from everything around it.
+        let base = f64::from(ronoctua_tokens::font::TERMINAL_POINTS);
+        assert!(
+            (base - 11.0).abs() < f64::EPSILON,
+            "the token moved: {base}"
+        );
+        for percent in [70u16, 100, 125, 200] {
+            let want = base * f64::from(percent) / 100.0;
+            let said = font_at(&format!("x {base}"), percent).unwrap();
+            let got: f64 = said.rsplit(' ').next().unwrap().parse().unwrap();
+            // AGAINST THE ROUNDING ITSELF, not a tolerance. A font
+            // description carries one decimal, so the answer IS `want` rounded
+            // to one — and `(13.8 - 13.75).abs()` is 0.050000000000000710,
+            // which no epsilon of 0.05 admits. Comparing to the rounded value
+            // says what is meant and has no epsilon to get wrong.
+            let rounded = (want * 10.0).round() / 10.0;
+            assert!(
+                (got - rounded).abs() < f64::EPSILON * 16.0,
+                "{percent}%: {got} against {rounded}"
+            );
+        }
     }
 }
 

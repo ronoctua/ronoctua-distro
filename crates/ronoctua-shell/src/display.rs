@@ -1842,6 +1842,27 @@ impl View {
             // baseline that has moved on.
             self.no_thread || self.blind,
         );
+        // AND UNDER THE CURSOR, WHAT THE SIZE ACTUALLY REACHES.
+        //
+        // The row is one label and one number, and a person reads "the size of
+        // the text" as meaning ALL of it. Most of it is true — the shell and
+        // its windows move at once, and GTK and Qt applications follow as they
+        // redraw, because the size travels in the font description those
+        // toolkits read. What is not true for every application is WHEN.
+        //
+        // So the exception is named, and only the ones that were MEASURED are
+        // named: `toolkits::wake_the_terminals` signals the running Ghostty
+        // processes, and what it cannot reach is anything already open that
+        // reads its configuration once. Promising more than was measured is
+        // what the sentence in `docs/PENDING.md` was written against.
+        //
+        // Under the cursor and nowhere else — the discreet second register the
+        // format buffer uses, so a list of settings does not become a list of
+        // paragraphs. `View::at` is what the cursor is ON, which is the same
+        // field `settle` finds the row again by.
+        if self.at.as_ref() == Some(&Target::Text) && !self.no_thread && !self.blind {
+            b.told(b.texts.t(ronoctua_i18n::key::DISPLAY_TEXT_REACHES));
+        }
     }
 
     /// One screen and everything about it.
@@ -4862,5 +4883,46 @@ mod tests {
             said(&View::fresh(), &now).contains(&sentence),
             "the settings look lost and nothing on the list says why",
         );
+    }
+
+    #[test]
+    fn the_size_row_says_what_it_reaches_only_under_the_cursor() {
+        // A LIST OF SETTINGS MUST NOT BECOME A LIST OF PARAGRAPHS. The
+        // sentence belongs to the row the cursor is on — the second register
+        // the format buffer uses — and nowhere else.
+        let t = texts();
+        let moment = Instant::now();
+        let now = snapshot(vec![screen("eDP-1", true)]);
+        let said = |v: &View| {
+            v.rows(&now, 400, moment, &t)
+                .iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let sentence = t.t(ronoctua_i18n::key::DISPLAY_TEXT_REACHES);
+
+        // The cursor starts on the first screen, so the line is not there.
+        let mut v = View::fresh();
+        v.at = Some(Target::Screen("eDP-1".to_owned()));
+        assert!(
+            !said(&v).contains(&sentence),
+            "the sentence is on every row"
+        );
+
+        // On the size row, it is.
+        v.at = Some(Target::Text);
+        assert!(
+            said(&v).contains(&sentence),
+            "the row promises a size and says nothing about what it reaches",
+        );
+
+        // AND A ROW THAT REFUSES SAYS ITS OWN REASON INSTEAD. Two sentences on
+        // one row is the paragraph this is against, and the refusal is the one
+        // that matters.
+        let mut mute = View::fresh();
+        mute.without_a_reader();
+        mute.at = Some(Target::Text);
+        assert!(!said(&mute).contains(&sentence));
     }
 }

@@ -2702,6 +2702,12 @@ display-this-one = { $name } — esta
 display-arrangement = Disposição
 display-text-size = Tamanho do texto
 
+# Sob o cursor na linha do tamanho: o que a mudança alcança na hora e o que
+# espera. Diz o que foi MEDIDO — ver docs/PENDING.md — e nunca promete um
+# aplicativo que ninguém observou.
+display-text-reaches = o shell e as janelas dele seguem na hora; aplicativos GTK e Qt seguem conforme redesenham
+display-text-reopens = { $names } ficam no tamanho antigo até reabrir
+
 display-fact-connector = Soquete
 display-fact-filed = Os ajustes dela seguem
 display-fact-size = Tela

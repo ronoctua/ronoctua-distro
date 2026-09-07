@@ -21,29 +21,26 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ### 0.00001. O tamanho do texto: o que ele ainda não alcança · pequeno cada
 
-O texto do shell anda de 70% a 200%, **tudo** que o host desenha anda junto, e as dez portas
-ouvem o arquivo mudar — há check (`one-text-size`) e teste de propriedade. Três coisas ficam de fora, e cada uma por um motivo
-diferente.
+O texto do shell anda de 70% a 200%, **tudo** que o host desenha anda junto, as dez portas ouvem o
+arquivo mudar, e desde 2026-09-07 o tamanho **sai do shell**: ele viaja na DESCRIÇÃO DA FONTE
+(`font-name`, `monospace-font-name`, `document-font-name`), que é o que GTK e Qt leem, e o Ghostty
+ganha arquivo próprio mais um `SIGUSR2`. Duas coisas ficam de fora.
 
-- **Ninguém verificou os apps que não são GTK 4.** O shell escreve
-  `/org/gnome/desktop/interface/text-scaling-factor` no dconf, que é a camada de onde o portal
-  responde. Que o GTK 4 siga **ao vivo** é conhecido (ele mapeia essa chave em `gtk-xft-dpi`). Que o
-  Chromium e o Electron sigam é o que se diz por aí e **não foi medido aqui** — sem um app desses
-  aberto numa sessão com portal, não dá para afirmar. **Como saber que acabou:** abrir um Chromium e
-  um Electron numa sessão de verdade, mudar o tamanho e olhar; e escrever na tela o que
-  segue ao vivo e o que espera reabrir, em vez de prometer.
+- **GTK e Qt seguem a descrição da fonte, e isso foi lido nos binários, não numa tela.** O
+  `qgnomeplatform` 0.8.4 assina `changed::font-name` e `changed::monospace-font-name` (e NÃO
+  `text-scaling-factor` — foi por isso que o canal mudou); o `libgtk` lê as duas. Mas nenhum teste
+  daqui abre um app GTK ou Qt: o que existe é a evidência das strings. **Como saber que acabou:**
+  abrir um de cada numa sessão com portal, mudar o tamanho, e medir — e escrever na tela o que segue
+  ao vivo e o que espera redesenhar, em vez de prometer.
 
-- **O Ghostty tem tamanho próprio.** `nix/modules/terminal.nix` fixa `font-size = 11`, e o Ghostty lê
-  o config dele — nem o atômico nem o `text-scaling-factor` o alcançam. Então o terminal fica no
-  tamanho de ontem enquanto o resto anda, que é o buraco visível de "a pessoa mexeu no texto".
-  **Como saber que acabou:** o `theme.rs` já reescreve `ghostty-theme.conf` quando o tema muda; o
-  tamanho entra pelo mesmo caminho, e o Ghostty relê em processo novo.
+- **O Chromium e o Electron não foram medidos.** Eles leem o portal; se leem a descrição da fonte ou
+  só o multiplicador que agora é zerado, ninguém aqui verificou. **Como saber que acabou:** o mesmo
+  método acima, e se seguirem só o multiplicador, eles entram na frase da tela como exceção
+  nomeada.
 
-- **O terminal não ouve o tema.** Achado ao dar a ele o vigia do tamanho: `terminal.rs` tem laço
-  próprio e **não instala `theme::watch`** — as outras NOVE portas instalam. Então escolher um tema
-  no rodapé recolore tudo menos o terminal, que fica no tema de quando foi aberto. Não é do tamanho
-  do texto; apareceu no caminho. **Como saber que acabou:** as seis linhas que toda porta tem, e o
-  `paint()` no lugar do `ask_paint()` que ele não tem.
+O que ESTÁ medido de ponta a ponta é o Ghostty: o `ghostty-config-includes-theme` deita o
+`ghostty-size.conf` e pergunta ao binário a configuração EFETIVA, que respondeu `11 -> 22` no teto
+da faixa. É o único aplicativo estrangeiro que este repositório consegue interrogar sem sessão.
 
 - **Dois valores em pixel não escalam.** `space.rule.thickness` é 1 px, e é defensável — uma régua é
   uma linha, e uma linha é um pixel lógico em qualquer tamanho. Já `space.files.pictureAir` são 6 px

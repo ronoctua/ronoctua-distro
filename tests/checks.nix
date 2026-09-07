@@ -9595,6 +9595,65 @@ let
                 "nothing downstream can undo"
             )
 
+    # 3c. AND THE SIZE REACHES THE APPLICATIONS THAT ARE NOT OURS.
+    #
+    #     The size does not stop at our own windows, and the channel it takes
+    #     was MEASURED rather than assumed. Two facts decided it, and both are
+    #     in the binaries:
+    #
+    #     - `qgnomeplatform` 0.8.4 subscribes to `changed::font-name`,
+    #       `changed::monospace-font-name` and five more on
+    #       `org.gnome.desktop.interface` — and NOT to `text-scaling-factor`.
+    #       So Qt never followed the multiplier, whatever the `full` profile
+    #       paid for its platform theme.
+    #     - GTK renders at `points x (gtk-xft-dpi/96)`, and `gtk-xft-dpi` comes
+    #       from that same multiplier. So writing BOTH scales GTK twice.
+    #
+    #     There is no channel that reaches Qt and misses GTK. The size
+    #     therefore travels in the font description, the multiplier is reset,
+    #     and Ghostty — which reads neither, having a `font-size` of its own —
+    #     is given a file. Each of those three is a rule here, because each of
+    #     them can be silently undone by one line.
+    #     READ WITH THE STRINGS KEPT. `code` above strips string literals as
+    #     well as comments — right for the rules that hunt for identifiers, and
+    #     wrong here, where the KEY NAMES and the dconf verbs are the evidence.
+    #     Comments still go, so a sentence cannot satisfy any of this.
+    toolkits = (shell / "toolkits.rs").read_text()
+    plain = "\n".join(
+        (l if (cut := l.find("//")) < 0 else l[:cut]) for l in toolkits.splitlines()
+    )
+    for what, why in (
+        (
+            "font-name",
+            "the size no longer travels in the font description, so Qt stops "
+            "following it",
+        ),
+        (
+            '"reset", SCALING_KEY',
+            "the multiplier is not put back, so GTK scales the font AND the "
+            "multiplier — the square of what was asked for",
+        ),
+        (
+            "SIZE_FILE",
+            "Ghostty is not told its own size, and it reads neither of the "
+            "other two channels",
+        ),
+        (
+            "TERMINAL_POINTS",
+            "the terminal's base size is a number written here instead of the "
+            "token `nix/modules/terminal.nix` reads, so the two can drift",
+        ),
+    ):
+        if what not in plain:
+            wrong.append(f"toolkits.rs no longer names `{what}`: {why}")
+    #     AND THE MULTIPLIER IS NEVER WRITTEN AGAIN. Resetting it and then
+    #     writing it is the same defect with an extra step.
+    if re.search(r'"write",\s*SCALING_KEY', plain):
+        wrong.append(
+            "toolkits.rs writes the scaling multiplier again; with the size in "
+            "the font description that scales GTK twice"
+        )
+
     # 4. ONE SHELL SOURCE SETS THE SIZE, for the reason `theme::set` carries:
     #    it is process-wide and the tests run in parallel, so a second one
     #    changes it under the first — and the failure is a FLAKE, which is the
@@ -10504,6 +10563,56 @@ let
         echo "OK: every theme carries its six fragments, and niri merges each desk under a layout of its own"
       '';
 
+  # GHOSTTY STILL RELOADS ON THE SIGNAL THIS SYSTEM SENDS.
+  #
+  # "toolkits::wake_the_terminals" sends SIGUSR2 so a size chosen in
+  # `LEADER s d` reaches the terminals that are ALREADY OPEN. Without it the
+  # new file would only be read by the next window, and the person would have a
+  # row of terminals in yesterday's size beside a footer in today's.
+  #
+  # THE SIGNAL IS NOT IN THE MANUAL. Neither man page mentions USR2; what
+  # exists is the string below, in the binary, under Ghostty's own
+  # "gtk_ghostty_application" log scope — so this is observed behaviour of the
+  # version this system pins, not a promise anybody made. SIGUSR1, which is the
+  # signal one would guess, appears nowhere.
+  #
+  # That is exactly why it needs a check rather than a comment: the day an
+  # upgrade drops it, the terminal quietly keeps the old size and nothing else
+  # in this repository would notice. Here it goes red and says what to do.
+  ghostty-reloads-on-a-signal = mkCheck "ghostty-reloads-on-a-signal" [ pkgs.binutils ] ''
+    # The wrapper is a small C program; the Zig binary beside it carries the
+    # strings.
+    real=${pkgs.ghostty}/bin/.ghostty-wrapped
+    test -x "$real" || real=${pkgs.ghostty}/bin/ghostty
+    strings -n 8 "$real" > said || { echo "ERROR: could not read $real" >&2; exit 1; }
+
+    grep -q "received SIGUSR2, reloading configuration" said || {
+      echo "ERROR: Ghostty ${pkgs.ghostty.version} no longer reloads on SIGUSR2." >&2
+      echo "" >&2
+      echo "       toolkits::wake_the_terminals sends that signal so a size" >&2
+      echo "       chosen in the display view reaches terminals that are" >&2
+      echo "       already open. Without it they keep the old size until they" >&2
+      echo "       are reopened, and nothing on the screen says why." >&2
+      echo "" >&2
+      echo "       What to do: find what this version reloads on — a keybind" >&2
+      echo "       action reload_config is documented — and change" >&2
+      echo "       wake_the_terminals and this check together." >&2
+      exit 1; }
+
+    # AND THE SIGNAL IS THE ONE WE SEND. Reading the binary proves nothing if
+    # the shell sends a different one, and SIGUSR1 is the guess.
+    #
+    # THE ARGUMENT, NOT THE WORD, AND WITH THE COMMENTS GONE. The first
+    # version of this grepped the file for "USR2" and passed while the shell
+    # sent USR1 — because the paragraph explaining the signal says USR2 four
+    # times. A rule a sentence can satisfy is worse than no rule.
+    sed 's|//.*||' ${../crates/ronoctua-shell/src/toolkits.rs} | grep -q '"-USR2"' || {
+      echo "ERROR: the shell does not send SIGUSR2, so open terminals keep their size" >&2
+      exit 1; }
+
+    echo "OK: Ghostty ${pkgs.ghostty.version} reloads on SIGUSR2, and that is what the shell sends"
+  '';
+
   # GHOSTTY WEARS THE THEME: the palette solved for the machine's default, and
   # after it the person's own, optional — AFTER, because in Ghostty the later
   # file wins, and a machine that never chose has no second file at all.
@@ -10521,12 +10630,30 @@ let
         cfg=${pkgs.writeText "ghostty-config" text}
         grep -n '^config-file = ' "$cfg" > lines || {
           echo "ERROR: Ghostty's config includes no palette" >&2; exit 1; }
-        test "$(wc -l < lines)" -eq 2 || {
-          echo "ERROR: two config-file lines were expected:" >&2; cat lines >&2; exit 1; }
-        head -1 lines | grep -q '/ghostty.conf$' || {
+        # THREE, AND IN THIS ORDER — the later file wins in Ghostty, so the
+        # order IS the precedence: the machine's palette, then the theme the
+        # person chose, then the size they chose. A size ahead of the palette
+        # would be overwritten by a file that carries no size at all.
+        test "$(wc -l < lines)" -eq 3 || {
+          echo "ERROR: three config-file lines were expected:" >&2; cat lines >&2; exit 1; }
+        sed -n 1p lines | grep -q '/ghostty.conf$' || {
           echo "ERROR: the first include is not the generated palette:" >&2; cat lines >&2; exit 1; }
-        tail -1 lines | grep -q '= ?/home/.*/.config/ronoctua/ghostty-theme.conf$' || {
-          echo "ERROR: the second include is not the person's optional one:" >&2; cat lines >&2; exit 1; }
+        sed -n 2p lines | grep -q '= ?/home/.*/.config/ronoctua/ghostty-theme.conf$' || {
+          echo "ERROR: the second include is not the person's optional theme:" >&2; cat lines >&2; exit 1; }
+        # AND THE SIZE, LAST. `LEADER s d` moves one number and the terminal
+        # has to move with everything else; `toolkits::tell_them` writes this
+        # file. It is separate from the theme's on purpose — that one is copied
+        # WHOLE out of the store, so a size written into it would be erased by
+        # the next change of theme.
+        sed -n 3p lines | grep -q '= ?/home/.*/.config/ronoctua/ghostty-size.conf$' || {
+          echo "ERROR: the third include is not the person's optional size:" >&2; cat lines >&2; exit 1; }
+
+        # AND THE SIZE IN THE CONFIG IS THE TOKEN'S, not a number typed twice.
+        # `toolkits::tell_them` scales `font::TERMINAL_POINTS`; if the module
+        # wrote a different base the terminal would sit at a size of its own.
+        grep -qE "^font-size = ${toString (import ../assets/tokens/typography.nix).size.terminalPoints}$" "$cfg" || {
+          echo "ERROR: Ghostty's font-size is not font.size.terminalPoints:" >&2
+          grep -n '^font-size' "$cfg" >&2; exit 1; }
         palette=$(head -1 lines | sed 's/.*= //')
         grep -qE '^palette = 0=#[0-9A-F]{6}$' "$palette" || {
           echo "ERROR: the generated palette has no ANSI 0: $palette" >&2; exit 1; }
@@ -10539,14 +10666,51 @@ let
         # takes no config flags: a `--config-file` route could not be proved.)
         export HOME=$TMPDIR/home XDG_CONFIG_HOME=$TMPDIR/xdg
         mkdir -p "$HOME" "$XDG_CONFIG_HOME/ghostty"
-        cp "$cfg" "$XDG_CONFIG_HOME/ghostty/config"
+        # THE TWO OPTIONAL INCLUDES ARE ABSOLUTE, with the person's user name
+        # baked in at build time, so nothing a sandbox can set redirects them —
+        # `docs/PENDING.md` 0.000017 records the same shape for the niri
+        # fragments. Their SPELLING is asserted above, off the module's own
+        # text; here they are pointed at this scratch home so the MECHANISM can
+        # be measured, which is the half no grep can reach.
+        sed "s|= ?/home/[^/]*/\.config/ronoctua/|= ?$HOME/.config/ronoctua/|" "$cfg" \
+          > "$XDG_CONFIG_HOME/ghostty/config"
         ghostty +show-config > effective 2> errors.txt || {
           echo "ERROR: Ghostty refused the system's config:" >&2; cat errors.txt >&2; exit 1; }
         grep -q '^window-decoration = none$' effective || {
           echo "ERROR: the decoration line did not reach Ghostty:" >&2; cat effective >&2; exit 1; }
         grep -qiE '^palette = 0=#[0-9a-f]{6}$' effective || {
           echo "ERROR: the palette did not reach Ghostty:" >&2; cat effective >&2; exit 1; }
-        echo "OK: Ghostty reads the system's config, and it carries the default palette, then the person's"
+
+        # AND THE SIZE THE PERSON CHOSE REACHES IT — MEASURED, not argued.
+        #
+        # This is the one end-to-end proof in the repository that a size chosen
+        # in `LEADER s d` arrives at a foreign application. The shell writes
+        # `ghostty-size.conf`; here that file is laid down exactly as
+        # `toolkits::tell_them` writes it, and Ghostty is asked what its
+        # EFFECTIVE font size is. If the include is wrong, if the order is
+        # wrong, or if the later file stops winning, this number does not move.
+        #
+        # 200% is used because it is the ceiling of the range and doubles a
+        # number no rounding can blur.
+        base=$(grep '^font-size = ' "$cfg" | sed 's/.*= //')
+        want=$(awk -v b="$base" 'BEGIN { printf "%.1f", b * 2 }')
+        mkdir -p "$HOME/.config/ronoctua"
+        printf '# GENERATED by ronoctua-shell. Do not edit — `LEADER s d` rewrites it.\nfont-size = %s\n' "$want" \
+          > "$HOME/.config/ronoctua/ghostty-size.conf"
+        ghostty +show-config > doubled 2> errors.txt || {
+          echo "ERROR: Ghostty refused the size file:" >&2; cat errors.txt >&2; exit 1; }
+        said=$(grep '^font-size = ' doubled | sed 's/.*= //')
+        awk -v a="$said" -v b="$want" 'BEGIN { exit (a - b < 0.05 && b - a < 0.05) ? 0 : 1 }' || {
+          echo "ERROR: the size the person chose did not reach Ghostty." >&2
+          echo "       the file said $want and the binary reports $said" >&2
+          echo "" >&2
+          echo "       This is what makes the terminal follow LEADER s d. If the" >&2
+          echo "       third config-file include, or its order, or the name of" >&2
+          echo "       the file changes, the terminal silently keeps its own" >&2
+          echo "       size while everything around it moves." >&2
+          exit 1; }
+
+        echo "OK: Ghostty reads the system's config, its palette, and the size the person chose ($base -> $said)"
       '';
 
   # GHOSTTY'S WINDOWS ARE PROCESSES THROUGH EVERY DOOR. The module's config says
@@ -13055,6 +13219,7 @@ let
       colours-are-computed
       themes-have-fragments
       ghostty-config-includes-theme
+      ghostty-reloads-on-a-signal
       ghostty-windows-are-processes
       foreign-apps-prefer-dark
       secrets-out-of-repo

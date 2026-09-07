@@ -28,6 +28,19 @@
     # `chrome::Door`, which existed only to say that the doors differed here.
     base = 18;
     small = 15;
+    # THE FOREIGN TERMINAL'S SIZE, in POINTS and not pixels.
+    #
+    # Ghostty is not ours: it draws with its own renderer and takes a `font-size`
+    # in points (`nix/modules/terminal.nix` writes it, and the manual is explicit
+    # that the unit is points). Every other number in this block is logical
+    # pixels, which is why this one says so in its name.
+    #
+    # It is here, and not a literal in the module, because TWO things need it:
+    # the module that writes Ghostty's config, and `toolkits::tell_them`, which
+    # scales it when the person moves the size of the text. A number written in
+    # both places is a number that drifts, and the drift would show as a
+    # terminal at a different size from everything around it.
+    terminalPoints = 11;
     # THE SIZE A CHROME GLYPH IS DRAWN AT, next to text of the base size.
     #
     # It is not taste, it is a MEASUREMENT. In the real face the ink of

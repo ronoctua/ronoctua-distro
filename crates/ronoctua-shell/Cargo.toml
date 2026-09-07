@@ -112,6 +112,10 @@ raw-window-handle.workspace = true
 
 wgpu.workspace = true
 anyhow.workspace = true
+# The three font descriptions a toolkit reads, as they were BEFORE this
+# system ever touched them — see `toolkits::Untouched`. One tiny file, so a
+# size can be applied again and again without compounding.
+serde = { workspace = true }
 serde_json.workspace = true
 resvg.workspace = true
 image.workspace = true

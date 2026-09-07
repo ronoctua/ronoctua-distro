@@ -593,9 +593,22 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   sessão. `apps::pixmap_key` e `buffer::svg_key` carregam o lado, e o `svg_key` carrega **o token
   também** — a tinta é `tema × token`, e só o tema estava lá. O `.clear()` que sobrou é teto de
   memória, não correção. **O tamanho do
-  texto vale para o shell E para os apps** (`toolkits.rs`, dconf), e a aritmética do passo é do
-  token, uma só (`tokens::text::stepped`, que recebe de ONDE se parte — a vista segura o que pediu
-  até o arquivo voltar).
+  texto vale para o shell E para os apps**, e o canal é a DESCRIÇÃO DA FONTE, não o multiplicador
+  (`toolkits.rs`). Medido, não suposto: o `qgnomeplatform` assina `changed::font-name` e
+  `changed::monospace-font-name` e **não** o `text-scaling-factor` — então o Qt nunca seguiu o
+  multiplicador, por mais que o perfil `full` pague 591 MiB pelo tema de plataforma. E o GTK desenha
+  a `pontos × (gtk-xft-dpi/96)`, com o `gtk-xft-dpi` vindo do multiplicador, então escrever os DOIS
+  escala o GTK duas vezes. Como não existe canal que alcance o Qt sem alcançar o GTK, o tamanho vai
+  na fonte, o multiplicador é ZERADO (resíduo dele multiplicaria o que agora viaja na fonte: o
+  quadrado do que a pessoa pediu), e a escala sai SEMPRE da descrição intocada, guardada em
+  `toolkits.json` — reescalar o que já está no dconf compõe, e 125% duas vezes é 156%. **O Ghostty
+  tem `font-size` próprio**: ganha `ghostty-size.conf` (arquivo SÓ dele — o do tema é copiado
+  inteiro do store e apagaria o tamanho), incluído por último, mais um `SIGUSR2`, que é o que a
+  1.3.1 recarrega e não está em manual nenhum — foi lido no binário, e o
+  `ghostty-reloads-on-a-signal` reancora se a versão mudar. Provado de ponta a ponta pelo
+  `+show-config`: 11 → 22 no teto. A aritmética do passo é do token, uma só
+  (`tokens::text::stepped`, que recebe de ONDE se parte — a vista segura o que pediu até o arquivo
+  voltar), e a faixa é travada contra o schema do GNOME (0,5–3,0) no `gen-tokens.py`.
 - **`LEADER s m` é o painel de memória**, e a capacidade `system` é a trava: o host amostra
   (`ronoctua-memory`, única fronteira com `/proc`) e manda `input::survey`; o buffer desenha e pede
   por `effect::ask`. Relógio de 1 s lê pseudo-arquivo; varredura e `systemctl` vão para thread.

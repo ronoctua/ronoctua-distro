@@ -113,7 +113,7 @@ in
       # The name comes from the token, it is not hard-coded here by
       # accident: it is the same `families.mono` that feeds fontconfig and the renderer.
       font-family = ${ronoctua.fonts.families.mono}
-      font-size = 11
+      font-size = ${toString ronoctua.fonts.sizes.terminalPoints}
       # The font is monospaced at exactly 0.600 em. Do not let Ghostty
       # adjust cell width, or the grid falls out of line with the rest of the system.
       adjust-cell-width = 0
@@ -140,6 +140,22 @@ in
       # (`ghosttyPerWindow`, at the top).
       config-file = ${ronoctua.themed}/${cfg.theme}/ghostty.conf
       config-file = ?/home/${cfg.user}/.config/ronoctua/ghostty-theme.conf
+
+      # --- and the size of the text, which is the person's too ----------
+      # THIRD, AND IN A FILE OF ITS OWN. `LEADER s d` moves one number and
+      # everything the machine draws follows it — this is how it reaches the
+      # terminal. `crates/ronoctua-shell/src/toolkits.rs` writes a single
+      # `font-size` line here.
+      #
+      # NOT INSIDE `ghostty-theme.conf`, and that is not tidiness: the theme
+      # fragment is COPIED WHOLE out of the store by `theme::copy_fragments`,
+      # so a size written into it would be erased by the next change of
+      # theme. One writer per file is the rule the rest of this system keeps.
+      #
+      # LAST, because in Ghostty the later file wins: the size the person
+      # chose beats the `font-size` above, and the theme in between carries
+      # only colours.
+      config-file = ?/home/${cfg.user}/.config/ronoctua/ghostty-size.conf
     '';
 
     # Ghostty's terminfo has to be available for remote sessions and for

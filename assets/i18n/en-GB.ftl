@@ -2712,6 +2712,12 @@ display-this-one = { $name } — this one
 display-arrangement = Arrangement
 display-text-size = Size of the text
 
+# Under the cursor on the size row: what a change reaches at once, and what
+# waits. It names what was MEASURED — see docs/PENDING.md — and never promises
+# an application nobody watched.
+display-text-reaches = the shell and its windows follow at once; GTK and Qt applications follow as they redraw
+display-text-reopens = { $names } keep their size until reopened
+
 display-fact-connector = Socket
 display-fact-filed = Its settings follow
 display-fact-size = Screen

@@ -20,6 +20,11 @@
 }:
 
 let
+  # THE TOKEN FILE IS THE TRUTH about every size and family, and this reads it
+  # rather than repeating a number (invariant 9). Only `size.terminalPoints`
+  # leaves here — see `sizes` at the bottom.
+  typography = import ../assets/tokens/typography.nix;
+
   # fonttools to rewrite name tables; brotli to read/write WOFF2;
   # freetype-py to rasterise the console's PSF.
   py = python3.withPackages (ps: [
@@ -322,6 +327,18 @@ in
     mono = familyNF;
     ui = familyNF;
     plain = familyPlain;
+  };
+
+  # The sizes a MODULE needs, straight out of the token file.
+  #
+  # Only the foreign terminal's, and only because Ghostty takes a size in its
+  # own config: everything this system draws itself asks
+  # `ronoctua_tokens::text::size()` at runtime instead. Read from the token so
+  # `nix/modules/terminal.nix` and `toolkits::tell_them` cannot drift apart —
+  # a terminal at a different size from everything around it is exactly the
+  # defect this feature exists to remove.
+  sizes = {
+    inherit (typography.size) terminalPoints;
   };
 
   inherit coreFaces;

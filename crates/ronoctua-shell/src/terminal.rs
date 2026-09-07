@@ -223,6 +223,30 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
         })
         .map_err(|e| anyhow::anyhow!("hang the text size channel: {e}"))?;
 
+    // AND THE THEME, for the same reason and by the same means.
+    //
+    // This was the ONE door of the ten without it: choosing a theme in the
+    // footer recoloured the whole system except the terminal, which sat there
+    // in the palette it had opened with. It was found while giving this door
+    // the size watch above — the two are the same six lines, and only one of
+    // them was here.
+    let (theme_sender, theme_changed) =
+        smithay_client_toolkit::reexports::calloop::channel::channel::<()>();
+    let theme_watch = crate::theme::watch(move || theme_sender.send(()).is_ok());
+    cycle
+        .handle()
+        .insert_source(theme_changed, |event, (), j: &mut TerminalWindow| {
+            if let smithay_client_toolkit::reexports::calloop::channel::Event::Msg(()) = event
+                && crate::theme::reload()
+            {
+                // `paint` AND NOT `ask_paint`: this door has no frame-callback
+                // throttle of its own — the module's header says the PTY's
+                // ping is what wakes it — so there is nothing to ask.
+                j.paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("hang the theme channel: {e}"))?;
+
     // The PTY's thread. It touches neither Wayland nor wgpu — it only feeds the
     // engine and rings the ping.
     {
@@ -252,6 +276,7 @@ fn host_as(app_id: &str, title: &str, program: Option<&str>, args: &[String]) ->
 
     let mut state = TerminalWindow {
         _size_watch: size_watch,
+        _theme_watch: theme_watch,
         conn: conn.clone(),
         handle: cycle.handle(),
         registry: RegistryState::new(&globals),
@@ -342,6 +367,8 @@ struct TerminalWindow {
     /// function would drop the watch at its end, and nothing anywhere would
     /// say so — the terminal would simply stop following the size.
     _size_watch: Option<ronoctua_files::notice::Notice>,
+    /// The theme's watch, kept alive for the window's life — see `_size_watch`.
+    _theme_watch: Option<ronoctua_files::notice::Notice>,
     /// The loop, for the one thing that needs it: a keyboard that REPEATS.
     /// Holding backspace in a terminal is meant to erase several characters,
     /// and SCTK only repeats for a keyboard made with

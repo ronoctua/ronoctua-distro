@@ -232,9 +232,20 @@ def main() -> int:
     A(f'    pub const FAMILY_MONO: &str = "{typo["family"]["mono"]}";')
     A(f'    /// `font.family.ui` — the same one: the system is monospaced by design.')
     A(f'    pub const FAMILY_UI: &str = "{typo["family"]["ui"]}";')
+    # THE ONE SIZE THAT IS NOT IN PIXELS, taken out of the loop so its doc
+    # cannot say the wrong unit. Ghostty is a foreign renderer and takes points.
     for k, v in sorted(typo["size"].items()):
+        if k == "terminalPoints":
+            continue
         A(f"    /// `font.size.{k}`, in logical px.")
         A(f"    pub const SIZE_{k.upper()}: f32 = {float(v)};")
+    A("    /// `font.size.terminalPoints` — the foreign terminal's size, in POINTS.")
+    A("    ///")
+    A("    /// Ghostty draws with its own renderer and its `font-size` is in")
+    A("    /// points, not the logical pixels every other size here is in. Both")
+    A("    /// `nix/modules/terminal.nix` and `toolkits::tell_them` read it, which")
+    A("    /// is why it is a token and not a literal in either.")
+    A(f'    pub const TERMINAL_POINTS: f32 = {float(typo["size"]["terminalPoints"])};')
     A("")
     # THE RANGE THE PERSON MAY MOVE THE BASE IN, in percent. `u16` and not
     # `f32`: a percentage of a size is a whole number of steps, and a float
@@ -278,6 +289,33 @@ def main() -> int:
             f"100% is not reachable in {floor}..{ceiling} by steps of {step}, "
             "so the design's own size would not be a size anybody can return to"
         )
+    # AND THE RANGE FITS WHAT THE FOREIGN TOOLKITS ACCEPT.
+    #
+    # The size does not stop at our own windows: `toolkits.rs` carries it to
+    # GTK, Qt and Ghostty through `org.gnome.desktop.interface`. The GNOME
+    # schema declares its scaling key as
+    #
+    #     <key name="text-scaling-factor" type="d"><range min="0.5" max="3.0"/>
+    #
+    # (`gsettings-desktop-schemas`, `org.gnome.desktop.interface.gschema.xml`),
+    # and the font-size keys are read by toolkits that will simply refuse or
+    # clamp a value they think absurd.
+    #
+    # `dconf write` DOES NOT VALIDATE against the schema — it writes the raw
+    # GVariant — so a range widened here would leave our own windows correct
+    # and every foreign application quietly disagreeing with them, which is
+    # the one failure this whole feature exists to avoid. Nothing downstream
+    # can catch it: the shell would be right.
+    #
+    # The bounds are the schema's, in percent.
+    FOREIGN_FLOOR, FOREIGN_CEILING = 50, 300
+    for name, end in (("floor", floor), ("ceiling", ceiling)):
+        if not FOREIGN_FLOOR <= end <= FOREIGN_CEILING:
+            raise SystemExit(
+                f"font.scale.{name} is {end}%, outside the {FOREIGN_FLOOR}.."
+                f"{FOREIGN_CEILING}% that the foreign toolkits accept — our own "
+                "windows would follow it and GTK, Qt and Ghostty would not"
+            )
     for k, v in sorted(typo["scale"].items()):
         A(f"    /// `font.scale.{k}`, in percent of `font.size.base`.")
         A(f"    pub const SCALE_{k.upper()}: u16 = {int(v)};")
