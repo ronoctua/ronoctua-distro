@@ -128,11 +128,12 @@ impl Journal {
     ///
     /// The directory cannot be created, or the file cannot be written.
     pub fn write_to(&self, dir: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(dir)?;
         // COMPACT, unlike the preferences: nobody edits this by hand, and the
         // one thing it should not be is large.
         let text = serde_json::to_string(self).map_err(std::io::Error::other)?;
-        std::fs::write(dir.join(JOURNAL_FILE), text)
+        // AND ATOMICALLY, like every other store in this tree — see the same
+        // line in `prefs::write_to`.
+        ronoctua_xdg::write_atomically(dir, JOURNAL_FILE, text.as_bytes())
     }
 }
 

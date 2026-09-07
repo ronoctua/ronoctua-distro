@@ -37,8 +37,35 @@
   # An OPEN ENVELOPE is the drawing everybody already reads as "read", and a bin
   # is the drawing everybody already reads as "gone". Neither is a circle, and
   # neither needs a legend.
+  # AND THE SAME CONTROL THE OTHER WAY. A row that is read keeps the target and
+  # changes the drawing: the envelope with the unread mark, which is the verb
+  # this one has and the open one does not. Marking read used to be a one-way
+  # door — the row simply lost its envelope — so a slip of the hand was read for
+  # fifteen days. One control, two drawings, and the drawing says which way it
+  # goes.
+  #
+  # `md-email_outline`, the plain closed envelope, was the first choice and the
+  # scale check refused it: it draws at 78% of the digit's height against the
+  # open one's 95%, so the pair would have read as two different sizes of the
+  # same idea.
   notification-mark-read = "md-email_open_outline";
+  notification-mark-unread = "md-email_mark_as_unread";
   notification-delete = "cod-trash";
+
+  # AND THE MARK THAT SAYS "THERE IS SOMETHING TO PRESS HERE".
+  #
+  # Not the buttons: a notification may carry several, with labels that are
+  # sentences, and a row is one line — the owner read two of them crowding a
+  # line out and said so. The row says only THAT there are some; opening it
+  # lists them, one under the other.
+  #
+  # It was an ELLIPSIS, and the owner read that off the screen too: three dots
+  # mean "there is more text", which is what the elision beside it already
+  # means — the two ran together as `disconn…⋯`. A HAND TAPPING means the one
+  # thing that is true here and nowhere else on the row: there is something to
+  # press. It is not itself a control — what acts is `RET`, and what the
+  # pointer can press are the two targets at the end.
+  notification-has-actions = "md-gesture_tap";
 
   # HOW LONG THE ONE ON SCREEN HAS LEFT — a pie in ONE cell, eight steps.
   #

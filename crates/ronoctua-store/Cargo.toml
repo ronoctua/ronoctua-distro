@@ -1,0 +1,17 @@
+[package]
+name = "ronoctua-store"
+description = "One store: a file under a root, written whole and atomically, read back or degraded to its default with a reason — and the second root, which is the repository."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

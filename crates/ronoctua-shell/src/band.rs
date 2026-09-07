@@ -308,10 +308,14 @@ pub fn lines(
                 // know what it says, so we do not pretend to translate it.
                 ronoctua_notify::Label::Text(t) => t.clone(),
             };
-            let text = match a.key {
-                Some(k) => format!("[{k}] {label}"),
-                None => label.clone(),
-            };
+            // NO LETTER IN FRONT OF IT any more. An action used to carry one
+            // and draw it here as `[b] bluetooth`, and the letter only ever
+            // worked in the MANAGER — the band cannot take a key at all, since
+            // the footer at rest does not capture the keyboard. So it was a
+            // key taught on one screen and pressed on another, in a manager
+            // that already teaches a dozen and will teach more. The arrows
+            // reach an action now, in the open record.
+            let text = label.clone();
             let w = layout::width(&text);
             if x + w >= columns {
                 break;
@@ -321,13 +325,11 @@ pub fn lines(
                 text,
                 color: tokens::color::NOTIFICATION_QUIET,
                 hit: Some(Hit::Action(i)),
-                explain: Some(words.texts.t_with(
-                    ronoctua_i18n::key::HINT_NOTIF_ACTION,
-                    &[
-                        ("action", &label),
-                        ("key", &a.key.map(String::from).unwrap_or_default()),
-                    ],
-                )),
+                explain: Some(
+                    words
+                        .texts
+                        .t_with(ronoctua_i18n::key::HINT_NOTIF_ACTION, &[("action", &label)]),
+                ),
             });
             x += w + tokens::space::MODELINE_SEGMENTGAP;
         }
@@ -372,7 +374,6 @@ mod tests {
         n.actions = (0..actions)
             .map(|i| ronoctua_notify::Action {
                 id: format!("a{i}"),
-                key: Some(char::from(b'a' + i as u8)),
                 label: ronoctua_notify::Label::Text(format!("action {i}")),
                 doing: ronoctua_notify::Doing::Invoke,
             })
@@ -509,9 +510,15 @@ mod tests {
     }
 
     #[test]
-    fn every_action_is_clickable_and_says_its_letter() {
-        // Nothing the mouse reaches that the keyboard does not: the letter is
-        // drawn, and it is what one presses in the manager.
+    fn every_action_is_clickable_and_says_only_its_words() {
+        // EVERY ONE IS A TARGET, and none of them carries a letter.
+        //
+        // They used to be drawn `[b] bluetooth`, and the letter only ever
+        // worked in the MANAGER — the band cannot take a key at all, since the
+        // footer at rest does not capture the keyboard. A key taught on one
+        // screen and pressed on another, in a manager that already teaches a
+        // dozen: the owner asked for it gone, and the arrows reach an action
+        // in the open record instead.
         let t = words();
         let w = Words { texts: &t };
         let s = shown(Show::Full, "corpo", 3);
@@ -520,7 +527,16 @@ mod tests {
         assert_eq!(last.pieces.len(), 3);
         for (i, p) in last.pieces.iter().enumerate() {
             assert_eq!(p.hit, Some(Hit::Action(i)));
-            assert!(p.text.starts_with('['), "{:?} has no letter", p.text);
+            assert!(
+                !p.text.starts_with('['),
+                "{:?} still carries a letter",
+                p.text
+            );
+            assert!(
+                p.explain.is_some(),
+                "{:?} does not say what it does",
+                p.text
+            );
         }
     }
 

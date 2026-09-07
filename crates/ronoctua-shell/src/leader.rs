@@ -1188,6 +1188,50 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "notif-act",
             label: key::CMD_NOTIF_ACT,
         },
+        // `RET` ON A ROW opens the record whole — body wrapped, buttons drawn,
+        // facts beside it. It is a name of its own for `notif-adjust`'s
+        // reason: the same key runs the FOCUSED BUTTON a moment later, and one
+        // id with two meanings is one label that lies at one of the two.
+        Command {
+            id: "notif-see",
+            label: key::CMD_NOTIF_SEE,
+        },
+        Command {
+            id: "notif-filters",
+            label: key::CMD_NOTIF_FILTERS,
+        },
+        Command {
+            id: "notif-new",
+            label: key::CMD_NOTIF_NEW,
+        },
+        Command {
+            id: "notif-drop",
+            label: key::CMD_NOTIF_DROP,
+        },
+        Command {
+            id: "notif-share",
+            label: key::CMD_NOTIF_SHARE,
+        },
+        Command {
+            id: "notif-share-answer",
+            label: key::CMD_NOTIF_SHARE_ANSWER,
+        },
+        Command {
+            id: "notif-draft-type",
+            label: key::CMD_NOTIF_DRAFT_TYPE,
+        },
+        Command {
+            id: "notif-draft-add",
+            label: key::CMD_NOTIF_DRAFT_ADD,
+        },
+        Command {
+            id: "notif-draft-drop",
+            label: key::CMD_NOTIF_DRAFT_DROP,
+        },
+        Command {
+            id: "notif-draft-save",
+            label: key::CMD_NOTIF_DRAFT_SAVE,
+        },
         // `RET` ON THE CATALOGUE: the entry's sheet. A command of its own for
         // `notif-restore`'s reason — the same key means the other thing on
         // the other column, and one id with two meanings is one label that
@@ -1720,6 +1764,11 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // — see the note over `s w`, which lists all seven.
         ("n w", "notif-window", None),
         ("n r", "notif-read-all", None),
+        // `n f` — THE FILTERS, which had no door at all. They are the third
+        // column of the manager and the only thing that named them was that
+        // column's own title, so the feature existed for whoever pressed `TAB`
+        // twice inside a screen they had already opened.
+        ("n f", "notif-filters", None),
         // `h` for help, as in Doom. A group with a single item is the honest
         // beginning: the other help content comes in here, and the group already
         // exists to receive it.
@@ -1965,6 +2014,13 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .map(|(_, id, _)| *id),
     );
     out.extend(crate::notifications::OF_THE_SHEET.iter().map(|(_, id)| *id));
+    out.extend(crate::notifications::OF_THE_OPEN.iter().map(|(_, id)| *id));
+    out.extend(crate::notifications::OF_THE_DRAFT.iter().map(|(_, id)| *id));
+    out.extend(
+        crate::notifications::OF_THE_QUESTION
+            .iter()
+            .map(|(_, id)| *id),
+    );
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id)| *id));
@@ -2538,6 +2594,16 @@ mod tests {
             "notif-pane-next",
             "notif-pane-previous",
             "notif-knob-next",
+            "notif-see",
+            "notif-filters",
+            "notif-new",
+            "notif-drop",
+            "notif-share",
+            "notif-share-answer",
+            "notif-draft-type",
+            "notif-draft-add",
+            "notif-draft-drop",
+            "notif-draft-save",
             "notif-knob-previous",
             "notif-restore",
             "power-open",

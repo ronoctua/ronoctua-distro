@@ -161,7 +161,12 @@ pub fn host_it() -> Result<()> {
         quads: None,
         dragging: false,
         lines_owed: 0.0,
-        view: crate::notifications::View::fresh(),
+        // THE MACHINE'S CLOCK, read once and carried — an open record shows
+        // when it arrived, and a `View` that read `/etc/localtime` itself would
+        // be a `View` no test could pin to a date.
+        view: crate::notifications::View::fresh().in_zone(ronoctua_files::when::Zone::read_from(
+            std::path::Path::new("/etc/localtime"),
+        )),
         records: Vec::new(),
         book: ronoctua_notify::Book::distro(),
         notes: ronoctua_notify::store::Where::of_env(),
@@ -283,15 +288,22 @@ impl NotificationsWindow {
     fn reread(&mut self) {
         let fresh = self.notes.history();
         let prefs = self.notes.preferences();
-        let same = fresh == self.records
-            && prefs.adjustments == self.book.adjustments
-            && prefs.rules == self.book.mine;
-        if same {
+        // COMPARED AFTER `took`, not before it. A filter that has come back as
+        // one of the distro's leaves `mine` — so the file and the book DIFFER
+        // by design from that moment on, and comparing the raw file against
+        // the book would say "changed" on every one of these ticks, for ever.
+        let mut candidate = ronoctua_notify::Book::distro();
+        candidate.took(prefs.rules, prefs.shared);
+        candidate.adjustments = prefs.adjustments;
+        if fresh == self.records
+            && candidate.mine == self.book.mine
+            && candidate.shared == self.book.shared
+            && candidate.adjustments == self.book.adjustments
+        {
             return;
         }
         self.records = fresh;
-        self.book.mine = prefs.rules;
-        self.book.adjustments = prefs.adjustments;
+        self.book = candidate;
         self.ask_paint();
     }
 
@@ -361,10 +373,19 @@ impl NotificationsWindow {
             self.offset = 0;
             return;
         }
-        // PLUS THE HEADING, which is row zero of what is drawn. Without it the
-        // scrolling aims one line above the focused one — the same adjustment
-        // the footer's own `list_cursor` makes.
-        let cursor = self.view.cursor() + 1;
+        // AN OPEN RECORD IS NOT A LIST EITHER, but it can be taller than the
+        // window — that is why the level exists — so it DOES follow: what it
+        // follows is the line the arrows moved, not a cursor.
+
+        // THE DRAWN LINE OF THE CURSOR, asked of the view — which is what
+        // knows how many titles are above it. Adding one for "the heading" was
+        // the arrangement written down as a constant, and narrow stacks the
+        // two columns, so there are two.
+        let cursor = {
+            let lists = crate::notifications::Lists::of(&self.records, &self.book);
+            self.view
+                .visual_cursor(&lists, &self.book, self.columns, &self.texts)
+        };
         if cursor < self.offset + MARGIN {
             self.offset = cursor.saturating_sub(MARGIN);
         } else if cursor + MARGIN >= self.offset + room {
@@ -393,11 +414,15 @@ impl NotificationsWindow {
             // the footer read the history once, at start-up, and wrote its
             // whole vector over the file on every change, so this door's `d`
             // came undone the moment any notification arrived.
-            Errand::Read(id) => {
-                for r in self.records.iter_mut().filter(|r| r.notification.id == id) {
-                    r.read = true;
-                }
-                self.save_history();
+            Errand::Read(key) => {
+                self.set_read(key, true);
+            }
+            // THE OTHER WAY, and it writes the file just the same. The footer
+            // reconciles `read` in BOTH directions now, so a row put back to
+            // unread here stays unread there — it used to take only `true`,
+            // which would have undone this on the next write.
+            Errand::Unread(key) => {
+                self.set_read(key, false);
             }
             Errand::ReadAll => {
                 // NOT THE SUPPRESSED ONES, for the footer's reason: they are
@@ -411,44 +436,164 @@ impl NotificationsWindow {
                 }
                 self.save_history();
             }
-            Errand::Forget(id) => {
-                self.records.retain(|r| r.notification.id != id);
+            Errand::Forget(key) => {
+                self.records.retain(|r| r.key() != key);
                 self.save_history();
             }
-            // AN ACTION IS THE FOOTER'S TO RUN, and it says so instead of
-            // running it. The footer is the process that knows how to spawn
-            // into a scope of its own (section 9.1) and that holds the
-            // clipboard; a second implementation here is exactly the second
+            // AN ACTION IS THE FOOTER'S TO RUN — and this door SENDS it there
+            // rather than telling somebody to go and do it themselves.
+            //
+            // The owner pressed one here and was told the action runs from the
+            // footer, which is true and useless: the control socket exists for
+            // exactly this, the buffer host already writes to it, and a
+            // command of ours is a command id the footer knows how to run.
+            //
+            // The other three kinds stay the footer's alone and say so: a bus
+            // reply belongs to the process that owns the name, the clipboard
+            // is the footer's, and spawning into a scope of its own is section
+            // 9.1. A second implementation of any of them here is the second
             // door disagreeing with the first.
-            Errand::Act(_, _) => {
-                // THE KEYS ARE AN ARGUMENT, read from the same constant the
-                // keymap binds: a sentence that carried `n h` as text went
-                // stale the day the key moved.
-                // `leader()` and not `leader_chord()`: the sequence is typed
-                // after the LEADER (`SPC`, or `CTRL ALT SPC` in the nested
-                // loop); the chord's label is the modifier held for the
-                // arrows, and in the nested loop the two are not the same.
+            Errand::Act(key, which) => {
+                let sent = self
+                    .records
+                    .iter()
+                    .find(|r| r.key() == key)
+                    .and_then(|r| r.notification.actions.get(which))
+                    .and_then(|a| match &a.doing {
+                        ronoctua_notify::Doing::Command(id) => Some(id.clone()),
+                        _ => None,
+                    })
+                    .map(|id| crate::leader::send_it(&format!("command {id}")));
+                match sent {
+                    Some(Ok(())) => {}
+                    Some(Err(e)) => {
+                        tracing::warn!(error = %e, "the footer did not take the action");
+                        self.message = Some(self.texts.t(ronoctua_i18n::key::NOTIF_ACT_NO_FOOTER));
+                    }
+                    None => self.act_in_the_footer(),
+                }
+            }
+
+            // TYPING HAPPENS IN THE FOOTER, and this door says so rather
+            // than growing a minibuffer of its own — the same answer it gives
+            // about running an action, and the same reason: a second place to
+            // type is a second thing that can disagree.
+            Errand::Ask(_) => {
                 let keys = format!("{} {}", crate::leader(), crate::leader::NOTIF_OPEN_KEYS);
                 self.message = Some(self.texts.t_with(
-                    ronoctua_i18n::key::NOTIF_ACT_IN_THE_FOOTER,
+                    ronoctua_i18n::key::NOTIF_TYPE_IN_THE_FOOTER,
                     &[("keys", &keys)],
                 ));
+            }
+            // THE PERSON'S OWN FILTERS. This door writes the same file the
+            // footer does, and the footer is watching it — the arrangement
+            // `Adjusted` below already has.
+            Errand::Filter { was, rule } => {
+                if let Some(old) = was {
+                    self.book.mine.retain(|r| r.id != old);
+                }
+                self.book.mine.retain(|r| r.id != rule.id);
+                self.book.mine.push(rule);
+                self.save_the_book();
+            }
+            Errand::Unfilter(id) => {
+                self.book.mine.retain(|r| r.id != id);
+                self.book.adjustments.remove(&id);
+                self.save_the_book();
+            }
+            // INTO THE REPOSITORY, one filter at a time, by name, after a
+            // screen that said what it means. This writes SOURCE — what makes
+            // it part of the distro is the next build, and what publishes it
+            // is the owner's own commit, which needs them in front of the
+            // machine anyway.
+            Errand::Share(id) => {
+                let said = self.share_one(&id);
+                self.message = Some(self.texts.t(said));
             }
             Errand::Adjusted(id, verdict) => {
                 match verdict {
                     Some(v) => self.book.adjustments.insert(id, v),
                     None => self.book.adjustments.remove(&id),
                 };
-                let prefs = ronoctua_notify::Preferences {
-                    rules: self.book.mine.clone(),
-                    adjustments: self.book.adjustments.clone(),
-                };
-                if let Err(e) = self.notes.save_preferences(&prefs) {
-                    tracing::warn!(error = %e, "could not write the preferences");
-                }
+                self.save_the_book();
             }
         }
         self.ask_paint();
+    }
+
+    /// Puts one filter of the person's into the repository.
+    ///
+    /// The file is a LIST and this replaces by id, so sharing the same filter
+    /// twice leaves one line rather than two. It is written in the table's own
+    /// shape (`ronoctua_notify::as_table`) — the shape `assets/notifications.nix`
+    /// uses and the generator already validates — because somebody will open
+    /// that file, and serde's `{"Contains": "backup"}` is exactly the thing the
+    /// owner said was not an interface.
+    ///
+    /// It returns the text key to put on the message line.
+    fn share_one(&mut self, id: &str) -> &'static str {
+        let Some(rule) = self.book.mine.iter().find(|r| r.id == id).cloned() else {
+            return ronoctua_i18n::key::NOTIF_SHARE_FAILED;
+        };
+        let shared = ronoctua_store::Shared::of(ronoctua_store::repo_dir());
+        if !shared.is_open() {
+            return ronoctua_i18n::key::NOTIF_SHARE_NOWHERE;
+        }
+        let mut held: Vec<serde_json::Value> =
+            shared.read(crate::notifications::SHARED_NOTIFICATIONS);
+        held.retain(|it| it.get("id").and_then(serde_json::Value::as_str) != Some(id));
+        held.push(ronoctua_notify::as_table(&rule));
+        if let Err(e) = shared.write(crate::notifications::SHARED_NOTIFICATIONS, &held) {
+            tracing::warn!(error = %e, id, "the filter could not be shared");
+            return ronoctua_i18n::key::NOTIF_SHARE_FAILED;
+        }
+        // AND THE SCREEN REMEMBERS IT IS TRAVELLING. The copy on this machine
+        // keeps working until a build brings it back as one of the distro's —
+        // see `Book::took`, which is where it retires.
+        self.book.shared.insert(id.to_owned());
+        self.save_the_book();
+        tracing::info!(id, "a filter was written into the repository");
+        ronoctua_i18n::key::NOTIF_SHARED_WRITTEN
+    }
+
+    /// Says the action is the footer's to run, and where the footer is.
+    ///
+    /// THE KEYS ARE AN ARGUMENT, read from the same constant the keymap binds:
+    /// a sentence that carried `n h` as text went stale the day the key moved.
+    /// `leader()` and not `leader_chord()`: the sequence is typed after the
+    /// LEADER (`SPC`, or `CTRL ALT SPC` in the nested loop).
+    fn act_in_the_footer(&mut self) {
+        let keys = format!("{} {}", crate::leader(), crate::leader::NOTIF_OPEN_KEYS);
+        self.message = Some(self.texts.t_with(
+            ronoctua_i18n::key::NOTIF_ACT_IN_THE_FOOTER,
+            &[("keys", &keys)],
+        ));
+    }
+
+    /// Writes the person's half of the filter book: their filters and their
+    /// adjustments.
+    fn save_the_book(&mut self) {
+        let prefs = ronoctua_notify::Preferences {
+            rules: self.book.mine.clone(),
+            shared: self.book.shared.clone(),
+            adjustments: self.book.adjustments.clone(),
+        };
+        if let Err(e) = self.notes.save_preferences(&prefs) {
+            tracing::warn!(error = %e, "could not write the preferences");
+        }
+    }
+
+    /// Turns one record's `read` on or off, and writes the file.
+    ///
+    /// BY THE RECORD'S NAME and not by the protocol's id: the id repeats across
+    /// sessions and inside one, so `id ==` acted on every record that had ever
+    /// been given that number — and the list being newest first, the extra ones
+    /// were the rows BELOW the one under the cursor.
+    fn set_read(&mut self, key: ronoctua_notify::RecordKey, read: bool) {
+        for r in self.records.iter_mut().filter(|r| r.key() == key) {
+            r.read = read;
+        }
+        self.save_history();
     }
 
     fn save_history(&mut self) {
@@ -528,7 +673,7 @@ impl NotificationsWindow {
         self.message = None;
         let errand = {
             let lists = crate::notifications::Lists::of(&self.records, &self.book);
-            self.view.key(press, &lists, &self.book)
+            self.view.key(press, &lists, &self.book, self.columns)
         };
         // THE CURSOR MOVED, so the list follows it — here, on the EVENT, and
         // never in the paint. See `settle_offset` for what following from a
@@ -617,7 +762,7 @@ impl NotificationsWindow {
             let lists = crate::notifications::Lists::of(&self.records, &self.book);
             let place = Some((self.view.cursor(), lists.len(self.view.pane())));
             spans.extend(crate::chrome::hint_spans(
-                &self.view.hint_of(place, &self.texts),
+                &self.view.hint_of(place, &lists, &self.texts),
                 ronoctua_render::Size::Px(size),
                 margin,
                 0,
@@ -1015,17 +1160,16 @@ impl PointerHandler for NotificationsWindow {
         // view has the same shape: marking read, running an action, adjusting a
         // filter are all things somebody meant to do.
         if let Some((row, cell)) = clicked {
-            // Row zero of the drawing is the heading; it names the column and
-            // is not in it.
-            if let Some(i) = row.checked_sub(1) {
-                let errand = {
-                    let lists = crate::notifications::Lists::of(&self.records, &self.book);
-                    self.view.clicked(i, cell, &lists, self.columns)
-                };
-                self.apply(errand);
-                return;
-            }
-            self.ask_paint();
+            // THE DRAWN ROW, headings and all: which of them is an item of
+            // which column is `View::place_of`, the one plan the drawing
+            // walked. Subtracting one for "the heading" was the arrangement
+            // written down as a constant, and narrow now stacks the two
+            // columns, so there are two of them.
+            let errand = {
+                let lists = crate::notifications::Lists::of(&self.records, &self.book);
+                self.view.clicked(row, cell, &lists, self.columns)
+            };
+            self.apply(errand);
             return;
         }
         if turned {

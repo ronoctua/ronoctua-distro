@@ -107,6 +107,12 @@ pub struct Book {
     pub rules: Vec<Rule>,
     /// The person's own filters. They are tried BEFORE the distro's.
     pub mine: Vec<Rule>,
+    /// Which of `mine` have been sent to the repository and not come back yet.
+    ///
+    /// The screen reads it to say "on its way to everybody" instead of
+    /// "yours"; nothing else does. When a build brings one back it appears in
+    /// `rules` as well, and the copy in `mine` retires — see `Book::settled`.
+    pub shared: std::collections::BTreeSet<String>,
     /// The person's adjustments, keyed by the id of an entry or of a rule.
     pub adjustments: std::collections::BTreeMap<String, Verdict>,
 }
@@ -119,7 +125,39 @@ impl Book {
             entries: generated_entries(),
             rules: generated_rules(),
             mine: Vec::new(),
+            shared: std::collections::BTreeSet::new(),
             adjustments: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Takes the person's half, retiring what has come back as the distro's.
+    ///
+    /// # Why the retirement is here
+    ///
+    /// Because a filter somebody shared travels as TWO copies for a while:
+    /// theirs, which keeps working, and the one in the repository, which does
+    /// nothing until a build brings it into this table. The day it arrives,
+    /// both exist and the catalogue would list it twice.
+    ///
+    /// So the answer to "has it landed" is asked here, once, against the table
+    /// this binary was built with — no socket, no git, no clock. If the id is
+    /// among the distro's rules, the local copy has done its job and goes.
+    pub fn took(&mut self, mine: Vec<Rule>, shared: std::collections::BTreeSet<String>) {
+        let landed: Vec<String> = shared
+            .iter()
+            .filter(|id| self.rules.iter().any(|r| r.id == **id))
+            .cloned()
+            .collect();
+        self.mine = mine
+            .into_iter()
+            .filter(|r| !landed.contains(&r.id))
+            .collect();
+        self.shared = shared
+            .into_iter()
+            .filter(|id| !landed.contains(id))
+            .collect();
+        for id in landed {
+            tracing::info!(id = %id, "a shared filter came back as the distro's");
         }
     }
 
@@ -224,6 +262,57 @@ mod tests {
         // And its glyph came from the font by NAME — nothing in the design
         // system says "screen capture".
         assert!(p.glyph.is_some());
+    }
+
+    #[test]
+    fn what_the_bluetooth_says_arrives_already_read() {
+        // The owner asked for it off his own screen: a keyboard that
+        // reconnects three times had left three things on the bell, and none
+        // of them was a thing to do. All four of the radio's notifications
+        // arrive read — they still SHOW, which is the moment they are worth
+        // anything, and `show` is what decides that.
+        let book = Book::distro();
+        for tag in [
+            "bluetooth-connected",
+            "bluetooth-disconnected",
+            "bluetooth-pairing",
+            "bluetooth-battery-low",
+        ] {
+            let mut n = Notification::fresh_one(
+                1,
+                "bluetooth".into(),
+                None,
+                "a keyboard".into(),
+                String::new(),
+                Urgency::Normal,
+            );
+            n.tags = vec![tag.to_owned()];
+            let p = book.decide(&n);
+            assert_eq!(p.catalogue.as_deref(), Some(tag));
+            assert!(p.auto_read, "`{tag}` still counts on the bell");
+            assert!(
+                !matches!(p.show, Show::Hidden),
+                "`{tag}` stopped showing, which is not what was asked"
+            );
+        }
+        // AND IT IS THE QUEUE THAT HONOURS IT, not the manager: the record is
+        // written read, so nothing has to remember to read it later.
+        let mut n = Notification::fresh_one(
+            1,
+            "bluetooth".into(),
+            None,
+            "a keyboard".into(),
+            String::new(),
+            Urgency::Normal,
+        );
+        n.tags = vec!["bluetooth-connected".to_owned()];
+        let p = book.decide(&n);
+        let mut q = crate::Queue::fresh_one();
+        q.enqueue(n, p, std::time::Instant::now());
+        assert_eq!(q.history().len(), 1);
+        assert!(q.history()[0].read);
+        assert_eq!(q.unread(), 0, "the bell counted one that arrives read");
+        assert!(q.showing().is_some(), "and it never reached the band");
     }
 
     #[test]

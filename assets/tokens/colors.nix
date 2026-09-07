@@ -303,6 +303,40 @@
       strong = "grey.text-loud";
       weak = "grey.text";
     };
+
+    # WHAT THE PERSON WROTE THEMSELVES.
+    #
+    # The catalogue is forty rows the distro ships and, under them, the handful
+    # the person wrote. The word beside each one says which ("your filter"), and
+    # the owner asked for the colour to say it too — a word at the far end of a
+    # row is not what the eye finds when it is looking for its own work.
+    #
+    # It is the ACCENT's family and not a new one: the accent is already what
+    # this system uses for "this one is yours to act on" (the cursor, a focused
+    # button), and a step down from its solid tone reads as related without
+    # competing with the cursor sitting on the same list. No seed changes, so
+    # no theme grows a family for one row.
+    mine = "accent.text";
+
+    # AND WHAT IS ON ITS WAY TO EVERYBODY.
+    #
+    # A filter of theirs that has been sent to the repository and has not come
+    # back yet: still working, still theirs, and no longer only theirs. A third
+    # state gets a third tone rather than a footnote — but a COOLER family than
+    # the accent, because it is not something to act on, it is something that
+    # is happening. The day a build brings it back it becomes one of the
+    # distro's rows and this tone stops applying to it, which is the honest end
+    # of the story.
+    #
+    # `alternate` is the family, and that is not an arbitrary pick from the
+    # list. It is the one this system already spends on "the meaning of this is
+    # in motion" — the hint line's key whose sentence moves under the reader —
+    # and a filter halfway to everybody is exactly that. It was `cyan` first,
+    # and measured: cyan sits ΔE_ok 0.046 from `text.mine`, which is above the
+    # JND and below the distance this project asks of two things that must not
+    # be confused. `alternate` measures 0.079 from `mine` and 0.26 from an
+    # ordinary row.
+    shared = "alternate.text";
   };
 
   # -------------------------------------------------------------------

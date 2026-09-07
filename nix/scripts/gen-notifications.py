@@ -52,8 +52,6 @@ ID = re.compile(r"^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$")
 #
 # The way to find that out would be pressing it and watching something else
 # happen, which is why it is refused here instead.
-RESERVED_KEYS = {"r": "marks them all as read", "d": "forgets the focused notification"}
-
 problems: list[str] = []
 
 
@@ -169,13 +167,15 @@ def read_verdict(where: str, raw: dict) -> str:
             complain(where, f"`life = {life!r}` does not exist (there are: {', '.join(sorted(LIFE))})")
         else:
             out.append(f"life: Some(Life::{life.capitalize()})")
-    for name in ("loud", "blink", "vibrate", "audio"):
+    # The switches, whose Nix name is the Rust name with kebab for snake.
+    for name in ("loud", "blink", "vibrate", "audio", "auto-read"):
         v = raw.get(name)
         if v is not None:
             if not isinstance(v, bool):
-                complain(where, f"`{name}` e booleano, veio {v!r}")
+                complain(where, f"`{name}` is a boolean, got {v!r}")
             else:
-                out.append(f"{name}: Some({'true' if v else 'false'})")
+                field = name.replace("-", "_")
+                out.append(f"{field}: Some({'true' if v else 'false'})")
     level = raw.get("level")
     if level is not None:
         if not isinstance(level, int) or not 0 <= level <= TOP_LEVEL:
@@ -192,30 +192,27 @@ def read_verdict(where: str, raw: dict) -> str:
 
 def read_actions(where: str, raw: list, keys: set[str]) -> str:
     parts = []
-    seen_keys: set[str] = set()
     for i, a in enumerate(raw):
         at = f"{where}.actions[{i}]"
         ident = a.get("id")
         if not isinstance(ident, str) or not ID.match(ident):
             complain(at, f"the id `{ident}` is not English kebab")
             continue
-        key = a.get("key")
-        if key is not None:
-            if not isinstance(key, str) or len(key) != 1:
-                complain(at, f"`key` is ONE letter, got {key!r}")
-                key = None
-            elif key in RESERVED_KEYS:
-                complain(
-                    at,
-                    f"the letter `{key}` belongs to the manager ({RESERVED_KEYS[key]}); "
-                    "an action with it would never be reached",
-                )
-            elif key in seen_keys:
-                # Two actions on one letter means one of them cannot be
-                # reached by keyboard, and the mouse would be the only way in.
-                complain(at, f"the letter `{key}` already belongs to another action of this notification")
-            else:
-                seen_keys.add(key)
+        # AN ACTION HAS NO LETTER OF ITS OWN, and asking for one is refused
+        # here rather than half-honoured later.
+        #
+        # The manager's levels already teach a dozen keys and will teach more;
+        # a letter owned by a notification is a letter that collides with one
+        # of them sooner or later, and the collision is invisible — the person
+        # presses it and something else happens. It is also unnecessary: an
+        # action is reached with the ARROWS, in the open record, where they are
+        # listed one under the other.
+        if "key" in a:
+            complain(
+                at,
+                "an action has no letter of its own: the arrows reach it in the open "
+                "record, and a letter here would collide with a key of the manager",
+            )
         doing = None
         if "command" in a:
             doing = f"Doing::Command({rust_str(a['command'])}.to_owned())"
@@ -240,9 +237,8 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
             complain(at, "needs `command`, `run` or `copy-path`")
             continue
         keys.add(f"notif-action-{ident}")
-        key_rust = f"Some('{key}')" if key else "None"
         parts.append(
-            f"Action {{ id: {rust_str(ident)}.to_owned(), key: {key_rust}, "
+            f"Action {{ id: {rust_str(ident)}.to_owned(), "
             f"label: Label::Key({rust_str('notif-action-' + ident)}.to_owned()), "
             f"doing: {doing} }}"
         )
@@ -252,6 +248,12 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--notifications", type=pathlib.Path, required=True)
+    ap.add_argument(
+        "--shared",
+        type=pathlib.Path,
+        required=True,
+        help="assets/shared/notifications.json: the filters somebody shared",
+    )
     ap.add_argument("--icons", type=pathlib.Path, required=True, help="the glyph database's icons.json")
     ap.add_argument(
         "--glyphs",
@@ -269,6 +271,10 @@ def main() -> int:
     args = ap.parse_args()
 
     source = json.loads(args.notifications.read_text(encoding="utf-8"))
+    shared = json.loads(args.shared.read_text(encoding="utf-8"))
+    if not isinstance(shared, list):
+        complain("shared", "it is a LIST of filters; the shell writes it")
+        shared = []
     global icons, glyphs
     icons = json.loads(args.icons.read_text(encoding="utf-8"))
     glyphs = {
@@ -297,7 +303,7 @@ def main() -> int:
                 complain(where, f"the tag `{t}` is not English kebab")
         rewrite = e.get("rewrite", False)
         if not isinstance(rewrite, bool):
-            complain(where, f"`rewrite` e booleano, veio {rewrite!r}")
+            complain(where, f"`rewrite` is a boolean, got {rewrite!r}")
         entries.append(
             "        Entry {\n"
             f"            id: {rust_str(ident)}.to_owned(),\n"
@@ -313,9 +319,15 @@ def main() -> int:
 
     rules = []
     seen: set[str] = set(source.get("entries", {}))
-    for i, r in enumerate(source.get("rules", [])):
+    # THE DISTRO'S OWN FIRST, THEN WHAT SOMEBODY SHARED — and the order is the
+    # rule: the first filter that matches decides, so what was declared here
+    # keeps its say over what arrived later. A shared one is a filter somebody
+    # wrote on their machine and sent to the repository; the only thing that
+    # makes it real is this build.
+    declared = [(f"rules[{i}]", r) for i, r in enumerate(source.get("rules", []))]
+    declared += [(f"shared[{i}]", r) for i, r in enumerate(shared)]
+    for where, r in declared:
         ident = r.get("id")
-        where = f"rules[{i}]"
         if not isinstance(ident, str) or not ID.match(ident):
             complain(where, f"the id `{ident}` is not English kebab")
             continue
@@ -324,13 +336,18 @@ def main() -> int:
         if ident in seen:
             complain(where, f"the id `{ident}` already belongs to another entry or rule")
         seen.add(ident)
-        keys.add(f"notif-rule-{ident}")
-        terms = read_terms(f"rules.{ident}", r.get("when", []))
+        # A TEXT KEY ONLY FOR THE DISTRO'S OWN. A shared filter is named by
+        # whoever wrote it, in whatever language they wrote it in, and demanding
+        # a translation of it in both `.ftl` would make sharing one impossible.
+        # The screen falls back to the id, which IS the name they typed.
+        if where.startswith("rules["):
+            keys.add(f"notif-rule-{ident}")
+        terms = read_terms(f"{where}.{ident}", r.get("when", []))
         rules.append(
             "        Rule {\n"
             f"            id: {rust_str(ident)}.to_owned(),\n"
             f"            when: {rust_terms(terms)},\n"
-            f"            apply: {read_verdict('rules.' + ident, r.get('apply', {}))},\n"
+            f"            apply: {read_verdict(where, r.get('apply', {}))},\n"
             "        },"
         )
 

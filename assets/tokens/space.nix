@@ -498,8 +498,57 @@
   # body — and the right one holds what a filter kept out, which is a
   # reference list read rarely and never at length.
   notifications = {
-    twoColumnsFrom = 80;
+    # FROM WHAT WIDTH THE TWO COLUMNS OF THE LIST ARE WORTH HAVING.
+    #
+    # It was 80, and the owner photographed what that buys: nine rows reading
+    # `bluetooth: Bluetooth Keyboard connect…`, every one of them cut at the
+    # same word and none of them telling him which was which. Two columns that
+    # cost the sentence are two columns that destroy what the list is for.
+    #
+    # MEASURED, in the arithmetic `extent_of` does. The left column is
+    # `splitAtPct` of the width, less the lead, the gap and the row's furniture
+    # (the severity glyph, the mark, the two targets); what is left is the
+    # sentence. At 80 that is 37 cells and `bluetooth: Bluetooth Keyboard
+    # connected` is 39, so it cuts. At 96 it is 46, and the same sentence fits
+    # with air to spare.
+    #
+    # And 96 is not a new number: it is `files.panelsFrom`, where this system
+    # already decided a second column of CONTENT starts being worth its width.
+    twoColumnsFrom = 96;
     splitAtPct = 60;
+
+    # HOW MANY LINES OF A BODY AN OPEN RECORD WILL WRAP.
+    #
+    # A bound on WORK and not a layout decision — the same distinction the file
+    # manager's preview draws. A notification body is a sentence or two; two
+    # hundred lines is far past anything an application sends, and wrapping a
+    # megabyte to draw a screenful is a cost that only shows up on somebody
+    # else's machine.
+    bodyLines = 200;
+
+    # FROM WHAT WIDTH AN OPEN RECORD PUTS ITS FACTS IN A COLUMN OF THEIR OWN.
+    #
+    # Not `twoColumnsFrom`: that one is about the LIST, where a column holds
+    # one elided sentence and 80 is enough. A fact is a label AND a value on
+    # one line — `filter that decided` is nineteen cells and
+    # `none of them matched` is twenty — so the column needs about forty, and
+    # it gets `100 - splitAtPct` of the width. Forty divided by 0.40 is a
+    # hundred, and four cells of margin make it 104.
+    #
+    # Below that the facts go UNDERNEATH the message and its actions, which is
+    # the same answer the list gives when its own two columns do not fit, and
+    # the answer the file manager gives when its panels do not.
+    factsFrom = 104;
+
+    # HOW MUCH OF A ROW THE SENTENCE KEEPS, whatever else wants the line.
+    #
+    # A row with buttons has three things on it: what happened, what you can do
+    # about it, and the two targets at the end. The buttons are drawn only while
+    # this much is left for the sentence — below it the row would be a column of
+    # brackets beside an ellipsis, and the open record shows every button anyway.
+    # Twenty-four cells is `bluetooth: Bluetooth Keyboa…`, which still says which
+    # notification the row is.
+    sentenceFloor = 24;
   };
 
   # THE RULE'S THICKNESS, and this is the SECOND block in this file measured in

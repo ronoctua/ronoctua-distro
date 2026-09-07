@@ -115,6 +115,14 @@ pub use ronoctua_xdg::{config_dir, state_dir};
 pub struct Preferences {
     /// Filters the person wrote. They are tried BEFORE the distro's.
     pub rules: Vec<Rule>,
+    /// Which of those filters have been sent to the REPOSITORY.
+    ///
+    /// The filter itself stays in `rules` until it comes back as part of the
+    /// distro — a build from the flake is the only way it can — and this is
+    /// what lets the screen say "on its way" rather than "yours" about it. It
+    /// is a list of ids and not a copy of anything: the copy that matters is
+    /// the one in `assets/shared/notifications.json`, in the repository.
+    pub shared: std::collections::BTreeSet<String>,
     /// Adjustments to a catalogue entry or to a distro rule, keyed by its id.
     ///
     /// This is "use the distro's default, or customise" as one map: an id that
@@ -173,9 +181,8 @@ pub fn read_preferences_from(dir: &Path) -> Preferences {
 ///
 /// When the directory cannot be created or the file cannot be written.
 pub fn write_preferences_to(dir: &Path, p: &Preferences) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(p)?;
-    write_atomically(&dir.join(PREFERENCES_FILE), &text)
+    ronoctua_xdg::write_atomically(dir, PREFERENCES_FILE, text.as_bytes())
 }
 
 /// Reads the history, already pruned to [`HISTORY_DAYS`].
@@ -211,20 +218,8 @@ pub fn read_history_from(dir: &Path) -> Vec<Record> {
 /// When the directory cannot be created or the file cannot be written.
 pub fn write_history_to(dir: &Path, records: &mut Vec<Record>) -> std::io::Result<()> {
     prune(records, SystemTime::now());
-    std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string(records)?;
-    write_atomically(&dir.join(HISTORY_FILE), &text)
-}
-
-/// Writes through a temporary file in the same directory, then renames.
-///
-/// A history half written is a history that will not parse, and the next start
-/// would silently begin from nothing. `rename` inside one filesystem is atomic,
-/// so either the old file is there or the new one is.
-fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    ronoctua_xdg::write_atomically(dir, HISTORY_FILE, text.as_bytes())
 }
 
 /// Drops what is older than [`HISTORY_DAYS`], and then what is over the ceiling.

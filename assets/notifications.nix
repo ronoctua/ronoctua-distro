@@ -108,7 +108,6 @@
         # is not installed rather than failing when clicked.
         {
           id = "edit";
-          key = "e";
           run = "edit";
           args = [
             "-f"
@@ -117,19 +116,16 @@
         }
         {
           id = "open";
-          key = "a";
           run = "open";
           args = [ "file" ];
         }
         {
           id = "folder";
-          key = "p";
           run = "open";
           args = [ "folder" ];
         }
         {
           id = "copy-path";
-          key = "c";
           copy-path = true;
         }
       ];
@@ -165,7 +161,6 @@
         # The panel that shows the policy that did it, and lets it be loosened.
         {
           id = "memory-panel";
-          key = "m";
           command = "memory-open";
         }
       ];
@@ -191,6 +186,23 @@
     # And the other end is closed too: `bluetooth_unasked` dismisses this card
     # the moment the question is answered, taken back or times out, so the
     # card never outlives the question.
+    # AND ALL FOUR GO TO THE BLUETOOTH VIEW. Whatever the radio has to say,
+    # the answer is in one place — reconnecting, forgetting, charging, saying
+    # yes to a pairing — so every one of them offers the way there. The pairing
+    # card's own body already said "open Bluetooth to answer"; now it does.
+    #
+    # AND ALL FOUR ARRIVE READ (`auto-read`), which the owner asked for after
+    # reading his own screen: a keyboard that reconnects three times had left
+    # three things on the bell to clear, and none of them was a thing to do.
+    #
+    # It is about the BELL and not about the band — all four still show, which
+    # is the moment they are worth anything. Suppressing them would have been
+    # the wrong tool: it takes them off the screen exactly when they matter.
+    #
+    # The pairing card and the flat battery are in the list because he chose
+    # the four. It costs one thing, and it is worth writing down: a pairing
+    # question missed while it was on screen leaves no unread trace afterwards.
+    # It is still in the record; it just does not call.
     bluetooth-pairing = {
       when = [
         {
@@ -203,6 +215,7 @@
       life = "long";
       loud = true;
       level = 90;
+      auto-read = true;
       icon = "bluetooth-connected";
       tags = [
         "bluetooth-pairing"
@@ -211,13 +224,15 @@
       actions = [
         {
           id = "bluetooth-accept";
-          key = "y";
           command = "bluetooth-accept";
         }
         {
           id = "bluetooth-refuse";
-          key = "n";
           command = "bluetooth-refuse";
+        }
+        {
+          id = "bluetooth-panel";
+          command = "bluetooth-open";
         }
       ];
     };
@@ -247,12 +262,18 @@
       life = "quick";
       loud = false;
       level = 20;
+      auto-read = true;
       icon = "bluetooth-connected";
       tags = [
         "bluetooth-connected"
         "bluetooth"
       ];
-      actions = [ ];
+      actions = [
+        {
+          id = "bluetooth-panel";
+          command = "bluetooth-open";
+        }
+      ];
     };
     bluetooth-disconnected = {
       when = [
@@ -266,6 +287,7 @@
       life = "normal";
       loud = false;
       level = 30;
+      auto-read = true;
       icon = "bluetooth-off";
       tags = [
         "bluetooth-disconnected"
@@ -274,7 +296,6 @@
       actions = [
         {
           id = "bluetooth-panel";
-          key = "b";
           command = "bluetooth-open";
         }
       ];
@@ -301,6 +322,7 @@
       life = "normal";
       loud = false;
       level = 60;
+      auto-read = true;
       icon = "battery-danger";
       tags = [
         "bluetooth-battery-low"
@@ -309,7 +331,6 @@
       actions = [
         {
           id = "bluetooth-panel";
-          key = "b";
           command = "bluetooth-open";
         }
       ];
@@ -347,7 +368,6 @@
       actions = [
         {
           id = "power-panel";
-          key = "p";
           command = "power-open";
         }
       ];
@@ -372,7 +392,6 @@
       actions = [
         {
           id = "power-panel";
-          key = "p";
           command = "power-open";
         }
       ];

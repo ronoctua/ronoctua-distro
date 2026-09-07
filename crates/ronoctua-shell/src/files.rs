@@ -34,7 +34,7 @@ use ronoctua_files::{
     mime,
     mode::{self, Explanation},
     size,
-    when::{self, Zone},
+    when::Zone,
     who::Roster,
 };
 use ronoctua_inspect::motion::Show;
@@ -5116,12 +5116,13 @@ impl View {
                     });
                 }
                 Column::Modified => {
-                    let c = when::civil(entry.modified, &self.zone);
                     fields.push(Field {
                         at: *at,
-                        text: format!(
-                            "{:04}-{:02}-{:02} {:02}:{:02}",
-                            c.year, c.month, c.day, c.hour, c.minute
+                        text: crate::chrome::when_text(
+                            entry.modified,
+                            &self.zone,
+                            false,
+                            &self.texts,
                         ),
                         color: ronoctua_tokens::color::TEXT_DIM,
                         hit: Hit::Nothing,
@@ -6480,32 +6481,26 @@ impl View {
         let mut out = vec![crate::chrome::Piece::prose(
             texts.t(ronoctua_i18n::key::FILES_HINT),
         )];
-        let mut said: Vec<&str> = Vec::with_capacity(OF_THE_VIEW.len());
-        for (notation, id) in OF_THE_VIEW {
-            if said.contains(id) {
-                continue;
-            }
-            said.push(id);
-            let Ok(t) = Key::parse(notation) else {
-                continue;
-            };
-            // A KEY THAT FOLLOWS THE SECTION CARRIES THE SECTION'S SENTENCE,
-            // and its own colour. Showing the family's name instead would be
-            // a line that says "it depends" four times.
-            let (says, alternate) = match strong_of(id) {
-                Some(d) => (self.strong_meaning(d), true),
-                None => (*id, false),
-            };
+        // A KEY THAT FOLLOWS THE SECTION CARRIES THE SECTION'S SENTENCE, and
+        // its own colour. Showing the family's name instead would be a line
+        // that says "it depends" four times.
+        //
+        // This loop used to be written out here, to say that — a second copy of
+        // `chrome::hint_of` that had already drifted from it: it spent the id
+        // BEFORE `Key::parse` had a say, so a mistyped notation took its id off
+        // the line for good, including a later row that spelt it correctly.
+        // `hint_of_with` is the one loop, with the resolver passed in.
+        let keys = crate::chrome::hint_of_with(
+            OF_THE_VIEW,
+            |id| strong_of(id).map(|d| self.strong_meaning(d)),
+            texts,
+        );
+        // AND THE SEPARATOR BEFORE THE FIRST KEY, which the generator cannot
+        // put there: it separates one shortcut from the next, and what comes
+        // before this one is the sentence about typing, not a shortcut.
+        if !keys.is_empty() {
             out.push(crate::chrome::Piece::separator());
-            out.push(crate::chrome::Piece::key(
-                crate::chrome::key_text(&t),
-                alternate,
-            ));
-            // THE SPACE BETWEEN THE KEY AND ITS WORDS BELONGS TO THE WORDS, for
-            // the reason `fold::wrap_pieces` gives about the other seam: a key
-            // piece has to be exactly the notation, because that is what the
-            // colour is about.
-            out.push(crate::chrome::Piece::prose(format!(" {}", texts.t(says))));
+            out.extend(keys);
         }
         out
     }
@@ -9646,7 +9641,6 @@ impl View {
             .roster
             .group(entry.gid)
             .map_or_else(|| entry.gid.to_string(), ToOwned::to_owned);
-        let c = when::civil(entry.modified, &self.zone);
         let measured = self
             .measured
             .as_ref()
@@ -9698,10 +9692,7 @@ impl View {
             ),
             (
                 ronoctua_i18n::key::FILES_DETAIL_MODIFIED,
-                format!(
-                    "{:04}-{:02}-{:02} {:02}:{:02}",
-                    c.year, c.month, c.day, c.hour, c.minute
-                ),
+                crate::chrome::when_text(entry.modified, &self.zone, false, &texts),
                 Doable::Nothing,
             ),
             (

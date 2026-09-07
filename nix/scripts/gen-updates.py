@@ -185,7 +185,7 @@ def read_needs(where: str, raw: object) -> list[tuple[str, object]]:
             continue
         if kind in ("always", "network"):
             if value is not True:
-                complain(at, f"`{kind}` so aceita `true`, veio {value!r}")
+                complain(at, f"`{kind}` only takes `true`, got {value!r}")
                 continue
         elif kind == "binary":
             if not isinstance(value, str) or not ID.match(value):
@@ -292,12 +292,12 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
 
     root = raw.get("root")
     if not isinstance(root, bool):
-        complain(where, f"`root` e booleano, veio {root!r}")
+        complain(where, f"`root` is a boolean, got {root!r}")
         root = None
 
     enable = raw.get("enable")
     if not isinstance(enable, bool):
-        complain(where, f"`enable` e booleano, veio {enable!r}")
+        complain(where, f"`enable` is a boolean, got {enable!r}")
         enable = None
 
     on_failure = raw.get("on-failure")

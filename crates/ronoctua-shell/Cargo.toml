@@ -56,6 +56,7 @@ ronoctua-design = { path = "../ronoctua-design" }
 # one implementation and one role-to-token map.
 ronoctua-syntax = { path = "../ronoctua-syntax" }
 ronoctua-runtime = { path = "../ronoctua-runtime" }
+ronoctua-store = { path = "../ronoctua-store" }
 ronoctua-term = { path = "../ronoctua-term" }
 # The ONLY border with /proc, the cgroups and systemd's memory policy — the
 # same arrangement as `ronoctua-network`: the shell asks, it reads.

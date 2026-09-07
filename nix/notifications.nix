@@ -11,6 +11,12 @@
 # `keys.txt` is what makes "all of the distro's notifications exist in English
 # and Portuguese" stop depending on discipline: the `notifications-have-text`
 # check reads it and demands every line of both `.ftl`s.
+#
+# And a SECOND source of filters, `assets/shared/notifications.json`: the ones
+# somebody wrote on their own machine and decided everybody should have. They
+# are already JSON — written by the shell, in the shape `Rule` serialises — so
+# this derivation hands the file straight to the generator, which refuses
+# anything malformed in it exactly as it refuses a bad field in the Nix.
 {
   lib,
   stdenvNoCC,
@@ -18,6 +24,7 @@
   writeText,
   glyphdb,
   notificationsFile,
+  sharedFile,
 }:
 
 stdenvNoCC.mkDerivation {
@@ -33,6 +40,7 @@ stdenvNoCC.mkDerivation {
     mkdir -p $out
     python3 ${./scripts/gen-notifications.py} \
       --notifications ${writeText "notifications.json" (builtins.toJSON (import notificationsFile))} \
+      --shared ${sharedFile} \
       --icons ${glyphdb.db}/icons.json \
       --glyphs ${glyphdb.db}/glyphs.json \
       --out $out/notifications.rs \

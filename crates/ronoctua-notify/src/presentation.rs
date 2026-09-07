@@ -222,6 +222,21 @@ pub struct Presentation {
     /// Same shape as `vibrate`, different reason: this one is not missing a
     /// device, it is missing an implementation, and it is in `docs/PENDING.md`.
     pub audio: bool,
+    /// It arrives already READ: it shows, and it never asks to be dismissed.
+    ///
+    /// # What it is for
+    ///
+    /// News you do not answer. A bluetooth device connecting is worth a line on
+    /// the band while it happens and is worth nothing afterwards — but the bell
+    /// counted it, so a keyboard reconnecting three times left three things to
+    /// clear. Suppressing it instead would be the wrong tool: `Show::Hidden`
+    /// takes it off the screen too, and the moment it is worth seeing is
+    /// exactly when it happens.
+    ///
+    /// It is about the BELL and not about the band: `show` decides whether it
+    /// appears, and this decides whether it is still waiting for you when it
+    /// is gone.
+    pub auto_read: bool,
     /// Which catalogue entry recognised it. `None` = it came from outside and
     /// matched nothing.
     pub catalogue: Option<String>,
@@ -302,6 +317,7 @@ impl Presentation {
             blink: false,
             vibrate: false,
             audio: false,
+            auto_read: false,
             catalogue: None,
             by: None,
         }
@@ -335,6 +351,8 @@ pub struct Verdict {
     pub vibrate: Option<bool>,
     /// See [`Presentation::audio`].
     pub audio: Option<bool>,
+    /// See [`Presentation::auto_read`].
+    pub auto_read: Option<bool>,
 }
 
 impl Verdict {
@@ -364,6 +382,9 @@ impl Verdict {
         if let Some(v) = self.audio {
             p.audio = v;
         }
+        if let Some(v) = self.auto_read {
+            p.auto_read = v;
+        }
     }
 
     /// Does it say anything at all?
@@ -380,6 +401,7 @@ impl Verdict {
             && self.blink.is_none()
             && self.vibrate.is_none()
             && self.audio.is_none()
+            && self.auto_read.is_none()
     }
 }
 

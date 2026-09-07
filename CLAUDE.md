@@ -258,7 +258,62 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   reler. Sem isso a janela era um segundo escritor e o rodapé passava por cima dela na notificação
   seguinte: um `d` na janela voltava atrás sozinho. O que chegou DEPOIS do arquivo sobrevive — senão
   a janela apagaria o que acabou de chegar.
-- **`LEADER n` é notificação, e TUDO sai de `assets/notifications.nix`** — catálogo, filtros e as chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações); **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e envelope na BORDA DIREITA para marcar lida; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade. Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide — o gerenciador diz qual. Suprimida não aparece **e não conta**. **O sino só existe com não lida** (sem número — o hover diz quantas, não lidas e filtradas); clicar abre; `n n` no rodapé (duas colunas), `n w` em janela, uma `View` só, **dica GERADA de `OF_THE_VIEW` nas duas portas** (`chrome::hint_of`); na lista, envelope e lixeira por linha (`Espaço` e `d`, que o gerador recusa como letra de ação). 15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
+- **`LEADER n` é notificação, e TUDO sai de `assets/notifications.nix`** — catálogo, filtros e as
+  chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações);
+  **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e
+  envelope na BORDA DIREITA; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade.
+  Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide. Suprimida não aparece **e não
+  conta**. **O sino só existe com não lida**; clicar abre; `n n` no rodapé, `n w` em janela, `n f`
+  nos filtros, uma `View` só, **dica GERADA das tabelas nas duas portas** (`chrome::hint_of`).
+  15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e
+  `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
+- **Um registro se chama `(id, quando chegou)`** (`ronoctua_notify::RecordKey`), nunca só a `id`: o
+  contador do barramento nasce em 1 a cada partida e o das nossas nasce em `u32::MAX` e desce,
+  enquanto o histórico dura 15 dias — a mesma `id` existe várias vezes em disco, e `replaces_id`
+  a repete dentro de uma sessão. Marcar lida e esquecer varriam por `id ==`, e como a lista é do
+  mais novo para o mais velho as colisões estavam **sempre abaixo** da selecionada. `Espaço`
+  ALTERNA (o envelope aberto vira o de não lida) e a reconciliação entre as portas copia `read`
+  nos DOIS sentidos, senão a outra porta desfaz a marca.
+- **Ação de notificação NÃO tem letra própria** (o gerador recusa uma): a vista já ensina uma dúzia
+  de teclas e vai ensinar mais, e uma letra que a notificação possui colide com alguma delas mais
+  cedo ou mais tarde — e colide em silêncio, porque a pessoa aperta e outra coisa acontece. A letra
+  também só funcionava no GERENCIADOR: a faixa não toma teclado. O que alcança uma ação é o CURSOR
+  no registro aberto. **A linha da lista só MARCA que há ações** (`icon.notification-has-actions`,
+  a mão tocando — três pontinhos era o que a elisão ao lado já dizia, e os dois
+  colavam; a célula é reservada para a coluna inteira, com o AR antes do glifo) — um rótulo de ação é uma frase e uma linha é uma
+  linha —, e abrir lista todas, uma sob a outra. **Ação de comando fecha o gerenciador antes de
+  rodar**, senão o `region_is_free` recusa e nada acontece; e **a janela ENCAMINHA** o comando pelo
+  socket de controle em vez de mandar você ir ao rodapé fazer à mão.
+- **A vista tem QUATRO níveis** (molde do bluetooth: um campo diz onde se está, um `match` em
+  `rows()` desenha, `Esc` volta um): a lista, o registro ABERTO (`RET` — corpo quebrado em linhas,
+  botões desenhados, e os fatos numa coluna à direita, ou embaixo no estreito, pelo mesmo
+  `two_columns` da lista), a ficha de um tipo e a ficha de um FILTRO. No registro aberto o cursor **só
+  para nas AÇÕES** — linha de mensagem não é coisa em que se age, e andar por
+  elas uma a uma sem nada acender é o que o dono leu na tela —, e o `RET` roda
+  a que estiver sob ele; sem ação nenhuma, aí sim as setas rolam o corpo. **Os
+  fatos descem para baixo da mensagem** quando a coluna deles não cabe
+  (`space.notifications.factsFrom`, mais alto que o `twoColumnsFrom` da lista:
+  um fato é rótulo E valor numa linha). O `RET` contextual —
+  frase e cor mudando (`Register::Alternate`), como o `S-<seta>` do gerenciador — ficou onde ele
+  realmente muda: no catálogo, onde ajustar o da distro e editar o SEU são coisas diferentes. **Estreito EMPILHA as duas colunas** ("Filtered out" abaixo de
+  "Received"), e uma função só (`place_of`) diz o que é cada linha desenhada, para o desenho, as
+  teclas e o ponteiro. **`auto-read` faz nascer lida** — as quatro do bluetooth nascem — e é sobre
+  o SINO, não sobre a faixa.
+- **Os filtros da pessoa se escrevem na TELA** (`n f`, `n` para um novo, `RET` para editar o seu,
+  `d` para apagar): nome, condições (`campo`/`teste`/`valor`) e o veredito, com as setas girando o
+  que se gira e o **minibuffer do rodapé** recebendo o que se digita (a janela DIZ isso). O nome de
+  um filtro seu é DADO — texto que você digitou —, e por isso a tela o mostra como está em vez de
+  procurar uma chave que não existe. Tom próprio (`text.mine`) e palavra própria, porque "seu"
+  antes queria dizer *você ajustou este*.
+- **E um filtro pode ir para TODOS** (`p`, e só depois de uma pergunta que abre no `não`): o shell
+  escreve `assets/shared/notifications.json` no repositório — na forma do `assets/notifications.nix`,
+  não na do serde — e o build o junta à tabela. **Isso é PUBLICAR**: o repositório é público
+  (inv. 2) e nada pessoal entra nele (inv. 13), então vai um por vez, nomeado, com a tela dizendo
+  a frase e mostrando o texto exato; quem publica de verdade é o seu commit. O caminho do
+  repositório vem da opção `ronoctua.repo` (`$RONOCTUA_REPO`), NUNCA de procurar. **E nada pergunta
+  à rede**: "já chegou?" se responde contra a tabela COMPILADA — a única estrada do conteúdo da
+  distro até uma máquina é um build pelo flake, então o build é a resposta (`Book::took` aposenta
+  a cópia local).
 - **A modeline diz se há SAÍDA** (`ronoctua_network::Snapshot`, um `watch` desde a partida): `net-off`
   quando um link se acha conectado e o caminho não leva a lugar nenhum (portal, uplink morto — e a
   marca só existe porque `ronoctua.network.connectivityCheck` liga o teste do NM, senão ele responde
@@ -336,6 +391,13 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **Dois rótulos de UMA vista não dizem a mesma coisa** (`labels-of-a-view-are-distinct`): havia
   TRÊS `tailnet` e TRÊS `address`, cada um um fato diferente com a mesma palavra, numa lista onde a
   palavra é a única coisa que diz qual fato é. Verbo da dica e formato com `{ $ }` não contam.
+- **Arquivo de gente tem UM jeito de ser escrito** (`ronoctua-store`, sobre o `ronoctua-xdg`, que
+  fica com ZERO dependência porque três daemons o linkam só pelas raízes): `Store<T>` é raiz +
+  escrita atômica + "lê ou cai no padrão e diz por quê". Cada domínio fica com o SEU arquivo, e não
+  há banco: **o arquivo É o broadcast** (um banco precisaria de um segundo canal de aviso de
+  mudança), você os edita à mão, e um arquivo que não parseia custa UMA feature em vez de todas.
+  A varredura que decidiu isso achou TRÊS escritas atômicas, DUAS que não eram atômicas (as do
+  brain) e o "leu, falhou, loga e cai no padrão" escrito SETE vezes.
 - **Tokens e textos são GERADOS do Nix** (`assets/tokens/*.nix`, `*.ftl`): chave ou cor inexistente é erro de **compilação** — inv. 8 e 9. **Layout é aritmética de inteiros**, em duas fases: preferência, e "nada vaza da tela".
 - **Cor NENHUMA é escrita à mão: `colors.nix` é RECEITA** (`text.primary = "neutral.text-strong"`) e o valor sai de `nix/scripts/gen-theme.py`, por tema, das SEMENTES em `assets/themes/<id>.nix` (matiz, croma relativo, shift, torção) — a lista é `assets/themes/themes.nix`, o primeiro é o padrão, e nenhum outro sítio nomeia um tema (inv. 16). A escada é a paleta do owl feita regra; toda relação que era prosa é GATE (contraste APCA, distância ΔE_ok, matiz ≥ 14°, faixa protan 158–172°), e o owl gerado é comparado chave a chave com `owl.reference.nix` (≤ 0,03, ou `deviations` com motivo). `nix build .#themes` deixa o `report.md`. **Mexer no gerador reconstrói o workspace** (o caminho do `tokens.rs` muda), então afine ANTES de compilar Rust.
 - **Afinar uma cor é mexer na SEMENTE, e o laço custa 2 s**: `nix build .#themes --no-link

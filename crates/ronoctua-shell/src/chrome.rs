@@ -441,6 +441,32 @@ impl Piece {
 /// manual and which-key read.
 #[must_use]
 pub fn hint_of(table: &[(&str, &str)], texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+    hint_of_with(table, |_| None, texts)
+}
+
+/// The same line, where SOME of the keys mean what the focused thing decides.
+///
+/// `means` is asked about every id in the table. `None` is the ordinary case:
+/// the id is its own phrase and the key is drawn in the plain register. `Some`
+/// is a key whose meaning MOVES under the reader without the reader pressing
+/// anything — the file manager's `S-<arrows>`, which point wherever the focused
+/// section points, and the notification manager's `SPC`, which reads or unreads
+/// depending on the row it is on. Those are drawn in [`Register::Alternate`],
+/// because a key that changes meaning has to say so.
+///
+/// # Why this is one function and not two
+///
+/// It was two: this loop, and a copy of it in `files::View::hint` written to
+/// add exactly that. The copy drifted, and in the one way that matters — it
+/// spent the id BEFORE the notation parsed, which is the defect the comment
+/// below says was fixed here. In the copy a mistyped notation took its id off
+/// the line for good, including a later row of the table that spelt the same
+/// id correctly.
+pub fn hint_of_with(
+    table: &[(&str, &str)],
+    means: impl Fn(&str) -> Option<&'static str>,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<Piece> {
     let mut out = Vec::with_capacity(table.len() * 3);
     let mut said: Vec<&str> = Vec::with_capacity(table.len());
     for (notation, id) in table {
@@ -462,14 +488,60 @@ pub fn hint_of(table: &[(&str, &str)], texts: &ronoctua_i18n::Texts) -> Vec<Piec
         if !out.is_empty() {
             out.push(Piece::separator());
         }
-        out.push(Piece::key(key_text(&t), false));
+        let (says, alternate) = match means(id) {
+            Some(other) => (other, true),
+            None => (*id, false),
+        };
+        out.push(Piece::key(key_text(&t), alternate));
         // THE SPACE BETWEEN THE KEY AND ITS WORDS BELONGS TO THE WORDS, for
         // the reason `fold::wrap_pieces` gives about the other seam: a key
         // piece has to be exactly the notation, because that is what the
         // colour is about.
-        out.push(Piece::prose(format!(" {}", texts.t(id))));
+        out.push(Piece::prose(format!(" {}", texts.t(says))));
     }
     out
+}
+
+/// A moment, as a date a person reads.
+///
+/// # Why it is here and not written where it is needed
+///
+/// Because it was written where it was needed, twice, as a bare
+/// `format!("{:04}-{:02}-{:02} {:02}:{:02}")` — a UI string in code, which
+/// invariant 8 does not allow, and beside two `.ftl` keys (`files-when`,
+/// `files-when-utc`) that had been declared for exactly this and were read by
+/// nothing. Three views ask the question now, and a fourth reading of the same
+/// clock would be a third answer waiting to differ.
+///
+/// The ORDER is the key's, so a language may write it its own way; the padding
+/// is not, because a translation cannot pad and a column of dates that does not
+/// line up is a column that cannot be scanned. And a zone that could not be
+/// read says UTC rather than drawing a local time it cannot vouch for — the
+/// reason [`ronoctua_files::when::Zone::is_utc`] exists.
+/// `say_zone` is for a LINE, never for a COLUMN. When `/etc/localtime` could
+/// not be read the date is UTC and saying so is the difference between a date
+/// one can trust and one that is an hour out for ever — but the caveat is four
+/// cells wide, and a measured column has no room it did not ask for. Where the
+/// date is a column the caveat is what the pointer explains instead, which is
+/// what the listing already does with this very key.
+#[must_use]
+pub fn when_text(
+    secs: i64,
+    zone: &ronoctua_files::when::Zone,
+    say_zone: bool,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    let c = ronoctua_files::when::civil(secs, zone);
+    let args = c.args();
+    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    texts.t_with(
+        if say_zone && zone.is_utc() {
+            ronoctua_i18n::key::FILES_WHEN_UTC
+        } else {
+            ronoctua_i18n::key::FILES_WHEN
+        },
+        &args,
+    )
 }
 
 /// How a key is DRAWN, as against how it is written down.

@@ -367,12 +367,14 @@ pub fn read_from(dir: &Path) -> Prefs {
 ///
 /// The directory cannot be created, or the file cannot be written.
 pub fn write_to(dir: &Path, p: &Prefs) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let path = dir.join(PREFERENCES_FILE);
     // PRETTY, and the only file in this crate that is: a person opens this one
     // by hand. The journal is machine-written and stays compact.
     let text = serde_json::to_string_pretty(p).map_err(std::io::Error::other)?;
-    std::fs::write(&path, text)
+    // ATOMICALLY, like every other store in this tree. It was a plain
+    // `fs::write` — this crate already linked `ronoctua-xdg` for the roots and
+    // simply did not use the third function in it — so a kill or a full disk
+    // in the middle left the person with half of their own preferences.
+    ronoctua_xdg::write_atomically(dir, PREFERENCES_FILE, text.as_bytes())
 }
 
 #[cfg(test)]

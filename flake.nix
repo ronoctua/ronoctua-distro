@@ -240,6 +240,10 @@
       notificationsRs = pkgs.callPackage ./nix/notifications.nix {
         inherit glyphdb;
         notificationsFile = ./assets/notifications.nix;
+        # AND WHAT SOMEBODY SHARED. The shell writes this file — one filter at
+        # a time, by name, after saying on screen that it becomes public — and
+        # the build is what turns it into part of the distro.
+        sharedFile = ./assets/shared/notifications.json;
       };
 
       # The MIME database, from freedesktop's own files into a Rust table.

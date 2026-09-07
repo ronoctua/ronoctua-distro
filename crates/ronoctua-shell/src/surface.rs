@@ -600,6 +600,12 @@ struct Footer {
     bluetooth: Option<crate::bluetooth::View>,
     /// The device a name is being typed for, while the minibuffer asks.
     bluetooth_renaming: Option<String>,
+    /// What the filter sheet is waiting for somebody to type.
+    ///
+    /// The same shape as `bluetooth_renaming`, and for the same reason: the
+    /// minibuffer answers by running a command with an argument, and the
+    /// argument alone does not say which line of the draft asked for it.
+    manager_asking: Option<crate::notifications::Asking>,
     /// The pairing question's own door — NOT the orders thread. See
     /// [`ronoctua_bluetooth::Watch::questions`] for why it cannot be.
     bluetooth_questions: Option<ronoctua_bluetooth::agent::Questions>,
@@ -1749,12 +1755,16 @@ pub fn run() -> Result<()> {
             // `store::read_preferences`.
             let mut b = ronoctua_notify::Book::distro();
             let prefs = notes.preferences();
-            b.mine = prefs.rules;
+            b.took(prefs.rules, prefs.shared);
             b.adjustments = prefs.adjustments;
             b
         },
         notifications_open: false,
-        manager: crate::notifications::View::fresh(),
+        // THE MACHINE'S CLOCK, read once and carried — see the same line in
+        // the manager's other door.
+        manager: crate::notifications::View::fresh().in_zone(
+            ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
+        ),
         blink_on: true,
         update_tick: 0,
         band_placed: Vec::new(),
@@ -1824,6 +1834,7 @@ pub fn run() -> Result<()> {
         bluetooth_orders: None,
         bluetooth: None,
         bluetooth_renaming: None,
+        manager_asking: None,
         bluetooth_questions: None,
         bluetooth_asked: None,
         bluetooth_alarmed: std::collections::BTreeSet::new(),
@@ -2702,14 +2713,14 @@ impl Footer {
     /// where the keyboard actually is — the footer at rest does not capture it,
     /// or no buffer would ever receive one.
     fn band_clicked(&mut self, hit: crate::band::Hit) {
-        let Some(id) = self.notifications.showing().map(|s| s.notification.id) else {
+        let Some(key) = self.notifications.showing().map(|s| s.notification.key()) else {
             return;
         };
         match hit {
             crate::band::Hit::Read => {
-                self.manager_errand(crate::notifications::Errand::Read(id));
+                self.manager_errand(crate::notifications::Errand::Read(key));
             }
-            crate::band::Hit::Action(n) => self.run_notification_action(id, n),
+            crate::band::Hit::Action(n) => self.run_notification_action(key, n),
         }
     }
 
@@ -4527,6 +4538,40 @@ impl Footer {
             "power-up" => self.power_press(crate::power::Press::Up),
             "power-down" => self.power_press(crate::power::Press::Down),
             "notif-open" => self.toggle_manager(),
+            // THE FILTERS HAVE A DOOR OF THEIR OWN. Same view, same region —
+            // it opens on the column that holds them, which is the whole of
+            // the difference.
+            // THE ANSWER FROM THE MINIBUFFER. With no argument it is the
+            // question being asked again — which is what the bluetooth alias
+            // does, and it keeps one command per thing typed.
+            "notif-filter-typed" => match (argument, self.manager_asking.take()) {
+                (Some(text), Some(what)) if !text.is_empty() => {
+                    self.manager.typed(what, text);
+                    self.draw_and_paint();
+                }
+                // AN EMPTY ANSWER IS A NO: the minibuffer was closed with
+                // nothing typed, and the line keeps what it had.
+                _ => {}
+            },
+            // THE FILTER SHEET'S OWN KEYS, by name. They are commands for the
+            // reason every key of this manager is one: the hint line is
+            // generated from the table that names them, and a key the line
+            // teaches has to be a command the manual can name.
+            "notif-new" => self.manager_press(crate::notifications::Press::Letter('n')),
+            "notif-drop" => self.manager_press(crate::notifications::Press::Letter('d')),
+            "notif-share" => self.manager_press(crate::notifications::Press::Letter('p')),
+            "notif-share-answer" => self.manager_press(crate::notifications::Press::Enter),
+            "notif-draft-type" => self.manager_press(crate::notifications::Press::Enter),
+            "notif-draft-add" => self.manager_press(crate::notifications::Press::Letter('a')),
+            "notif-draft-drop" => self.manager_press(crate::notifications::Press::Letter('x')),
+            "notif-draft-save" => self.manager_press(crate::notifications::Press::Letter('s')),
+            "notif-filters" => {
+                if self.notifications_open {
+                    self.manager_press(crate::notifications::Press::Letter('f'));
+                } else {
+                    self.toggle_manager_at(crate::notifications::Pane::Catalogue);
+                }
+            }
             // THE SECOND DOOR, in a window of its own — the same `View`, and
             // the same reason the file manager has two: the footer's region has
             // a twelve-line ceiling (invariant 14), which is right for a footer
@@ -4575,6 +4620,9 @@ impl Footer {
             "notif-pane-previous" => self.manager_press(crate::notifications::Press::BackTab),
             "notif-knob-next" => self.manager_press(crate::notifications::Press::Right),
             "notif-knob-previous" => self.manager_press(crate::notifications::Press::Left),
+            // `RET` OPENS THE RECORD — or runs the focused button, which is
+            // the same key and the reason `notif-act` is a name of its own.
+            "notif-see" => self.manager_press(crate::notifications::Press::Enter),
             // `r` IS TWO THINGS AT TWO LEVELS — all read on a list, the
             // distro's default in the sheet — so the command that names the
             // second one only presses when the sheet is open. Run by name
@@ -7163,6 +7211,11 @@ impl Footer {
     /// a cursor nobody can move is a view that only the mouse reaches, which is
     /// the one thing this footer refuses.
     fn toggle_manager(&mut self) {
+        self.toggle_manager_at(crate::notifications::Pane::Happened);
+    }
+
+    /// The same, opening on a chosen column — `n f` goes to the filters.
+    fn toggle_manager_at(&mut self, at: crate::notifications::Pane) {
         // THE SAME GUARD THE OTHER FIVE HAVE. Without it, clicking the bell
         // with the file manager open put the manager's keyboard over a
         // listing that stayed on screen: `d` forgot a NOTIFICATION, `r`
@@ -7176,7 +7229,7 @@ impl Footer {
         // sequence is still on screen, so `view()` answers `Leader` here and
         // the manager would keep the cursor of the last time it was open.
         if self.notifications_open {
-            self.manager = crate::notifications::View::fresh();
+            self.manager = self.manager.reopened(at);
         }
         self.first_page();
         tracing::info!(
@@ -7202,7 +7255,8 @@ impl Footer {
         let records = self.notifications.history().to_vec();
         let errand = {
             let lists = crate::notifications::Lists::of(&records, &self.book);
-            self.manager.key(press, &lists, &self.book)
+            self.manager
+                .key(press, &lists, &self.book, self.screen_columns())
         };
         self.manager_errand(errand);
         self.apply_geometry(self.interactivity());
@@ -7235,7 +7289,9 @@ impl Footer {
         };
         let records = self.notifications.history().to_vec();
         let lists = crate::notifications::Lists::of(&records, &self.book);
-        let errand = self.manager.key(press, &lists, &self.book);
+        let errand = self
+            .manager
+            .key(press, &lists, &self.book, self.screen_columns());
         drop(lists);
         self.manager_errand(errand);
         self.apply_geometry(self.interactivity());
@@ -7257,22 +7313,36 @@ impl Footer {
         };
         match errand {
             Errand::Nothing => {}
-            Errand::Read(id) => {
-                if self.notifications.mark_read(id) {
+            Errand::Read(key) => {
+                if self.notifications.mark_read(key) {
                     // The one on the band goes too: marking it read and leaving
                     // it on screen would be two states for one thing.
                     if self
                         .notifications
                         .showing()
-                        .is_some_and(|s| s.notification.id == id)
+                        .is_some_and(|s| s.notification.key() == key)
                     {
                         self.notifications
                             .dismiss_current(std::time::Instant::now());
                     }
                     ronoctua_notify::dbus::notification_was_closed(
-                        id,
+                        key.id,
                         ronoctua_notify::dbus::Closed::ByHand,
                     );
+                }
+                self.after_the_queue_moved();
+            }
+            // PUTTING ONE BACK SAYS NOTHING ON THE BUS, and takes nothing off
+            // the band.
+            //
+            // There is no "un-closed" in the protocol, and there could not be:
+            // `NotificationClosed` is final, and the sender has already acted
+            // on it. This is the person's own record changing its mind about
+            // something the sender was told about long ago — the same reason
+            // forgetting a record says nothing either.
+            Errand::Unread(key) => {
+                if self.notifications.mark_unread(key) {
+                    tracing::info!(id = key.id, "notification put back to unread");
                 }
                 self.after_the_queue_moved();
             }
@@ -7290,47 +7360,75 @@ impl Footer {
                 // because a suppressed record is already off the count, and
                 // this used to sweep it in anyway — closing, on the bus, a
                 // notification the person was never shown.
-                let ids: Vec<u32> = self
+                let keys: Vec<ronoctua_notify::RecordKey> = self
                     .notifications
                     .history()
                     .iter()
                     .filter(|r| {
                         !r.read && !matches!(r.presentation.show, ronoctua_notify::Show::Hidden)
                     })
-                    .map(|r| r.notification.id)
+                    .map(ronoctua_notify::Record::key)
                     .collect();
-                for id in ids {
-                    if self.notifications.mark_read(id) {
+                for key in keys {
+                    if self.notifications.mark_read(key) {
                         ronoctua_notify::dbus::notification_was_closed(
-                            id,
+                            key.id,
                             ronoctua_notify::dbus::Closed::ByHand,
                         );
                     }
                 }
                 self.after_the_queue_moved();
             }
-            Errand::Forget(id) => {
-                if self.notifications.forget(id) {
-                    tracing::info!(id, "notification forgotten");
+            Errand::Forget(key) => {
+                if self.notifications.forget(key) {
+                    tracing::info!(id = key.id, "notification forgotten");
                 }
                 self.after_the_queue_moved();
             }
-            Errand::Act(id, which) => self.run_notification_action(id, which),
+            Errand::Act(key, which) => self.run_notification_action(key, which),
             Errand::Adjusted(id, verdict) => {
                 match verdict {
                     Some(v) => self.book.adjustments.insert(id.clone(), v),
                     None => self.book.adjustments.remove(&id),
                 };
-                let prefs = ronoctua_notify::Preferences {
-                    rules: self.book.mine.clone(),
-                    adjustments: self.book.adjustments.clone(),
-                };
-                if let Err(e) = self.notes.save_preferences(&prefs) {
-                    tracing::warn!(error = %e, "could not write the preferences");
-                    self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
-                }
+                self.save_the_book();
                 tracing::info!(id = %id, "notification preference saved");
-                self.draw_and_paint();
+            }
+            // THE MINIBUFFER IS WHERE TEXT IS TYPED, and it is the only
+            // place — the network's password and the bluetooth alias come in
+            // the same way. It comes back as this command's argument.
+            Errand::Ask(what) => {
+                self.manager_asking = Some(what);
+                self.mx.request("notif-filter-typed", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // THE PERSON'S OWN FILTERS, saved where they already live: the
+            // preferences file both doors watch. Editing REPLACES rather than
+            // adds — `was` is the id it had before it was renamed.
+            Errand::Filter { was, rule } => {
+                if let Some(old) = was {
+                    self.book.mine.retain(|r| r.id != old);
+                }
+                self.book.mine.retain(|r| r.id != rule.id);
+                self.book.mine.push(rule);
+                self.save_the_book();
+            }
+            Errand::Unfilter(id) => {
+                self.book.mine.retain(|r| r.id != id);
+                // AND THE ADJUSTMENT THAT WAS KEYED TO IT. A verdict left
+                // behind for a filter nobody has is a line in the file that
+                // nothing will ever read again.
+                self.book.adjustments.remove(&id);
+                self.save_the_book();
+            }
+            // INTO THE REPOSITORY, one filter at a time, by name, after a
+            // screen that said what it means. This writes SOURCE — what makes
+            // it part of the distro is the next build, and what publishes it
+            // is the owner's own commit, which needs them in front of the
+            // machine anyway.
+            Errand::Share(id) => {
+                let said = self.share_one(&id);
+                self.echo_message(self.texts.t(said));
             }
             Errand::Close => {
                 self.toggle_manager();
@@ -7348,24 +7446,35 @@ impl Footer {
     /// over is an id and an index, and the record is found here, where the
     /// queue is. A manager carrying its own copy is the second copy that goes
     /// stale, and this file has already paid for one.
-    fn run_notification_action(&mut self, id: u32, which: usize) {
-        let Some(record) = self
-            .notifications
-            .history()
-            .iter()
-            .find(|r| r.notification.id == id)
-        else {
+    fn run_notification_action(&mut self, key: ronoctua_notify::RecordKey, which: usize) {
+        let Some(record) = self.notifications.history().iter().find(|r| r.key() == key) else {
             return;
         };
         let Some(action) = record.notification.actions.get(which).cloned() else {
             return;
         };
         let file = record.notification.file();
+        // A COMMAND OF OURS MAY WANT THE REGION, so the manager gets out of
+        // its way first.
+        //
+        // This is the defect the owner reported: `[b] bluetooth` on a
+        // disconnection did nothing at all. The command was `bluetooth-open`,
+        // which asks `region_is_free` — and the manager was the view holding
+        // the footer, because the manager is where the button was pressed. It
+        // refused, said so on a line the person was not reading, and the only
+        // visible effect was the row going quiet.
+        //
+        // Only for a command: copying a path and running a program leave the
+        // screen where it is, and closing the manager under somebody who asked
+        // for the clipboard would be a second surprise.
+        if matches!(action.doing, ronoctua_notify::Doing::Command(_)) && self.notifications_open {
+            self.toggle_manager();
+        }
         match &action.doing {
             // A FOREIGN APP'S BUTTON goes back to the bus, which is what the
             // sender is waiting for.
             ronoctua_notify::Doing::Invoke => {
-                ronoctua_notify::dbus::action_was_invoked(id, &action.id);
+                ronoctua_notify::dbus::action_was_invoked(key.id, &action.id);
             }
             ronoctua_notify::Doing::Command(cmd) => self.run_command(&cmd.clone()),
             ronoctua_notify::Doing::CopyPath => {
@@ -7411,7 +7520,7 @@ impl Footer {
             }
         }
         // Acting on it is having seen it.
-        self.notifications.mark_read(id);
+        self.notifications.mark_read(key);
         self.after_the_queue_moved();
     }
 
@@ -8729,10 +8838,13 @@ impl Footer {
             .into_iter()
             .enumerate()
             .map(|(n, r)| ExpansionRow {
-                // THE HEADING IS NOT A ROW to click on: it names the column, it
-                // is not in it. Giving it a click would put the cursor on the
-                // first item while the pointer was on the title.
-                click: (n > 0).then(|| Click::Notifications(n - 1)),
+                // THE DRAWN ROW'S OWN NUMBER, headings included. Which of them
+                // is a list item — and of which column — is `View::place_of`,
+                // the same plan the drawing above walked. It used to subtract
+                // one for "the heading", which is the arrangement written down
+                // as a constant, and there are two of them once the columns
+                // stack.
+                click: Some(Click::Notifications(n)),
                 fields: r.fields,
                 foot: false,
                 ..ExpansionRow::empty_one()
@@ -10355,7 +10467,16 @@ impl Footer {
             // no arm here at all the region does not follow the cursor: holding
             // the arrow walks the cursor off the bottom of a list that never
             // moves.
-            ViewState::Notifications => Some(self.manager.cursor() + 1),
+            ViewState::Notifications => {
+                let records = self.notifications.history();
+                let lists = crate::notifications::Lists::of(records, &self.book);
+                Some(self.manager.visual_cursor(
+                    &lists,
+                    &self.book,
+                    self.screen_columns(),
+                    &self.texts,
+                ))
+            }
             _ => None,
         }
     }
@@ -10855,7 +10976,11 @@ impl Footer {
                 // counter on one and not the other is two answers again.
                 ViewState::Notifications => notifications_open.then(|| {
                     let lists = crate::notifications::Lists::of(records, book);
-                    manager.hint_of(Some((manager.cursor(), lists.len(manager.pane()))), texts)
+                    manager.hint_of(
+                        Some((manager.cursor(), lists.len(manager.pane()))),
+                        &lists,
+                        texts,
+                    )
                 }),
                 ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
                 // THE RADIO AND THE NETWORK, whose tables are bare letters:
@@ -13026,11 +13151,14 @@ impl Footer {
         // rather than two: the distro's catalogue, plus the person's rules
         // and adjustments.
         let mut book = ronoctua_notify::Book::distro();
-        book.mine = prefs.rules;
+        book.took(prefs.rules, prefs.shared);
         book.adjustments = prefs.adjustments;
         // WHAT CHANGED is the person's half — the distro's catalogue is
         // compiled in and cannot move under us — so that is what is compared.
-        if book.mine == self.book.mine && book.adjustments == self.book.adjustments {
+        if book.mine == self.book.mine
+            && book.shared == self.book.shared
+            && book.adjustments == self.book.adjustments
+        {
             return;
         }
         tracing::info!(
@@ -13847,6 +13975,60 @@ impl Footer {
                 self.mx.request("bluetooth-rename", false);
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
+        }
+        self.draw_and_paint();
+    }
+
+    /// Puts one filter of the person's into the repository.
+    ///
+    /// The file is a LIST and this replaces by id, so sharing the same filter
+    /// twice leaves one line rather than two. It is written in the table's own
+    /// shape (`ronoctua_notify::as_table`) — the shape `assets/notifications.nix`
+    /// uses and the generator already validates — because somebody will open
+    /// that file, and serde's `{"Contains": "backup"}` is exactly the thing the
+    /// owner said was not an interface.
+    ///
+    /// It returns the text key to put on the message line.
+    fn share_one(&mut self, id: &str) -> &'static str {
+        let Some(rule) = self.book.mine.iter().find(|r| r.id == id).cloned() else {
+            return ronoctua_i18n::key::NOTIF_SHARE_FAILED;
+        };
+        let shared = ronoctua_store::Shared::of(ronoctua_store::repo_dir());
+        if !shared.is_open() {
+            return ronoctua_i18n::key::NOTIF_SHARE_NOWHERE;
+        }
+        let mut held: Vec<serde_json::Value> =
+            shared.read(crate::notifications::SHARED_NOTIFICATIONS);
+        held.retain(|it| it.get("id").and_then(serde_json::Value::as_str) != Some(id));
+        held.push(ronoctua_notify::as_table(&rule));
+        if let Err(e) = shared.write(crate::notifications::SHARED_NOTIFICATIONS, &held) {
+            tracing::warn!(error = %e, id, "the filter could not be shared");
+            return ronoctua_i18n::key::NOTIF_SHARE_FAILED;
+        }
+        // AND THE SCREEN REMEMBERS IT IS TRAVELLING. The copy on this machine
+        // keeps working until a build brings it back as one of the distro's —
+        // see `Book::took`, which is where it retires.
+        self.book.shared.insert(id.to_owned());
+        self.save_the_book();
+        tracing::info!(id, "a filter was written into the repository");
+        ronoctua_i18n::key::NOTIF_SHARED_WRITTEN
+    }
+
+    /// Writes the person's half of the filter book: their filters and their
+    /// adjustments.
+    ///
+    /// ONE place, because there are now three things that change it — a knob
+    /// turned, a filter written, a filter dropped — and the file is the
+    /// broadcast: the other door is watching it by inotify.
+    fn save_the_book(&mut self) {
+        let prefs = ronoctua_notify::Preferences {
+            rules: self.book.mine.clone(),
+            shared: self.book.shared.clone(),
+            adjustments: self.book.adjustments.clone(),
+        };
+        if let Err(e) = self.notes.save_preferences(&prefs) {
+            tracing::warn!(error = %e, "could not write the preferences");
+            self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
         }
         self.draw_and_paint();
     }
@@ -14813,7 +14995,6 @@ mod tests {
         let actions = vec![
             ronoctua_notify::Action {
                 id: "open".into(),
-                key: Some('a'),
                 label: ronoctua_notify::Label::Key("k".into()),
                 doing: Doing::Run {
                     program: Program::Open,
@@ -14822,13 +15003,11 @@ mod tests {
             },
             ronoctua_notify::Action {
                 id: "copy-path".into(),
-                key: Some('c'),
                 label: ronoctua_notify::Label::Key("k".into()),
                 doing: Doing::CopyPath,
             },
             ronoctua_notify::Action {
                 id: "panel".into(),
-                key: Some('m'),
                 label: ronoctua_notify::Label::Key("k".into()),
                 doing: Doing::Command("memory-open".into()),
             },

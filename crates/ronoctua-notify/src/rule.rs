@@ -112,6 +112,36 @@ impl Test {
         }
     }
 
+    /// Every kind of comparison, in the order the manager cycles them.
+    ///
+    /// The kinds and not the values: a `Test` carries what it compares
+    /// against, and turning "contains" into "at least" has to keep it.
+    pub const KINDS: [&'static str; 5] = ["is", "contains", "starts-with", "at-least", "at-most"];
+
+    /// The same comparison of another kind, keeping what it compares against.
+    ///
+    /// Text becomes a number by reading it, and a number becomes text by
+    /// writing it — so turning the knob past the end of the text tests and back
+    /// does not silently empty the value the person typed.
+    #[must_use]
+    pub fn of_kind(&self, kind: &str) -> Self {
+        let text = self.against();
+        let number = text.trim().parse::<u8>().unwrap_or_default();
+        match kind {
+            "contains" => Self::Contains(text),
+            "starts-with" => Self::StartsWith(text),
+            "at-least" => Self::AtLeast(number),
+            "at-most" => Self::AtMost(number),
+            _ => Self::Is(text),
+        }
+    }
+
+    /// Does it compare against a NUMBER?
+    #[must_use]
+    pub const fn is_numeric(&self) -> bool {
+        matches!(self, Self::AtLeast(_) | Self::AtMost(_))
+    }
+
     /// What it is comparing against, as the manager draws it.
     #[must_use]
     pub fn against(&self) -> String {
@@ -176,6 +206,74 @@ impl Term {
             Test::AtLeast(_) | Test::AtMost(_) => false,
         }
     }
+}
+
+/// Can this filter's name be a name in the REPOSITORY?
+///
+/// A filter on one machine is called whatever its author typed — it is data.
+/// One that goes to everybody becomes a line of the distro, and invariant 18
+/// says every name in this repository is English kebab: it is the key an
+/// adjustment is stored under, and the id the build refuses if it is malformed.
+///
+/// So the door checks it and says so, rather than mangling `silenciar cópias`
+/// into `silenciar-cpias` behind somebody's back.
+#[must_use]
+pub fn is_shareable_name(id: &str) -> bool {
+    !id.is_empty()
+        && id.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A filter in the shape the BUILD reads — which is the shape a person reads.
+///
+/// # Why not serde's own
+///
+/// Because this goes into the repository, beside `assets/notifications.nix`,
+/// and somebody will open it. Serde spells a `Test` as `{"Contains": "backup"}`
+/// — the variant's Rust name — and a `Field` as `"Summary"`. The table spells
+/// the same condition `{"field": "summary", "contains": "backup"}`, which is
+/// what the Nix file says and what `gen-notifications.py` already validates.
+/// One shape for the build to read, and it is the readable one.
+#[must_use]
+pub fn as_table(rule: &Rule) -> serde_json::Value {
+    let when: Vec<serde_json::Value> = rule
+        .when
+        .iter()
+        .map(|t| {
+            let value = match &t.test {
+                Test::Is(s) | Test::Contains(s) | Test::StartsWith(s) => {
+                    serde_json::Value::String(s.clone())
+                }
+                Test::AtLeast(n) | Test::AtMost(n) => serde_json::Value::from(*n),
+            };
+            serde_json::json!({ "field": t.field.id(), t.test.id(): value })
+        })
+        .collect();
+    let mut apply = serde_json::Map::new();
+    let v = &rule.apply;
+    if let Some(x) = v.show {
+        apply.insert("show".into(), x.id().into());
+    }
+    if let Some(x) = v.life {
+        apply.insert("life".into(), x.id().into());
+    }
+    if let Some(x) = v.level {
+        apply.insert("level".into(), x.into());
+    }
+    for (name, held) in [
+        ("loud", v.loud),
+        ("blink", v.blink),
+        ("vibrate", v.vibrate),
+        ("audio", v.audio),
+        ("auto-read", v.auto_read),
+    ] {
+        if let Some(x) = held {
+            apply.insert(name.into(), x.into());
+        }
+    }
+    serde_json::json!({ "id": rule.id, "when": when, "apply": apply })
 }
 
 /// The urgency's name, as a filter spells it.

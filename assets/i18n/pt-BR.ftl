@@ -75,13 +75,10 @@ state-update = atualização
 
 ## Notifications
 
-notif-empty = sem notificações
 notif-title = Notificações
-notif-critical = CRÍTICA
 
 # A faixa, acima da modeline. O contador só aparece com mais de uma.
 notif-queue-position = { $shown }/{ $total }
-notif-mark-read = marcar como lida
 
 # O CATÁLOGO — as notificações da própria distro, com um resumo e um corpo
 # cada. Para uma entrada REESCRITA (a captura de tela do compositor), é isto
@@ -93,11 +90,11 @@ notif-memory-killed-summary = Fechado para liberar memória
 notif-memory-killed-body = Um aplicativo foi fechado para a máquina não travar.
 
 # O que cada notificação deixa fazer.
-notif-action-edit = editar
-notif-action-open = abrir
-notif-action-folder = pasta
+notif-action-edit = editar a imagem
+notif-action-open = abrir a imagem
+notif-action-folder = abrir a pasta
 notif-action-copy-path = copiar o caminho
-notif-action-memory-panel = painel de memória
+notif-action-memory-panel = abrir o painel de memória
 
 # OS FILTROS QUE A DISTRO JÁ TRAZ. O gerenciador os lista por estes nomes.
 notif-rule-important-gets-room = O que é importante ganha espaço
@@ -109,9 +106,45 @@ notif-column-suppressed = Filtradas
 notif-column-catalogue = Notificações e filtros
 # A LINHA DE DICAS lê cada id das tabelas de teclas do gerenciador como um texto
 # curto — a convenção do gerenciador de arquivos; `cmd-<id>` é o rótulo longo do manual.
-notif-read = lida
+notif-read = lida ou não lida
 notif-forget = esquecer
 notif-read-all = todas lidas
+notif-filters = filtros
+notif-any-device = Um dispositivo
+notif-type-in-the-footer = Digitar é no rodapé — { $keys } abre por lá.
+
+# A FICHA DO FILTRO — escrever um seu. A linguagem de regras está completa desde
+# o dia em que foi gerada; até agora o único caminho até ela era editar o JSON à
+# mão, o que não é um caminho.
+notif-draft-name = como chamar
+notif-draft-field = olhar para
+notif-draft-test = comparar
+notif-draft-value = com
+notif-draft-unnamed = ainda sem nome
+notif-draft-nothing = ainda nada
+notif-draft-unready = falta um nome e algo com que comparar
+notif-draft-type = digitar esta
+notif-draft-add = mais uma condição
+notif-draft-drop = tirar esta condição
+notif-draft-save = salvar o filtro
+notif-new = escrever um filtro
+notif-edit = editar este filtro seu
+notif-drop = apagar este filtro seu
+
+# O que uma condição olha, e como compara. As palavras são da pessoa, não da
+# tabela: `summary` é como o protocolo chama, e `o título` é o que é.
+notif-field-app = quem mandou
+notif-field-summary = o título
+notif-field-body = o corpo
+notif-field-tag = uma etiqueta
+notif-field-catalogue = o tipo
+notif-field-urgency = quão urgente
+notif-field-level = o nível
+notif-test-is = é exatamente
+notif-test-contains = contém
+notif-test-starts-with = começa com
+notif-test-at-least = é pelo menos
+notif-test-at-most = é no máximo
 notif-act = rodar a ação
 notif-adjust = ajustar este tipo
 notif-where = { $at } de { $total }
@@ -122,17 +155,30 @@ notif-pane-previous = coluna anterior
 notif-knob-next = próximo valor
 notif-knob-previous = valor anterior
 notif-restore = o padrão da distro
-notif-suppressed-by = filtrada por { $rule }
-notif-decided-by = por { $rule }
-notif-from-catalogue = { $entry }
 notif-default = padrão da distro
+notif-mine = seu filtro
+notif-shared = a caminho de todo mundo
+
+# ANTES DE UM FILTRO IR PARA TODO MUNDO. O repositório é público, e o que cai
+# nele está publicado: o git guarda e um espelho copia.
+notif-share = compartilhar com todo mundo
+notif-share-answer = responder
+notif-share-does = e ele faz
+notif-share-public = Isto vai para o repositório, que é PÚBLICO. Tudo o que está acima é publicado junto, e não há como voltar atrás na prática. Nada mais seu vai — nem o histórico, nem os ajustes, nem o nome desta máquina. Quem publica de verdade é o seu commit.
+notif-share-not-a-name = Nome no repositório é inglês, minúsculo, com hífen no lugar do espaço (invariante 18) — é a chave sob a qual um ajuste é guardado. Renomeie o filtro e volte.
+notif-share-no = não, fica só comigo
+notif-share-yes = sim, compartilhar
+notif-shared-written = Está no repositório. Quem publica é o seu commit.
+notif-share-failed = Não deu para escrever no repositório.
+notif-share-nowhere = Esta máquina não tem repositório para onde compartilhar.
 notif-yours = seu ajuste
 notif-nothing-here = nada aqui
 notif-yes = sim
 notif-no = não
 notif-knob-show = aparece
 notif-knob-life = fica
-notif-act-in-the-footer = A ação roda pelo rodapé: { $keys }, e a letra dela
+notif-act-in-the-footer = Esta roda pelo rodapé: { $keys }, e abra a notificação.
+notif-act-no-footer = O rodapé não está escutando; a ação não foi a lugar nenhum.
 
 # Como os campos da apresentação aparecem na tela.
 notif-show-hidden = não mostrar
@@ -146,6 +192,20 @@ notif-level = nível
 notif-blink = piscar
 notif-vibrate = vibrar
 notif-audio = tocar som
+notif-auto-read = chega já lida
+
+# O QUE O GERENCIADOR SABE SOBRE UM REGISTRO, na coluna ao lado dele. É o que a
+# linha não tem espaço para dizer: de onde veio, quando, quanto tempo ficou e — o
+# que o dono pediu pelo nome — QUAL FILTRO DECIDIU, que antes vinha colado no fim
+# da frase como um id cru.
+notif-fact-origin = quem mandou
+notif-fact-arrived = quando chegou
+notif-fact-life = quanto tempo ficou
+notif-fact-show = como apareceu
+notif-fact-read = já foi lida
+notif-fact-filter = filtro que decidiu
+notif-fact-no-filter = nenhum casou
+notif-see = abrir
 
 # OS DOIS INTERRUPTORES QUE NÃO FAZEM NADA, e por quê. Um interruptor que não
 # interrompe e não diz nada é a armadilha que este projeto já pagou uma vez.
@@ -167,7 +227,7 @@ hint-notif-bell = { $unread ->
     } — clique abre o gerenciador
 hint-notif-read = marcar como lida e tirar da tela
 hint-notif-countdown = quanto tempo ela ainda tem
-hint-notif-action = { $action } — aperte { $key } no gerenciador
+hint-notif-action = { $action } — clique, ou abra a notificação
 
 ## Installer — the six questions (section 7.1)
 
@@ -264,9 +324,20 @@ cmd-workspace-move = Levar a janela para o espaço
 cmd-notif-open = Notificações
 cmd-notif-window = Notificações em uma janela
 cmd-notif-read-all = Marcar todas como lidas
-cmd-notif-read = Marcar esta notificação como lida
+cmd-notif-read = Marcar esta notificação como lida, ou como não lida
 cmd-notif-forget = Esquecer esta notificação
 cmd-notif-act = Rodar a ação da notificação
+cmd-notif-see = Abrir a notificação e ler tudo
+cmd-notif-filters = Filtros de notificação
+cmd-notif-new = Escrever um filtro de notificação seu
+cmd-notif-drop = Apagar este filtro seu
+cmd-notif-share = Compartilhar este filtro seu com todo mundo
+cmd-notif-share-answer = Responder a pergunta de compartilhar
+cmd-notif-draft-type = Digitar o que esta linha do filtro guarda
+cmd-notif-draft-add = Acrescentar mais uma condição ao filtro
+cmd-notif-draft-drop = Tirar esta condição do filtro
+cmd-notif-draft-save = Salvar o filtro
+cmd-notif-filter-typed = Responder a pergunta da ficha do filtro
 cmd-notif-adjust = Ajustar este tipo de notificação
 cmd-notif-up = Uma notificação acima
 cmd-notif-down = Uma notificação abaixo
@@ -2189,8 +2260,8 @@ notif-bluetooth-app = bluetooth
 notif-bluetooth-pairing-summary = Algo quer parear
 notif-bluetooth-pairing-keys = { $yes } responde sim, { $no } responde não — depois que este aviso sai.
 notif-bluetooth-pairing-body = Abra o Bluetooth para responder.
-notif-action-bluetooth-accept = sim
-notif-action-bluetooth-refuse = não
+notif-action-bluetooth-accept = sim, parear
+notif-action-bluetooth-refuse = não, recusar
 notif-bluetooth-connected-summary = { $device } conectado
 notif-bluetooth-connected-body = Está pronto para usar.
 notif-bluetooth-disconnected-summary = { $device } desconectado
@@ -2203,8 +2274,8 @@ notif-battery-critical-summary = Bateria crítica
 notif-battery-critical-body = { $percent }% restantes. A máquina vai { $action } sozinha em breve.
 notif-battery-charged-summary = Bateria carregada
 notif-battery-charged-body = Pode desligar da tomada.
-notif-action-power-panel = painel de energia
-notif-action-bluetooth-panel = bluetooth
+notif-action-power-panel = abrir o painel de energia
+notif-action-bluetooth-panel = abrir o Bluetooth
 
 # A SAÍDA — as três marcas, e o que o daemon acredita.
 network-way = a internet

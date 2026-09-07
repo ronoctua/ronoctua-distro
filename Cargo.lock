@@ -2805,6 +2805,7 @@ dependencies = [
  "ronoctua-protocol",
  "ronoctua-render",
  "ronoctua-runtime",
+ "ronoctua-store",
  "ronoctua-syntax",
  "ronoctua-term",
  "ronoctua-tokens",
@@ -2819,6 +2820,16 @@ dependencies = [
  "wayland-client",
  "wayland-protocols-wlr",
  "wgpu",
+]
+
+[[package]]
+name = "ronoctua-store"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-xdg",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

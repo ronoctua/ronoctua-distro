@@ -28,7 +28,7 @@
 //! outside the tokens (invariant 9).
 
 use ronoctua_notify::presentation::Verdict;
-use ronoctua_notify::{Book, Life, Presentation, Record, Show, TOP_LEVEL};
+use ronoctua_notify::{Book, Life, Presentation, Record, RecordKey, Show, TOP_LEVEL};
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
@@ -100,22 +100,85 @@ impl Column {
     }
 }
 
+// THE ORDER IS WHAT SURVIVES A NARROW LINE. `chrome::hint_spans` elides across
+// pieces, so the tail of this table is what a person never reads — and the two
+// that MUST be read are the ones nothing else on screen hints at: the side
+// arrows, and what `RET` would do. `TAB` has a column heading lighting up to
+// speak for it; `r` is a convenience.
 pub const OF_THE_VIEW: &[(&str, &str, Column)] = &[
     ("<down>", "notif-down", Column::Anywhere),
     ("<up>", "notif-up", Column::Anywhere),
+    // `RET` OPENS THE RECORD, and that is all it does here. It used to run
+    // action ZERO, blind; then it ran whichever button the side arrows had
+    // left focused ON the row. The buttons left the row — a notification may
+    // carry several with labels that are sentences, and a row is one line —
+    // so what reaches an action is the cursor in the open record, where they
+    // are listed one under the other.
+    ("RET", "notif-see", Column::Happened),
+    ("SPC", "notif-read", Column::Happened),
+    ("d", "notif-forget", Column::ARecord),
     ("TAB", "notif-pane-next", Column::Anywhere),
     // `S-TAB` is the keysym `ISO_Left_Tab`, which is what xkb produces for
     // it — the same "xkb has already applied it" both doors' key readers
     // rely on when they refuse to count Shift. See `files::OF_THE_VIEW`.
     ("S-TAB", "notif-pane-previous", Column::Anywhere),
-    ("SPC", "notif-read", Column::Happened),
-    ("d", "notif-forget", Column::ARecord),
     ("r", "notif-read-all", Column::Anywhere),
-    ("RET", "notif-act", Column::Happened),
+    // `f` FOR THE FILTERS, from either column of records — on the filters
+    // themselves it would be a key that says "go where you are". The catalogue
+    // was the third stop of `TAB` and nothing on screen named it, so the whole
+    // of it — every kind of notification the distro ships, every filter, and
+    // the person's own — existed only for somebody who pressed `TAB` twice and
+    // looked.
+    ("f", "notif-filters", Column::ARecord),
     // THE SAME KEY, THE OTHER MEANING. On the catalogue `RET` opens the
     // entry's sheet, and calling that "run its action" was the label lying at
     // one of the two levels — the same reason `notif-restore` exists.
     ("RET", "notif-adjust", Column::Catalogue),
+    // AND THE TWO THAT MAKE THE FILTERS THE PERSON'S. Writing one had no key
+    // at all — the only way in was the JSON — and deleting one had none
+    // either, so a filter written by hand could never be taken back by hand.
+    ("n", "notif-new", Column::Catalogue),
+    ("d", "notif-drop", Column::Catalogue),
+    // AND THE ONE THAT SENDS IT TO EVERYBODY, which is a door out of this
+    // machine and therefore a question rather than a key that acts.
+    ("p", "notif-share", Column::Catalogue),
+];
+
+/// The FILTER SHEET's keys — what the line teaches while one is being written.
+///
+/// A table of its own, like the sheet's and the open record's: the arrows turn
+/// what the focused line holds, and three letters do what no arrow can.
+pub const OF_THE_DRAFT: &[(&str, &str)] = &[
+    ("<down>", "notif-down"),
+    ("<up>", "notif-up"),
+    ("<right>", "notif-knob-next"),
+    ("<left>", "notif-knob-previous"),
+    ("RET", "notif-draft-type"),
+    ("a", "notif-draft-add"),
+    ("x", "notif-draft-drop"),
+    ("s", "notif-draft-save"),
+];
+
+/// The QUESTION's keys — two answers and a way out.
+pub const OF_THE_QUESTION: &[(&str, &str)] = &[
+    ("<down>", "notif-down"),
+    ("<up>", "notif-up"),
+    ("RET", "notif-share-answer"),
+];
+
+/// The OPEN record's keys — what the line teaches while one record fills the
+/// screen.
+///
+/// A table of its own, like the sheet's, because two of these mean something
+/// else here: the arrows scroll the record instead of walking a list, and `RET`
+/// runs the focused button rather than opening anything — there is nothing left
+/// to open.
+pub const OF_THE_OPEN: &[(&str, &str)] = &[
+    ("<down>", "notif-down"),
+    ("<up>", "notif-up"),
+    ("RET", "notif-act"),
+    ("SPC", "notif-read"),
+    ("d", "notif-forget"),
 ];
 
 /// The SHEET's keys — what the line teaches while one entry is being adjusted.
@@ -132,6 +195,68 @@ pub const OF_THE_SHEET: &[(&str, &str)] = &[
     ("<left>", "notif-knob-previous"),
     ("r", "notif-restore"),
 ];
+
+/// What ONE drawn row is, when the rows are one column of them.
+///
+/// # Why the arrangement is written down instead of walked twice
+///
+/// Because the drawing and the pointer used to work it out separately, and
+/// each was right about a different number of titles: both assumed exactly one
+/// (`n - 1` in each door), which was true while a narrow screen drew a single
+/// pane. Narrow now STACKS the two — "Received" and everything it holds, then
+/// "Filtered out" and everything it holds — so there are two titles, a blank
+/// line between them, and a row's index says nothing on its own.
+///
+/// One plan, three readers: [`View::one_column`] draws it, [`View::place_of`]
+/// answers the pointer with it, and [`View::visual_cursor`] tells the region
+/// which line to scroll to. It is the rule this file's header already states
+/// about the two halves of a list disagreeing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// A column's title.
+    Heading(Pane),
+    /// The blank line before the second title. Air before a heading, which is
+    /// the rule the other views already follow.
+    Air,
+    /// Item `n` of that pane.
+    Item(Pane, usize),
+    /// The line an EMPTY pane draws in place of its items. It has to be drawn:
+    /// a column with nothing under its title is indistinguishable from a key
+    /// that did not work.
+    Empty(Pane),
+}
+
+/// What a row of the catalogue IS.
+///
+/// It used to be `is a rule: bool`, which answered the wrong question. The one
+/// that matters on screen is WHOSE it is: the distro ships entries and filters
+/// that can be adjusted and never deleted, and the person writes filters of
+/// their own that can be edited, deleted, and — the owner asked for this by
+/// name — told apart at a glance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A KIND of notification the distro recognises.
+    Entry,
+    /// A filter the distro ships.
+    Rule,
+    /// A filter the person wrote. Theirs to change and to drop.
+    Mine,
+    /// A filter of theirs that has been SENT to the repository and has not
+    /// come back yet.
+    ///
+    /// It is still local — it has to be, or it would stop working the moment
+    /// it was shared — and it stops being this the day a build brings it back
+    /// as one of the distro's. See `ronoctua_store::Shared::landed`.
+    Shared,
+}
+
+impl Kind {
+    /// Is it the person's own?
+    #[must_use]
+    pub const fn is_mine(self) -> bool {
+        matches!(self, Self::Mine | Self::Shared)
+    }
+}
 
 /// Which list has the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -198,11 +323,13 @@ pub enum Knob {
     Vibrate,
     /// Declared, and nothing does it. See [`ronoctua_notify::INERT`].
     Audio,
+    /// It arrives already read: it shows, and the bell never counts it.
+    AutoRead,
 }
 
 impl Knob {
     /// Every one, in the order the sheet draws them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Show,
         Self::Life,
         Self::Loud,
@@ -210,6 +337,7 @@ impl Knob {
         Self::Blink,
         Self::Vibrate,
         Self::Audio,
+        Self::AutoRead,
     ];
 
     /// The label's text key.
@@ -223,6 +351,7 @@ impl Knob {
             Self::Blink => ronoctua_i18n::key::NOTIF_BLINK,
             Self::Vibrate => ronoctua_i18n::key::NOTIF_VIBRATE,
             Self::Audio => ronoctua_i18n::key::NOTIF_AUDIO,
+            Self::AutoRead => ronoctua_i18n::key::NOTIF_AUTO_READ,
         }
     }
 
@@ -237,6 +366,7 @@ impl Knob {
             Self::Blink => "blink",
             Self::Vibrate => "vibrate",
             Self::Audio => "audio",
+            Self::AutoRead => "auto-read",
         }
     }
 
@@ -278,21 +408,49 @@ pub enum Errand {
     /// Nothing; redraw.
     Nothing,
     /// Mark this notification read.
-    Read(u32),
+    Read(RecordKey),
+    /// Mark it UNREAD again, and put it back on the bell's count.
+    Unread(RecordKey),
     /// Forget this notification: out of the record for good.
-    Forget(u32),
+    Forget(RecordKey),
     /// Mark everything read.
     ReadAll,
-    /// Run action `n` of the notification with this id.
-    Act(u32, usize),
+    /// Run action `n` of this notification.
+    Act(RecordKey, usize),
     /// The person adjusted `id`. `None` puts it back to the distro's default.
     ///
     /// The verdict travels WITH the errand rather than being written here: this
     /// module holds no book, and giving it one would be the second copy that
     /// goes stale — see the header.
     Adjusted(String, Option<Verdict>),
+    /// The draft wants something TYPED. The footer asks; the window says where.
+    Ask(Asking),
+    /// Save this filter of the person's own. `was` is the id it replaces.
+    Filter {
+        /// The id being replaced, when this was an edit.
+        was: Option<String>,
+        /// What to save.
+        rule: ronoctua_notify::Rule,
+    },
+    /// Drop this filter of the person's own.
+    Unfilter(String),
+    /// Put this filter of theirs in the REPOSITORY, for everybody.
+    ///
+    /// Answered `yes` on a screen that said what it means and showed exactly
+    /// what would go. What the door does is write one file in the repository —
+    /// what publishes it is the owner's own commit.
+    Share(String),
     /// Close the manager.
     Close,
+}
+
+/// What a draft is waiting for somebody to type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asking {
+    /// What the filter is called.
+    Name,
+    /// What condition `n` compares against.
+    Value(usize),
 }
 
 /// The manager's state.
@@ -302,8 +460,150 @@ pub struct View {
     happened: usize,
     suppressed: usize,
     catalogue: usize,
-    /// Which knob the sheet has focused. `None` = the sheet is closed.
-    knob: Option<usize>,
+    /// Which of the manager's levels is on screen.
+    level: Level,
+    /// How far this machine is ahead of UTC, for the dates an open record
+    /// shows.
+    zone: ronoctua_files::when::Zone,
+}
+
+/// Which level of the manager is on screen.
+///
+/// The shape is the Bluetooth view's, and for the same reason: one field says
+/// where you are, one `match` in [`View::rows`] draws it, and `Esc` walks back
+/// one step. Neither door knows a level exists — both ask for rows and paint
+/// what they get.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Level {
+    /// The columns.
+    #[default]
+    List,
+    /// ONE record, whole: its body, its buttons and its facts.
+    ///
+    /// `line` is which line of it the region is asked to keep on screen — the
+    /// arrows move it, because a body that does not fit is exactly the reason
+    /// this level exists.
+    Open {
+        /// Which record.
+        at: RecordKey,
+        /// Which of its lines the region keeps on screen.
+        line: usize,
+    },
+    /// A catalogue entry being adjusted; the number is the focused knob.
+    Sheet(usize),
+    /// A filter of the person's OWN being written or edited.
+    ///
+    /// It is the only level that holds anything but a cursor, and it has to:
+    /// a filter half-written is not saved anywhere yet, and a person naming it
+    /// in the minibuffer is a round trip through the door and back.
+    Draft(Draft),
+    /// The question before a filter goes to EVERYBODY.
+    ///
+    /// It shows the filter whole — every condition, every verdict — and says
+    /// in one sentence that the repository is public and that there is no way
+    /// back. `yes` is which of the two answers the cursor is on, and it starts
+    /// on `no`: the format buffer's rule, for the same reason, at a gesture
+    /// that cannot be undone either.
+    Publish {
+        /// Which filter of theirs.
+        id: String,
+        /// Is the cursor on "yes"?
+        yes: bool,
+    },
+}
+
+/// A filter of the person's own, being written.
+///
+/// # Why this exists at all
+///
+/// Because there was NO way to write one. The rule language has been complete
+/// since the day it was generated — seven fields, five comparisons, the person's
+/// own filters tried before the distro's — and the only path to it was editing
+/// `$XDG_CONFIG_HOME/ronoctua/notifications.json` by hand, in a JSON of serde
+/// variant names (`{"Contains": "backup"}`). That is a feature nobody has.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Draft {
+    /// What the person is calling it. It is the rule's id, and it is DATA:
+    /// text they typed, not an identifier this repository writes.
+    pub name: String,
+    /// The conditions. Every one has to hold.
+    pub when: Vec<ronoctua_notify::Term>,
+    /// What it decides.
+    pub apply: Verdict,
+    /// Which line of it the arrows are on.
+    pub line: usize,
+    /// The filter it REPLACES, when this is an edit rather than a new one.
+    pub editing: Option<String>,
+}
+
+impl Draft {
+    /// A blank one, with a first condition already there.
+    ///
+    /// With none, the first screen is a name and nothing else, and "add a
+    /// condition" is a step everybody takes: a filter with no condition matches
+    /// EVERYTHING, which is the one thing nobody means to write by accident.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self {
+            when: vec![ronoctua_notify::Term {
+                field: ronoctua_notify::Field::Summary,
+                test: ronoctua_notify::Test::Contains(String::new()),
+            }],
+            ..Self::default()
+        }
+    }
+
+    /// The one that edits an existing filter of theirs.
+    #[must_use]
+    pub fn of(rule: &ronoctua_notify::Rule) -> Self {
+        Self {
+            name: rule.id.clone(),
+            when: rule.when.clone(),
+            apply: rule.apply.clone(),
+            line: 0,
+            editing: Some(rule.id.clone()),
+        }
+    }
+
+    /// What it would be saved as. `None` while it is not ready.
+    ///
+    /// A filter needs a NAME — it is how the screen and the adjustment file
+    /// both refer to it — and at least one condition with something to compare
+    /// against. Half a filter saved is a filter that catches everything.
+    #[must_use]
+    pub fn ready(&self) -> Option<ronoctua_notify::Rule> {
+        let name = self.name.trim();
+        if name.is_empty() || self.when.is_empty() {
+            return None;
+        }
+        if self
+            .when
+            .iter()
+            .any(|t| !t.test.is_numeric() && t.test.against().trim().is_empty())
+        {
+            return None;
+        }
+        Some(ronoctua_notify::Rule {
+            id: name.to_owned(),
+            when: self.when.clone(),
+            apply: self.apply.clone(),
+        })
+    }
+}
+
+/// What ONE line of the filter sheet is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Line {
+    /// What the filter is called.
+    Name,
+    /// What condition `n` looks at.
+    Field(usize),
+    /// How condition `n` compares.
+    Test(usize),
+    /// What condition `n` compares against.
+    Value(usize),
+    /// One of the eight knobs of what it decides.
+    Knob(usize),
 }
 
 /// What goes in each pane, resolved once so the drawing and the keys agree.
@@ -319,8 +619,9 @@ pub struct Lists<'a> {
     pub happened: Vec<&'a Record>,
     /// What a filter kept off the screen.
     pub suppressed: Vec<&'a Record>,
-    /// `(id, is a rule)` for everything the distro ships with.
-    pub catalogue: Vec<(String, bool)>,
+    /// `(id, what it is)` — the distro's kinds, the distro's filters, and the
+    /// person's own filters, in that order.
+    pub catalogue: Vec<(String, Kind)>,
 }
 
 impl<'a> Lists<'a> {
@@ -339,22 +640,45 @@ impl<'a> Lists<'a> {
         // THE DISTRO'S ENTRIES, THE DISTRO'S RULES, AND THE PERSON'S RULES.
         //
         // `book.mine` was missing, and it is the half a person can actually
-        // change: a suppressed row names the rule that hid it
-        // (`NOTIF_SUPPRESSED_BY`), and if that rule was one of theirs the
-        // catalogue could neither show it nor adjust it — the screen named
-        // something the screen could not reach.
+        // change: an open record names the filter that decided it, and if that
+        // filter was one of theirs the catalogue could neither show it nor
+        // adjust it — the screen named something the screen could not reach.
         let catalogue = book
             .entries
             .iter()
-            .map(|e| (e.id.clone(), false))
-            .chain(book.rules.iter().map(|r| (r.id.clone(), true)))
-            .chain(book.mine.iter().map(|r| (r.id.clone(), true)))
+            .map(|e| (e.id.clone(), Kind::Entry))
+            .chain(book.rules.iter().map(|r| (r.id.clone(), Kind::Rule)))
+            .chain(book.mine.iter().map(|r| {
+                // ON ITS WAY, or simply theirs. The question is answered
+                // against the table this binary was COMPILED with, and that is
+                // the whole of the check: distro content reaches a machine by
+                // one road, a build from the flake, so being in that table IS
+                // having arrived. Nothing here asks the network or git.
+                if book.shared.contains(&r.id) {
+                    (r.id.clone(), Kind::Shared)
+                } else {
+                    (r.id.clone(), Kind::Mine)
+                }
+            }))
             .collect();
         Self {
             happened,
             suppressed,
             catalogue,
         }
+    }
+
+    /// The record with this name, in whichever column holds it.
+    ///
+    /// The two columns are one history split by a filter's verdict, so a name
+    /// belongs to at most one of them.
+    #[must_use]
+    pub fn record(&self, at: RecordKey) -> Option<&'a Record> {
+        self.happened
+            .iter()
+            .chain(&self.suppressed)
+            .copied()
+            .find(|r| r.key() == at)
     }
 
     /// How many rows one pane has.
@@ -467,6 +791,130 @@ impl View {
         self.set_cursor(self.cursor().min(there - 1));
     }
 
+    /// How many cells this column reserves for buttons, on every one of its
+    /// rows.
+    ///
+    /// Measured over the WHOLE column so the sentence starts in the same place
+    /// on every line — see [`buttons_room`], which is the arithmetic. Only the
+    /// records column has buttons: a suppressed one never reached the screen,
+    /// and the catalogue's rows are kinds of notification, not notifications.
+    fn reserved(lists: &Lists<'_>, pane: Pane, columns: u16) -> Buttons {
+        let (_, room) = extent_of(pane, columns);
+        let records = match pane {
+            Pane::Happened => &lists.happened,
+            Pane::Suppressed => &lists.suppressed,
+            Pane::Catalogue => return Buttons { marked: false },
+        };
+        Buttons {
+            marked: buttons_marked(records, room),
+        }
+    }
+
+    /// The panes this arrangement draws, in the order it draws them.
+    ///
+    /// The CATALOGUE is alone on the screen: it is not something that
+    /// happened, it is what is configured, and it has two columns of its own.
+    /// The other two travel together — narrow, one under the other.
+    const fn stack(&self) -> &'static [Pane] {
+        match self.pane {
+            Pane::Catalogue => &[Pane::Catalogue],
+            _ => &[Pane::Happened, Pane::Suppressed],
+        }
+    }
+
+    /// What each drawn row is, in the ONE-column arrangement.
+    fn plan(&self, lists: &Lists<'_>) -> Vec<Place> {
+        let mut out = Vec::new();
+        for (i, pane) in self.stack().iter().copied().enumerate() {
+            if i > 0 {
+                out.push(Place::Air);
+            }
+            out.push(Place::Heading(pane));
+            let n = lists.len(pane);
+            if n == 0 {
+                out.push(Place::Empty(pane));
+            }
+            out.extend((0..n).map(|k| Place::Item(pane, k)));
+        }
+        out
+    }
+
+    /// Which pane and which item the DRAWN row `row` holds, if any.
+    ///
+    /// `cell` is where along the row the pointer is, and it only matters in the
+    /// two-column arrangement, where one drawn row carries two notifications.
+    /// A title, the blank line and an empty column's sentence answer `None`.
+    #[must_use]
+    pub fn place_of(
+        &self,
+        lists: &Lists<'_>,
+        columns: u16,
+        row: usize,
+        cell: Option<u16>,
+    ) -> Option<(Pane, usize)> {
+        if self.pane != Pane::Catalogue && two_columns(columns) {
+            // WIDE: one title, then one row per pair. Which of the two the
+            // pointer means is the cell's answer, and the keyboard's is the
+            // pane it is already in.
+            let i = row.checked_sub(1)?;
+            let pane = match cell {
+                Some(c) if c >= split_at(columns) => Pane::Suppressed,
+                Some(_) => Pane::Happened,
+                None => self.pane,
+            };
+            return (i < lists.len(pane)).then_some((pane, i));
+        }
+        match self.plan(lists).get(row)? {
+            Place::Item(pane, i) => Some((*pane, *i)),
+            _ => None,
+        }
+    }
+
+    /// Which DRAWN row the cursor is on.
+    ///
+    /// It is what the region scrolls to, through both doors. They each used to
+    /// add one for "the heading", which was the whole arrangement written as a
+    /// constant — and wrong the moment there were two headings.
+    #[must_use]
+    pub fn visual_cursor(
+        &self,
+        lists: &Lists<'_>,
+        book: &Book,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> usize {
+        match &self.level {
+            // THE SHEET IS SHORT BY CONSTRUCTION and has a cursor of its own;
+            // the catalogue's index would send the region thirty rows down a
+            // list of eight.
+            Level::Sheet(knob) => return *knob,
+            Level::Draft(d) => return d.line,
+            // THE QUESTION IS READ FROM THE ANSWERS. What it is about is
+            // drawn above them, and what has to be on screen is the sentence
+            // and the two answers — a question one has to scroll to answer is
+            // a question that gets answered by whichever key is nearest.
+            Level::Publish { id, yes } => {
+                let (at, room) = extent_of(Pane::Catalogue, columns);
+                return self
+                    .publish_rows(id, *yes, book, at, room, texts)
+                    .len()
+                    .saturating_sub(1);
+            }
+            // AN OPEN RECORD HAS NO CURSOR — there is nothing to choose. What
+            // the arrows move is which of its lines the region keeps on
+            // screen, which is what a body that does not fit needs.
+            Level::Open { line, .. } => return *line,
+            Level::List => {}
+        }
+        if self.pane != Pane::Catalogue && two_columns(columns) {
+            return self.cursor() + 1;
+        }
+        self.plan(lists)
+            .iter()
+            .position(|p| *p == Place::Item(self.pane, self.cursor()))
+            .unwrap_or(0)
+    }
+
     /// Which column has the keyboard.
     #[must_use]
     pub const fn pane(&self) -> Pane {
@@ -515,7 +963,7 @@ impl View {
     /// Clicking anywhere else on the row still only aims.
     pub fn clicked(
         &mut self,
-        n: usize,
+        row: usize,
         cell: Option<u16>,
         lists: &Lists<'_>,
         columns: u16,
@@ -530,41 +978,47 @@ impl View {
         // adjustment onto a notification kind nobody had opened. The errand
         // was `Nothing`, so nothing on screen said a click had done anything
         // at all.
-        if self.knob.is_some() {
+        if !matches!(self.level, Level::List) {
             return Errand::Nothing;
         }
-        // WHICH COLUMN WAS CLICKED decides which pane the cursor goes to. With
-        // two columns on screen a click in the right one used to move the
-        // LEFT pane's cursor, and the right column's envelope and bin were
-        // out of reach for the mouse until `TAB` had been pressed — the cell
-        // fell outside the left pane's extent and no target answered. Found
-        // by the review of the two-column screen; "a click selects" is the
-        // rule, and it has to mean the thing under the pointer.
-        if self.pane != Pane::Catalogue && two_columns(columns) {
-            self.pane = match cell {
-                Some(c) if c >= split_at(columns) => Pane::Suppressed,
-                _ => Pane::Happened,
-            };
-        }
-        // CLAMPED to the pane that was just chosen: the rows run to the
-        // longer of the two columns, so a click below the shorter one's last
-        // item names a row that pane does not have — and a cursor past the
-        // end lights nothing until an arrow brings it back.
-        self.set_cursor(n.min(lists.len(self.pane).saturating_sub(1)));
+        // WHAT IS UNDER THE POINTER, asked of the one plan the drawing used.
+        //
+        // A title, the blank line between the two stacked columns and an empty
+        // column's sentence are not rows of a list, and a click on one of them
+        // moves nothing — it used to move the cursor to whatever item happened
+        // to share the index.
+        let Some((pane, i)) = self.place_of(lists, columns, row, cell) else {
+            return Errand::Nothing;
+        };
+        // A CLICK SELECTS, and it selects the thing under the pointer — which
+        // includes the column it is in. With two columns on screen a click in
+        // the right one used to move the LEFT pane's cursor, and the right
+        // column's envelope and bin were out of reach for the mouse until
+        // `TAB` had been pressed.
+        self.pane = pane;
+        self.set_cursor(i);
         let (at, room) = self.row_extent(columns);
         let Some(hit) = cell.and_then(|c| target_at(c, at, room)) else {
             return Errand::Nothing;
         };
-        let id = match self.pane {
-            Pane::Happened => lists.happened.get(n).map(|r| r.notification.id),
-            Pane::Suppressed => lists.suppressed.get(n).map(|r| r.notification.id),
+        // THE RECORD IS THE ONE JUST NAMED, not the one at the raw row index.
+        // The cursor was clamped and the lookup was not, so a click below the
+        // shorter column's last item acted on nothing while the bin under the
+        // pointer looked as if it had been pressed.
+        let record = match pane {
+            Pane::Happened => lists.happened.get(i),
+            Pane::Suppressed => lists.suppressed.get(i),
             Pane::Catalogue => None,
         };
-        let Some(id) = id else { return Errand::Nothing };
+        let Some(record) = record else {
+            return Errand::Nothing;
+        };
+        let key = record.key();
         match hit {
-            Hit::MarkRead if Self::can_be_read(self.pane) => Errand::Read(id),
-            Hit::MarkRead => Errand::Nothing,
-            Hit::Delete => Errand::Forget(id),
+            Hit::ToggleRead if !Self::can_be_read(pane) => Errand::Nothing,
+            Hit::ToggleRead if record.read => Errand::Unread(key),
+            Hit::ToggleRead => Errand::Read(key),
+            Hit::Delete => Errand::Forget(key),
         }
     }
 
@@ -576,7 +1030,15 @@ impl View {
     /// way a pointer's explanation wins over the keys everywhere else.
     #[must_use]
     pub fn note(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        let knob = self.knob?;
+        // AND WHY `s` DID NOTHING, when the draft is not ready to be saved.
+        // Same line, same reason it exists: a key that answers nothing has to
+        // say why, or the answer is "this screen is broken".
+        if let Some(said) = self.draft_note(texts) {
+            return Some(said);
+        }
+        let Level::Sheet(knob) = self.level else {
+            return None;
+        };
         Some(texts.t(Knob::ALL.get(knob)?.inert()?))
     }
 
@@ -607,11 +1069,16 @@ impl View {
     pub fn hint_of(
         &self,
         of: Option<(usize, usize)>,
+        lists: &Lists<'_>,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
-        let mut out = self.taught(texts);
+        let mut out = self.taught(lists, texts);
         // MORE THAN ONE, or there is nothing to place: the band's rule, and
         // the same reason — `1/1` is a column spent saying nothing.
+        //
+        // AND ONLY WHERE THERE IS A LIST. With one record open or one entry
+        // being adjusted, "3 of 12" is about a list nobody is looking at.
+        let of = of.filter(|_| matches!(self.level, Level::List));
         if let Some((at, total)) = of.filter(|(_, total)| *total > 1) {
             out.push(crate::chrome::Piece::separator());
             out.push(crate::chrome::Piece::prose(texts.t_args(
@@ -632,16 +1099,54 @@ impl View {
     }
 
     /// The keys the level teaches, and nothing else.
-    fn taught(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
-        if self.knob.is_some() {
-            return crate::chrome::hint_of(OF_THE_SHEET, texts);
+    fn taught(&self, lists: &Lists<'_>, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
+        match &self.level {
+            Level::Sheet(_) => crate::chrome::hint_of(OF_THE_SHEET, texts),
+            Level::Open { .. } => crate::chrome::hint_of(OF_THE_OPEN, texts),
+            Level::Draft(_) => crate::chrome::hint_of(OF_THE_DRAFT, texts),
+            Level::Publish { .. } => crate::chrome::hint_of(OF_THE_QUESTION, texts),
+            Level::List => {
+                let here: Vec<(&str, &str)> = OF_THE_VIEW
+                    .iter()
+                    .filter(|(_, _, c)| c.shown(self.pane))
+                    .map(|(k, id, _)| (*k, *id))
+                    .collect();
+                crate::chrome::hint_of_with(&here, |id| self.means(id, lists), texts)
+            }
         }
-        let here: Vec<(&str, &str)> = OF_THE_VIEW
-            .iter()
-            .filter(|(_, _, c)| c.shown(self.pane))
-            .map(|(k, id, _)| (*k, *id))
-            .collect();
-        crate::chrome::hint_of(&here, texts)
+    }
+
+    /// What a key of MOVING meaning says right now.
+    ///
+    /// `None` for every key that means one thing. `RET` is the one that does
+    /// not: on the row itself it opens the record, and on a button — where the
+    /// side arrows may have left it — it runs that button. The hint line draws
+    /// what this returns, and draws the key in the register that says its
+    /// meaning moves.
+    fn means(&self, id: &str, lists: &Lists<'_>) -> Option<&'static str> {
+        match id {
+            // ADJUSTING IS FOR THE DISTRO'S; a filter the person WROTE is
+            // opened and rewritten whole, conditions and all.
+            "notif-adjust" => self.mine_here(lists).is_some().then_some("notif-edit"),
+            _ => None,
+        }
+    }
+
+    /// The filter behind the focused catalogue row, when it is theirs.
+    fn mine_of(&self, lists: &Lists<'_>, book: &Book) -> Option<ronoctua_notify::Rule> {
+        let id = self.mine_here(lists)?;
+        book.mine.iter().find(|r| r.id == id).cloned()
+    }
+
+    /// The focused catalogue row, when it is a filter of the person's own.
+    fn mine_here<'a>(&self, lists: &'a Lists<'_>) -> Option<&'a str> {
+        if self.pane != Pane::Catalogue {
+            return None;
+        }
+        match lists.catalogue.get(self.cursor()) {
+            Some((id, Kind::Mine)) => Some(id.as_str()),
+            _ => None,
+        }
     }
 
     /// Is an entry's sheet open?
@@ -651,7 +1156,37 @@ impl View {
     /// and a command run by name must not do the other thing.
     #[must_use]
     pub const fn in_sheet(&self) -> bool {
-        self.knob.is_some()
+        matches!(self.level, Level::Sheet(_))
+    }
+
+    /// A fresh view at a chosen column, keeping what the DOOR gave this one.
+    ///
+    /// Opening the manager builds a new view — the cursor should not be where
+    /// it was three days ago — and the clock is not part of that: it came from
+    /// the door at start-up, and a plain `fresh()` here quietly threw it away,
+    /// so every date an open record showed would have read UTC.
+    ///
+    /// The column is a parameter because `n f` opens ON the filters: a feature
+    /// reachable only by pressing `TAB` twice inside a screen one has already
+    /// opened is a feature nobody finds.
+    #[must_use]
+    pub fn reopened(&self, pane: Pane) -> Self {
+        Self {
+            pane,
+            zone: self.zone.clone(),
+            ..Self::fresh()
+        }
+    }
+
+    /// Hands it the machine's clock, for the dates an open record shows.
+    ///
+    /// Carried and not found, which is the rule this repository already
+    /// follows for the trash bin and the sidebar's store: a `View` built by a
+    /// test reads nobody's clock, and the two doors hand it the real one.
+    #[must_use]
+    pub fn in_zone(mut self, zone: ronoctua_files::when::Zone) -> Self {
+        self.zone = zone;
+        self
     }
 
     /// Where the focused pane's rows begin and how wide they are.
@@ -680,9 +1215,13 @@ impl View {
 #[must_use]
 pub fn in_force(book: &Book, id: &str) -> (Presentation, bool) {
     let mut p = Presentation::from_urgency(ronoctua_notify::Urgency::Normal);
+    // AND THE PERSON'S OWN FILTERS, which were missing. The catalogue lists
+    // them — it has to, or a record could name a filter the screen could not
+    // show — and every one of them drew the plain arrival defaults instead of
+    // what it actually does, on the row and in the sheet both.
     if let Some(e) = book.entry(id) {
         e.apply.over(&mut p);
-    } else if let Some(r) = book.rules.iter().find(|r| r.id == id) {
+    } else if let Some(r) = book.mine.iter().chain(&book.rules).find(|r| r.id == id) {
         r.apply.over(&mut p);
     }
     let adjusted = book.adjustments.get(id).is_some_and(|a| !a.says_nothing());
@@ -712,6 +1251,7 @@ pub fn turn(now: &Presentation, knob: Knob, step: i32, into: &mut Verdict) {
         Knob::Blink => into.blink = Some(!now.blink),
         Knob::Vibrate => into.vibrate = Some(!now.vibrate),
         Knob::Audio => into.audio = Some(!now.audio),
+        Knob::AutoRead => into.auto_read = Some(!now.auto_read),
         Knob::Level => {
             // TEN AT A TIME. One at a time would be eleven presses to cross the
             // range, and nobody distinguishes level 63 from level 64.
@@ -755,6 +1295,7 @@ pub fn value_of(p: &Presentation, knob: Knob, texts: &ronoctua_i18n::Texts) -> S
         Knob::Blink => yes_no(p.blink),
         Knob::Vibrate => yes_no(p.vibrate),
         Knob::Audio => yes_no(p.audio),
+        Knob::AutoRead => yes_no(p.auto_read),
         Knob::Level => p.level.to_string(),
     }
 }
@@ -791,7 +1332,7 @@ pub fn target_at(column: u16, at: u16, room: u16) -> Option<Hit> {
     let end = at + room;
     match end.checked_sub(column) {
         Some(1) => Some(Hit::Delete),
-        Some(3) => Some(Hit::MarkRead),
+        Some(3) => Some(Hit::ToggleRead),
         _ => None,
     }
 }
@@ -799,11 +1340,291 @@ pub fn target_at(column: u16, at: u16, room: u16) -> Option<Hit> {
 /// What a click on a row of the manager does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
-    /// Mark it read, without taking it out of the record.
-    MarkRead,
+    /// Turn read on or off, without taking it out of the record.
+    ///
+    /// It is one target and not two because it is one control: the envelope on
+    /// the row is open or closed, and pressing it goes the other way. A name
+    /// that said `MarkRead` while sometimes unmarking would be a name that
+    /// lies to the next reader.
+    ToggleRead,
     /// Forget it. The history is the record of what happened, and this is the
     /// person deciding one line of it is not worth keeping.
     Delete,
+}
+
+/// The lines of a filter sheet, in the order they are drawn.
+///
+/// ONE ANSWER, read by the drawing and by the keys — the rule this file's
+/// header states about a list's two halves, at a third level.
+fn draft_lines(d: &Draft) -> Vec<Line> {
+    let mut out = vec![Line::Name];
+    for i in 0..d.when.len() {
+        out.extend([Line::Field(i), Line::Test(i), Line::Value(i)]);
+    }
+    out.extend((0..Knob::ALL.len()).map(Line::Knob));
+    out
+}
+
+/// A filter sheet, line by line.
+fn draft_rows(d: &Draft, left: u16, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+    // WHAT IT WOULD DECIDE, resolved once: the knobs draw the verdict laid
+    // over the arrival defaults, which is what the filter would actually do to
+    // a notification it caught.
+    let mut now = Presentation::from_urgency(ronoctua_notify::Urgency::Normal);
+    d.apply.over(&mut now);
+    draft_lines(d)
+        .into_iter()
+        .enumerate()
+        .map(|(n, line)| {
+            let (label, value) = match line {
+                Line::Name => (
+                    ronoctua_i18n::key::NOTIF_DRAFT_NAME.to_owned(),
+                    if d.name.is_empty() {
+                        texts.t(ronoctua_i18n::key::NOTIF_DRAFT_UNNAMED)
+                    } else {
+                        d.name.clone()
+                    },
+                ),
+                Line::Field(i) => (
+                    ronoctua_i18n::key::NOTIF_DRAFT_FIELD.to_owned(),
+                    texts.t(&format!("notif-field-{}", d.when[i].field.id())),
+                ),
+                Line::Test(i) => (
+                    ronoctua_i18n::key::NOTIF_DRAFT_TEST.to_owned(),
+                    texts.t(&format!("notif-test-{}", d.when[i].test.id())),
+                ),
+                Line::Value(i) => {
+                    let against = d.when[i].test.against();
+                    (
+                        ronoctua_i18n::key::NOTIF_DRAFT_VALUE.to_owned(),
+                        if against.trim().is_empty() {
+                            texts.t(ronoctua_i18n::key::NOTIF_DRAFT_NOTHING)
+                        } else {
+                            against
+                        },
+                    )
+                }
+                Line::Knob(k) => (
+                    Knob::ALL[k].label().to_owned(),
+                    value_of(&now, Knob::ALL[k], texts),
+                ),
+            };
+            let focused = n == d.line;
+            let tone = if focused {
+                tokens::color::STATE_ACCENT
+            } else {
+                tokens::color::TEXT_LABEL_FACT
+            };
+            Row {
+                fields: crate::chrome::field_pair(
+                    left,
+                    room,
+                    &texts.t(&label),
+                    &value,
+                    tone,
+                    if focused {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_PRIMARY
+                    },
+                ),
+            }
+        })
+        .collect()
+}
+
+/// Does an open record put its facts in a column of their own?
+///
+/// A HIGHER BAR THAN THE LIST'S. `two_columns` asks whether two elided
+/// sentences fit side by side, and eighty cells is enough for that; a fact is a
+/// label AND a value on one line, and its column gets `100 - splitAtPct` of the
+/// width. Below `factsFrom` they go underneath the message and its actions —
+/// the same answer the list gives about itself, one level down.
+#[must_use]
+pub const fn facts_beside(columns: u16) -> bool {
+    two_columns(columns) && columns >= tokens::space::NOTIFICATIONS_FACTSFROM
+}
+
+/// What ONE row of an open record is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Told {
+    /// Line `n` of what it says — the title, then the body.
+    Said(usize),
+    /// A blank line.
+    Air,
+    /// Action `n`. It is what `RET` runs when the cursor is here.
+    Act(usize),
+    /// Fact `n`, when the facts are stacked underneath rather than beside.
+    Fact(usize),
+}
+
+/// How many lines of a body an open record will wrap. A bound on WORK.
+const BODY_CEILING: usize = tokens::space::NOTIFICATIONS_BODYLINES as usize;
+
+/// The file in the repository that holds what somebody shared.
+///
+/// Under `assets/shared/`, which is where [`ronoctua_store::Shared`] writes and
+/// where `nix/notifications.nix` reads at build time.
+pub const SHARED_NOTIFICATIONS: &str = "notifications.json";
+
+/// How many facts an open record shows. A closed set, and the height of that
+/// column — see [`facts_of`].
+const FACTS: usize = 6;
+
+/// Whether this column reserves the cell that says "there is something to do".
+#[derive(Clone, Copy)]
+struct Buttons {
+    /// Does ANY row of this column carry an action? Then every row of it
+    /// leaves the cell, so the sentences all end in the same place.
+    marked: bool,
+}
+
+/// The cells the mark takes: the glyph and the air before it.
+const MARK: u16 = 2;
+
+/// A record's buttons, as they read: `[k] label`, the band's own shape.
+///
+/// The letter is inside the brackets and the letter is what presses it, here,
+/// on the band and in the open record — one control, one drawing.
+fn button_texts<'a>(
+    r: &'a Record,
+    texts: &'a ronoctua_i18n::Texts,
+) -> impl Iterator<Item = (usize, String)> + 'a {
+    r.notification.actions.iter().enumerate().map(|(i, a)| {
+        let label = match &a.label {
+            ronoctua_notify::Label::Key(k) => texts.t(k),
+            // A FOREIGN APP'S, in whatever language it chose. We do not know
+            // what it says, so we do not pretend to translate it.
+            ronoctua_notify::Label::Text(t) => t.clone(),
+        };
+        (i, label)
+    })
+}
+
+/// Does this column need the cell that marks "there is something to do"?
+///
+/// Asked of the WHOLE column, once, and answered the same for every row of it:
+/// a mark that appeared only on the rows that have one would move the end of
+/// every sentence around it. And only while the sentence keeps its floor
+/// (`space.notifications.sentenceFloor`) — below that the mark competes for a
+/// line that has nothing to spare, and the record lists every action anyway
+/// the moment it is opened.
+fn buttons_marked(records: &[&Record], room: u16) -> bool {
+    records.iter().any(|r| !r.notification.actions.is_empty())
+        && room.saturating_sub(2 + TARGETS + MARK) >= tokens::space::NOTIFICATIONS_SENTENCEFLOOR
+}
+
+/// What the manager KNOWS about a record, as label and value.
+///
+/// Six, and the number is a constant because it is the height of this column —
+/// see [`FACTS`]. They are what the row cannot say and the person cannot ask:
+/// who sent it, when, how long it stayed, how it was shown, whether it has
+/// been read, and WHICH FILTER DECIDED.
+///
+/// # The filter is here and not on the row
+///
+/// It used to be appended to the sentence, raw and untranslated, and the owner
+/// read `bluetooth: Bluetooth Keyboard connected by small-things-are-quick`
+/// off his screen as a claim about who had connected the keyboard. It is a
+/// fact about the record and it belongs with the facts — named, not spelt as
+/// an id, and the `ARCHITECTURE.md` promise that the manager says which rule
+/// decided is kept where it can be read.
+fn facts_of(
+    r: &Record,
+    zone: &ronoctua_files::when::Zone,
+    at: u16,
+    room: u16,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<Vec<Field>> {
+    let secs = r
+        .notification
+        .at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let yes_no = |v: bool| {
+        texts.t(if v {
+            ronoctua_i18n::key::NOTIF_YES
+        } else {
+            ronoctua_i18n::key::NOTIF_NO
+        })
+    };
+    let filter = match &r.presentation.by {
+        Some(id) => rule_name(id, texts),
+        None => texts.t(ronoctua_i18n::key::NOTIF_FACT_NO_FILTER),
+    };
+    [
+        (
+            ronoctua_i18n::key::NOTIF_FACT_ORIGIN,
+            r.notification.app.clone(),
+        ),
+        (
+            ronoctua_i18n::key::NOTIF_FACT_ARRIVED,
+            crate::chrome::when_text(secs, zone, true, texts),
+        ),
+        (
+            ronoctua_i18n::key::NOTIF_FACT_LIFE,
+            value_of(&r.presentation, Knob::Life, texts),
+        ),
+        (
+            ronoctua_i18n::key::NOTIF_FACT_SHOW,
+            value_of(&r.presentation, Knob::Show, texts),
+        ),
+        (ronoctua_i18n::key::NOTIF_FACT_READ, yes_no(r.read)),
+        (ronoctua_i18n::key::NOTIF_FACT_FILTER, filter),
+    ]
+    .into_iter()
+    .map(|(label, value)| {
+        crate::chrome::field_pair(
+            at,
+            room,
+            &texts.t(label),
+            &value,
+            tokens::color::TEXT_LABEL_FACT,
+            tokens::color::TEXT_READ_STRONG,
+        )
+    })
+    .collect()
+}
+
+/// What a catalogue row is CALLED.
+///
+/// The distro's rows have a text key the generator mints for every one of them.
+/// A filter the PERSON wrote has none and never will: its id is text they
+/// typed, which is data and not an identifier — see [`rule_name`].
+fn name_of(id: &str, kind: Kind, texts: &ronoctua_i18n::Texts) -> String {
+    match kind {
+        // A KIND, and not one that happened, so the sentence has nothing to
+        // put in its blanks. Three of the distro's summaries name the thing
+        // they are about (`{ $device } connected`), and the catalogue drew the
+        // blank verbatim: the screen read `{$device} connected`, which is a
+        // template leaking through a list of English sentences.
+        //
+        // The word goes IN rather than the blank coming out, because a
+        // sentence with a hole in it does not read in either language: "A
+        // device connected" is what this row is about, and " connected" is not
+        // a row.
+        Kind::Entry => texts.t_with(
+            &format!("notif-{id}-summary"),
+            &[("device", &texts.t(ronoctua_i18n::key::NOTIF_ANY_DEVICE))],
+        ),
+        Kind::Rule | Kind::Mine | Kind::Shared => rule_name(id, texts),
+    }
+}
+
+/// A filter's name, as a person reads it.
+///
+/// The distro's filters have a text key the generator mints for every one of
+/// them (`gen-notifications.py`). A filter the PERSON wrote has no key and
+/// never will: its id is text they typed, which is data and not an identifier,
+/// so it is shown as they typed it. Without this the manager drew
+/// `[notif-rule-my-filter]`, the missing-key marker, at every one of their own.
+fn rule_name(id: &str, texts: &ronoctua_i18n::Texts) -> String {
+    let said = texts.t(&format!("notif-rule-{id}"));
+    if said.starts_with('[') {
+        id.to_owned()
+    } else {
+        said
+    }
 }
 
 /// One record, as one line.
@@ -816,7 +1637,7 @@ fn record_line(
     room: u16,
     focused: bool,
     readable: bool,
-    texts: &ronoctua_i18n::Texts,
+    buttons: Buttons,
 ) -> Vec<Field> {
     let tone = if focused {
         tokens::color::STATE_ACCENT
@@ -835,36 +1656,62 @@ fn record_line(
     // looking for".
     let mut out = vec![piece(at, crate::band::glyph_of_record(r).to_string(), tone)];
     let text_at = at + 2;
-    let mut line = r.notification.line();
-    // WHICH FILTER CAUGHT IT, next to what it caught. A filter that does not
-    // say why it took something off the screen is a filter nobody can correct.
-    if let Some(by) = &r.presentation.by {
-        line.push(' ');
-        line.push_str(&texts.t_with(
-            if matches!(r.presentation.show, Show::Hidden) {
-                ronoctua_i18n::key::NOTIF_SUPPRESSED_BY
-            } else {
-                ronoctua_i18n::key::NOTIF_DECIDED_BY
-            },
-            &[("rule", by)],
-        ));
-    }
-    let room_for_text = room.saturating_sub(2 + TARGETS);
+    // THE LINE IS THE NOTIFICATION, and nothing else.
+    //
+    // Which filter decided it used to be appended here, and the owner read it
+    // off the screen as part of the sentence: `bluetooth: Bluetooth Keyboard
+    // connected by small-things-are-quick` — a filter's kebab id, untranslated,
+    // glued with a space onto a sentence that had already ended, saying that
+    // something called `small-things-are-quick` had connected the keyboard.
+    //
+    // It is a FACT about the record, so it went where the facts are: the open
+    // record's own column (`Level::Open`), under a label that says it is a
+    // filter, with the filter's NAME rather than its id. What is true stayed
+    // true — `ARCHITECTURE.md` promises the manager says which rule decided —
+    // and only the place changed.
+    let room_for_text = room.saturating_sub(2 + TARGETS + if buttons.marked { MARK } else { 0 });
     out.push(piece(
         text_at,
-        layout::elide_end(&line, room_for_text),
+        layout::elide_end(&r.notification.line(), room_for_text),
         tone,
     ));
 
+    // AND A MARK SAYING THERE IS SOMETHING TO DO, never the buttons
+    // themselves.
+    //
+    // They were drawn here, and the owner read the screen and said why that
+    // cannot work: a notification may carry several actions with labels that
+    // are sentences, and a row is one line. So the row says only THAT there
+    // are some — one cell — and opening it lists them, one under the other,
+    // with room for their words.
+    //
+    // The cell is reserved for the whole column (`marked`) and not for the
+    // rows that happen to have actions: a sentence that ends at a different
+    // column on every line is a list nobody can scan.
+    if buttons.marked && !r.notification.actions.is_empty() {
+        // THE AIR COMES FIRST, and this is the whole of `MARK`: one cell of it
+        // and then the glyph. Drawn at the start of the pair, the mark landed
+        // on the very cell where the elided sentence ends — the owner
+        // photographed `disconn…⋯`, two ellipses touching.
+        out.push(piece(
+            at + room - TARGETS - MARK + 1,
+            tokens::icon::NOTIFICATION_HAS_ACTIONS.to_string(),
+            tone,
+        ));
+    }
+
     // AND THE TWO TARGETS, at the row's right end.
     //
-    // Each has a key — `Espaço` marks read, `d` forgets — which is the rule
-    // this footer holds the mouse to: a second way to the same door, never a
-    // door of its own.
+    // Each has a key — `Espaço` turns read on and off, `d` forgets — which is
+    // the rule this footer holds the mouse to: a second way to the same door,
+    // never a door of its own.
     //
-    // An UNREAD one gets the envelope; a read one does not, because marking
-    // read what is already read is a gesture with no effect, and a control that
-    // does nothing is worse than one that is not offered.
+    // THE ENVELOPE IS THERE EITHER WAY, and the DRAWING says which way it goes:
+    // open on an unread row (press it and it is read), closed on a read one
+    // (press it and it is unread again). It used to be drawn only while unread,
+    // on the argument that marking read what is already read does nothing —
+    // true, and it made the gesture one-way: a row read by a slip of the hand
+    // stayed read for fifteen days, with no control anywhere saying otherwise.
     //
     // AND A SUPPRESSED ONE NEVER GETS IT (`readable`), although it is stored
     // unread: it never reached the band, so nothing could have read it, and
@@ -873,10 +1720,15 @@ fn record_line(
     // would — and pressing it told the application the person had dismissed
     // something they were never shown.
     let end = at + room;
-    if readable && !r.read {
+    if readable {
         out.push(piece(
             end.saturating_sub(3),
-            tokens::icon::NOTIFICATION_MARK_READ.to_string(),
+            if r.read {
+                tokens::icon::NOTIFICATION_MARK_UNREAD
+            } else {
+                tokens::icon::NOTIFICATION_MARK_READ
+            }
+            .to_string(),
             tone,
         ));
     }
@@ -891,7 +1743,7 @@ fn record_line(
 /// One catalogue row: what it is, and whether it is yours or the distro's.
 fn catalogue_line(
     id: &str,
-    is_rule: bool,
+    kind: Kind,
     book: &Book,
     at: u16,
     room: u16,
@@ -899,15 +1751,16 @@ fn catalogue_line(
     texts: &ronoctua_i18n::Texts,
 ) -> Vec<Field> {
     let (p, adjusted) = in_force(book, id);
-    let name = texts.t(&if is_rule {
-        format!("notif-rule-{id}")
-    } else {
-        format!("notif-{id}-summary")
-    });
-    let source = texts.t(if adjusted {
-        ronoctua_i18n::key::NOTIF_YOURS
-    } else {
-        ronoctua_i18n::key::NOTIF_DEFAULT
+    let name = name_of(id, kind, texts);
+    // WHOSE IT IS, and it is three answers rather than two. "Your adjustment"
+    // used to be the only thing that could be said, so a filter the person had
+    // WRITTEN read as "the distro's default" — the screen calling their own
+    // work somebody else's.
+    let source = texts.t(match (kind, adjusted) {
+        (Kind::Shared, _) => ronoctua_i18n::key::NOTIF_SHARED,
+        (Kind::Mine, _) => ronoctua_i18n::key::NOTIF_MINE,
+        (_, true) => ronoctua_i18n::key::NOTIF_YOURS,
+        (_, false) => ronoctua_i18n::key::NOTIF_DEFAULT,
     });
     let summary = format!(
         "{} · {} · {}",
@@ -922,6 +1775,13 @@ fn catalogue_line(
             layout::elide_end(&name, half.saturating_sub(1)),
             if focused {
                 tokens::color::STATE_ACCENT
+            } else if kind == Kind::Shared {
+                tokens::color::TEXT_SHARED
+            } else if kind.is_mine() {
+                // A TONE OF ITS OWN for what the person wrote, which is what
+                // the owner asked for: in a list of forty rows, three of them
+                // are theirs and the rest are the distro's.
+                tokens::color::TEXT_MINE
             } else if adjusted {
                 tokens::color::TEXT_PRIMARY
             } else {
@@ -991,15 +1851,29 @@ impl View {
 
         // THE SHEET takes the whole region: it is one thing being adjusted, and
         // a list beside it would be a second place for the eye to be.
-        if let Some(knob) = self.knob {
+        if let Level::Sheet(knob) = self.level {
             return self.sheet_rows(lists, book, left, room, knob, texts);
+        }
+        if let Level::Draft(d) = &self.level {
+            return draft_rows(d, left, room, texts);
+        }
+        if let Level::Publish { id, yes } = &self.level {
+            return self.publish_rows(id, *yes, book, left, room, texts);
+        }
+        if let Level::Open { at, .. } = self.level {
+            // A RECORD THE LIST NO LONGER HAS is a level with nothing in it —
+            // forgotten through the other door, or aged out while it was open.
+            // The list is what there still is, so it decides.
+            if let Some(r) = lists.record(at) {
+                return self.open_rows(r, columns, texts);
+            }
         }
 
         // THE CATALOGUE takes the whole width too — it is not something that
         // happened, it is something that is configured, and it has two columns
         // of its own.
         if self.pane == Pane::Catalogue || !two_columns(columns) {
-            return self.one_column(lists, book, left, room, texts);
+            return self.one_column(lists, book, left, room, columns, texts);
         }
 
         let split = split_at(columns);
@@ -1043,6 +1917,7 @@ impl View {
         // none filtered, the right-hand column was blank, which the owner
         // reported as a column that had lost its "nothing here". An empty
         // region is indistinguishable from a key that did not work.
+        let reserved = |pane| Self::reserved(lists, pane, columns);
         let tall = lists.happened.len().max(lists.suppressed.len()).max(1);
         for i in 0..tall {
             let mut fields = Vec::new();
@@ -1069,7 +1944,7 @@ impl View {
                             room,
                             focused,
                             View::can_be_read(pane),
-                            texts,
+                            reserved(pane),
                         ));
                     }
                     None if i == 0 => fields.push(piece(
@@ -1093,52 +1968,68 @@ impl View {
         book: &Book,
         left: u16,
         room: u16,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        let mut out = vec![Row {
-            fields: vec![piece(
-                left,
-                texts.t(self.pane.heading()),
-                tokens::color::TEXT_GROUP,
-            )],
-        }];
-        let n = lists.len(self.pane);
-        for i in 0..n {
-            let focused = self.cursor() == i;
-            let fields = match self.pane {
-                Pane::Happened => record_line(
-                    lists.happened[i],
-                    left,
-                    room,
-                    focused,
-                    Self::can_be_read(Pane::Happened),
-                    texts,
-                ),
-                Pane::Suppressed => record_line(
-                    lists.suppressed[i],
-                    left,
-                    room,
-                    focused,
-                    Self::can_be_read(Pane::Suppressed),
-                    texts,
-                ),
-                Pane::Catalogue => {
-                    let (id, rule) = &lists.catalogue[i];
-                    catalogue_line(id, *rule, book, left, room, focused, texts)
-                }
-            };
-            out.push(Row { fields });
-        }
-        if n == 0 {
-            out.push(Row {
-                fields: vec![piece(
-                    left,
-                    texts.t(ronoctua_i18n::key::NOTIF_NOTHING_HERE),
-                    tokens::color::TEXT_DIM,
-                )],
-            });
-        }
-        out
+        let reserved = |pane| Self::reserved(lists, pane, columns);
+        let plan = self.plan(lists);
+        let several = plan
+            .iter()
+            .filter(|p| matches!(p, Place::Heading(_)))
+            .count()
+            > 1;
+        plan.iter()
+            .map(|place| Row {
+                fields: match *place {
+                    Place::Air => Vec::new(),
+                    Place::Heading(pane) => vec![piece(
+                        left,
+                        texts.t(pane.heading()),
+                        // LIT WHEN THERE IS SOMETHING TO TELL IT FROM. Stacked,
+                        // the two titles are the only thing saying which list
+                        // `TAB` left the keyboard in — an empty column has no
+                        // row to light. Alone on the screen, a lit title would
+                        // be an accent answering a question nobody asked.
+                        if several && self.pane == pane {
+                            tokens::color::STATE_ACCENT
+                        } else {
+                            tokens::color::TEXT_GROUP
+                        },
+                    )],
+                    Place::Empty(_) => vec![piece(
+                        left,
+                        texts.t(ronoctua_i18n::key::NOTIF_NOTHING_HERE),
+                        tokens::color::TEXT_DIM,
+                    )],
+                    Place::Item(pane, i) => {
+                        let focused = self.pane == pane && self.cursor() == i;
+                        let buttons = reserved(pane);
+                        match pane {
+                            Pane::Happened => record_line(
+                                lists.happened[i],
+                                left,
+                                room,
+                                focused,
+                                Self::can_be_read(Pane::Happened),
+                                buttons,
+                            ),
+                            Pane::Suppressed => record_line(
+                                lists.suppressed[i],
+                                left,
+                                room,
+                                focused,
+                                Self::can_be_read(Pane::Suppressed),
+                                buttons,
+                            ),
+                            Pane::Catalogue => {
+                                let (id, kind) = &lists.catalogue[i];
+                                catalogue_line(id, *kind, book, left, room, focused, texts)
+                            }
+                        }
+                    }
+                },
+            })
+            .collect()
     }
 
     /// One catalogue entry, field by field, with the distro's answer beside it.
@@ -1151,24 +2042,20 @@ impl View {
         knob: usize,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
-        let Some((id, is_rule)) = lists.catalogue.get(self.catalogue) else {
+        let Some((id, kind)) = lists.catalogue.get(self.catalogue) else {
             return Vec::new();
         };
         let (p, adjusted) = in_force(book, id);
-        let name = texts.t(&if *is_rule {
-            format!("notif-rule-{id}")
-        } else {
-            format!("notif-{id}-summary")
-        });
+        let name = name_of(id, *kind, texts);
         let mut out = vec![Row {
             fields: vec![
                 piece(left, name, tokens::color::TEXT_PRIMARY),
                 piece(
                     left + room / 2,
-                    texts.t(if adjusted {
-                        ronoctua_i18n::key::NOTIF_YOURS
-                    } else {
-                        ronoctua_i18n::key::NOTIF_DEFAULT
+                    texts.t(match (kind, adjusted) {
+                        (Kind::Mine, _) => ronoctua_i18n::key::NOTIF_MINE,
+                        (_, true) => ronoctua_i18n::key::NOTIF_YOURS,
+                        (_, false) => ronoctua_i18n::key::NOTIF_DEFAULT,
                     }),
                     tokens::color::TEXT_DIM,
                 ),
@@ -1213,9 +2100,21 @@ impl View {
 
     /// Acts on a key.
     #[must_use]
-    pub fn key(&mut self, press: Press, lists: &Lists<'_>, book: &Book) -> Errand {
-        if let Some(knob) = self.knob {
+    /// `columns` is the width the rows were drawn at: an open record's height
+    /// depends on it, and the arrows stop at the last line of it.
+    pub fn key(&mut self, press: Press, lists: &Lists<'_>, book: &Book, columns: u16) -> Errand {
+        if let Level::Sheet(knob) = self.level {
             return self.sheet_key(press, lists, book, knob);
+        }
+        if let Level::Open { at, line } = self.level {
+            return self.open_key(press, lists, at, line, columns);
+        }
+        if matches!(self.level, Level::Draft(_)) {
+            return self.draft_key(press);
+        }
+        if let Level::Publish { id, yes } = &self.level {
+            let (id, yes) = (id.clone(), *yes);
+            return self.publish_key(press, &id, yes);
         }
         let n = lists.len(self.pane);
         match press {
@@ -1242,11 +2141,21 @@ impl View {
                 Errand::Nothing
             }
             Press::Escape => Errand::Close,
+            // `SPC` TURNS IT ROUND, whichever way it is: read becomes unread
+            // and unread becomes read. One key for one control, and the line
+            // of hints says which of the two this row would do — the phrase
+            // moves under the reader, so the key is drawn as one that does.
             Press::Space => match self.pane {
                 Pane::Happened => lists
                     .happened
                     .get(self.cursor())
-                    .map_or(Errand::Nothing, |r| Errand::Read(r.notification.id)),
+                    .map_or(Errand::Nothing, |r| {
+                        if r.read {
+                            Errand::Unread(r.key())
+                        } else {
+                            Errand::Read(r.key())
+                        }
+                    }),
                 // A SUPPRESSED ONE IS ALREADY OFF THE COUNT, so marking it read
                 // would be a gesture with no effect — and a key that does
                 // nothing is worse than a key that is not bound.
@@ -1256,68 +2165,587 @@ impl View {
                 // On the catalogue, `Enter` opens the sheet: that is where the
                 // distro's default is either kept or changed.
                 Pane::Catalogue if self.cursor() < n => {
-                    self.knob = Some(0);
+                    // A FILTER OF THEIRS OPENS WHOLE, and the distro's opens
+                    // its knobs. The distro's cannot be rewritten — it comes
+                    // from `assets/notifications.nix` and a rebuild would put
+                    // it back — so what a person does to one is adjust it.
+                    self.level = match self.mine_of(lists, book) {
+                        Some(rule) => Level::Draft(Draft::of(&rule)),
+                        None => Level::Sheet(0),
+                    };
                     Errand::Nothing
                 }
-                Pane::Happened => lists
-                    .happened
-                    .get(self.cursor())
-                    .filter(|r| !r.notification.actions.is_empty())
-                    .map_or(Errand::Nothing, |r| Errand::Act(r.notification.id, 0)),
+                Pane::Happened => match lists.happened.get(self.cursor()) {
+                    // THE RECORD OPENS. It is the answer to the row that did
+                    // not fit: the body wrapped, every action listed one under
+                    // the other, and the facts beside it.
+                    Some(r) => {
+                        self.level = Level::Open {
+                            at: r.key(),
+                            line: 0,
+                        };
+                        Errand::Nothing
+                    }
+                    None => Errand::Nothing,
+                },
                 _ => Errand::Nothing,
             },
+            // AND THE ONE THAT OFFERS IT TO EVERYBODY. It opens a question
+            // and nothing else: what is published is published.
+            Press::Letter('p') if self.pane == Pane::Catalogue => {
+                self.mine_here(lists).map_or(Errand::Nothing, |id| {
+                    self.level = Level::Publish {
+                        id: id.to_owned(),
+                        yes: false,
+                    };
+                    Errand::Nothing
+                })
+            }
+            // A NEW FILTER, from the column that holds them.
+            Press::Letter('n') if self.pane == Pane::Catalogue => {
+                self.level = Level::Draft(Draft::fresh());
+                Errand::Nothing
+            }
             Press::Letter('r') => Errand::ReadAll,
+            // STRAIGHT TO THE FILTERS, wherever the cursor is. The letter is
+            // reserved against a notification's own actions, like `r` and `d`.
+            Press::Letter('f') => {
+                self.pane = Pane::Catalogue;
+                let there = lists.len(Pane::Catalogue);
+                self.set_cursor(self.cursor().min(there.saturating_sub(1)));
+                Errand::Nothing
+            }
             // `d` FORGETS the focused one. Reserved, and the generator refuses
             // an action that asks for the same letter — an action shadowed by a
             // view key is an action nobody can reach, and the way to find out
             // would be pressing it and watching something else happen.
+            // `d` ON THE CATALOGUE DROPS A FILTER OF THEIRS, and only ever
+            // one of theirs: the distro's are declared in the flake, and
+            // "deleting" one would be a lie the next rebuild tells.
+            Press::Letter('d') if self.pane == Pane::Catalogue => self
+                .mine_here(lists)
+                .map_or(Errand::Nothing, |id| Errand::Unfilter(id.to_owned())),
             Press::Letter('d') => match self.pane {
                 Pane::Happened => lists
                     .happened
                     .get(self.cursor())
-                    .map_or(Errand::Nothing, |r| Errand::Forget(r.notification.id)),
+                    .map_or(Errand::Nothing, |r| Errand::Forget(r.key())),
                 Pane::Suppressed => lists
                     .suppressed
                     .get(self.cursor())
-                    .map_or(Errand::Nothing, |r| Errand::Forget(r.notification.id)),
+                    .map_or(Errand::Nothing, |r| Errand::Forget(r.key())),
                 Pane::Catalogue => Errand::Nothing,
             },
-            // THE ACTION'S OWN LETTER. It is what makes an action on the band
-            // reachable without the mouse: the band cannot take a key (the
-            // footer at rest does not hold the keyboard, or no buffer would
-            // ever receive one), so it is pressed here.
-            Press::Letter(c) if self.pane == Pane::Happened => lists
-                .happened
-                .get(self.cursor())
-                .and_then(|r| {
-                    r.notification
-                        .actions
-                        .iter()
-                        .position(|a| a.key == Some(c))
-                        .map(|i| Errand::Act(r.notification.id, i))
-                })
-                .unwrap_or(Errand::Nothing),
             Press::Letter(_) | Press::Left | Press::Right => Errand::Nothing,
         }
+    }
+
+    /// What each row of an OPEN record is.
+    ///
+    /// One plan, three readers — the drawing, the keys and the region's scroll
+    /// — for the reason the list's own [`Place`] gives: two answers to "what
+    /// is on row n" is how a cursor comes to act on something else.
+    fn open_plan(&self, r: &Record, columns: u16) -> Vec<Told> {
+        let (_, room) = self.open_extent(columns, false);
+        let mut out: Vec<Told> = Vec::new();
+        let said = layout::wrap(&r.notification.line(), room, BODY_CEILING).len()
+            + layout::wrap(&r.notification.body, room, BODY_CEILING).len();
+        out.extend((0..said).map(Told::Said));
+        if !r.notification.actions.is_empty() {
+            // AIR BEFORE THEM. They are a different kind of thing from the
+            // sentence above, and this system says that with space.
+            out.push(Told::Air);
+            out.extend((0..r.notification.actions.len()).map(Told::Act));
+        }
+        if out.is_empty() {
+            out.push(Told::Air);
+        }
+        if facts_beside(columns) {
+            // THE FACTS RIDE ON THE SAME ROWS, in the second column, so the
+            // record is as tall as its taller half.
+            while out.len() < FACTS {
+                out.push(Told::Air);
+            }
+        } else {
+            // NARROW: they go underneath, with a blank line between — the same
+            // answer the list gives when its two columns do not fit, and the
+            // same token deciding it.
+            out.push(Told::Air);
+            out.extend((0..FACTS).map(Told::Fact));
+        }
+        out
+    }
+
+    /// Where one half of an open record begins and how wide it is.
+    ///
+    /// The SAME split the two columns of the list use, so the eye finds the
+    /// facts where it found the second column — and narrow, both halves take
+    /// the whole width, one under the other. One token decides both.
+    fn open_extent(&self, columns: u16, facts: bool) -> (u16, u16) {
+        if !facts_beside(columns) {
+            return extent_of(Pane::Catalogue, columns);
+        }
+        extent_of(
+            if facts {
+                Pane::Suppressed
+            } else {
+                Pane::Happened
+            },
+            columns,
+        )
+    }
+
+    /// ONE record, whole.
+    ///
+    /// # Why this level exists
+    ///
+    /// Because a row is one line, and a line that does not fit was the end of
+    /// the road: the owner had notifications he could not read and nothing to
+    /// press. Here the body is WRAPPED rather than cut, the actions are a LIST
+    /// — one under the other, with room for their words — and what the manager
+    /// knows about the record is a column of facts beside it.
+    fn open_rows(&self, r: &Record, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        let (left, room) = self.open_extent(columns, false);
+        let (facts_at, facts_room) = self.open_extent(columns, true);
+        let facts = facts_of(r, &self.zone, facts_at, facts_room, texts);
+
+        // WHAT IT SAYS. The title carries the tone the row carried, so a loud
+        // one is still loud with its body open.
+        let tone = if r.presentation.loud {
+            tokens::color::NOTIFICATION_LOUD
+        } else {
+            tokens::color::TEXT_PRIMARY
+        };
+        let mut said: Vec<Field> = layout::wrap(&r.notification.line(), room, BODY_CEILING)
+            .into_iter()
+            .map(|line| piece(left, line, tone))
+            .collect();
+        said.extend(
+            layout::wrap(&r.notification.body, room, BODY_CEILING)
+                .into_iter()
+                .map(|line| piece(left, line, tokens::color::TEXT_SECONDARY)),
+        );
+
+        let wide = facts_beside(columns);
+        self.open_plan(r, columns)
+            .into_iter()
+            .enumerate()
+            .map(|(n, told)| {
+                let mut fields = match told {
+                    Told::Air => Vec::new(),
+                    Told::Said(i) => said.get(i).cloned().into_iter().collect(),
+                    // AN ACTION IS A ROW, and the cursor lights the one `RET`
+                    // would run. It is the file manager's own answer to the
+                    // same question, and invariant 15 leaves no other.
+                    Told::Act(i) => button_texts(r, texts)
+                        .nth(i)
+                        .map(|(_, text)| {
+                            vec![piece(
+                                left,
+                                text,
+                                if self.open_line() == n {
+                                    tokens::color::STATE_ACCENT
+                                } else {
+                                    tokens::color::TEXT_LABEL_ACTS
+                                },
+                            )]
+                        })
+                        .unwrap_or_default(),
+                    Told::Fact(i) => facts.get(i).cloned().unwrap_or_default(),
+                };
+                if wide && let Some(f) = facts.get(n) {
+                    fields.extend(f.iter().cloned());
+                }
+                Row { fields }
+            })
+            .collect()
+    }
+
+    /// Which row of an open record the cursor is on.
+    const fn open_line(&self) -> usize {
+        match self.level {
+            Level::Open { line, .. } => line,
+            _ => usize::MAX,
+        }
+    }
+
+    /// The open record's keys: the arrows scroll it, `d` forgets it, `Esc`
+    /// goes back to the list.
+    fn open_key(
+        &mut self,
+        press: Press,
+        lists: &Lists<'_>,
+        at: RecordKey,
+        line: usize,
+        columns: u16,
+    ) -> Errand {
+        let Some(r) = lists.record(at) else {
+            // It was forgotten through the other door while it was open.
+            self.level = Level::List;
+            return Errand::Nothing;
+        };
+        let plan = self.open_plan(r, columns);
+        let step = |to: usize| Level::Open {
+            at,
+            line: to.min(plan.len().saturating_sub(1)),
+        };
+        match press {
+            Press::Escape => {
+                self.level = Level::List;
+                Errand::Nothing
+            }
+            // THE CURSOR STOPS ONLY WHERE THERE IS SOMETHING TO DO.
+            //
+            // It used to walk every row, and the owner read what that is like:
+            // several presses to cross the message, one line at a time, with
+            // nothing lighting up on the way — because a line of the body is
+            // not a thing one can act on and had nothing to show for being
+            // under the cursor. So the arrows step from ACTION to ACTION.
+            //
+            // With no action there is nothing to step to, and then they scroll
+            // the record line by line: a body that does not fit is the reason
+            // this level exists, and the wheel must not be the only way down
+            // it.
+            Press::Up | Press::Down => {
+                let forward = press == Press::Down;
+                let acts: Vec<usize> = plan
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(n, told)| matches!(told, Told::Act(_)).then_some(n))
+                    .collect();
+                self.level = if acts.is_empty() {
+                    step(if forward {
+                        line + 1
+                    } else {
+                        line.saturating_sub(1)
+                    })
+                } else if forward {
+                    step(acts.iter().copied().find(|n| *n > line).unwrap_or(acts[0]))
+                } else {
+                    step(
+                        acts.iter()
+                            .copied()
+                            .rev()
+                            .find(|n| *n < line)
+                            .unwrap_or_else(|| acts[acts.len() - 1]),
+                    )
+                };
+                Errand::Nothing
+            }
+            // AND `RET` RUNS THE ONE UNDER IT. On any other row there is
+            // nothing to run, and the hint line says which of the two this row
+            // is — the same moving key the list draws.
+            Press::Enter => match plan.get(line) {
+                Some(Told::Act(i)) => Errand::Act(at, *i),
+                _ => Errand::Nothing,
+            },
+            // FORGETTING IT CLOSES IT: the level is about a record, and there
+            // would be no record left to be at.
+            Press::Letter('d') => {
+                self.level = Level::List;
+                Errand::Forget(at)
+            }
+            Press::Space => {
+                if r.read {
+                    Errand::Unread(at)
+                } else {
+                    Errand::Read(at)
+                }
+            }
+            _ => Errand::Nothing,
+        }
+    }
+
+    /// The question before a filter goes to everybody.
+    ///
+    /// It draws the filter and, in one line, what it does — not the eight
+    /// knobs the sheet draws. The question here is "shall this go", and the
+    /// answers have to be ON SCREEN with the sentence that explains them:
+    /// drawn whole, the two fell below the footer's twelve-line ceiling, which
+    /// is a question one has to scroll to answer.
+    fn publish_rows(
+        &self,
+        id: &str,
+        yes: bool,
+        book: &Book,
+        left: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Row> {
+        let Some(rule) = book.mine.iter().find(|r| r.id == id) else {
+            return Vec::new();
+        };
+        let draft = Draft::of(rule);
+        let mut out: Vec<Row> = draft_rows(&draft, left, room, texts)
+            .into_iter()
+            .take(1 + draft.when.len() * 3)
+            .collect();
+        let mut now = Presentation::from_urgency(ronoctua_notify::Urgency::Normal);
+        rule.apply.over(&mut now);
+        out.push(Row {
+            fields: crate::chrome::field_pair(
+                left,
+                room,
+                &texts.t(ronoctua_i18n::key::NOTIF_SHARE_DOES),
+                &format!(
+                    "{} {} {}",
+                    value_of(&now, Knob::Show, texts),
+                    tokens::mark::SEPARATOR,
+                    value_of(&now, Knob::Life, texts),
+                ),
+                tokens::color::TEXT_LABEL_FACT,
+                tokens::color::TEXT_PRIMARY,
+            ),
+        });
+        out.push(Row { fields: Vec::new() });
+        // THE SENTENCE, and it is the whole reason this screen exists. The
+        // repository is public (invariant 2) and no personal datum belongs in
+        // it (invariant 13); a filter can carry a person's name, an internal
+        // application, a project.
+        for line in layout::wrap(
+            &texts.t(ronoctua_i18n::key::NOTIF_SHARE_PUBLIC),
+            room,
+            BODY_CEILING,
+        ) {
+            out.push(Row {
+                fields: vec![piece(left, line, tokens::color::TEXT_SECONDARY)],
+            });
+        }
+        out.push(Row { fields: Vec::new() });
+        // A NAME IN THE REPOSITORY IS ENGLISH KEBAB (invariant 18), and it is
+        // the id an adjustment is keyed by. Mangling `silenciar cópias` behind
+        // somebody's back would be worse than saying so.
+        if !ronoctua_notify::is_shareable_name(id) {
+            for line in layout::wrap(
+                &texts.t(ronoctua_i18n::key::NOTIF_SHARE_NOT_A_NAME),
+                room,
+                BODY_CEILING,
+            ) {
+                out.push(Row {
+                    fields: vec![piece(left, line, tokens::color::STATE_ERROR)],
+                });
+            }
+            return out;
+        }
+        // NO FIRST, and the cursor starts on it.
+        for (says, here) in [
+            (ronoctua_i18n::key::NOTIF_SHARE_NO, !yes),
+            (ronoctua_i18n::key::NOTIF_SHARE_YES, yes),
+        ] {
+            out.push(Row {
+                fields: vec![piece(
+                    left,
+                    texts.t(says),
+                    if here {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_SECONDARY
+                    },
+                )],
+            });
+        }
+        out
+    }
+
+    /// The question's keys: the arrows choose, `RET` answers, `Esc` is no.
+    fn publish_key(&mut self, press: Press, id: &str, yes: bool) -> Errand {
+        match press {
+            Press::Escape => {
+                self.level = Level::List;
+                Errand::Nothing
+            }
+            // A RING OF TWO: either arrow goes to the other answer. There are
+            // exactly two, so an arrow that stops dead at one of them is an
+            // arrow somebody presses twice wondering whether it arrived.
+            Press::Up | Press::Down => {
+                self.level = Level::Publish {
+                    id: id.to_owned(),
+                    yes: !yes,
+                };
+                Errand::Nothing
+            }
+            Press::Enter => {
+                let go = yes && ronoctua_notify::is_shareable_name(id);
+                self.level = Level::List;
+                if go {
+                    Errand::Share(id.to_owned())
+                } else {
+                    Errand::Nothing
+                }
+            }
+            _ => Errand::Nothing,
+        }
+    }
+
+    /// The filter sheet's keys.
+    ///
+    /// The arrows turn what is on the focused line, `RET` asks for the text
+    /// that cannot be turned, `a` adds a condition, `x` takes one away, `s`
+    /// saves, and `Esc` leaves without saving. Every one of them is on the
+    /// hint line, which is generated from [`OF_THE_DRAFT`].
+    fn draft_key(&mut self, press: Press) -> Errand {
+        let Level::Draft(d) = &mut self.level else {
+            return Errand::Nothing;
+        };
+        let lines = draft_lines(d);
+        let here = lines.get(d.line).copied();
+        match press {
+            Press::Escape => {
+                // NOTHING IS SAVED HERE. The file is written by the errand,
+                // through the door, exactly as an adjustment is — so leaving
+                // is leaving, and a half-written filter never reaches disk.
+                self.level = Level::List;
+                Errand::Nothing
+            }
+            Press::Up => {
+                d.line = d.line.saturating_sub(1);
+                Errand::Nothing
+            }
+            Press::Down => {
+                d.line = (d.line + 1).min(lines.len().saturating_sub(1));
+                Errand::Nothing
+            }
+            Press::Left | Press::Right => {
+                let forward = press == Press::Right;
+                match here {
+                    Some(Line::Field(i)) => {
+                        if let Some(t) = d.when.get_mut(i) {
+                            let now = ronoctua_notify::Field::ALL
+                                .iter()
+                                .position(|f| *f == t.field)
+                                .unwrap_or(0);
+                            t.field = ronoctua_notify::Field::ALL
+                                [wrap(now, ronoctua_notify::Field::ALL.len(), forward)];
+                        }
+                    }
+                    Some(Line::Test(i)) => {
+                        if let Some(t) = d.when.get_mut(i) {
+                            let kinds = ronoctua_notify::Test::KINDS;
+                            let now = kinds.iter().position(|k| *k == t.test.id()).unwrap_or(0);
+                            t.test = t.test.of_kind(kinds[wrap(now, kinds.len(), forward)]);
+                        }
+                    }
+                    // A NUMBER IS TURNED, not typed: `at-least` takes `0..=100`
+                    // and the level knob already moves in tens for the reason
+                    // nobody tells 63 from 64.
+                    Some(Line::Value(i)) => {
+                        if let Some(t) = d.when.get_mut(i)
+                            && t.test.is_numeric()
+                        {
+                            let now = t.test.against().parse::<i32>().unwrap_or(0);
+                            let next = (now + if forward { 10 } else { -10 })
+                                .clamp(0, i32::from(TOP_LEVEL))
+                                .to_string();
+                            t.test = ronoctua_notify::Test::of_kind(
+                                &ronoctua_notify::Test::Is(next),
+                                t.test.id(),
+                            );
+                        }
+                    }
+                    Some(Line::Knob(k)) => {
+                        let mut now = Presentation::from_urgency(ronoctua_notify::Urgency::Normal);
+                        d.apply.over(&mut now);
+                        let mut into = d.apply.clone();
+                        turn(&now, Knob::ALL[k], if forward { 1 } else { -1 }, &mut into);
+                        d.apply = into;
+                    }
+                    Some(Line::Name) | None => {}
+                }
+                Errand::Nothing
+            }
+            // WHAT CANNOT BE TURNED IS TYPED, and typing happens in the
+            // footer's minibuffer — the one place this system takes text. The
+            // window says so instead of growing a second one.
+            Press::Enter => match here {
+                Some(Line::Name) => Errand::Ask(Asking::Name),
+                Some(Line::Value(i)) if !d.when[i].test.is_numeric() => {
+                    Errand::Ask(Asking::Value(i))
+                }
+                _ => Errand::Nothing,
+            },
+            Press::Letter('a') => {
+                d.when.push(ronoctua_notify::Term {
+                    field: ronoctua_notify::Field::Summary,
+                    test: ronoctua_notify::Test::Contains(String::new()),
+                });
+                d.line = draft_lines(d).len().saturating_sub(1) - Knob::ALL.len();
+                Errand::Nothing
+            }
+            // TAKING ONE AWAY, and never the last one: a filter with no
+            // condition matches EVERYTHING, and nobody means to write that by
+            // pressing a key twice.
+            Press::Letter('x') => {
+                if let Some(Line::Field(i) | Line::Test(i) | Line::Value(i)) = here
+                    && d.when.len() > 1
+                {
+                    d.when.remove(i);
+                    d.line = d.line.min(draft_lines(d).len().saturating_sub(1));
+                }
+                Errand::Nothing
+            }
+            Press::Letter('s') => match d.ready() {
+                Some(rule) => {
+                    let was = d.editing.clone();
+                    self.level = Level::List;
+                    Errand::Filter { was, rule }
+                }
+                // IT SAYS WHY, on the line the message wins. A key that
+                // silently does nothing is the defect this repository has a
+                // check about.
+                None => Errand::Nothing,
+            },
+            Press::Letter(_) | Press::Tab | Press::BackTab | Press::Space => Errand::Nothing,
+        }
+    }
+
+    /// What the person typed in the minibuffer, back into the draft.
+    pub fn typed(&mut self, what: Asking, text: &str) {
+        let Level::Draft(d) = &mut self.level else {
+            return;
+        };
+        match what {
+            Asking::Name => d.name = text.trim().to_owned(),
+            Asking::Value(i) => {
+                if let Some(t) = d.when.get_mut(i) {
+                    t.test = ronoctua_notify::Test::of_kind(
+                        &ronoctua_notify::Test::Is(text.to_owned()),
+                        t.test.id(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Why `s` did nothing, when it did nothing.
+    ///
+    /// The message line, not the hint line — the same place the sheet says why
+    /// a switch is inert.
+    fn draft_note(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        let Level::Draft(d) = &self.level else {
+            return None;
+        };
+        d.ready()
+            .is_none()
+            .then(|| texts.t(ronoctua_i18n::key::NOTIF_DRAFT_UNREADY))
     }
 
     /// The sheet's keys: the arrows turn, `r` restores, `Esc` closes it.
     fn sheet_key(&mut self, press: Press, lists: &Lists<'_>, book: &Book, knob: usize) -> Errand {
         let Some((id, _)) = lists.catalogue.get(self.catalogue) else {
-            self.knob = None;
+            self.level = Level::List;
             return Errand::Nothing;
         };
         match press {
             Press::Escape => {
-                self.knob = None;
+                self.level = Level::List;
                 Errand::Nothing
             }
             Press::Up => {
-                self.knob = Some(knob.saturating_sub(1));
+                self.level = Level::Sheet(knob.saturating_sub(1));
                 Errand::Nothing
             }
             Press::Down => {
-                self.knob = Some((knob + 1).min(Knob::ALL.len() - 1));
+                self.level = Level::Sheet((knob + 1).min(Knob::ALL.len() - 1));
                 Errand::Nothing
             }
             Press::Left | Press::Right => {
@@ -1353,19 +2781,39 @@ mod tests {
     }
 
     fn record(id: u32, show: Show, read: bool) -> Record {
+        arrived(id, show, read, u64::from(id))
+    }
+
+    /// The same, with the ARRIVAL NAMED — which is the other half of a record's
+    /// name, and the half two records can differ in while sharing an id.
+    ///
+    /// The clock is written down and not read: `SystemTime::now()` would make
+    /// every key in these tests a different one on every run, and the case that
+    /// matters here is precisely two records agreeing on the id.
+    fn arrived(id: u32, show: Show, read: bool, secs: u64) -> Record {
         let mut p = Presentation::from_urgency(Urgency::Normal);
         p.show = show;
+        let mut n = Notification::fresh_one(
+            id,
+            "app".into(),
+            None,
+            format!("r{id}"),
+            String::new(),
+            Urgency::Normal,
+        );
+        n.at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
         Record {
-            notification: Notification::fresh_one(
-                id,
-                "app".into(),
-                None,
-                format!("r{id}"),
-                String::new(),
-                Urgency::Normal,
-            ),
+            notification: n,
             presentation: p,
             read,
+        }
+    }
+
+    /// The name of a record `record(id, …)` built.
+    fn named(id: u32) -> RecordKey {
+        RecordKey {
+            id,
+            at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(id)),
         }
     }
 
@@ -1398,12 +2846,12 @@ mod tests {
         assert!(
             l.catalogue
                 .iter()
-                .any(|(id, rule)| id == "screenshot" && !rule)
+                .any(|(id, kind)| id == "screenshot" && *kind == Kind::Entry)
         );
         assert!(
             l.catalogue
                 .iter()
-                .any(|(id, rule)| id == "important-gets-room" && *rule)
+                .any(|(id, kind)| id == "important-gets-room" && *kind == Kind::Rule)
         );
     }
 
@@ -1483,13 +2931,19 @@ mod tests {
     }
 
     #[test]
-    fn a_row_says_which_filter_caught_it() {
-        let t = texts();
+    fn the_line_is_the_notification_and_nothing_else() {
+        // WHICH FILTER DECIDED IS NOT PART OF THE SENTENCE. It used to be
+        // appended to it, raw and untranslated, and the owner read
+        // `bluetooth: Bluetooth Keyboard connected by small-things-are-quick`
+        // off the screen as a claim that something called
+        // `small-things-are-quick` had connected the keyboard. It is a fact
+        // about the record, and it went where the facts are.
         let mut r = record(1, Show::Hidden, false);
         r.presentation.by = Some("my-rule".into());
-        let fields = record_line(&r, 0, 120, false, true, &t);
+        let fields = record_line(&r, 0, 120, false, true, Buttons { marked: false });
         let text: String = fields.iter().map(|f| f.text.as_str()).collect();
-        assert!(text.contains("my-rule"), "{text}");
+        assert!(!text.contains("my-rule"), "{text}");
+        assert!(text.contains("app: r1"), "{text}");
     }
 
     #[test]
@@ -1515,8 +2969,10 @@ mod tests {
 
     #[test]
     fn one_column_stacks_them_instead() {
-        // A small display, or a narrow window: the same code, deciding by the
-        // width it was given.
+        // THE OWNER'S ASK: narrow, "Filtered out" goes UNDER "Received"
+        // instead of vanishing. It used to draw only the pane with the
+        // keyboard, so half the screen's content was reachable solely by
+        // pressing `TAB` — a key nothing on screen asked for.
         let t = texts();
         let b = Book::distro();
         let records = vec![
@@ -1524,21 +2980,43 @@ mod tests {
             record(2, Show::Hidden, false),
         ];
         let lists = Lists::of(&records, &b);
+        let said = |r: &Row| -> String { r.fields.iter().map(|f| f.text.as_str()).collect() };
+        // AND AT 90 TOO, which is about the width the owner photographed: the
+        // two columns fitted and cost the sentence, so nine rows all read
+        // `bluetooth: Bluetooth Keyboard connect…` and none of them said which
+        // was which. Two columns that cost the sentence are two columns that
+        // destroy what the list is for.
+        for columns in [50_u16, 90] {
+            let rows = View::fresh().rows(&lists, &b, columns, &t);
+            assert_eq!(
+                rows.len(),
+                5,
+                "at {columns}: {:?}",
+                rows.iter().map(said).collect::<Vec<_>>()
+            );
+        }
         let rows = View::fresh().rows(&lists, &b, 50, &t);
-        // Only the focused pane, and its heading.
-        assert_eq!(rows.len(), 2);
-        let text: String = rows[1].fields.iter().map(|f| f.text.as_str()).collect();
-        assert!(text.contains("r1") && !text.contains("r2"), "{text}");
+        // Title, its one record, air, the other title, its one record.
+        assert!(said(&rows[1]).contains("r1"), "{}", said(&rows[1]));
+        assert!(said(&rows[2]).is_empty(), "no air before the second title");
+        assert!(said(&rows[4]).contains("r2"), "{}", said(&rows[4]));
+        // AND THE TITLE WITH THE KEYBOARD IS THE LIT ONE: stacked, that is the
+        // only thing saying which of the two lists the arrows are walking.
+        let lit = |r: &Row| r.fields[0].color;
+        assert_eq!(lit(&rows[0]), tokens::color::STATE_ACCENT);
+        assert_eq!(lit(&rows[3]), tokens::color::TEXT_GROUP);
     }
 
     #[test]
     fn an_empty_pane_says_so() {
-        // An empty region is indistinguishable from a key that did not work.
+        // An empty region is indistinguishable from a key that did not work,
+        // and each column says it for ITSELF — stacked, both are on screen.
         let t = texts();
         let b = Book::distro();
         let rows = View::fresh().rows(&Lists::of(&[], &b), &b, 50, &t);
-        assert_eq!(rows.len(), 2);
-        assert!(!rows[1].fields.is_empty());
+        assert_eq!(rows.len(), 5);
+        assert!(!rows[1].fields.is_empty(), "the first column said nothing");
+        assert!(!rows[4].fields.is_empty(), "the second column said nothing");
     }
 
     #[test]
@@ -1547,12 +3025,12 @@ mod tests {
         let records = vec![record(9, Show::Brief, false)];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        assert_eq!(v.key(Press::Space, &lists, &b), Errand::Read(9));
+        assert_eq!(v.key(Press::Space, &lists, &b, 200), Errand::Read(named(9)));
         // A SUPPRESSED one is already off the count, so the same key on the
         // other column does nothing — a key with no effect is worse than a key
         // that is not bound.
         v.pane = Pane::Suppressed;
-        assert_eq!(v.key(Press::Space, &lists, &b), Errand::Nothing);
+        assert_eq!(v.key(Press::Space, &lists, &b, 200), Errand::Nothing);
     }
 
     #[test]
@@ -1563,11 +3041,11 @@ mod tests {
         let lists = Lists::of(&[], &b);
         let mut v = View::fresh();
         v.pane = Pane::Catalogue;
-        assert_eq!(v.key(Press::Enter, &lists, &b), Errand::Nothing);
-        assert!(v.knob.is_some(), "Enter did not open the sheet");
-        assert_eq!(v.key(Press::Escape, &lists, &b), Errand::Nothing);
-        assert!(v.knob.is_none(), "Esc did not close the sheet");
-        assert_eq!(v.key(Press::Escape, &lists, &b), Errand::Close);
+        assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
+        assert!(v.in_sheet(), "Enter did not open the sheet");
+        assert_eq!(v.key(Press::Escape, &lists, &b, 200), Errand::Nothing);
+        assert!(!v.in_sheet(), "Esc did not close the sheet");
+        assert_eq!(v.key(Press::Escape, &lists, &b, 200), Errand::Close);
     }
 
     #[test]
@@ -1576,8 +3054,8 @@ mod tests {
         let lists = Lists::of(&[], &b);
         let mut v = View::fresh();
         v.pane = Pane::Catalogue;
-        let _ = v.key(Press::Enter, &lists, &b);
-        let Errand::Adjusted(id, verdict) = v.key(Press::Right, &lists, &b) else {
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        let Errand::Adjusted(id, verdict) = v.key(Press::Right, &lists, &b, 200) else {
             panic!("the arrow adjusted nothing");
         };
         assert_eq!(id, lists.catalogue[0].0);
@@ -1586,38 +3064,9 @@ mod tests {
         // setting it to the same value: "yours" and "the distro's, which
         // happens to agree" are different answers to "who decided this?".
         assert_eq!(
-            v.key(Press::Letter('r'), &lists, &b),
+            v.key(Press::Letter('r'), &lists, &b, 200),
             Errand::Adjusted(lists.catalogue[0].0.clone(), None)
         );
-    }
-
-    #[test]
-    fn a_notifications_own_letter_runs_its_action() {
-        // The band cannot take a key — the footer at rest does not hold the
-        // keyboard, or no buffer would ever receive one. This is where the
-        // letter drawn on the band is actually pressed.
-        let b = Book::distro();
-        let mut r = record(5, Show::Brief, false);
-        r.notification.actions = vec![
-            ronoctua_notify::Action {
-                id: "open".into(),
-                key: Some('a'),
-                label: ronoctua_notify::Label::Text("open".into()),
-                doing: ronoctua_notify::Doing::Invoke,
-            },
-            ronoctua_notify::Action {
-                id: "edit".into(),
-                key: Some('e'),
-                label: ronoctua_notify::Label::Text("editar".into()),
-                doing: ronoctua_notify::Doing::Invoke,
-            },
-        ];
-        let records = vec![r];
-        let lists = Lists::of(&records, &b);
-        let mut v = View::fresh();
-        assert_eq!(v.key(Press::Letter('e'), &lists, &b), Errand::Act(5, 1));
-        // A letter nothing answers to does nothing, rather than something else.
-        assert_eq!(v.key(Press::Letter('z'), &lists, &b), Errand::Nothing);
     }
 
     #[test]
@@ -1626,14 +3075,37 @@ mod tests {
         // they can drift. A key that is listed and answers nothing is a line in
         // the manual promising something that does not happen — and it is the
         // check `files-everything-has-a-key` exists for, one view over.
-        let b = Book::distro();
+        //
+        // A FILTER OF THE PERSON'S OWN, because two of the catalogue's keys
+        // are about exactly that — opening one and dropping one — and a
+        // catalogue with none of theirs would make both look dead.
+        let mut b = Book::distro();
+        for id in ["mine", "mine-too"] {
+            b.mine.push(ronoctua_notify::Rule {
+                id: id.into(),
+                when: vec![ronoctua_notify::Term {
+                    field: ronoctua_notify::Field::Summary,
+                    test: ronoctua_notify::Test::Contains("backup".into()),
+                }],
+                apply: Verdict::default(),
+            });
+        }
         let mut r = record(1, Show::Brief, false);
-        r.notification.actions = vec![ronoctua_notify::Action {
-            id: "open".into(),
-            key: Some('a'),
-            label: ronoctua_notify::Label::Text("open".into()),
-            doing: ronoctua_notify::Doing::Invoke,
-        }];
+        // TWO buttons, because one of the keys the line teaches is "the next
+        // button" — with a single one there is no next, and the arrow would
+        // look dead in a test whose whole point is that no taught key is.
+        r.notification.actions = vec![
+            ronoctua_notify::Action {
+                id: "open".into(),
+                label: ronoctua_notify::Label::Text("open".into()),
+                doing: ronoctua_notify::Doing::Invoke,
+            },
+            ronoctua_notify::Action {
+                id: "copy".into(),
+                label: ronoctua_notify::Label::Text("copy".into()),
+                doing: ronoctua_notify::Doing::Invoke,
+            },
+        ];
         // THREE, so that from the middle row both `<up>` and `<down>` have
         // somewhere to go — and the middle one is the one with the action,
         // because that is the row the cursor stands on.
@@ -1677,27 +3149,81 @@ mod tests {
                 }
                 let mut v = View::fresh();
                 v.pane = pane;
-                let _ = v.key(Press::Down, &lists, &b);
+                if pane == Pane::Catalogue {
+                    // THE PERSON'S OWN FILTERS ARE THE LAST ROWS — the distro
+                    // speaks first, then you — and two of this column's keys
+                    // are about nothing else. The second-to-last, so that both
+                    // arrows still have somewhere to go.
+                    v.set_cursor(lists.len(pane).saturating_sub(2));
+                } else {
+                    let _ = v.key(Press::Down, &lists, &b, 200);
+                }
                 let (was, cursor) = (v.pane, v.cursor());
-                let did = v.key(press_of(key), &lists, &b);
+                let did = v.key(press_of(key), &lists, &b, 200);
                 assert!(
                     did != Errand::Nothing
                         || (v.pane, v.cursor()) != (was, cursor)
-                        || v.knob.is_some(),
+                        || v.level != Level::List,
                     "`{key}` ({id}) does nothing on {pane:?}, and the line teaches it there"
                 );
             }
+        }
+        // AND IN THE QUESTION before a filter goes to everybody: the arrows
+        // choose between the two answers and `RET` gives the one they left.
+        for (key, id) in OF_THE_QUESTION {
+            let mut v = View::fresh();
+            v.pane = Pane::Catalogue;
+            v.set_cursor(lists.len(Pane::Catalogue).saturating_sub(2));
+            let _ = v.key(Press::Letter('p'), &lists, &b, 200);
+            assert!(
+                matches!(v.level, Level::Publish { .. }),
+                "`p` did not ask the question"
+            );
+            let before = v.level.clone();
+            let did = v.key(press_of(key), &lists, &b, 200);
+            assert!(
+                did != Errand::Nothing || v.level != before,
+                "`{key}` ({id}) does nothing in the sharing question"
+            );
+        }
+        // AND IN AN OPEN RECORD, where the arrows scroll it and `RET` runs
+        // the button they left focused.
+        for (key, id) in OF_THE_OPEN {
+            let mut v = View::fresh();
+            let _ = v.key(Press::Down, &lists, &b, 200);
+            let _ = v.key(Press::Enter, &lists, &b, 200);
+            assert!(
+                matches!(v.level, Level::Open { .. }),
+                "`RET` did not open the record"
+            );
+            // ONTO THE FIRST ACTION. `RET` runs the row under the cursor —
+            // on the title there is nothing to run — and from an action both
+            // arrows still have somewhere to go.
+            let first = v
+                .open_plan(&records[1], 200)
+                .iter()
+                .position(|t| matches!(t, Told::Act(_)))
+                .expect("the record has no action to walk to");
+            while !matches!(&v.level, Level::Open { line, .. } if *line == first) {
+                let _ = v.key(Press::Down, &lists, &b, 200);
+            }
+            let before = v.level.clone();
+            let did = v.key(press_of(key), &lists, &b, 200);
+            assert!(
+                did != Errand::Nothing || v.level != before,
+                "`{key}` ({id}) does nothing in an open record"
+            );
         }
         // AND IN THE SHEET, where the same keys mean the sheet's things.
         for (key, id) in OF_THE_SHEET {
             let mut v = View::fresh();
             v.pane = Pane::Catalogue;
-            let _ = v.key(Press::Enter, &lists, &b);
-            let _ = v.key(Press::Down, &lists, &b);
-            let before = v.knob;
-            let did = v.key(press_of(key), &lists, &b);
+            let _ = v.key(Press::Enter, &lists, &b, 200);
+            let _ = v.key(Press::Down, &lists, &b, 200);
+            let before = v.level.clone();
+            let did = v.key(press_of(key), &lists, &b, 200);
             assert!(
-                did != Errand::Nothing || v.knob != before,
+                did != Errand::Nothing || v.level != before,
                 "`{key}` ({id}) does nothing in the sheet"
             );
         }
@@ -1713,7 +3239,8 @@ mod tests {
         let every = OF_THE_VIEW
             .iter()
             .map(|(_, id, _)| *id)
-            .chain(OF_THE_SHEET.iter().map(|(_, id)| *id));
+            .chain(OF_THE_SHEET.iter().map(|(_, id)| *id))
+            .chain(OF_THE_OPEN.iter().map(|(_, id)| *id));
         for id in every {
             for key in [id.to_owned(), format!("cmd-{id}")] {
                 // `[key]` is what a missing one resolves to; comparing
@@ -1734,16 +3261,16 @@ mod tests {
         let mut v = View::fresh();
         let (pane, restore) = (t.t("notif-pane-next"), t.t("notif-restore"));
         let on_list: String = v
-            .hint_of(None, &t)
+            .hint_of(None, &lists, &t)
             .iter()
             .map(|p| p.text.as_str())
             .collect();
         assert!(on_list.contains(&pane), "{on_list}");
         assert!(!on_list.contains(&restore), "{on_list}");
         v.pane = Pane::Catalogue;
-        let _ = v.key(Press::Enter, &lists, &b);
+        let _ = v.key(Press::Enter, &lists, &b, 200);
         let in_sheet: String = v
-            .hint_of(None, &t)
+            .hint_of(None, &lists, &t)
             .iter()
             .map(|p| p.text.as_str())
             .collect();
@@ -1751,7 +3278,7 @@ mod tests {
         assert!(!in_sheet.contains(&pane), "{in_sheet}");
         // And the separator between shortcuts is the code's, never a value's.
         assert!(
-            v.hint_of(None, &t)
+            v.hint_of(None, &lists, &t)
                 .iter()
                 .any(|p| p.register == crate::chrome::Register::Separator)
         );
@@ -1769,7 +3296,7 @@ mod tests {
             seen.len()
         };
         assert_eq!(
-            v.hint_of(None, &t).len(),
+            v.hint_of(None, &lists, &t).len(),
             3 * count(OF_THE_SHEET.iter().map(|(_, id)| *id).collect()) - 1
         );
         // AND ON A COLUMN, only that column's keys — which is what the line
@@ -1782,7 +3309,11 @@ mod tests {
                 .filter(|(_, _, c)| c.shown(pane))
                 .map(|(_, id, _)| *id)
                 .collect();
-            assert_eq!(one.hint_of(None, &t).len(), 3 * count(here) - 1, "{pane:?}");
+            assert_eq!(
+                one.hint_of(None, &lists, &t).len(),
+                3 * count(here) - 1,
+                "{pane:?}"
+            );
         }
     }
 
@@ -1795,7 +3326,7 @@ mod tests {
         let records = vec![record(1, Show::Brief, false), record(2, Show::Brief, false)];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        let _ = v.key(Press::Down, &lists, &b);
+        let _ = v.key(Press::Down, &lists, &b, 200);
         assert_eq!(v.cursor(), 1);
         drop(lists);
         let shorter = vec![record(1, Show::Brief, false)];
@@ -1818,7 +3349,7 @@ mod tests {
         let lists = Lists::of(&[], &b);
         let mut v = View::fresh();
         v.pane = Pane::Catalogue;
-        let _ = v.key(Press::Enter, &lists, &b);
+        let _ = v.key(Press::Enter, &lists, &b, 200);
         assert!(v.in_sheet());
         let was = v.cursor();
         let did = v.clicked(3, Some(4), &lists, 120);
@@ -1914,7 +3445,7 @@ mod tests {
         assert_eq!(lit(&v, split), tokens::color::TEXT_GROUP);
 
         // AND ON THE EMPTY ONE, which is the case that had nothing to show.
-        let _ = v.key(Press::Tab, &lists, &b);
+        let _ = v.key(Press::Tab, &lists, &b, 200);
         assert_eq!(v.pane, Pane::Suppressed);
         assert_eq!(lit(&v, split), tokens::color::STATE_ACCENT);
         assert_eq!(lit(&v, left), tokens::color::TEXT_GROUP);
@@ -1947,16 +3478,22 @@ mod tests {
             let mut v = View::fresh();
             v.pane = pane;
             for row in v.rows(&lists, &b, columns, &t) {
-                let first = row.fields.iter().map(|f| f.at).min().unwrap();
+                // The air between two stacked columns draws nothing, and a row
+                // with no field has no left edge to be wrong about.
+                let Some(first) = row.fields.iter().map(|f| f.at).min() else {
+                    continue;
+                };
                 assert_eq!(
                     first + crate::chrome::FIELDS_LEAD,
                     crate::chrome::INSET,
                     "{pane:?} at {columns}"
                 );
             }
-            let _ = v.key(Press::Enter, &lists, &b);
+            let _ = v.key(Press::Enter, &lists, &b, 200);
             for row in v.rows(&lists, &b, columns, &t) {
-                let first = row.fields.iter().map(|f| f.at).min().unwrap();
+                let Some(first) = row.fields.iter().map(|f| f.at).min() else {
+                    continue;
+                };
                 assert_eq!(
                     first + crate::chrome::FIELDS_LEAD,
                     crate::chrome::INSET,
@@ -2033,27 +3570,51 @@ mod tests {
         assert!(drawn.contains(&(end - 1)), "no trash icon at {}", end - 1);
         assert!(drawn.contains(&(end - 3)), "no envelope at {}", end - 3);
         assert_eq!(target_at(end - 1, at, room), Some(Hit::Delete));
-        assert_eq!(target_at(end - 3, at, room), Some(Hit::MarkRead));
+        assert_eq!(target_at(end - 3, at, room), Some(Hit::ToggleRead));
         // And the sentence's cells are not targets: a click there only aims.
         assert_eq!(target_at(at + 5, at, room), None);
     }
 
     #[test]
-    fn a_read_one_offers_no_envelope() {
-        // Marking read what is already read is a gesture with no effect, and a
-        // control that does nothing is worse than one that is not offered.
+    fn a_read_one_offers_the_closed_envelope() {
+        // The control is there either way, and the DRAWING says which way it
+        // goes. It used to be drawn only while unread — which made marking
+        // read a one-way door, and a row read by a slip of the hand stayed
+        // read for a fortnight with nothing on screen offering otherwise.
         let t = texts();
         let b = Book::distro();
-        let records = vec![record(1, Show::Brief, true)];
+        let records = vec![record(1, Show::Brief, true), record(2, Show::Brief, false)];
         let lists = Lists::of(&records, &b);
-        let v = View::fresh();
+        let mut v = View::fresh();
         let (at, room) = v.row_extent(200);
         let rows = v.rows(&lists, &b, 200, &t);
-        let drawn: Vec<u16> = rows[1].fields.iter().map(|f| f.at).collect();
-        assert!(drawn.contains(&(at + room - 1)), "the trash icon is gone");
-        assert!(
-            !drawn.contains(&(at + room - 3)),
-            "an envelope on one already read"
+        let glyph = |row: &Row| {
+            row.fields
+                .iter()
+                .find(|f| f.at == at + room - 3)
+                .map(|f| f.text.clone())
+        };
+        let drawn = |c: char| Some(c.to_string());
+        // Newest first: row 1 is the unread one, row 2 the read one.
+        assert_eq!(
+            glyph(&rows[1]),
+            drawn(tokens::icon::NOTIFICATION_MARK_READ),
+            "the unread row lost its open envelope"
+        );
+        assert_eq!(
+            glyph(&rows[2]),
+            drawn(tokens::icon::NOTIFICATION_MARK_UNREAD),
+            "the read row has no closed envelope"
+        );
+        // And the same cell, pressed, goes the other way on each of them —
+        // unread first, then read, so drawn row 1 is the unread one.
+        assert_eq!(
+            v.clicked(1, Some(at + room - 3), &lists, 200),
+            Errand::Read(named(2))
+        );
+        assert_eq!(
+            v.clicked(2, Some(at + room - 3), &lists, 200),
+            Errand::Unread(named(1))
         );
     }
 
@@ -2064,16 +3625,23 @@ mod tests {
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
         let (at, room) = v.row_extent(200);
-        // Newest first: row 0 is id 2.
-        assert_eq!(v.clicked(0, Some(at + 5), &lists, 200), Errand::Nothing);
+        // Row 0 of the drawing is the heading; newest first, so drawn row 1
+        // is id 2 and drawn row 2 is id 1.
+        assert_eq!(v.clicked(1, Some(at + 5), &lists, 200), Errand::Nothing);
         assert_eq!(v.cursor(), 0, "the click on the row at least aims");
         assert_eq!(
-            v.clicked(1, Some(at + room - 3), &lists, 200),
-            Errand::Read(1)
+            v.clicked(2, Some(at + room - 3), &lists, 200),
+            Errand::Read(named(1))
         );
         assert_eq!(
-            v.clicked(1, Some(at + room - 1), &lists, 200),
-            Errand::Forget(1)
+            v.clicked(2, Some(at + room - 1), &lists, 200),
+            Errand::Forget(named(1))
+        );
+        // AND THE HEADING IS NOT A ROW OF THE LIST: a click on it does nothing
+        // and moves nothing, rather than acting on whatever shares its index.
+        assert_eq!(
+            v.clicked(0, Some(at + room - 1), &lists, 200),
+            Errand::Nothing
         );
     }
 
@@ -2089,21 +3657,37 @@ mod tests {
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
         let (at, room) = extent_of(Pane::Suppressed, 120);
+        // Drawn row 0 is the pair of headings; row 1 holds both columns' first
+        // item, and the CELL says which of the two the pointer means.
         assert_eq!(
-            v.clicked(0, Some(at + room - 1), &lists, 120),
-            Errand::Forget(2),
+            v.clicked(1, Some(at + room - 1), &lists, 120),
+            Errand::Forget(named(2)),
             "the right column's bin did not answer"
         );
         assert_eq!(v.pane, Pane::Suppressed);
         // And a click back on the left column brings the cursor home.
-        assert_eq!(v.clicked(0, Some(3), &lists, 120), Errand::Nothing);
+        assert_eq!(v.clicked(1, Some(3), &lists, 120), Errand::Nothing);
         assert_eq!(v.pane, Pane::Happened);
-        // Stacked, there is one column and the pane stays where `TAB` put it.
-        v.pane = Pane::Suppressed;
-        let _ = v.clicked(0, Some(3), &lists, 50);
-        assert_eq!(v.pane, Pane::Suppressed);
-        // And a click BELOW the shorter column's last item lands on that
-        // item, not on a row the column does not have.
+
+        // STACKED, the columns are one under the other and it is the ROW that
+        // says which — clicking in "Filtered out" moves the keyboard there,
+        // which is the same rule read down instead of across.
+        let mut v = View::fresh();
+        // 0 title, 1 the record, 2 air, 3 title, 4 the suppressed one.
+        assert_eq!(v.clicked(4, Some(3), &lists, 50), Errand::Nothing);
+        assert_eq!((v.pane, v.cursor()), (Pane::Suppressed, 0));
+        // And a title is not a row of a list: it moves nothing.
+        assert_eq!(v.clicked(0, Some(3), &lists, 50), Errand::Nothing);
+        assert_eq!(v.pane, Pane::Suppressed, "a title took the keyboard");
+
+        // AND A CLICK BELOW THE SHORTER COLUMN'S LAST ITEM DOES NOTHING.
+        //
+        // Wide, the rows run to the LONGER of the two columns, so the right
+        // half of the last rows is blank. It used to clamp the cursor to that
+        // column's last item — the pointer was on nothing and the keyboard
+        // moved two rows away — and before that it acted on the raw index,
+        // which named nothing at all. There is no item there; that is the
+        // whole answer.
         let records = vec![
             record(1, Show::Brief, false),
             record(2, Show::Brief, false),
@@ -2112,8 +3696,8 @@ mod tests {
         ];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        let _ = v.clicked(2, Some(at), &lists, 120);
-        assert_eq!((v.pane, v.cursor()), (Pane::Suppressed, 0));
+        assert_eq!(v.clicked(3, Some(at), &lists, 120), Errand::Nothing);
+        assert_eq!((v.pane, v.cursor()), (Pane::Happened, 0), "it moved anyway");
     }
 
     #[test]
@@ -2146,6 +3730,637 @@ mod tests {
     }
 
     #[test]
+    fn space_puts_a_read_one_back_to_unread() {
+        // One key, one control, and the row decides which way it goes. Marking
+        // read used to be a one-way door: nothing anywhere undid it, so a row
+        // read by a slip of the hand was read for a fortnight.
+        let b = Book::distro();
+        let records = vec![record(9, Show::Brief, true)];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        assert_eq!(
+            v.key(Press::Space, &lists, &b, 200),
+            Errand::Unread(named(9))
+        );
+    }
+
+    #[test]
+    fn a_key_names_one_row_when_two_share_an_id() {
+        // The owner's report: `Espaço` and `d` acted on notifications BELOW the
+        // selected one. The cursor was never wrong — the errand named a record
+        // by the protocol's id, which repeats across restarts and, with
+        // `replaces_id`, inside one session too. Newest first, so the other
+        // ones were always below.
+        let b = Book::distro();
+        let records = vec![
+            arrived(7, Show::Brief, false, 10),
+            arrived(7, Show::Brief, false, 30),
+        ];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        let newest = RecordKey {
+            id: 7,
+            at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(30),
+        };
+        let oldest = RecordKey {
+            id: 7,
+            at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(10),
+        };
+        assert_eq!(v.key(Press::Space, &lists, &b, 200), Errand::Read(newest));
+        assert_eq!(
+            v.key(Press::Letter('d'), &lists, &b, 200),
+            Errand::Forget(newest)
+        );
+        // And the row below is a DIFFERENT errand, which is the whole point.
+        v.set_cursor(1);
+        assert_eq!(v.key(Press::Space, &lists, &b, 200), Errand::Read(oldest));
+        assert_eq!(
+            v.key(Press::Letter('d'), &lists, &b, 200),
+            Errand::Forget(oldest)
+        );
+    }
+
+    /// A record with a body long enough to need wrapping and two buttons.
+    fn wordy() -> Record {
+        let mut r = record(1, Show::Brief, false);
+        r.notification.summary = "the disk is nearly full".into();
+        r.notification.body = "There is less than a gigabyte left on the root filesystem. \
+             Something will stop working soon, and it will not say why."
+            .into();
+        r.presentation.by = Some("small-things-are-quick".into());
+        r.notification.actions = vec![
+            ronoctua_notify::Action {
+                id: "open".into(),
+                label: ronoctua_notify::Label::Text("open it".into()),
+                doing: ronoctua_notify::Doing::Invoke,
+            },
+            ronoctua_notify::Action {
+                id: "copy".into(),
+                label: ronoctua_notify::Label::Text("copy the path".into()),
+                doing: ronoctua_notify::Doing::Invoke,
+            },
+        ];
+        r
+    }
+
+    #[test]
+    fn enter_opens_the_record_whole() {
+        // THE OWNER'S ASK: a row that does not fit had nothing to press. Now
+        // `RET` gives the body WRAPPED — not cut — every button drawn, and the
+        // facts beside it.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![wordy()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+        assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
+        assert!(matches!(v.level, Level::Open { .. }), "{:?}", v.level);
+
+        let said = |rows: &[Row]| -> String {
+            rows.iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let rows = v.rows(&lists, &b, 200, &t);
+        let text = said(&rows);
+        // The whole of the body is there, in pieces no wider than its column.
+        assert!(text.contains("will not say why"), "{text}");
+        assert!(!text.contains('…'), "the body was cut: {text}");
+        // Both actions, as rows of their own.
+        assert!(
+            text.contains("open it") && text.contains("copy the path"),
+            "{text}"
+        );
+        // AND THE FACTS, including the filter that decided — which is what
+        // used to be glued to the end of the row's sentence as a raw id.
+        assert!(
+            text.contains(&t.t(ronoctua_i18n::key::NOTIF_FACT_ORIGIN)),
+            "{text}"
+        );
+        assert!(text.contains("Small things go by quickly"), "{text}");
+
+        // WIDE: the facts are the SECOND column, where the list's second
+        // column is. NARROW: they are underneath, which is the same answer the
+        // list gives and the same token deciding it.
+        let (facts_at, _) = extent_of(Pane::Suppressed, 200);
+        assert!(
+            rows.iter()
+                .any(|r| r.fields.iter().any(|f| f.at == facts_at)),
+            "no fact in the second column"
+        );
+        // AND THE BAR IS HIGHER THAN THE LIST'S. A fact is a label AND a value
+        // on one line, so its column needs about forty cells — at 90 the two
+        // columns of the LIST still fit and the facts no longer do, and they
+        // go underneath.
+        assert!(
+            two_columns(100),
+            "the list would already have stacked at 100"
+        );
+        for columns in [50_u16, 100] {
+            let narrow = v.rows(&lists, &b, columns, &t);
+            let (left, _) = extent_of(Pane::Catalogue, columns);
+            assert!(
+                narrow.iter().all(|r| r.fields.iter().all(|f| f.at >= left)),
+                "at {columns} a fact stayed in a column that is not there"
+            );
+            assert!(
+                narrow.len() > rows.len(),
+                "at {columns} stacked is not taller than side by side"
+            );
+        }
+
+        // AND `Esc` GOES BACK ONE LEVEL, not out.
+        assert_eq!(v.key(Press::Escape, &lists, &b, 200), Errand::Nothing);
+        assert_eq!(v.level, Level::List);
+        assert_eq!(v.key(Press::Escape, &lists, &b, 200), Errand::Close);
+    }
+
+    #[test]
+    fn the_mark_never_touches_the_sentence() {
+        // THE OWNER PHOTOGRAPHED `disconn…⋯`: the mark landed on the very cell
+        // where the elided sentence ended, so two ellipses ran together and
+        // the row read as one word with six dots in it. There is a cell of air
+        // between them, and this is the arithmetic that keeps it there.
+        let t = texts();
+        let b = Book::distro();
+        let mut r = record(1, Show::Brief, false);
+        r.notification.summary = "a summary far too long for any of these widths".into();
+        r.notification.actions = vec![ronoctua_notify::Action {
+            id: "open".into(),
+            label: ronoctua_notify::Label::Text("open it".into()),
+            doing: ronoctua_notify::Doing::Invoke,
+        }];
+        let records = vec![r];
+        let lists = Lists::of(&records, &b);
+        let v = View::fresh();
+        for columns in [50_u16, 80, 120, 200] {
+            let rows = v.rows(&lists, &b, columns, &t);
+            let row = rows.iter().find(|r| {
+                r.fields
+                    .iter()
+                    .any(|f| f.text == tokens::icon::NOTIFICATION_HAS_ACTIONS.to_string())
+            });
+            let Some(row) = row else {
+                // Too narrow for the sentence to keep its floor: the mark
+                // stands down and the record still lists every action.
+                continue;
+            };
+            let mark = row
+                .fields
+                .iter()
+                .find(|f| f.text == tokens::icon::NOTIFICATION_HAS_ACTIONS.to_string())
+                .expect("the mark");
+            let sentence = row
+                .fields
+                .iter()
+                .find(|f| f.text.contains("a summary"))
+                .expect("the sentence");
+            let ends = sentence.at + ronoctua_render::layout::width(&sentence.text);
+            assert!(
+                mark.at > ends,
+                "at {columns} the mark is at {} and the sentence ends at {ends}",
+                mark.at
+            );
+        }
+    }
+
+    #[test]
+    fn the_row_only_marks_and_the_open_record_lists() {
+        // THE OWNER READ THE SCREEN AND SAID WHY. A notification may carry
+        // several actions with labels that are sentences, and a row is one
+        // line — two of them already crowded it out. So the row says only THAT
+        // there are some, and opening it lists them, one under the other.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![wordy()];
+        let lists = Lists::of(&records, &b);
+        let mut v = View::fresh();
+
+        let row: String = v.rows(&lists, &b, 200, &t)[1]
+            .fields
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect();
+        assert!(!row.contains("open it"), "the row draws a button: {row}");
+        assert!(
+            row.contains(tokens::icon::NOTIFICATION_HAS_ACTIONS),
+            "the row does not say there is anything to do: {row}"
+        );
+
+        // OPENED, they are ROWS — one each, and in order.
+        assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
+        let rows = v.rows(&lists, &b, 200, &t);
+        let said = |r: &Row| -> String { r.fields.iter().map(|f| f.text.as_str()).collect() };
+        let first = rows
+            .iter()
+            .position(|r| said(r).contains("open it"))
+            .unwrap();
+        let second = rows
+            .iter()
+            .position(|r| said(r).contains("copy the path"))
+            .unwrap();
+        assert_eq!(second, first + 1, "the actions are not one under the other");
+
+        // AND ONE CURSOR REACHES THEM. It scrolls the record on the way, which
+        // is the other thing a body that does not fit needs.
+        while !matches!(v.level, Level::Open { line, .. } if line == first) {
+            let before = v.level.clone();
+            let _ = v.key(Press::Down, &lists, &b, 200);
+            assert_ne!(v.level, before, "the cursor stopped short of the actions");
+        }
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Act(named(1), 0)
+        );
+        let _ = v.key(Press::Down, &lists, &b, 200);
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Act(named(1), 1)
+        );
+
+        // AND THE ONE UNDER THE CURSOR IS LIT, which is how the eye knows
+        // which of them `RET` would run.
+        let rows = v.rows(&lists, &b, 200, &t);
+        assert_eq!(
+            rows[second].fields[0].color,
+            tokens::color::STATE_ACCENT,
+            "{}",
+            said(&rows[second])
+        );
+        // AND IT NEVER LANDS ANYWHERE ELSE. A line of the message is not
+        // something one can act on, and stepping through them one at a time
+        // with nothing lighting up is what the owner read off his screen.
+        let plan = v.open_plan(&records[0], 200);
+        for press in [Press::Down, Press::Up, Press::Up, Press::Down, Press::Down] {
+            let _ = v.key(press, &lists, &b, 200);
+            let Level::Open { line, .. } = v.level else {
+                panic!("the record closed")
+            };
+            assert!(
+                matches!(plan[line], Told::Act(_)),
+                "the cursor stopped on {:?}, which is not an action",
+                plan[line]
+            );
+        }
+    }
+
+    #[test]
+    fn the_hint_says_which_of_the_two_ret_would_do() {
+        // `RET` ON THE CATALOGUE MOVES: the distro's rows are ADJUSTED and a
+        // filter the person wrote is opened and rewritten whole. The text
+        // changes and so does the colour — the register this system spends on
+        // a key whose meaning moves under the reader.
+        let t = texts();
+        let mut b = Book::distro();
+        b.mine.push(ronoctua_notify::Rule {
+            id: "quiet-backups".into(),
+            when: Vec::new(),
+            apply: Verdict::default(),
+        });
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let says = |v: &View| -> Vec<(String, crate::chrome::Register)> {
+            v.hint_of(None, &lists, &t)
+                .into_iter()
+                .map(|p| (p.text, p.register))
+                .collect()
+        };
+        let on_the_distros = says(&v);
+        assert!(
+            on_the_distros
+                .iter()
+                .any(|(text, _)| text.contains(&t.t("notif-adjust"))),
+            "{on_the_distros:?}"
+        );
+        assert!(
+            on_the_distros
+                .iter()
+                .all(|(_, r)| *r != crate::chrome::Register::Alternate),
+            "nothing moves yet, and the line says something does"
+        );
+
+        v.set_cursor(lists.catalogue.len() - 1);
+        let on_mine = says(&v);
+        assert!(
+            on_mine
+                .iter()
+                .any(|(text, _)| text.contains(&t.t("notif-edit"))),
+            "{on_mine:?}"
+        );
+        assert!(
+            on_mine
+                .iter()
+                .any(|(_, r)| *r == crate::chrome::Register::Alternate),
+            "the key changed meaning and kept its colour"
+        );
+    }
+    #[test]
+    fn an_open_record_is_as_tall_as_it_says_it_is() {
+        // TWO ANSWERS TO "HOW TALL IS THIS" is how a cursor comes to stop three
+        // lines short of the end: the arrows ask `open_height` before there is
+        // anything drawn to count, and the drawing has to agree with it.
+        let t = texts();
+        let records = [wordy(), record(2, Show::Brief, false)];
+        let v = View::fresh();
+        for r in [&records[0], &records[1]] {
+            for columns in [40_u16, 50, 80, 120, 200] {
+                assert_eq!(
+                    v.open_rows(r, columns, &t).len(),
+                    v.open_plan(r, columns).len(),
+                    "at {columns} columns"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_filter_can_be_written_from_the_screen() {
+        // THE OWNER'S ASK. The rule language was complete and unreachable: the
+        // only way to a filter of one's own was editing the preferences JSON,
+        // in serde's variant spelling.
+        let t = texts();
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        assert_eq!(v.key(Press::Letter('n'), &lists, &b, 200), Errand::Nothing);
+        assert!(matches!(v.level, Level::Draft(_)), "`n` opened nothing");
+
+        // IT REFUSES TO SAVE HALF A FILTER, and says why on the line that
+        // exists for saying why.
+        assert_eq!(v.key(Press::Letter('s'), &lists, &b, 200), Errand::Nothing);
+        assert!(
+            matches!(v.level, Level::Draft(_)),
+            "half a filter was saved"
+        );
+        assert!(v.note(&t).is_some(), "and it said nothing about refusing");
+
+        // NAMED AND FILLED IN — the two things that are typed come in through
+        // the minibuffer, which is what `Errand::Ask` sends the door to do.
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Ask(Asking::Name)
+        );
+        v.typed(Asking::Name, "quiet backups");
+        // Down to the value of the first condition: name, field, test, value.
+        for _ in 0..3 {
+            let _ = v.key(Press::Down, &lists, &b, 200);
+        }
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Ask(Asking::Value(0))
+        );
+        v.typed(Asking::Value(0), "backup");
+
+        // AND THE ARROWS TURN WHAT CANNOT BE TYPED. Up to the field, one step
+        // on, and the condition is about the sender instead of the title.
+        let _ = v.key(Press::Up, &lists, &b, 200);
+        let _ = v.key(Press::Up, &lists, &b, 200);
+        let _ = v.key(Press::Left, &lists, &b, 200);
+        let Level::Draft(d) = &v.level else {
+            panic!("the draft closed")
+        };
+        assert_eq!(d.when[0].field, ronoctua_notify::Field::App);
+        assert_eq!(d.when[0].test.against(), "backup");
+
+        // SAVED, and it goes back to the list it came from.
+        let Errand::Filter { was, rule } = v.key(Press::Letter('s'), &lists, &b, 200) else {
+            panic!("`s` did not save a filter that is ready")
+        };
+        assert_eq!(was, None, "a new filter replaces nothing");
+        assert_eq!(rule.id, "quiet backups");
+        assert_eq!(rule.when.len(), 1);
+        assert_eq!(v.level, Level::List);
+    }
+
+    #[test]
+    fn a_filter_of_yours_is_told_apart_edited_and_dropped() {
+        // Three things the screen could not do: SAY that a filter is yours,
+        // open it to change it, and take it away.
+        let t = texts();
+        let mut b = Book::distro();
+        b.mine.push(ronoctua_notify::Rule {
+            id: "quiet backups".into(),
+            when: vec![ronoctua_notify::Term {
+                field: ronoctua_notify::Field::Summary,
+                test: ronoctua_notify::Test::Contains("backup".into()),
+            }],
+            apply: Verdict {
+                show: Some(Show::Hidden),
+                ..Verdict::default()
+            },
+        });
+        let lists = Lists::of(&[], &b);
+        let last = lists.catalogue.len() - 1;
+        assert_eq!(lists.catalogue[last], ("quiet backups".into(), Kind::Mine));
+
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+
+        // ITS NAME IS THE TEXT THEY TYPED, not a key that does not exist —
+        // the row used to read `[notif-rule-quiet backups]`.
+        let rows = v.rows(&lists, &b, 200, &t);
+        let said: String = rows[last + 1]
+            .fields
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect();
+        assert!(said.contains("quiet backups"), "{said}");
+        assert!(
+            !said.contains('['),
+            "the missing-key marker is on screen: {said}"
+        );
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::NOTIF_MINE)),
+            "{said}"
+        );
+        // AND ITS OWN TONE, which is what the owner asked for: in forty rows,
+        // the handful that are yours are found without reading. Read with the
+        // cursor ELSEWHERE, because the cursor wins over provenance — a
+        // focused row is the accent whoever wrote it.
+        assert_eq!(rows[last + 1].fields[0].color, tokens::color::TEXT_MINE);
+        v.set_cursor(last);
+
+        // AND WHAT IT DOES IS DRAWN. `in_force` looked in the distro's filters
+        // only, so a filter of theirs showed the plain arrival defaults.
+        let (p, _) = in_force(&b, "quiet backups");
+        assert_eq!(p.show, Show::Hidden, "the row does not say what it does");
+
+        // `RET` OPENS IT WHOLE — conditions included, which is the difference
+        // between editing a filter and adjusting a kind.
+        assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
+        let Level::Draft(d) = &v.level else {
+            panic!("`RET` did not open the filter")
+        };
+        assert_eq!(d.editing.as_deref(), Some("quiet backups"));
+        assert_eq!(d.when.len(), 1);
+        let _ = v.key(Press::Escape, &lists, &b, 200);
+
+        // AND `d` TAKES IT AWAY.
+        assert_eq!(
+            v.key(Press::Letter('d'), &lists, &b, 200),
+            Errand::Unfilter("quiet backups".to_owned())
+        );
+        // But never one of the distro's: those come from the flake, and the
+        // next rebuild would put back whatever the screen pretended to delete.
+        v.set_cursor(0);
+        assert_eq!(v.key(Press::Letter('d'), &lists, &b, 200), Errand::Nothing);
+    }
+
+    #[test]
+    fn sharing_asks_first_and_answers_no_by_default() {
+        // A GESTURE THAT CANNOT BE UNDONE gets a question, and the question
+        // opens on `no` — the format buffer's rule, for the same reason. What
+        // lands in a public repository is published, and git keeps it.
+        let t = texts();
+        let mut b = Book::distro();
+        b.mine.push(ronoctua_notify::Rule {
+            id: "quiet-backups".into(),
+            when: vec![ronoctua_notify::Term {
+                field: ronoctua_notify::Field::Summary,
+                test: ronoctua_notify::Test::Contains("backup".into()),
+            }],
+            apply: Verdict::default(),
+        });
+        let lists = Lists::of(&[], &b);
+        let last = lists.catalogue.len() - 1;
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        v.set_cursor(last);
+        assert_eq!(v.key(Press::Letter('p'), &lists, &b, 200), Errand::Nothing);
+        assert_eq!(
+            v.level,
+            Level::Publish {
+                id: "quiet-backups".to_owned(),
+                yes: false
+            },
+            "the question did not open on `no`"
+        );
+
+        // IT SHOWS WHAT WOULD GO, and it says what it means.
+        let said: String = v
+            .rows(&lists, &b, 200, &t)
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(said.contains("quiet-backups"), "{said}");
+        assert!(
+            said.contains("backup"),
+            "the condition is not on screen: {said}"
+        );
+        assert!(
+            said.contains("PUBLIC"),
+            "it does not say what it means: {said}"
+        );
+
+        // `RET` ON `no` IS NO, and it goes back with nothing sent.
+        assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
+        assert_eq!(v.level, Level::List);
+
+        // AND `yes` IS THE ONE THAT SENDS IT.
+        let _ = v.key(Press::Letter('p'), &lists, &b, 200);
+        let _ = v.key(Press::Down, &lists, &b, 200);
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Share("quiet-backups".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_a_name_in_the_repository_is_refused() {
+        // Invariant 18: every name in this repository is English kebab, and the
+        // id is what an adjustment is keyed by. Mangling `silenciar cópias`
+        // into something else behind somebody's back would be worse than the
+        // screen saying so.
+        let t = texts();
+        let mut b = Book::distro();
+        b.mine.push(ronoctua_notify::Rule {
+            id: "silenciar cópias".into(),
+            when: vec![ronoctua_notify::Term {
+                field: ronoctua_notify::Field::Summary,
+                test: ronoctua_notify::Test::Contains("backup".into()),
+            }],
+            apply: Verdict::default(),
+        });
+        let lists = Lists::of(&[], &b);
+        let last = lists.catalogue.len() - 1;
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        v.set_cursor(last);
+        let _ = v.key(Press::Letter('p'), &lists, &b, 200);
+        let said: String = v
+            .rows(&lists, &b, 200, &t)
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::NOTIF_SHARE_NOT_A_NAME)[..20]),
+            "{said}"
+        );
+        // And there is no `yes` to press: the two answers are not offered.
+        assert!(
+            !said.contains(&t.t(ronoctua_i18n::key::NOTIF_SHARE_YES)),
+            "{said}"
+        );
+        // Even `yes` forced in answers nothing, which is what makes the
+        // refusal a refusal rather than a drawing.
+        v.level = Level::Publish {
+            id: "silenciar cópias".to_owned(),
+            yes: true,
+        };
+        assert_eq!(v.key(Press::Enter, &lists, &b, 200), Errand::Nothing);
+    }
+
+    #[test]
+    fn what_came_back_as_the_distros_retires_the_copy_that_travelled() {
+        // THE "HAS IT ARRIVED" QUESTION, and the whole of the answer: the table
+        // this binary was COMPILED with either has it or does not. No network,
+        // no git, no clock — a build from the flake is the only road distro
+        // content travels.
+        let mine = vec![ronoctua_notify::Rule {
+            id: "quiet-backups".into(),
+            when: Vec::new(),
+            apply: Verdict::default(),
+        }];
+        let shared: std::collections::BTreeSet<String> =
+            std::iter::once("quiet-backups".to_owned()).collect();
+
+        // STILL TRAVELLING: it is not in the distro's rules, so it stays, and
+        // the catalogue says so.
+        let mut b = Book::distro();
+        b.took(mine.clone(), shared.clone());
+        assert_eq!(b.mine.len(), 1);
+        let lists = Lists::of(&[], &b);
+        let last = lists.catalogue.len() - 1;
+        assert_eq!(lists.catalogue[last].1, Kind::Shared);
+
+        // ARRIVED: the build brought it in, so the local copy has done its job.
+        let mut b = Book::distro();
+        b.rules.push(ronoctua_notify::Rule {
+            id: "quiet-backups".into(),
+            when: Vec::new(),
+            apply: Verdict::default(),
+        });
+        b.took(mine, shared);
+        assert!(b.mine.is_empty(), "the copy that travelled is still here");
+        assert!(b.shared.is_empty(), "and it is still called travelling");
+        let lists = Lists::of(&[], &b);
+        assert_eq!(
+            lists
+                .catalogue
+                .iter()
+                .filter(|(id, _)| id == "quiet-backups")
+                .count(),
+            1,
+            "it is in the catalogue twice"
+        );
+    }
+
+    #[test]
     fn d_forgets_the_focused_one() {
         // The keyboard's half of the bin. The generator refuses an action that
         // asks for `d`, so nothing can shadow it.
@@ -2153,11 +4368,14 @@ mod tests {
         let records = vec![record(7, Show::Brief, false)];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        assert_eq!(v.key(Press::Letter('d'), &lists, &b), Errand::Forget(7));
+        assert_eq!(
+            v.key(Press::Letter('d'), &lists, &b, 200),
+            Errand::Forget(named(7))
+        );
         // On the catalogue there is nothing to forget: those are rows of a
         // table, not things that happened.
         v.pane = Pane::Catalogue;
-        assert_eq!(v.key(Press::Letter('d'), &lists, &b), Errand::Nothing);
+        assert_eq!(v.key(Press::Letter('d'), &lists, &b, 200), Errand::Nothing);
     }
 
     #[test]
@@ -2170,13 +4388,13 @@ mod tests {
         let lists = Lists::of(&[], &b);
         let mut v = View::fresh();
         v.pane = Pane::Catalogue;
-        let _ = v.key(Press::Enter, &lists, &b);
+        let _ = v.key(Press::Enter, &lists, &b, 200);
         // The first knob works, so it has nothing to add.
         assert_eq!(v.note(&t), None);
         // Walk down to `vibrate`.
         let dead = Knob::ALL.iter().position(|k| k.inert().is_some()).unwrap();
         for _ in 0..dead {
-            let _ = v.key(Press::Down, &lists, &b);
+            let _ = v.key(Press::Down, &lists, &b, 200);
         }
         assert!(v.note(&t).is_some(), "the dead switch stayed silent");
         // And the row itself carries no third column any more.
@@ -2197,16 +4415,16 @@ mod tests {
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
         for _ in 0..4 {
-            let _ = v.key(Press::Down, &lists, &b);
+            let _ = v.key(Press::Down, &lists, &b, 200);
         }
         assert_eq!(v.cursor(), 4);
         // The suppressed list is empty here.
-        let _ = v.key(Press::Tab, &lists, &b);
+        let _ = v.key(Press::Tab, &lists, &b, 200);
         assert_eq!(v.pane, Pane::Suppressed);
         assert_eq!(v.cursor(), 0);
         // And the one it left is where it was.
-        let _ = v.key(Press::Tab, &lists, &b);
-        let _ = v.key(Press::Tab, &lists, &b);
+        let _ = v.key(Press::Tab, &lists, &b, 200);
+        let _ = v.key(Press::Tab, &lists, &b, 200);
         assert_eq!(v.pane, Pane::Happened);
         assert_eq!(v.cursor(), 4);
     }

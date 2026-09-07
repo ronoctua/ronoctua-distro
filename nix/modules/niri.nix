@@ -368,6 +368,10 @@ in
       environment = {
         RONOCTUA_THEME = config.ronoctua.theme;
         RONOCTUA_THEMES = "${ronoctua.themed}";
+        # WHERE THIS MACHINE'S REPOSITORY IS, when it has one — see
+        # `ronoctua.repo`. Empty on a machine that installed the distro rather
+        # than building it, and then sharing a filter is simply not offered.
+        RONOCTUA_REPO = config.ronoctua.repo;
       };
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];

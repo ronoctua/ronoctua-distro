@@ -115,12 +115,6 @@ pub struct Action {
     /// Stable id. For ours it is the kebab id from the table; for a foreign
     /// app's it is whatever the sender chose, and it goes back untouched.
     pub id: String,
-    /// The key that reaches the screen, when the action has one.
-    ///
-    /// One letter, and it is what makes the action reachable WITHOUT the mouse:
-    /// the manager holds the keyboard and this is what one presses there.
-    /// `None` for a foreign app's, which we have no keymap for.
-    pub key: Option<char>,
     /// How the name is drawn.
     pub label: Label,
     /// What it does.
@@ -142,7 +136,6 @@ impl Action {
             .filter(|p| p[0] != "default")
             .map(|p| Self {
                 id: p[0].clone(),
-                key: None,
                 label: Label::Text(p[1].clone()),
                 doing: Doing::Invoke,
             })

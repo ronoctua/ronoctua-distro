@@ -37,6 +37,28 @@ in
       description = "Hostname pattern (section 2). E.g. noctua-z16.";
     };
 
+    # WHERE THIS MACHINE'S OWN COPY OF THE REPOSITORY IS, when it has one.
+    #
+    # It is what makes "share this filter with everybody" possible: the shell
+    # writes one file under `assets/shared/`, the next build turns it into part
+    # of the distro, and the owner's commit publishes it.
+    #
+    # An OPTION and never a search. A program that goes hunting for a git
+    # checkout finds somebody else's, and this one writes into what it finds —
+    # so it is told, or it does not offer to share at all. Empty is the default,
+    # which is right for every machine that installed this distro rather than
+    # building it.
+    repo = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      example = "/home/noctua/ronoctua-distro";
+      description = ''
+        This machine's checkout of the distro's repository, if it builds from
+        one. It is where "share a filter with everybody" writes, and the shell
+        only offers that when the path is set and holds a `flake.nix`.
+      '';
+    };
+
     # Section 9: the hash NEVER enters the repository. The installer writes it to
     # /persist and this module only points there.
     hashedPasswordFile = lib.mkOption {

@@ -1811,9 +1811,15 @@ let
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #
     # Two things, and each has a key: the circle marks it read, which is what
-    # `notif-dismiss` does; an action runs, which is what its own letter does in
-    # the manager. There is nothing up there the keyboard cannot reach, and this
-    # is what keeps that true as the band grows.
+    # `notif-dismiss` does; an action runs, which the keyboard reaches by
+    # OPENING the record — the actions are rows there, one under the other, and
+    # `RET` runs the one under the cursor. There is nothing up there the
+    # keyboard cannot reach, and this is what keeps that true as the band grows.
+    #
+    # It used to be the action's OWN LETTER, and the owner had it removed: the
+    # manager's levels already teach a dozen keys and will teach more, so a
+    # letter owned by a notification collides with one of them sooner or later
+    # — invisibly, because the person presses it and something else happens.
     band = (shell / "band.rs").read_text()
     # EVERY variant of the enum, and not only the two we hoped to find: a check
     # that looks for what it expects passes on a THIRD target nobody gave a key
@@ -1829,8 +1835,15 @@ let
     if '"notif-dismiss"' not in keymap:
         gaps.append("the band's circle has no equivalent key")
     manager = (shell / "notifications.rs").read_text()
-    if "a.key == Some(c)" not in manager:
-        gaps.append("the band's action is not reachable by letter in the manager")
+    # AGAINST THE CODE AND NOT THE CRITERION: the row has to EXIST in the open
+    # record's plan, and `RET` has to run the one under the cursor. Looking for
+    # the words "action" anywhere would pass on a comment.
+    if "Told::Act(" not in manager:
+        gaps.append("the open record has no row for an action")
+    if not re.search(r"Some\(Told::Act\(i\)\) => Errand::Act\(", manager):
+        gaps.append("`RET` does not run the action under the cursor in the open record")
+    if '"notif-act"' not in manager:
+        gaps.append("the open record's line does not teach how to run one")
 
     # AND THE BRAIN'S LINE, below the minibuffer, for the same reason.
     #
@@ -1870,9 +1883,16 @@ let
     if not rows_enum:
         sys.exit("ERROR: `notifications::Hit` went away or changed shape")
     targets = set(re.findall(r"^    ([A-Z]\w*)", rows_enum.group(1), re.M))
-    if targets != {"MarkRead", "Delete"}:
+    #
+    # `ToggleRead` was `MarkRead`, and the rename is the point rather than a
+    # detail: the envelope is ONE control that goes both ways, drawn open on an
+    # unread row and closed on a read one. Marking read used to be a one-way
+    # door — a row read by a slip of the hand stayed read for a fortnight — and
+    # a name that said `MarkRead` while sometimes unmarking would be a name
+    # that lies to whoever reads this check next. TWO targets, still.
+    if targets != {"ToggleRead", "Delete"}:
         gaps.append("the list has targets " + repr(sorted(targets)) + ", outside what was agreed")
-    for key, verb in (("Press::Space", "MarkRead"), ("Press::Letter('d')", "Delete")):
+    for key, verb in (("Press::Space", "ToggleRead"), ("Press::Letter('d')", "Delete")):
         if key not in manager:
             gaps.append("the list's " + verb + " target has no equivalent key")
     # AND EVERY CONTROL EXPLAINS ITSELF on the message line, never in a tooltip.
@@ -7636,8 +7656,10 @@ let
           "wifi-off",
           "network-secured",
           "ethernet",
-          # The two things one does to a notification with the mouse.
-          "notification-mark-read", "notification-delete",
+          # The two things one does to a notification with the mouse, and the
+          # second drawing of the first: the closed envelope that puts a row
+          # back to unread.
+          "notification-mark-read", "notification-mark-unread", "notification-delete",
           # And the generic marks, for what nobody named a glyph for.
           "info", "warning", "error",
           "transfer",

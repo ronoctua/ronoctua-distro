@@ -47,6 +47,19 @@ pkgs.testers.runNixOSTest {
   nodes.machine = {
     virtualisation.memorySize = 2048;
     virtualisation.cores = 2;
+    # ROOM FOR WHAT THIS TEST WRITES, and it writes a lot: a 400 MB source file
+    # and then copies of it, twice, to watch a copy be held and be given up.
+    #
+    # The default image is 1 GiB and this had no headroom at all — it passed
+    # while the closure inside the image was small enough, and the day it grew
+    # the copy stopped at `No space left on device (os error 28)` with the test
+    # reporting a `failed` job, which reads like a defect in the queue and is a
+    # defect in the sizing. It ran alone and passed on the same tree.
+    #
+    # Four GiB is source + two copies + the closure, with room to spare: a test
+    # whose margin is measured in megabytes is a test that fails on somebody
+    # else's machine.
+    virtualisation.diskSize = 4096;
 
     environment.systemPackages = [
       niri

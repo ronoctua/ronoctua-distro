@@ -175,6 +175,17 @@ impl Notification {
         }
     }
 
+    /// What NAMES the record this notification makes.
+    ///
+    /// The pair, and not the id — see [`RecordKey`].
+    #[must_use]
+    pub const fn key(&self) -> RecordKey {
+        RecordKey {
+            id: self.id,
+            at: self.at,
+        }
+    }
+
     /// The file this notification is about, from a `file://` icon.
     ///
     /// It is how the compositor hands over a screenshot's path, and it is what
@@ -263,6 +274,42 @@ impl Record {
     pub const fn counts(&self) -> bool {
         !self.read && !matches!(self.presentation.show, Show::Hidden)
     }
+
+    /// What NAMES this record.
+    #[must_use]
+    pub const fn key(&self) -> RecordKey {
+        self.notification.key()
+    }
+}
+
+/// What names ONE record of the history.
+///
+/// # Why the protocol's id is not enough
+///
+/// Because it is not unique, and nothing ever promised it would be. The bus's
+/// counter starts at 1 on every start of this process ([`crate::dbus`]), the
+/// ones we raise ourselves count DOWN from `u32::MAX`, and the history outlives
+/// both by fifteen days — so one restart is enough for the same id to name
+/// several records. Inside a single session a progress bar does it on its own:
+/// `replaces_id` reuses the id BY DESIGN, and every arrival is remembered.
+///
+/// The consequence was on screen, and it is what the owner reported: marking
+/// read and forgetting walked the history with `id ==` and acted on every
+/// match, and because the list is drawn newest first the extra ones were always
+/// BELOW the row the person was looking at.
+///
+/// The pair costs nothing — both halves are already written to the file, so
+/// both processes already agree on them — and `at` is the wall clock at
+/// arrival, which two records of one id never share.
+///
+/// The id STAYS the protocol's: it is what `replaces_id`, `dismiss` and
+/// `NotificationClosed` name, and none of those is about the history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordKey {
+    /// The protocol's id.
+    pub id: u32,
+    /// When it arrived, on the wall clock.
+    pub at: SystemTime,
 }
 
 /// How many records the history keeps in memory.
@@ -357,10 +404,15 @@ impl Queue {
     }
 
     fn remember(&mut self, n: Notification, p: Presentation) {
+        // AND SOME ARRIVE READ. It is news you do not answer — a device
+        // connecting, a device going — and the bell is for what still wants
+        // something from you. See `Presentation::auto_read`; it does not touch
+        // whether the band shows it, which is `show`'s question.
+        let read = p.auto_read;
         self.history.push(Record {
             notification: n,
             presentation: p,
-            read: false,
+            read,
         });
         if self.history.len() > HISTORY_CEILING {
             self.history.remove(0);
@@ -413,7 +465,7 @@ impl Queue {
     pub fn dismiss_current(&mut self, now: Instant) -> bool {
         match self.showing.take() {
             Some(s) => {
-                self.mark_read(s.notification.id);
+                self.mark_read(s.notification.key());
                 self.pull(now);
                 true
             }
@@ -422,32 +474,57 @@ impl Queue {
     }
 
     /// Closes one by id, wherever it is. The protocol's `CloseNotification`.
+    ///
+    /// BY ID, because that is the only name the sender has: `CloseNotification`
+    /// carries the number the bus handed out. What it marks read is named the
+    /// other way — by the record ([`RecordKey`]) of the very notification it
+    /// took off, so closing one does not touch a record from a past session
+    /// that happens to have been given the same number.
     pub fn dismiss(&mut self, id: u32, now: Instant) -> bool {
-        if self
-            .showing
-            .as_ref()
-            .is_some_and(|s| s.notification.id == id)
-        {
+        if let Some(s) = self.showing.as_ref().filter(|s| s.notification.id == id) {
+            let key = s.notification.key();
             self.showing = None;
-            self.mark_read(id);
+            self.mark_read(key);
             self.pull(now);
             return true;
         }
-        let before = self.pending.len();
+        let gone: Vec<RecordKey> = self
+            .pending
+            .iter()
+            .filter(|(n, _)| n.id == id)
+            .map(|(n, _)| n.key())
+            .collect();
         self.pending.retain(|(n, _)| n.id != id);
-        if before != self.pending.len() {
-            self.mark_read(id);
-            return true;
+        if gone.is_empty() {
+            return false;
         }
-        false
+        for key in gone {
+            self.mark_read(key);
+        }
+        true
     }
 
     /// Marks a record read. It is what takes it off the bell's count.
-    pub fn mark_read(&mut self, id: u32) -> bool {
+    pub fn mark_read(&mut self, key: RecordKey) -> bool {
+        self.set_read(key, true)
+    }
+
+    /// Marks a record UNREAD, and puts it back on the bell's count.
+    ///
+    /// The gesture is the same key and the same target as marking read — one
+    /// control, and the envelope on the row says which way it goes. Without it
+    /// the manager was a place where a decision could not be undone: a row
+    /// marked read by a slip of the hand was read for fifteen days.
+    pub fn mark_unread(&mut self, key: RecordKey) -> bool {
+        self.set_read(key, false)
+    }
+
+    /// Both of the above. It returns whether anything actually moved.
+    fn set_read(&mut self, key: RecordKey, read: bool) -> bool {
         let mut touched = false;
-        for r in self.history.iter_mut().filter(|r| r.notification.id == id) {
-            touched |= !r.read;
-            r.read = true;
+        for r in self.history.iter_mut().filter(|r| r.key() == key) {
+            touched |= r.read != read;
+            r.read = read;
         }
         touched
     }
@@ -465,9 +542,9 @@ impl Queue {
     /// It does not touch the band: what is on screen is on screen until it is
     /// dismissed or expires, and pulling it out from under the eye would be the
     /// list acting on something the person is reading.
-    pub fn forget(&mut self, id: u32) -> bool {
+    pub fn forget(&mut self, key: RecordKey) -> bool {
         let before = self.history.len();
-        self.history.retain(|r| r.notification.id != id);
+        self.history.retain(|r| r.key() != key);
         before != self.history.len()
     }
 
@@ -556,8 +633,6 @@ impl Queue {
             .count()
     }
 
-    /// The whole history, oldest first.
-    #[must_use]
     /// Takes what ANOTHER process wrote to the history file.
     ///
     /// # Why this exists
@@ -569,16 +644,25 @@ impl Queue {
     /// moment any notification arrived, and the window's next reread showed
     /// it returned. One store, two writers, and the last one won.
     ///
-    /// The reconciliation is by ID and in one direction only: what the file
-    /// says about a record the queue HAS is taken (read, and gone), and what
-    /// the queue has and the file does not is taken as forgotten. Records the
-    /// file has and the queue does not are NOT added back — the queue is
-    /// what is live, and a record it has already pruned is not news.
+    /// The reconciliation is BY THE RECORD'S NAME ([`RecordKey`]) and in one
+    /// direction only: what the file says about a record the queue HAS is
+    /// taken (read or unread, and gone), and what the queue has and the file
+    /// does not is taken as forgotten. Records the file has and the queue does
+    /// not are NOT added back — the queue is what is live, and a record it has
+    /// already pruned is not news.
+    ///
+    /// # Why `read` is taken in BOTH directions
+    ///
+    /// It used to be copied only when the file said `true`, which was right
+    /// while `true` was the only thing that could be said. Now a row can be
+    /// marked UNREAD by hand, and a one-way reconciliation would undo that on
+    /// the other door's next write: the file is the broadcast, so for a record
+    /// the file holds, the file's answer is the answer.
     ///
     /// It returns whether anything moved, so the caller can decide to paint.
     pub fn took_from_disk(&mut self, disk: &[Record]) -> bool {
         use std::collections::HashMap;
-        let theirs: HashMap<u32, bool> = disk.iter().map(|r| (r.notification.id, r.read)).collect();
+        let theirs: HashMap<RecordKey, bool> = disk.iter().map(|r| (r.key(), r.read)).collect();
         // ONLY WHAT ARRIVED BEFORE THE FILE WAS WRITTEN can be judged missing
         // from it: anything newer simply had not been written yet, and
         // dropping it would delete a notification nobody dismissed.
@@ -586,16 +670,15 @@ impl Queue {
         let mut moved = false;
         let before = self.history.len();
         self.history.retain(|r| {
-            let known = theirs.contains_key(&r.notification.id);
+            let known = theirs.contains_key(&r.key());
             known || newest.is_none_or(|t| r.notification.at > t)
         });
         moved |= self.history.len() != before;
         for r in &mut self.history {
-            if let Some(read) = theirs.get(&r.notification.id)
-                && *read
-                && !r.read
+            if let Some(read) = theirs.get(&r.key())
+                && r.read != *read
             {
-                r.read = true;
+                r.read = *read;
                 moved = true;
             }
         }
@@ -651,14 +734,27 @@ mod tests {
     }
 
     fn n(id: u32) -> Notification {
-        Notification::fresh_one(
+        at(id, u64::from(id))
+    }
+
+    /// One with its ARRIVAL named — the other half of a record's name, and the
+    /// half two records can differ in while sharing an id.
+    fn at(id: u32, secs: u64) -> Notification {
+        let mut one = Notification::fresh_one(
             id,
             "app".into(),
             None,
             format!("summary {id}"),
             String::new(),
             Urgency::Normal,
-        )
+        );
+        one.at = std::time::UNIX_EPOCH + Duration::from_secs(secs);
+        one
+    }
+
+    /// The name of the record `n(id)` makes.
+    fn named(id: u32) -> RecordKey {
+        n(id).key()
     }
 
     #[test]
@@ -741,7 +837,7 @@ mod tests {
         // AND READING DOES NOT MOVE IT: a suppressed one was never shown, so
         // there is nothing to read, and the number the hover says is about
         // the filter and not about attention.
-        f.mark_read(2);
+        f.mark_read(named(2));
         assert_eq!(f.suppressed(), 2);
         assert_eq!(f.unread(), 0);
     }
@@ -786,6 +882,68 @@ mod tests {
         f.enqueue(later, p(50, Life::Normal), t0);
         assert!(!f.took_from_disk(&disk));
         assert!(f.history().iter().any(|r| r.notification.id == 9));
+    }
+
+    #[test]
+    fn what_the_file_says_about_read_is_taken_both_ways() {
+        // A row can be put BACK to unread now, and that decision has to
+        // survive the other door writing the file. The reconciliation used to
+        // copy `read` only when the file said `true` — right while `true` was
+        // the only thing that could be said, and a silent undo the day it was
+        // not: the window would put a row back to unread, the footer would
+        // keep its own `true`, and the next write from the footer would put
+        // the file back the way it was.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        assert!(f.mark_read(named(1)));
+        assert!(f.history()[0].read);
+
+        let mut disk = f.history().to_vec();
+        disk[0].read = false;
+        assert!(f.took_from_disk(&disk), "the file's `unread` was ignored");
+        assert!(!f.history()[0].read);
+        assert_eq!(f.unread(), 1, "and it counts on the bell again");
+    }
+
+    #[test]
+    fn one_id_can_name_several_records_and_only_one_is_acted_on() {
+        // THE DEFECT THE OWNER REPORTED, at its root. The bus's counter starts
+        // at 1 on every start of this process and the ones we raise ourselves
+        // count down from `u32::MAX`, while the history lives fifteen days —
+        // so one restart is enough for an id to name several records. Inside
+        // one session `replaces_id` does the same by design: a progress bar
+        // keeps its id and every arrival is remembered.
+        //
+        // Marking read and forgetting walked the history with `id ==` and hit
+        // every match. The list is drawn newest first, so the extra ones were
+        // always the rows BELOW the one under the cursor — which is exactly
+        // what "it applies to all the notifications listed below" describes.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(at(7, 10), p(50, Life::Normal), t0);
+        f.enqueue(at(7, 20), p(50, Life::Normal), t0);
+        f.enqueue(at(7, 30), p(50, Life::Normal), t0);
+        assert_eq!(f.history().len(), 3, "three records, one id");
+
+        let middle = RecordKey {
+            id: 7,
+            at: SystemTime::UNIX_EPOCH + Duration::from_secs(20),
+        };
+        assert!(f.mark_read(middle));
+        let read: Vec<bool> = f.history().iter().map(|r| r.read).collect();
+        assert_eq!(read, vec![false, true, false], "it read more than one");
+
+        assert!(f.forget(middle));
+        let left: Vec<SystemTime> = f.history().iter().map(|r| r.notification.at).collect();
+        assert_eq!(
+            left,
+            vec![
+                SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+                SystemTime::UNIX_EPOCH + Duration::from_secs(30),
+            ],
+            "it forgot more than one"
+        );
     }
 
     #[test]
@@ -887,11 +1045,11 @@ mod tests {
         let mut f = Queue::fresh_one();
         f.enqueue(n(1), p(50, Life::Normal), t0);
         f.enqueue(n(2), p(50, Life::Normal), t0);
-        assert!(f.forget(1));
+        assert!(f.forget(named(1)));
         assert_eq!(f.history().len(), 1);
         assert_eq!(f.history()[0].notification.id, 2);
         // And forgetting what is not there is not an error, it is nothing.
-        assert!(!f.forget(9));
+        assert!(!f.forget(named(9)));
     }
 
     #[test]

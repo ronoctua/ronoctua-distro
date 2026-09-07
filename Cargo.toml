@@ -15,6 +15,7 @@ exclude = [ "buffers" ]
 members = [
   "crates/ronoctua-tokens",
   "crates/ronoctua-xdg",
+  "crates/ronoctua-store",
   "crates/ronoctua-syntax",
   "crates/ronoctua-protocol",
   "crates/ronoctua-design",

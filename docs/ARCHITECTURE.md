@@ -1922,6 +1922,85 @@ tempo: sem isso, a janela apagaria a notificação que acabou de chegar no rodap
 de volta** ao reconciliar: escrever mexeria no inotify do outro processo, que leria, que escreveria —
 dois processos respondendo ao evento um do outro para sempre.
 
+##### Um registro se chama `(id, quando chegou)`
+
+A `id` do protocolo não é nome de registro, e nada nunca prometeu que fosse. O contador do
+barramento nasce em 1 a cada partida do rodapé; o das notificações que nós mesmos levantamos nasce
+em `u32::MAX` e desce; o histórico dura quinze dias em disco. Uma restart basta para a mesma `id`
+nomear vários registros, e dentro de uma sessão o `replaces_id` faz o mesmo por desenho — uma barra
+de progresso reusa a id e cada chegada é lembrada.
+
+Marcar lida e esquecer varriam a história com `id ==` e agiam em TODOS os que casassem. Como a
+lista é desenhada do mais novo para o mais velho, os extras estavam sempre ABAIXO da linha em que a
+pessoa estava — que é exatamente como o dono descreveu o defeito. O nome é o PAR, e ele é de graça:
+as duas metades já eram persistidas e as duas portas já liam as duas do mesmo arquivo.
+
+##### Quatro níveis, e nenhuma porta sabe que existem
+
+O molde é o do Bluetooth: um campo diz onde se está, um `match` em `View::rows` desenha, `Esc` volta
+um passo. A lista, o registro ABERTO, a ficha de um tipo e a ficha de um filtro. As duas portas
+pedem `rows()` e pintam `Row.fields`; nenhuma tem um `if` sobre nível nenhum.
+
+O registro aberto existe porque uma linha é uma linha: uma notificação que não cabia não tinha o que
+apertar. Ali o corpo é QUEBRADO em vez de cortado, os botões são desenhados em vez de só terem
+letra, e o que o gerenciador sabe — de onde veio, quando, quanto ficou, como apareceu, qual filtro
+decidiu — é uma coluna de fatos ao lado. **Qual filtro decidiu saiu do título**: estava colado na
+frase, cru e sem tradução, e lia-se `bluetooth: Bluetooth Keyboard connected by
+small-things-are-quick`, o que diz que algo chamado `small-things-are-quick` conectou o teclado. É
+fato do registro, e foi para onde os fatos estão.
+
+##### Uma ação não tem letra própria
+
+Ela tinha, e o dono leu a tela: `[b] bluetooth` numa desconexão. Três coisas erradas numa linha.
+
+A letra só funcionava no GERENCIADOR — a faixa não pode tomar teclado, porque o rodapé em repouso
+não o captura, ou nenhum buffer receberia tecla —, então era uma tecla desenhada numa tela e
+apertada noutra. E o gerenciador já ensina uma dúzia de teclas em quatro níveis e vai ensinar mais:
+uma letra que a notificação possui colide com alguma delas mais cedo ou mais tarde, e colide em
+SILÊNCIO, porque a pessoa aperta e outra coisa acontece.
+
+O que alcança uma ação agora é o cursor do registro aberto, e é um cursor só: ele rola o corpo — a
+razão de o nível existir — e pousa nas ações, que são linhas como as outras. `RET` roda a que
+estiver sob ele.
+
+E a linha da lista só MARCA que há ações. Uma notificação pode ter várias, com rótulos que são
+frases, e uma linha é uma linha: duas delas já espremiam a frase para fora. A célula é reservada
+para a coluna inteira, senão o fim de cada frase muda de lugar conforme a linha.
+
+##### E a ação tinha de FUNCIONAR
+
+Ela não funcionava, e as duas portas erravam de jeitos diferentes.
+
+No rodapé, `bluetooth-open` pergunta ao `region_is_free` — e a vista que segurava o rodapé era o
+GERENCIADOR, que é de onde o botão foi apertado. Recusava, dizia numa linha que ninguém estava
+lendo, e o único efeito visível era a linha ficar quieta. Uma ação de COMANDO fecha o gerenciador
+antes de rodar; copiar um caminho e abrir um programa não fecham, porque deixam a tela onde está.
+
+Na janela, a resposta era "a ação roda pelo rodapé". É verdade e é inútil: o socket de controle
+existe exatamente para isso e o hospedeiro de buffer já escreve nele. A janela ENCAMINHA o comando.
+As outras três formas continuam sendo do rodapé e dizem por quê — resposta de barramento é de quem
+tem o nome, a área de transferência é do rodapé, e abrir num escopo próprio é a seção 9.1.
+
+##### O filtro da pessoa, e o filtro de todo mundo
+
+A linguagem de regras está completa desde o dia em que foi gerada — sete campos, cinco comparações,
+os filtros da pessoa tentados antes dos da distro — e o único caminho até ela era editar o JSON de
+preferências à mão, na grafia de variante do serde (`{"Contains": "backup"}`). Isso não é interface.
+Agora se escreve na tela: nome, condições e veredito, com as setas girando o que se gira e o
+minibuffer do rodapé recebendo o que se digita.
+
+E um filtro pode deixar de ser só seu. `p` abre uma pergunta que nasce no **não** (a regra do
+formatar, pelo mesmo motivo), mostra o filtro inteiro e diz numa frase que o repositório é PÚBLICO e
+que não há volta prática. Respondido sim, o shell escreve uma linha em `assets/shared/notifications.json`
+— na forma que o `assets/notifications.nix` usa, porque alguém vai abrir esse arquivo — e o build
+junta a regra à tabela da distro. **Quem publica de verdade é o commit do dono.**
+
+O caminho do repositório vem da opção `ronoctua.repo`, nunca de procurar: um programa que sai
+caçando um checkout do git acha o de outra pessoa, e este escreve no que achar. E **nada pergunta à
+rede**. "Já chegou?" se responde contra a tabela que ESTE binário compilou: a única estrada por onde
+conteúdo da distro alcança uma máquina é um build pelo flake, então estar na tabela é ter chegado.
+É a maneira eficiente porque não é uma conferência.
+
 **`vibrate` e `audio` existem e não fazem nada — e a tela diz isso, na linha de mensagem.** Eles
 existem porque a API externa que o dono vai pôr no ar vai setá-los, e derrubá-los na porta faria a
 mesma notificação significar coisas diferentes conforme por onde entrou. O que eles não podem ser é o
