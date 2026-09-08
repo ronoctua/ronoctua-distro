@@ -32,14 +32,24 @@
     hue = 85;
     chroma = 0.26;
   };
-  # The desk under the windows when the person asks for the theme's colour
-  # instead of black (`LEADER s t`, second column): the accent's blue, a step
-  # below the chrome, at half of what sRGB can show that dark — a night sky,
-  # not a surface. The greys above it stay untinted, so it is the one place
-  # the hue is the theme's own.
+  # The desk under the windows when the person asks for the theme's own
+  # instead of black (`LEADER s t`, second column).
+  #
+  # IT IS GREY, at the owner's word: it was the accent's blue at half of what
+  # sRGB can show that dark — a night sky rather than a surface — and they
+  # asked for a desk with no colour in it at all. So the chroma is nought and
+  # the hue is the neutral ramp's own, which is to say it is not drawn.
+  #
+  # AND THAT IS WHY THE STEP IS HERE. A coloured desk is told from the footer's
+  # chrome by its hue; a grey one has only lightness left, and the mirrored
+  # single step is not enough of it — measured, a grey desk one step below the
+  # chrome sits at ΔE 0.026 from it, which the palette's own gate calls legal
+  # and marginal. Five steps down it is 0.05 from the chrome and still 0.13
+  # from the content's black, clear of both floors with room to spare.
   backdrop = {
-    hue = 264;
-    chroma = 0.55;
+    hue = 85;
+    chroma = 0.0;
+    step = 0.05;
   };
 
   # A global multiplier on every relative chroma. One, because these seeds are

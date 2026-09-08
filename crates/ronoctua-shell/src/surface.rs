@@ -2410,9 +2410,12 @@ pub fn run() -> Result<()> {
             tracing::warn!(error = %e, "no configuration directory to watch power.json in");
             return None;
         }
-        ronoctua_files::notice::Notice::on_file(&dir, ronoctua_power::prefs::FILE, move || {
-            power_file_sender.send(()).is_ok()
-        })
+        ronoctua_files::notice::Notice::on_file(
+            &dir,
+            ronoctua_power::prefs::FILE,
+            ronoctua_files::notice::Pace::Coalesced,
+            move || power_file_sender.send(()).is_ok(),
+        )
         .ok()
     });
     handle
@@ -2458,6 +2461,7 @@ pub fn run() -> Result<()> {
         ronoctua_files::notice::Notice::on_file(
             &dir,
             ronoctua_notify::store::HISTORY_FILE,
+            ronoctua_files::notice::Pace::Coalesced,
             move || notes_changed.send(()).is_ok(),
         )
         .ok()
@@ -2466,6 +2470,7 @@ pub fn run() -> Result<()> {
         ronoctua_files::notice::Notice::on_file(
             &dir,
             ronoctua_notify::store::PREFERENCES_FILE,
+            ronoctua_files::notice::Pace::Coalesced,
             move || book_changed.send(()).is_ok(),
         )
         .ok()
@@ -5124,6 +5129,10 @@ impl Footer {
                 if self.theme_chooser.is_none() {
                     self.theme_chooser = Some(crate::theme_chooser::View::fresh_one(
                         crate::theme::committed_backdrop(),
+                        // ASKED ONCE, BEFORE THE FIRST PREVIEW. From here on
+                        // the file exists whether or not anybody chose, because
+                        // that is how a preview reaches the other doors.
+                        crate::theme::chosen_before(),
                     ));
                 }
                 self.first_page();
@@ -5375,6 +5384,38 @@ impl Footer {
                 );
                 self.echo_message(m);
             }
+        }
+    }
+
+    /// Writes a previewed or chosen pair everywhere, and tells the compositor
+    /// to look NOW.
+    ///
+    /// # Why the compositor is told rather than left to notice
+    ///
+    /// Because it notices on its own clock. The desk is a
+    /// `layout { background-color }` in a fragment niri includes, and niri
+    /// watches its config — so writing the file and stopping there left the
+    /// footer changing colour at once and the desk arriving "sometimes a
+    /// little faster, sometimes a little slower", which is what the owner
+    /// read off the screen. The variance is a watcher's cadence, and
+    /// invariant 3 forbids the fork that would tune it. Asking costs one
+    /// unix-socket round trip.
+    fn show_theme_everywhere(&self, choice: crate::theme::Choice) {
+        crate::theme::show_everywhere(choice);
+        self.tell_the_compositor_to_reread();
+    }
+
+    /// One round trip, and QUIET when there is nobody to answer.
+    ///
+    /// Not [`Self::niri_action`]: that one echoes on the message line, which is
+    /// right for a key somebody pressed and wrong for something the footer
+    /// does on its own. A renderer with no compositor, a test, a nested loop
+    /// that went away — none of those is news, and all of them would print it
+    /// once per keystroke of a preview.
+    fn tell_the_compositor_to_reread(&self) {
+        let asked = ronoctua_niri::Niri::connect().and_then(|mut n| n.reload_config());
+        if let Err(e) = asked {
+            tracing::debug!(error = %e, "the compositor was not told to reread its config");
         }
     }
 
@@ -6982,13 +7023,20 @@ impl Footer {
             match key.sym {
                 Sym::Esc => {
                     if let Some(v) = self.theme_chooser.take() {
-                        // BOTH previews back: the footer's theme, and the desk
-                        // the compositor was shown — its fragment goes back to
-                        // what the file says, or away when there is no file
-                        // (unchanged bytes are not written, so an untouched
-                        // desk costs nothing).
+                        // EVERYTHING back: this door's own colours in memory,
+                        // and — through the file every other door watches —
+                        // the windows, the compositor's desk and the fragments
+                        // new terminals read. The file goes back to what it
+                        // said, or AWAY when there was none: a machine that
+                        // never chose must not be given a file by having
+                        // looked at the list.
                         tokens::theme::set(v.committed().theme);
-                        crate::theme::put_compositor_back(v.committed());
+                        crate::theme::put_everything_back(v.committed(), v.chosen_before());
+                        // AND THE DESK COMES BACK IN THE SAME BREATH, for the
+                        // reason it went: niri would otherwise notice on its
+                        // own clock, and `Esc` would leave the previewed desk
+                        // on screen for as long as that took.
+                        self.tell_the_compositor_to_reread();
                     }
                     self.first_page();
                     self.apply_geometry(self.interactivity());
@@ -6996,17 +7044,25 @@ impl Footer {
                 }
                 Sym::Down | Sym::Up => {
                     let step = if key.sym == Sym::Down { 1 } else { -1 };
+                    // THE PAIR IS TAKEN INSIDE THE BORROW AND SHOWN OUTSIDE
+                    // IT: `v` holds `self`, and telling the compositor is the
+                    // footer's own business.
+                    let mut shown = None;
                     if let Some(v) = self.theme_chooser.as_mut() {
-                        match v.move_by(step) {
-                            crate::theme_chooser::Moved::Theme(t) => {
-                                tokens::theme::set(t);
-                            }
-                            // The desk's swatch is the desk: the compositor is
-                            // told, with the theme under the other cursor.
-                            crate::theme_chooser::Moved::Desk(c) => {
-                                crate::theme::show_to_compositor(c);
-                            }
-                        }
+                        // EITHER CURSOR PREVIEWS THE WHOLE PAIR. It used to
+                        // matter which one moved — the theme repainted this
+                        // door alone and the desk went to the compositor alone
+                        // — so what the person saw was a theme worn by one
+                        // strip of the screen. The owner asked for all of it
+                        // to move together, and a preview is a PAIR either
+                        // way; see `theme::show_everywhere`.
+                        let (crate::theme_chooser::Moved::Theme(c)
+                        | crate::theme_chooser::Moved::Desk(c)) = v.move_by(step);
+                        tokens::theme::set(c.theme);
+                        shown = Some(c);
+                    }
+                    if let Some(c) = shown {
+                        self.show_theme_everywhere(c);
                     }
                     self.draw_and_paint();
                 }
@@ -10644,12 +10700,23 @@ impl Footer {
                 let cell = self.cell_under_pointer.unwrap_or(0) % grid.width.max(1);
                 let on_the_right = cell >= grid.colon;
                 if let Some(v) = self.theme_chooser.as_mut() {
-                    if on_the_right {
-                        if let Some(c) = v.focus_desk_row(n) {
-                            crate::theme::show_to_compositor(c);
-                        }
+                    // THE POINTER PREVIEWS WHAT THE ARROWS DO — the whole pair,
+                    // wherever it landed. See the key branch above.
+                    let moved = if on_the_right {
+                        v.focus_desk_row(n).is_some()
                     } else if n < crate::theme_chooser::View::theme_count() {
-                        tokens::theme::set(v.focus_theme(n));
+                        v.focus_theme(n);
+                        true
+                    } else {
+                        false
+                    };
+                    let shown = moved.then(|| {
+                        let c = v.focused_choice();
+                        tokens::theme::set(c.theme);
+                        c
+                    });
+                    if let Some(c) = shown {
+                        self.show_theme_everywhere(c);
                     }
                     self.draw_and_paint();
                 }

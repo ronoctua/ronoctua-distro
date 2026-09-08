@@ -225,6 +225,29 @@ fn main() -> Result<()> {
         );
     }
 
+    // N. THE CONFIG RELOAD, which the theme's preview leans on.
+    //
+    //    The desk is a `layout { background-color }` in a fragment niri
+    //    includes, and niri notices a changed config on its OWN clock — the
+    //    owner read the result off the screen as a desk that follows the
+    //    footer "sometimes a little faster, sometimes a little slower". The
+    //    footer asks instead, and the ask is a name on the wire: niri's client
+    //    spells it `load-config-file` and the socket wants `LoadConfigFile`,
+    //    which is a translation a unit test can derive but only a running niri
+    //    can confirm. Wrong by one letter it answers `error parsing request`,
+    //    which is a `warn` in a log and a desk that never changes.
+    //
+    //    Side effects: it reads the config file the compositor was started
+    //    with, which in this test is the one Nix wrote — so the reload is a
+    //    no-op with a real answer, which is exactly what is wanted.
+    //    A connection of its own: the one above was moved into the event
+    //    stream, and that is what the actions probe does per action anyway.
+    Niri::connect_at(&path)
+        .context("connect in order to ask for a reload")?
+        .reload_config()
+        .context("`LoadConfigFile` was refused — the theme's preview cannot reach the desk")?;
+    println!("reload: accepted");
+
     println!(
         "contract OK: {read_lines} events, {} windows, {} outputs",
         state.amount(),

@@ -32,6 +32,7 @@
   backdrop = {
     hue = 150;
     chroma = 0.85;
+    step = 0.018;
   };
 
   # A hair under owl's: the greys already carry chroma here, and solids at full

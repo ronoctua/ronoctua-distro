@@ -123,8 +123,13 @@ NEUTRAL_PAINT = (
 #: the chrome, the desk one step below it, so a window on the desk is two
 #: steps up and the footer's chrome one. Its hue and relative chroma are the
 #: seed's `backdrop` — the only neutral step with a hue of its own, because
-#: this is the one surface that is MEANT to read as the theme's colour.
-NEUTRAL_BACKDROP = ("backdrop", -0.018)
+#: this is the one surface that is MEANT to read as the theme's colour — or
+#: not to, which is why the STEP is the seed's too. A desk with no chroma has
+#: only its lightness left to be told from the footer's chrome, and one step is
+#: not enough of it: owl asked for a grey desk and, at the mirrored step, it
+#: measured ΔE 0.026 from the chrome — legal and marginal, which is not a place
+#: to leave a surface the eye is meant to read as another thing.
+NEUTRAL_BACKDROP = "backdrop"
 #: Below this |Lc| of the ground on a solid, `on-solid` switches to the
 #: strongest text instead.
 ON_SOLID_FLOOR = 45.0
@@ -258,7 +263,11 @@ class Theme:
             raise Refusal(f"{source}: chrome must be strictly inside (0, 1)")
         if self.chrome <= self.ground:
             raise Refusal(f"{source}: the chrome ({self.chrome}) has to be lighter than the ground ({self.ground}) — the ladder climbs from it")
-        for group, fields in (("neutral", ("hue", "tint")), ("text", ("hue", "chroma")), ("backdrop", ("hue", "chroma"))):
+        for group, fields in (
+            ("neutral", ("hue", "tint")),
+            ("text", ("hue", "chroma")),
+            ("backdrop", ("hue", "chroma", "step")),
+        ):
             if not isinstance(seed[group], dict) or set(seed[group]) != set(fields):
                 raise Refusal(f"{source}: {group} must be an attribute set with exactly {list(fields)}")
         self.neutral_hue = _number(seed["neutral"]["hue"], f"{source}: neutral.hue", 0.0, 360.0) % 360.0
@@ -267,6 +276,17 @@ class Theme:
         self.text_chroma = _number(seed["text"]["chroma"], f"{source}: text.chroma", 0.0, 1.0)
         self.backdrop_hue = _number(seed["backdrop"]["hue"], f"{source}: backdrop.hue", 0.0, 360.0) % 360.0
         self.backdrop_chroma = _number(seed["backdrop"]["chroma"], f"{source}: backdrop.chroma", 0.0, 1.0)
+        #: How far BELOW the chrome the desk sits, in L. A theme that paints it
+        #: grey needs more of this than one that paints it a colour: with no
+        #: chroma, the lightness is the whole of what tells it from the chrome.
+        self.backdrop_step = _number(seed["backdrop"]["step"], f"{source}: backdrop.step", 0.0, 1.0)
+        if not 0.0 < self.backdrop_step:
+            raise Refusal(f"{source}: backdrop.step has to be positive — the desk sits BELOW the chrome")
+        if self.chrome - self.backdrop_step <= self.ground:
+            raise Refusal(
+                f"{source}: backdrop.step ({self.backdrop_step}) takes the desk to or below the ground "
+                f"({self.ground}) — a desk the eye cannot tell from the content's own black"
+            )
         self.multiplier = _number(seed["chroma"], f"{source}: chroma", 0.0, 2.0)
         if not isinstance(seed["overrides"], dict):
             raise Refusal(f"{source}: overrides must be an attribute set")
@@ -341,8 +361,8 @@ class Theme:
         for name, delta in NEUTRAL_PAINT:
             if name == step:
                 return self._paint(hue, tint, delta, f"chrome + {delta}")
-        if step == NEUTRAL_BACKDROP[0]:
-            delta = NEUTRAL_BACKDROP[1]
+        if step == NEUTRAL_BACKDROP:
+            delta = -self.backdrop_step
             return self._paint(self.backdrop_hue, self._rel(self.backdrop_chroma, scale), delta, f"chrome {delta:+}, h {self.backdrop_hue:.0f}")
         for name, lc in TEXT_STEPS:
             if name == step:
@@ -378,7 +398,7 @@ class Theme:
 
     def every_primitive(self) -> dict[str, Swatch]:
         out: dict[str, Swatch] = {}
-        for step in ("ground", "chrome", NEUTRAL_BACKDROP[0], *(n for n, _ in NEUTRAL_PAINT), *(n for n, _ in TEXT_STEPS)):
+        for step in ("ground", "chrome", NEUTRAL_BACKDROP, *(n for n, _ in NEUTRAL_PAINT), *(n for n, _ in TEXT_STEPS)):
             out[f"neutral.{step}"] = self.primitive("neutral", step)
         for family in self.families:
             for step in (*(n for n, _, _ in PAINT_STEPS), *(n for n, _, _ in SOLID_STEPS), *(n for n, _ in TEXT_STEPS), "on-solid"):

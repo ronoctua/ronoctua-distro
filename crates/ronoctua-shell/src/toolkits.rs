@@ -247,7 +247,12 @@ where
         tracing::warn!(error = %e, "no configuration directory to watch the text size in");
         return None;
     }
-    match ronoctua_files::notice::Notice::on_file(dir, ronoctua_display::prefs::FILE, on_stir) {
+    match ronoctua_files::notice::Notice::on_file(
+        dir,
+        ronoctua_display::prefs::FILE,
+        ronoctua_files::notice::Pace::Coalesced,
+        on_stir,
+    ) {
         Ok(n) => Some(n),
         Err(e) => {
             tracing::warn!(

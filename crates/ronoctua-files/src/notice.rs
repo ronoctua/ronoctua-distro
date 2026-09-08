@@ -86,6 +86,31 @@ const QUIET: Duration = Duration::from_millis(250);
 /// this is never the worse of the two.
 const BURST: Duration = Duration::from_secs(1);
 
+/// How much of a burst a watch may absorb before answering again.
+///
+/// # Why this is a choice and not a constant
+///
+/// Because the two answers a change can have cost wildly different things. A
+/// listing's answer is a `reread` — a `readdir`, an `lstat` and a MIME lookup
+/// PER ENTRY — so copying a thousand files into the open directory has to
+/// become ONE re-read or the window cannot keep up; that is what `QUIET` and
+/// `BURST` are for, and the arithmetic is in [`Watcher::hold_off`].
+///
+/// A PREFERENCE file's answer is a repaint, and its "burst" is a person
+/// holding an arrow key. Measured on this machine: with the hold-off, the
+/// first change lands in 5 ms and the next in **253** — the quarter second
+/// the thread spends waiting for silence that is not coming. The theme
+/// chooser previews by writing the file every keystroke, and a quarter of a
+/// second per step is what the owner reported as a bad preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pace {
+    /// The leading edge at once, then the tail of the burst — once.
+    Coalesced,
+    /// Every change as it lands. For a watch whose answer is cheap and whose
+    /// changes are a person's keystrokes.
+    AtOnce,
+}
+
 /// The read buffer, in bytes.
 ///
 /// An `inotify_event` is sixteen bytes plus the name, so this holds upwards of a
@@ -167,13 +192,18 @@ impl Notice {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        Self::raise(sidebar, None, on_stir)
+        Self::raise(sidebar, None, Pace::Coalesced, on_stir)
     }
 
     /// The one constructor behind the two doors: a fixed directory (the
     /// sidebar's, or the file's), an optional name that narrows what counts,
     /// and the thread.
-    fn raise<F>(fixed: Option<&Path>, only: Option<OsString>, on_stir: F) -> Result<Self>
+    fn raise<F>(
+        fixed: Option<&Path>,
+        only: Option<OsString>,
+        pace: Pace,
+        on_stir: F,
+    ) -> Result<Self>
     where
         F: Fn() -> bool + Send + 'static,
     {
@@ -206,6 +236,7 @@ impl Notice {
                     listing: None,
                     sidebar,
                     only,
+                    pace,
                     held: Vec::new(),
                 }
                 .run(&on_stir);
@@ -228,14 +259,18 @@ impl Notice {
     /// scratch file over the real one, and a watch on the inode would be
     /// watching the old file. `MOVED_TO` is that rename arriving.
     ///
+    /// `pace` is the caller's, and it matters: a preference file that a
+    /// PREVIEW writes wants [`Pace::AtOnce`], or every change after the first
+    /// lands a quarter of a second late. See [`Pace`].
+    ///
     /// # Errors
     ///
     /// As [`Notice::watching`].
-    pub fn on_file<F>(dir: &Path, name: &str, on_stir: F) -> Result<Self>
+    pub fn on_file<F>(dir: &Path, name: &str, pace: Pace, on_stir: F) -> Result<Self>
     where
         F: Fn() -> bool + Send + 'static,
     {
-        Self::raise(Some(dir), Some(OsString::from(name)), on_stir)
+        Self::raise(Some(dir), Some(OsString::from(name)), pace, on_stir)
     }
 
     /// Points the watch at a directory.
@@ -319,6 +354,8 @@ struct Watcher {
     /// The one file name that counts, when the watch is on a file. `None`
     /// means every event in a held directory is ours.
     only: Option<OsString>,
+    /// How much of a burst this watch absorbs. See [`Pace`].
+    pace: Pace,
     /// Every watch descriptor held.
     ///
     /// A list and not two fields because inotify keys a watch by INODE: asking
@@ -355,7 +392,13 @@ impl Watcher {
             // THE LEADING EDGE. One file appearing is reported at once: holding
             // it for the quiet time would make a manager that is merely
             // debouncing look like a manager that is thinking.
-            if !on_stir() || !self.hold_off(&mut buffer, on_stir) {
+            if !on_stir() {
+                return;
+            }
+            // AND THE TAIL, for a watch that wants one. `AtOnce` goes straight
+            // back to the wait: what is still queued comes out of the next
+            // read, one report each, which is the whole point of it.
+            if self.pace == Pace::Coalesced && !self.hold_off(&mut buffer, on_stir) {
                 return;
             }
         }
@@ -578,10 +621,10 @@ mod tests {
     }
 
     /// A one-file notice whose reports are counted, and the counter.
-    fn counted_file(dir: &Path, name: &str) -> (Notice, Arc<AtomicUsize>) {
+    fn counted_file(dir: &Path, name: &str, pace: Pace) -> (Notice, Arc<AtomicUsize>) {
         let seen = Arc::new(AtomicUsize::new(0));
         let mine = Arc::clone(&seen);
-        let notice = Notice::on_file(dir, name, move || {
+        let notice = Notice::on_file(dir, name, pace, move || {
             mine.fetch_add(1, Ordering::SeqCst);
             true
         })
@@ -898,13 +941,81 @@ mod tests {
     }
 
     #[test]
+    // THE DEFECT THIS CATCHES: a preview that answers a keystroke a quarter of
+    // a second later.
+    //
+    // The theme chooser previews by WRITING `theme.json` on every arrow, and
+    // every other door repaints from a watch on it. With the listing's
+    // coalescing, the first change lands at once and each one behind it waits
+    // for `QUIET` — measured here before the fix, 5 ms and then 253. The owner
+    // reported it as a preview that lags.
+    //
+    // Both halves are asserted, because only the pair says the choice is the
+    // right one: the fast watch has to be fast, and the coalescing one has to
+    // still coalesce — it is what keeps a thousand files copied into an open
+    // directory from costing a thousand re-reads.
+    fn a_preview_watch_answers_at_once_and_a_listing_still_absorbs_a_burst() {
+        // Comfortably under `QUIET`, and twenty times the 5 ms measured: this
+        // is a CEILING on the answer, not a sleep waiting for one.
+        const PROMPTLY: Duration = Duration::from_millis(100);
+        assert!(
+            PROMPTLY < QUIET,
+            "the window this measures in is longer than the hold-off it is measuring"
+        );
+        for (pace, prompt) in [(Pace::AtOnce, true), (Pace::Coalesced, false)] {
+            let dir = scratch(if prompt { "at-once" } else { "coalesced" });
+            let (_notice, seen) = counted_file(&dir, "theme.json", pace);
+            let write = |what: &[u8]| ronoctua_xdg::write_atomically(&dir, "theme.json", what);
+            // Armed, and then given time to be back at its wait with no
+            // deadline — the leading edge is prompt under BOTH paces.
+            let deadline = Instant::now() + PATIENCE;
+            loop {
+                let was = seen.load(Ordering::SeqCst);
+                write(b"arming").unwrap();
+                if past(&seen, was, Duration::from_millis(100)) > was {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the watch never came alive");
+            }
+            settled(&seen);
+
+            // The leading edge, which is the same either way.
+            let was = seen.load(Ordering::SeqCst);
+            write(b"one").unwrap();
+            let led = past(&seen, was, PATIENCE);
+            assert!(led > was, "the leading edge was never reported ({pace:?})");
+
+            // AND THE ONE BEHIND IT, which is the whole difference.
+            write(b"two").unwrap();
+            let after = past(&seen, led, PROMPTLY);
+            assert_eq!(
+                after > led,
+                prompt,
+                "{pace:?}: a change right behind the leading edge \
+                 {} inside {PROMPTLY:?}",
+                if prompt { "did not land" } else { "landed" }
+            );
+            // The coalescing one is not LOSING it — it is holding it, and the
+            // tail still arrives. A watch that dropped changes would pass the
+            // line above and be a much worse defect.
+            if !prompt {
+                assert!(
+                    past(&seen, led, PATIENCE) > led,
+                    "the held change never arrived at all"
+                );
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
     // THE DEFECT THIS CATCHES: a watch on ONE file that hears the whole
     // directory. Every door's live theme rides on `theme.json`; the sidebar
     // file and the writer's own scratch file live beside it, and a filter that
     // let them through would repaint five processes for every sidebar pin.
     fn a_one_file_watch_hears_its_file_and_nothing_beside_it() {
         let dir = scratch("one-file");
-        let (_notice, seen) = counted_file(&dir, "theme.json");
+        let (_notice, seen) = counted_file(&dir, "theme.json", Pace::AtOnce);
         // Armed when the named file itself rings: the `arming-N` files the
         // directory helper writes are exactly what this watch must ignore.
         let deadline = Instant::now() + PATIENCE;

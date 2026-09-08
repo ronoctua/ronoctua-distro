@@ -129,9 +129,10 @@ pub struct Choice {
 /// and Ghostty the second with `?`, so a machine that never chose has neither
 /// and is on the default — and [`sync_with_file`] keeps that true, removing
 /// both when there is no file. The first depends on the desk: one generated
-/// file per answer, and copying is choosing. The first is also the only one a
-/// PREVIEW writes ([`show_to_compositor`]): a terminal opened during a
-/// preview must not wear a palette nobody applied.
+/// file per answer, and copying is choosing. A PREVIEW writes BOTH, because a
+/// preview writes the file (see [`show_everywhere`]) — a terminal opened over
+/// one wears the palette on screen, which is the point, and `Esc` puts both
+/// back.
 #[must_use]
 pub const fn fragments(backdrop: Backdrop) -> [(&'static str, &'static str); 2] {
     [
@@ -307,33 +308,86 @@ pub fn persist(choice: Choice) -> std::io::Result<()> {
     let dir = home().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "no configuration directory")
     })?;
+    persist_in(dir, fragments_root().as_deref(), choice)
+}
+
+/// [`persist`], with its two roots as parameters — see [`put_back_in`] for why
+/// the pair of them exists.
+fn persist_in(dir: &Path, root: Option<&Path>, choice: Choice) -> std::io::Result<()> {
     let text = serde_json::json!({ "theme": choice.theme.id(), "backdrop": choice.backdrop.id() })
         .to_string();
     ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())?;
-    sync_fragments(choice, dir);
+    if let Some(root) = root {
+        copy_fragments(root, choice, dir, &fragments(choice.backdrop));
+    }
     Ok(())
 }
 
-/// Shows a pair to the compositor WITHOUT writing the file: the chooser's
-/// preview of the desk, which has no swatch but the desk itself. The
-/// compositor's fragment is the only way to reach it, so that ONE fragment is
-/// written — never the terminal's — and on `Esc` [`put_compositor_back`]
-/// undoes it. A footer that died between the two leaves a fragment the file
-/// disagrees with — until its next start, where [`sync_with_file`] makes them
-/// agree again, by copying or by removing.
-pub fn show_to_compositor(choice: Choice) {
-    if let (Some(dir), Some(root)) = (home(), fragments_root()) {
-        copy_fragments(&root, choice, dir, &fragments(choice.backdrop)[..1]);
+/// Shows a pair to EVERYTHING, which means WRITING THE FILE.
+///
+/// # Why a preview writes the file a choice writes
+///
+/// Because the file IS the broadcast. The footer changes its own colours in
+/// memory; every other door — the six windows and the compositor — learns of
+/// a theme by watching `theme.json` and reading it back. A preview that kept
+/// off the file was a preview of one strip of the screen, which is what the
+/// owner reported: the minibuffer changed and the windows, the desk and the
+/// terminals did not.
+///
+/// A second channel was the alternative and was refused for the reason this
+/// repository refuses it elsewhere: it is a second thing to keep in step, and
+/// every reader would have to learn a precedence between the two.
+///
+/// # What it costs, and what pays it back
+///
+/// The file that means "chosen" is written while nobody has chosen yet. A
+/// footer that dies mid-preview leaves the previewed pair persisted — the
+/// same class of loose end the desk's own preview had, one file down. It is a
+/// PREFERENCE, reversible with the same two keys that set it, and never data:
+/// what is left behind is exactly what `RET` would have written.
+///
+/// `Esc` is what undoes it: see [`put_everything_back`], which needs to be
+/// told whether there was a file before, because by then there always is one.
+pub fn show_everywhere(choice: Choice) {
+    if let Err(e) = persist(choice) {
+        tracing::warn!(error = %e, "the preview could not be shown to the other doors");
     }
 }
 
-/// `Esc` after a preview: the compositor is shown what the file says again,
-/// or nothing when the file does not exist — a machine that never chose has
-/// no fragment, and a preview must not be the thing that gives it one.
-pub fn put_compositor_back(committed: Choice) {
-    if let Some(dir) = home() {
-        put_back_in(dir, fragments_root().as_deref(), committed);
+/// `Esc` after a preview: everything is shown what it was shown before.
+///
+/// `chosen_before` is the chooser's, taken when it opened — see
+/// [`crate::theme_chooser::View::chosen_before`]. It cannot be worked out
+/// here any more: the preview wrote the file, so the file always exists by
+/// now, and a machine that never chose must not be given one by having looked
+/// at the list.
+pub fn put_everything_back(committed: Choice, chosen_before: bool) {
+    let Some(dir) = home() else {
+        return;
+    };
+    put_everything_back_in(dir, fragments_root().as_deref(), committed, chosen_before);
+}
+
+/// [`put_everything_back`], with its two roots as parameters.
+fn put_everything_back_in(dir: &Path, root: Option<&Path>, committed: Choice, chosen_before: bool) {
+    if chosen_before {
+        if let Err(e) = persist_in(dir, root, committed) {
+            tracing::warn!(error = %e, "the committed theme could not be put back");
+        }
+        return;
     }
+    if let Err(e) = std::fs::remove_file(dir.join(FILE))
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(error = %e, "the preview's file could not be taken away again");
+    }
+    remove_fragments(dir);
+}
+
+/// Has a pair ever been written? Asked ONCE, when the chooser opens.
+#[must_use]
+pub fn chosen_before() -> bool {
+    home().is_some_and(|dir| matches!(read_choice(&dir.join(FILE)), Ok(Some(_))))
 }
 
 /// [`put_compositor_back`], with its two roots as parameters.
@@ -344,17 +398,6 @@ fn put_back_in(dir: &Path, root: Option<&Path>, committed: Choice) {
         }
     } else {
         remove_fragments(dir);
-    }
-}
-
-/// Copies the pair's fragments into the configuration directory, if the
-/// generator's output is known. Not fatal and not silent when it is not: a
-/// nested loop or a test has no `RONOCTUA_THEMES`, and the footer still
-/// changes colour — only the compositor's border and new terminals stay on
-/// the default.
-pub fn sync_fragments(choice: Choice, dir: &Path) {
-    if let Some(root) = fragments_root() {
-        copy_fragments(&root, choice, dir, &fragments(choice.backdrop));
     }
 }
 
@@ -424,6 +467,20 @@ pub fn sync_with_file() {
     put_back_in(dir, fragments_root().as_deref(), committed);
 }
 
+/// How fast the theme's watch answers, and it is the ONE watch in the shell
+/// that does not coalesce.
+///
+/// The chooser previews by WRITING this file on every keystroke, and the
+/// hold-off that serves a listing puts a quarter of a second between the arrow
+/// and the colour — measured, 5 ms for the first change and 253 for each one
+/// behind it. A listing absorbs a burst because its answer is a `readdir` per
+/// event; this one's answer is a repaint, and the burst is a person's hand.
+///
+/// Named, rather than written into the call, so a test can hold it: the
+/// difference the pace makes is measured where the watcher lives, and nothing
+/// else would notice this line going back to the other value.
+const PACE: ronoctua_files::notice::Pace = ronoctua_files::notice::Pace::AtOnce;
+
 /// A watch on the file, ringing `on_stir` from the watcher's thread when it
 /// changes. `None`, with a line in the log, when there is no configuration
 /// directory or no inotify instance left — the door then adopts a change at
@@ -439,7 +496,7 @@ where
         tracing::warn!(error = %e, "no configuration directory to watch the theme in");
         return None;
     }
-    match ronoctua_files::notice::Notice::on_file(dir, FILE, on_stir) {
+    match ronoctua_files::notice::Notice::on_file(dir, FILE, PACE, on_stir) {
         Ok(n) => Some(n),
         Err(e) => {
             tracing::warn!(error = %e, "no theme watcher; a change reaches this door at its next start");
@@ -521,7 +578,20 @@ mod tests {
     }
 
     #[test]
-    fn a_preview_writes_the_compositors_fragment_alone_and_leaves_nothing_without_a_file() {
+    fn the_themes_watch_does_not_coalesce() {
+        // Every other door repaints from this watch, and the chooser writes
+        // the file once per keystroke. `notice::Pace` carries the measurement;
+        // this is the line that would silently undo it.
+        assert_eq!(PACE, ronoctua_files::notice::Pace::AtOnce);
+    }
+
+    #[test]
+    fn a_preview_reaches_every_door_and_leaves_nothing_behind_without_a_file() {
+        // IT USED TO WRITE THE COMPOSITOR'S FRAGMENT AND NOTHING ELSE, and
+        // that is what the owner reported: the minibuffer changed colour, the
+        // windows did not, and what they were shown was a theme worn by one
+        // strip of the screen. The file is the channel every other door
+        // watches, so a preview writes it — and `Esc` is what makes that safe.
         let dir = scratch("preview");
         let root = fake_root("preview-root");
         let committed = Choice {
@@ -532,30 +602,40 @@ mod tests {
             backdrop: Backdrop::Theme,
             ..committed
         };
-        // The preview: one fragment, the compositor's, saying the desk tried.
-        copy_fragments(&root, tried, &dir, &fragments(tried.backdrop)[..1]);
+
+        // A MACHINE THAT NEVER CHOSE. The preview writes the file and both
+        // fragments — everything the doors read.
+        persist_in(&dir, Some(&root), tried).unwrap();
+        assert!(dir.join(FILE).exists(), "the other doors are told nothing");
         assert_eq!(
             std::fs::read_to_string(dir.join("niri-theme.kdl")).unwrap(),
             "desk theme\n"
         );
-        assert!(
-            !dir.join("ghostty-theme.conf").exists(),
-            "the terminal is not previewed"
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ghostty-theme.conf")).unwrap(),
+            "palette\n"
         );
-        // `Esc` on a machine that never chose: the fragment goes away.
-        put_back_in(&dir, Some(&root), committed);
+        // `Esc`: EVERYTHING goes away again. Looking at a list must not be
+        // what gives a machine a choice it never made — and by now the file
+        // exists, so only the chooser can still say it did not.
+        put_everything_back_in(&dir, Some(&root), committed, false);
+        assert!(
+            !dir.join(FILE).exists(),
+            "a machine that never chose was given a file by previewing"
+        );
         assert!(!dir.join("niri-theme.kdl").exists());
-        // `Esc` on a machine that chose: both fragments say the file's pair.
-        std::fs::write(
-            dir.join(FILE),
-            format!(
-                "{{\"theme\":\"{}\",\"backdrop\":\"black\"}}",
-                theme::default_one().id()
-            ),
-        )
-        .unwrap();
-        copy_fragments(&root, tried, &dir, &fragments(tried.backdrop)[..1]);
-        put_back_in(&dir, Some(&root), committed);
+        assert!(!dir.join("ghostty-theme.conf").exists());
+
+        // A MACHINE THAT CHOSE. `Esc` puts back what it had, in all three.
+        persist_in(&dir, Some(&root), committed).unwrap();
+        persist_in(&dir, Some(&root), tried).unwrap();
+        put_everything_back_in(&dir, Some(&root), committed, true);
+        assert!(dir.join(FILE).exists());
+        assert_eq!(
+            read_choice(&dir.join(FILE)).unwrap().unwrap().backdrop,
+            Some(Backdrop::Black.id().to_owned()),
+            "the file kept the previewed desk"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join("niri-theme.kdl")).unwrap(),
             "desk black\n"
@@ -564,11 +644,6 @@ mod tests {
             std::fs::read_to_string(dir.join("ghostty-theme.conf")).unwrap(),
             "palette\n"
         );
-        // And with the file gone, the next start removes both.
-        std::fs::remove_file(dir.join(FILE)).unwrap();
-        put_back_in(&dir, Some(&root), committed);
-        assert!(!dir.join("niri-theme.kdl").exists());
-        assert!(!dir.join("ghostty-theme.conf").exists());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }

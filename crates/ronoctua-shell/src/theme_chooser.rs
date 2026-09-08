@@ -26,11 +26,13 @@
 //! ([`Backdrop`]). It is a list too, with its own cursor: `<left>`/`<right>`
 //! cross between the columns, `<up>`/`<down>` walk the one that has the
 //! focus, and the header row of the second is not a row the cursor lands on.
-//! Its preview cannot be the footer's — the footer never paints the desk — so
-//! it is the compositor's: the fragment is written when the cursor moves
-//! (`theme::show_to_compositor`), and written again with the committed pair
-//! on `Esc`. The theme column keeps its preview to the footer, as before;
-//! `RET` applies the PAIR under the two cursors.
+//! EITHER CURSOR PREVIEWS THE WHOLE PAIR, and it did not: moving in the theme
+//! column repainted the footer alone, so a theme was shown worn by one strip
+//! of the screen while every window, the desk and the terminals kept the old
+//! one. The owner read that off the screen. A preview now writes the FILE
+//! (`theme::show_everywhere`), which is the channel every other door already
+//! watches, and `Esc` puts the file back — or takes it away, when there was
+//! none. `RET` applies the PAIR under the two cursors, as before.
 //!
 //! # Why the state is three numbers and a pair
 //!
@@ -64,13 +66,24 @@ pub enum DeskRow {
     Empty,
 }
 
-/// What moving the cursor changed, so the door previews the right thing.
+/// What moving the cursor changed.
+///
+/// # Why both arms carry the whole PAIR now
+///
+/// Because a preview is a pair, and it was half of one. Moving in the theme
+/// column repainted the FOOTER and nothing else — every window kept the old
+/// colours, and the desk kept them too, so what the person was shown was a
+/// theme applied to one strip of the screen. The owner read that off the
+/// screen and asked for the whole thing to move together.
+///
+/// The two arms survive because the LISTS are two — the drawing and the tests
+/// still ask which cursor moved — but what is previewed no longer depends on
+/// the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moved {
-    /// The theme under the cursor: the footer previews it.
-    Theme(Theme),
-    /// The desk under the cursor: the compositor previews it, with the theme
-    /// under the other cursor.
+    /// The theme cursor moved; the pair it lands on.
+    Theme(Choice),
+    /// The desk cursor moved; the pair it lands on.
     Desk(Choice),
 }
 
@@ -85,6 +98,14 @@ pub struct View {
     desk_cursor: usize,
     /// What the file says — what `Esc` returns to.
     committed: Choice,
+    /// Was there a file at all when this opened?
+    ///
+    /// A preview WRITES the file — that is how every other door hears about
+    /// it — so by the time `Esc` runs, "does the file exist" can no longer
+    /// answer "did the person ever choose". It is answered here, once, before
+    /// the first preview: a machine that never chose must not be given a file
+    /// by having looked at the list.
+    chosen_before: bool,
 }
 
 impl View {
@@ -94,7 +115,7 @@ impl View {
     /// Opens on the theme the process is in and the desk the file says, which
     /// together are the committed pair. The keyboard starts on the themes.
     #[must_use]
-    pub fn fresh_one(backdrop: Backdrop) -> Self {
+    pub fn fresh_one(backdrop: Backdrop, chosen_before: bool) -> Self {
         let now = theme::current();
         Self {
             column: Column::Themes,
@@ -104,7 +125,14 @@ impl View {
                 theme: now,
                 backdrop,
             },
+            chosen_before,
         }
+    }
+
+    /// Whether a choice was already written when this opened. See the field.
+    #[must_use]
+    pub const fn chosen_before(&self) -> bool {
+        self.chosen_before
     }
 
     /// How many themes there are.
@@ -192,7 +220,7 @@ impl View {
         match self.column {
             Column::Themes => {
                 self.cursor = clamped(self.cursor, step, Self::theme_count());
-                Moved::Theme(self.focused())
+                Moved::Theme(self.focused_choice())
             }
             Column::Desk => {
                 self.desk_cursor = clamped(self.desk_cursor, step, Backdrop::ALL.len());
@@ -309,7 +337,7 @@ mod tests {
 
     #[test]
     fn it_opens_on_the_current_pair_and_the_cursors_stay_inside() {
-        let v = View::fresh_one(Backdrop::Black);
+        let v = View::fresh_one(Backdrop::Black, true);
         assert_eq!(v.focused(), theme::current());
         assert_eq!(v.focused_backdrop(), Backdrop::Black);
         assert_eq!(v.committed(), v.focused_choice());
@@ -358,7 +386,7 @@ mod tests {
         }
         assert_eq!(View::desk_row(View::DESK_ROWS), DeskRow::Empty);
 
-        let mut v = View::fresh_one(Backdrop::Black);
+        let mut v = View::fresh_one(Backdrop::Black, true);
         assert_eq!(v.focus_desk_row(0), None, "the header is not a row");
         assert_eq!(v.column(), Column::Themes, "and the focus did not move");
         let shown = v.focus_desk_row(1 + Backdrop::Theme.position());
@@ -374,8 +402,43 @@ mod tests {
     }
 
     #[test]
+    fn either_cursor_previews_the_whole_pair() {
+        // THE DEFECT THE OWNER READ OFF THE SCREEN: moving in the theme column
+        // answered with a THEME, so the door repainted itself and told nobody
+        // else — every window, the desk and the terminals kept the old
+        // colours, and the preview was a theme worn by one strip of the
+        // screen. Both arms carry the pair now, so what is previewed does not
+        // depend on which list the keyboard happens to be in.
+        let mut v = View::fresh_one(Backdrop::Black, true);
+        // Put the DESK cursor somewhere that is not the committed answer, and
+        // then move in the THEME column: what comes back has to carry it.
+        v.cross(1);
+        let Moved::Desk(_) = v.move_by(1) else {
+            panic!("the desk column moves the desk");
+        };
+        v.cross(-1);
+        assert_eq!(v.column(), Column::Themes);
+        let Moved::Theme(pair) = v.move_by(1) else {
+            panic!("the theme column moves the theme");
+        };
+        assert_eq!(
+            pair.backdrop,
+            Backdrop::Theme,
+            "the theme column previewed a pair that forgot the desk"
+        );
+        assert_eq!(
+            pair,
+            v.focused_choice(),
+            "the preview is not what is focused"
+        );
+        // AND IT IS STILL A PREVIEW. Neither move touches what `Esc` goes
+        // back to — which is the whole reason the file can be written.
+        assert_eq!(v.committed().backdrop, Backdrop::Black);
+    }
+
+    #[test]
     fn commit_moves_the_committed_pair_and_nothing_else_does() {
-        let mut v = View::fresh_one(Backdrop::Black);
+        let mut v = View::fresh_one(Backdrop::Black, true);
         let before = v.committed();
         v.cross(1);
         let Moved::Desk(shown) = v.move_by(1) else {
@@ -396,7 +459,7 @@ mod tests {
     #[test]
     fn the_hint_names_the_keys_that_apply_cross_and_close() {
         let texts = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
-        let hint = View::fresh_one(Backdrop::Black).hint(&texts);
+        let hint = View::fresh_one(Backdrop::Black, true).hint(&texts);
         let joined: String = hint.iter().map(|p| p.text.as_str()).collect();
         assert!(joined.contains("RET"), "{joined}");
         assert!(joined.contains("<left>/<right>"), "{joined}");

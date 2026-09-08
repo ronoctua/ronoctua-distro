@@ -808,6 +808,29 @@ impl Niri {
         self.action(serde_json::json!({ "FocusWindowDown": {} }))
     }
 
+    /// Asks the compositor to read its configuration again, NOW.
+    ///
+    /// # Why this exists at all
+    ///
+    /// Because niri already watches its config and we cannot wait for it. The
+    /// theme's desk is a `layout { background-color }` in a fragment the
+    /// config includes, so changing the desk means writing a file and hoping —
+    /// and the owner read the result off the screen: the footer changed colour
+    /// at once, the desk followed "sometimes a little faster, sometimes a
+    /// little slower". A watcher's own cadence is not ours to tune (invariant
+    /// 3 forbids the fork that would), but asking is: the write happens, then
+    /// this, and the compositor stops being the last to know.
+    ///
+    /// The socket and not `niri msg`: [`run_through_client`] waits for a
+    /// PROCESS, and this is on the path of a keystroke.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`Niri::action`].
+    pub fn reload_config(&mut self) -> Result<()> {
+        self.action(serde_json::json!({ RELOAD_CONFIG: {} }))
+    }
+
     /// An action WITHOUT an argument, by the name niri uses in the protocol.
     ///
     /// # Why the raw name, and not an enum of ours
@@ -1199,6 +1222,42 @@ pub fn run_through_client(name: &str, argument: Option<&str>) -> Result<()> {
     )
 }
 
+/// The protocol spelling of the action [`Niri::reload_config`] sends.
+///
+/// # Why a constant with a test under it
+///
+/// niri names one action twice: `load-config-file` for its client and clap,
+/// `LoadConfigFile` on the wire. The generated table
+/// ([`NIRI_ACTIONS`]) holds the FIRST — it is read out of `niri msg action
+/// --help` — and the socket wants the second, so this line is a translation
+/// nothing else in the repository would notice going wrong: a misspelling
+/// here is a desk that keeps the old colour, with a warning in a log.
+///
+/// `the_protocol_spelling_is_the_kebab_name_in_camel` derives it from the
+/// table and checks the derivation against the two spellings this file
+/// already sends in production.
+const RELOAD_CONFIG: &str = "LoadConfigFile";
+
+/// The kebab name a protocol variant is written as by niri's client — the
+/// mapping clap and serde make between the same enum's two faces.
+///
+/// It exists to be CHECKED and not to be called: production sends the constant
+/// above, and deriving it at run time would move a fixed cost onto a keystroke
+/// to answer a question that cannot change between builds.
+#[cfg(test)]
+fn camel_of(kebab: &str) -> String {
+    kebab
+        .split('-')
+        .map(|word| {
+            let mut c = word.chars();
+            match c.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Does the action exist in this niri?
 #[must_use]
 pub fn action_exists(name: &str) -> bool {
@@ -1207,6 +1266,32 @@ pub fn action_exists(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_protocol_spelling_is_the_kebab_name_in_camel() {
+        // ONE ENUM, TWO FACES. niri's client says `load-config-file` and the
+        // socket wants `LoadConfigFile`, and the generated table only holds
+        // the first — so `RELOAD_CONFIG` is a translation nothing else would
+        // notice going wrong. A desk that kept the old colour, with a line in
+        // a log, is the whole symptom.
+        //
+        // The derivation is checked against the two spellings this file
+        // already sends in production, which a running niri accepts today:
+        // if the mapping were wrong, those would be wrong too.
+        assert_eq!(camel_of("close-window"), "CloseWindow");
+        assert_eq!(camel_of("focus-window-down"), "FocusWindowDown");
+        // And the table has to still carry the action under that name.
+        let named = NIRI_ACTIONS
+            .iter()
+            .find(|a| camel_of(a.name) == RELOAD_CONFIG)
+            .map(|a| a.name);
+        assert_eq!(
+            named,
+            Some("load-config-file"),
+            "no action of this niri spells `{RELOAD_CONFIG}` — the compositor \
+             would refuse the reload and the desk would keep the old colour"
+        );
+    }
+
     use super::*;
 
     fn window_json(id: u64, focused: bool) -> serde_json::Value {

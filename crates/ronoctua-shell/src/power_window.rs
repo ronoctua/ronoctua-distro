@@ -126,9 +126,12 @@ pub fn host_it() -> Result<()> {
             tracing::warn!(error = %e, "no configuration directory to watch power.json in");
             return None;
         }
-        ronoctua_files::notice::Notice::on_file(&dir, ronoctua_power::prefs::FILE, move || {
-            wish_sender.send(()).is_ok()
-        })
+        ronoctua_files::notice::Notice::on_file(
+            &dir,
+            ronoctua_power::prefs::FILE,
+            ronoctua_files::notice::Pace::Coalesced,
+            move || wish_sender.send(()).is_ok(),
+        )
         .ok()
     });
     handle

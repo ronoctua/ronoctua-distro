@@ -475,7 +475,8 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   o WIT e os seis buffers. Os botões são OKLCH, e cada um responde a uma pergunta: `hue` (graus) diz
   OUTRO TIPO de coisa, `text-chroma` diz quanto a matiz aparece (`0.0` é cinza de verdade, e a matiz
   declarada nem é desenhada), `text-shift` sobe ou desce a escada inteira em Lc — luminância é OUTRA
-  IMPORTÂNCIA. Escolher o DEGRAU (`text-muted` 23, `text` 48, `text-loud` 79, `text-strong` 87) é o
+  IMPORTÂNCIA —, e `backdrop.step` diz o quanto o fundo do compositor desce
+  abaixo do chrome. Escolher o DEGRAU (`text-muted` 23, `text` 48, `text-loud` 79, `text-strong` 87) é o
   passo grosso; o `shift` é o fino.
 - **Papel novo = família em TODOS os temas** (`assets/themes/*.nix`, menos a `.reference`): sem isso
   o gerador recusa com `no family '<nome>' in the seed`. E papel novo NÃO entra na referência
@@ -484,7 +485,30 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   que toma RGBA8), o `report.md` e o fixture congelado. Hex numa maquete do scratchpad ou numa frase
   de relatório é MEDIÇÃO — pixel amostrado para provar o que está na tela —, nunca escolha. Quem
   escolhe diz matiz, croma e contraste, e o solver resolve.
-- **`LEADER s t` escolhe o tema, e mover o cursor PRÉ-VISUALIZA só no rodapé**; `RET` grava `$XDG_CONFIG_HOME/ronoctua/theme.json`, `Esc` volta ao gravado. A lista mostra SÓ o id. **A segunda coluna (`←/→`) é o FUNDO do compositor — preto ou `surface.backdrop`, o degrau neutro ABAIXO do chrome no matiz da semente `backdrop`** —, e a prévia dele é o próprio niri: o fragmento é escrito ao mover o cursor e reescrito no `Esc`; `RET` grava o PAR. **O arquivo É o broadcast**: as cinco portas vigiam `theme.json` por inotify (`Notice::on_file`) e repintam; `RONOCTUA_THEME` (opção `ronoctua.theme`) é o piso, o primeiro tema é o chão. O rodapé COPIA os fragmentos do tema (`$RONOCTUA_THEMES/<id>/`): `niri-theme.kdl` (borda E fundo — `window-rule` mais `layout { background-color }`, que o niri FUNDE ao incluir; dois `layout` no MESMO arquivo ele recusa; o config o inclui `optional=true` no FIM e recarrega) e `ghostty-theme.conf` (`config-file = ?…`, processo novo — e a entrada `.desktop` é REESCRITA sem o `--gtk-single-instance=true` do upstream: flag vence arquivo). **O Ghostty só lê `~/.config/ghostty/config`** — `/etc/xdg` ele NÃO lê —, e é lá que o home-manager põe o config do módulo. GTK/Qt vestem o MODO escuro (Qt só no perfil `full`: custa 591 MiB); a extensão, o padrão do build.
+- **`LEADER s t` escolhe o tema, e mover o cursor PRÉ-VISUALIZA em TODA porta** — era só no rodapé,
+  e o dono leu na tela: o minibuffer trocava de cor e as janelas, a mesa e os terminais ficavam no
+  tema velho, ou seja, um tema vestido por uma tira da tela. A prévia ESCREVE O ARQUIVO
+  (`theme::show_everywhere`), que é o canal que as outras portas já vigiam — um segundo canal seria
+  uma segunda coisa a manter em dia, e toda leitora teria de aprender uma precedência. O preço é
+  que o arquivo que significa "escolhido" é escrito antes de alguém escolher: rodapé que morre no
+  meio deixa o par pré-visualizado gravado, que é PREFERÊNCIA e não dado, e é exatamente o que o
+  `RET` teria escrito. **`Esc` é o que paga**, e ele precisa saber se HAVIA arquivo antes
+  (`View::chosen_before`, perguntado uma vez na abertura): a partir da primeira prévia o arquivo
+  existe sempre, e olhar uma lista não pode dar a uma máquina uma escolha que ela nunca fez.
+  **E a vigia do tema NÃO junta rajada** (`notice::Pace::AtOnce`, a única assim): a do gerenciador
+  segura o rabo da rajada porque a resposta dela é um `readdir` por evento, e a desta é um REPINTE —
+  medido, a primeira mudança sai em 5 ms e cada uma atrás dela levava **253**, que é o `QUIET` de um
+  quarto de segundo esperando um silêncio que não vem enquanto a mão anda na lista. O `PACE` é
+  CONSTANTE NOMEADA para um teste segurar; e a MESA é PEDIDA, não esperada: o desk é um
+  `layout { background-color }` num fragmento que o niri inclui, e ele nota no relógio DELE — o dono
+  leu na tela como uma mesa que segue o rodapé *"às vezes mais rápido, às vezes mais devagar"*. Não
+  se toca no watcher (inv. 3), mas pedir é IPC: escreve e então `Niri::reload_config`
+  (`LoadConfigFile`), um ida-e-volta de socket e não um `niri msg`, que é PROCESSO e bloqueia. **O
+  nome é traduzido e o repositório o confere dos dois lados**: o cliente do niri diz
+  `load-config-file` e o socket quer `LoadConfigFile` — um teste deriva a grafia pela mesma regra
+  que produz as duas que já vão para um niri vivo (`CloseWindow`, `FocusWindowDown`), e o
+  `niri-contract` a manda para um niri DE VERDADE, nas duas versões pinadas. Errada por uma letra
+  ela responde `error parsing request`, que é um `warn` no log e uma mesa que nunca muda. `RET` grava `$XDG_CONFIG_HOME/ronoctua/theme.json`, `Esc` volta ao gravado. A lista mostra SÓ o id. **A segunda coluna (`←/→`) é o FUNDO do compositor — preto ou `surface.backdrop`, um degrau ABAIXO do chrome no matiz E NA DISTÂNCIA da semente `backdrop` (`hue`, `chroma`, `step`)**; no owl ele é CINZA (`#080808`, croma zero, cinco degraus abaixo) a pedido do dono, no forest é verde. **O `step` é da semente porque um fundo sem cor só tem a luminância para se separar do chrome**: um degrau só mede ΔE 0,026 dali, que o portão chama de legal e marginal —, e a prévia dele é o próprio niri: o fragmento é escrito ao mover o cursor e reescrito no `Esc`; `RET` grava o PAR. **O arquivo É o broadcast**: as cinco portas vigiam `theme.json` por inotify (`Notice::on_file`) e repintam; `RONOCTUA_THEME` (opção `ronoctua.theme`) é o piso, o primeiro tema é o chão. O rodapé COPIA os fragmentos do tema (`$RONOCTUA_THEMES/<id>/`): `niri-theme.kdl` (borda E fundo — `window-rule` mais `layout { background-color }`, que o niri FUNDE ao incluir; dois `layout` no MESMO arquivo ele recusa; o config o inclui `optional=true` no FIM e recarrega) e `ghostty-theme.conf` (`config-file = ?…`, processo novo — e a entrada `.desktop` é REESCRITA sem o `--gtk-single-instance=true` do upstream: flag vence arquivo). **O Ghostty só lê `~/.config/ghostty/config`** — `/etc/xdg` ele NÃO lê —, e é lá que o home-manager põe o config do módulo. GTK/Qt vestem o MODO escuro (Qt só no perfil `full`: custa 591 MiB); a extensão, o padrão do build.
 - **Layout é do `ronoctua-design`** — UM crate compilado dos dois lados (ele é dono das bindings do
   WIT; nenhum buffer chama `generate!`). **DOIS TRILHOS**: texto recua por `chrome::INSET`, régua e
   seleção sangram de borda a borda e não passam pela margem. **UM cabeçalho**, de três células —
