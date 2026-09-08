@@ -1328,7 +1328,8 @@ impl State {
             | Input::Toggle
             | Input::Survey(_)
             | Input::Queue(_)
-            | Input::Mind(_) => vec![],
+            | Input::Mind(_)
+            | Input::Keyboards(_) => vec![],
         }
     }
 }

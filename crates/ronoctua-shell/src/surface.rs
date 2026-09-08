@@ -4652,8 +4652,9 @@ impl Footer {
             // THE AUDIO PROFILE'S RING. It acts on the OPEN view's card, so
             // with the view closed it does nothing — the honest answer, and
             // the same one every other row key gives.
-            "bluetooth-audio-next" => self.bluetooth_press(crate::bluetooth::Press::Right),
-            "bluetooth-audio-previous" => self.bluetooth_press(crate::bluetooth::Press::Left),
+            "bluetooth-more" => self.bluetooth_press(crate::bluetooth::Press::Right),
+            "bluetooth-less" => self.bluetooth_press(crate::bluetooth::Press::Left),
+            "bluetooth-settings" => self.bluetooth_press(crate::bluetooth::Press::Cross),
             "bluetooth-power" => self.bluetooth_errand_of(crate::bluetooth::Press::Power),
             "bluetooth-discoverable" => {
                 self.bluetooth_errand_of(crate::bluetooth::Press::Discoverable);
@@ -5242,6 +5243,16 @@ impl Footer {
             "glyphs-nerd-fonts" => self.open_buffer("RONOCTUA_BUFFER_GLYPHS"),
             "unicode-symbols" => self.open_buffer("RONOCTUA_BUFFER_UNICODE"),
             "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
+            // THE KEYBOARDS, and it may be opened ABOUT one: the row on a
+            // Bluetooth device's page hands over its `Modalias`, which carries
+            // the same two numbers keyd matches on. The host turns it into the
+            // id and puts that keyboard first — the disks buffer's arrangement,
+            // and for its reason: ordering is the host's business, and moving
+            // a cursor the buffer owns is not.
+            "keyboard-open" => {
+                let about = argument.and_then(ronoctua_keyboards::id_of_modalias);
+                self.open_buffer_about("RONOCTUA_BUFFER_KEYBOARD", about.as_deref());
+            }
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
             "brain-open" => self.open_buffer("RONOCTUA_BUFFER_BRAIN"),
             // THE COUNTDOWN'S TWO ANSWERS. They are the band's two controls and
@@ -9047,6 +9058,11 @@ impl Footer {
                     click: (!r.heading).then_some(Click::Bluetooth(n)),
                     fields: r.fields,
                     foot: false,
+                    // AND WHAT THE POINTER ASKS. A label is two or three words,
+                    // and some of these rows are about things nobody meets
+                    // twice a year — the owner said so from the screen. See
+                    // `bluetooth::Row::description`.
+                    description: r.description,
                     ..ExpansionRow::empty_one()
                 })
                 .collect();
@@ -10471,10 +10487,21 @@ impl Footer {
                 // THE MOUSE AIMS, THE KEYS ACT — the power view's rule, and
                 // the same reason: forgetting a device is not one click away.
                 let width = self.screen_columns();
+                // WHERE ALONG THE LINE, because a device's page has two halves
+                // side by side and a click on the right one has to put the
+                // keyboard there — otherwise the second column would answer
+                // `TAB` and nothing else, and the rule is that the mouse
+                // reaches what the keyboard reaches.
+                let cell = self.cell_under_pointer;
                 let scene = std::mem::take(&mut self.bluetooth_scene);
                 if let Some(v) = self.bluetooth.as_mut() {
+                    // THE PANE FIRST, THEN THE ROWS. The rows describe
+                    // whichever half has the keyboard, so aiming at the other
+                    // one and then reading the old half's rows would put the
+                    // cursor on a row that is about to stop existing.
+                    v.aim(cell, width);
                     let rows = v.rows(&scene, width, &self.texts);
-                    v.clicked(n, &rows);
+                    v.clicked(n, cell, width, &rows);
                 }
                 self.bluetooth_scene = scene;
                 self.draw_and_paint();
@@ -14236,6 +14263,22 @@ impl Footer {
             Some(at) => crate::bluetooth::View::fresh_at(at),
             None => crate::bluetooth::View::fresh(),
         });
+        // AND A PAGE OPENED STRAIGHT ONTO A DEVICE READS IT.
+        //
+        // `View::fresh_at` is what a click on a modeline mark and what
+        // `bluetooth-device <path>` both do, and only `RET` on a row used to
+        // reach `look_at_the_device`. So clicking the headphones' mark — the
+        // shortest path there is — gave a page with no volume, no profile and
+        // no second half at all, while walking to the same page through the
+        // list gave all three. One screen, two contents, depending on how you
+        // arrived.
+        if at.is_some() {
+            let scene = std::mem::take(&mut self.bluetooth_scene);
+            if let Some(v) = self.bluetooth.as_mut() {
+                v.look_at_the_device(&scene);
+            }
+            self.bluetooth_scene = scene;
+        }
         self.first_page();
         self.follow_cursor();
         self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -14244,11 +14287,15 @@ impl Footer {
 
     /// One press, for the bluetooth view.
     fn bluetooth_press(&mut self, press: crate::bluetooth::Press) {
+        // THE WIDTH THE ROWS WERE DRAWN AT. A device's page has two halves
+        // that sit side by side or stack, and `TAB` means a different move in
+        // each — so the key cannot be decided at a width nobody is looking at.
+        let columns = self.screen_columns();
         let scene = std::mem::take(&mut self.bluetooth_scene);
         let errand = self
             .bluetooth
             .as_mut()
-            .map(|v| v.key(press, &scene, &self.texts));
+            .map(|v| v.key(press, &scene, columns, &self.texts));
         self.bluetooth_scene = scene;
         // THE SURFACE FIRST, THEN THE CURSOR — see `region_resized`, and
         // `display_resized` for the measurement that found it.
@@ -14274,7 +14321,7 @@ impl Footer {
         }
         let mut aside = crate::bluetooth::View::fresh();
         let scene = std::mem::take(&mut self.bluetooth_scene);
-        let errand = aside.key(press, &scene, &self.texts);
+        let errand = aside.key(press, &scene, self.screen_columns(), &self.texts);
         self.bluetooth_scene = scene;
         self.bluetooth_errand(errand);
     }
@@ -14414,9 +14461,29 @@ impl Footer {
                 // power orders follow.
                 let scene = std::mem::take(&mut self.bluetooth_scene);
                 if let Some(v) = self.bluetooth.as_mut() {
-                    v.look_at_the_card(&scene);
+                    v.look_at_the_device(&scene);
                 }
                 self.bluetooth_scene = scene;
+            }
+            // AND THESE TWO DO NOT RE-READ IT, for the reason the comment
+            // above gives from the other side: changing a profile recreates
+            // the node, changing a volume does not, and `pw-dump` under a
+            // held arrow is a fork per frame.
+            // A COMMAND OF THE REGISTRY, run where commands are run. The
+            // settings column's keyboard row is the first of these: what a key
+            // becomes is a screen of its own, and the row is the way to it.
+            Errand::Run(id, about) => {
+                self.run_with(id, (!about.is_empty()).then_some(about.as_str()));
+            }
+            Errand::Volume(node, percent) => {
+                if let Err(e) = ronoctua_bluetooth::audio::set_volume(node, percent) {
+                    tracing::warn!(error = %e, "the volume did not change");
+                }
+            }
+            Errand::Mute(node, on) => {
+                if let Err(e) = ronoctua_bluetooth::audio::set_mute(node, on) {
+                    tracing::warn!(error = %e, "the mute did not change");
+                }
             }
             Errand::Answer(yes) => self.bluetooth_answer(yes, ""),
             // THE DIGITS COME IN THROUGH THE MINIBUFFER, and come back as

@@ -2676,6 +2676,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-keyboards"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-store",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-keymap"
 version = "0.1.0"
 
@@ -2811,6 +2821,7 @@ dependencies = [
  "ronoctua-files",
  "ronoctua-i18n",
  "ronoctua-inspect",
+ "ronoctua-keyboards",
  "ronoctua-keymap",
  "ronoctua-lan",
  "ronoctua-memory",

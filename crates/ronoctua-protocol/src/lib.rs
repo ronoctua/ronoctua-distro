@@ -156,6 +156,14 @@ pub enum Effect {
     /// remembered and the HOST writes the file, the same way [`Effect::Save`]
     /// is how a file editor writes.
     Tune(Setting),
+    /// Make a key on ONE keyboard mean something else. Needs
+    /// [`Capability::Keyboard`].
+    ///
+    /// NOT an [`Effect::Ask`]: a demand is a verb plus an index and carries no
+    /// value, and this carries three. The buffer touches nothing — it says
+    /// what it wants, and the host writes the file, asks keyd whether it can
+    /// read it, and restarts the daemon.
+    Remap(Remap),
 }
 
 impl Effect {
@@ -186,6 +194,7 @@ impl Effect {
             // system, and a buffer that asked for nothing must not get to
             // change that quietly.
             Self::Tune(_) => Some(Capability::Brain),
+            Self::Remap(_) => Some(Capability::Keyboard),
             // AND THESE COST NOTHING, each for a reason that is worth being
             // able to check rather than assume: redrawing, closing and saying
             // which state one is in are the buffer talking about ITSELF;
@@ -257,6 +266,14 @@ pub enum Capability {
     /// mind arrives already read, already decided and already formatted —
     /// including the DATES, which the component cannot compute, having no zone.
     Brain,
+    /// Receiving [`Input::Keyboards`] and emitting [`Effect::Remap`].
+    ///
+    /// Its own, and not folded into [`Capability::System`], because of what it
+    /// reaches: the file a daemon between the keyboard and everything else
+    /// reads. A mistake there is a keyboard that does not type, on a machine
+    /// somebody is holding. The buffer still touches nothing — it hands back
+    /// three strings out of the list it was given.
+    Keyboard,
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +499,73 @@ pub struct Device {
 pub struct Rack {
     /// The devices, already filtered and already judged by the host.
     pub devices: Vec<Device>,
+}
+
+/// One keyboard, as the kernel reports it and as the person has decided.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Board {
+    /// `vendor:product`, which is what keyd matches on.
+    ///
+    /// NOT unique: two of the same model report the same pair, and keyd has no
+    /// finer grain. The screen says so rather than pretending.
+    pub id: String,
+    /// What the kernel calls it.
+    pub name: String,
+    /// Built into this machine, rather than plugged or paired into it.
+    pub built_in: bool,
+    /// What this keyboard has been told: keyd's name for a key, and for what
+    /// it becomes.
+    pub decided: Vec<(String, String)>,
+}
+
+/// A word of the vocabulary: what keyd calls it, and what names it on screen.
+///
+/// It TRAVELS rather than being compiled into the buffer, because invariant 11
+/// stands: the buffer holds no table of ours and does not translate. It
+/// receives the ids and hands them back, and the host resolves both.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Word {
+    /// keyd's own word. Empty, among the choices, means "leave it alone".
+    pub keyd: String,
+    /// The text key. The host resolves it; the buffer never reads it.
+    pub text: String,
+    /// Does the meaning depend on how long the key is held?
+    pub holds: bool,
+}
+
+/// Every keyboard, and what a key can be made into.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Boards {
+    /// Which keys are offered, in the order they are drawn.
+    pub keys: Vec<Word>,
+    /// What each can become. The FIRST is the way back.
+    pub choices: Vec<Word>,
+    /// The keyboards themselves.
+    pub boards: Vec<Board>,
+    /// The rules could not be written, and this says why — already a text
+    /// key. Empty when the last write went through.
+    pub trouble: String,
+    /// keyd's name for the key the leader is made of.
+    ///
+    /// It travels because the screen has to warn before that one is moved: a
+    /// rule written after the leader's wins, so remapping it is how somebody
+    /// loses the key that opens everything, on that keyboard.
+    pub leader: String,
+}
+
+/// What a key on a keyboard should become.
+///
+/// A [`Demand`] cannot carry this: it is a verb plus an INDEX, and this is
+/// three values. The same reason [`Setting`] exists beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Remap {
+    /// `vendor:product`, out of the [`Board`] this came from.
+    pub device: String,
+    /// keyd's name for the key, out of [`Boards::keys`].
+    pub key: String,
+    /// keyd's name for what it becomes, out of [`Boards::choices`]. Empty
+    /// leaves the key alone, and is how a remap is undone.
+    pub becomes: String,
 }
 
 /// What became of the last [`Effect::Format`].
@@ -2067,6 +2151,12 @@ pub enum Input {
     /// no reading, which is what makes the absence structural rather than
     /// promised.
     Rack(Rack),
+    /// Every keyboard, and what a key can be made into.
+    ///
+    /// Requires [`Capability::Keyboard`]. Like [`Input::Rack`], nobody
+    /// pressed it: the host reads the kernel and the person's file, and what
+    /// arrives is the whole picture.
+    Keyboards(Boards),
     /// What became of the format the buffer asked for.
     Formatted(Outcome),
     /// What the machine is going to do by itself, ALREADY READ. Only for a

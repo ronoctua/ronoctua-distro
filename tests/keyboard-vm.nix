@@ -114,9 +114,28 @@ pkgs.testers.runNixOSTest {
           journal = machine.succeed("journalctl -u keyd --no-pager")
           print(journal)
           assert "DEVICE: match" in journal, journal
-          assert "all.conf" in journal, journal
+          # THE FILE IT READ, BY ITS NAME. It used to be `all.conf`, which the
+          # NixOS module generated from `services.keyd.keyboards.all`; since
+          # the shell renders this directory (`LEADER s k`) the catch-all is
+          # `default.conf` and the module only SEEDS it. keyd naming it is what
+          # proves the seed arrived and the symlink points where it should.
+          assert "default.conf" in journal, journal
           for bad in ["error", "invalid", "syntax"]:
               assert bad not in journal.lower(), f"keyd complained: {journal}"
+
+      with subtest("the directory belongs to the session, not to the store"):
+          # WHAT MAKES `LEADER s k` POSSIBLE AT ALL. `/etc/keyd` is a symlink to
+          # a directory this machine owns, and the shell writes there with no
+          # privilege — a store path would be read-only and the whole feature
+          # would be a screen that refuses.
+          link = machine.succeed("readlink -f /etc/keyd").strip()
+          assert link == "/var/lib/ronoctua/keyd", link
+          owner = machine.succeed("stat -c %U /var/lib/ronoctua/keyd").strip()
+          assert owner == user_name, owner
+          # AND THE SHELL CAN ACTUALLY WRITE THERE. The ownership above is what
+          # the module declares; this is the machine answering.
+          machine.succeed(f"su - {user_name} -c 'touch /var/lib/ronoctua/keyd/.probe'")
+          machine.succeed("rm /var/lib/ronoctua/keyd/.probe")
 
       with subtest("it touches NO other key"):
           # What limits the damage of a mistake here: one key remapped, all the

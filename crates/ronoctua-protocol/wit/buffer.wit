@@ -225,6 +225,14 @@ interface types {
         // wants remembered and the HOST writes the file, the same way `save`
         // is how a file editor writes.
         tune(setting),
+        // Make a key on ONE keyboard mean something else. Needs
+        // `capability::keyboard`.
+        //
+        // NOT a `demand`: that one is a verb plus an index and carries no
+        // value, and this carries three. The buffer touches nothing — it says
+        // what it wants, and the host writes the file, asks keyd whether it
+        // can read it, and restarts the daemon.
+        remap(remap),
     }
 
     // Capabilities a buffer may ASK for in the descriptor. The host refuses whoever
@@ -320,6 +328,23 @@ interface types {
         // compute, having no zone. It names an id it was given, and the host
         // checks it against the list it just sent.
         brain,
+        // Receiving `input::keyboards` and emitting `effect::remap` — which
+        // keyboards the machine has, and what a key on one of them means.
+        //
+        // # Why it is its own capability
+        //
+        // Because of what it reaches. `system` ends processes and sweeps the
+        // store, `disks` writes a filesystem — and this one writes the file a
+        // daemon between the keyboard and everything else reads. A mistake
+        // there is a keyboard that does not type, on a machine somebody is
+        // holding. A buffer asks for exactly the power it uses.
+        //
+        // # What it does NOT open
+        //
+        // No filesystem, no daemon, no command. The buffer receives a list
+        // already read and hands back three strings out of that same list; the
+        // host is what renders, validates and restarts.
+        keyboard,
     }
 
     // ------------------------------------------------------------------
@@ -733,6 +758,80 @@ interface types {
     // Every disk the machine has, as the host last read it.
     record rack {
         devices: list<device>,
+    }
+
+    // ONE KEYBOARD, as the kernel reports it and as the person has decided.
+    //
+    // `id` is `vendor:product`, which is what keyd matches on and is NOT
+    // unique: two of the same model report the same pair. The screen says so
+    // rather than pretending, because a person with two identical keyboards
+    // configures them together whether they meant to or not.
+    record board {
+        id: string,
+        name: string,
+        // Built into this machine, rather than plugged or paired into it. A
+        // list of "AT Translated Set 2 keyboard" and "Bluetooth Keyboard" is a
+        // list where only one of them is obvious.
+        built-in: bool,
+        // What this keyboard has been told, as the keyd names of a key and of
+        // what it becomes. Empty for a keyboard nobody has touched.
+        decided: list<tuple<string, string>>,
+    }
+
+    // A WORD OF THE VOCABULARY: what keyd calls it, and the text key that
+    // names it on screen.
+    //
+    // IT TRAVELS RATHER THAN BEING COMPILED IN, because invariant 11 stands:
+    // the buffer holds no table of ours and does not translate. It receives
+    // the ids and hands them back, and the HOST resolves both.
+    record word {
+        // keyd's own word. Empty, among the choices, means "leave it alone".
+        keyd: string,
+        // The text key. The host resolves it; the buffer never reads it.
+        text: string,
+        // Does the meaning depend on how long the key is held? Only a choice
+        // answers this, and the screen says it out loud.
+        holds: bool,
+    }
+
+    // EVERY KEYBOARD, AND WHAT A KEY CAN BE MADE INTO.
+    //
+    // The whole state, never a delta — the rule `rack` and `queue` follow, and
+    // for the same reason: a buffer that assembled a picture out of changes
+    // would be a second place where the truth lives.
+    record boards {
+        // Which keys are offered, in the order they are drawn.
+        keys: list<word>,
+        // What each can become. The FIRST is the way back.
+        choices: list<word>,
+        // The keyboards themselves.
+        boards: list<board>,
+        // The rules could not be written, and this says why — already a text
+        // key. Empty when the last write went through.
+        trouble: string,
+        // keyd's name for the key the LEADER is made of.
+        //
+        // It travels because the screen has to warn before that one is moved:
+        // every rendered file claims it, and a rule written after it wins — so
+        // remapping it is how somebody loses the key that opens everything, on
+        // that keyboard. The buffer holds no table of ours and could not know
+        // which key it is.
+        leader: string,
+    }
+
+    // WHAT A KEY ON A KEYBOARD SHOULD BECOME.
+    //
+    // A demand cannot carry this: it is a verb plus an INDEX, and "capslock
+    // becomes escape on the keyboard whose id is 3554:f605" is three values.
+    // It is the same reason `setting` exists beside `demand`.
+    record remap {
+        // `vendor:product`, out of the `board` this came from.
+        device: string,
+        // keyd's name for the key, out of `boards.keys`.
+        key: string,
+        // keyd's name for what it becomes, out of `boards.choices`. Empty
+        // leaves the key alone, and is how a remap is undone.
+        becomes: string,
     }
 
     // A filesystem this build can actually CREATE.
@@ -1214,6 +1313,12 @@ interface types {
         // signal, which is what makes the absence structural.
         rack(rack),
         formatted(outcome),
+        // Every keyboard, and what a key can be made into. Only for whoever
+        // declared `capability::keyboard`.
+        //
+        // Like `rack`, nobody pressed it: the host reads the kernel and the
+        // person's file, and what arrives is the whole picture.
+        keyboards(boards),
         // What the machine is going to do by itself, ALREADY READ. Only for
         // whoever declared `capability::brain`.
         //

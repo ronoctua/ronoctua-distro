@@ -507,6 +507,35 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ffmpeg decodifica os planos lineares e sai quase preto. Todo caminho externo devolve imagem no
   **stdout** e quem decodifica é o `image`: `Rgba` nasce num lugar só. **Recusa é VALOR, não ausência** — painel em branco e painel recusado são
   iguais na tela, e só um tem frase. GPS não é mostrado, e a linha DIZ que o arquivo o carrega.
+- **A ficha de um aparelho tem DUAS METADES**: os fatos, e o que dá para ajustar NELE. Lado a lado
+  acima de `space.bluetooth.settingsFrom`, empilhadas abaixo — e `TAB` atravessa nos dois casos
+  (molde do `notifications::two_columns`, o único lugar com cursor por coluna). **Lado a lado, só a
+  metade com o teclado carrega o ALVO da linha**: a outra é desenhada e não age, senão `RET`
+  mexeria no que o olho não está. O clique leva a CÉLULA (`View::aim`), porque o mouse tem de
+  alcançar o que a tecla alcança. O que a coluna oferece sai do `Kind`: volume e mudo por
+  `wpctl` — **e volume é NÓ, não cartão** (`set-profile` recebe device, `set-volume` recebe node;
+  o headset é device 84 e sink 83) —, o perfil A2DP/HFP, o `WakeAllowed`, e num teclado a porta
+  para o `LEADER s k`. **O que o PipeWire guarda não é o que a pessoa lê**: `channelVolumes` é
+  amplitude linear e todo mixer mostra a RAIZ CÚBICA dela (0,367886 é 72%).
+  **`View::fresh_at` não lia o cartão** — abrir pela marca da modeline, que é o caminho mais
+  curto, dava ficha sem perfil de áudio; a lista dá uma linha por FRASE, e o encanamento (`1800`,
+  `1801`) não é desenhado.
+- **`LEADER s k` são os TECLADOS** (`ronoctua-keyboards` + `buffers/keyboard`), e é o único ajuste
+  POR DISPOSITIVO que existe: o niri tem **um** `input { keyboard { … } }` para todos e não expõe
+  dispositivo nenhum por IPC, então layout, acentos e repetição são globais **por construção** — a
+  tela DIZ isso. Quem distingue teclado é o `keyd`, e a regra dele é: **um id em UM arquivo só**.
+  Como o arquivo da distro reivindica `*`, um teclado com regra própria SAI do coringa — e sai da
+  leader junto, se o arquivo dele não a repetir. Por isso `/etc/keyd` é link para
+  `/var/lib/ronoctua/keyd`, que é do usuário (tmpfiles), a regra da leader é declarada UMA vez
+  (`assets/keyboards.nix`, lida pelo módulo e pelo shell) e **todo** arquivo renderizado a carrega;
+  cobra o `keyd-rules-carry-the-leader`. Antes de instalar, `keyd check` — recusar é melhor que um
+  keyd morto —, e o reinício passa pela regra polkit que já existia. O buffer não traduz e não
+  escreve: recebe teclados, teclas e significados (`input::keyboards`) e devolve três strings
+  (`effect::remap`, `capability::keyboard`), que o host confere contra o que mandou.
+  **`kbd` não faz um teclado**: o botão de energia, a tampa, o barramento de vídeo, o
+  alto-falante do PC e o controle do headset carregam o handler — em 2026-09-08, nove
+  dispositivos desta máquina o carregavam e DOIS eram teclados. O filtro é o alfabeto, como
+  o próprio keyd faz.
 - **`LEADER s b` é o Bluetooth** (`ronoctua-bluetooth`, a fronteira com o BlueZ): uma `View`
   (`bluetooth.rs`), duas portas (`s b b`/`s b w`), três níveis (lista → dispositivo → rádio) e
   LETRAS NUAS lidas da `OF_THE_VIEW` pelas duas. Tudo por `GetManagedObjects` (propriedade opcional

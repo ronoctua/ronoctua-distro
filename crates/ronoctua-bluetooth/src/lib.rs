@@ -652,31 +652,58 @@ impl Scene {
     }
 }
 
+/// The tail every SIG-assigned 16-bit service id wears.
+///
+/// A UUID that does not end in this is a MANUFACTURER'S OWN — 128 bits with no
+/// published meaning — and must never be read as a short id. This used to slice
+/// characters 4..8 out of anything at all: of the UUIDs the devices in this
+/// house announce, TEN are not of this shape (`0cf12d31-fac3-4553-…` sliced to
+/// `2d31`). None of them happened to land on a name, and one that did would
+/// have said something confident and wrong about somebody's headphones.
+const BASE_UUID: &str = "-0000-1000-8000-00805f9b34fb";
+
+// The table, GENERATED from `assets/bluetooth-profiles.nix` — see
+// `nix/bluetooth-profiles.nix`. It defines `PROFILES`, and the same source
+// emits the list of text keys both languages owe.
+include!(concat!(env!("OUT_DIR"), "/profiles.rs"));
+
+/// The four hex digits of a 16-bit service id, or `None` for anything else.
+///
+/// PRIVATE, and the comment here once said the opposite: the screen drew the
+/// short form for a while, and the owner asked for the whole string — half an
+/// identifier is not one. Only the table's own two lookups use this now.
+fn short_of(uuid: &str) -> Option<&str> {
+    let rest = uuid.strip_prefix("0000")?;
+    let (short, tail) = rest.split_at_checked(4)?;
+    tail.eq_ignore_ascii_case(BASE_UUID).then_some(short)
+}
+
 /// What a service id means, as a text key — `None` for one nobody named.
 ///
-/// The list is what a person meets: the audio profiles, the input one, the
-/// file ones and the phone's three. The rest are drawn as the raw id, which
-/// is the truth and is what a search engine takes.
+/// It is also `None` for the plumbing every BLE device is obliged to carry,
+/// and the two are NOT the same answer: one is drawn raw, which is the truth
+/// and is what a search engine takes, and the other is not drawn at all.
+/// [`profile_is_plumbing`] tells them apart.
 #[must_use]
 pub fn profile_key(uuid: &str) -> Option<&'static str> {
-    let short = uuid.get(4..8)?;
-    Some(match short {
-        "1108" => "bluetooth-profile-headset",
-        "111e" | "111f" => "bluetooth-profile-handsfree",
-        "110b" => "bluetooth-profile-audio-sink",
-        "110a" => "bluetooth-profile-audio-source",
-        "110c" | "110e" => "bluetooth-profile-remote-control",
-        "1124" => "bluetooth-profile-human-interface",
-        "1106" => "bluetooth-profile-file-transfer",
-        "1105" => "bluetooth-profile-object-push",
-        "112f" | "1130" => "bluetooth-profile-phone-book",
-        "1132" | "1133" => "bluetooth-profile-message-access",
-        "1116" | "1115" => "bluetooth-profile-network",
-        "180f" => "bluetooth-profile-battery",
-        "180a" => "bluetooth-profile-device-information",
-        "1101" => "bluetooth-profile-serial",
-        "112d" => "bluetooth-profile-sim-access",
-        _ => return None,
+    let short = short_of(uuid)?;
+    PROFILES
+        .iter()
+        .find(|(id, _)| id.eq_ignore_ascii_case(short))
+        .and_then(|(_, key)| *key)
+}
+
+/// Is this a service this system knows and deliberately does not draw?
+///
+/// `1800` and `1801` are on EVERY BLE device because the specification obliges
+/// it. Drawing "says its own name" in a list headed *what it can do* is noise,
+/// and it pushed the row that mattered — the keyboard's `1812` — down the page.
+#[must_use]
+pub fn profile_is_plumbing(uuid: &str) -> bool {
+    short_of(uuid).is_some_and(|short| {
+        PROFILES
+            .iter()
+            .any(|(id, key)| id.eq_ignore_ascii_case(short) && key.is_none())
     })
 }
 
@@ -1557,6 +1584,52 @@ mod tests {
         );
         assert_eq!(profile_key("0000feed-0000-1000-8000-00805f9b34fb"), None);
         assert_eq!(profile_key("nonsense"), None);
+        // THE ONE THE OWNER'S KEYBOARD SPEAKS. It is BLE, so it announces the
+        // GATT id and never the classic one, and this row was drawn raw.
+        assert_eq!(
+            profile_key("00001812-0000-1000-8000-00805f9b34fb"),
+            profile_key("00001124-0000-1000-8000-00805f9b34fb")
+        );
+        assert!(profile_key("00001812-0000-1000-8000-00805f9b34fb").is_some());
+    }
+
+    #[test]
+    fn a_manufacturers_own_id_is_never_read_as_a_short_one() {
+        // These are real, off the devices paired to this machine (the digits
+        // are a manufacturer's, not anybody's address). Each one carries four
+        // hex digits where a 16-bit id would be, and the old table sliced them
+        // blindly: `0cf12d31-…` was read as `2d31`.
+        for theirs in [
+            "0cf12d31-fac3-4553-bd80-d6832e7b31b1",
+            "f000ffc0-0451-4000-b000-000000000000",
+            "00000000-deca-fade-deca-deafdecacaff",
+            "00010000-0000-1000-8000-011f2000046d",
+        ] {
+            assert_eq!(profile_key(theirs), None, "`{theirs}` is not ours to name");
+            assert!(
+                !profile_is_plumbing(theirs),
+                "`{theirs}` is not our plumbing"
+            );
+        }
+        // And the guard is not "it does not start with 0000": a real short id
+        // with the right tail still resolves.
+        assert!(profile_key("00001101-0000-1000-8000-00805F9B34FB").is_some());
+    }
+
+    #[test]
+    fn the_plumbing_is_known_and_not_named() {
+        // Every BLE device carries these two because the specification says
+        // so. They are in the table — that is how we know to hide them — and
+        // they have no sentence.
+        for plumbing in [
+            "00001800-0000-1000-8000-00805f9b34fb",
+            "00001801-0000-1000-8000-00805f9b34fb",
+        ] {
+            assert!(profile_is_plumbing(plumbing));
+            assert_eq!(profile_key(plumbing), None);
+        }
+        // An id nobody named is NOT plumbing: it is drawn, raw.
+        assert!(!profile_is_plumbing("0000fff0-0000-1000-8000-00805f9b34fb"));
     }
 
     #[test]

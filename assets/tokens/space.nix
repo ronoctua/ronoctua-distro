@@ -563,6 +563,37 @@
   # It is a quad now, drawn edge to edge at the BOTTOM of the row it names, and
   # a quad's height is a distance and not a count of cells. One logical pixel is
   # what `colors.nix` has always described it as: "One line, one logical pixel."
+  # THE DEVICE PAGE'S SECOND COLUMN — what you can ADJUST about this thing.
+  #
+  # # Why it is a column and not a level
+  #
+  # A device page answers two different questions that a person asks at the
+  # same time: *what is this, and is it working* (the facts) and *turn it
+  # down* (the settings). Down a level, the second question costs a key press
+  # and a screen; beside the first, it costs nothing and the answer to "is it
+  # connected" stays visible while you change the volume.
+  #
+  # # Why 88 and not the notifications' 96
+  #
+  # Because the halves are not the same shape. A notification row is an elided
+  # SENTENCE, and cutting it destroys what the list is for; these two columns
+  # hold label-and-value rows, which the `view.labelCells` arithmetic already
+  # sizes at 28 + the value. Measured against the widest pair on either side:
+  # `what it can do` beside `plays sound from here` is 36 cells, and the
+  # settings' longest is `volume` beside `72%`. At 88 the left column gets 52
+  # and the right 32, and both fit; at 80 the right one has 28 and `wake on
+  # its own` (16) plus a value stops fitting with air.
+  #
+  # Below it the settings go UNDERNEATH the facts, which is the answer the
+  # notifications' facts give and the answer the file manager's panels give.
+  bluetooth = {
+    settingsFrom = 88;
+    # The FACTS get the wider half: a fact is a label and a value, and the
+    # labels there are sentences (`can be woken by this device`) while the
+    # settings' are one or two words.
+    splitAtPct = 60;
+  };
+
   rule = {
     thickness = 1;
   };

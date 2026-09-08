@@ -39,8 +39,50 @@
 # opens the sequence without depending on `F13`, and `Ctrl+Shift+L` runs
 # `keyboard-restore`, which restarts this service. A recovery shortcut that
 # depended on the leader would be the key inside the safe.
-{ config, ... }:
+#
+# # AND WHY THE DIRECTORY IS OURS RATHER THAN THE STORE'S
+#
+# Since 2026-09-08 the shell can give ONE keyboard rules of its own
+# (`LEADER s k`), and keyd's own manual is what shapes this: *a device id may
+# only be listed in a single config file*. The file below claims `*`, so a
+# keyboard with rules of its own has to be taken OUT of that claim — and that
+# subtraction changes whenever somebody configures a keyboard, which a store
+# path cannot do.
+#
+# So `/etc/keyd` is a symlink to a directory this machine owns, seeded here
+# with the same leader rule and written afterwards by the shell. What the
+# flake still declares is the RULE (`assets/keyboards.nix`), which is the part
+# that must never drift: every file the shell renders repeats it, because a
+# keyboard outside the catch-all with no leader is a keyboard that cannot open
+# anything.
+{
+  config,
+  pkgs,
+  ...
+}:
 
+let
+  keyboards = import ../../assets/keyboards.nix;
+  inherit (keyboards.leader) key action;
+
+  # WHERE THE RULES LIVE, and the shell has the same path baked in
+  # (`ronoctua_keyboards::DIRECTORY`). Under `/var/lib` and not
+  # `$XDG_CONFIG_HOME`: keyd is a SYSTEM daemon and starts before anybody logs
+  # in, so a file in a home directory would be a leader that arrives late.
+  directory = "/var/lib/ronoctua/keyd";
+
+  # THE SEED, and it is what `ronoctua_keyboards::render` produces for a
+  # machine where nobody has configured anything. It exists so the leader
+  # works on the FIRST boot, before the shell has ever written a file — and
+  # `keyd-rules-carry-the-leader` compares the two.
+  seed = pkgs.writeText "keyd-default.conf" ''
+    [ids]
+    *
+
+    [main]
+    ${key} = ${action}
+  '';
+in
 {
   # DO NOT CREATE THE `keyd` GROUP.
   #
@@ -54,21 +96,27 @@
   # round with a dead keyboard.
   services.keyd = {
     enable = true;
-    keyboards.all = {
-      # Every keyboard: the laptop's, the Bluetooth one, whatever gets plugged
-      # in later. A specific `ids` would leave the leader out of precisely the
-      # keyboard the person has just connected.
-      ids = [ "*" ];
-      settings.main = {
-        # The physical key is `leftmeta`. `overload(meta, f13)` — see above.
-        #
-        # `f13` and not a real key: F13 exists on no keyboard, so nothing else can
-        # emit it by accident. Using `esc` or `menu` would make the leader fire
-        # when the person wanted the actual key.
-        leftmeta = "overload(meta, f13)";
-      };
-    };
+    # NO `keyboards` BLOCK. The upstream module turns one into
+    # `environment.etc."keyd/<name>.conf"`, which is a read-only store path —
+    # and the whole point is that the subtraction below its `[ids]` changes
+    # when somebody configures a keyboard. The rule itself is still declared,
+    # in `assets/keyboards.nix`, and seeded into the directory below.
+    keyboards = { };
   };
+
+  # THE DIRECTORY, ITS SEED, AND THE SYMLINK.
+  #
+  # `d` makes it belong to the session's user, so the shell writes there with
+  # no privilege at all. `C` copies the seed only when the file is not there,
+  # so a machine that has been configured keeps its rules across a rebuild —
+  # and one that has never been configured has a leader on first boot. `L+`
+  # replaces whatever is at `/etc/keyd`, which on this system is nothing:
+  # `keyboards = { }` above means the upstream module declares no file.
+  systemd.tmpfiles.rules = [
+    "d ${directory} 0755 ${config.ronoctua.user} users -"
+    "C ${directory}/default.conf 0644 ${config.ronoctua.user} users - ${seed}"
+    "L+ /etc/keyd - - - - ${directory}"
+  ];
 
   # WHO MAY RESTART KEYD, AND ONLY THAT.
   #

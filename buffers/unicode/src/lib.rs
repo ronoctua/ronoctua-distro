@@ -2486,6 +2486,7 @@ impl State {
                 | Input::Queue(_)
                 | Input::Rack(_)
                 | Input::Mind(_)
+                | Input::Keyboards(_)
                 | Input::Formatted(_)
                 | Input::EnterState(_) => {
                     vec![]

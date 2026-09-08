@@ -87,6 +87,7 @@ ronoctua-power = { path = "../ronoctua-power" }
 # The screens: what they can do, how bright they are, and how big the text is.
 ronoctua-display = { path = "../ronoctua-display" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
+ronoctua-keyboards = { path = "../ronoctua-keyboards" }
 # THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the
 # modeline's two marks and the network view's two sections. Neither daemon
 # signals, so the crate polls on a thread of its own; a machine with neither

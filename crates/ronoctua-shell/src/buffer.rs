@@ -295,6 +295,9 @@ struct Host {
     /// The same, for [`ronoctua_protocol::Capability::Brain`]: a subscription
     /// to the daemon, the tasks it may name and the preferences it may change.
     brain: Option<Brain>,
+    /// The same, for [`ronoctua_protocol::Capability::Keyboard`]: what the
+    /// kernel reports and what the person decided, and the gate for both.
+    keyboards: Option<Keyboards>,
     /// The states the descriptor declared, in order. The first is the base.
     ///
     /// Never empty: [`ronoctua_protocol::Descriptor::validate`] refuses an empty
@@ -484,6 +487,41 @@ impl Disks {
             known: Vec::new(),
             rack: None,
             said: None,
+        }
+    }
+}
+
+/// What a buffer with [`ronoctua_protocol::Capability::Keyboard`] may act on.
+///
+/// # The gate, and why it is three lists
+///
+/// The buffer receives the keyboards, the keys and the choices FROM here, and
+/// hands three strings back. So the question at the moment of acting is not
+/// "is this a keyboard" but "is this one of the ones I sent" — and the same
+/// for the key and for what it becomes. A component that invented any of the
+/// three is refused, which is the discipline `Disks::known` follows one
+/// capability over.
+///
+/// It matters more here than it looks: what is written is the file a daemon
+/// between the keyboard and everything else reads.
+struct Keyboards {
+    /// The ids of the last keyboards delivered.
+    boards: Vec<String>,
+    /// The keyd names of the keys offered, and of what they can become.
+    keys: Vec<String>,
+    choices: Vec<String>,
+    /// Why the last write did not go through, already a text key. Empty when
+    /// it did.
+    trouble: String,
+}
+
+impl Keyboards {
+    const fn fresh() -> Self {
+        Self {
+            boards: Vec::new(),
+            keys: Vec::new(),
+            choices: Vec::new(),
+            trouble: String::new(),
         }
     }
 }
@@ -895,6 +933,14 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         .capabilities
         .contains(&ronoctua_protocol::Capability::Brain)
         .then(Brain::fresh);
+    // And the same for the keyboards: no capability, no reading of the kernel
+    // and no writing of the daemon's file. It reaches further than it looks —
+    // what it writes sits between the keyboard and everything else — and a
+    // buffer that never asked cannot get near it.
+    let keyboards = d
+        .capabilities
+        .contains(&ronoctua_protocol::Capability::Keyboard)
+        .then(Keyboards::fresh);
 
     let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // THE LOOP FIRST, because the state carries its handle: a keyboard that
@@ -906,6 +952,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         queue,
         disks,
         brain,
+        keyboards,
         states: d.states.clone(),
         current: std::sync::Arc::clone(&current),
         escape: Escape::default(),
@@ -1198,6 +1245,18 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
         } else {
             tracing::warn!("could not hang the brain's channel");
         }
+    }
+
+    // THE KEYBOARDS ARRIVE ONCE, AND AGAIN AFTER EVERY CHANGE.
+    //
+    // No thread and no clock: `/proc/bus/input/devices` is three kilobytes
+    // read at the moment somebody opens the window, and a keyboard plugged in
+    // while it is open is a case that costs a `udev` socket and a thread to
+    // catch. The buffer is re-sent the whole picture after every remap — which
+    // is when the numbers on screen actually change — and the header of
+    // `keyboards_arrived` says so.
+    if state.keyboards.is_some() {
+        state.keyboards_arrived();
     }
 
     let signal = cycle.get_signal();
@@ -1976,6 +2035,25 @@ impl Host {
                     }
                     self.format(&plan);
                 }
+                // A KEY ON ONE KEYBOARD, and the gate is the same shape for the
+                // same reason — what this writes is read by a daemon that sits
+                // between the keyboard and everything else. The capability is
+                // checked here, once; whether the three strings NAME anything
+                // is `remap`'s job, because that answer needs the lists that
+                // were sent and they are not in this scope.
+                ronoctua_protocol::Effect::Remap(what) => {
+                    if !self
+                        .capabilities
+                        .contains(&ronoctua_protocol::Capability::Keyboard)
+                    {
+                        tracing::error!(
+                            capability = ?ronoctua_protocol::Capability::Keyboard,
+                            "remap refused: the buffer did not declare the capability"
+                        );
+                        continue;
+                    }
+                    self.remap(&what);
+                }
                 // A PREFERENCE, and the gate in front of it reads like the two
                 // above for the same reason: what is being remembered here is
                 // when the machine rebuilds its own operating system, so the
@@ -2386,6 +2464,181 @@ impl Host {
             d.rack = Some(rack);
         }
         self.deliver(&ronoctua_protocol::Input::Rack(over));
+    }
+
+    /// Reads the keyboards and what was decided, and sends the whole picture.
+    ///
+    /// # Why it reads the kernel every time
+    ///
+    /// `/proc/bus/input/devices` is three kilobytes and a parse. A keyboard
+    /// arrives when somebody plugs it in and leaves when the battery dies, and
+    /// there is no signal for either — udev would be a socket and a thread for
+    /// a list nobody looks at while it changes. Reading it at every delivery
+    /// costs less than being wrong about which keyboards exist.
+    fn keyboards_arrived(&mut self) {
+        if self.keyboards.is_none() {
+            return;
+        }
+        let seen = ronoctua_keyboards::seen().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "the kernel did not say what keyboards there are");
+            Vec::new()
+        });
+        let prefs = ronoctua_keyboards::store().read();
+        // WHAT THIS WINDOW WAS OPENED ABOUT GOES FIRST.
+        //
+        // The row on a Bluetooth device's page opens this naming a keyboard,
+        // and that keyboard is what somebody was looking at when they pressed.
+        // The buffer puts its cursor on the first row it is given, so ORDERING
+        // is all it takes — and ordering is the host's business here, the same
+        // arrangement the disks buffer already has. Not a field on the record:
+        // that would be a way for the host to move a cursor the buffer owns.
+        let mut ordered = seen;
+        if let Some(about) = self.file.as_ref().map(|p| p.to_string_lossy().into_owned())
+            && let Some(at) = ordered.iter().position(|k| k.id == about)
+        {
+            let chosen = ordered.remove(at);
+            ordered.insert(0, chosen);
+        }
+        let word = |(keyd, text): (&str, &str), holds: bool| ronoctua_protocol::Word {
+            keyd: keyd.to_owned(),
+            text: text.to_owned(),
+            holds,
+        };
+        let over = ronoctua_protocol::Boards {
+            keys: ronoctua_keyboards::KEYS
+                .iter()
+                .map(|(k, t)| word((k, t), false))
+                .collect(),
+            choices: ronoctua_keyboards::CHOICES
+                .iter()
+                .map(|(k, t, holds)| word((k, t), *holds))
+                .collect(),
+            boards: ordered
+                .iter()
+                .map(|k| ronoctua_protocol::Board {
+                    id: k.id.clone(),
+                    name: k.name.clone(),
+                    built_in: k.built_in,
+                    decided: prefs.of(&k.id).keys.into_iter().collect(),
+                })
+                .collect(),
+            // NO PLACE TO WRITE IS SAID AT ONCE, and not after a key.
+            //
+            // The directory belongs to the installed system; in the nested
+            // loop the host is somebody else's distro and there is none. The
+            // screen says so when it opens rather than blaming keyd on the
+            // first arrow — and that loop is where most of the work happens.
+            trouble: if ronoctua_keyboards::somewhere_to_write(ronoctua_keyboards::DIRECTORY) {
+                self.keyboards
+                    .as_ref()
+                    .map(|k| k.trouble.clone())
+                    .unwrap_or_default()
+            } else {
+                ronoctua_i18n::key::KEYBOARD_TROUBLE_NO_PLACE.to_owned()
+            },
+            // WHICH KEY THE LEADER IS MADE OF, so the screen can say so before
+            // somebody moves it. Every rendered file claims that key, and a
+            // rule written after it wins — which is the one remap that costs
+            // the key opening everything else.
+            leader: ronoctua_keyboards::LEADER.0.to_owned(),
+        };
+        if let Some(k) = self.keyboards.as_mut() {
+            k.boards = over.boards.iter().map(|b| b.id.clone()).collect();
+            k.keys = over.keys.iter().map(|w| w.keyd.clone()).collect();
+            k.choices = over.choices.iter().map(|w| w.keyd.clone()).collect();
+        }
+        self.deliver(&ronoctua_protocol::Input::Keyboards(over));
+    }
+
+    /// Makes a key on one keyboard mean something else.
+    ///
+    /// # The three questions, and why they are all asked HERE
+    ///
+    /// Did I send this keyboard; did I send this key; did I send this meaning.
+    /// The buffer received all three from `keyboards_arrived` and hands them
+    /// back, so anything else is a component that made one up — and what is
+    /// about to be written is read by the daemon that owns the keyboard.
+    ///
+    /// # And the file is validated before it is installed
+    ///
+    /// `ronoctua_keyboards::install` renders into a scratch directory, asks
+    /// `keyd check` — the daemon's own parser — and only then writes. A keyd
+    /// that refuses its configuration is a keyboard with no leader on a
+    /// machine somebody is holding.
+    fn remap(&mut self, what: &ronoctua_protocol::Remap) {
+        let Some(gate) = self.keyboards.as_ref() else {
+            return;
+        };
+        if !gate.boards.contains(&what.device) {
+            tracing::error!(
+                device = what.device,
+                "remap refused: no such keyboard was sent"
+            );
+            return;
+        }
+        if !gate.keys.contains(&what.key) {
+            tracing::error!(key = what.key, "remap refused: that key was not offered");
+            return;
+        }
+        if !gate.choices.contains(&what.becomes) {
+            tracing::error!(
+                becomes = what.becomes,
+                "remap refused: that meaning was not offered"
+            );
+            return;
+        }
+
+        if !ronoctua_keyboards::somewhere_to_write(ronoctua_keyboards::DIRECTORY) {
+            tracing::warn!(
+                directory = ronoctua_keyboards::DIRECTORY,
+                "no place for the keyboard rules on this machine"
+            );
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_NO_PLACE);
+            return;
+        }
+        let store = ronoctua_keyboards::store();
+        // `parsed` AND NOT `read`: this writes the whole value back, and a
+        // reader's default over a file that will not parse is how somebody
+        // loses every keyboard they had configured. The rule is written out in
+        // `ronoctua_store`.
+        let Some(mut prefs) = store.parsed() else {
+            tracing::error!("the keyboards file will not parse; refusing to write over it");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_FILE);
+            return;
+        };
+        prefs.set(&what.device, &what.key, &what.becomes);
+        let files = ronoctua_keyboards::render(&prefs);
+        if let Err(e) = ronoctua_keyboards::install(ronoctua_keyboards::DIRECTORY, &files) {
+            tracing::error!(error = %e, "keyd would not take the rules");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_REFUSED);
+            return;
+        }
+        if let Err(e) = store.write(&prefs) {
+            tracing::error!(error = %e, "the keyboards file was not written");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_FILE);
+            return;
+        }
+        // AND THE DAEMON IS TOLD, through the polkit rule that already exists
+        // for `keyboard-restore`: one verb, one unit, one user.
+        if let Err(e) = crate::keyboard::restore_it() {
+            tracing::error!(error = %e, "keyd did not restart");
+            self.trouble(ronoctua_i18n::key::KEYBOARD_TROUBLE_RESTART);
+            return;
+        }
+        if let Some(k) = self.keyboards.as_mut() {
+            k.trouble.clear();
+        }
+        self.keyboards_arrived();
+    }
+
+    /// Remembers why a write did not go through, and says so on the next
+    /// delivery — the buffer draws it, because a refusal nobody sees is a key
+    /// that did nothing.
+    fn trouble(&mut self, key: &str) {
+        if let Some(k) = self.keyboards.as_mut() {
+            k.trouble = key.to_owned();
+        }
+        self.keyboards_arrived();
     }
 
     /// Writes a filesystem, once the target checks out.

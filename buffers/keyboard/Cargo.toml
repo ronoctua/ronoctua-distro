@@ -1,0 +1,39 @@
+# A workspace of its own, like every buffer: the component is built for
+# `wasm32-wasip2`, and as a member of the host's workspace `rust-lld` would
+# refuse the version script with an error that mentions wasm nowhere.
+[workspace]
+
+[package]
+name = "ronoctua-buffer-keyboard"
+description = "The keyboards: which ones this machine has, and what each key on each one means."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# THE LAYOUT VOCABULARY, and the bindings with it.
+#
+# `wit-bindgen` is NOT a dependency here any more: `ronoctua-design` owns the
+# `generate!` and re-exports the `export!` macro, so there is ONE generated
+# binding set for the seven buffers instead of seven. That is what makes "one
+# heading" enforceable rather than agreed — and it is why the panel that was
+# already right about its heading is now the panel everybody copies.
+ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
+  "guest",
+] }
+
+[lints.rust]
+# The same ones as the host's workspace, repeated because this is another
+# workspace. There is no `allow` for generated code any more: this buffer
+# generates none.
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

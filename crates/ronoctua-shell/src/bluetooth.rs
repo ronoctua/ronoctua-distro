@@ -52,14 +52,13 @@ pub enum Where {
     OnTheList,
     /// Only while the other side is asking.
     WhileAsked,
-    /// Only where there is an audio card to move between profiles.
+    /// Only where the device has something to ADJUST.
     ///
-    /// A KEYBOARD HAS NONE, and the screen proof of a keyboard's own page
-    /// showed the line teaching "the next audio profile" on it — the same
-    /// defect as the radio's screen teaching `c connect`, one level down.
-    /// `OnADevice` is not fine enough: it is about WHICH SCREEN, and this is
-    /// about what the device on it can do.
-    OnACard,
+    /// The same reasoning as `OnACard`, one step wider: a headset has a
+    /// volume and a profile, a keyboard has whether it may wake the machine,
+    /// and a thermometer has nothing. Teaching `TAB` on a page with one
+    /// column is teaching a key that goes nowhere.
+    OnTheSettings,
 }
 
 /// The keys this view answers to, and the hint line is generated from it —
@@ -79,15 +78,16 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("o", "bluetooth-power", Where::OnTheRadio),
     ("v", "bluetooth-discoverable", Where::OnTheRadio),
     ("h", "bluetooth-unnamed", Where::OnTheList),
-    ("<right>", "bluetooth-audio-next", Where::OnACard),
-    ("<left>", "bluetooth-audio-previous", Where::OnACard),
+    ("TAB", "bluetooth-settings", Where::OnTheSettings),
+    ("<right>", "bluetooth-more", Where::OnTheSettings),
+    ("<left>", "bluetooth-less", Where::OnTheSettings),
     ("y", "bluetooth-accept", Where::WhileAsked),
     ("n", "bluetooth-refuse", Where::WhileAsked),
 ];
 
 impl Where {
     /// Does a key of this kind mean anything on that screen?
-    const fn shown(self, level: &Level, asking: bool, card: bool) -> bool {
+    const fn shown(self, level: &Level, asking: bool, settings: bool) -> bool {
         match self {
             Self::Anywhere => true,
             Self::WhileAsked => asking,
@@ -98,7 +98,7 @@ impl Where {
             Self::OnADevice => matches!(level, Level::List | Level::Device(_)),
             // THE CARD DECIDES, not the screen: a keyboard's own page is a
             // device page with nothing to move between.
-            Self::OnACard => card && matches!(level, Level::Device(_)),
+            Self::OnTheSettings => settings && matches!(level, Level::Device(_)),
             Self::OnTheRadio => matches!(level, Level::List | Level::Radio),
             Self::OnTheList => matches!(level, Level::List),
         }
@@ -127,6 +127,7 @@ pub const POOL: [&str; 4] = ["bt-1", "bt-2", "bt-3", "bt-4"];
 /// widths and compares the targets. Without it, the day one section drops a
 /// row on a narrow screen, the key acts on a different row from the one the
 /// footer drew — and nothing would say so.
+#[cfg(test)]
 const DECIDING_WIDTH: u16 = 80;
 
 /// A key, already reduced to what the view cares about.
@@ -156,14 +157,23 @@ pub enum Press {
     Scan,
     /// Turn the radio on or off.
     Power,
-    /// The next audio profile, and the one before.
+    /// MORE of whatever the cursor is on, and less.
     ///
-    /// The ONLY pair of arrows in this view, and they are here because the
-    /// question they answer has an order: off, music in stereo, a call with
-    /// the microphone. `RET` would need somewhere to put a list.
+    /// The only pair of arrows in this view, and they belong to the settings
+    /// column: a volume goes up in steps and an audio profile has an order
+    /// (off, music in stereo, a call with the microphone). `RET` would need
+    /// somewhere to put a list. They used to be named after the profile,
+    /// which was true while it was the only thing they moved.
     Right,
     /// The other way round `Right` goes.
     Left,
+    /// Cross to the other half of a device's page, and back.
+    ///
+    /// Side by side when the width affords it, stacked when it does not —
+    /// and the key means the same thing either way, which is why it is not
+    /// gated on the width. Stacked, it JUMPS: walking twelve facts with the
+    /// arrow to reach the volume is not crossing, it is scrolling.
+    Cross,
     /// Let others see this machine, or stop.
     Discoverable,
     /// Show the devices with no name, or hide them again.
@@ -229,12 +239,55 @@ pub enum Target {
     /// the view holds the CARD it read, so the row does not have to go
     /// looking when a key is pressed.
     Audio(u32, i32),
+    /// Open the keyboards, which is where a key of this one is changed.
+    ///
+    /// A DOOR AND NOT A SETTING. What a key becomes is a screen of its own —
+    /// seven keys and nine meanings — and the settings column is a handful of
+    /// rows beside the facts. The row says where to go; the buffer is where
+    /// one sits down.
+    ///
+    /// The string is the device's `Modalias`, which carries the same
+    /// `vendor:product` keyd matches on — so the buffer opens with THIS
+    /// keyboard under the cursor. Empty opens the list, which is the other
+    /// question: what every keyboard on this machine does.
+    Keyboards(String),
+    /// Set this sink's volume, as a percentage.
+    ///
+    /// PipeWire's NODE id, already resolved — and never the card's: the two
+    /// are different objects and `wpctl` takes a different one for each.
+    Volume(u32, u8),
+    /// Silence this sink, or give it back.
+    Mute(u32, bool),
     /// May this device wake the machine from sleep?
     ///
     /// `readwrite` on the bus, and it was drawn as a FACT: on a Bluetooth
     /// keyboard it is the setting that decides whether pressing a key can
     /// bring the machine back at all.
     Wake(String, bool),
+}
+
+/// How much one press of an arrow moves a volume.
+///
+/// FIVE and not one: a volume is read as a rough amount, and twenty presses to
+/// cross the range is a key nobody uses. It rounds to the step first, so a
+/// device that came back from PipeWire at 37 goes to 40 and then 45 rather
+/// than 42 — the ladder is the same wherever you got on it.
+const VOLUME_STEP: u8 = 5;
+
+/// The volume one arrow away, clamped to the range.
+#[must_use]
+pub const fn step(now: u8, up: bool) -> u8 {
+    let rung = now / VOLUME_STEP * VOLUME_STEP;
+    if up {
+        let next = rung + VOLUME_STEP;
+        if next > 100 { 100 } else { next }
+    } else if rung == 0 {
+        0
+    } else if rung == now {
+        rung - VOLUME_STEP
+    } else {
+        rung
+    }
 }
 
 /// The next visibility timeout in the ring — three minutes, ten, an hour,
@@ -266,6 +319,20 @@ pub struct Row {
     /// Drawn dim and REFUSING — a blocked device's connect, a radio that is
     /// off. Reachable, so the row can say why.
     pub disabled: bool,
+    /// The whole sentence, for the line the footer explains things on.
+    ///
+    /// # Why a row carries one at all
+    ///
+    /// Because a label is two or three words and some of these rows are about
+    /// things nobody meets twice a year. `services read` and `the keys were
+    /// kept` are true and say nothing to somebody who has not read the
+    /// Bluetooth specification — and the owner said so from the screen.
+    ///
+    /// It arrives by POINTING, which is where this footer already puts a
+    /// description (`ExpansionRow::description`, and the leader's own list
+    /// before it). Nothing floats: it is the message line, which is invariant
+    /// 14 intact.
+    pub description: Option<String>,
 }
 
 /// What the view wants done, after a key or a click.
@@ -289,6 +356,20 @@ pub enum Errand {
     Type,
     /// Ask for a name in the minibuffer, for the device at this path.
     Rename(String),
+    /// Run a command of the registry, by id, with an argument when it takes
+    /// one.
+    ///
+    /// The footer runs it; the window SENDS it, over the control socket the
+    /// notification manager already forwards through. A second implementation
+    /// in the second door is the second door disagreeing with the first.
+    Run(&'static str, String),
+    /// Set a sink's volume — PipeWire's NODE id, and the percentage.
+    ///
+    /// Beside `Audio` and not folded into it for the reason the two `wpctl`
+    /// verbs are not the same call: one takes a device and the other a node.
+    Volume(u32, u8),
+    /// Silence a sink, or give it back.
+    Mute(u32, bool),
     /// Put this device's card in a profile — PipeWire's id, and the index.
     ///
     /// NOT an `Ask`: the orders thread speaks to BlueZ, and this is
@@ -333,6 +414,38 @@ pub struct View {
     /// `None` is both "not an audio device" and "PipeWire is not answering",
     /// and the row says which by not being there at all.
     card: Option<ronoctua_bluetooth::audio::Card>,
+    /// The sink of the device this view is looking at, when it has one.
+    ///
+    /// Read beside the card, out of the SAME `pw-dump`: a volume and a
+    /// profile are two objects of one graph, and printing it twice would be
+    /// two processes for one screen.
+    sink: Option<ronoctua_bluetooth::audio::Sink>,
+    /// Which half of a device's page the keyboard is in.
+    ///
+    /// Only meaningful side by side. Stacked, the two halves are one list and
+    /// the cursor's own index says which one it is in — so `TAB` moves the
+    /// cursor there instead of moving the keyboard.
+    pane: Pane,
+    /// Has the device on screen anything to adjust?
+    ///
+    /// Learned when the level changes, beside the card, because the hint line
+    /// has to know it and does not have the scene. Without it `TAB` would be
+    /// taught on a thermometer's page.
+    settings: bool,
+}
+
+/// The two halves of a device's page.
+///
+/// Side by side above `space.bluetooth.settingsFrom`, stacked below it — and
+/// stacked they are still two halves, because `TAB` crosses between them
+/// either way and the cursor knows which one it is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pane {
+    /// What this thing IS, and whether it is working.
+    #[default]
+    Facts,
+    /// What you can turn, about this thing in particular.
+    Settings,
 }
 
 /// Where a row's cells begin and how wide they are, in the ROW's cells —
@@ -342,6 +455,44 @@ pub fn extent(columns: u16) -> (u16, u16) {
     let left = crate::chrome::INSET.saturating_sub(crate::chrome::FIELDS_LEAD);
     let end = columns.saturating_sub(crate::chrome::FIELDS_LEAD + tokens::space::FILES_EDGERIGHT);
     (left, end.saturating_sub(left))
+}
+
+/// Does the width afford the settings beside the facts?
+///
+/// The token is the cut and the arithmetic is here — the same division of
+/// labour `notifications::two_columns` makes, and the same answer in the
+/// footer's region and in the window.
+#[must_use]
+pub const fn two_columns(columns: u16) -> bool {
+    columns >= tokens::space::BLUETOOTH_SETTINGSFROM
+}
+
+/// Where the settings column starts, in cells.
+#[must_use]
+pub fn split_at(columns: u16) -> u16 {
+    columns * tokens::space::BLUETOOTH_SPLITATPCT / 100
+}
+
+/// One half's cells, when there are two halves.
+///
+/// Below the cut both halves answer the FULL width: they are stacked then, and
+/// a stacked half that kept the narrow extent would draw its rows in the left
+/// sixty per cent of a screen with nothing beside them.
+#[must_use]
+pub fn extent_of(pane: Pane, columns: u16) -> (u16, u16) {
+    let (left, room) = extent(columns);
+    if !two_columns(columns) {
+        return (left, room);
+    }
+    let end = left + room;
+    let split = split_at(columns);
+    match pane {
+        Pane::Facts => (
+            left,
+            split.saturating_sub(left + tokens::space::MODELINE_SEGMENTGAP),
+        ),
+        Pane::Settings => (split, end.saturating_sub(split)),
+    }
 }
 
 /// A daemon's word, in the person's language — or the daemon's word.
@@ -445,14 +596,22 @@ impl View {
     /// the whole graph, and a headset's profile does not move while nobody is
     /// pressing a key. A failure is `None` and the row simply is not drawn —
     /// PipeWire not answering is not a reason for the view to say anything.
-    pub fn look_at_the_card(&mut self, scene: &Scene) {
+    pub fn look_at_the_device(&mut self, scene: &Scene) {
         self.card = None;
+        self.sink = None;
+        self.settings = false;
+        self.pane = Pane::Facts;
         let Level::Device(at) = &self.level else {
             return;
         };
-        let Some(address) = scene.device(at).map(|d| d.address.clone()) else {
+        let Some(d) = scene.device(at) else {
             return;
         };
+        // WHETHER THERE IS A SECOND HALF AT ALL, and the hint line needs the
+        // answer without having the scene. A device that exposes none of the
+        // three is not offered `TAB`.
+        self.settings = d.wake.is_some();
+        let address = d.address.clone();
         if address.is_empty() {
             return;
         }
@@ -460,6 +619,11 @@ impl View {
             Ok(card) => self.card = card,
             Err(e) => tracing::debug!(error = %e, "no audio card for this device"),
         }
+        match ronoctua_bluetooth::audio::sink(&address) {
+            Ok(sink) => self.sink = sink,
+            Err(e) => tracing::debug!(error = %e, "no audio sink for this device"),
+        }
+        self.settings = self.settings || self.card.is_some() || self.sink.is_some();
     }
 
     /// The row the cursor is on — what the region scrolls to.
@@ -508,8 +672,34 @@ impl View {
         self.cursor = 2;
     }
 
+    /// Which half a pointer at this cell is over.
+    ///
+    /// Separate from [`Self::clicked`] because the door has to ask it FIRST:
+    /// the rows describe whichever half has the keyboard, so it has to know
+    /// before it builds them.
+    pub fn aim(&mut self, cell: Option<u16>, columns: u16) {
+        if let Some(cell) = cell
+            && two_columns(columns)
+            && matches!(self.level, Level::Device(_))
+            && self.settings
+        {
+            self.pane = if cell >= split_at(columns) {
+                Pane::Settings
+            } else {
+                Pane::Facts
+            };
+        }
+    }
+
     /// Puts the cursor on row `n`, when it is a row one can stand on.
-    pub fn clicked(&mut self, n: usize, rows: &[Row]) {
+    ///
+    /// `cell` is where along the line the pointer was, and it decides WHICH
+    /// HALF of a device's page was clicked — the keyboard's `TAB` and the
+    /// mouse have to reach the same two places, or the second column would be
+    /// keyboard-only. `None` is a caller that has no pointer, which leaves
+    /// the halves as they are.
+    pub fn clicked(&mut self, n: usize, cell: Option<u16>, columns: u16, rows: &[Row]) {
+        self.aim(cell, columns);
         if rows.get(n).is_some_and(|r| !r.heading) {
             self.put(n, rows);
         }
@@ -570,7 +760,7 @@ impl View {
         }
         let here: Vec<(&str, &str)> = OF_THE_VIEW
             .iter()
-            .filter(|(_, _, w)| w.shown(&self.level, self.question.is_some(), self.card.is_some()))
+            .filter(|(_, _, w)| w.shown(&self.level, self.question.is_some(), self.settings))
             .map(|(k, id, _)| (*k, *id))
             .collect();
         out.extend(crate::chrome::hint_of(&here, texts));
@@ -579,8 +769,21 @@ impl View {
 
     /// Acts on a key.
     #[must_use]
-    pub fn key(&mut self, press: Press, scene: &Scene, texts: &ronoctua_i18n::Texts) -> Errand {
-        let rows = self.rows(scene, DECIDING_WIDTH, texts);
+    pub fn key(
+        &mut self,
+        press: Press,
+        scene: &Scene,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        // THE WIDTH IS THE DOOR'S, and it has to be: a device's page has two
+        // halves that sit side by side above `space.bluetooth.settingsFrom`
+        // and stack below it, and `TAB` means "move the keyboard" in one and
+        // "move the cursor" in the other. This used to decide every key at a
+        // fixed eighty columns, which was sound while every screen was one
+        // column — the rows really were the same things at every width.
+        let width = columns.max(1);
+        let rows = self.rows(scene, width, texts);
         self.settle(&rows);
         let target = rows
             .get(self.cursor)
@@ -682,7 +885,7 @@ impl View {
                     // changed without this view knowing, and `pw-dump` is a
                     // process — asking it per frame would put a fork in the
                     // footer's loop.
-                    self.look_at_the_card(scene);
+                    self.look_at_the_device(scene);
                     Errand::Nothing
                 }
                 Target::Radio => {
@@ -697,6 +900,24 @@ impl View {
                 Target::Timeout(seconds) => Errand::Order(Ask::DiscoverableTimeout(seconds)),
                 Target::PairableTimeout(seconds) => Errand::Order(Ask::PairableTimeout(seconds)),
                 Target::Wake(at, on) => Errand::Order(Ask::Wake(at, on)),
+                // `RET` ON A VOLUME IS ONE STEP UP, and then it wraps to
+                // nothing: a row that only ever goes up is a row you cannot
+                // undo without reaching for the arrows. The arrows are the
+                // proper answer and the hint teaches them; this is the one
+                // key that is always on a row, so it does the obvious thing.
+                Target::Keyboards(which) => Errand::Run("keyboard-open", which),
+                Target::Volume(node, wanted) => {
+                    if let Some(sink) = self.sink.as_mut() {
+                        sink.volume = wanted;
+                    }
+                    Errand::Volume(node, wanted)
+                }
+                Target::Mute(node, on) => {
+                    if let Some(sink) = self.sink.as_mut() {
+                        sink.muted = on;
+                    }
+                    Errand::Mute(node, on)
+                }
                 Target::Audio(card, profile) => Errand::Audio(card, profile),
                 // THE MACHINE'S OWN NAME is typed in the minibuffer, the same
                 // path a device's is — `Errand::Rename` with no path means
@@ -741,20 +962,90 @@ impl View {
                 self.unnamed = !self.unnamed;
                 Errand::Nothing
             }
-            // THE AUDIO PROFILE'S RING, and the only arrows in this view.
+            // MORE AND LESS, of whatever the cursor is on.
             //
-            // It acts on the CARD the view is holding and not on the row, for
-            // the power view's reason: the row is what says which profile is
-            // on, and the arrows move between the ones the device can
-            // actually do (`Card::next` skips the rest).
+            // They used to be the audio profile's ring and nothing else,
+            // which was true while the profile was the only thing in this
+            // view that had an order. Now the settings column has a volume
+            // too, so the arrows ask the ROW — and a row that has no order
+            // simply does not move, which is what an arrow on a fact should
+            // do.
+            //
+            // The profile still acts on the CARD the view is holding rather
+            // than on the row, for the power view's reason: the row says
+            // which profile is on, and `Card::next` is what knows which ones
+            // the device can actually do.
             Press::Right | Press::Left => {
-                let Some(card) = self.card.as_ref() else {
+                let up = press == Press::Right;
+                match target {
+                    Target::Volume(node, _) => {
+                        let now = self.sink.as_ref().map_or(0, |s| s.volume);
+                        let wanted = step(now, up);
+                        if wanted == now {
+                            return Errand::Nothing;
+                        }
+                        // THE VIEW MOVES ITS OWN NUMBER, and does not wait for
+                        // PipeWire to be asked again. `pw-dump` is read when
+                        // the level opens, so a row that waited for it would
+                        // sit at the old percentage until somebody left the
+                        // page and came back — one key press, no answer.
+                        if let Some(sink) = self.sink.as_mut() {
+                            sink.volume = wanted;
+                        }
+                        Errand::Volume(node, wanted)
+                    }
+                    _ => {
+                        let Some(card) = self.card.as_ref() else {
+                            return Errand::Nothing;
+                        };
+                        let Some(next) = card.next(up) else {
+                            return Errand::Nothing;
+                        };
+                        Errand::Audio(card.id, next.index)
+                    }
+                }
+            }
+            // CROSSING TO THE OTHER HALF.
+            //
+            // Side by side it moves the KEYBOARD and leaves the cursor on its
+            // line, which is what "act on the other column of this row" means.
+            // Stacked, the two halves are one list, so it moves the CURSOR to
+            // the top of the other block — walking twelve facts with an arrow
+            // to reach the volume is not crossing, it is scrolling.
+            Press::Cross => {
+                if !self.settings || !matches!(self.level, Level::Device(_)) {
                     return Errand::Nothing;
-                };
-                let Some(next) = card.next(press == Press::Right) else {
-                    return Errand::Nothing;
-                };
-                Errand::Audio(card.id, next.index)
+                }
+                if two_columns(width) {
+                    self.pane = match self.pane {
+                        Pane::Facts => Pane::Settings,
+                        Pane::Settings => Pane::Facts,
+                    };
+                    let rows = self.rows(scene, width, texts);
+                    // THE LINE IS KEPT, and the nearest row that can be stood
+                    // on is taken: the other column is usually shorter, and a
+                    // cursor left past its end would focus nothing.
+                    let mut i = self.cursor.min(rows.len().saturating_sub(1));
+                    while i > 0 && rows.get(i).is_some_and(|r| r.heading) {
+                        i -= 1;
+                    }
+                    if rows.get(i).is_some_and(|r| r.heading) {
+                        i = rows.iter().position(|r| !r.heading).unwrap_or(0);
+                    }
+                    self.put(i, &rows);
+                } else {
+                    let rows = self.rows(scene, width, texts);
+                    let facts = self.facts_len_at(scene, width, texts);
+                    let (from, to) = if self.cursor < facts {
+                        (facts, rows.len())
+                    } else {
+                        (0, facts)
+                    };
+                    if let Some(i) = (from..to).find(|i| rows.get(*i).is_some_and(|r| !r.heading)) {
+                        self.put(i, &rows);
+                    }
+                }
+                Errand::Nothing
             }
             // THE REST ARE ABOUT THE DEVICE UNDER THE CURSOR, and the detail
             // is about the device it opened: one lookup, two levels.
@@ -827,6 +1118,7 @@ impl View {
             room,
             cursor: self.cursor,
             texts,
+            said: None,
         };
         if let Some(q) = &self.question {
             self.prompt(&mut b, q, scene);
@@ -836,7 +1128,9 @@ impl View {
             Level::List => self.list(&mut b, scene),
             Level::Radio => self.radio(&mut b, scene),
             Level::Device(at) => match scene.device(at) {
-                Some(d) => self.detail(&mut b, d, texts),
+                // THE DEVICE PAGE HAS TWO HALVES and builds its own rows: it
+                // needs an extent per half, and the builder above has one.
+                Some(d) => return self.device_rows(d, columns, texts),
                 // IT WENT AWAY WHILE THE DETAIL WAS OPEN: say so where the
                 // facts were, rather than draw an empty screen.
                 None => {
@@ -1023,15 +1317,23 @@ impl View {
                 key::BLUETOOTH_NO
             })
         };
-        b.heading(key::BLUETOOTH_TITLE);
-        b.pair(
-            format!("{} {}", glyph(d.kind), d.label),
+        // THE PAGE IS TITLED WITH THE DEVICE, not with the word `Bluetooth` —
+        // which was true of this screen, of the list, and of the radio, and
+        // therefore told nobody which of the three they were on.
+        b.heading_of(format!("{} {}", glyph(d.kind), d.label));
+        // AND WHAT IT IS gets a label of its own. The name was the LABEL and
+        // the kind the value, which reads as though the device were called
+        // "headphones" — a row whose left half is data is a row with no
+        // question in it.
+        b.about_key(key::BLUETOOTH_ABOUT_KIND);
+        b.fact(
+            key::BLUETOOTH_FACT_KIND,
             texts.t(&format!("bluetooth-kind-{}", d.kind.id())),
-            Target::Nothing,
-            false,
         );
+        b.about_key(key::BLUETOOTH_ABOUT_CONNECTED);
         b.fact_coloured(key::BLUETOOTH_FACT_CONNECTED, yes_no(d.connected), None);
         if let Some(p) = d.battery {
+            b.about_key(key::BLUETOOTH_ABOUT_BATTERY);
             b.fact_coloured(
                 key::BLUETOOTH_FACT_BATTERY,
                 texts.t_args(
@@ -1042,18 +1344,26 @@ impl View {
             );
         }
         if let Some(source) = &d.battery_source {
+            b.about_key(key::BLUETOOTH_ABOUT_BATTERY_SOURCE);
             b.fact(key::BLUETOOTH_FACT_BATTERY_SOURCE, source.clone());
         }
+        b.about_key(key::BLUETOOTH_ABOUT_PAIRED);
         b.fact(key::BLUETOOTH_FACT_PAIRED, yes_no(d.paired));
+        b.about_key(key::BLUETOOTH_ABOUT_BONDED);
         b.fact(key::BLUETOOTH_FACT_BONDED, yes_no(d.bonded));
+        b.about_key(key::BLUETOOTH_ABOUT_TRUSTED);
         b.fact(key::BLUETOOTH_FACT_TRUSTED, yes_no(d.trusted));
+        b.about_key(key::BLUETOOTH_ABOUT_BLOCKED);
         b.fact(key::BLUETOOTH_FACT_BLOCKED, yes_no(d.blocked));
         if !d.name.is_empty() {
+            b.about_key(key::BLUETOOTH_ABOUT_NAME);
             b.fact(key::BLUETOOTH_FACT_NAME, d.name.clone());
         }
         if !d.alias.is_empty() && d.alias != d.name {
+            b.about_key(key::BLUETOOTH_ABOUT_ALIAS);
             b.fact(key::BLUETOOTH_FACT_ALIAS, d.alias.clone());
         }
+        b.about_key(key::BLUETOOTH_ABOUT_ADDRESS);
         b.fact(key::BLUETOOTH_FACT_ADDRESS, d.address.clone());
         if !d.address_type.is_empty() {
             // A CLOSED VOCABULARY IS A TEXT KEY, not the daemon's word.
@@ -1063,12 +1373,14 @@ impl View {
             // screen ("tipo de endereço: random"). This file already
             // translates `PowerState` and every service UUID through a key;
             // three enumerations had been left out.
+            b.about_key(key::BLUETOOTH_ABOUT_ADDRESS_TYPE);
             b.fact(
                 key::BLUETOOTH_FACT_ADDRESS_TYPE,
                 word_or(texts, "bluetooth-address-type", &d.address_type),
             );
         }
         if let Some(rssi) = d.rssi {
+            b.about_key(key::BLUETOOTH_ABOUT_RSSI);
             b.fact(
                 key::BLUETOOTH_FACT_RSSI,
                 texts.t_args(
@@ -1078,6 +1390,7 @@ impl View {
             );
         }
         if let Some(tx) = d.tx_power {
+            b.about_key(key::BLUETOOTH_ABOUT_TX_POWER);
             b.fact(
                 key::BLUETOOTH_FACT_TX_POWER,
                 texts.t_args(
@@ -1087,13 +1400,18 @@ impl View {
             );
         }
         if d.legacy {
+            b.about_key(key::BLUETOOTH_ABOUT_LEGACY);
             b.fact(key::BLUETOOTH_FACT_LEGACY, yes_no(true));
         }
         if let Some(wake) = d.wake {
-            // A SWITCH AND NOT A FACT. `WakeAllowed` is `readwrite` on
-            // `Device1`, and this drew it read-only — on a Bluetooth keyboard
-            // it is the setting that decides whether the lid opening the
-            // machine is a thing that can happen at all.
+            // A SWITCH AND NOT A FACT, and it stays HERE among the facts.
+            //
+            // It was moved to the settings column for one afternoon, and the
+            // owner sent it back: that column is for what this device adds,
+            // not for things taken out of this one. `WakeAllowed` is a
+            // property of `Device1` like every other row around it — the only
+            // difference is that this one can be turned.
+            b.about_key(key::BLUETOOTH_ABOUT_WAKE);
             b.pair(
                 b.texts.t(key::BLUETOOTH_FACT_WAKE),
                 yes_no(wake),
@@ -1101,37 +1419,40 @@ impl View {
                 !d.paired,
             );
         }
+        b.about_key(key::BLUETOOTH_ABOUT_SERVICES);
         b.fact(key::BLUETOOTH_FACT_SERVICES, yes_no(d.services_resolved));
         if let Some(mode) = &d.reconnect {
+            b.about_key(key::BLUETOOTH_ABOUT_RECONNECT);
             b.fact(
                 key::BLUETOOTH_FACT_RECONNECT,
                 word_or(texts, "bluetooth-reconnect", mode),
             );
         }
         if let Some(class) = d.class {
+            b.about_key(key::BLUETOOTH_ABOUT_CLASS);
             b.fact(key::BLUETOOTH_FACT_CLASS, format!("0x{class:06x}"));
         }
         if let Some(appearance) = d.appearance {
+            b.about_key(key::BLUETOOTH_ABOUT_APPEARANCE);
             b.fact(key::BLUETOOTH_FACT_APPEARANCE, appearance.to_string());
         }
         if let Some(modalias) = &d.modalias {
+            b.about_key(key::BLUETOOTH_ABOUT_MODALIAS);
             b.fact(key::BLUETOOTH_FACT_MODALIAS, modalias.clone());
         }
         if !d.adapter.is_empty() {
+            b.about_key(key::BLUETOOTH_ABOUT_ADAPTER);
             b.fact(key::BLUETOOTH_FACT_ADAPTER, d.adapter.clone());
         }
-        // THE AUDIO PROFILE, which is the one thing on this screen that is a
-        // CHOICE and not a fact — and the only row in this view the arrows
-        // move. BlueZ cannot answer it (`MediaTransport1` says what is
-        // playing, never what could be), so it comes from PipeWire; see
-        // `ronoctua_bluetooth::audio`.
-        //
-        // NO CARD, NO ROW. A device that is not audio has none, and a
-        // PipeWire that is not answering is the same absence — offering a
-        // switch that cannot move is worse than not offering it.
+        // WHICH WAY THE SOUND GOES, and it belongs here for the same reason
+        // the wake switch does: it is what the device IS doing, which is the
+        // question this column answers. BlueZ cannot say it (`MediaTransport1`
+        // reports what is playing, never what could be), so it comes from
+        // PipeWire — see `ronoctua_bluetooth::audio`.
         if let Some(card) = self.card.as_ref()
             && let Some(now) = card.now()
         {
+            b.about_key(key::BLUETOOTH_ABOUT_AUDIO_PROFILE);
             b.pair(
                 b.texts.t(key::BLUETOOTH_AUDIO_PROFILE),
                 word_or(texts, "bluetooth-audio", now),
@@ -1143,6 +1464,7 @@ impl View {
         for t in &d.transports {
             let what = ronoctua_bluetooth::profile_key(&t.uuid)
                 .map_or_else(|| t.uuid.clone(), |k| texts.t(k));
+            b.about_key(key::BLUETOOTH_ABOUT_AUDIO);
             b.fact(
                 key::BLUETOOTH_FACT_AUDIO,
                 texts.t_with(
@@ -1157,6 +1479,7 @@ impl View {
                 // A PERCENTAGE, not the raw 0-127 the bus carries. "84" is a
                 // number a person cannot place; the row said it for months.
                 let percent = i64::from(v).min(127) * 100 / 127;
+                b.about_key(key::BLUETOOTH_ABOUT_VOLUME);
                 b.fact(
                     key::BLUETOOTH_FACT_VOLUME,
                     texts.t_args(key::BLUETOOTH_PERCENT, &[("percent", Arg::Number(percent))]),
@@ -1165,6 +1488,7 @@ impl View {
             if let Some(c) = t.codec {
                 // THE NAME AND NOT THE BYTE. `0` is SBC and `2` is AAC; the
                 // screen said `0`, which is true of nothing a person knows.
+                b.about_key(key::BLUETOOTH_ABOUT_CODEC);
                 b.fact(
                     key::BLUETOOTH_FACT_CODEC,
                     word_or(texts, "bluetooth-codec", &c.to_string()),
@@ -1172,14 +1496,37 @@ impl View {
             }
         }
 
-        // WHAT IT CAN DO, one row each, and `RET` connects or drops that one.
+        // THE SERVICES IT ANNOUNCES, one row each, and `RET` connects or drops
+        // that one. The heading said `What it can do`, which is the kind of
+        // title that fits any list and names none.
         b.heading(key::BLUETOOTH_HEADING_PROFILES);
-        if d.uuids.is_empty() {
-            b.note(key::BLUETOOTH_NOTHING_HERE);
-        }
+        // ONE ROW PER SENTENCE, and two things are dropped before that.
+        //
+        // THE PLUMBING, because every BLE device carries `1800` and `1801`
+        // whether it wants to or not, and "says its own name" in a list headed
+        // *what it can do* is a row that pushed the real answer down. And a
+        // SENTENCE ALREADY SAID, because the ids are roles of one profile and a
+        // device announces several: the owner's headphones carry `110c`,
+        // `110e` and `110f`, which are three ids for one thing, and the screen
+        // drew "its buttons control the player" three times.
+        //
+        // The row keeps the FIRST id that said it, which is the one the device
+        // put first — as good an answer as any, and it is a real id, so
+        // connecting it still means something.
+        let mut already: Vec<String> = Vec::new();
         for uuid in &d.uuids {
-            let said =
-                ronoctua_bluetooth::profile_key(uuid).map_or_else(|| uuid.clone(), |k| texts.t(k));
+            if ronoctua_bluetooth::profile_is_plumbing(uuid) {
+                continue;
+            }
+            let said = ronoctua_bluetooth::profile_key(uuid).map(|k| texts.t(k));
+            let gloss = said.clone().unwrap_or_default();
+            // ONE ROW PER SENTENCE — and an id nobody named is its own
+            // sentence, so two of those never collapse into one.
+            let seen = said.clone().unwrap_or_else(|| uuid.clone());
+            if already.contains(&seen) {
+                continue;
+            }
+            already.push(seen);
             // WHETHER THIS ONE IS UP, not whether the device is: on a
             // connected headset every service row used to say "disconnect",
             // so a person could never add the microphone to the music.
@@ -1190,13 +1537,31 @@ impl View {
                 .iter()
                 .find(|t| t.uuid.eq_ignore_ascii_case(uuid))
                 .map_or(d.connected, |t| t.state != "idle");
-            b.pair(
-                said,
+            // THE ID IS THE LABEL, AND THE WHOLE OF IT. It is what a person
+            // searches for and what a manufacturer's page names; the sentence
+            // we have is a gloss, and a gloss in the label's place reads as
+            // though it were the thing.
+            //
+            // Not the four-digit short form: that is the SIG's half of the
+            // string, and half an identifier is not one — what the device
+            // announces, and what anything else will call it, is the whole of
+            // it.
+            let named = uuid.clone();
+            b.about(match &said {
+                Some(sentence) => texts.t_with(
+                    key::BLUETOOTH_ABOUT_PROFILE,
+                    &[("id", &named), ("said", sentence)],
+                ),
+                None => texts.t_with(key::BLUETOOTH_ABOUT_PROFILE_UNKNOWN, &[("id", &named)]),
+            });
+            b.triple(
+                named,
                 texts.t(if running {
                     key::BLUETOOTH_YES
                 } else {
                     key::BLUETOOTH_NO
                 }),
+                gloss,
                 Target::Profile {
                     device: d.at.clone(),
                     uuid: uuid.clone(),
@@ -1205,6 +1570,207 @@ impl View {
                 !d.paired,
             );
         }
+        // AND THE NOTE ASKS WHAT WAS DRAWN, not what was announced. A device
+        // whose whole list is plumbing — a bare BLE peripheral is exactly that
+        // — used to leave the heading standing over nothing at all.
+        if already.is_empty() {
+            b.note(key::BLUETOOTH_NOTHING_HERE);
+        }
+    }
+
+    /// The other half of a device's page: what this KIND of thing adds.
+    ///
+    /// # What belongs here, and what does not
+    ///
+    /// Only things the facts column does not already have. It is not a second
+    /// home for rows moved out of the first — that was the first attempt, and
+    /// the owner sent the wake switch and the audio profile back: both are
+    /// properties of `Device1`, and a column that empties its neighbour has
+    /// added nothing.
+    ///
+    /// What goes here is what this device can do that a Bluetooth device in
+    /// general cannot, INCLUDING what only something outside BlueZ can answer:
+    /// a headset's volume is PipeWire's, and a keyboard's keys are keyd's.
+    /// That is the shape a specific device gets a specific screen through —
+    /// one arm here, and the row it draws.
+    fn settings(&self, b: &mut Builder<'_>, d: &Device, texts: &ronoctua_i18n::Texts) {
+        use ronoctua_i18n::{Arg, key};
+        let yes_no = |on: bool| {
+            texts.t(if on {
+                key::BLUETOOTH_YES
+            } else {
+                key::BLUETOOTH_NO
+            })
+        };
+        b.heading(key::BLUETOOTH_HEADING_SETTINGS);
+        let mut any = false;
+
+        // HOW LOUD, and it is PipeWire's answer about a NODE — BlueZ has no
+        // volume to give. `wpctl` shows the cube root of what the graph
+        // stores, which is what every other volume on the machine shows;
+        // `audio::Sink` has already done that.
+        if let Some(sink) = self.sink.as_ref() {
+            any = true;
+            b.about_key(key::BLUETOOTH_ABOUT_SINK_VOLUME);
+            b.pair(
+                b.texts.t(key::BLUETOOTH_SETTING_VOLUME),
+                texts.t_args(
+                    key::BLUETOOTH_PERCENT,
+                    &[("percent", Arg::Number(i64::from(sink.volume)))],
+                ),
+                Target::Volume(sink.id, step(sink.volume, true)),
+                !d.connected,
+            );
+            b.about_key(key::BLUETOOTH_ABOUT_MUTE);
+            b.pair(
+                b.texts.t(key::BLUETOOTH_SETTING_MUTE),
+                yes_no(sink.muted),
+                Target::Mute(sink.id, !sink.muted),
+                !d.connected,
+            );
+        }
+
+        // AND A KEYBOARD'S KEYS ARE KEYD'S, which is a screen of its own —
+        // seven keys and nine meanings do not fit beside the facts. Two doors,
+        // because there are two questions: what THIS keyboard does, and what
+        // every keyboard on the machine does.
+        if d.kind == Kind::Keyboard {
+            any = true;
+            b.about_key(key::BLUETOOTH_ABOUT_THIS_KEYBOARD);
+            b.door(
+                b.texts.t(key::BLUETOOTH_DOOR_THIS_KEYBOARD),
+                Target::Keyboards(d.modalias.clone().unwrap_or_default()),
+            );
+            b.about_key(key::BLUETOOTH_ABOUT_ALL_KEYBOARDS);
+            b.door(
+                b.texts.t(key::BLUETOOTH_DOOR_ALL_KEYBOARDS),
+                Target::Keyboards(String::new()),
+            );
+        }
+
+        if !any {
+            b.note(key::BLUETOOTH_NOTHING_TO_ADJUST);
+        }
+    }
+
+    /// A device's page: the facts, and what can be adjusted about it.
+    ///
+    /// # Why the halves are built separately and joined afterwards
+    ///
+    /// Because they are joined two different ways. Side by side, row `i` of
+    /// each half shares a LINE, and only the half the keyboard is in carries
+    /// the line's target — the other one is drawn and not acted on, which is
+    /// what "the cursor is in one column" has to mean. Stacked, they are one
+    /// list after another and every row keeps its own target.
+    ///
+    /// Either way each half is built with its OWN cursor, so the accent lands
+    /// on the row somebody is on and on no other.
+    fn device_rows(&self, d: &Device, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        let facts = self.half(Pane::Facts, d, columns, texts);
+        let settings = self.half(Pane::Settings, d, columns, texts);
+
+        if !two_columns(columns) {
+            // STACKED: one list, and the cursor's own index says which half
+            // it is in. `half` was given the offset, so the accent is already
+            // where it belongs.
+            let mut out = facts;
+            out.extend(settings);
+            return out;
+        }
+
+        let tall = facts.len().max(settings.len());
+        (0..tall)
+            .map(|i| {
+                let left = facts.get(i);
+                let right = settings.get(i);
+                let mine = match self.pane {
+                    Pane::Facts => left,
+                    Pane::Settings => right,
+                };
+                let mut fields = Vec::new();
+                if let Some(l) = left {
+                    fields.extend(l.fields.clone());
+                }
+                if let Some(r) = right {
+                    fields.extend(r.fields.clone());
+                }
+                Row {
+                    fields,
+                    focused: mine.is_some_and(|m| m.focused),
+                    // A LINE WHERE THE KEYBOARD'S HALF HAS NOTHING IS A
+                    // HEADING, which is how the cursor skips it. Without this
+                    // the arrows would stop on the blank beside a row of the
+                    // other column, and `RET` there would do nothing while
+                    // something was plainly drawn on the line.
+                    heading: mine.is_none_or(|m| m.heading),
+                    target: mine.map_or(Target::Nothing, |m| m.target.clone()),
+                    disabled: mine.is_some_and(|m| m.disabled),
+                    // THE SENTENCE OF THE HALF THE KEYBOARD IS IN, for the
+                    // same reason its target is: pointing at a line asks about
+                    // the column that acts.
+                    description: mine.and_then(|m| m.description.clone()),
+                }
+            })
+            .collect()
+    }
+
+    /// One half of a device's page, in its own cells and with its own cursor.
+    fn half(&self, pane: Pane, d: &Device, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        let (left, room) = extent_of(pane, columns);
+        // WHOSE CURSOR THIS HALF CARRIES. Side by side it is the pane the
+        // keyboard is in; stacked, the two halves are one list, so the second
+        // one counts from where the first ended.
+        let cursor = if two_columns(columns) {
+            if self.pane == pane {
+                self.cursor
+            } else {
+                usize::MAX
+            }
+        } else if pane == Pane::Facts {
+            self.cursor
+        } else {
+            self.cursor
+                .checked_sub(self.facts_len(d, columns, texts))
+                .unwrap_or(usize::MAX)
+        };
+        let mut b = Builder {
+            out: Vec::new(),
+            left,
+            room,
+            cursor,
+            texts,
+            said: None,
+        };
+        match pane {
+            Pane::Facts => self.detail(&mut b, d, texts),
+            Pane::Settings => self.settings(&mut b, d, texts),
+        }
+        b.out
+    }
+
+    /// How many rows the facts take on the device this view is open on.
+    fn facts_len_at(&self, scene: &Scene, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
+        let Level::Device(at) = &self.level else {
+            return 0;
+        };
+        scene
+            .device(at)
+            .map_or(0, |d| self.facts_len(d, columns, texts))
+    }
+
+    /// How many rows the facts take — what the stacked settings count from.
+    fn facts_len(&self, d: &Device, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
+        let (left, room) = extent_of(Pane::Facts, columns);
+        let mut b = Builder {
+            out: Vec::new(),
+            left,
+            room,
+            cursor: usize::MAX,
+            texts,
+            said: None,
+        };
+        self.detail(&mut b, d, texts);
+        b.out.len()
     }
 
     /// The radio's own settings.
@@ -1343,6 +1909,12 @@ struct Builder<'a> {
     room: u16,
     cursor: usize,
     texts: &'a ronoctua_i18n::Texts,
+    /// The sentence the NEXT row will carry.
+    ///
+    /// Staged rather than passed, because every row primitive would otherwise
+    /// grow an argument that almost every caller passes `None` to — and a
+    /// long tail of `None`s is how a parameter stops being read.
+    said: Option<String>,
 }
 
 impl Builder<'_> {
@@ -1356,7 +1928,21 @@ impl Builder<'_> {
         }
     }
 
+    /// A heading whose words are the thing's own, not a key of ours.
+    ///
+    /// A device's page is titled with the device: the glyph for what it is,
+    /// and the name it calls itself. It used to say `Bluetooth` — true of
+    /// every screen in this view, and therefore of no use on any of them.
+    fn heading_of(&mut self, text: String) {
+        self.headed(text);
+    }
+
     fn heading(&mut self, key: &str) {
+        let text = self.texts.t(key);
+        self.headed(text);
+    }
+
+    fn headed(&mut self, text: String) {
         // AIR FIRST, and never before the first title. See `chrome::AIR`: a
         // section that starts immediately under the last row of the one above
         // does not start anywhere, and the owner read that off the screen.
@@ -1367,22 +1953,36 @@ impl Builder<'_> {
                 heading: true,
                 target: Target::Nothing,
                 disabled: false,
+                description: None,
             });
         }
         self.out.push(Row {
             fields: vec![Self::piece(
                 self.left,
-                self.texts.t(key),
+                layout::elide_end(&text, self.room),
                 tokens::color::TEXT_GROUP,
             )],
             focused: false,
             heading: true,
             target: Target::Nothing,
             disabled: false,
+            description: None,
         });
     }
 
     /// A sentence that stands for a whole section — "nothing here".
+    /// The sentence the NEXT row carries, for the line the footer explains
+    /// things on.
+    fn about(&mut self, text: String) {
+        self.said = Some(text);
+    }
+
+    /// The same, out of a text key.
+    fn about_key(&mut self, key: &str) {
+        let text = self.texts.t(key);
+        self.about(text);
+    }
+
     fn note(&mut self, key: &str) {
         let text = self.texts.t(key);
         self.sentence(text);
@@ -1409,6 +2009,7 @@ impl Builder<'_> {
             heading: false,
             target: Target::Nothing,
             disabled: false,
+            description: self.said.take(),
         });
     }
 
@@ -1420,6 +2021,107 @@ impl Builder<'_> {
     fn fact_coloured(&mut self, key: &str, value: String, colour: Option<tokens::Color>) {
         let label = self.texts.t(key);
         self.coloured(label, value, Target::Nothing, false, colour);
+    }
+
+    /// An id, its state, and a quiet gloss after it.
+    ///
+    /// # Why it does not go through `field_pair`
+    ///
+    /// That one puts the value at a fixed column and ELIDES the label to reach
+    /// it — which is right for `trusted` beside `no`, and wrong for the only
+    /// rows in this view whose label is the point. A service id is
+    /// thirty-six characters, and cut at the value column it stops being an
+    /// id: `0000110b-0000-1000-8000-00805f9b3` is not a thing anybody can
+    /// look up. So here the label keeps what it needs and everything else
+    /// follows it.
+    ///
+    /// Every id is the same length, so the values line up anyway.
+    fn triple(
+        &mut self,
+        label: String,
+        value: String,
+        aside: String,
+        target: Target,
+        disabled: bool,
+    ) {
+        let focused = self.cursor == self.out.len();
+        let (label_colour, value_colour) = match (focused, disabled) {
+            (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
+            (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
+            (false, false) => (
+                if target == Target::Nothing {
+                    tokens::color::TEXT_LABEL_FACT
+                } else {
+                    tokens::color::TEXT_LABEL_ACTS
+                },
+                if target == Target::Nothing {
+                    tokens::color::TEXT_READ_STRONG
+                } else {
+                    tokens::color::TEXT_PRIMARY
+                },
+            ),
+        };
+        let end = self.left + self.room;
+        let mut fields = vec![Self::piece(
+            self.left,
+            layout::elide_end(&label, self.room),
+            label_colour,
+        )];
+        let after = |at: u16, text: &str| at + ronoctua_protocol::cells(text) + 2;
+        let at = after(self.left, &label);
+        if at < end {
+            fields.push(Self::piece(
+                at,
+                layout::elide_end(&value, end - at),
+                value_colour,
+            ));
+            // AND THE GLOSS LAST, in the dim tone and only if there is room:
+            // it is what we have to say ABOUT the id, not the id, and a
+            // sentence that pushed the state off the line would have the
+            // priorities backwards.
+            let at = after(at, &value);
+            if at < end && !aside.is_empty() {
+                fields.push(Self::piece(
+                    at,
+                    layout::elide_end(&aside, end - at),
+                    tokens::color::TEXT_DIM,
+                ));
+            }
+        }
+        self.out.push(Row {
+            fields,
+            focused,
+            heading: false,
+            target,
+            disabled,
+            description: self.said.take(),
+        });
+    }
+
+    /// A row that is a WAY SOMEWHERE, and has no value to show.
+    ///
+    /// A `pair` would need one, and the first attempt gave it `opens` — which
+    /// the owner read off the screen and could not parse: open what, and which
+    /// keys? A door is a sentence and a target, and what it opens is said on
+    /// the message line when the pointer is on it.
+    fn door(&mut self, label: String, target: Target) {
+        let focused = self.cursor == self.out.len();
+        self.out.push(Row {
+            fields: vec![Self::piece(
+                self.left,
+                layout::elide_end(&label, self.room),
+                if focused {
+                    tokens::color::STATE_ACCENT
+                } else {
+                    tokens::color::TEXT_LABEL_ACTS
+                },
+            )],
+            focused,
+            heading: false,
+            target,
+            disabled: false,
+            description: self.said.take(),
+        });
     }
 
     /// A row with something to do on `RET`.
@@ -1479,6 +2181,7 @@ impl Builder<'_> {
             heading: false,
             target,
             disabled,
+            description: self.said.take(),
         });
     }
 }
@@ -1504,18 +2207,27 @@ mod tests {
             bonded: true,
             battery,
             uuids: vec!["0000110b-0000-1000-8000-00805f9b34fb".to_owned()],
+            // EVERY DEVICE THE OWNER OWNS CARRIES THIS, and it is what the
+            // settings half is built out of when there is no audio card:
+            // `pw-dump` cannot run in a test.
+            wake: Some(false),
             ..Device::default()
         }
     }
 
     #[test]
-    fn the_rows_are_the_same_things_at_every_width() {
-        // `View::key` builds its rows at `DECIDING_WIDTH` because it does not
-        // know how wide the screen is — and that is only honest while the row
-        // COUNT and the row TARGETS do not depend on the width. The day one
-        // section drops a row on a narrow screen, a key would act on a
-        // different row from the one the footer drew, and nothing on screen
-        // would say so.
+    fn the_rows_are_the_same_things_at_every_width_of_one_layout() {
+        // `View::key` decides against the rows the DOOR drew, so a key must
+        // never act on a different row from the one on screen. That used to
+        // mean "the rows are the same at every width", and it was honest
+        // while every screen was one column.
+        //
+        // A DEVICE'S PAGE NOW HAS TWO LAYOUTS. Above
+        // `space.bluetooth.settingsFrom` the settings sit BESIDE the facts and
+        // the two halves share lines; below it they stack, and the list is one
+        // after the other. Those are different row lists on purpose — so the
+        // invariant is asserted inside each layout, and the width is passed to
+        // `key` for exactly this reason.
         //
         // The FIELDS are allowed to differ — that is what eliding is.
         let t = texts();
@@ -1529,11 +2241,203 @@ mod tests {
                     .map(|r| (r.heading, r.disabled, r.target))
                     .collect()
             };
-            let at_eighty = want(DECIDING_WIDTH);
-            for columns in [40_u16, 60, 100, 160, 240] {
-                assert_eq!(want(columns), at_eighty, "the rows differ at {columns}");
+            // STACKED, and the deciding width is one of them.
+            let narrow = want(DECIDING_WIDTH);
+            for columns in [40_u16, 60, 87] {
+                assert_eq!(want(columns), narrow, "the rows differ at {columns}");
+            }
+            // AND SIDE BY SIDE.
+            let wide = want(120);
+            for columns in [88_u16, 160, 240] {
+                assert_eq!(want(columns), wide, "the rows differ at {columns}");
             }
         }
+    }
+
+    #[test]
+    #[ignore = "a drawing, for reading with --nocapture"]
+    fn look_at_the_device_page() {
+        let t = texts();
+        let scene = a_scene();
+        let mut v = View::fresh_at("/d/1");
+        v.settings = true;
+        v.sink = Some(ronoctua_bluetooth::audio::Sink {
+            id: 83,
+            volume: 72,
+            muted: false,
+        });
+        v.card = Some(ronoctua_bluetooth::audio::Card {
+            id: 84,
+            active: 1,
+            profiles: vec![
+                ronoctua_bluetooth::audio::Profile {
+                    index: 1,
+                    name: "a2dp-sink".to_owned(),
+                    available: true,
+                },
+                ronoctua_bluetooth::audio::Profile {
+                    index: 2,
+                    name: "headset-head-unit".to_owned(),
+                    available: true,
+                },
+            ],
+        });
+        // AND A KEYBOARD, which is the other shape the right-hand column
+        // takes: two doors and no values.
+        let mut k = View::fresh_at("/d/2");
+        k.settings = true;
+        println!("\n== A KEYBOARD, side by side ==");
+        for (n, r) in k.rows(&scene, 120, &t).into_iter().enumerate() {
+            let mut line = vec![' '; 128];
+            for f in &r.fields {
+                for (i, c) in f.text.chars().enumerate() {
+                    if usize::from(f.at) + i < line.len() {
+                        line[usize::from(f.at) + i] = c;
+                    }
+                }
+            }
+            println!(
+                "{n:>2}|{}|{}",
+                line.into_iter().collect::<String>().trim_end(),
+                r.description.as_deref().map_or(String::new(), |d| format!(
+                    "   ← {}",
+                    d.chars().take(64).collect::<String>()
+                ))
+            );
+        }
+
+        for (label, columns, pane) in [
+            ("STACKED, 80 columns", 80_u16, Pane::Facts),
+            ("SIDE BY SIDE, 120 columns", 120, Pane::Facts),
+            ("SIDE BY SIDE, the keyboard crossed", 120, Pane::Settings),
+        ] {
+            v.pane = pane;
+            println!("\n== {label} ==");
+            for (n, r) in v.rows(&scene, columns, &t).into_iter().enumerate() {
+                let mut line = vec![' '; usize::from(columns) + 8];
+                for f in &r.fields {
+                    for (i, c) in f.text.chars().enumerate() {
+                        let at = usize::from(f.at) + i;
+                        if at < line.len() {
+                            line[at] = c;
+                        }
+                    }
+                }
+                let mark = if r.focused {
+                    ">"
+                } else if r.heading {
+                    "#"
+                } else {
+                    " "
+                };
+                println!(
+                    "{n:>2}{mark}|{}|",
+                    line.into_iter().collect::<String>().trim_end()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_layouts_hold_the_same_things() {
+        // The halves are joined two different ways, and neither may LOSE a
+        // row: stacked they are one list after another, side by side they
+        // share lines. A device with more facts than settings — every device
+        // — would hide the whole settings column if the merge counted the
+        // wrong half.
+        let t = texts();
+        let scene = a_scene();
+        let mut v = View::fresh_at("/d/1");
+        // A SINK, because `pw-dump` cannot run in a test and the volume is
+        // what the right-hand column holds for a headset. It is also the whole
+        // point of that column: BlueZ has no volume to give, so this row
+        // exists only because something OUTSIDE it was asked.
+        v.settings = true;
+        v.sink = Some(ronoctua_bluetooth::audio::Sink {
+            id: 83,
+            volume: 72,
+            muted: false,
+        });
+        let stacked = v.rows(&scene, 80, &t).len();
+        let beside = v.rows(&scene, 120, &t).len();
+        // SIDE BY SIDE IS SHORTER BY WHAT THE SHORTER HALF HOLDS: the two
+        // lists share lines instead of following one another.
+        assert!(
+            beside < stacked,
+            "side by side ({beside}) is not shorter than stacked ({stacked})"
+        );
+        let has_volume = |v: &View, columns: u16| {
+            v.rows(&scene, columns, &t)
+                .iter()
+                .any(|r| matches!(r.target, Target::Volume(_, _)))
+        };
+        // STACKED, EVERY ROW KEEPS ITS OWN TARGET: one list, one cursor, and
+        // the volume is reachable by walking down.
+        assert!(
+            has_volume(&v, 80),
+            "stacked, the settings are not reachable"
+        );
+
+        // SIDE BY SIDE, ONLY THE HALF THE KEYBOARD IS IN CARRIES THE LINE'S
+        // TARGET. That is what "the cursor is in one column" has to mean: the
+        // other column is drawn and not acted on, so `RET` cannot turn
+        // something the eye is not on.
+        assert!(
+            !has_volume(&v, 120),
+            "the settings act while the keyboard is on the facts"
+        );
+        v.pane = Pane::Settings;
+        assert!(
+            has_volume(&v, 120),
+            "crossing to the settings does not make them act"
+        );
+        // AND THE FACTS STOP ACTING WHILE IT IS THERE — the same rule, read
+        // from the other side.
+        assert!(
+            !v.rows(&scene, 120, &t)
+                .iter()
+                .any(|r| matches!(r.target, Target::Profile { .. })),
+            "the facts act while the keyboard is on the settings"
+        );
+    }
+
+    #[test]
+    fn the_settings_column_adds_and_never_moves() {
+        // WHAT THE RIGHT-HAND COLUMN IS FOR, and the owner said it from the
+        // screen: only what this KIND of thing adds, and never a row taken out
+        // of the facts. The wake switch and the audio profile were moved there
+        // for an afternoon and sent back — both are properties of `Device1`,
+        // and a column that empties its neighbour has added nothing.
+        let t = texts();
+        let scene = a_scene();
+        let mut v = View::fresh_at("/d/1");
+        v.settings = true;
+        v.card = Some(ronoctua_bluetooth::audio::Card {
+            id: 84,
+            active: 1,
+            profiles: vec![
+                ronoctua_bluetooth::audio::Profile {
+                    index: 1,
+                    name: "a2dp-sink".to_owned(),
+                    available: true,
+                },
+                ronoctua_bluetooth::audio::Profile {
+                    index: 2,
+                    name: "headset-head-unit".to_owned(),
+                    available: true,
+                },
+            ],
+        });
+        // STACKED, so both halves are in one list and every row keeps its own
+        // target — which is what lets this ask where each one IS.
+        let rows = v.rows(&scene, 80, &t);
+        let facts = v.facts_len_at(&scene, 80, &t);
+        let at = |wanted: fn(&Target) -> bool| rows.iter().position(|r| wanted(&r.target));
+
+        let wake = at(|t| matches!(t, Target::Wake(_, _))).expect("the wake switch is drawn");
+        let audio = at(|t| matches!(t, Target::Audio(_, _))).expect("the audio profile is drawn");
+        assert!(wake < facts, "the wake switch left the facts");
+        assert!(audio < facts, "the audio profile left the facts");
     }
 
     fn a_scene() -> Scene {
@@ -1598,13 +2502,15 @@ mod tests {
                     v.level = Level::Radio;
                     v
                 }
-                Where::OnACard | Where::OnADevice | Where::OnTheList | Where::Anywhere => {
+                Where::OnTheSettings | Where::OnADevice | Where::OnTheList | Where::Anywhere => {
                     let mut v = View::fresh();
                     // A CARD, because `pw-dump` cannot run in a test and the
-                    // two arrows act on what it read. Two profiles, so the
-                    // ring has somewhere to go.
-                    if *column == Where::OnACard {
+                    // arrows act on what it read. Two profiles, so the ring
+                    // has somewhere to go — and the settings half exists,
+                    // which is what `TAB` and the arrows are taught on.
+                    if *column == Where::OnTheSettings {
                         v.level = Level::Device("/d/1".to_owned());
+                        v.settings = true;
                     }
                     v.card = Some(ronoctua_bluetooth::audio::Card {
                         id: 42,
@@ -1644,9 +2550,9 @@ mod tests {
             let mut worked = false;
             for row in 0..rows.len() {
                 let mut here = v.clone();
-                here.clicked(row, &rows);
+                here.clicked(row, None, DECIDING_WIDTH, &rows);
                 let (was, level, unnamed) = (here.cursor(), here.level.clone(), here.unnamed);
-                let did = here.key(press, &scene, &t);
+                let did = here.key(press, &scene, DECIDING_WIDTH, &t);
                 worked |= did != Errand::Nothing
                     || here.cursor() != was
                     || here.level != level
@@ -1661,42 +2567,46 @@ mod tests {
 
     #[test]
     fn every_service_this_table_names_has_a_sentence() {
-        // `profile_key` maps a UUID to a text key, and four of its fifteen
-        // were tested — twice, once on each side. A missing `.ftl` entry for
-        // any of the other eleven puts `[bluetooth-profile-sim-access]` on
-        // screen, and nothing looked.
+        // A missing `.ftl` entry for any of these puts
+        // `[bluetooth-profile-sim-access]` on screen, in a list nobody audits.
         //
-        // THE UUIDs COME FROM THE FUNCTION, not from a list beside it: the
-        // sixteen-bit shorts are read out of its own source, so a service
-        // added there is demanded here on the next build.
+        // THE IDS COME FROM THE TABLE ITSELF, and the table is now GENERATED
+        // from `assets/bluetooth-profiles.nix`. This used to parse the body of
+        // `profile_key` out of the crate's source, which worked only while the
+        // table was a `match` written by hand.
         let t = texts();
-        let source = include_str!("../../ronoctua-bluetooth/src/lib.rs");
-        let table = source
-            .split_once("pub fn profile_key(")
-            .expect("profile_key is still there")
-            .1
-            .split_once("\n}")
-            .expect("and it still closes")
-            .0;
-        // EVERY quoted short, not one per line: several arms bind two
-        // (`"111e" | "111f"`), and reading only the first left six of the
-        // twenty-one untested.
-        let shorts: Vec<&str> = table
-            .split('"')
-            .skip(1)
-            .step_by(2)
-            .filter(|s| s.len() == 4 && s.chars().all(|c| c.is_ascii_hexdigit()))
-            .collect();
-        assert!(shorts.len() >= 20, "only {} shorts read", shorts.len());
-        for short in shorts {
+        let table = ronoctua_bluetooth::PROFILES;
+        assert!(
+            table.len() >= 25,
+            "only {} services in the table",
+            table.len()
+        );
+        let mut named = 0;
+        for (short, key) in table {
             let uuid = format!("0000{short}-0000-1000-8000-00805f9b34fb");
-            let id = ronoctua_bluetooth::profile_key(&uuid)
-                .unwrap_or_else(|| panic!("`{uuid}` is in the table and resolves to nothing"));
-            assert!(
-                !t.t(id).starts_with('['),
-                "`{id}` names a service and has no sentence"
-            );
+            match key {
+                Some(key) => {
+                    named += 1;
+                    assert_eq!(
+                        ronoctua_bluetooth::profile_key(&uuid),
+                        Some(*key),
+                        "`{uuid}` is in the table and does not resolve to its own key"
+                    );
+                    assert!(
+                        !t.t(key).starts_with('['),
+                        "`{key}` names a service and has no sentence"
+                    );
+                }
+                // The plumbing: known, and deliberately not drawn. It owes no
+                // sentence — and it has to be told apart from an id nobody
+                // named, which IS drawn, raw.
+                None => {
+                    assert!(ronoctua_bluetooth::profile_is_plumbing(&uuid));
+                    assert_eq!(ronoctua_bluetooth::profile_key(&uuid), None);
+                }
+            }
         }
+        assert!(named >= 20, "only {named} services carry a sentence");
     }
 
     #[test]
@@ -1744,19 +2654,23 @@ mod tests {
         let said = words(&one);
         assert!(said.contains(&t.t("bluetooth-connect")));
         assert!(!said.contains(&t.t("bluetooth-scan")));
-        // AND A DEVICE WITH NO AUDIO CARD IS NOT OFFERED THE PROFILE.
+        // AND A DEVICE WITH NOTHING TO ADJUST IS NOT OFFERED THE OTHER HALF.
         //
         // The owner's own keyboard, photographed: `→ the next audio profile`
         // on the page of a thing that has none. `OnADevice` is about WHICH
-        // SCREEN and this is about what the device on it can do, which is why
-        // there is a column of its own for it.
-        assert!(!said.contains(&t.t("bluetooth-audio-next")));
-        one.card = Some(ronoctua_bluetooth::audio::Card {
-            id: 1,
-            active: 0,
-            profiles: Vec::new(),
-        });
-        assert!(words(&one).contains(&t.t("bluetooth-audio-next")));
+        // SCREEN and this is about what the device on it can do — which is
+        // now a column of its own, and the three keys that reach it are
+        // taught together or not at all.
+        for id in ["bluetooth-settings", "bluetooth-more", "bluetooth-less"] {
+            assert!(!said.contains(&t.t(id)), "`{id}` on a page with one half");
+        }
+        // `settings` is what `look_at_the_device` learns; a test cannot run
+        // `pw-dump`, so it says the same thing by hand.
+        one.settings = true;
+        let now = words(&one);
+        for id in ["bluetooth-settings", "bluetooth-more", "bluetooth-less"] {
+            assert!(now.contains(&t.t(id)), "`{id}` missing where it acts");
+        }
 
         // AND A QUESTION TAKES THE SCREEN: two keys, and no others.
         let mut asked = View::fresh();
@@ -1791,7 +2705,7 @@ mod tests {
             .iter()
             .position(|r| r.target == Target::Device("/d/4".to_owned()))
             .expect("the speaker has a row");
-        v.clicked(speaker, &rows);
+        v.clicked(speaker, None, DECIDING_WIDTH, &rows);
         assert_eq!(v.cursor(), speaker);
 
         // NOW IT CONNECTS, which lifts it above every disconnected one and
@@ -1826,7 +2740,7 @@ mod tests {
             .iter()
             .position(|r| r.target == Target::Device("/d/2".to_owned()))
             .expect("the keyboard has a row");
-        v.clicked(at, &rows);
+        v.clicked(at, None, DECIDING_WIDTH, &rows);
         scene.devices.retain(|d| d.at != "/d/2");
         let after = v.rows(&scene, 80, &t);
         v.settle(&after);
@@ -1895,7 +2809,7 @@ mod tests {
                 .count()
         };
         assert_eq!(nearby_shown(&open), 0);
-        let _ = open.key(Press::Unnamed, &a_scene(), &t);
+        let _ = open.key(Press::Unnamed, &a_scene(), DECIDING_WIDTH, &t);
         assert_eq!(nearby_shown(&open), 1);
     }
 
@@ -1931,8 +2845,11 @@ mod tests {
             .iter()
             .position(|r| matches!(&r.target, Target::Device(at) if at == "/d/1"))
             .unwrap();
-        v.clicked(row, &rows);
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Nothing);
+        v.clicked(row, None, DECIDING_WIDTH, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
         assert_eq!(v.level(), &Level::Device("/d/1".to_owned()));
         // The detail has the facts and the services.
         let detail = v.rows(&scene, 80, &t);
@@ -1943,9 +2860,15 @@ mod tests {
                 .any(|r| matches!(r.target, Target::Profile { .. }))
         );
         // Esc goes back to the list, and only then closes.
-        assert_eq!(v.key(Press::Escape, &scene, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Escape, &scene, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
         assert_eq!(v.level(), &Level::List);
-        assert_eq!(v.key(Press::Escape, &scene, &t), Errand::Close);
+        assert_eq!(
+            v.key(Press::Escape, &scene, DECIDING_WIDTH, &t),
+            Errand::Close
+        );
     }
 
     #[test]
@@ -1958,32 +2881,32 @@ mod tests {
             .iter()
             .position(|r| matches!(&r.target, Target::Device(at) if at == "/d/1"))
             .unwrap();
-        v.clicked(row, &rows);
+        v.clicked(row, None, DECIDING_WIDTH, &rows);
         // It is connected, so `c` drops the link.
         assert_eq!(
-            v.key(Press::Connect, &scene, &t),
+            v.key(Press::Connect, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Disconnect("/d/1".to_owned()))
         );
         assert_eq!(
-            v.key(Press::Trust, &scene, &t),
+            v.key(Press::Trust, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Trust("/d/1".to_owned(), true))
         );
         assert_eq!(
-            v.key(Press::Block, &scene, &t),
+            v.key(Press::Block, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Block("/d/1".to_owned(), true))
         );
         assert_eq!(
-            v.key(Press::Forget, &scene, &t),
+            v.key(Press::Forget, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Forget("/d/1".to_owned()))
         );
         assert_eq!(
-            v.key(Press::Rename, &scene, &t),
+            v.key(Press::Rename, &scene, DECIDING_WIDTH, &t),
             Errand::Rename("/d/1".to_owned())
         );
         // And inside the detail the same letters are about the same device.
-        let _ = v.key(Press::Enter, &scene, &t);
+        let _ = v.key(Press::Enter, &scene, DECIDING_WIDTH, &t);
         assert_eq!(
-            v.key(Press::Connect, &scene, &t),
+            v.key(Press::Connect, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Disconnect("/d/1".to_owned()))
         );
     }
@@ -1994,21 +2917,21 @@ mod tests {
         let mut scene = a_scene();
         let mut v = View::fresh();
         assert_eq!(
-            v.key(Press::Power, &scene, &t),
+            v.key(Press::Power, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Power(false)),
             "it is on, so `o` turns it off"
         );
         assert_eq!(
-            v.key(Press::Scan, &scene, &t),
+            v.key(Press::Scan, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Scan(true))
         );
         scene.adapters[0].discovering = true;
         assert_eq!(
-            v.key(Press::Scan, &scene, &t),
+            v.key(Press::Scan, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Scan(false))
         );
         assert_eq!(
-            v.key(Press::Discoverable, &scene, &t),
+            v.key(Press::Discoverable, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::Discoverable(true))
         );
     }
@@ -2034,10 +2957,16 @@ mod tests {
         let hint = v.hint(&t);
         assert!(!hint.is_empty());
         // Every other key does nothing while it stands.
-        assert_eq!(v.key(Press::Connect, &scene, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Connect, &scene, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
         assert!(v.asking(), "a letter answered the question");
         // And `n` says no.
-        assert_eq!(v.key(Press::Refuse, &scene, &t), Errand::Answer(false));
+        assert_eq!(
+            v.key(Press::Refuse, &scene, DECIDING_WIDTH, &t),
+            Errand::Answer(false)
+        );
         assert!(!v.asking());
         // AND `RET` ANSWERS THE ROW: on "no" it says no, which is the whole
         // reason the prompt draws two rows rather than one.
@@ -2051,8 +2980,11 @@ mod tests {
             .iter()
             .position(|r| r.target == Target::Answer(false))
             .unwrap();
-        v.clicked(no, &rows);
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Answer(false));
+        v.clicked(no, None, DECIDING_WIDTH, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Answer(false)
+        );
 
         // AND AN UNTOUCHED QUESTION ANSWERS NO.
         //
@@ -2071,7 +3003,10 @@ mod tests {
             Target::Answer(false),
             "the cursor does not start on the refusal"
         );
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Answer(false));
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Answer(false)
+        );
 
         // SAYING YES TAKES AIM FIRST, which is one arrow or one `y`.
         let mut v = View::fresh();
@@ -2084,8 +3019,11 @@ mod tests {
             .iter()
             .position(|r| r.target == Target::Answer(true))
             .unwrap();
-        v.clicked(yes, &rows);
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Answer(true));
+        v.clicked(yes, None, DECIDING_WIDTH, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Answer(true)
+        );
     }
 
     #[test]
@@ -2115,16 +3053,25 @@ mod tests {
             .iter()
             .position(|r| r.target == Target::Answer(true))
             .unwrap();
-        v.clicked(yes, &rows);
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Type);
+        v.clicked(yes, None, DECIDING_WIDTH, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Type
+        );
         let mut v = View::fresh();
         v.asked(agent::Question {
             device: "/d/1".to_owned(),
             asked: agent::Asked::Pin,
         });
-        assert_eq!(v.key(Press::Accept, &scene, &t), Errand::Type);
+        assert_eq!(
+            v.key(Press::Accept, &scene, DECIDING_WIDTH, &t),
+            Errand::Type
+        );
         // And `n` still refuses outright.
-        assert_eq!(v.key(Press::Refuse, &scene, &t), Errand::Answer(false));
+        assert_eq!(
+            v.key(Press::Refuse, &scene, DECIDING_WIDTH, &t),
+            Errand::Answer(false)
+        );
     }
 
     #[test]
@@ -2138,7 +3085,10 @@ mod tests {
         });
         assert!(v.asking());
         // Nothing to answer — the digits are typed on the other thing.
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
         assert!(!v.asking());
     }
 
@@ -2151,7 +3101,10 @@ mod tests {
             device: "/d/1".to_owned(),
             asked: agent::Asked::Authorize,
         });
-        assert_eq!(v.key(Press::Escape, &scene, &t), Errand::Answer(false));
+        assert_eq!(
+            v.key(Press::Escape, &scene, DECIDING_WIDTH, &t),
+            Errand::Answer(false)
+        );
         assert!(!v.asking());
     }
 
@@ -2161,7 +3114,7 @@ mod tests {
         let scene = a_scene();
         let mut v = View::fresh();
         let rows = v.rows(&scene, 80, &t);
-        v.clicked(rows.len() - 1, &rows);
+        v.clicked(rows.len() - 1, None, DECIDING_WIDTH, &rows);
         // Every device goes away under the cursor.
         let empty = Scene {
             daemon: true,
@@ -2172,8 +3125,14 @@ mod tests {
         assert!(v.cursor() < rows.len());
         assert!(!rows[v.cursor()].heading);
         // And the arrows still move.
-        assert_eq!(v.key(Press::Down, &empty, &t), Errand::Nothing);
-        assert_eq!(v.key(Press::Up, &empty, &t), Errand::Nothing);
+        assert_eq!(
+            v.key(Press::Down, &empty, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+        assert_eq!(
+            v.key(Press::Up, &empty, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
     }
 
     #[test]
@@ -2188,19 +3147,22 @@ mod tests {
         // Open the radio level, which is what `RET` on the adapter's row does.
         let rows = v.rows(&scene, 80, &t);
         let at = rows.iter().position(|r| r.target == Target::Radio).unwrap();
-        v.clicked(at, &rows);
-        assert_eq!(v.key(Press::Enter, &scene, &t), Errand::Nothing);
+        v.clicked(at, None, DECIDING_WIDTH, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
 
         let rows = v.rows(&scene, 80, &t);
         let alias = rows
             .iter()
             .position(|r| r.target == Target::Rename)
             .expect("the machine's name cannot be changed");
-        v.clicked(alias, &rows);
+        v.clicked(alias, None, DECIDING_WIDTH, &rows);
         // AN EMPTY PATH MEANS THIS MACHINE — the same door a device's name
         // takes, and the path is what tells them apart.
         assert_eq!(
-            v.key(Press::Enter, &scene, &t),
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
             Errand::Rename(String::new())
         );
 
@@ -2209,9 +3171,9 @@ mod tests {
             .iter()
             .position(|r| matches!(r.target, Target::Timeout(_)))
             .expect("the visibility timeout cannot be changed");
-        v.clicked(timeout, &rows);
+        v.clicked(timeout, None, DECIDING_WIDTH, &rows);
         assert_eq!(
-            v.key(Press::Enter, &scene, &t),
+            v.key(Press::Enter, &scene, DECIDING_WIDTH, &t),
             Errand::Order(Ask::DiscoverableTimeout(180)),
             "the ring does not start at three minutes"
         );

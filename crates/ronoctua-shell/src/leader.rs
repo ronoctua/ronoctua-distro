@@ -810,6 +810,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `LEADER s m`. The panel's own commands are NOT here: they live in the
         // buffer's descriptor, under `SPC m`, and are resolved by the buffer's
         // own host while it holds the keyboard.
+        // THE KEYBOARDS, and the only place a per-device setting exists on this
+        // system: the compositor has one keyboard configuration for all of
+        // them, so what this reaches is `keyd`, below it.
+        Command {
+            id: "keyboard-open",
+            label: key::CMD_KEYBOARD_OPEN,
+        },
         Command {
             id: "memory-open",
             label: key::CMD_MEMORY_OPEN,
@@ -967,17 +974,22 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `f f` are — a prefix cannot also be a command, and the tree refuses
         // it. (`r r` was the network's, and the same change that made this
         // group killed the first-level `r`.)
-        // THE AUDIO PROFILE'S TWO, which are the view's own arrows. They are
-        // in the registry for the reason every view key is: the hint line is
-        // generated from the table that names them, and a key the line
-        // teaches has to be a command the manual can name.
+        // THE DEVICE PAGE'S THREE, which are the view's own arrows and the key
+        // that crosses to the other half. They are in the registry for the
+        // reason every view key is: the hint line is generated from the table
+        // that names them, and a key the line teaches has to be a command the
+        // manual can name.
         Command {
-            id: "bluetooth-audio-next",
-            label: key::CMD_BLUETOOTH_AUDIO_NEXT,
+            id: "bluetooth-more",
+            label: key::CMD_BLUETOOTH_MORE,
         },
         Command {
-            id: "bluetooth-audio-previous",
-            label: key::CMD_BLUETOOTH_AUDIO_PREVIOUS,
+            id: "bluetooth-less",
+            label: key::CMD_BLUETOOTH_LESS,
+        },
+        Command {
+            id: "bluetooth-settings",
+            label: key::CMD_BLUETOOTH_SETTINGS,
         },
         Command {
             id: "bluetooth-open",
@@ -1717,6 +1729,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `LEADER s m` — the memory panel. The machine already had a policy
         // against freezing and no screen ever said so; this is where it
         // becomes something one can look at, and loosen.
+        ("s k", "keyboard-open", None),
         ("s m", "memory-open", None),
         // `LEADER s f` — formatting a disk. Under `s` because it is about the
         // SYSTEM's hardware and sits beside the memory panel, and `f` is free
@@ -2685,8 +2698,9 @@ mod tests {
             "power-more",
             "power-up",
             "power-down",
-            "bluetooth-audio-next",
-            "bluetooth-audio-previous",
+            "bluetooth-more",
+            "bluetooth-settings",
+            "bluetooth-less",
             "bluetooth-open",
             "bluetooth-window",
             "bluetooth-scan",
@@ -2718,6 +2732,7 @@ mod tests {
             "monitor-btop",
             "rescue-open",
             "monitor-bottom",
+            "keyboard-open",
             "memory-open",
             // THE BRAIN. `brain-open` is the screen; the other two answer the
             // countdown on the footer's own line, with no window open — which

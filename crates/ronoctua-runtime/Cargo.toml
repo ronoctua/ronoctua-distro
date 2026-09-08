@@ -55,6 +55,15 @@ name = "ronoctua-test-memory"
 path = "src/bin/memory.rs"
 
 [[bin]]
+# THE KEYBOARDS, and the second buffer whose screen is empty until the host
+# speaks. What only this proves is what it hands BACK: a remap carries three
+# strings, and every one has to be a string the host sent — the host refuses
+# anything else, so a buffer that invented one would be a screen where the
+# arrows do nothing at all, silently.
+name = "ronoctua-test-keyboard"
+path = "src/bin/keyboard.rs"
+
+[[bin]]
 # The fifth, for the transfer queue in a window. The criterion only it has: the
 # cursor is an ID, and the list REORDERS underneath it — a job finishing moves
 # every row below it, and the key in question deletes the piece already written

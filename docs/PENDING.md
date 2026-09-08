@@ -49,6 +49,20 @@ da faixa. É o único aplicativo estrangeiro que este repositório consegue inte
   argumento supunha. **Como saber que acabou:** ou o ar da figura vira fração de célula, ou o
   comentário passa a dizer por que 6 px vale em toda a faixa.
 
+### 0.0000103. Um teclado ligado com a janela aberta só aparece depois · pequeno
+
+O `LEADER s k` lê `/proc/bus/input/devices` quando a janela abre e de novo depois de cada mudança —
+que é quando os números da tela realmente mudam. Um teclado ligado ENQUANTO a janela está aberta não
+aparece até que se mexa em alguma coisa ou se feche e abra.
+
+O conserto é um socket `udev` numa thread, no molde da thread de sinais do `ronoctua-bluetooth`: o
+kernel avisa `add`/`remove` de `input`, e a chegada manda a lista inteira. Não foi feito porque três
+quilobytes lidos na abertura resolvem o caso comum, e uma thread e um socket para uma lista que
+ninguém olha enquanto muda é preço antes de necessidade.
+
+**Como saber que acabou:** com a janela aberta, parear o teclado Bluetooth e ver a linha aparecer
+sem tocar em nada. **Tamanho:** pequeno.
+
 ### 0.000013. As telas não se empilham na vertical · pequeno
 
 A disposição (`s d d` → `m`) move a tela sob o cursor com `←`/`→` e grava só o `x`

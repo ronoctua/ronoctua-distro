@@ -246,6 +246,20 @@
         sharedFile = ./assets/shared/notifications.json;
       };
 
+      # WHAT A BLUETOOTH SERVICE ID MEANS (section 4.2's shape, one file later).
+      # A person reading `00001812-0000-1000-8000-00805f9b34fb` learns nothing;
+      # this turns the catalogue into the table, the owed keys, and a refusal.
+      bluetoothProfilesRs = pkgs.callPackage ./nix/bluetooth-profiles.nix {
+        profilesFile = ./assets/bluetooth-profiles.nix;
+      };
+
+      # WHAT A KEY CAN BE MADE INTO, and the leader's own rule. Two places read
+      # it — the NixOS module that configures keyd, and the shell that renders
+      # a file per keyboard — so it is declared once.
+      keyboardsRs = pkgs.callPackage ./nix/keyboards.nix {
+        keyboardsFile = ./assets/keyboards.nix;
+      };
+
       # The MIME database, from freedesktop's own files into a Rust table.
       #
       # `shared-mime-info` is a BUILD input and never a runtime one: its 75 MiB
@@ -337,6 +351,8 @@
           i18nRs
           mimeDb
           notificationsRs
+          bluetoothProfilesRs
+          keyboardsRs
           updatesRs
           syntaxRs
           niriActions
@@ -346,6 +362,7 @@
         bufferUnicode = buffers.unicode;
         bufferLucide = buffers.lucide;
         bufferMemory = buffers.memory;
+        bufferKeyboard = buffers.keyboard;
         bufferTransfers = buffers.transfers;
         bufferFormat = buffers.format;
         bufferBrain = buffers.brain;
@@ -698,6 +715,8 @@
         themes = themed;
         mime-db = mimeDb;
         notifications-rs = notificationsRs;
+        bluetooth-profiles-rs = bluetoothProfilesRs;
+        keyboards-rs = keyboardsRs;
         niri-actions = niriActions;
         # THE SEVEN COMPONENTS, each buildable on its own.
         #
@@ -710,6 +729,7 @@
         buffer-unicode = buffers.unicode;
         buffer-lucide = buffers.lucide;
         buffer-memory = buffers.memory;
+        buffer-keyboard = buffers.keyboard;
         buffer-transfers = buffers.transfers;
         buffer-format = buffers.format;
         buffer-brain = buffers.brain;
@@ -932,6 +952,8 @@
           mimeDb
           tokensRs
           notificationsRs
+          bluetoothProfilesRs
+          keyboardsRs
           niriActions
           torrentShim
           extension

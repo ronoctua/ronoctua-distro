@@ -926,7 +926,8 @@ impl State {
             | Input::Survey(_)
             | Input::Queue(_)
             | Input::Rack(_)
-            | Input::Formatted(_) => Vec::new(),
+            | Input::Formatted(_)
+            | Input::Keyboards(_) => Vec::new(),
         }
     }
 }

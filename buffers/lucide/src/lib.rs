@@ -2171,6 +2171,7 @@ impl State {
             | Input::Queue(_)
             | Input::Rack(_)
             | Input::Mind(_)
+            | Input::Keyboards(_)
             | Input::Formatted(_)
             | Input::EnterState(_) => redraw,
         }
@@ -2808,6 +2809,7 @@ impl State {
                 | Input::Rack(_)
                 | Input::Mind(_)
                 | Input::Formatted(_)
+                | Input::Keyboards(_)
                 | Input::EnterState(_) => {
                     vec![]
                 }

@@ -62,6 +62,8 @@
   # The notification catalogue, for the two checks that read it: the table's
   # own shape, and the text keys it demands of both languages.
   notificationsRs,
+  bluetoothProfilesRs,
+  keyboardsRs,
   syntaxTable,
   mimeDb,
   niriActions,
@@ -100,6 +102,24 @@ let
     ps.fonttools
     ps.brotli
   ]);
+
+  # THE KEYBOARD'S HALF OF THE BUILT SYSTEM, for `keyd-rules-carry-the-leader`.
+  #
+  # Out of the EVALUATED configuration and not out of the module's source: what
+  # a machine boots with is the file and the rules, not the expression that
+  # made them. The three lines are `d` (the directory, and whose it is), `C`
+  # (the seed, whose sixth field is the store path it copies from) and `L+`
+  # (the symlink `/etc/keyd` becomes).
+  keyboardTmpfiles = builtins.filter (
+    rule: builtins.match ".*keyd.*" rule != null
+  ) self.nixosConfigurations.vm.config.systemd.tmpfiles.rules;
+  tmpfilesOfTheKeyboard = pkgs.writeText "keyd-tmpfiles" (
+    builtins.concatStringsSep "\n" keyboardTmpfiles
+  );
+  seedOfTheKeyboard = builtins.elemAt (lib.splitString " " (
+    lib.findFirst (r: lib.hasPrefix "C " r) "" keyboardTmpfiles
+  )) 6;
+  user = self.nixosConfigurations.vm.config.ronoctua.user;
 
   # A check that runs a script and passes if it exits 0.
   mkCheck =
@@ -1802,6 +1822,24 @@ let
       ${../assets/i18n}
   '';
 
+  # THE KEYBOARDS, DRIVEN — `LEADER s k`.
+  #
+  # Its screen is empty until the host speaks, so the record with three lists
+  # inside crosses the WIT here rather than on somebody's machine. And one
+  # thing is this buffer's alone: what it hands BACK. A remap carries three
+  # strings, the host refuses any it did not send, and a component that built
+  # one out of its own head would be a screen where the arrows do nothing at
+  # all — no error, no message, nothing moving.
+  #
+  # It also walks the ring in BOTH directions, because the way back out of a
+  # remap is the first choice and a ring that only goes forwards is a ring
+  # somebody has to walk nine times to leave.
+  keyboard-driven = mkCheck "keyboard-driven" [ ] ''
+    ${rust.workspace}/bin/ronoctua-test-keyboard \
+      ${buffers.keyboard}/lib/ronoctua_buffer_keyboard.wasm \
+      ${../assets/i18n}
+  '';
+
   # AND THE ONE BUFFER WITH NO WIDTH CONSTANT OF ITS OWN.
   #
   # # What this catches
@@ -2108,6 +2146,7 @@ let
       ${buffers.glyphs}/lib/ronoctua_buffer_glyphs.wasm \
       ${buffers.unicode}/lib/ronoctua_buffer_unicode.wasm \
       ${buffers.memory}/lib/ronoctua_buffer_memory.wasm \
+      ${buffers.keyboard}/lib/ronoctua_buffer_keyboard.wasm \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm \
       ${buffers.format}/lib/ronoctua_buffer_format.wasm \
       ${buffers.example}/lib/ronoctua_buffer_example.wasm
@@ -10184,6 +10223,277 @@ let
     PY
   '';
 
+  # AND A BLUETOOTH SERVICE ID SAYS WHAT IT IS.
+  #
+  # # What the screen looked like without this
+  #
+  # The owner opened their keyboard's page and read five rows of
+  # `00001812-0000-1000-8000-00805f9b34fb`. The table that names a service was
+  # a `match` written by hand, it knew fifteen ids, and it knew the CLASSIC
+  # profiles — not the GATT ones. A BLE keyboard announces `1812` and never
+  # `1124`, so the one row that mattered was the one drawn raw.
+  #
+  # # Why it reads a generated list and not the `.ftl`
+  #
+  # Because the demand has to come from the DECLARATION. A hand-written list
+  # here would go stale the day somebody added a service, and the failure would
+  # be `[bluetooth-profile-…]` on a screen nobody audits — the exact shape of
+  # defect `notifications-have-text` was written to remove, one file later.
+  #
+  # The plumbing (`1800`, `1801`) is deliberately absent from `keys.txt`: it is
+  # in the table so the view knows to HIDE it, and something not drawn owes no
+  # sentence.
+  bluetooth-profiles-have-text = mkCheck "bluetooth-profiles-have-text" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    keys = pathlib.Path("${bluetoothProfilesRs}/keys.txt").read_text().split()
+    if len(keys) < 12:
+        print(f"ERROR: only {len(keys)} services carry a sentence — the table lost its content")
+        sys.exit(1)
+
+    failed = False
+    for language in ${builtins.toJSON languages}:
+        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        missing = [k for k in keys if k not in have]
+        if missing:
+            print(f"ERROR: {language} does not have: {', '.join(missing)}")
+            failed = True
+        else:
+            print(f"ok  {language}: the catalogue's {len(keys)} sentences are there")
+
+    # AND THE TABLE REACHES THE CODE. The keys existing proves nothing if the
+    # crate stopped consulting the generated table — it would answer `None` for
+    # everything and every row would go back to being a raw id, with both
+    # languages still perfectly translated.
+    crate = pathlib.Path("${../crates/ronoctua-bluetooth/src}/lib.rs").read_text()
+    # THE PRODUCT, NOT ITS TESTS. The base UUID appears thirteen times in the
+    # `mod tests` fixtures, so searching the whole file found it however the
+    # guard was broken — the check was reading its own evidence.
+    crate = crate.split("#[cfg(test)]")[0]
+    for wanted, why in [
+        ("include!(concat!(env!(\"OUT_DIR\"), \"/profiles.rs\"))",
+         "the generated table is not included"),
+        ("PROFILES", "nothing reads the table"),
+        # THE GUARD BY ITS CONTENT, NOT BY ITS NAME. Looking for `BASE_UUID`
+        # was defeated by renaming the constant to `BASE_UUID_UNUSED` — the
+        # substring still matched and the check went green over a guard that
+        # was no longer applied. These two literals ARE the guard: the tail it
+        # demands, and the prefix a 16-bit id wears.
+        ("-0000-1000-8000-00805f9b34fb",
+         "the base-UUID tail is gone, so a manufacturer's own 128-bit id would be sliced as if it were a short one"),
+        ("strip_prefix(\"0000\")",
+         "nothing checks that the id is the 16-bit form"),
+    ]:
+        if wanted not in crate:
+            print(f"ERROR: {why} (looked for `{wanted}`)")
+            failed = True
+
+    if failed:
+        print("")
+        print("       Every service the distro names has to exist in both languages")
+        print("       (invariant 8). The list comes out of assets/bluetooth-profiles.nix")
+        print("       itself — there is no forgetting without failing.")
+        sys.exit(1)
+    print("OK: every named Bluetooth service speaks both languages")
+    PY
+  '';
+
+  # AND EVERY WORD THE KEYBOARD BUFFER OFFERS SAYS SOMETHING.
+  #
+  # `LEADER s k` draws a ring of meanings for a key — nine of them — and every
+  # one arrives as a TEXT KEY the buffer hands to the host (invariant 11: the
+  # component translates nothing). A key with no sentence is
+  # `[keyboard-choice-noop]` on a screen where somebody is about to change what
+  # their Caps Lock does.
+  #
+  # The list comes out of `assets/keyboards.nix` itself, so a word added there
+  # is demanded here on the next build — the arrangement `notifications-have-text`
+  # established and `bluetooth-profiles-have-text` copied one file earlier.
+  keyboard-choices-have-text = mkCheck "keyboard-choices-have-text" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    keys = pathlib.Path("${keyboardsRs}/keys.txt").read_text().split()
+    if len(keys) < 12:
+        print(f"ERROR: only {len(keys)} words in the vocabulary — the table lost its content")
+        sys.exit(1)
+
+    failed = False
+    for language in ${builtins.toJSON languages}:
+        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        missing = [k for k in keys if k not in have]
+        if missing:
+            print(f"ERROR: {language} does not have: {', '.join(missing)}")
+            failed = True
+        else:
+            print(f"ok  {language}: the vocabulary's {len(keys)} words are there")
+
+    if failed:
+        sys.exit(1)
+    print("OK: every key and every meaning speaks both languages")
+    PY
+  '';
+
+  # KEYD REALLY REFUSES A FILE IT CANNOT READ.
+  #
+  # # Why this is measured and not assumed
+  #
+  # The whole safety of `LEADER s k` rests on one sentence: the rendered files
+  # are validated BEFORE they are installed, because a keyd that refuses its
+  # configuration is a keyboard with no leader on a machine somebody is
+  # holding. That sentence is only true if `keyd check` says no — and how it is
+  # spelled decides whether it says anything at all:
+  #
+  #     keyd check good.conf bad.conf   exit 255   what the crate uses
+  #     keyd check -c <directory>       exit 255   `-c` is read as a filename
+  #     keyd check <directory>          exit   0   a directory parses as nothing
+  #
+  # The first version of the crate used the middle spelling, which refuses
+  # everything — the feature would have been a screen that never wrote. The
+  # third is worse: a guard that says yes to a file that would kill the daemon.
+  # So this runs the real binary, both ways, and reads the crate for the
+  # spelling.
+  keyd-refuses-what-it-cannot-read =
+    mkCheck "keyd-refuses-what-it-cannot-read"
+      [
+        pkgs.keyd
+        pkgs.gnugrep
+      ]
+      ''
+        printf '[ids]\n*\n\n[main]\nleftmeta = overload(meta, f13)\n' > good.conf
+        printf '[ids]\n*\n\n[main]\nleftmeta = nonsense_action(1,2,3)\n' > bad.conf
+
+        keyd check good.conf || {
+          echo "ERROR: keyd refused a configuration this system renders." >&2
+          exit 1; }
+
+        if keyd check bad.conf 2>/dev/null; then
+          echo "ERROR: keyd accepted a configuration it cannot read." >&2
+          echo "      The guard in front of every install is this command, and" >&2
+          echo "      a guard that says yes to anything is not a guard." >&2
+          exit 1
+        fi
+
+        # AND THE CRATE SPELLS IT THE WAY THAT WORKS. `-c` would refuse every
+        # write; a bare directory would accept every one.
+        crate=${../crates/ronoctua-keyboards/src}/lib.rs
+        grep -q '\.arg("check")' "$crate" || {
+          echo "ERROR: the crate no longer calls \`keyd check\`." >&2
+          exit 1; }
+        grep -q '\.args(files)' "$crate" || {
+          echo "ERROR: the crate does not hand keyd the FILES it is about to install." >&2
+          echo "      With no file, keyd checks what is already in /etc/keyd —" >&2
+          echo "      the configuration that is running, not the one being written." >&2
+          exit 1; }
+        if grep -q '"check", "-c"' "$crate"; then
+          echo "ERROR: the crate passes \`-c\`, which keyd reads as a filename." >&2
+          echo "      Every install would be refused." >&2
+          exit 1
+        fi
+
+        echo "OK: keyd takes the files, accepts what we render and refuses what it cannot read"
+      '';
+
+  # THE LEADER SURVIVES BEING CONFIGURED.
+  #
+  # # What would go wrong without this
+  #
+  # keyd takes a device id in ONE file. The distro's file claims `*`, so a
+  # keyboard given rules of its own has to be taken OUT of that claim — and a
+  # keyboard outside the catch-all has no rules at all unless its own file
+  # repeats them. One of those rules is the leader.
+  #
+  # So the failure this holds back is precise and awful: somebody configures
+  # their keyboard, and the key that opens every command in the system stops
+  # working ON THAT KEYBOARD. Nothing errors; the file is valid; keyd is happy.
+  #
+  # # The three things it reads, and why all three
+  #
+  # The RULE is declared once (`assets/keyboards.nix`) — the module writes it
+  # into the seed and the shell writes it into every file it renders, and a
+  # second copy would drift. The SEED has to carry it, or a machine that has
+  # never been configured has no leader on first boot. And the DIRECTORY has to
+  # belong to the user, or the shell cannot write there at all and the whole
+  # feature is a screen that refuses.
+  keyd-rules-carry-the-leader =
+    mkCheck "keyd-rules-carry-the-leader"
+      [
+        pkgs.python3
+        pkgs.gnugrep
+      ]
+      ''
+        python3 - <<'PY'
+        import pathlib, re, sys
+
+        declared = pathlib.Path("${../assets/keyboards.nix}").read_text()
+        key = re.search(r'key = "([a-z0-9]+)";', declared)
+        action = re.search(r'action = "([^"]+)";', declared)
+        if not key or not action:
+            print("ERROR: assets/keyboards.nix declares no leader rule")
+            sys.exit(1)
+        rule = f"{key.group(1)} = {action.group(1)}"
+
+        failed = False
+
+        # THE SEED, out of the built system rather than out of the module's
+        # source: what a machine boots with is the file, not the expression.
+        seed = pathlib.Path("${seedOfTheKeyboard}").read_text()
+        if rule not in seed:
+            print(f"ERROR: the seeded keyd config does not carry `{rule}`")
+            print(f"       it says: {seed!r}")
+            failed = True
+        if "[ids]" not in seed or "*" not in seed:
+            print("ERROR: the seeded keyd config claims no keyboard")
+            failed = True
+
+        # AND THE CRATE PUTS IT IN EVERY FILE. Read out of the source, because
+        # the unit test that proves it by rendering cannot run from here — and
+        # what would break this is somebody writing the rule into the catch-all
+        # only, which reads as correct until a keyboard is configured.
+        crate = pathlib.Path("${../crates/ronoctua-keyboards/src}/lib.rs").read_text()
+        product = crate.split("#[cfg(test)]")[0]
+        if "let leader = format!" not in product:
+            print("ERROR: the renderer no longer builds the leader's line once")
+            failed = True
+        # Every file gets it: the catch-all pushes it, and so does the loop.
+        if product.count("push_str(&leader)") < 2:
+            print("ERROR: the leader is not written into every rendered file —")
+            print("       a keyboard with rules of its own would lose it.")
+            failed = True
+
+        # AND THE DIRECTORY IS OURS TO WRITE.
+        rules = pathlib.Path("${tmpfilesOfTheKeyboard}").read_text()
+        if not re.search(r"^d /var/lib/ronoctua/keyd .* ${user} ", rules, re.M):
+            print("ERROR: the keyd directory does not belong to the session's user")
+            print(f"       {rules}")
+            failed = True
+        if "L+ /etc/keyd" not in rules:
+            print("ERROR: /etc/keyd is not pointed at the directory the shell writes")
+            failed = True
+
+        # AND THE TWO HALVES AGREE ON ITS NAME. The module seeds a file and the
+        # crate renders one; if they disagree, a machine boots with the seed
+        # AND keeps it beside the shell's own — two catch-alls, both claiming
+        # `*`, which is what keyd's manual forbids.
+        seeded = re.search(r"^C (\S+)", rules, re.M)
+        named = re.search(r'pub const EVERYONE: &str = "([^"]+)"', crate)
+        if not seeded or not named:
+            print("ERROR: could not read the catch-all's name from both sides")
+            failed = True
+        elif not seeded.group(1).endswith("/" + named.group(1)):
+            print(f"ERROR: the module seeds `{seeded.group(1)}` and the shell")
+            print(f"       renders `{named.group(1)}` — two catch-alls, both claiming `*`.")
+            failed = True
+
+        if failed:
+            sys.exit(1)
+        print(f"OK: `{rule}` is in the seed and in every file the shell renders")
+        PY
+      '';
+
   # The guard of section 6.3 is only worth anything if it is tested. This check
   # builds the negative fixture, which ONLY passes if the generator refused a
   # token that does not exist.
@@ -12586,6 +12896,7 @@ let
       for ours in -ronoctua-0.1.0 -niri- -libghostty-vt- -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- \
                   -ronoctua-buffer-lucide- -ronoctua-buffer-memory- \
+                  -ronoctua-buffer-keyboard- \
                   -ronoctua-buffer-transfers- \
                   -ronoctua-buffer-format- \
                   -ronoctua-buffer-brain- \
@@ -12685,7 +12996,8 @@ let
                   -networkmanager- -systemd- -ffmpeg-full- -exiftool- \
                   -ronoctua-buffer-glyphs- \
                   -ronoctua-buffer-unicode- -ronoctua-buffer-lucide- \
-                  -ronoctua-buffer-memory- -ronoctua-buffer-transfers- \
+                  -ronoctua-buffer-memory- -ronoctua-buffer-keyboard- \
+                  -ronoctua-buffer-transfers- \
                   -ronoctua-buffer-format- -ronoctua-buffer-brain-; do
         grep -q -i -e "$kept" ${minimal}/store-paths || {
           echo "ERROR: the minimal profile lost $kept, which is part of the distro" >&2
@@ -13332,6 +13644,11 @@ let
       display-fragment-has-one-name
       one-text-size
       bluetooth-bus-policy-is-open
+      bluetooth-profiles-have-text
+      keyboard-choices-have-text
+      keyboard-driven
+      keyd-rules-carry-the-leader
+      keyd-refuses-what-it-cannot-read
       persistence-takes-its-root-as-a-parameter
       browser-has-no-keyring
       ;

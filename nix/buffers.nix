@@ -262,6 +262,13 @@ lib.fix (all: {
   # that could not: every number it draws is read by the host at that moment and
   # pushed in through `input::survey`. What it declares instead of a database is
   # `capability::system`.
+  # THE KEYBOARDS, and the only buffer that writes something a daemon between
+  # the keyboard and everything else reads. See its own header.
+  keyboard = buffer {
+    name = "keyboard";
+    src = ../buffers/keyboard;
+  };
+
   memory = buffer {
     name = "memory";
     src = ../buffers/memory;

@@ -412,6 +412,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         Input::Survey(s) => ("survey", Some(val_of_survey(s))),
         Input::Queue(q) => ("queue", Some(val_of_queue(q))),
         Input::Rack(r) => ("rack", Some(val_of_rack(r))),
+        Input::Keyboards(b) => ("keyboards", Some(val_of_boards(b))),
         Input::Mind(m) => ("mind", Some(val_of_mind(m))),
         Input::Formatted(o) => (
             "formatted",
@@ -661,6 +662,57 @@ fn val_of_rack(r: &ronoctua_protocol::Rack) -> wasmtime::component::Val {
         .collect();
 
     Val::Record(vec![("devices".into(), Val::List(devices))])
+}
+
+/// The keyboards, as a `Val` the guest can receive.
+///
+/// THE FIELD ORDER IS THE WIT'S, for the reason `val_of_rack` gives above:
+/// `wasmtime` zips a record positionally and only then compares names, so a
+/// field moved here without being moved there fails when the function is
+/// called, with a message about a name.
+fn val_of_boards(b: &ronoctua_protocol::Boards) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+
+    let word = |w: &ronoctua_protocol::Word| {
+        Val::Record(vec![
+            ("keyd".into(), Val::String(w.keyd.clone())),
+            ("text".into(), Val::String(w.text.clone())),
+            ("holds".into(), Val::Bool(w.holds)),
+        ])
+    };
+    let boards = b
+        .boards
+        .iter()
+        .map(|one| {
+            Val::Record(vec![
+                ("id".into(), Val::String(one.id.clone())),
+                ("name".into(), Val::String(one.name.clone())),
+                ("built-in".into(), Val::Bool(one.built_in)),
+                (
+                    "decided".into(),
+                    Val::List(
+                        one.decided
+                            .iter()
+                            .map(|(k, v)| {
+                                Val::Tuple(vec![Val::String(k.clone()), Val::String(v.clone())])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ])
+        })
+        .collect();
+
+    Val::Record(vec![
+        ("keys".into(), Val::List(b.keys.iter().map(word).collect())),
+        (
+            "choices".into(),
+            Val::List(b.choices.iter().map(word).collect()),
+        ),
+        ("boards".into(), Val::List(boards)),
+        ("trouble".into(), Val::String(b.trouble.clone())),
+        ("leader".into(), Val::String(b.leader.clone())),
+    ])
 }
 
 /// The survey, as a `Val` the guest can receive.
@@ -971,6 +1023,29 @@ fn plan_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::
 /// `part-of-day` that failed to lift would default to `any` and move a rebuild
 /// out of the small hours into the middle of somebody's afternoon — a change
 /// nobody asked for and nobody would connect to the key they pressed.
+/// The remap the guest asked for, read back out of its record.
+///
+/// Three strings and no interpretation: the host is what decides whether they
+/// name anything, because the buffer got them FROM the host in the first
+/// place and a buffer that invented one is a buffer that gets refused.
+fn remap_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::Remap> {
+    use wasmtime::component::Val;
+
+    let Some(Val::Record(fields)) = v else {
+        return None;
+    };
+    let get = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+    let text = |name: &str| match get(name) {
+        Some(Val::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    Some(ronoctua_protocol::Remap {
+        device: text("device")?,
+        key: text("key")?,
+        becomes: text("becomes")?,
+    })
+}
+
 fn setting_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::Setting> {
     use ronoctua_protocol::Knob;
     use wasmtime::component::Val;
@@ -1114,6 +1189,7 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 // key that does nothing; there is a test at the end of this
                 // file so that `tune` cannot become the second one.
                 "tune" => setting_from(payload.as_deref()).map(Effect::Tune),
+                "remap" => remap_from(payload.as_deref()).map(Effect::Remap),
                 otherwise => {
                     tracing::warn!(effect = otherwise, "an unknown effect");
                     None
@@ -1180,6 +1256,7 @@ fn descriptor_of(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::Desc
                 Val::Enum(n) if n == "transfers" => Some(prot::Capability::Transfers),
                 Val::Enum(n) if n == "disks" => Some(prot::Capability::Disks),
                 Val::Enum(n) if n == "brain" => Some(prot::Capability::Brain),
+                Val::Enum(n) if n == "keyboard" => Some(prot::Capability::Keyboard),
                 // AN UNKNOWN CAPABILITY DISAPPEARS HERE, and that is the
                 // quietest failure in this file: the buffer declared it, the
                 // host did not learn to read it, and every gated effect is then

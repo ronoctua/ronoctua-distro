@@ -26,6 +26,9 @@
   # The notification catalogue and filters (section 4.2), generated from
   # `assets/notifications.nix` in the same shape as the tokens.
   notificationsRs,
+  bluetoothProfilesRs,
+  keyboardsRs,
+  keyd,
   # The update sequence, generated from `assets/updates.nix`.
   updatesRs,
   syntaxRs,
@@ -67,6 +70,7 @@
   bufferUnicode,
   bufferLucide,
   bufferMemory,
+  bufferKeyboard,
   bufferTransfers,
   bufferFormat,
   bufferBrain,
@@ -186,6 +190,17 @@ let
     # first is missing, instead of generating a fallback that would mask the error.
     RONOCTUA_TOKENS_RS = "${tokensRs}/tokens.rs";
     RONOCTUA_NOTIFICATIONS_RS = "${notificationsRs}/notifications.rs";
+    # THE SERVICE CATALOGUE, read by `ronoctua-bluetooth`'s build script for
+    # the same reason: a table in Nix, a `match` nowhere.
+    RONOCTUA_BLUETOOTH_PROFILES_RS = "${bluetoothProfilesRs}/profiles.rs";
+    # THE KEYBOARD VOCABULARY, and the leader's own rule with it: the module
+    # that configures the daemon and the shell that renders per-keyboard files
+    # both read `assets/keyboards.nix`, so the rule cannot drift between them.
+    RONOCTUA_KEYBOARDS_RS = "${keyboardsRs}/keyboards.rs";
+    # `keyd check`, which is the daemon's own parser. It is asked BEFORE a
+    # rendered file is installed, because a keyd that refuses its config is a
+    # keyboard with no leader on a machine somebody is holding.
+    RONOCTUA_KEYD = "${keyd}/bin/keyd";
     # THE UPDATE SEQUENCE, and the brain reads it rather than declaring one.
     #
     # `assets/updates.nix` is the ONE place the sequence lives. The brain used
@@ -458,6 +473,7 @@ let
     RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
     RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
+    RONOCTUA_BUFFER_KEYBOARD = "${bufferKeyboard}/lib/ronoctua_buffer_keyboard.wasm";
     RONOCTUA_BUFFER_TRANSFERS = "${bufferTransfers}/lib/ronoctua_buffer_transfers.wasm";
     RONOCTUA_BUFFER_FORMAT = "${bufferFormat}/lib/ronoctua_buffer_format.wasm";
     RONOCTUA_BUFFER_BRAIN = "${bufferBrain}/lib/ronoctua_buffer_brain.wasm";

@@ -407,8 +407,40 @@ impl BluetoothWindow {
                     tracing::warn!(error = %e, "the audio profile did not change");
                 }
                 let scene = std::mem::take(&mut self.scene);
-                self.view.look_at_the_card(&scene);
+                self.view.look_at_the_device(&scene);
                 self.scene = scene;
+            }
+            // THE VOLUME AND THE MUTE DO NOT RE-READ THE GRAPH.
+            //
+            // The profile above does, because changing it recreates the node
+            // and the view is holding a stale id. A volume changes a number on
+            // an object that stays; `pw-dump` is a process and a parse, and
+            // running one per arrow press would put a fork under the key
+            // somebody is holding down. The view has already moved its own
+            // number, which is what the row draws.
+            // AND THIS DOOR SENDS IT rather than telling somebody to go to
+            // the footer and do it themselves — the control socket exists for
+            // exactly this, and the notification manager already forwards
+            // through it.
+            Errand::Run(id, about) => {
+                let line = if about.is_empty() {
+                    format!("command {id}")
+                } else {
+                    format!("command {id} {about}")
+                };
+                if let Err(e) = crate::leader::send_it(&line) {
+                    tracing::warn!(id, error = %e, "the footer did not take the command");
+                }
+            }
+            Errand::Volume(node, percent) => {
+                if let Err(e) = ronoctua_bluetooth::audio::set_volume(node, percent) {
+                    tracing::warn!(error = %e, "the volume did not change");
+                }
+            }
+            Errand::Mute(node, on) => {
+                if let Err(e) = ronoctua_bluetooth::audio::set_mute(node, on) {
+                    tracing::warn!(error = %e, "the mute did not change");
+                }
             }
             // THE ANSWER IS THE FOOTER'S TOO, and for the agent's reason:
             // it is the footer's connection bluetoothd is asking.
@@ -548,7 +580,7 @@ impl BluetoothWindow {
         };
         self.message = None;
         let scene = std::mem::take(&mut self.scene);
-        let errand = self.view.key(press, &scene, &self.texts);
+        let errand = self.view.key(press, &scene, self.columns, &self.texts);
         self.scene = scene;
         // THE CURSOR MOVED, so the list follows it — here, on the EVENT, and
         // never in the paint. See `settle_offset` for what following from a
@@ -688,6 +720,25 @@ impl BluetoothWindow {
     }
 
     /// Which drawn row is at height `y`.
+    /// Which cell of the line a pointer at `x` is over.
+    ///
+    /// The twin of `row_at`, in the other axis, and it answers in the SAME
+    /// units the view's extents are written in — the content margin is taken
+    /// off first, because that is what the columns are counted from.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a pointer inside a window, divided by a cell"
+    )]
+    fn cell_at(&self, x: f64) -> Option<u16> {
+        let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
+        if cell <= 0.0 {
+            return None;
+        }
+        let inset = cell * f64::from(CONTENT_MARGIN);
+        Some(((x - inset).max(0.0) / cell) as u16)
+    }
+
     fn row_at(&self, y: f64) -> Option<usize> {
         let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
         if line <= 0.0 || y < 0.0 {
@@ -709,6 +760,16 @@ fn press_of(event: &KeyEvent) -> Option<crate::bluetooth::Press> {
         Keysym::Return | Keysym::KP_Enter => Press::Enter,
         Keysym::Up => Press::Up,
         Keysym::Down => Press::Down,
+        // THE THREE THAT ARE NOT LETTERS, and they need naming here.
+        //
+        // The fallback below matches `event.utf8` against the view's own
+        // notation, which works for a bare letter and for nothing else: an
+        // arrow and a `TAB` produce no text, so `<right>`, `<left>` and `TAB`
+        // resolved to nothing and were unreachable in this door while the
+        // footer answered them. The hint line taught all three, in both.
+        Keysym::Right => Press::Right,
+        Keysym::Left => Press::Left,
+        Keysym::Tab | Keysym::ISO_Left_Tab => Press::Cross,
         // AND THE BARE LETTERS, out of the view's own table — the footer
         // reads it the same way, so the two doors cannot teach different
         // keys. A letter with no press there is a letter that does nothing,
@@ -900,6 +961,10 @@ impl PointerHandler for BluetoothWindow {
     ) {
         let before = self.row_under_pointer;
         let mut clicked: Option<usize> = None;
+        // WHERE ALONG THE LINE, for the same reason the footer keeps it: a
+        // device's page has two halves side by side, and a click on the right
+        // one has to put the keyboard there.
+        let mut clicked_cell: Option<u16> = None;
         let mut turned = false;
         // THE BAR IS A CONTROL, and a drag is three events. `Scroll::offset_at`
         // maps any point of the TRACK, so nobody has to aim at the handle.
@@ -971,6 +1036,7 @@ impl PointerHandler for BluetoothWindow {
                     }
                     self.row_under_pointer = self.row_at(e.position.1);
                     clicked = self.row_under_pointer;
+                    clicked_cell = self.cell_at(e.position.0);
                 }
                 PointerEventKind::Axis {
                     vertical,
@@ -995,8 +1061,12 @@ impl PointerHandler for BluetoothWindow {
         // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
         // and `RET` is what applies, arms and confirms.
         if let Some(row) = clicked {
+            // THE PANE FIRST, THEN THE ROWS: they describe whichever half has
+            // the keyboard, so reading them before aiming would put the cursor
+            // on a row that is about to stop existing.
+            self.view.aim(clicked_cell, self.columns);
             let rows = self.rows();
-            self.view.clicked(row, &rows);
+            self.view.clicked(row, clicked_cell, self.columns, &rows);
             self.follow(rows.len());
             self.ask_paint();
             return;

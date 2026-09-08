@@ -7165,6 +7165,48 @@ seco de lugar nenhum: abre a vista e pede no minibuffer, senão o que sairia daq
 
 ---
 
+### Teclados — `LEADER s k`, e por que o ajuste por dispositivo mora abaixo do compositor
+
+O niri tem **um** `input { keyboard { … } }` para todos os teclados da máquina: um layout, uma taxa
+de repetição, e nenhuma forma de nomear um dispositivo. Não é esquecimento — as sete seções de
+entrada dele são por TIPO de dispositivo, e o `apply_libinput_settings` ramifica pela capacidade do
+aparelho, nunca pelo nome. O IPC também não expõe dispositivo de entrada nenhum: as dezesseis
+requisições vão de `Outputs` a `Casts` e não há `InputDevices`. O invariante 3 fecha a porta de
+mudar isso aqui.
+
+Então **layout, tecla de acentos e repetição são globais por construção**, e a tela diz isso em vez
+de oferecer um ajuste por teclado que não existe. O que sobra por dispositivo é o remapeamento, e
+quem o faz é o `keyd`, abaixo do compositor, casando por `vendor:product`.
+
+**A regra do keyd que decide todo o desenho**: *um id de dispositivo só pode estar listado em um
+arquivo de configuração*. O arquivo da distro reivindica `*`, então um teclado com regra própria tem
+de SAIR do coringa — e um teclado fora do coringa não tem regra nenhuma, a não ser que o arquivo
+dele as repita. Uma dessas regras é a leader.
+
+Daí as três consequências, e nenhuma delas é escolha de estilo:
+
+1. **O diretório é da máquina, não do store.** `/etc/keyd` é link para `/var/lib/ronoctua/keyd`,
+   criado por `systemd-tmpfiles` com posse do usuário da sessão. A subtração abaixo do `[ids]` muda
+   quando alguém configura um teclado, e caminho do store não muda.
+2. **A regra da leader é declarada UMA vez** (`assets/keyboards.nix`) e repetida em TODO arquivo
+   renderizado. O módulo a semeia — para a primeira inicialização, antes de o shell ter escrito
+   qualquer coisa — e o `ronoctua-keyboards` a escreve em cada arquivo. Cobra o
+   `keyd-rules-carry-the-leader`, e a falha que ele impede é precisa e silenciosa: configurar o
+   teclado é como se perderia a tecla que abre tudo, NAQUELE teclado, com o arquivo válido e o keyd
+   satisfeito.
+3. **Nada é instalado sem o keyd ter lido.** `keyd check` recebe ARQUIVOS — medido contra o
+   binário, porque as três grafias plausíveis fazem três coisas diferentes: com os arquivos ele
+   recusa o que não entende (255), com `-c <dir>` ele recusa tudo (o `-c` vira nome de arquivo), e
+   com o diretório ele aceita tudo (um diretório não parseia nada). A primeira versão disto usava a
+   do meio, que teria feito da funcionalidade uma tela que nunca escreve.
+
+O buffer não tem tabela nossa: os teclados, as teclas oferecidas e os significados CHEGAM
+(`input::keyboards`), cada um com a palavra do keyd e a chave de texto que o host resolve, e ele
+devolve três strings que o host confere contra o que mandou (invariante 11 intacto). E `kbd` no
+handler não faz um teclado: o botão de energia, a tampa, o barramento de vídeo, o alto-falante e o
+controle do headset o carregam também — medido em 2026-09-08, nove dispositivos desta máquina o
+carregavam e DOIS eram teclados. O filtro é o alfabeto, como o próprio keyd faz.
+
 ## 8. Desempenho, grafo e riscos
 
 ### Grafo de crates
