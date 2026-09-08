@@ -1659,18 +1659,18 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("TAB m <up>", "workspace-move-previous", None),
         ("TAB m .", "workspace-move-next", None),
         ("TAB m ,", "workspace-move-previous", None),
-        // `c` STOPPED BEING A COMMAND AND BECAME A GROUP.
+        // `c` IS THE CLIPBOARD AND NOTHING ELSE, and it is a COMMAND again.
         //
-        // The screen capture used to be `t c`, and `t` is now the transfers
-        // group — so it had to move, and the owner chose where: `c` for
-        // CAPTURE, which is what both things under it do. The clipboard
-        // captures what you copy; the screen captures what you see.
+        // It was a group called "capture", holding the clipboard and the
+        // screenshot: the clipboard captures what you copy, the screen
+        // captures what you see. The owner unmade it — one word covering two
+        // unrelated jobs is a group that reads well and answers badly, and it
+        // cost the clipboard, which is used all day, a second keystroke to
+        // house a screenshot, which is not. The screenshot went to `m`.
         //
-        // It costs the clipboard one keystroke (`c` became `c c`), and that is
-        // the convention this keymap already uses everywhere a prefix gained a
-        // second item — `s n n`, `f f`, `TAB TAB`.
-        ("c c", "clipboard-open", None),
-        ("c s", "screen-capture", None),
+        // A command here is only legal because nothing hangs off `c` any more:
+        // a prefix that is also a command is the `PrefixWithCommand` collision.
+        ("c", "clipboard-open", None),
         // `a` for APPLICATIONS, at the first level. It was free, and an
         // application launcher is a first-level thing: if it costs two
         // keys, the person goes back to opening everything through the terminal.
@@ -1720,12 +1720,24 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // because that is how often it is used. A manager that costs two keys
         // is a manager people go back to the terminal for.
         (".", "files-open", None),
+        // `m` FOR MISCELLANEOUS — the drawer for what belongs to no other one.
+        //
+        // The owner asked for it, and it is what frees `c` for the clipboard
+        // alone. Two things live here so far: the screenshot, which used to
+        // share a group with the clipboard on a word rather than on a job, and
+        // the three browsers, which keep their own prefix INSIDE it.
+        //
+        // `m i` and not three loose letters: `i n`, `i u` and `i l` are one
+        // trio reading one lexicon (see the `ARCHITECTURE`), and a drawer for
+        // odds and ends is exactly where a named trio would stop looking like
+        // one.
+        ("m s", "screen-capture", None),
         // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
         // first collection, and others are going to come in — the group is born with the
         // name of what it is going to hold, and not with the first item's.
-        ("i n", "glyphs-nerd-fonts", None),
-        ("i u", "unicode-symbols", None),
-        ("i l", "lucide-icons", None),
+        ("m i n", "glyphs-nerd-fonts", None),
+        ("m i u", "unicode-symbols", None),
+        ("m i l", "lucide-icons", None),
         // `LEADER s m` — the memory panel. The machine already had a policy
         // against freezing and no screen ever said so; this is where it
         // becomes something one can look at, and loosen.
@@ -1798,21 +1810,24 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
         // any one buffer's: the same drawer as memory, format and the brain.
         ("s t", "theme-open", None),
-        ("q q", "session-quit", None),
+        // `s q` — THE WAYS OUT, under SYSTEM at the owner's word.
+        //
+        // They held a letter of their own at the first level, and what they do
+        // is what the machine does to ITSELF — which is the sentence the `s`
+        // group is defined by, and the same drawer the power view, the update
+        // and the theme already live in.
+        ("s q q", "session-quit", None),
         // THE MACHINE'S FOUR WAYS OUT, beside the session's own. Each opens
         // the power view on its row, armed — `RET` confirms, `Esc` cancels.
-        ("q s", "power-suspend", None),
-        ("q h", "power-hibernate", None),
-        ("q r", "power-reboot", None),
-        ("q p", "power-off", None),
+        ("s q s", "power-suspend", None),
+        ("s q h", "power-hibernate", None),
+        ("s q r", "power-reboot", None),
+        ("s q p", "power-off", None),
         // `LEADER :` — `M-x`'s key in Doom, which is where the concept
         // comes from. It used to be `x`, which in Doom is the scratch buffer and not the locator.
         // One key only: with both, the list showed the same thing on two
         // lines, and the list is the scarce resource here.
         (":", "mx-open", None),
-        // `x` TOO, at the owner's request. The two coexist because they are two
-        // different reflexes: `:` is Doom's, `x` is Emacs's `M-x`.
-        ("x", "mx-open", None),
         // NOTIFICATIONS. Both were socket orders with no key at all: the
         // history only opened through `ronoctua-shell history`, typed in a
         // terminal. A feature with no path is a feature nobody
@@ -1889,7 +1904,10 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("w", key::GROUP_WINDOW),
         ("TAB", key::GROUP_WORKSPACE),
         ("TAB m", key::GROUP_WORKSPACE_MOVE),
-        ("i", key::GROUP_ICONS),
+        // `m` FOR MISCELLANEOUS, and `m i` for the browsers inside it. See the
+        // bindings for why the trio keeps a prefix of its own.
+        ("m", key::GROUP_MISCELLANEOUS),
+        ("m i", key::GROUP_ICONS),
         // `t` FOR TRANSFERS. It held the screen capture alone and gave the
         // letter up: a queue that everything long goes through earns a
         // first-level prefix, and a single screenshot does not.
@@ -1900,12 +1918,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // can be asked for, so the sequence itself says which of the two
         // happened.
         ("t i", key::GROUP_IDENTIFIED),
-        // `c` FOR CAPTURE — the clipboard and the screen, which is where the
-        // screenshot went.
-        ("c", key::GROUP_CAPTURE),
         ("n", key::GROUP_NOTIFICATION),
         ("h", key::GROUP_HELP),
-        ("q", key::GROUP_QUIT),
         // `s` for SYSTEM — what the machine is doing to itself, as opposed to
         // what one is doing with it: memory, disks, the update, the theme —
         // and the network and Syncthing, which moved in from the first level.
@@ -1915,6 +1929,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s d", key::GROUP_DISPLAY),
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
+        ("s q", key::GROUP_QUIT),
     ];
 
     let mut registry = Registry::fresh();
@@ -2316,15 +2331,18 @@ mod tests {
         let (tree, _) = default_of().expect("the default keymap has to close");
         let mut l = Leader::default();
         l.activate();
-        match l.key(&tree, Key::simple(Sym::Char('I'))) {
+        // `M` and not `I`: the letter is only an EXAMPLE of a first-level
+        // binding, and the icons moved under `m` when `m` was made the drawer
+        // for what belongs nowhere else.
+        match l.key(&tree, Key::simple(Sym::Char('M'))) {
             Effect::Close {
                 other_case: Some(t),
             } => assert_eq!(
                 t.sym,
-                Sym::Char('i'),
+                Sym::Char('m'),
                 "the suggestion has to be the lower-case one"
             ),
-            otherwise => panic!("`I` should end pointing at `i`; got {otherwise:?}"),
+            otherwise => panic!("`M` should end pointing at `m`; got {otherwise:?}"),
         }
     }
 
@@ -2365,9 +2383,11 @@ mod tests {
                 shift: false,
                 logo: false,
             },
-            sym: Sym::Char('i'),
+            sym: Sym::Char('m'),
         };
-        // The premise: `M-i` is not bound to anything, and `i` is.
+        // The premise: `M-m` is not bound to anything, and `m` is. The letter
+        // is only an example of a first-level binding; the icons' `i` was it
+        // until `m` became the drawer they moved into.
         assert!(matches!(
             tree.resolve(&[with_alt]),
             ronoctua_keymap::Resolution::Nothing
@@ -2379,13 +2399,13 @@ mod tests {
             Effect::Close {
                 other_case: Some(t),
             } => {
-                assert_eq!(t.sym, Sym::Char('i'));
+                assert_eq!(t.sym, Sym::Char('m'));
                 assert!(
                     !t.mods.alt,
                     "the suggestion has to be the key WITHOUT the Alt"
                 );
             }
-            otherwise => panic!("`M-i` should end pointing at `i`; got {otherwise:?}"),
+            otherwise => panic!("`M-m` should end pointing at `m`; got {otherwise:?}"),
         }
     }
 
@@ -2506,8 +2526,11 @@ mod tests {
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
         l.activate();
-        // `i n`, and not `g g`: the group became `i` for ICONS, because the
-        // Nerd Fonts browser is the first collection and others are going to come in.
+        // `m i n` — THREE keys, which is also what this test wants: a sequence
+        // that runs has to be walked to the end, and a two-key one cannot tell
+        // "the last key ran it" from "any key after a group runs it". The
+        // browsers keep the `i` prefix inside `m`; see the bindings.
+        l.key(&tree, Key::simple(Sym::Char('m')));
         l.key(&tree, Key::simple(Sym::Char('i')));
         assert_eq!(
             l.key(&tree, Key::simple(Sym::Char('n'))),

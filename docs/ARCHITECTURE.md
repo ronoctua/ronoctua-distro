@@ -209,7 +209,7 @@ que falta. `profile-minimal-closes` passou a nomear os cinco pela mesma razão q
 superpacote.
 
 De brinde, um defeito que estava lá desde sempre: **o binário do hot reload nunca teve os buffers**.
-`nix run .#dev` compila com `cargo`, e as cinco variáveis não estavam exportadas ali — `i n` abria
+`nix run .#dev` compila com `cargo`, e as cinco variáveis não estavam exportadas ali — `m i n` abria
 janela antes da primeira edição e respondia "não consegui abrir" depois dela. Ele se escondia atrás
 de quem roda `nix run .#dev` de DENTRO do `nix develop`, porque ali quatro delas existiam por acaso;
 é o mesmo defeito que o comentário dos ícones descreve seis linhas acima, no mesmo arquivo. Hoje a
@@ -5899,13 +5899,15 @@ por isso a marca de "já tentei" é posta *antes* de saber se deu certo.
 
 ### O histórico de clipboard
 
-`c` virou GRUPO: a captura de tela era `t c`, e `t` passou a ser a fila de transferências. O dono
-escolheu onde ela cairia — `c` de CAPTURA, que é o que as duas coisas embaixo dele fazem: o clipboard
-captura o que se copia, a tela captura o que se vê. Custou uma tecla ao histórico (`c` virou `c c`),
-que é a convenção que este keymap já usa em todo prefixo com um segundo item — `s n n`, `f f`,
-`TAB TAB`.
+`c` virou GRUPO e depois deixou de ser: a captura de tela era `t c`, `t` passou a ser a fila de
+transferências, e o dono escolheu `c` de CAPTURA para as duas — o clipboard captura o que se copia, a
+tela captura o que se vê. Ele desfez isso depois, e a razão está na frase: uma palavra que cobre dois
+trabalhos sem relação é um grupo que lê bem e responde mal, e custava uma tecla ao clipboard, que se
+usa o dia inteiro, para hospedar um screenshot, que não. A captura foi para `LEADER m s`
+(MISCELÂNEA, o gaveteiro do que não pertence a nenhum outro) e `c` voltou a ser COMANDO — o que só é
+legal porque nada mais pende dele: prefixo que também é comando é a colisão `PrefixWithCommand`.
 
-`LEADER c c` abre, na região abaixo do minibuffer, o histórico à esquerda e — separado por uma régua,
+`LEADER c` abre, na região abaixo do minibuffer, o histórico à esquerda e — separado por uma régua,
 que é a única divisão que o projeto usa (invariante 15) — o conteúdo do item, o que ele é, o estado
 do ClipCascade e as ações à direita. É o **quinto** modo da mesma superfície, ao lado do which-key,
 do `M-x`, do manual e do histórico de notificações: nenhuma janela nova, nenhum popup

@@ -328,7 +328,7 @@ cmd-workspace-previous = Previous workspace
 cmd-workspace-move-next = Move window to next workspace
 cmd-workspace-move-previous = Move window to previous workspace
 cmd-screen-capture = Screenshot
-group-window = window
+group-window = window/buffer
 group-workspace = workspace
 cmd-workspace-overview = Workspace overview
 cmd-window-float = Toggle floating
@@ -1676,7 +1676,7 @@ files-value-mesh-open = no — { $n } open edges
 group-transfer = transfers
 # `c` stopped being a command and became a group: the clipboard captures what
 # you copy, and the screen captures what you see.
-group-capture = capture
+group-miscellaneous = miscellaneous
 
 cmd-transfers-open = the transfer queue
 # The VIEW's keys. The id IS the key, as in the file manager: `cmd-` belongs

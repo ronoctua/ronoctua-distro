@@ -63,10 +63,16 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `ronoctua-shell command <id>` roda qualquer id — é por onde entram os QUATRO binds SEM leader.
 - **`Ctrl+Alt+Del` é o RESGATE** (7 toques em 2 s ainda forçam): janela flutuante, ou VT 8 sem niri.
 - **Todo comando é `kebab-case`, e a chave é `cmd-<id>`**; o registro recusa divergirem. As 141 ações
-  do niri entram como `niri-<nome>`, GERADAS, alcançáveis por nome (`LEADER :`). **O teclado tem UM
+  do niri entram como `niri-<nome>`, GERADAS, alcançáveis por nome (`LEADER :`, e SÓ ele — o `x`
+  paralelo saiu a pedido do dono; duas teclas para uma coisa gastam duas linhas da lista, que é o
+  recurso escasso ali). **`m` é MISCELÂNEA**, o gaveteiro do que não pertence a nenhum outro grupo
+  (a captura de tela e o `m i` dos três navegadores), e é o que libera `c` para ser o clipboard
+  SOZINHO — comando, não prefixo. **`s q` são as saídas**, porque o que elas fazem é o que a máquina
+  faz a SI MESMA, que é a frase que define o grupo `s`. E `w` se chama `window/buffer`: janela e
+  buffer são a mesma coisa (inv. 4), e o rótulo dizia só metade. **O teclado tem UM
   lugar** (`nix/keyboard-xkb.nix`); o xkb **não recusa** layout inexistente — cai no `us` mudo, e
   quem impede é `keyboard-layout-exists`.
-- **Três navegadores, um léxico** (`i n`, `i u`, `i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
+- **Três navegadores, um léxico** (`m i n`, `m i u`, `m i l`). Só o da Lucide personaliza; a prévia é o SVG COPIADO, e a marca sai da MESMA `affordance` que a tecla lê.
 - **São TREZE vistas, e a precedência vive só em `Footer::view()`** — nenhuma é menu (inv. 14), e
   **TODA porta pergunta a ele**: o ramo de teclas, o `expansion()` e o `region_is_free` das onze
   portas. Isso não era verdade e três revisores acharam o mesmo defeito em três vistas: cada um
@@ -270,7 +276,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **`LEADER t` é a fila, e ela é de uma UNIDADE** (`ronoctua-transfers`): três processos olham a mesma
   lista e a cópia sobrevive ao rodapé reiniciar. Socket JSON por linha, um por USUÁRIO. `t t` no
   rodapé, `t w` no buffer wasip2 — e o cursor é o **id**, que a lista reordena. `t a`/`t v`/`t u`/`t l`
-  pegam o COPIADO. Desistir APAGA o pedaço. `c c` clipboard, `c s` captura.
+  pegam o COPIADO. Desistir APAGA o pedaço. `c` clipboard, `m s` captura.
 - **QUATRO motores, e o motor sai do `Work`** (`Work::engine()`), nunca do pedido: disco, aria2
   (JSON-RPC no loopback, HTTP na mão — sem tokio; segredo em `%t` `0600`, NUNCA em `argv`), yt-dlp
   (grupo próprio, pausar É `SIGSTOP`; vem do AMBIENTE — `option_env!` o poria no perfil mínimo) e
@@ -601,7 +607,7 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **Todo teclado repete** (`get_keyboard_with_repeat`), e nenhum repetia: SCTK só repete para um
   teclado criado assim, então nove janelas tinham `repeat_key` como código morto — segurar seta andava
   uma linha. Cobra o `every-window-repeats`; o rodapé é a exceção escrita (repetir leader é erro).
-- **`LEADER s p` é energia** (`ronoctua-power`, a fronteira com UPower, power-profiles-daemon e logind — molde do `ronoctua-disks`, três threads e o snapshot inteiro): uma `View` (`power.rs`), duas portas (`s p p`/`s p w`), oito seções como linhas. **Modeline em repouso é muda**: bateria só abaixo de 99% e fora de `FullyCharged` (limite de carga a 80% diz `FullyCharged` para sempre), `%` só a ≤30, `state.error` a ≤15 (regra literal, carregando ou não); perfil só quando NÃO é o topo que o daemon oferece — **o padrão da distro é `performance`** (`ronoctua.power.profile`, piso; `power.json` vence; aplicado UMA vez por sessão, nunca sobre um hold e **nunca quando ninguém nomeou** — o `nix run .#dev` não mexe no perfil do dono). Limites de carga escrevem no sysfs por regra udev (grupo `users`); as travas de sono/tampa são fds na thread de ordens do RODAPÉ (a janela encaminha `power-keep-*`); `q s/h/r/p` abrem a vista ARMADA e `RET` confirma. **Nenhuma regra polkit nossa** (logind e PPD já dão `yes`; há check). Alarmes `battery-low/critical/charged` por TRANSIÇÃO (`alarms`), pelo catálogo.
+- **`LEADER s p` é energia** (`ronoctua-power`, a fronteira com UPower, power-profiles-daemon e logind — molde do `ronoctua-disks`, três threads e o snapshot inteiro): uma `View` (`power.rs`), duas portas (`s p p`/`s p w`), oito seções como linhas. **Modeline em repouso é muda**: bateria só abaixo de 99% e fora de `FullyCharged` (limite de carga a 80% diz `FullyCharged` para sempre), `%` só a ≤30, `state.error` a ≤15 (regra literal, carregando ou não); perfil só quando NÃO é o topo que o daemon oferece — **o padrão da distro é `performance`** (`ronoctua.power.profile`, piso; `power.json` vence; aplicado UMA vez por sessão, nunca sobre um hold e **nunca quando ninguém nomeou** — o `nix run .#dev` não mexe no perfil do dono). Limites de carga escrevem no sysfs por regra udev (grupo `users`); as travas de sono/tampa são fds na thread de ordens do RODAPÉ (a janela encaminha `power-keep-*`); `s q s/h/r/p` abrem a vista ARMADA e `RET` confirma. **Nenhuma regra polkit nossa** (logind e PPD já dão `yes`; há check). Alarmes `battery-low/critical/charged` por TRANSIÇÃO (`alarms`), pelo catálogo.
 - **`LEADER s d` são as telas** (`ronoctua-display`, a fronteira com o niri por IPC e com o kernel
   por `/sys` e `/dev/i2c-*`): uma `View` (`display.rs`), DUAS portas (`s d d` rodapé, `s d w` janela),
   três níveis (lista → ficha de uma tela → disposição), resolução, taxa, escala, giro, lugar, VRR,

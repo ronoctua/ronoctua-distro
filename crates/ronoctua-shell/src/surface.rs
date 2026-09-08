@@ -15691,29 +15691,33 @@ mod tests {
     }
 
     #[test]
-    fn with_caps_lock_the_icon_group_still_opens() {
+    fn with_caps_lock_a_group_still_opens() {
         // THE CRITERION, and not the function. This is literally the screen the
         // owner sent: `CTRL ALT SPC I is not bound`. With the Lock on xkb delivers
-        // `I`, `LEADER I` is bound to nothing, and EVERY lowercase binding of
-        // the keymap dies with it.
+        // the capital, that sequence is bound to nothing, and EVERY lowercase
+        // binding of the keymap dies with it.
+        //
+        // The LETTER is only the example. It was the icons' `i` on the day of
+        // the incident; the browsers now live under `m`, so `m` is the
+        // first-level group this walks through.
         use ronoctua_keymap::{Key, Resolution, Sym};
         let (tree, _) = crate::leader::default_of().expect("the default keymap has to close");
 
         assert!(
             matches!(
-                tree.resolve(&[Key::simple(Sym::Char('I'))]),
+                tree.resolve(&[Key::simple(Sym::Char('M'))]),
                 Resolution::Nothing
             ),
-            "if `I` becomes a shortcut, this test has lost its point"
+            "if `M` becomes a shortcut, this test has lost its point"
         );
 
-        let c = Footer::without_caps_lock('I', true);
+        let c = Footer::without_caps_lock('M', true);
         assert!(
             matches!(
                 tree.resolve(&[Key::simple(Sym::Char(c))]),
                 Resolution::Prefix(_)
             ),
-            "with Caps Lock on, `LEADER i` has to open the icon group"
+            "with Caps Lock on, `LEADER m` has to open the group"
         );
     }
 

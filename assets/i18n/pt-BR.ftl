@@ -315,7 +315,7 @@ cmd-workspace-previous = Espaço anterior
 cmd-workspace-move-next = Levar a janela para o próximo espaço
 cmd-workspace-move-previous = Levar a janela para o espaço anterior
 cmd-screen-capture = Capturar a tela
-group-window = janela
+group-window = janela/buffer
 group-workspace = workspace
 cmd-workspace-overview = Panorama dos espaços
 cmd-window-float = Alternar flutuante
@@ -1668,7 +1668,7 @@ files-value-mesh-open = não — { $n } arestas abertas
 group-transfer = transferências
 # O `c` deixou de ser um comando e virou grupo: o clipboard captura o que se
 # copia, e a tela captura o que se vê.
-group-capture = captura
+group-miscellaneous = diversos
 
 cmd-transfers-open = a fila de transferências
 # As teclas da VISTA. O id É a chave, como no gerenciador de arquivos:
