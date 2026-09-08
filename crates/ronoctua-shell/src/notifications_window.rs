@@ -198,6 +198,7 @@ pub fn host_it() -> Result<()> {
         notes: ronoctua_notify::store::Where::of_env(),
         texts,
         row_under_pointer: None,
+        cell_under_pointer: None,
         offset: 0,
         message: None,
     };
@@ -323,6 +324,13 @@ struct NotificationsWindow {
     notes: ronoctua_notify::store::Where,
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
     row_under_pointer: Option<usize>,
+    /// Which CELL along that row, which the message line needs and the click
+    /// already asked for.
+    ///
+    /// Side by side one drawn row is two records, one per column, so the row
+    /// alone cannot say what the pointer is over — see
+    /// `notifications::View::about_at`.
+    cell_under_pointer: Option<u16>,
     /// The first visible row. A window has no page: it scrolls, like the
     /// locator and the manual.
     offset: usize,
@@ -807,7 +815,24 @@ impl NotificationsWindow {
         // The note is the same source as the footer's — the reason a switch
         // does nothing — so the two doors say the same sentence in the same
         // place.
-        let said = self.message.clone().or_else(|| self.view.note(&self.texts));
+        let said = self
+            .message
+            .clone()
+            .or_else(|| self.view.note(&self.texts))
+            // AND WHAT THE ROW UNDER THE POINTER HAS TO ADD: when the
+            // notification arrived, and the whole of a sentence the row had to
+            // cut. The footer's own line takes it from the same method, so the
+            // two doors cannot say different things about the same row.
+            .or_else(|| {
+                let lists = crate::notifications::Lists::of(&self.records, &self.book);
+                self.view.about_at(
+                    &lists,
+                    self.columns,
+                    self.row_under_pointer?,
+                    self.cell_under_pointer,
+                    &self.texts,
+                )
+            });
         // THE ROOM IS THE WHOLE OF `columns`, and that is not the mistake it
         // looks like: `recount` already took BOTH margins off the width before
         // counting cells, so `columns` is what lies between them and a line
@@ -1204,6 +1229,7 @@ impl PointerHandler for NotificationsWindow {
                         ));
                     } else {
                         self.row_under_pointer = self.row_at(e.position.1);
+                        self.cell_under_pointer = self.cell_at(e.position.0);
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -1277,7 +1303,8 @@ impl PointerHandler for NotificationsWindow {
             // columns, so there are two of them.
             let errand = {
                 let lists = crate::notifications::Lists::of(&self.records, &self.book);
-                self.view.clicked(row, cell, &lists, self.columns)
+                self.view
+                    .clicked(row, cell, &lists, &self.book, self.columns)
             };
             self.apply(errand);
             return;

@@ -10213,13 +10213,31 @@ let
         else:
             print(f"ok  {language}: the catalogue's {len(keys)} keys are there")
 
+        # AND AN ACTION READS AS A BUTTON, which starts with a capital.
+        #
+        # The owner read the screen: every action on a card began in lower
+        # case, so a thing one PRESSES was punctuated like the tail of the
+        # sentence above it. Nine were fixed by hand; this is what says the
+        # tenth cannot arrive in lower case — the label is written in the
+        # `.ftl`, so the `.ftl` is where it can be checked.
+        #
+        # A foreign application's label is NOT touched anywhere, here or in
+        # the drawing: we do not know what it says, and capitalising somebody
+        # else's first letter turns `gtk-update` into `Gtk-update`.
+        for line in ftl.splitlines():
+            m = re.match(r"^(notif-action-[a-z0-9-]+) *= *(\S)", line)
+            if m and m.group(2).islower():
+                print(f"ERROR: {language}: `{m.group(1)}` begins in lower case: {line}")
+                failed = True
+
     if failed:
         print("")
         print("       Every notification and every filter of the distro has to exist")
         print("       in both languages (invariant 8). The list comes out of")
         print("       assets/notifications.nix itself — there is no forgetting without failing.")
+        print("       And every action of theirs is a button, so it is written like one.")
         sys.exit(1)
-    print("OK: the notification catalogue speaks both languages")
+    print("OK: the notification catalogue speaks both languages, and its actions read as buttons")
     PY
   '';
 

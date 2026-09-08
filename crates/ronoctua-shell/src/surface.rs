@@ -2813,19 +2813,31 @@ impl Footer {
     /// `Motion` arrives per pixel of movement, and two calculations of one
     /// position are two chances to point at the wrong thing.
     fn band_at(&self, x: f64, y: f64) -> Option<&crate::band::Piece> {
-        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let row = self.band_row_at(x, y)?;
         let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
-        if line_height <= 0.0 || cell <= 0.0 || x < 0.0 || y < 0.0 {
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let row = (y / line_height) as u16;
-        if row >= self.band_rows() {
+        if cell <= 0.0 || x < 0.0 {
             return None;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let column = (x / cell) as u16;
         crate::band::at(&self.band_placed, row, column)
+    }
+
+    /// Which LINE of the band the pointer is on, piece or no piece.
+    ///
+    /// Separate from [`Self::band_at`] because the two answer different
+    /// questions: that one is "what control is under the hand", this one is
+    /// "is the hand on the notification at all". Stopping the clock is the
+    /// second — a notification is read across its whole width, and the gaps
+    /// between the words are as much of it as the words.
+    fn band_row_at(&self, x: f64, y: f64) -> Option<u16> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        if line_height <= 0.0 || y < 0.0 || x < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let row = (y / line_height) as u16;
+        (row < self.band_rows()).then_some(row)
     }
 
     /// A click on the band: the circle marks it read, an action runs.
@@ -3898,6 +3910,14 @@ impl PointerHandler for Footer {
         // AND THE BAND'S, kept apart for the same reason: its lines are not
         // rows of the expanded region either.
         let mut band_hit = None;
+        // WHETHER THE BAND'S CLOCK STARTED OR STOPPED IN THIS FRAME, which is
+        // a repaint: the pie becomes a pause and back, and nothing else in the
+        // loop would ask for one — the clock that beats the band answers
+        // "nothing changed" precisely while it is held.
+        let mut held_changed = false;
+        // AND WHERE THE POINTER ENDED UP, so the message line can be asked
+        // again once the pause has actually been drawn. See below.
+        let mut pointed_at: Option<(f64, f64)> = None;
         // AND THE BRAIN'S, which is a third region and not a row: it sits
         // between the minibuffer and the list, and everything below asks the
         // row what it is.
@@ -3920,6 +3940,20 @@ impl PointerHandler for Footer {
                     self.band_hint = self
                         .band_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
+                    // AND THE POINTER RESTING ON THE BAND STOPS ITS CLOCK.
+                    //
+                    // ANYWHERE on it, and not only on a piece: what is being
+                    // read is the notification, and the gaps between the words
+                    // are part of it. `band_row_at` is the region; `band_at`
+                    // above is the drawn piece, and the two answer different
+                    // questions.
+                    let on_the_band = self.band_row_at(e.position.0, e.position.1).is_some();
+                    if on_the_band {
+                        held_changed |= self.notifications.hold(std::time::Instant::now());
+                    } else {
+                        held_changed |= self.notifications.release(std::time::Instant::now());
+                    }
+                    pointed_at = Some(e.position);
                     // AND THE BRAIN'S LINE, the same way and on the same line:
                     // whatever explains itself does it on the message line and
                     // never in a tooltip (invariant 14).
@@ -3973,6 +4007,11 @@ impl PointerHandler for Footer {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
+                    // THE CLOCK GOES ON. A pointer that leaves the surface
+                    // sends no motion event on the way out, so without this a
+                    // notification held at the edge would stay held until the
+                    // hand came back — which is for ever, if it does not.
+                    held_changed |= self.notifications.release(std::time::Instant::now());
                     self.under_pointer = false;
                     self.row_under_pointer = None;
                     self.cell_under_pointer = None;
@@ -4156,6 +4195,31 @@ impl PointerHandler for Footer {
                     wheel_at = Some(e.position.1);
                 }
                 _ => {}
+            }
+        }
+
+        // THE PIE CHANGED INTO A PAUSE, OR BACK. Nothing else in this frame
+        // asks for a paint on its account, and the second-by-second clock that
+        // beats the band cannot: while the pointer holds it, that clock's whole
+        // answer is "nothing changed".
+        if held_changed {
+            self.draw_and_paint();
+            // AND THE MESSAGE LINE CATCHES UP IN THE SAME GESTURE.
+            //
+            // The hint is read out of `band_placed`, which is what was last
+            // PAINTED — so the one taken above came from the band as it was
+            // before the clock stopped, and the line would go on saying "how
+            // long it has left" over a pie that had already become a pause,
+            // until the hand moved one pixel. The paint above is what makes
+            // the new placement exist; this asks it, and paints again only if
+            // the words really changed. Twice on the frame a hand enters or
+            // leaves the band, and never in a frame that only moves.
+            if let Some((x, y)) = pointed_at {
+                let said = self.band_at(x, y).and_then(|p| p.explain.clone());
+                if said != self.band_hint {
+                    self.band_hint = said;
+                    self.draw_and_paint();
+                }
             }
         }
 
@@ -10470,7 +10534,7 @@ impl Footer {
                 let records = self.notifications.history().to_vec();
                 let errand = {
                     let lists = crate::notifications::Lists::of(&records, &self.book);
-                    self.manager.clicked(n, cell, &lists, width)
+                    self.manager.clicked(n, cell, &lists, &self.book, width)
                 };
                 self.manager_errand(errand);
                 self.draw_and_paint();
@@ -11467,6 +11531,28 @@ impl Footer {
                     .and_then(|i| visible.get(i))
                     .and_then(|l| l.description.clone())
             })
+            // AND WHAT THE MANAGER'S ROW UNDER THE POINTER HAS TO ADD.
+            //
+            // Not through `ExpansionRow::description` like the line above,
+            // because side by side one drawn row is TWO records — one per
+            // column — so the answer depends on the cell as well. See
+            // `notifications::View::about_at`, which asks the same plan the
+            // click does.
+            .or_else(|| {
+                if !self.notifications_open {
+                    return None;
+                }
+                let row = self.row_under_pointer?;
+                let records = self.notifications.history();
+                let lists = crate::notifications::Lists::of(records, &self.book);
+                self.manager.about_at(
+                    &lists,
+                    self.screen_columns(),
+                    row,
+                    self.cell_under_pointer,
+                    &self.texts,
+                )
+            })
             // AND A MENU ROW UNDER THE CURSOR SAYS WHAT IT ACTUALLY DOES.
             //
             // ASKED FOR FROM THE SCREEN, and the request named the gap exactly:
@@ -11741,6 +11827,7 @@ impl Footer {
                 self.notifications.fraction_left(std::time::Instant::now()),
                 self.notifications.position(),
                 self.blink_on,
+                self.notifications.held(),
                 &crate::band::Words { texts: &self.texts },
             );
             for (row, line) in band.iter().enumerate() {

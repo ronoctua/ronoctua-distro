@@ -290,11 +290,25 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   chaves que o i18n cobra. A faixa fica ACIMA da modeline (1 linha, até 3 com corpo e ações);
   **nada fica para sempre, nem a crítica** (`quick`/`normal`/`long`), com pizza de 8 passos e
   envelope na BORDA DIREITA; contador `2/5` só com mais de uma; sem glifo próprio, o da severidade.
+  **O ponteiro em QUALQUER lugar da faixa para o relógio**, e a pizza vira PAUSA na mesma célula
+  (`Queue::hold`/`release`): quem está lendo não pode ver a notificação sumir na última palavra. Um
+  INSTANTE, não uma flag — soltar devolve o vão exato empurrando o `since`, senão a notificação
+  pagaria a espera inteira de uma vez; e o vão conta a partir de `max(hold, since)`, senão marcar
+  uma como lida com a mão parada ali daria à seguinte uma vida maior que a dela. Enquanto segura,
+  o `tick` responde "nada mudou", então quem pede o quadro é o próprio ponteiro — e a dica é relida
+  DEPOIS do quadro, porque ela sai do `band_placed`, que é o que foi DESENHADO. Ponteiro esquecido
+  em cima segura para sempre: é o preço do pedido, e o gesto que desfaz é tirar a mão.
   Filtro é `campo + teste`, sem regex, e a PRIMEIRA que casa decide. Suprimida não aparece **e não
   conta**. **O sino só existe com não lida**; clicar abre; `n n` no rodapé, `n w` em janela, `n f`
   nos filtros, uma `View` só, **dica GERADA das tabelas nas duas portas** (`chrome::hint_of`).
   15 dias em `$XDG_STATE_HOME`; seu ajuste em `$XDG_CONFIG_HOME` vence a distro. **`vibrate` e
-  `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check).
+  `audio` não fazem nada — e a linha de mensagem DIZ** (`INERT`, com check). **Uma AÇÃO é botão**:
+  tom próprio (`notification.acts`, a matiz do `label.text` — não há caixa nem borda, inv. 15, então
+  a cor é o único que pode dizer) e MAIÚSCULA inicial no `.ftl`. A promessa é METADE em cada lado:
+  o teste diz que os dois papéis diferem, e o portão do tema (`notification.quiet vs .acts`, ΔE ≥
+  0,04) diz que os papéis resolvem em tintas diferentes em TODO tema — um papel desenhado duas
+  vezes passa no portão, e dois papéis numa primitiva passam no teste. Rótulo de app ESTRANGEIRO
+  não se toca: `gtk-update` viraria `Gtk-update`.
 - **Um registro se chama `(id, quando chegou)`** (`ronoctua_notify::RecordKey`), nunca só a `id`: o
   contador do barramento nasce em 1 a cada partida e o das nossas nasce em `u32::MAX` e desce,
   enquanto o histórico dura 15 dias — a mesma `id` existe várias vezes em disco, e `replaces_id`
@@ -326,7 +340,15 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   realmente muda: no catálogo, onde ajustar o da distro e editar o SEU são coisas diferentes. **Estreito EMPILHA as duas colunas** ("Filtered out" abaixo de
   "Received"), e uma função só (`place_of`) diz o que é cada linha desenhada, para o desenho, as
   teclas e o ponteiro. **`auto-read` faz nascer lida** — as quatro do bluetooth nascem — e é sobre
-  o SINO, não sobre a faixa.
+  o SINO, não sobre a faixa. **A lista é ORDEM DE CHEGADA, mais nova em cima**, e nada mais a
+  ordena: as não lidas iam agrupadas acima, então uma lida há cinco segundos ficava ABAIXO de uma de
+  ontem — a lista não respondia *"o que acabou de acontecer"*, que é a pergunta com que se abre. As
+  duas idades continuam distintas pelo TOM, que não custa posição. **Clique numa linha é o `RET`
+  dela** (`open_here`, uma função para a tecla e para o mouse); os dois controles da borda direita
+  são perguntados ANTES, porque clique neles é aquele controle. **E o ponteiro sobre uma linha diz
+  QUANDO chegou e a frase INTEIRA** (`View::about_at`) — as duas coisas que não cabem na linha. Não
+  é campo de `Row`: lado a lado uma linha desenhada são DOIS registros, um por coluna, então a
+  resposta depende da CÉLULA, e quem resolve as duas é o `place_of`, o mesmo que o clique pergunta.
 - **Os filtros da pessoa se escrevem na TELA** (`n f`, `n` para um novo, `RET` para editar o seu,
   `d` para apagar): nome, condições (`campo`/`teste`/`valor`) e o veredito, com as setas girando o
   que se gira e o **minibuffer do rodapé** recebendo o que se digita (a janela DIZ isso). O nome de

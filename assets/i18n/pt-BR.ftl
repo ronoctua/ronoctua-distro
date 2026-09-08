@@ -91,11 +91,11 @@ notif-memory-killed-summary = Fechado para liberar memória
 notif-memory-killed-body = Um aplicativo foi fechado para a máquina não travar.
 
 # O que cada notificação deixa fazer.
-notif-action-edit = editar a imagem
-notif-action-open = abrir a imagem
-notif-action-folder = abrir a pasta
-notif-action-copy-path = copiar o caminho
-notif-action-memory-panel = abrir o painel de memória
+notif-action-edit = Editar a imagem
+notif-action-open = Abrir a imagem
+notif-action-folder = Abrir a pasta
+notif-action-copy-path = Copiar o caminho
+notif-action-memory-panel = Abrir o painel de memória
 
 # OS FILTROS QUE A DISTRO JÁ TRAZ. O gerenciador os lista por estes nomes.
 notif-rule-important-gets-room = O que é importante ganha espaço
@@ -201,6 +201,7 @@ notif-auto-read = chega já lida
 # da frase como um id cru.
 notif-fact-origin = quem mandou
 notif-fact-arrived = quando chegou
+notif-about-record = { $when } — { $line }
 notif-fact-life = quanto tempo ficou
 notif-fact-show = como apareceu
 notif-fact-read = já foi lida
@@ -228,6 +229,7 @@ hint-notif-bell = { $unread ->
     } — clique abre o gerenciador
 hint-notif-read = marcar como lida e tirar da tela
 hint-notif-countdown = quanto tempo ela ainda tem
+hint-notif-paused = o tempo está parado enquanto o ponteiro está nela
 hint-notif-action = { $action } — clique, ou abra a notificação
 
 ## Installer — the six questions (section 7.1)
@@ -2261,12 +2263,12 @@ notif-bluetooth-app = bluetooth
 notif-bluetooth-pairing-summary = Algo quer parear
 notif-bluetooth-pairing-keys = { $yes } responde sim, { $no } responde não — depois que este aviso sai.
 notif-bluetooth-pairing-body = Abra o Bluetooth para responder.
-notif-action-bluetooth-accept = sim, parear
-notif-action-bluetooth-refuse = não, recusar
+notif-action-bluetooth-accept = Sim, parear
+notif-action-bluetooth-refuse = Não, recusar
 notif-bluetooth-connected-summary = { $device } conectado
 notif-bluetooth-connected-body = Está pronto para usar.
 notif-bluetooth-disconnected-summary = { $device } desconectado
-notif-bluetooth-disconnected-body = Se for o seu teclado ou mouse, é por isso que a máquina parou de responder.
+notif-bluetooth-disconnected-body = Pode ter sido desligado, ficado sem bateria ou saído do alcance.
 notif-bluetooth-battery-low-summary = { $device } está acabando
 notif-bluetooth-battery-low-body = Restam { $percent }%. Carregue quando puder.
 notif-battery-low-summary = Bateria baixa
@@ -2275,8 +2277,8 @@ notif-battery-critical-summary = Bateria crítica
 notif-battery-critical-body = { $percent }% restantes. A máquina vai { $action } sozinha em breve.
 notif-battery-charged-summary = Bateria carregada
 notif-battery-charged-body = Pode desligar da tomada.
-notif-action-power-panel = abrir o painel de energia
-notif-action-bluetooth-panel = abrir o Bluetooth
+notif-action-power-panel = Abrir o painel de energia
+notif-action-bluetooth-panel = Abrir o Bluetooth
 
 # A SAÍDA — as três marcas, e o que o daemon acredita.
 network-way = a internet

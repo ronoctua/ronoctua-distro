@@ -494,6 +494,23 @@
     # family — the same as `text.dim`.
     countdown = "neutral.text-muted";
 
+    # AN ACTION THE NOTIFICATION CARRIES, on the band and in the open record.
+    #
+    # The owner read the screen: an action was drawn in `quiet`, the same tone
+    # as the sentence above it, so the one thing on the card that can be
+    # PRESSED looked like one more line of the message. Nothing said it was a
+    # button — no box, no border and no rule, because there are none here
+    # (invariant 15) — which leaves colour as the only thing that could.
+    #
+    # `label.text` is the palette's own answer to "this answers `RET`": the
+    # hue that no value ever wears, which is what the label column of the
+    # network, power and Bluetooth views already uses. The band gets a recipe
+    # of its own rather than borrowing `text.label.acts`, for the reason
+    # `read`, `suppressed` and `countdown` are three recipes on one primitive
+    # — the day a theme wants the band's buttons apart from a label column,
+    # this is the line to change.
+    acts = "label.text";
+
     # ALREADY READ, in the manager's left column. It stays in the list — the
     # list is the record of what happened — and it recedes.
     read = "neutral.text-muted";

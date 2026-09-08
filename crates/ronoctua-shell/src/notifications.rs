@@ -261,7 +261,7 @@ impl Kind {
 /// Which list has the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Pane {
-    /// What happened: unread first, then read, in a quieter tone.
+    /// What happened: newest first, the read ones in a quieter tone.
     #[default]
     Happened,
     /// What a filter kept off the screen.
@@ -615,7 +615,7 @@ enum Line {
 /// not the row the eye was on. It is the same defect `ExpansionRow` carries a
 /// comment about, one level up.
 pub struct Lists<'a> {
-    /// Unread first, then read — one list, two tones.
+    /// Newest first — one list, and the read ones in a quieter tone.
     pub happened: Vec<&'a Record>,
     /// What a filter kept off the screen.
     pub suppressed: Vec<&'a Record>,
@@ -632,11 +632,15 @@ impl<'a> Lists<'a> {
             .iter()
             .rev()
             .partition(|r| matches!(r.presentation.show, Show::Hidden));
-        // UNREAD FIRST, and the read ones under them in a quieter tone — the
-        // owner's arrangement, and one list rather than two because they are
-        // the same thing at two ages.
-        let mut happened: Vec<&Record> = shown.iter().copied().filter(|r| !r.read).collect();
-        happened.extend(shown.iter().copied().filter(|r| r.read));
+        // AS THEY ARRIVED, NEWEST AT THE TOP, and nothing else sorts them.
+        //
+        // The unread were grouped above the read, which was the owner's
+        // earlier arrangement and which they replaced from the screen: one
+        // read five seconds ago sat BELOW one from yesterday that had not
+        // been, so the list did not answer "what just happened" — which is the
+        // question somebody opens it with. The two ages are still told apart,
+        // by TONE (`record_line`), and a tone costs no position.
+        let happened = shown;
         // THE DISTRO'S ENTRIES, THE DISTRO'S RULES, AND THE PERSON'S RULES.
         //
         // `book.mine` was missing, and it is the half a person can actually
@@ -966,6 +970,7 @@ impl View {
         row: usize,
         cell: Option<u16>,
         lists: &Lists<'_>,
+        book: &Book,
         columns: u16,
     ) -> Errand {
         // THE SHEET IS NOT A LIST, and a click in it moves nothing.
@@ -999,7 +1004,12 @@ impl View {
         self.set_cursor(i);
         let (at, room) = self.row_extent(columns);
         let Some(hit) = cell.and_then(|c| target_at(c, at, room)) else {
-            return Errand::Nothing;
+            // A CLICK ON THE ROW ITSELF IS ITS `RET` — the owner's rule, the
+            // same one the Bluetooth page follows. The two controls at the
+            // right edge are asked FIRST, because a click on one of them means
+            // that control; everything else on the line is the notification,
+            // and clicking a notification opens it.
+            return self.open_here(lists, book);
         };
         // THE RECORD IS THE ONE JUST NAMED, not the one at the raw row index.
         // The cursor was clamped and the lookup was not, so a click below the
@@ -1020,6 +1030,98 @@ impl View {
             Hit::ToggleRead => Errand::Read(key),
             Hit::Delete => Errand::Forget(key),
         }
+    }
+
+    /// What `RET` opens on the list — and what a CLICK on a row opens.
+    ///
+    /// One function and not two. The owner's rule is that a click on a row is
+    /// that row's `RET`, and two copies of "what Enter does here" are two
+    /// answers waiting to differ: the day the catalogue learns a third kind of
+    /// entry, one of the copies learns it.
+    fn open_here(&mut self, lists: &Lists<'_>, book: &Book) -> Errand {
+        match self.pane {
+            // On the catalogue it opens the sheet: that is where the distro's
+            // default is either kept or changed.
+            Pane::Catalogue if self.cursor() < lists.len(Pane::Catalogue) => {
+                // A FILTER OF THEIRS OPENS WHOLE, and the distro's opens its
+                // knobs. The distro's cannot be rewritten — it comes from
+                // `assets/notifications.nix` and a rebuild would put it back —
+                // so what a person does to one is adjust it.
+                self.level = match self.mine_of(lists, book) {
+                    Some(rule) => Level::Draft(Draft::of(&rule)),
+                    None => Level::Sheet(0),
+                };
+                Errand::Nothing
+            }
+            Pane::Happened => match lists.happened.get(self.cursor()) {
+                // THE RECORD OPENS. It is the answer to the row that did not
+                // fit: the body wrapped, every action listed one under the
+                // other, and the facts beside it.
+                Some(r) => {
+                    self.level = Level::Open {
+                        at: r.key(),
+                        line: 0,
+                    };
+                    Errand::Nothing
+                }
+                None => Errand::Nothing,
+            },
+            // A SUPPRESSED ONE DOES NOT OPEN, by `RET` or by click: what there
+            // is to say about it is which filter kept it off the screen, and
+            // that is the catalogue's column.
+            _ => Errand::Nothing,
+        }
+    }
+
+    /// What the message line says about the row the POINTER is on.
+    ///
+    /// The two things a record's row cannot hold: WHEN it arrived — a line
+    /// with a sentence on it has no room for a date — and the WHOLE of that
+    /// sentence, which `elide_end` cut to fit. The owner asked for both from
+    /// the screen.
+    ///
+    /// # Why this is not a field of [`Row`]
+    ///
+    /// Because one drawn row is not one record. Side by side the two panes
+    /// SHARE a line — `happened[i]` on the left, `suppressed[i]` on the right
+    /// — so what the pointer is over depends on the CELL as much as on the
+    /// row, and a row carrying one answer would say the left column's date
+    /// over the right column's notification. [`Self::place_of`] is the one
+    /// plan that resolves both, and it is what a click already asks.
+    #[must_use]
+    pub fn about_at(
+        &self,
+        lists: &Lists<'_>,
+        columns: u16,
+        row: usize,
+        cell: Option<u16>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<String> {
+        // ONLY THE LIST. With a record open, a sheet up or a question waiting,
+        // the drawn rows are not the list's and `place_of` would resolve them
+        // against a plan nobody drew.
+        if !matches!(self.level, Level::List) {
+            return None;
+        }
+        let (pane, i) = self.place_of(lists, columns, row, cell)?;
+        let r = match pane {
+            Pane::Happened => lists.happened.get(i)?,
+            Pane::Suppressed => lists.suppressed.get(i)?,
+            // A FILTER IS NOT A NOTIFICATION: it has no arrival and its name
+            // is drawn whole. Saying nothing is the honest answer.
+            Pane::Catalogue => return None,
+        };
+        Some(self.about(r, texts))
+    }
+
+    /// The sentence itself. Split out so a test can ask for it without a
+    /// pointer, and so the two doors cannot word it differently.
+    fn about(&self, r: &Record, texts: &ronoctua_i18n::Texts) -> String {
+        let when = crate::chrome::when_text(arrived_secs(r), &self.zone, true, texts);
+        texts.t_with(
+            ronoctua_i18n::key::NOTIF_ABOUT_RECORD,
+            &[("when", &when), ("line", &r.notification.line())],
+        )
     }
 
     /// What the message line says about the focused row.
@@ -1536,11 +1638,7 @@ fn facts_of(
     room: u16,
     texts: &ronoctua_i18n::Texts,
 ) -> Vec<Vec<Field>> {
-    let secs = r
-        .notification
-        .at
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let secs = arrived_secs(r);
     let yes_no = |v: bool| {
         texts.t(if v {
             ronoctua_i18n::key::NOTIF_YES
@@ -1631,6 +1729,23 @@ fn rule_name(id: &str, texts: &ronoctua_i18n::Texts) -> String {
 ///
 /// `focused` is drawn as a COLOUR and not as a box: it is the file manager's
 /// own answer to the same question, and invariant 15 leaves no other.
+/// When a record arrived, in seconds since the epoch.
+///
+/// `_secs` because the test module has an `arrived` of its own that BUILDS a
+/// record at a given second, and two things called `arrived` in one file, one
+/// shadowing the other, is a reader's trap for nothing.
+///
+/// One reading of the clock, because there are two askers now: the open
+/// record's facts, and what the pointer says over a row of the list. A second
+/// `duration_since` written out beside the first is a second answer waiting to
+/// differ about the same notification.
+fn arrived_secs(r: &Record) -> i64 {
+    r.notification
+        .at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
 fn record_line(
     r: &Record,
     at: u16,
@@ -2161,35 +2276,7 @@ impl View {
                 // nothing is worse than a key that is not bound.
                 _ => Errand::Nothing,
             },
-            Press::Enter => match self.pane {
-                // On the catalogue, `Enter` opens the sheet: that is where the
-                // distro's default is either kept or changed.
-                Pane::Catalogue if self.cursor() < n => {
-                    // A FILTER OF THEIRS OPENS WHOLE, and the distro's opens
-                    // its knobs. The distro's cannot be rewritten — it comes
-                    // from `assets/notifications.nix` and a rebuild would put
-                    // it back — so what a person does to one is adjust it.
-                    self.level = match self.mine_of(lists, book) {
-                        Some(rule) => Level::Draft(Draft::of(&rule)),
-                        None => Level::Sheet(0),
-                    };
-                    Errand::Nothing
-                }
-                Pane::Happened => match lists.happened.get(self.cursor()) {
-                    // THE RECORD OPENS. It is the answer to the row that did
-                    // not fit: the body wrapped, every action listed one under
-                    // the other, and the facts beside it.
-                    Some(r) => {
-                        self.level = Level::Open {
-                            at: r.key(),
-                            line: 0,
-                        };
-                        Errand::Nothing
-                    }
-                    None => Errand::Nothing,
-                },
-                _ => Errand::Nothing,
-            },
+            Press::Enter => self.open_here(lists, book),
             // AND THE ONE THAT OFFERS IT TO EVERYBODY. It opens a question
             // and nothing else: what is published is published.
             Press::Letter('p') if self.pane == Pane::Catalogue => {
@@ -3352,7 +3439,7 @@ mod tests {
         let _ = v.key(Press::Enter, &lists, &b, 200);
         assert!(v.in_sheet());
         let was = v.cursor();
-        let did = v.clicked(3, Some(4), &lists, 120);
+        let did = v.clicked(3, Some(4), &lists, &b, 120);
         assert_eq!(did, Errand::Nothing);
         assert_eq!(v.cursor(), was, "the click moved which entry is open");
     }
@@ -3380,7 +3467,7 @@ mod tests {
         v.pane = Pane::Suppressed;
         let (at, room) = v.row_extent(120);
         assert_eq!(
-            v.clicked(0, Some(at + room - 3), &lists, 120),
+            v.clicked(0, Some(at + room - 3), &lists, &b, 120),
             Errand::Nothing
         );
     }
@@ -3606,20 +3693,25 @@ mod tests {
             drawn(tokens::icon::NOTIFICATION_MARK_UNREAD),
             "the read row has no closed envelope"
         );
-        // And the same cell, pressed, goes the other way on each of them —
-        // unread first, then read, so drawn row 1 is the unread one.
+        // And the same cell, pressed, goes the other way on each of them.
+        // Newest first, so drawn row 1 is id 2 — which is also the unread one
+        // here, and was so under the old order for a different reason.
         assert_eq!(
-            v.clicked(1, Some(at + room - 3), &lists, 200),
+            v.clicked(1, Some(at + room - 3), &lists, &b, 200),
             Errand::Read(named(2))
         );
         assert_eq!(
-            v.clicked(2, Some(at + room - 3), &lists, 200),
+            v.clicked(2, Some(at + room - 3), &lists, &b, 200),
             Errand::Unread(named(1))
         );
     }
 
     #[test]
-    fn clicking_a_target_acts_and_clicking_the_row_only_aims() {
+    fn clicking_a_control_acts_and_clicking_the_row_opens_it() {
+        // THE OWNER'S RULE: a click on the row IS that row's `RET`. It used to
+        // only aim, so reaching a notification meant a click and then a key —
+        // while the two controls at the right edge already acted on one press,
+        // which is the inconsistency read off the screen.
         let b = Book::distro();
         let records = vec![record(1, Show::Brief, false), record(2, Show::Brief, false)];
         let lists = Lists::of(&records, &b);
@@ -3627,22 +3719,125 @@ mod tests {
         let (at, room) = v.row_extent(200);
         // Row 0 of the drawing is the heading; newest first, so drawn row 1
         // is id 2 and drawn row 2 is id 1.
-        assert_eq!(v.clicked(1, Some(at + 5), &lists, 200), Errand::Nothing);
-        assert_eq!(v.cursor(), 0, "the click on the row at least aims");
+        assert_eq!(v.clicked(1, Some(at + 5), &lists, &b, 200), Errand::Nothing);
+        assert_eq!(v.cursor(), 0, "the click on the row did not aim");
+        let opened = Level::Open {
+            at: named(2),
+            line: 0,
+        };
+        assert_eq!(v.level, opened, "clicking the row did not open it");
+
+        // AND IT IS THE SAME THING THE KEY DOES, which is what `open_here`
+        // exists for: two answers to "what does this row do" is two answers
+        // waiting to differ.
+        v.level = Level::List;
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        assert_eq!(v.level, opened, "`RET` and the click disagree");
+        v.level = Level::List;
+
+        // THE TWO CONTROLS AT THE RIGHT EDGE ARE ASKED FIRST: a click there is
+        // that control, and not the row it sits on.
         assert_eq!(
-            v.clicked(2, Some(at + room - 3), &lists, 200),
+            v.clicked(2, Some(at + room - 3), &lists, &b, 200),
             Errand::Read(named(1))
         );
+        assert_eq!(v.level, Level::List, "the envelope opened the record too");
         assert_eq!(
-            v.clicked(2, Some(at + room - 1), &lists, 200),
+            v.clicked(2, Some(at + room - 1), &lists, &b, 200),
             Errand::Forget(named(1))
         );
+        assert_eq!(v.level, Level::List, "the bin opened the record too");
         // AND THE HEADING IS NOT A ROW OF THE LIST: a click on it does nothing
         // and moves nothing, rather than acting on whatever shares its index.
         assert_eq!(
-            v.clicked(0, Some(at + room - 1), &lists, 200),
+            v.clicked(0, Some(at + room - 1), &lists, &b, 200),
             Errand::Nothing
         );
+        assert_eq!(v.level, Level::List, "a heading opened something");
+    }
+
+    #[test]
+    fn the_list_is_in_arrival_order_with_the_newest_on_top() {
+        // THE OWNER'S ORDER, and it replaced their earlier one. The unread
+        // were grouped above the read, so one read five seconds ago sat BELOW
+        // one from yesterday that had not been — and the list did not answer
+        // "what just happened", which is the question one opens it with.
+        let b = Book::distro();
+        let records = vec![
+            arrived(1, Show::Brief, false, 10),
+            arrived(2, Show::Brief, true, 20),
+            arrived(3, Show::Brief, false, 30),
+            arrived(4, Show::Brief, true, 40),
+        ];
+        let lists = Lists::of(&records, &b);
+        let order: Vec<u32> = lists.happened.iter().map(|r| r.notification.id).collect();
+        assert_eq!(
+            order,
+            vec![4, 3, 2, 1],
+            "the list is not in arrival order, newest first"
+        );
+        // AND THE TWO AGES ARE STILL TOLD APART, by tone — which is what made
+        // it safe to stop spending POSITION on the difference.
+        let plain = Buttons { marked: false };
+        let read = record_line(lists.happened[0], 0, 80, false, true, plain);
+        let unread = record_line(lists.happened[1], 0, 80, false, true, plain);
+        assert_ne!(
+            read[0].color, unread[0].color,
+            "read and unread are drawn the same, and now nothing tells them apart"
+        );
+    }
+
+    #[test]
+    fn the_pointer_says_when_it_arrived_and_the_whole_line() {
+        // TWO THINGS THE ROW CANNOT HOLD, both asked for from the screen: a
+        // line with a sentence on it has no room for a date, and the sentence
+        // itself is cut by `elide_end` to fit.
+        let t = texts();
+        let b = Book::distro();
+        let records = vec![record(1, Show::Brief, false)];
+        let lists = Lists::of(&records, &b);
+        let v = View::fresh();
+        // Drawn row 0 is the heading and says nothing; row 1 is the record.
+        assert_eq!(v.about_at(&lists, 200, 0, Some(4), &t), None);
+        let said = v
+            .about_at(&lists, 200, 1, Some(4), &t)
+            .expect("the record says nothing under the pointer");
+        assert!(
+            said.contains(&records[0].notification.line()),
+            "the whole line is not in it: {said}"
+        );
+        assert!(
+            said.contains(&crate::chrome::when_text(
+                arrived_secs(&records[0]),
+                &v.zone,
+                true,
+                &t
+            )),
+            "when it arrived is not in it: {said}"
+        );
+        // AND IT IS THE CELL THAT SAYS WHICH COLUMN, not the row: side by side
+        // the two panes SHARE a line, so a row-only answer would put the left
+        // column's date over the right column's notification.
+        let records = vec![
+            arrived(1, Show::Brief, false, 10),
+            arrived(2, Show::Hidden, false, 20),
+        ];
+        let lists = Lists::of(&records, &b);
+        let v = View::fresh();
+        let right = extent_of(Pane::Suppressed, 120).0;
+        let left = v.about_at(&lists, 120, 1, Some(3), &t).expect("the left");
+        let across = v
+            .about_at(&lists, 120, 1, Some(right + 1), &t)
+            .expect("the right");
+        assert_ne!(
+            left, across,
+            "both halves of one line say the same thing, so the cell was not read"
+        );
+        // AND A FILTER IS NOT A NOTIFICATION: it has no arrival, and its name
+        // is drawn whole.
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        assert_eq!(v.about_at(&lists, 50, 1, Some(3), &t), None);
     }
 
     #[test]
@@ -3660,24 +3855,30 @@ mod tests {
         // Drawn row 0 is the pair of headings; row 1 holds both columns' first
         // item, and the CELL says which of the two the pointer means.
         assert_eq!(
-            v.clicked(1, Some(at + room - 1), &lists, 120),
+            v.clicked(1, Some(at + room - 1), &lists, &b, 120),
             Errand::Forget(named(2)),
             "the right column's bin did not answer"
         );
         assert_eq!(v.pane, Pane::Suppressed);
-        // And a click back on the left column brings the cursor home.
-        assert_eq!(v.clicked(1, Some(3), &lists, 120), Errand::Nothing);
+        // And a click back on the left column brings the cursor home — and
+        // opens what it landed on, which is what a click on a row now does.
+        assert_eq!(v.clicked(1, Some(3), &lists, &b, 120), Errand::Nothing);
         assert_eq!(v.pane, Pane::Happened);
+        assert!(
+            matches!(v.level, Level::Open { .. }),
+            "the click did not open the row it landed on"
+        );
+        v.level = Level::List;
 
         // STACKED, the columns are one under the other and it is the ROW that
         // says which — clicking in "Filtered out" moves the keyboard there,
         // which is the same rule read down instead of across.
         let mut v = View::fresh();
         // 0 title, 1 the record, 2 air, 3 title, 4 the suppressed one.
-        assert_eq!(v.clicked(4, Some(3), &lists, 50), Errand::Nothing);
+        assert_eq!(v.clicked(4, Some(3), &lists, &b, 50), Errand::Nothing);
         assert_eq!((v.pane, v.cursor()), (Pane::Suppressed, 0));
         // And a title is not a row of a list: it moves nothing.
-        assert_eq!(v.clicked(0, Some(3), &lists, 50), Errand::Nothing);
+        assert_eq!(v.clicked(0, Some(3), &lists, &b, 50), Errand::Nothing);
         assert_eq!(v.pane, Pane::Suppressed, "a title took the keyboard");
 
         // AND A CLICK BELOW THE SHORTER COLUMN'S LAST ITEM DOES NOTHING.
@@ -3696,7 +3897,7 @@ mod tests {
         ];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        assert_eq!(v.clicked(3, Some(at), &lists, 120), Errand::Nothing);
+        assert_eq!(v.clicked(3, Some(at), &lists, &b, 120), Errand::Nothing);
         assert_eq!((v.pane, v.cursor()), (Pane::Happened, 0), "it moved anyway");
     }
 

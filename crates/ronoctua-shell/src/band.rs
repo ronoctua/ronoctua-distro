@@ -162,6 +162,11 @@ pub const fn countdown_glyph(left: u8) -> char {
 ///
 /// `blink_on` rides the clock the footer already beats to expire things; with
 /// `blink` off it changes nothing.
+///
+/// `held` is the pointer resting on the band, which stops the clock — the pie
+/// becomes a pause. It is passed in rather than worked out from `fraction`
+/// standing still, because two equal fractions a frame apart are also what a
+/// slow notification looks like.
 #[must_use]
 pub fn lines(
     shown: Option<&Shown>,
@@ -169,6 +174,7 @@ pub fn lines(
     fraction: Option<f32>,
     position: Option<(usize, usize)>,
     blink_on: bool,
+    held: bool,
     words: &Words<'_>,
 ) -> Vec<Line> {
     let Some(s) = shown else { return Vec::new() };
@@ -227,14 +233,32 @@ pub fn lines(
     });
 
     if let Some(f) = fraction {
-        let glyph = countdown_glyph(eighths(f));
+        // THE SAME CELL SAYS BOTH THINGS: how much time is left, and that the
+        // time is not moving. A frozen pie and a running one are the same
+        // drawing for the second or two anybody watches, so the pointer's
+        // effect would be invisible exactly while it is in force — and the
+        // person would take their hand away to be sure, which is the one
+        // gesture that undoes it.
+        //
+        // The COLOUR does not change with it. Two signals for one state is how
+        // a row comes to twitch; the drawing is the state, and the message
+        // line says it in words.
+        let glyph = if held {
+            tokens::icon::PAUSE
+        } else {
+            countdown_glyph(eighths(f))
+        };
         right = right.saturating_sub(2);
         first.pieces.push(Piece {
             at: right,
             text: glyph.to_string(),
             color: tokens::color::NOTIFICATION_COUNTDOWN,
             hit: None,
-            explain: Some(words.texts.t(ronoctua_i18n::key::HINT_NOTIF_COUNTDOWN)),
+            explain: Some(words.texts.t(if held {
+                ronoctua_i18n::key::HINT_NOTIF_PAUSED
+            } else {
+                ronoctua_i18n::key::HINT_NOTIF_COUNTDOWN
+            })),
         });
     }
     if let Some((shown_now, total)) = position {
@@ -323,7 +347,15 @@ pub fn lines(
             pieces.push(Piece {
                 at: x,
                 text,
-                color: tokens::color::NOTIFICATION_QUIET,
+                // NOT THE MESSAGE'S COLOUR. It was, and the owner read it off
+                // the screen: the one thing on the card that can be PRESSED
+                // was drawn in the same tone as the sentence above it, so it
+                // looked like one more line of the message. There is no box
+                // and no border to say otherwise (invariant 15), which leaves
+                // colour as the only thing that can — and this is the same
+                // token the open record already draws its actions in, so the
+                // two places agree about the same button.
+                color: tokens::color::NOTIFICATION_ACTS,
                 hit: Some(Hit::Action(i)),
                 explain: Some(
                     words
@@ -408,7 +440,7 @@ mod tests {
         let w = Words { texts: &t };
         for columns in [20_u16, 40, 80, 200] {
             let s = shown(Show::Full, &"c".repeat(500), 4);
-            for line in lines(Some(&s), columns, Some(0.5), Some((1, 5)), true, &w) {
+            for line in lines(Some(&s), columns, Some(0.5), Some((1, 5)), true, false, &w) {
                 for p in &line.pieces {
                     assert!(
                         p.at + layout::width(&p.text) <= columns,
@@ -428,7 +460,7 @@ mod tests {
         let t = words();
         let w = Words { texts: &t };
         let s = shown(Show::Brief, "", 0);
-        let out = lines(Some(&s), 80, Some(1.0), None, false, &w);
+        let out = lines(Some(&s), 80, Some(1.0), None, false, false, &w);
         let control = out[0]
             .pieces
             .iter()
@@ -467,7 +499,7 @@ mod tests {
         // And a named one always wins.
         s.presentation.glyph = Some('\u{F0AA5}');
         assert_eq!(glyph_of(&s), '\u{F0AA5}');
-        let out = lines(Some(&s), 80, None, None, false, &w);
+        let out = lines(Some(&s), 80, None, None, false, false, &w);
         assert_eq!(out[0].pieces[0].text, "\u{F0AA5}");
     }
 
@@ -476,8 +508,8 @@ mod tests {
         let t = words();
         let w = Words { texts: &t };
         let s = shown(Show::Brief, "", 0);
-        let alone = lines(Some(&s), 80, Some(1.0), None, false, &w);
-        let queued = lines(Some(&s), 80, Some(1.0), Some((1, 5)), false, &w);
+        let alone = lines(Some(&s), 80, Some(1.0), None, false, false, &w);
+        let queued = lines(Some(&s), 80, Some(1.0), Some((1, 5)), false, false, &w);
         assert!(queued[0].pieces.len() > alone[0].pieces.len());
         assert!(queued[0].pieces.iter().any(|p| p.text.contains("1/5")));
     }
@@ -492,21 +524,94 @@ mod tests {
     }
 
     #[test]
+    fn the_pie_becomes_a_pause_while_the_pointer_holds_it() {
+        // THE SAME CELL SAYS BOTH THINGS. A frozen pie and a running one are
+        // the same drawing for the second or two anybody watches, so without
+        // this the pointer's whole effect would be invisible exactly while it
+        // is in force — and the way to check would be to move the hand away,
+        // which is the one gesture that undoes it.
+        let t = words();
+        let w = Words { texts: &t };
+        let s = shown(Show::Brief, "", 0);
+
+        let running = lines(Some(&s), 80, Some(0.5), None, false, false, &w);
+        let held = lines(Some(&s), 80, Some(0.5), None, false, true, &w);
+        let pie = |out: &[Line]| {
+            out[0]
+                .pieces
+                .iter()
+                .find(|p| p.color == tokens::color::NOTIFICATION_COUNTDOWN)
+                .cloned()
+                .expect("the countdown is drawn")
+        };
+        let (a, b) = (pie(&running), pie(&held));
+        assert_eq!(a.text, countdown_glyph(eighths(0.5)).to_string());
+        assert_eq!(b.text, tokens::icon::PAUSE.to_string());
+        // AND IT DOES NOT MOVE. The two glyphs alternate in one cell, so a
+        // different column would make the whole right-hand cluster twitch
+        // every time a hand passed over the band.
+        assert_eq!(a.at, b.at, "the pause landed in a different cell");
+        // THE COLOUR IS THE SAME TOO: the drawing is the state, and two
+        // signals for one state is how a row comes to flicker.
+        assert_eq!(a.color, b.color);
+        // AND THE MESSAGE LINE SAYS IT IN WORDS, because a glyph is a glyph.
+        assert_ne!(a.explain, b.explain, "the pointer is told the same thing");
+        assert_eq!(
+            b.explain,
+            Some(t.t(ronoctua_i18n::key::HINT_NOTIF_PAUSED)),
+            "the paused pie does not explain itself"
+        );
+        // AND NOTHING ELSE ON THE LINE MOVED.
+        assert_eq!(running.len(), held.len());
+        let cells = |out: &[Line]| out[0].pieces.iter().map(|p| p.at).collect::<Vec<_>>();
+        assert_eq!(cells(&running), cells(&held));
+    }
+
+    #[test]
     fn blinking_only_moves_a_loud_one() {
         let t = words();
         let w = Words { texts: &t };
         let mut s = shown(Show::Brief, "", 0);
         s.presentation.loud = true;
         s.presentation.blink = true;
-        let on = lines(Some(&s), 80, None, None, true, &w);
-        let off = lines(Some(&s), 80, None, None, false, &w);
+        let on = lines(Some(&s), 80, None, None, true, false, &w);
+        let off = lines(Some(&s), 80, None, None, false, false, &w);
         assert_ne!(on[0].pieces[0].color, off[0].pieces[0].color);
         // With blink off, the clock changes nothing — otherwise every
         // notification would flicker once a second.
         s.presentation.blink = false;
-        let a = lines(Some(&s), 80, None, None, true, &w);
-        let b = lines(Some(&s), 80, None, None, false, &w);
+        let a = lines(Some(&s), 80, None, None, true, false, &w);
+        let b = lines(Some(&s), 80, None, None, false, false, &w);
         assert_eq!(a[0].pieces[0].color, b[0].pieces[0].color);
+    }
+
+    #[test]
+    fn an_action_is_not_drawn_in_the_message_s_colour() {
+        // THE OWNER READ IT OFF THE SCREEN: the one thing on the card that can
+        // be PRESSED was the same tone as the sentence above it, so it looked
+        // like one more line of the message. There is no box and no border to
+        // say otherwise (invariant 15), which leaves colour as the only thing
+        // that can.
+        //
+        // THIS IS HALF THE PROMISE, and deliberately: a `Color` is a ROLE, so
+        // what is asserted here is that the two rows ask for different roles.
+        // That the two roles RESOLVE to different ink in every theme is the
+        // palette's own gate — `notification.quiet vs notification.acts` in
+        // `gen-theme.py`, which fails the build at ΔE < 0.04. Neither half
+        // alone is the guarantee: one role drawn twice would pass the gate,
+        // and two roles on one primitive would pass this.
+        let t = words();
+        let w = Words { texts: &t };
+        let s = shown(Show::Full, "a body", 2);
+        let out = lines(Some(&s), 120, None, None, false, false, &w);
+        let body = out[1].pieces.first().expect("the body is drawn");
+        let action = out[2].pieces.first().expect("an action is drawn");
+        assert_eq!(body.color, tokens::color::NOTIFICATION_QUIET);
+        assert_eq!(action.color, tokens::color::NOTIFICATION_ACTS);
+        assert_ne!(
+            action.color, body.color,
+            "the action wears the message's own colour"
+        );
     }
 
     #[test]
@@ -522,7 +627,7 @@ mod tests {
         let t = words();
         let w = Words { texts: &t };
         let s = shown(Show::Full, "corpo", 3);
-        let out = lines(Some(&s), 120, Some(1.0), None, false, &w);
+        let out = lines(Some(&s), 120, Some(1.0), None, false, false, &w);
         let last = out.last().unwrap();
         assert_eq!(last.pieces.len(), 3);
         for (i, p) in last.pieces.iter().enumerate() {
@@ -545,7 +650,7 @@ mod tests {
         let t = words();
         let w = Words { texts: &t };
         let s = shown(Show::Full, "corpo", 2);
-        let out = lines(Some(&s), 120, Some(1.0), None, false, &w);
+        let out = lines(Some(&s), 120, Some(1.0), None, false, false, &w);
         // The control is at the right edge now, and the left margin carries the
         // notification's own mark.
         let edge = 120 - tokens::space::MODELINE_EDGERIGHT - 1;

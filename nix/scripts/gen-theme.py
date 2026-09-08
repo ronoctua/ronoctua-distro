@@ -579,6 +579,10 @@ CONTRAST_GATES = (
     ("notification.quiet", ("notification.background",), 43, 45),
     ("notification.loud", ("notification.background",), 45, 60),
     ("notification.countdown", ("notification.background",), 15, 20),
+    # AN ACTION IS READ AND PRESSED, so it holds the same floor as the message
+    # it sits under — a button one has to lean in to read is worse than one
+    # drawn in the message's own colour.
+    ("notification.acts", ("notification.background",), 43, 45),
     ("state.accent", ("surface.chrome",), 45, 50),
     ("state.success", ("surface.chrome",), 45, 50),
     ("state.warning", ("surface.chrome",), 45, 50),
@@ -624,6 +628,11 @@ DISTANCE_GATES = (
     ("text.subtle.strong", "brain.dim", 0.03, 0.04),
     ("text.subtle.alternate", "text.subtle.strong", 0.03, 0.04),
     ("state.error", "state.critical", 0.04, 0.05),
+    # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
+    # same ground and they are not the same kind of thing — one is read, the
+    # other is pressed — and for a while they were the same colour. This is
+    # what says they cannot go back to it in some theme nobody looked at.
+    ("notification.quiet", "notification.acts", 0.04, 0.05),
 )
 #: Pairs reported but never gated: they are never drawn side by side.
 DISTANCE_NOTES = (

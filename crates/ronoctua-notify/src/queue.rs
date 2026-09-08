@@ -331,6 +331,17 @@ pub struct Queue {
     showing: Option<Shown>,
     pending: VecDeque<(Notification, Presentation)>,
     history: Vec<Record>,
+    /// Since when the clock has been stopped, if it is stopped.
+    ///
+    /// The pointer resting anywhere on the band holds it: a notification that
+    /// goes on counting down while somebody is reading it is one that runs out
+    /// exactly when they got to the end of it.
+    ///
+    /// AN INSTANT AND NOT A FLAG, because releasing has to give back the exact
+    /// span that was held. A flag would leave `since` where it was and the
+    /// notification would take the whole hold out of its own life the moment
+    /// the pointer moved away — which is the defect, not the fix.
+    held: Option<Instant>,
 }
 
 impl Queue {
@@ -427,7 +438,7 @@ impl Queue {
                 changed: self.pull(now),
             };
         };
-        if now.duration_since(current.since) < self.how_long(current) {
+        if self.spent(current, now) < self.how_long(current) {
             return Tick {
                 expired: None,
                 changed: false,
@@ -457,6 +468,68 @@ impl Queue {
     #[allow(clippy::unused_self)]
     fn how_long(&self, s: &Shown) -> Duration {
         s.presentation.life.how_long()
+    }
+
+    /// How much of its life the one on the band has actually spent.
+    ///
+    /// `now - since`, LESS whatever is being held right now. Everything that
+    /// asks the clock asks this and not the subtraction, or the pie and the
+    /// expiry would disagree about the same notification — one frozen, one
+    /// running out under it.
+    fn spent(&self, s: &Shown, now: Instant) -> Duration {
+        let gone = now.duration_since(s.since);
+        match self.held {
+            // AND NEVER FROM BEFORE THIS ONE ARRIVED. Marking one read by
+            // hand while the pointer rests on the band pulls the next one in
+            // UNDER the hold, and its `since` is later than the moment the
+            // hold began. Counting the whole hold would hand the newcomer
+            // time it was never on screen for — and, once released, a life
+            // longer than the one it was given.
+            Some(at) => gone.saturating_sub(now.duration_since(at.max(s.since))),
+            None => gone,
+        }
+    }
+
+    /// The pointer came to rest on the band: the clock stops.
+    ///
+    /// Answers whether anything changed, so the caller knows whether to paint.
+    /// Holding an already-held clock is not a change — the pointer moving one
+    /// cell within the band arrives as a fresh motion event every time.
+    pub fn hold(&mut self, now: Instant) -> bool {
+        if self.held.is_some() || self.showing.is_none() {
+            return false;
+        }
+        self.held = Some(now);
+        true
+    }
+
+    /// The pointer left: the clock goes on FROM WHERE IT STOPPED.
+    ///
+    /// The held span is given back by moving `since` forward by it, which is
+    /// what makes this resume rather than restart: the notification's life is
+    /// measured from `since`, so pushing that mark forward is exactly the time
+    /// that did not count.
+    pub fn release(&mut self, now: Instant) -> bool {
+        let Some(at) = self.held.take() else {
+            return false;
+        };
+        if let Some(s) = self.showing.as_mut() {
+            // From `max`, for the reason `spent` gives: the one on the band
+            // may have arrived after the hold began.
+            s.since += now.duration_since(at.max(s.since));
+        }
+        true
+    }
+
+    /// Is the clock stopped?
+    ///
+    /// The band asks, because the pie draws a PAUSE while it is: a countdown
+    /// that has frozen and a countdown that is running look the same for the
+    /// second or two anybody watches, and the whole point is that the person
+    /// can tell they have time.
+    #[must_use]
+    pub const fn held(&self) -> bool {
+        self.held.is_some()
     }
 
     /// Marks the one on the band read and takes it off at once.
@@ -603,7 +676,7 @@ impl Queue {
         if whole <= 0.0 {
             return Some(0.0);
         }
-        let gone = now.duration_since(s.since).as_secs_f32();
+        let gone = self.spent(s, now).as_secs_f32();
         Some((1.0 - gone / whole).clamp(0.0, 1.0))
     }
 
@@ -788,6 +861,93 @@ mod tests {
         assert!(
             f.showing().is_none(),
             "the critical one stayed on screen forever"
+        );
+    }
+
+    #[test]
+    fn the_pointer_stops_the_clock_and_it_goes_on_from_there() {
+        // THE OWNER'S RULE: a notification that goes on counting down while
+        // somebody is reading it runs out exactly when they reach the end of
+        // it. The pointer resting on the band stops the clock, and taking it
+        // away starts it AGAIN — not over.
+        let t0 = Instant::now();
+        let whole = Life::Normal.how_long();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+
+        let third = whole / 3;
+        assert!(!f.tick(t0 + third).changed, "it left before its time");
+        let running = f.fraction_left(t0 + third).expect("something is showing");
+
+        // HELD. The clock stops where it was, and stays there however long the
+        // hand rests — well past the whole life, which is the case that would
+        // have taken it off the screen.
+        assert!(f.hold(t0 + third), "the first hold changed nothing");
+        assert!(
+            !f.hold(t0 + third + Duration::from_millis(1)),
+            "holding an already-held clock counted as a change — the pointer \
+             moving one cell inside the band is a fresh motion event, and a \
+             paint per pixel is what that would buy"
+        );
+        let long_after = t0 + third + whole * 4;
+        assert!(
+            !f.tick(long_after).changed,
+            "it expired with the pointer resting on it"
+        );
+        assert!(f.showing().is_some(), "it left the band while it was held");
+        let frozen = f.fraction_left(long_after).expect("something is showing");
+        assert!(
+            (frozen - running).abs() < f32::EPSILON,
+            "the pie moved while the clock was stopped: {running} -> {frozen}"
+        );
+        assert!(f.held(), "the band does not know it is holding");
+
+        // RELEASED. What is left is what was left — not a fresh life, and not
+        // the whole hold charged to it at once.
+        assert!(f.release(long_after), "the release changed nothing");
+        assert!(!f.held());
+        let after = f.fraction_left(long_after).expect("something is showing");
+        assert!(
+            (after - running).abs() < f32::EPSILON,
+            "letting go moved the pie: {running} -> {after}"
+        );
+        // Two thirds of the life are still owed, and one more third is not
+        // enough to spend them.
+        assert!(
+            !f.tick(long_after + third).changed,
+            "it expired after two thirds of its life"
+        );
+        assert!(
+            f.tick(long_after + whole).changed,
+            "it never expired after the pointer left"
+        );
+        assert!(f.showing().is_none());
+    }
+
+    #[test]
+    fn a_hold_never_pays_out_to_a_notification_that_was_not_there() {
+        // MARKING ONE READ WHILE THE POINTER RESTS ON THE BAND pulls the next
+        // one in UNDER the hold, and its clock starts AFTER the hold began.
+        // Counting the whole hold for it would hand it back time it was never
+        // on screen for — and, once released, push its `since` into the future
+        // and give it a life longer than the one it was allowed.
+        let t0 = Instant::now();
+        let whole = Life::Normal.how_long();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+
+        assert!(f.hold(t0));
+        let later = t0 + whole * 3;
+        assert!(f.dismiss_current(later), "the first one did not go");
+        assert_eq!(f.showing().map(|s| s.notification.id), Some(2));
+        assert!(f.release(later));
+        // The second one arrived at `later` and owes its whole life from
+        // there — no more, and no less.
+        assert!(!f.tick(later + whole / 2).changed, "it went early");
+        assert!(
+            f.tick(later + whole + Duration::from_secs(1)).changed,
+            "it outlived its life by the length of a hold it was never in"
         );
     }
 
