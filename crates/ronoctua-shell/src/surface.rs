@@ -4652,8 +4652,8 @@ impl Footer {
             // THE AUDIO PROFILE'S RING. It acts on the OPEN view's card, so
             // with the view closed it does nothing — the honest answer, and
             // the same one every other row key gives.
-            "bluetooth-more" => self.bluetooth_press(crate::bluetooth::Press::Right),
-            "bluetooth-less" => self.bluetooth_press(crate::bluetooth::Press::Left),
+            "bluetooth-more" => self.bluetooth_press(crate::bluetooth::Press::More),
+            "bluetooth-less" => self.bluetooth_press(crate::bluetooth::Press::Less),
             "bluetooth-settings" => self.bluetooth_press(crate::bluetooth::Press::Cross),
             "bluetooth-power" => self.bluetooth_errand_of(crate::bluetooth::Press::Power),
             "bluetooth-discoverable" => {
@@ -6982,7 +6982,24 @@ impl Footer {
                 Sym::Down => Some(crate::bluetooth::Press::Down),
                 Sym::Enter => Some(crate::bluetooth::Press::Enter),
                 otherwise => {
-                    let notation = ronoctua_keymap::Key::simple(otherwise).notation();
+                    // SHIFT IS PART OF THE NOTATION HERE. `Key::simple` drops
+                    // every modifier, which was right while this view had no
+                    // shifted key — and it stopped being right the day the
+                    // bare arrows started crossing the columns and
+                    // `S-<arrow>` took over more and less. Dropped, the two
+                    // pairs would be the same key and the volume could only
+                    // go up. Only SHIFT is carried: a letter never arrives
+                    // shifted (the key reader clears it for `Sym::Char`), so
+                    // the twelve bare letters are untouched, and `C-` or `M-`
+                    // finding no row is a chord this view does not answer.
+                    let notation = ronoctua_keymap::Key {
+                        mods: ronoctua_keymap::Mods {
+                            shift: key.mods.shift,
+                            ..ronoctua_keymap::Mods::default()
+                        },
+                        sym: otherwise,
+                    }
+                    .notation();
                     crate::bluetooth::OF_THE_VIEW
                         .iter()
                         .find(|(t, _, _)| *t == notation)
@@ -10484,8 +10501,16 @@ impl Footer {
                 self.draw_and_paint();
             }
             Some(Click::Bluetooth(n)) => {
-                // THE MOUSE AIMS, THE KEYS ACT — the power view's rule, and
-                // the same reason: forgetting a device is not one click away.
+                // A CLICK IS THE `RET` OF THE ROW IT LANDS ON.
+                //
+                // The owner's rule for this view, and it replaces "the mouse
+                // aims, the keys act" here: the second column's rows are a
+                // volume, a switch and two doors, and reaching them took a
+                // click to choose the column and then a hand back on the
+                // keyboard to do the thing. Nothing a row of this view does
+                // is one way — a volume steps, a switch flips back, a door
+                // opens a page. What forgets or blocks a device is a bare
+                // LETTER, and no click reaches a letter.
                 let width = self.screen_columns();
                 // WHERE ALONG THE LINE, because a device's page has two halves
                 // side by side and a click on the right one has to put the
@@ -10494,6 +10519,7 @@ impl Footer {
                 // reaches what the keyboard reaches.
                 let cell = self.cell_under_pointer;
                 let scene = std::mem::take(&mut self.bluetooth_scene);
+                let mut asking = false;
                 if let Some(v) = self.bluetooth.as_mut() {
                     // THE PANE FIRST, THEN THE ROWS. The rows describe
                     // whichever half has the keyboard, so aiming at the other
@@ -10502,9 +10528,20 @@ impl Footer {
                     v.aim(cell, width);
                     let rows = v.rows(&scene, width, &self.texts);
                     v.clicked(n, cell, width, &rows);
+                    asking = v.asking();
                 }
                 self.bluetooth_scene = scene;
-                self.draw_and_paint();
+                // EXCEPT WHILE A PAIRING QUESTION IS UP, where the pointer
+                // goes on only aiming. That question opens OVER whatever was
+                // on the screen and its cursor lands on the refusal for
+                // exactly this reason; a click that acted would put one
+                // movement of a hand between an unknown device asking and
+                // this machine saying yes.
+                if asking {
+                    self.draw_and_paint();
+                } else {
+                    self.bluetooth_press(crate::bluetooth::Press::Enter);
+                }
             }
             Some(Click::Display(n)) => {
                 // THE MOUSE AIMS, THE KEYS ACT — the rule every view here

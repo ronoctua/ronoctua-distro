@@ -78,9 +78,19 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("o", "bluetooth-power", Where::OnTheRadio),
     ("v", "bluetooth-discoverable", Where::OnTheRadio),
     ("h", "bluetooth-unnamed", Where::OnTheList),
+    // THE SIDEWAYS ARROWS CROSS THE COLUMNS, and `TAB` still does too — the
+    // file manager's rule, asked for here in the same words. Four notations
+    // and one id: `hint_of` spends an id once, so the line teaches the arrow
+    // and the other three go on working. With two halves there is nothing a
+    // DIRECTION could mean, which is why both arrows are the same key.
+    ("<right>", "bluetooth-settings", Where::OnTheSettings),
+    ("<left>", "bluetooth-settings", Where::OnTheSettings),
     ("TAB", "bluetooth-settings", Where::OnTheSettings),
-    ("<right>", "bluetooth-more", Where::OnTheSettings),
-    ("<left>", "bluetooth-less", Where::OnTheSettings),
+    ("S-TAB", "bluetooth-settings", Where::OnTheSettings),
+    // AND WHAT THE BARE ARROWS USED TO DO moved one modifier up, which is
+    // where the manager keeps the meaning that belongs to the focused thing.
+    ("S-<right>", "bluetooth-more", Where::OnTheSettings),
+    ("S-<left>", "bluetooth-less", Where::OnTheSettings),
     ("y", "bluetooth-accept", Where::WhileAsked),
     ("n", "bluetooth-refuse", Where::WhileAsked),
 ];
@@ -159,15 +169,20 @@ pub enum Press {
     Power,
     /// MORE of whatever the cursor is on, and less.
     ///
-    /// The only pair of arrows in this view, and they belong to the settings
-    /// column: a volume goes up in steps and an audio profile has an order
-    /// (off, music in stereo, a call with the microphone). `RET` would need
-    /// somewhere to put a list. They used to be named after the profile,
-    /// which was true while it was the only thing they moved.
-    Right,
-    /// The other way round `Right` goes.
-    Left,
+    /// `S-<right>` and `S-<left>`, which is the file manager's rule: the
+    /// bare arrows move between the columns and the SHIFTED pair acts on
+    /// what the focused column has. They belong to the settings half — a
+    /// volume goes up in steps and an audio profile has an order (off, music
+    /// in stereo, a call with the microphone) — and `RET` would need
+    /// somewhere to put a list. They were the bare arrows until the owner
+    /// asked for those to change column.
+    More,
+    /// The other way round `More` goes.
+    Less,
     /// Cross to the other half of a device's page, and back.
+    ///
+    /// `TAB` and the bare sideways arrows: with two halves there is nothing
+    /// for a DIRECTION to mean, so both arrows are this one key.
     ///
     /// Side by side when the width affords it, stacked when it does not —
     /// and the key means the same thing either way, which is why it is not
@@ -654,8 +669,11 @@ impl View {
     }
 
     /// Is a question waiting?
+    ///
+    /// Both doors ask before letting a CLICK act: a pairing question opens
+    /// over whatever was on the screen, and yes must not be one click away
+    /// from a device nobody has seen before.
     #[must_use]
-    #[cfg_attr(not(test), expect(dead_code, reason = "the doors do not ask yet"))]
     pub const fn asking(&self) -> bool {
         self.question.is_some()
     }
@@ -967,16 +985,15 @@ impl View {
             // They used to be the audio profile's ring and nothing else,
             // which was true while the profile was the only thing in this
             // view that had an order. Now the settings column has a volume
-            // too, so the arrows ask the ROW — and a row that has no order
-            // simply does not move, which is what an arrow on a fact should
-            // do.
+            // too, so they ask the ROW — and a row that has no order simply
+            // does not move, which is what this pair on a fact should do.
             //
             // The profile still acts on the CARD the view is holding rather
             // than on the row, for the power view's reason: the row says
             // which profile is on, and `Card::next` is what knows which ones
             // the device can actually do.
-            Press::Right | Press::Left => {
-                let up = press == Press::Right;
+            Press::More | Press::Less => {
+                let up = press == Press::More;
                 match target {
                     Target::Volume(node, _) => {
                         let now = self.sink.as_ref().map_or(0, |s| s.volume);
@@ -2399,6 +2416,130 @@ mod tests {
                 .any(|r| matches!(r.target, Target::Profile { .. })),
             "the facts act while the keyboard is on the settings"
         );
+    }
+
+    #[test]
+    fn every_notation_is_spelt_the_way_the_keymap_writes_it() {
+        // BOTH DOORS LOOK THIS TABLE UP BY STRING, and the string they
+        // compare against is what `Key::notation` produced from the key that
+        // was actually pressed. A row spelt any other way — `Shift-<right>`,
+        // `<Right>` — matches nothing: the key is dead in both doors, and
+        // `hint_of` drops it from the line as well, so the only symptom is a
+        // sentence one item shorter than the table.
+        for (notation, id, _) in OF_THE_VIEW {
+            let key = ronoctua_keymap::Key::parse(notation).unwrap_or_else(|_| {
+                panic!("`{notation}` ({id}) is not a key this repository can read")
+            });
+            assert_eq!(
+                &key.notation(),
+                notation,
+                "`{notation}` ({id}) is not how `Key::notation` writes that key"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sideways_arrows_cross_and_the_shifted_pair_acts() {
+        // THE OWNER'S RULE, which is the file manager's: the bare arrows move
+        // between the two columns — `TAB` still does too, for whoever arrives
+        // from the other manager — and `S-<arrow>` is what moves the value of
+        // the row the keyboard is on. They were the other way round, and
+        // reaching the second column meant knowing about `TAB`.
+        let press = |notation: &str| {
+            OF_THE_VIEW
+                .iter()
+                .find(|(t, _, _)| *t == notation)
+                .and_then(|(_, id, _)| crate::bluetooth_words::press_of(id))
+        };
+        for crossing in ["<right>", "<left>", "TAB", "S-TAB"] {
+            assert_eq!(
+                press(crossing),
+                Some(Press::Cross),
+                "`{crossing}` does not cross to the other column"
+            );
+        }
+        assert_eq!(press("S-<right>"), Some(Press::More));
+        assert_eq!(press("S-<left>"), Some(Press::Less));
+    }
+
+    #[test]
+    fn crossing_and_stepping_are_two_different_keys() {
+        // The pair above, from the other end: what each one does to the view.
+        let t = texts();
+        let scene = a_scene();
+        let mut v = View::fresh_at("/d/1");
+        v.settings = true;
+        v.sink = Some(ronoctua_bluetooth::audio::Sink {
+            id: 83,
+            volume: 72,
+            muted: false,
+        });
+        assert_eq!(v.pane, Pane::Facts);
+        assert_eq!(v.key(Press::Cross, &scene, 120, &t), Errand::Nothing);
+        assert_eq!(v.pane, Pane::Settings, "crossing did not move the keyboard");
+
+        let rows = v.rows(&scene, 120, &t);
+        let at = rows
+            .iter()
+            .position(|r| matches!(r.target, Target::Volume(_, _)))
+            .expect("the volume is drawn in the settings column");
+        v.put(at, &rows);
+        let Errand::Volume(node, wanted) = v.key(Press::More, &scene, 120, &t) else {
+            panic!("`S-<right>` on the volume did not ask for one");
+        };
+        assert_eq!(node, 83, "the volume was sent to the card and not the node");
+        assert!(wanted > 72, "the volume did not go up");
+
+        // AND CROSSING BACK LEAVES THE NUMBER ALONE. While the bare arrow was
+        // "more", these two were the same key; now one of them must not do
+        // the other's work.
+        let before = v.sink.expect("the sink is held").volume;
+        assert_eq!(v.key(Press::Cross, &scene, 120, &t), Errand::Nothing);
+        assert_eq!(v.pane, Pane::Facts);
+        assert_eq!(v.sink.expect("the sink is held").volume, before);
+    }
+
+    #[test]
+    fn a_click_acts_on_the_column_it_landed_in() {
+        // WHAT THE TWO DOORS DO WITH A PRESS OF THE MOUSE, in the order they
+        // do it: `aim` puts the keyboard in the half the pointer is over,
+        // `clicked` puts the cursor on the row, and then `RET`. Without the
+        // aim the click would move a row of the OTHER column; without the
+        // `RET` it would take a hand back on the keyboard to do the thing.
+        let t = texts();
+        let scene = a_scene();
+        let mut v = View::fresh_at("/d/1");
+        v.settings = true;
+        v.sink = Some(ronoctua_bluetooth::audio::Sink {
+            id: 83,
+            volume: 72,
+            muted: false,
+        });
+        let cell = split_at(120) + 2;
+        v.aim(Some(cell), 120);
+        assert_eq!(v.pane, Pane::Settings, "the pointer did not reach the half");
+        let rows = v.rows(&scene, 120, &t);
+        let at = rows
+            .iter()
+            .position(|r| matches!(r.target, Target::Volume(_, _)))
+            .expect("the volume is drawn in the settings column");
+        v.clicked(at, Some(cell), 120, &rows);
+        let Errand::Volume(node, _) = v.key(Press::Enter, &scene, 120, &t) else {
+            panic!("the clicked row did not answer `RET`");
+        };
+        assert_eq!(node, 83);
+
+        // AND A CLICK BACK ON THE LEFT-HAND HALF acts on THAT one — the same
+        // two calls, the other side of the line.
+        v.aim(Some(1), 120);
+        assert_eq!(v.pane, Pane::Facts);
+
+        // `clicked` AIMS AS WELL, and that is not a duplicate: the doors ask
+        // first because the rows have to be BUILT for the right half, and
+        // this second call is what keeps a caller that forgets from leaving
+        // the cursor in the column the pointer is not over.
+        v.clicked(at, Some(cell), 120, &rows);
+        assert_eq!(v.pane, Pane::Settings);
     }
 
     #[test]

@@ -217,16 +217,33 @@ pub fn set_mute(node: u32, muted: bool) -> Result<()> {
 pub fn sink_of(dump: &str, address: &str) -> Option<Sink> {
     let objects: Vec<serde_json::Value> = serde_json::from_str(dump).ok()?;
     for o in objects {
-        let info = o.get("info")?;
-        let props = info.get("props")?;
-        if props.get("media.class")?.as_str()? != "Audio/Sink" {
+        // A MISS SKIPS THE OBJECT; IT NEVER ANSWERS FOR THE DUMP.
+        //
+        // `pw-dump` prints the WHOLE graph, and most of it is not a node:
+        // measured here, 81 objects of which the FIRST is the core — it has
+        // props, and it has no `media.class`. A `?` on that lookup does not
+        // skip the core, it returns `None` from this function on the first
+        // line of every real dump, and the headset's node was number 83. The
+        // fixtures below are trimmed to what is read, so every test passed
+        // over a function that had never found anything on a real machine.
+        let Some(info) = o.get("info") else { continue };
+        let Some(props) = info.get("props") else {
+            continue;
+        };
+        if props.get("media.class").and_then(serde_json::Value::as_str) != Some("Audio/Sink") {
             continue;
         }
         let theirs = props.get("api.bluez5.address").and_then(|a| a.as_str());
         if !theirs.is_some_and(|a| a.eq_ignore_ascii_case(address)) {
             continue;
         }
-        let id = u32::try_from(o.get("id")?.as_i64()?).ok()?;
+        let Some(id) = o
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|n| u32::try_from(n).ok())
+        else {
+            continue;
+        };
         let settings = info
             .get("params")
             .and_then(|p| p.get("Props"))
@@ -276,13 +293,28 @@ pub fn card_of(dump: &str, address: &str) -> Option<Card> {
     let wanted = format!("bluez_card.{}", address.replace(':', "_")).to_lowercase();
     let objects: Vec<serde_json::Value> = serde_json::from_str(dump).ok()?;
     for o in objects {
-        let props = o.get("info")?.get("props")?;
-        let name = props.get("device.name")?.as_str()?;
+        // The same rule as `sink_of`: a miss skips the OBJECT, not the dump.
+        // Six of this machine's eighty-one objects carry no `info` at all,
+        // and the first of all of them carries no `device.name`.
+        let Some(props) = o.get("info").and_then(|i| i.get("props")) else {
+            continue;
+        };
+        let Some(name) = props.get("device.name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
         if name.to_lowercase() != wanted {
             continue;
         }
-        let id = u32::try_from(o.get("id")?.as_i64()?).ok()?;
-        let params = o.get("info")?.get("params")?;
+        let Some(id) = o
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|n| u32::try_from(n).ok())
+        else {
+            continue;
+        };
+        let Some(params) = o.get("info").and_then(|i| i.get("params")) else {
+            continue;
+        };
         let active = params
             .get("Profile")
             .and_then(|p| p.as_array())
@@ -378,6 +410,36 @@ mod tests {
     #[test]
     fn the_address_is_read_whatever_its_case() {
         assert!(sink_of(NODES, "aa:bb:cc:dd:ee:ff").is_some());
+    }
+
+    /// What a real dump STARTS with, in `pw-dump`'s own order: the core, a
+    /// module, and a metadata object that carries no `info` at all. None of
+    /// the three has `media.class` or `device.name`, and all three come
+    /// before anything that plays sound.
+    const BEFORE: &str = r#"
+      { "id": 0, "type": "PipeWire:Interface:Core",
+        "info": { "props": { "core.name": "pipewire-0", "cpu.max-align": 32 } } },
+      { "id": 1, "type": "PipeWire:Interface:Module",
+        "info": { "props": { "module.name": "libpipewire-module-rt" } } },
+      { "id": 30, "type": "PipeWire:Interface:Metadata" },
+    "#;
+
+    #[test]
+    fn the_graph_is_walked_past_what_is_not_a_node() {
+        // THE DEFECT THE OWNER SAW: the second column of a connected headset
+        // had no volume row. Both readers gave up on the first object of the
+        // dump instead of stepping over it, so on every real machine they
+        // answered "no card" and "no sink" — and the fixtures above, trimmed
+        // to the keys that are read, could never show it.
+        let dump = format!("[{BEFORE}{}", &NODES[1..]);
+        let sink = sink_of(&dump, "AA:BB:CC:DD:EE:FF").expect("the headset still has a sink");
+        assert_eq!(sink.id, 83);
+        assert_eq!(sink.volume, 72);
+
+        let dump = format!("[{BEFORE}{}", &DUMP[1..]);
+        let card = card_of(&dump, "00:00:00:00:00:02").expect("the headset still has a card");
+        assert_eq!(card.id, 42);
+        assert_eq!(card.now(), Some("a2dp-sink"));
     }
 
     /// ONE object, in the shape `pw-dump` prints, trimmed to what is read.

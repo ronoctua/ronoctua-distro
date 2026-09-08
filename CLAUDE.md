@@ -508,15 +508,24 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   **stdout** e quem decodifica é o `image`: `Rgba` nasce num lugar só. **Recusa é VALOR, não ausência** — painel em branco e painel recusado são
   iguais na tela, e só um tem frase. GPS não é mostrado, e a linha DIZ que o arquivo o carrega.
 - **A ficha de um aparelho tem DUAS METADES**: os fatos, e o que dá para ajustar NELE. Lado a lado
-  acima de `space.bluetooth.settingsFrom`, empilhadas abaixo — e `TAB` atravessa nos dois casos
-  (molde do `notifications::two_columns`, o único lugar com cursor por coluna). **Lado a lado, só a
-  metade com o teclado carrega o ALVO da linha**: a outra é desenhada e não age, senão `RET`
-  mexeria no que o olho não está. O clique leva a CÉLULA (`View::aim`), porque o mouse tem de
-  alcançar o que a tecla alcança. O que a coluna oferece sai do `Kind`: volume e mudo por
+  acima de `space.bluetooth.settingsFrom`, empilhadas abaixo — e **as setas ←/→ atravessam** nos
+  dois casos, `TAB`/`S-TAB` junto (molde do gerenciador; `notifications::two_columns` é o molde do
+  cursor por coluna). **`S-<setas>` é que mexem no VALOR** — volume e o anel do perfil —, porque
+  com duas metades a direção não tem o que dizer e alcançar a segunda coluna não pode depender de
+  saber do `TAB`. **Lado a lado, só a metade com o teclado carrega o ALVO da linha**: a outra é
+  desenhada e não age, senão `RET` mexeria no que o olho não está. **O clique é o `RET` da linha
+  em que cai**, e leva a CÉLULA (`View::aim`) para escolher a metade antes de montar as linhas —
+  nada aqui é de mão única (volume anda, chave volta, porta abre), e o que esquece ou bloqueia é
+  LETRA NUA, que clique nenhum alcança. A exceção é a pergunta de pareamento (`View::asking`): ali
+  o ponteiro só mira, senão `sim` para um aparelho desconhecido ficaria a um clique. O que a coluna
+  oferece sai do `Kind`: volume e mudo por
   `wpctl` — **e volume é NÓ, não cartão** (`set-profile` recebe device, `set-volume` recebe node;
   o headset é device 84 e sink 83) —, o perfil A2DP/HFP, o `WakeAllowed`, e num teclado a porta
   para o `LEADER s k`. **O que o PipeWire guarda não é o que a pessoa lê**: `channelVolumes` é
   amplitude linear e todo mixer mostra a RAIZ CÚBICA dela (0,367886 é 72%).
+  **`?` DENTRO DO LAÇO responde pelo DUMP, não pelo objeto**: `card_of` e `sink_of` desistiam no
+  objeto 0 de todo `pw-dump` real (o core, com `props` e sem `media.class`), então a coluna nunca
+  teve volume nem perfil em máquina nenhuma — e as fixtures, recortadas nas chaves lidas, passavam.
   **`View::fresh_at` não lia o cartão** — abrir pela marca da modeline, que é o caminho mais
   curto, dava ficha sem perfil de áudio; a lista dá uma linha por FRASE, e o encanamento (`1800`,
   `1801`) não é desenhado.

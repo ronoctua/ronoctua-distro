@@ -10300,6 +10300,181 @@ let
     PY
   '';
 
+  # AND THE TWO DOORS ANSWER THE SAME KEYS.
+  #
+  # `LEADER s b` has one view and two doors, and they read the keyboard in two
+  # different ways. The footer builds the NOTATION of what was pressed and looks
+  # it up in `bluetooth::OF_THE_VIEW`; the window matches KEYSYMS by hand for
+  # everything that is not a bare letter, because an arrow and a `TAB` produce
+  # no text and its fallback matches text. So the table is the truth in one door
+  # and a hand-written copy in the other, and a row changed there is a key that
+  # goes on working in the footer and dies in the window — silently, since both
+  # doors go on TEACHING it from the same table.
+  #
+  # That already happened once: `<right>`, `<left>` and `TAB` were reachable in
+  # the footer and unreachable in the window while the hint line taught all
+  # three in both. It cost a hand-written arm to fix, which is exactly the thing
+  # this check exists to keep honest.
+  #
+  # The shift is the newest half of it. `<right>` crosses the columns and
+  # `S-<right>` is more, and the only difference between them is a modifier —
+  # which the footer has to put into the notation and the window has to keep in
+  # a field of its own, because SCTK's `KeyEvent` carries none.
+  bluetooth-keys-reach-both-doors = mkCheck "bluetooth-keys-reach-both-doors" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    view = (shell / "bluetooth.rs").read_text()
+    words = (shell / "bluetooth_words.rs").read_text()
+    window = (shell / "bluetooth_window.rs").read_text()
+    footer = (shell / "surface.rs").read_text()
+    gaps = []
+
+    # 1) THE TABLE, which is what both doors teach.
+    table = re.search(r"pub const OF_THE_VIEW: &\[\(&str, &str, Where\)\] = &\[(.*?)\n\];", view, re.S)
+    if not table:
+        sys.exit("ERROR: `OF_THE_VIEW` went away or changed shape")
+    rows = re.findall(r'\("([^"]+)",\s*"([a-z0-9-]+)"', table.group(1))
+    if len(rows) < 15:
+        sys.exit(f"ERROR: only {len(rows)} rows read out of `OF_THE_VIEW` — the shape changed")
+
+    # 2) WHAT EACH ID MEANS. The footer goes id -> press through this map, so it
+    #    is the footer's whole answer once the notation has matched.
+    mapping = dict(re.findall(r'"([a-z0-9-]+)" => Press::(\w+),', words))
+
+    # 3) THE WINDOW'S HAND-WRITTEN ARMS, IN SOURCE ORDER — a `match` takes the
+    #    FIRST arm that fits, so an unguarded `Keysym::Right` written above the
+    #    guarded one would shadow it and shift would stop meaning anything. The
+    #    order is part of the answer, and reading it in order is what catches
+    #    that.
+    body = re.search(r"fn press_of\(event: &KeyEvent, mods: Modifiers\)(.*?)\n\}\n", window, re.S)
+    if not body:
+        sys.exit(
+            "ERROR: the window's `press_of` went away, or stopped taking the modifiers — "
+            "without them `<right>` and `S-<right>` are the same key"
+        )
+    arms = []
+    for line in body.group(1).splitlines():
+        line = line.split("//")[0]
+        m = re.match(
+            r"\s*(Keysym::\w+(?:\s*\|\s*Keysym::\w+)*)(\s+if mods\.shift)?\s*=> Press::(\w+),",
+            line,
+        )
+        if m:
+            arms.append((set(re.findall(r"Keysym::(\w+)", m.group(1))), bool(m.group(2)), m.group(3)))
+    if len(arms) < 4:
+        sys.exit(f"ERROR: only {len(arms)} arms read out of the window's `press_of` — the shape changed")
+
+    def answered_by_the_window(keysym, shift):
+        # A guarded arm answers only while shift is held; an unguarded one
+        # answers either way. Rust's own rule, and the first fit wins.
+        for syms, guarded, press in arms:
+            if keysym in syms and (shift or not guarded):
+                return press
+        return None
+
+    # 4) HOW A NOTATION IS SPELT AS A KEYSYM.
+    #
+    # A SPELLING TABLE AND NOT A LIST OF WHAT TO CHECK: a notation missing from
+    # it FAILS below rather than being skipped. A hand-typed list of what to
+    # look at is the hole this repository has already found twice — a check that
+    # scans six of eight things passes over the two it never knew about.
+    AS_KEYSYM = {
+        "RET": ("Return", False),
+        "ESC": ("Escape", False),
+        "TAB": ("Tab", False),
+        "S-TAB": ("ISO_Left_Tab", True),
+        "SPC": ("space", False),
+        "DEL": ("BackSpace", False),
+        "<up>": ("Up", False),
+        "<down>": ("Down", False),
+        "<left>": ("Left", False),
+        "<right>": ("Right", False),
+        "S-<up>": ("Up", True),
+        "S-<down>": ("Down", True),
+        "S-<left>": ("Left", True),
+        "S-<right>": ("Right", True),
+    }
+
+    for notation, id in rows:
+        want = mapping.get(id)
+        if want is None:
+            gaps.append(f"`{notation}` teaches `{id}`, and `bluetooth_words::press_of` answers nothing")
+            continue
+        if len(notation) == 1:
+            # A BARE LETTER needs nothing hardcoded: the window's fallback reads
+            # this same table by the text the key produced, so the two doors
+            # cannot disagree about a letter.
+            continue
+        spelt = AS_KEYSYM.get(notation)
+        if spelt is None:
+            gaps.append(
+                f"this check cannot spell `{notation}` as a keysym, so it cannot say whether "
+                "the window reaches it — teach `AS_KEYSYM` how, or the key is unchecked"
+            )
+            continue
+        keysym, shift = spelt
+        got = answered_by_the_window(keysym, shift)
+        if got != want:
+            said = f"`Press::{got}`" if got else "nothing at all"
+            gaps.append(
+                f"`{notation}` is `Press::{want}` in the footer and {said} in the window"
+            )
+
+    # 5) AND THE SHIFT HAS TO SURVIVE THE TRIP, in both doors.
+    at = footer.find("crate::bluetooth::OF_THE_VIEW")
+    if at < 0:
+        sys.exit("ERROR: the footer no longer looks the bluetooth table up by notation")
+    # THE CODE, NOT ITS COMMENTS. The branch explains itself by NAMING
+    # `Key::simple` and saying why it is wrong, so searching the text found the
+    # words in the explanation and the check failed on a correct file — the
+    # same "reading its own evidence" this repository has hit before.
+    branch = "\n".join(l.split("//")[0] for l in footer[max(0, at - 1600):at].splitlines())
+    if "shift: key.mods.shift" not in branch:
+        gaps.append(
+            "the footer builds the notation without the shift, so `S-<right>` arrives as "
+            "`<right>` and the volume cannot be moved"
+        )
+    if "Key::simple" in branch:
+        gaps.append("the footer is back on `Key::simple`, which drops every modifier")
+    if "press_of(&event, self.mods)" not in window:
+        gaps.append("the window does not hand the modifiers to `press_of`")
+    if "self.mods = mods;" not in window:
+        gaps.append("the window's `update_modifiers` does not record them, so shift is never held")
+    if "self.mods = Modifiers::default();" not in window:
+        gaps.append("the window does not drop the modifiers on losing focus, so a shift can stick")
+
+    # 6) AND A CLICK IS THE `RET` OF ITS ROW, in both doors and with the one
+    #    exception. A pairing question opens over whatever was on the screen; a
+    #    door that acted on a click there would put `yes` about an unknown
+    #    device one movement of a hand away.
+    arm = re.search(r"Some\(Click::Bluetooth\(n\)\) => \{(.*?)\n            \}\n", footer, re.S)
+    block = re.search(r"if let Some\(row\) = clicked \{(.*?)\n        \}\n", window, re.S)
+    if not arm or not block:
+        sys.exit("ERROR: the click path of one of the two doors went away or changed shape")
+    for door, text in [("footer", arm.group(1)), ("window", block.group(1))]:
+        if "Press::Enter" not in text:
+            gaps.append(f"a click in the {door} no longer does what `RET` does")
+        if "asking()" not in text:
+            gaps.append(
+                f"a click in the {door} acts while a pairing question is up — `yes` about an "
+                "unknown device would be one click away"
+            )
+
+    if gaps:
+        print("ERROR: the two doors of `LEADER s b` do not answer the same keys")
+        for gap in gaps:
+            print("  - " + gap)
+        print("")
+        print("       One view, two doors, one table. The footer reads the table and the")
+        print("       window copies part of it by hand, so the copy has to be checked or")
+        print("       it drifts — and both doors go on TEACHING the key that died.")
+        sys.exit(1)
+    print(f"OK: {len(rows)} keys, two doors, and the shift survives both")
+    PY
+  '';
+
   # AND EVERY WORD THE KEYBOARD BUFFER OFFERS SAYS SOMETHING.
   #
   # `LEADER s k` draws a ring of meanings for a key — nine of them — and every
@@ -13645,6 +13820,7 @@ let
       one-text-size
       bluetooth-bus-policy-is-open
       bluetooth-profiles-have-text
+      bluetooth-keys-reach-both-doors
       keyboard-choices-have-text
       keyboard-driven
       keyd-rules-carry-the-leader

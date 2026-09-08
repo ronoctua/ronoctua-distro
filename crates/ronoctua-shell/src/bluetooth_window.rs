@@ -167,6 +167,7 @@ pub fn host_it() -> Result<()> {
         scale_told: 1,
         columns: 80,
         lines: 24,
+        mods: Modifiers::default(),
         quit: false,
         owed: false,
         gpu: None,
@@ -244,6 +245,15 @@ struct BluetoothWindow {
     scale_told: i32,
     columns: u16,
     lines: u16,
+    /// The modifiers held, kept WHOLE.
+    ///
+    /// `KeyEvent` carries no modifier state, and this view needs one: the
+    /// bare sideways arrows cross the columns and `S-<arrow>` is more and
+    /// less, so a press that could not see shift would answer both with the
+    /// same thing. Cleared on losing focus, for the reason the file manager
+    /// records — a state that only updates with focus cannot keep holding
+    /// without it.
+    mods: Modifiers,
     quit: bool,
     /// Whether a frame is owed — see `notifications_window`'s field of the
     /// same name for why nothing here paints straight away.
@@ -575,7 +585,7 @@ impl BluetoothWindow {
     /// in `press_key`, and while it did, `repeat_key` was dead code and
     /// holding an arrow moved exactly one row.
     fn typed(&mut self, event: KeyEvent) {
-        let Some(press) = press_of(&event) else {
+        let Some(press) = press_of(&event, self.mods) else {
             return;
         };
         self.message = None;
@@ -753,7 +763,7 @@ impl BluetoothWindow {
 }
 
 /// A `KeyEvent` as the view sees it — the same mapping the footer does.
-fn press_of(event: &KeyEvent) -> Option<crate::bluetooth::Press> {
+fn press_of(event: &KeyEvent, mods: Modifiers) -> Option<crate::bluetooth::Press> {
     use crate::bluetooth::Press;
     Some(match event.keysym {
         Keysym::Escape => Press::Escape,
@@ -767,8 +777,15 @@ fn press_of(event: &KeyEvent) -> Option<crate::bluetooth::Press> {
         // arrow and a `TAB` produce no text, so `<right>`, `<left>` and `TAB`
         // resolved to nothing and were unreachable in this door while the
         // footer answered them. The hint line taught all three, in both.
-        Keysym::Right => Press::Right,
-        Keysym::Left => Press::Left,
+        //
+        // AND SHIFT DECIDES WHICH PAIR THE ARROWS ARE. Bare, they cross the
+        // columns; held, they are more and less of the row under the cursor.
+        // The keysym is `Right` either way — X11 does not shift an arrow —
+        // so the state this window keeps is the only thing that can tell
+        // them apart.
+        Keysym::Right if mods.shift => Press::More,
+        Keysym::Left if mods.shift => Press::Less,
+        Keysym::Right | Keysym::Left => Press::Cross,
         Keysym::Tab | Keysym::ISO_Left_Tab => Press::Cross,
         // AND THE BARE LETTERS, out of the view's own table — the footer
         // reads it the same way, so the two doors cannot teach different
@@ -904,6 +921,9 @@ impl KeyboardHandler for BluetoothWindow {
         _: &wl_surface::WlSurface,
         _: u32,
     ) {
+        // See the field: a modifier held when the focus goes cannot be seen
+        // to come up, and a stuck shift would make every arrow the loud one.
+        self.mods = Modifiers::default();
     }
 
     fn press_key(
@@ -944,10 +964,11 @@ impl KeyboardHandler for BluetoothWindow {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        mods: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.mods = mods;
     }
 }
 
@@ -1058,8 +1079,8 @@ impl PointerHandler for BluetoothWindow {
             self.ask_paint();
             return;
         }
-        // THE MOUSE AIMS, THE KEYS ACT — a click puts the cursor on the row,
-        // and `RET` is what applies, arms and confirms.
+        // A CLICK IS THE `RET` OF THE ROW IT LANDS ON — the footer's branch
+        // for this view says why, and the two doors have to agree.
         if let Some(row) = clicked {
             // THE PANE FIRST, THEN THE ROWS: they describe whichever half has
             // the keyboard, so reading them before aiming would put the cursor
@@ -1067,7 +1088,21 @@ impl PointerHandler for BluetoothWindow {
             self.view.aim(clicked_cell, self.columns);
             let rows = self.rows();
             self.view.clicked(row, clicked_cell, self.columns, &rows);
-            self.follow(rows.len());
+            // EXCEPT WHILE A PAIRING QUESTION IS UP: there the pointer only
+            // aims, because the question opens over whatever was on screen
+            // and yes must not be one click from an unknown device.
+            if !self.view.asking() {
+                let scene = std::mem::take(&mut self.scene);
+                let errand = self.view.key(
+                    crate::bluetooth::Press::Enter,
+                    &scene,
+                    self.columns,
+                    &self.texts,
+                );
+                self.scene = scene;
+                self.apply(errand);
+            }
+            self.follow(self.rows().len());
             self.ask_paint();
             return;
         }
