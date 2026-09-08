@@ -35,7 +35,7 @@ fn main() {
         let destination = dir.join(file);
         // DELETE FIRST: the file comes from the store and `fs::copy` inherits the
         // read-only mode along with the content — see `ronoctua-tokens`'s build.rs
-        // and the trap recorded in CLAUDE.md.
+        // and the trap recorded in AGENTS.md.
         let _ = fs::remove_file(&destination);
         let kdl_of = origin.join(file);
         fs::copy(&kdl_of, &destination)

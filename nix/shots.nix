@@ -585,7 +585,7 @@ pkgs.testers.runNixOSTest {
         # FROM THE STORE, and not from a heredoc written here.
         #
         # A heredoc would be a shell string inside a Python string inside this
-        # Nix fence, and CLAUDE.md names that trap in as many words: inside the
+        # Nix fence, and AGENTS.md names that trap in as many words: inside the
         # fence a Nix interpolation is live even in a comment, a backtick is
         # command substitution, and the fence itself closes on two apostrophes
         # wherever they appear. Writing this very comment closed it once. A
@@ -1163,7 +1163,7 @@ pkgs.testers.runNixOSTest {
 
         # AND IT GOES, or it stands in front of every shot after it. The bracket
         # keeps the pattern from matching the `pkill` that carries it —
-        # `CLAUDE.md` names that one.
+        # `AGENTS.md` names that one.
         machine.succeed("pkill -f '[b]in/ronoctua-shell files' || true")
         machine.wait_until_succeeds(
             "! ${pkgs.xwininfo}/bin/xwininfo -display :99 -root -children"

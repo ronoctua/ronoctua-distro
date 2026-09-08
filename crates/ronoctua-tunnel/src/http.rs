@@ -14,7 +14,7 @@
 //! A deadline on every read and write. This runs on a thread of the footer's
 //! process, and a socket that accepts a connection and never answers would
 //! otherwise hold that thread for ever — which is the `systemd-run --scope`
-//! trap CLAUDE.md records, one layer down.
+//! trap AGENTS.md records, one layer down.
 
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixStream;

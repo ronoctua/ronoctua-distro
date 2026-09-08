@@ -73,7 +73,7 @@ let
   runners = updates.mkScripts {
     # EVERY PACKAGE A STEP NAMES, resolved to a store path — never a bare name,
     # because a unit's `PATH` is minimal and the failure would appear far from
-    # the cause (`CLAUDE.md`). The generator refuses both directions: a package
+    # the cause (`AGENTS.md`). The generator refuses both directions: a package
     # no step names, and a step whose package is not here.
     programs = {
       # The machine's own Nix, not `pkgs.nix`: they can differ, and the one that

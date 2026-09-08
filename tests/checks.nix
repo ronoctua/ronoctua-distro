@@ -1413,7 +1413,7 @@ let
   # it is".
   #
   # It measures `self`, which already IS the source's path in the store —
-  # measuring makes no new copy (unlike `${../.}`; see the CLAUDE.md).
+  # measuring makes no new copy (unlike `${../.}`; see the AGENTS.md).
   secrets-out-of-repo = mkCheck "secrets-out-of-repo" [ pkgs.python3 ] ''
     python3 ${../nix/scripts/scan-secrets.py} ${self}
   '';
@@ -3697,7 +3697,7 @@ let
   #
   # `#[repr(C)]` promises to ARRANGE what it was told and never to check it: a
   # wrong width is a register with the wrong contents and produces no
-  # diagnostic at all. `CLAUDE.md` records that this cost three wrong struct
+  # diagnostic at all. `AGENTS.md` records that this cost three wrong struct
   # layouts on `libghostty-vt`, found by hand with a twenty-line C program.
   #
   # `nix/torrent-shim.nix` now compiles the REAL header with the real C++
@@ -5060,7 +5060,7 @@ let
         # It used to extract `declared` and compare it with nothing at all,
         # printing the count on the OK line while its own comment claimed it
         # caught that direction. A check against the criterion and not against
-        # the code closes an empty milestone, which is CLAUDE.md's own words.
+        # the code closes an empty milestone, which is AGENTS.md's own words.
         declared=$(sed -n '/^pub const OF_THE_VIEW/,/^];/p' "$view" \
           | grep -oE '^ *\("[^"]+"' | grep -oE '"[^"]+"' | tr -d '"')
         [ -n "$declared" ] || { echo "ERROR: could not find OF_THE_VIEW" >&2; exit 1; }
@@ -5325,7 +5325,7 @@ let
     done
 
     # NO BARE NAME. A `Command::new("bsdtar")` would work in the devshell and
-    # fail inside a systemd scope — the trap CLAUDE.md records.
+    # fail inside a systemd scope — the trap AGENTS.md records.
     bare=$(grep -nE 'Command::new\("[a-z]' "$src"/*.rs "$src"/bin/*.rs || true)
     [ -z "$bare" ] || {
       echo "ERROR: a program by NAME, not by path:" >&2
@@ -5703,7 +5703,7 @@ let
                 stripped = line.strip()
                 if not (stripped.startswith("if ") or stripped.startswith("} else if ")):
                     continue
-                # THE ONE WRITTEN EXCEPTION, and it is in CLAUDE.md: the
+                # THE ONE WRITTEN EXCEPTION, and it is in AGENTS.md: the
                 # minibuffer's QUESTION is a LINE and not a region, so it is
                 # deliberately outside the precedence `view()` ranks. It is
                 # named here rather than left to a narrow pattern — the old
@@ -5777,7 +5777,7 @@ let
   # SCTK generates repeat events ONLY for a keyboard created with
   # `get_keyboard_with_repeat`; a `repeat_key` implementation beside a plain
   # `get_keyboard` is dead code that looks exactly like a working one. That is
-  # already recorded in CLAUDE.md as a trap found and fixed — and five windows
+  # already recorded in AGENTS.md as a trap found and fixed — and five windows
   # written afterwards inherited it anyway, so holding an arrow in the power,
   # radio, network, notification or update window moved exactly one row.
   #
@@ -6866,7 +6866,7 @@ let
   # THE FIRST VERSION OF THIS CHECK PASSED FOUR WIDENING EDITS — `YES` turned
   # into `AUTH_ADMIN`, a second unit OR'd in, `try-restart` added, a second
   # user OR'd in — because it grepped for the presence of words and never for
-  # the RESULT or for what else the rule allows. That is CLAUDE.md's own trap:
+  # the RESULT or for what else the rule allows. That is AGENTS.md's own trap:
   # a check against the code and not against the criterion closes an empty
   # milestone.
   tor-polkit-is-narrow =
@@ -7049,7 +7049,7 @@ let
   # `nix/mimegen.nix` turns freedesktop's 125 KB of data into a Rust table at
   # BUILD time. What must never happen is that derivation becoming a runtime
   # reference — which is what an `option_env!` holding its path, or a crate
-  # that decided to read `share/mime` directly, would do. The trap `CLAUDE.md`
+  # that decided to read `share/mime` directly, would do. The trap `AGENTS.md`
   # records: a derivation references what its BYTES cite.
   #
   # WHAT THIS CHECK DOES NOT CLAIM, and the first version of it did.
@@ -7753,7 +7753,7 @@ let
   # for a program that never opens a window.
   #
   # Nothing would fail — which is why this is a check and not a comment. And it
-  # is the same measurement `CLAUDE.md` demands in place of trusting a switch:
+  # is the same measurement `AGENTS.md` demands in place of trusting a switch:
   # a derivation references what its BYTES cite, so measure the closure rather
   # than believing the `[[bin]]`.
   brain-unit-is-narrow =
@@ -7877,7 +7877,7 @@ let
   #
   # The path crosses the border as a STRING: the crate writes to it and a root
   # oneshot reads from it. Divergent, saving would report success and install
-  # nothing — the exact silence `CLAUDE.md` says needs a check.
+  # nothing — the exact silence `AGENTS.md` says needs a check.
   rescue-staging-agrees = mkCheck "rescue-staging-agrees" [ pkgs.gnugrep ] ''
     grep -q 'staged = "/run/ronoctua-rescue/staged"' ${../nix/modules}/rescue.nix || {
       echo "ERROR: the module changed the path where it reads the edited file." >&2; exit 1; }
@@ -8550,6 +8550,7 @@ let
           "docs/ARCHITECTURE.md"
           "tests/checks.nix"
           "flake.nix"
+          "AGENTS.md"
           "CLAUDE.md"
           "README.md"
         ]
@@ -8562,7 +8563,7 @@ let
         echo "ERROR: .gitignore is swallowing $f" >&2
         failed=1
       fi
-    done < <(find assets nix docs tests -type f 2>/dev/null; ls flake.nix CLAUDE.md README.md)
+    done < <(find assets nix docs tests -type f 2>/dev/null; ls flake.nix AGENTS.md CLAUDE.md README.md)
     [ $failed -eq 0 ] || exit 1
     echo "OK: no versioned source is ignored"
 
@@ -9158,7 +9159,7 @@ let
 
   # A SWITCH THAT SWITCHES NOTHING OFF HAS TO SAY SO.
   #
-  # The trap has a name in `CLAUDE.md` — "interruptor que não interrompe" — and
+  # The trap has a name in `AGENTS.md` — "interruptor que não interrompe" — and
   # the project has paid for it twice: `notoExtra` and `icons.superpack` were
   # both switches that turned nothing off, and the way anybody found out was by
   # measuring the closure.
@@ -9212,7 +9213,7 @@ let
     #     THE COMMENTS DO NOT COUNT. The first version of this test looked for
     #     the name anywhere in the file and passed on a doc link — a check
     #     against the CRITERION and not against the CODE, which is the way
-    #     `CLAUDE.md` puts it. Only a line that is not a comment answers.
+    #     `AGENTS.md` puts it. Only a line that is not a comment answers.
     reads_it = any(
         "ronoctua_notify::INERT" in line and not line.lstrip().startswith("//")
         for line in manager.splitlines()
@@ -11433,7 +11434,7 @@ let
   # ===================================================================
   # INVARIANT 18 — every NAME is English; every COMMENT is English too.
   #
-  # The `CLAUDE.md` already said "identifiers in English" and it was never met:
+  # The `AGENTS.md` already said "identifiers in English" and it was never met:
   # there were 54 ids, 90 checks, ~35 files and 358 keys in Portuguese. A rule
   # with no check is a recommendation, and a recommendation is what produced
   # that distance between what the repository asserts and what it does.
@@ -11983,7 +11984,7 @@ let
     #
     #     AND THAT IS A REAL HOLE, measured: a whole Portuguese SENTENCE in
     #     quotes walks through it, and three did for a round — a rule quoted
-    #     out of `CLAUDE.md`, which has an English statement available and now
+    #     out of `AGENTS.md`, which has an English statement available and now
     #     carries it. It is left open deliberately. 113 comment runs in this
     #     repository quote the OWNER verbatim, and those words are evidence:
     #     "ela acaba desaparecendo e mudando de tamanho" is what a person said
@@ -13283,9 +13284,19 @@ let
     echo "OK: the ISO came out whole (no ceiling: it is written with dd)"
   '';
 
-  # THE SIX DOCUMENTS EXIST.
+  # THE SIX DOCUMENTS EXIST, AND THE POINTER FINDS THEM.
   #
-  # There WAS a 150-line ceiling on the `CLAUDE.md`, on the reasoning that it is
+  # Six documents and SEVEN files: `AGENTS.md` holds the content, and
+  # `CLAUDE.md` is one line that imports it. The owner asked for that split so
+  # the rules reach every agent and not only this one — the name of the file an
+  # assistant reads on its own is the assistant's, and the rules are not.
+  #
+  # The pointer is checked and not assumed. A `CLAUDE.md` naming a file that is
+  # gone, or renamed, loses EVERY rule in one stroke and says nothing at all:
+  # an import that resolves to nothing reads exactly like a project with no
+  # instructions.
+  #
+  # There WAS a 150-line ceiling on the `AGENTS.md`, on the reasoning that it is
   # the only file that goes into every agent's context on its own, and that
   # going past the ceiling does not make it more informative — it makes it less
   # read. The owner removed it, and the reason is the other half of that same
@@ -13301,13 +13312,31 @@ let
   # if it is not demanded: a project with no place for a pending item to live
   # goes back to hiding an overdue promise in a code comment.
   docs-exist = mkCheck "docs-exist" [ pkgs.coreutils ] ''
-    for f in ${../CLAUDE.md} ${../README.md} \
+    for f in ${../AGENTS.md} ${../README.md} \
              ${../docs/ARCHITECTURE.md} ${../docs/PENDING.md} \
              ${../docs/INSTALL.md} ${../docs/DEVELOPMENT.md}; do
       test -s "$f" || { echo "ERROR: $f is missing or empty" >&2; exit 1; }
     done
 
-    echo "CLAUDE.md: $(wc -l < ${../CLAUDE.md}) lines"
+    echo "AGENTS.md: $(wc -l < ${../AGENTS.md}) lines"
+
+    # THE POINTER, AND WHAT IT POINTS AT. `@<file>` is the import; the file it
+    # names has to be the one holding the content, and the pointer has to hold
+    # nothing else — a second rule written there is a rule only one assistant
+    # would ever read.
+    pointer=${../CLAUDE.md}
+    test -s "$pointer" || { echo "ERROR: CLAUDE.md is missing or empty" >&2; exit 1; }
+    named=$(grep -oE '^@[A-Za-z0-9_.-]+' "$pointer" | head -1 | cut -c2-)
+    if [ "$named" != "AGENTS.md" ]; then
+      echo "ERROR: CLAUDE.md imports '$named', and the content is in AGENTS.md" >&2
+      exit 1
+    fi
+    if [ "$(grep -cvE '^ *(@[A-Za-z0-9_.-]+)? *$' "$pointer")" != "0" ]; then
+      echo "ERROR: CLAUDE.md carries more than the import." >&2
+      echo "      Everything an agent has to read belongs in AGENTS.md, which" >&2
+      echo "      every assistant reads; this file only forwards." >&2
+      exit 1
+    fi
 
     # The PENDING.md must not become a changelog. Its rule is "on finishing,
     # remove it"; a struck-through or done-marked item is the start of the rot.
@@ -13319,7 +13348,7 @@ let
       exit 1
     fi
 
-    echo "OK: the six documents exist, and PENDING did not become a changelog"
+    echo "OK: the six documents exist, the pointer finds them, and PENDING did not become a changelog"
   '';
 
   architecture-sections = mkCheck "architecture-sections" [ pkgs.python3 ] ''

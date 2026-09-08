@@ -135,7 +135,7 @@ pub fn host_it() -> Result<()> {
                 // screen's `Wanted`, so a scale kept in the FOOTER changed it
                 // and this window changed nothing — and then wrote its own
                 // stale copy back on the next keep, silently undoing the
-                // footer's change. It is the second-writer defect CLAUDE.md
+                // footer's change. It is the second-writer defect AGENTS.md
                 // records for the notification history, one file over.
                 if crate::toolkits::reload() {
                     state.text_size_changed();
@@ -282,7 +282,7 @@ struct DisplayWindow {
     /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
     /// carried rather than reached for. Without it `repeat_key` below is dead
     /// code and holding an arrow moves exactly one row, which is the trap
-    /// CLAUDE.md records and which nine windows inherited.
+    /// AGENTS.md records and which nine windows inherited.
     handle: calloop::LoopHandle<'static, Self>,
     _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,

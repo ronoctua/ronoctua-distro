@@ -355,7 +355,7 @@ interface types {
     //
     // The same reason `color` stopped being `record { token: string }`: a typo in
     // a string compiles and fails in silence on screen. And the harder rule from
-    // `CLAUDE.md` — a buffer has no JSON parser, so no field carries raw
+    // `AGENTS.md` — a buffer has no JSON parser, so no field carries raw
     // characters for the guest to take apart. The host reads `/proc`; what
     // crosses is already a number with a name.
     enum gauge {

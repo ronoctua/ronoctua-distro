@@ -33,7 +33,7 @@ pub const TARGET_DIRECTORY: &str = "/mnt/etc/nixos";
 ///
 ///   - `/mnt/etc/nixos` does not exist yet: it is disko that is going to mount it.
 ///   - the ISO's `/etc/nixos` is a store link, READ-ONLY (the same trap
-///     as `/etc/fonts/conf.d` in CLAUDE.md).
+///     as `/etc/fonts/conf.d` in AGENTS.md).
 ///
 /// So the flake is copied here, the `host.nix` is written here, and it is from here
 /// that `disko` evaluates. After mounting, all of this goes to the target.

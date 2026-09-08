@@ -48,7 +48,7 @@ pub const DIRECTORY: &str = "/persist/etc/ronoctua/wifi";
 /// The binary, by store path.
 ///
 /// Never by name: inside a systemd unit `PATH` is minimal, and the failure
-/// would show up far from the cause — a trap already recorded in CLAUDE.md.
+/// would show up far from the cause — a trap already recorded in AGENTS.md.
 const SYSTEMD_CREDS_PATH: &str = match option_env!("RONOCTUA_SYSTEMD_CREDS") {
     Some(c) => c,
     None => "systemd-creds",

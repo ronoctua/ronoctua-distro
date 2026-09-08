@@ -13,7 +13,7 @@ publish.workspace = true
 # extracts that binary on purpose so what runs AS ROOT does not carry the
 # desktop — `files-vm` asserts the closure. Putting image decoders and an SVG
 # rasteriser in that crate would put them inside a root binary, which is the
-# trap `CLAUDE.md` records as "a derivation references what its BYTES cite".
+# trap `AGENTS.md` records as "a derivation references what its BYTES cite".
 #
 # So the split is the same one `ronoctua-clipboard` and `ronoctua-notify`
 # already have: one border, one crate. `ronoctua-files` is the border with the

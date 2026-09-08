@@ -793,7 +793,7 @@ impl Eyes {
     /// every `/dev/i2c-N` a connector names — three tries fifty milliseconds
     /// apart on one that stays silent. A test that starts this thread on the
     /// real roots is a test that pokes whatever monitors are plugged into the
-    /// machine running it, and CLAUDE.md's own rule is to iterate with `cargo
+    /// machine running it, and AGENTS.md's own rule is to iterate with `cargo
     /// test`. Given a root with no `class/drm` under it, `connector::read`
     /// takes its early return and nothing is asked of any hardware.
     ///

@@ -46,7 +46,7 @@ in
 
       # WHERE `systemctl` IS, and why it arrives here.
       #
-      # `CLAUDE.md`: a program spawned from a systemd unit is found by PATH, and
+      # `AGENTS.md`: a program spawned from a systemd unit is found by PATH, and
       # a unit's PATH is minimal — the failure then appears far from its cause.
       # The store path comes from the environment rather than from `option_env!`
       # for the reason `RONOCTUA_YT_DLP` records next door: a path compiled in is

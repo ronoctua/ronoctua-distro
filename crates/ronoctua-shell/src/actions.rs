@@ -486,7 +486,7 @@ const XDG_OPEN: Option<&str> = option_env!("RONOCTUA_XDG_OPEN");
 /// when clicked. An offer that does nothing is worse than one never made.
 ///
 /// A PATH and never a name: a systemd unit's `PATH` is minimal, and the failure
-/// shows up far from the cause — the trap the `CLAUDE.md` names.
+/// shows up far from the cause — the trap the `AGENTS.md` names.
 #[must_use]
 pub fn notification_program(program: ronoctua_notify::Program) -> Option<String> {
     match program {

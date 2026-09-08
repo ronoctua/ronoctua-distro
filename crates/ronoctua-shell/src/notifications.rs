@@ -2199,7 +2199,7 @@ impl View {
             // It was drawn inline and the owner asked for it gone: two rows out
             // of seven carrying a sentence made the sheet read as a list of
             // problems. The honesty is not negotiable — the trap has a name in
-            // `CLAUDE.md` and this project has paid for it twice — so it moved
+            // `AGENTS.md` and this project has paid for it twice — so it moved
             // to where this footer already puts explanations, which is the same
             // line the file manager's fields explain themselves on.
             //
@@ -4582,7 +4582,7 @@ mod tests {
     #[test]
     fn the_sheet_says_why_a_switch_is_dead_on_the_message_line() {
         // It was a third column on the row and the owner asked for it gone. The
-        // honesty had to stay — the trap has a name in `CLAUDE.md` — so it
+        // honesty had to stay — the trap has a name in `AGENTS.md` — so it
         // moved to the line this footer already explains things on.
         let t = texts();
         let b = Book::distro();

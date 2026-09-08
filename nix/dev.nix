@@ -541,7 +541,7 @@ let
       root_dir="$PWD"
       if [ -f "$root_dir/Cargo.toml" ] && [ -d "$root_dir/crates" ]; then
         # OUTSIDE the tree. With `target/` inside, every evaluation of the flake copies
-        # gigabytes into the store — it cost 793 GB to find out. See CLAUDE.md.
+        # gigabytes into the store — it cost 793 GB to find out. See AGENTS.md.
         export CARGO_TARGET_DIR="''${CARGO_TARGET_DIR:-''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/target}"
         mkdir -p "$CARGO_TARGET_DIR"
         # EVERYTHING THE BUILD BAKES — see `bakedExports` in this file's `let`.

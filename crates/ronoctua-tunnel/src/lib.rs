@@ -221,7 +221,7 @@ where
         }
         // THE UNIT, THROUGH SYSTEMD, and by STORE PATH: a bare name fails at
         // EXEC inside a user unit, where `PATH` is minimal — the trap
-        // CLAUDE.md records, and it shows up far from its cause.
+        // AGENTS.md records, and it shows up far from its cause.
         Order::Tor(on) => {
             let verb = if *on { "start" } else { "stop" };
             match std::process::Command::new(systemctl)

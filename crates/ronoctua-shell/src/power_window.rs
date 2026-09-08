@@ -236,7 +236,7 @@ struct PowerWindow {
     /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
     /// carried rather than reached for. Without it `repeat_key` below is dead
     /// code and holding an arrow moves exactly one row, which is the trap
-    /// CLAUDE.md records and which nine windows inherited.
+    /// AGENTS.md records and which nine windows inherited.
     handle: calloop::LoopHandle<'static, Self>,
     _theme_watch: Option<ronoctua_files::notice::Notice>,
     registry: RegistryState,
@@ -443,7 +443,7 @@ impl PowerWindow {
             Errand::Order(ronoctua_power::Order::KeepAwake(keep, _)) => {
                 // NOT `status()`, WHICH WAITS. This runs inside the calloop
                 // callback, and waiting for a child there freezes the window
-                // for as long as the child takes — the same trap `CLAUDE.md`
+                // for as long as the child takes — the same trap `AGENTS.md`
                 // records about `systemd-run --scope` in the footer's loop. A
                 // footer socket that is gone or slow made this window stop
                 // painting; a `connect(2)` to a dead socket is fast, and a

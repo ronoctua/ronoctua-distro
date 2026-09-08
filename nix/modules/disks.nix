@@ -46,7 +46,7 @@ let
   # the tools it was built against (`force-path.patch`), so that list is exactly
   # what udisks can reach and exactly what the system pays for.
   slim = pkgs.udisks.override {
-    # MEASURED, not assumed — the trap `CLAUDE.md` records as "meça com
+    # MEASURED, not assumed — the trap `AGENTS.md` records as "meça com
     # `nix why-depends`". `xfsprogs-bin` is 305,4 MiB and `nix why-depends
     # --all` gives one path to it: `udisks → xfsprogs-bin → python3-env`, which
     # is 258,0 MiB of Python for `xfs_scrub`. Set arithmetic over the closure

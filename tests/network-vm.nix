@@ -25,7 +25,7 @@
 #
 # WHAT CANNOT BE PROVED HERE: a Wi-Fi network, a signal, a hotspot, a real
 # tailnet, a Tor circuit. QEMU has no radio and this machine has no way out.
-# Those are proved on the owner's own machine, by eye — `CLAUDE.md`'s rule
+# Those are proved on the owner's own machine, by eye — `AGENTS.md`'s rule
 # that a screen is looked at before the word "pronto".
 {
   pkgs,

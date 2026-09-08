@@ -53,7 +53,7 @@ pkgs.testers.runNixOSTest {
       # the test does not log in — it uses `machine.succeed` as root and `sudo -u`.
       #
       # A single attrset: a dynamic attribute in two sentences is an evaluation
-      # error ("dynamic attribute already defined") — see the CLAUDE.md.
+      # error ("dynamic attribute already defined") — see the AGENTS.md.
       users.users.${config.ronoctua.user} = {
         hashedPasswordFile = lib.mkForce null;
         password = "";

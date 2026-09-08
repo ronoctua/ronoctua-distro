@@ -101,7 +101,7 @@ pub fn hosts(address: Ipv4Addr, prefix: u8) -> Vec<Ipv4Addr> {
 ///
 /// ON A THREAD, ALWAYS: it waits `patience` for the slowest answer, which is
 /// a second the caller's loop must not spend — the `systemd-run --scope` trap
-/// CLAUDE.md records.
+/// AGENTS.md records.
 ///
 /// # Errors
 ///

@@ -107,7 +107,7 @@ fn buffer_component(variable: &str) -> Option<String> {
 /// The system's URL opener, for the Syncthing interface.
 ///
 /// By its STORE PATH and not by name: in a systemd unit the `PATH` is minimal,
-/// and the failure would show up far from the cause (CLAUDE.md). `option_env!`
+/// and the failure would show up far from the cause (AGENTS.md). `option_env!`
 /// by the same contract as the buffers — `cargo build` outside Nix keeps
 /// compiling, and the command warns on screen.
 const XDG_OPEN_PATH: Option<&str> = option_env!("RONOCTUA_XDG_OPEN");
@@ -5251,7 +5251,7 @@ impl Footer {
             // The Syncthing interface is a page; opening it is the default
             // browser's job. `xdg-open` by its STORE PATH: in a systemd
             // unit the PATH is minimal, and the name would fail far from
-            // the cause (CLAUDE.md).
+            // the cause (AGENTS.md).
             "syncthing-open" => match XDG_OPEN_PATH {
                 Some(abridor) => self.open_foreign(
                     abridor,
@@ -5965,7 +5965,7 @@ impl Footer {
             // THE SWEEP GOES ON A THREAD, and takes a second: it sends 254
             // packets and waits for the slowest answer, which is a second
             // the footer's one loop must not spend — the `systemd-run
-            // --scope` trap CLAUDE.md records.
+            // --scope` trap AGENTS.md records.
             crate::network::Errand::Discover => {
                 self.network_watch.read_vendors();
                 let address = crate::network::carrying(&self.net)
@@ -8139,7 +8139,7 @@ impl Footer {
     ///
     /// Two lines at rest; plus the notification band above, plus one per
     /// which-key entry below. The list stays BELOW the minibuffer — it is a
-    /// vertico, not a menu that pops up (see `CLAUDE.md`).
+    /// vertico, not a menu that pops up (see `AGENTS.md`).
     fn wanted_height(&self) -> u32 {
         // Which-key, the manager and `M-x` use THE SAME expanded area, and
         // never two at the same time: they are uses of one surface (invariant

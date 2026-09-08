@@ -277,7 +277,7 @@ struct Host {
     /// The host used to call `render` once and stop: no key reached
     /// the buffer, and the glyph browser was an image — there was no way to
     /// search, scroll or choose. The standalone `Runtime::render` on top of that
-    /// creates a new store and clears the state on every call (see CLAUDE.md).
+    /// creates a new store and clears the state on every call (see AGENTS.md).
     instance: ronoctua_runtime::Instance,
     /// Kept because `Instance` does not return them, and dropping them
     /// would take the component down.
@@ -399,7 +399,7 @@ impl Escape {
         // `down` IS CHECKED, and it is not paranoia: a key held while the focus
         // ARRIVES gives this window the release without ever giving it the
         // press. Without the check that release would cancel something nobody
-        // asked to cancel — the same trap `CLAUDE.md` records for the leader,
+        // asked to cancel — the same trap `AGENTS.md` records for the leader,
         // where a modifier held across a focus change has to be discounted.
         let was = std::mem::take(self);
         if was.down && !was.used {
@@ -3077,7 +3077,7 @@ impl KeyboardHandler for Host {
     /// Focus arrives — and whatever was held before it belongs to the OTHER
     /// window.
     ///
-    /// `CLAUDE.md` records this as a trap with a name: a modifier held across a
+    /// `AGENTS.md` records this as a trap with a name: a modifier held across a
     /// focus change kills the keymap, and the fix is to discount what was
     /// already down both on gaining focus and on starting a sequence. Here it is
     /// `Esc`: alt-tabbing into a buffer while it is down would leave this window
@@ -3457,7 +3457,7 @@ mod tests {
     /// A RELEASE WITH NO PRESS cancels nothing.
     ///
     /// It happens for real: Alt-Tabbing into a buffer while `Esc` is down gives
-    /// this window the release and never the press. `CLAUDE.md` records the same
+    /// this window the release and never the press. `AGENTS.md` records the same
     /// trap for the leader — a modifier held across a focus change has to be
     /// discounted, on gaining focus AND on starting a sequence.
     #[test]

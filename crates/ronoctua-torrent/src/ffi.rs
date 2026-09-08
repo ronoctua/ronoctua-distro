@@ -6,7 +6,7 @@
 //! `#[repr(C)]` promises to ARRANGE what it was told, never to check it against
 //! the header — on a 64-bit ABI a wrong integer width and a wrong struct size
 //! are both just registers with the wrong contents, and neither produces a
-//! diagnostic. That is written down in `CLAUDE.md` because it cost three wrong
+//! diagnostic. That is written down in `AGENTS.md` because it cost three wrong
 //! struct layouts on `libghostty-vt`, found by a twenty-line C program.
 //!
 //! So this one does not rely on somebody remembering: `nix/torrent-shim.nix`

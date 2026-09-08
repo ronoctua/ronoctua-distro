@@ -35,7 +35,7 @@ in
       The package is `noto-fonts`: in nixpkgs 26.05 `noto-fonts-extra` was
       absorbed into it, and the RENAMED alias brings the evaluation down instead of
       warning — the same class as the other renames already noted in
-      CLAUDE.md.
+      AGENTS.md.
     '';
   };
 

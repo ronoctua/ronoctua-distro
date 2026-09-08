@@ -131,7 +131,7 @@ pub const UNTOUCHED_FILE: &str = "toolkits.json";
 /// `dconf`, by path and not by name.
 ///
 /// A user unit's `PATH` is minimal, and a bare name fails far from the cause
-/// — the trap `CLAUDE.md` records. Outside Nix it falls back to the name.
+/// — the trap `AGENTS.md` records. Outside Nix it falls back to the name.
 const DCONF: &str = match option_env!("RONOCTUA_DCONF") {
     Some(c) => c,
     None => "dconf",
@@ -449,7 +449,7 @@ fn tell_the_terminal(percent: u16) {
 /// reopening the window.
 fn wake_the_terminals() {
     // BY NAME AND ONLY OUR OWN. `pkill` matches the caller's own command line
-    // — the trap `CLAUDE.md` records — so the pattern is bracketed, and `-U`
+    // — the trap `AGENTS.md` records — so the pattern is bracketed, and `-U`
     // keeps it to this person's processes on a machine that has others.
     let said = Command::new("pkill")
         .args([

@@ -229,7 +229,7 @@ struct NotificationsWindow {
     /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
     /// carried rather than reached for. Without it `repeat_key` below is dead
     /// code and holding an arrow moves exactly one row, which is the trap
-    /// CLAUDE.md records and which nine windows inherited.
+    /// AGENTS.md records and which nine windows inherited.
     handle: calloop::LoopHandle<'static, Self>,
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,

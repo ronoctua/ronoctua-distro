@@ -1277,7 +1277,7 @@
       #
       # It was, and that cost seven hours once: `nix fmt` with no argument
       # becomes a bare `nixfmt` reading STDIN, which BLOCKS. The trap was
-      # written down in `CLAUDE.md` and worked around by always typing
+      # written down in `AGENTS.md` and worked around by always typing
       # `nix fmt .` — while the pre-commit hook and the `check-fmt` both told
       # the person to run the version that hangs.
       #

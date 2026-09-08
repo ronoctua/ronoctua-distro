@@ -92,7 +92,7 @@ enum Level {
     /// id, and it changes under the cursor: a keyboard plugged in or a battery
     /// running out moves every row after it. Held as an index, the screen would
     /// go on saying one keyboard's name while the arrows remapped another —
-    /// which is the transfer queue's lesson, in `CLAUDE.md`.
+    /// which is the transfer queue's lesson, in `AGENTS.md`.
     One(String),
 }
 

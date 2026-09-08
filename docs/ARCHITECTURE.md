@@ -3,12 +3,12 @@
 Este documento existe para impedir que uma decisão já tomada seja refeita. Cada seção diz o que foi
 decidido e **por quê**, e o que foi descartado no caminho.
 
-Junto de `CLAUDE.md` (o contrato do agente), `INSTALL.md` (instalar no disco) e `DEVELOPMENT.md`
+Junto de `AGENTS.md` (o contrato do agente), `INSTALL.md` (instalar no disco) e `DEVELOPMENT.md`
 (rodar o ambiente de trabalho), ele deve bastar para alguém continuar o projeto sem nenhum histórico
 de conversa. O que ainda **falta** está em `PENDING.md`, não aqui.
 
 Não há relato de depuração aqui, e não há changelog. Quando um bug ensinou algo que se repete, o
-ensinamento virou uma armadilha no `CLAUDE.md` ou uma frase sobre o desenho atual; a história de como
+ensinamento virou uma armadilha no `AGENTS.md` ou uma frase sobre o desenho atual; a história de como
 o sistema chegou até aqui não sobreviveu de propósito.
 
 A interface toma emprestadas algumas ideias e alguns nomes de editores de teclado — modeline,
@@ -262,7 +262,7 @@ de anunciar sucesso e não mudar nada na tela.
 #### O formatador era a armadilha que ele mesmo documentava
 
 `formatter` era o `nixfmt` cru. `nix fmt` sem argumento virava um `nixfmt` lendo stdin e **travava** —
-sete horas de processo, uma vez. A armadilha ficou escrita no `CLAUDE.md`, e mesmo assim o hook de
+sete horas de processo, uma vez. A armadilha ficou escrita no `AGENTS.md`, e mesmo assim o hook de
 pre-commit e o `check-fmt` mandavam rodar exatamente o comando que trava.
 
 Documentar uma armadilha não a remove. Hoje o `formatter` é um invólucro: sem argumento formata a
@@ -304,7 +304,7 @@ padrão certo.
 "pareceu demorado": sete candidatos que SOAM caros foram cronometrados com `--rebuild` e ficaram
 (`disko-vm` 77 s particionando de verdade, `oom-vm` 49 s com duas máquinas, `tpm-vm` 22 s emulando um
 TPM), porque as vinte VMs da bateria levam de 17 a 48 s e nenhum sai da faixa. Até o `secureboot-vm`,
-que o `CLAUDE.md` registrava como "~2 h calado", mede **98 s de roteiro**: as ~2 h eram construir a
+que o `AGENTS.md` registrava como "~2 h calado", mede **98 s de roteiro**: as ~2 h eram construir a
 imagem de disco na primeira vez, e não o check. Ele fica de fora pelo critério 1, não pelo relógio.
 
 **Uma divisão derivada precisa que tudo tenha nome.** Quatro checks — `tokens-wit-name`,
@@ -544,7 +544,7 @@ cabendo é o teste, que tem os dois lados: o orçamento que o buffer declarou na
 **Três armadilhas que só o teste de VM encontrou**, e as três são de spawn:
 
 1. `wl-copy` faz `exec cat` para servir a seleção. Sob uma unidade do systemd o `PATH` é mínimo e o
-   `cat` não está lá — `exec cat: No such file or directory`. É a armadilha do `CLAUDE.md` um nível
+   `cat` não está lá — `exec cat: No such file or directory`. É a armadilha do `AGENTS.md` um nível
    mais fundo: quem spawna **por nome** é o programa que nós spawnamos por caminho. Daí o
    `RONOCTUA_WL_COPY_PATH`.
 2. `wait_with_output()` lê os canos até EOF, e o filho que o `wl-copy` deixa servindo herda esses
@@ -1672,7 +1672,7 @@ Três detalhes que custaram teste próprio, e cada um é um jeito de a coisa fal
 - **teclas que não são seta são engolidas.** Sem isso, soltar depois de `Esc`+letra cancelaria E a
   letra teria entrado na busca no caminho: um gesto fazendo duas coisas que ninguém pediu;
 - **release sem press não cancela nada.** Alt-Tab para dentro de um buffer com o `Esc` em baixo dá a
-  esta janela o release e nunca o press. É a mesma armadilha que o `CLAUDE.md` registra para a
+  esta janela o release e nunca o press. É a mesma armadilha que o `AGENTS.md` registra para a
   leader: modificador segurado tem de ser descontado ao ganhar foco.
 
 #### Os dois sentidos, e por que os dois
@@ -3148,7 +3148,7 @@ O que ela mostra, quando o ponteiro está sobre uma linha, é o **binário que v
 caminho resolvido, sempre. Antes metade dos aplicativos mostrava `/nix/store/…/bin/x` e a outra
 metade só `x`, conforme o que o fornecedor escreveu no `Exec=`. A resolução acontece **na varredura**,
 onde ainda se tem o `PATH` da sessão; dentro do `systemd-run --scope` ele é mínimo, e um nome nu ali
-falha longe da causa — a armadilha que o `CLAUDE.md` registra.
+falha longe da causa — a armadilha que o `AGENTS.md` registra.
 
 O **fundo** (`surface.selection`) marca a linha sob o ponteiro. O token existia desde o começo,
 descrito como "fundo da linha em foco dentro de uma lista expandida", e nunca havia chegado ao
@@ -3887,7 +3887,7 @@ puro. `nix/torrent-shim/shim.h` é a fronteira inteira.
 um `struct` que o chamador alocou: não há `free` para esquecer nem tempo de vida para errar. Custa
 uma cópia por leitura e elimina uma classe inteira de defeito.
 
-**E `sizeof` É o contrato.** O `CLAUDE.md` já registra que `#[repr(C)]` promete ARRANJAR e não
+**E `sizeof` É o contrato.** O `AGENTS.md` já registra que `#[repr(C)]` promete ARRANJAR e não
 conferir — um tamanho errado é um registrador com o conteúdo errado, sem diagnóstico nenhum, e no
 `libghostty-vt` isso custou três layouts errados achados à mão com um programa em C. Aqui a medição
 virou check: `nix/torrent-shim.nix` compila o cabeçalho REAL com o compilador C++ real e escreve
@@ -4388,7 +4388,7 @@ constrói o `ronoctua-files-root`, o binário que roda como **root**, e o `nix/r
 (`rust.filesRoot`) exatamente para que o que roda como root não carregue o desktop junto: o
 `files-vm` recusa `wgpu`, `wasmtime`, `mesa` e a fonte na closure dele. Pôr `image` e `resvg` ali
 seria pôr decodificador de formato estrangeiro dentro de um binário privilegiado, e a armadilha do
-`CLAUDE.md` diz por quê — **uma derivação referencia o que os BYTES dela citam**. O crate separado
+`AGENTS.md` diz por quê — **uma derivação referencia o que os BYTES dela citam**. O crate separado
 não é organização: é o que mantém aquela extração possível.
 
 Por isso a seta aponta ao contrário do que se imaginaria: o `ronoctua-inspect` depende do
@@ -5991,7 +5991,7 @@ Quatro decisões que valem o registro:
 
 - **Encaixa, nunca estica.** Uma captura deformada faz quem olha duvidar do que copiou.
 - **`Rgba8UnormSrgb`, e não `Unorm`.** Os bytes do PNG são sRGB e é a GPU que desfaz a curva; `Unorm`
-  clarearia tudo — a mesma armadilha do `to_linear` do `CLAUDE.md`, vista do outro lado.
+  clarearia tudo — a mesma armadilha do `to_linear` do `AGENTS.md`, vista do outro lado.
 - **A textura só sobe quando muda, e a mudança é medida por VERSÃO.** Comparar dimensões não bastaria:
   duas capturas do mesmo monitor têm o mesmo tamanho e são imagens diferentes.
 - **Os bytes ficam comprimidos no histórico.** Uma captura 4K são ~2 MB de PNG contra 33 MB de RGBA;

@@ -54,7 +54,7 @@ use ronoctua_design::{Phrases, budget, room, wide};
 ///
 /// Embedded and not read from a file: the component has no file system, and
 /// should not have one. The memory cost is what the `memory_init_cow` trap in
-/// `CLAUDE.md` deals with.
+/// `AGENTS.md` deals with.
 const BASE: &str = include_str!(env!("RONOCTUA_GLYPHS_JSON"));
 
 /// The SUBTAGS whose tags the database carries, in the order it wrote them.
@@ -513,7 +513,7 @@ fn format_as(id: &str, g: &Glyph) -> Option<String> {
         "glyphs-copy-name" => g.name.clone(),
         "glyphs-copy-glyph" => g.ch.to_string(),
         // The CSS class carries the `nf` prefix, which the NAME does not have — see
-        // the trap in CLAUDE.md.
+        // the trap in AGENTS.md.
         "glyphs-copy-css" => format!("nf nf-{}", g.name),
         "glyphs-copy-hex" => format!("U+{cp:04X}"),
         "glyphs-copy-utf16" => {

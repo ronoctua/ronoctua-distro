@@ -479,7 +479,7 @@ def emit_rust(steps: list[dict]) -> str:
 
     THE COMMAND CROSSES AS BASENAMES AND NOT AS STORE PATHS, on purpose. The
     view never runs anything — it starts a unit — so the path would buy nothing,
-    and it would cost twice: `CLAUDE.md` records that a store path baked into
+    and it would cost twice: `AGENTS.md` records that a store path baked into
     the Rust is a reference whoever COMPILES pays for, and the person reading
     the row wants to see `nix flake update`, not 52 characters of hash first.
     """

@@ -29,7 +29,7 @@ fn main() {
     // read-only mode along with the content: on the second token generation the
     // destination already exists without write permission and the copy fails with
     // "Permission denied", inside a build.rs — far from anything the
-    // person has just edited. It is the trap recorded in CLAUDE.md.
+    // person has just edited. It is the trap recorded in AGENTS.md.
     let _ = fs::remove_file(&destination);
     fs::copy(&generated, &destination)
         .unwrap_or_else(|e| panic!("could not copy {generated} -> {destination:?}: {e}"));

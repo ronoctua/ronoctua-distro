@@ -410,7 +410,7 @@ pub struct View {
     /// forgets a device nobody aimed at — keys gone from the radio's store,
     /// with no confirmation and no way back.
     ///
-    /// It is the transfer queue's lesson, in `CLAUDE.md`: the cursor is the
+    /// It is the transfer queue's lesson, in `AGENTS.md`: the cursor is the
     /// ID, which the list reorders. Only rows whose target NAMES something
     /// are anchored — a fact row's target is `Nothing`, and anchoring on that
     /// would pin the cursor to the first fact of any screen.

@@ -81,7 +81,7 @@ pkgs.testers.runNixOSTest {
 
     # `bytes()` and never `b\'\'`: inside a Nix `\'\'…\'\'` fence, ANY `\'\'` closes
     # the string — including one inside a Python literal inside a comment. It
-    # cost a build here, and `CLAUDE.md` already records it.
+    # cost a build here, and `AGENTS.md` already records it.
     #
     # ONE JSON OBJECT PER LINE, which is the whole protocol. Written out here
     # rather than driven through a helper binary on purpose: a test that spoke

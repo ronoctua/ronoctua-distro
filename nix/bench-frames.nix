@@ -169,7 +169,7 @@ writeShellApplication {
     import pathlib, re, statistics as st, sys
 
     # QUOTES around the value: `tracing` adds them on a `Debug` field. It is
-    # already in CLAUDE.md, and it has already cost one measurement round.
+    # already in AGENTS.md, and it has already cost one measurement round.
     PATTERN = re.compile(r'marco="([a-z-]+)" ms=([0-9.]+)')
     TARGETS = {"first-frame": 200.0, "which-key": 16.7}
 

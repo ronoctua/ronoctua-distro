@@ -189,7 +189,7 @@ impl Images {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("image"),
             // An `Option` in wgpu 30, like the pipeline's `layout`. See the
-            // graphics-API trap in CLAUDE.md.
+            // graphics-API trap in AGENTS.md.
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
@@ -324,7 +324,7 @@ impl Images {
             dimension: wgpu::TextureDimension::D2,
             // `Srgb`: the PNG's bytes are sRGB, and it is the GPU that undoes the curve
             // when sampling. Using `Unorm` would lighten everything — the same trap as
-            // `to_linear` recorded in CLAUDE.md, from the other side.
+            // `to_linear` recorded in AGENTS.md, from the other side.
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],

@@ -2,7 +2,7 @@
 #
 # # The defect this replaces
 #
-# `CLAUDE.md` used to carry an instruction: build `rust-tests`, `rust-clippy` and
+# `AGENTS.md` used to carry an instruction: build `rust-tests`, `rust-clippy` and
 # the package one at a time BEFORE the gate, because otherwise `rustc` dies with
 # `signal: 15` and no diagnostic. That instruction is the kind this project says
 # should not exist — a written step that could be automatic — and it failed in
@@ -66,7 +66,7 @@ let
   # THE TAIL, ASSEMBLED OUT HERE AND NOT INSIDE `text`.
   #
   # One doubled-quote fence inside another CLOSES the outer one: it ends at
-  # any `''`, and the trap is written down in CLAUDE.md. With the tail in a
+  # any `''`, and the trap is written down in AGENTS.md. With the tail in a
   # binding, the two strings are siblings instead of nested.
   targetLines = lib.concatMapStringsSep "\n      " (t: "\".#checks.${system}.${t}\"") targets;
   leftLines = lib.concatMapStringsSep "\n    " (t: "echo \"       ${t}\"") left;

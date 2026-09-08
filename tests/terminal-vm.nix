@@ -115,7 +115,7 @@ pkgs.testers.runNixOSTest {
         # thread had not come up, there would be no name here at all.
         #
         # WITH QUOTES: `tracing` quotes a `Debug` value, and `engine=alacritty`
-        # without them does not match. It is the trap already recorded in the CLAUDE.md.
+        # without them does not match. It is the trap already recorded in the AGENTS.md.
         assert 'engine="alacritty"' in journal, journal
 
     with subtest("the COMPOSITOR sees a window, not a region of ours"):

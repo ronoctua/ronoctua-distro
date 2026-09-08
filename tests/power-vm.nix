@@ -20,7 +20,7 @@
 #
 # WHAT CANNOT BE PROVED HERE: a battery's glyph, its number, its danger colour,
 # a threshold actually written. QEMU has no ACPI battery. Those are proved on
-# the owner's laptop, by eye — `CLAUDE.md`'s rule that a screen is looked at.
+# the owner's laptop, by eye — `AGENTS.md`'s rule that a screen is looked at.
 {
   pkgs,
   lib,
@@ -234,7 +234,7 @@ pkgs.testers.runNixOSTest {
           # is the `switch-profile` action from an ACTIVE session's user process,
           # which is what `allow_active: yes` promises and what a real login is.
           # BY PATH: the user manager's PATH is minimal, and a bare name fails
-          # at EXEC — the trap CLAUDE.md records for every spawn in a unit.
+          # at EXEC — the trap AGENTS.md records for every spawn in a unit.
           as_user("${pkgs.power-profiles-daemon}/bin/powerprofilesctl set balanced")
           machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = balanced ]", timeout=30)
           as_user("${pkgs.power-profiles-daemon}/bin/powerprofilesctl set power-saver")

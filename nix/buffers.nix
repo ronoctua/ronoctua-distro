@@ -312,7 +312,7 @@ lib.fix (all: {
   # without knowing which variables to set, because the three browsers embed
   # their database with `include_str!(env!(…))` and do not compile without it.
   #
-  # It is the trap `CLAUDE.md` already records once: *"`cargo test` did not have
+  # It is the trap `AGENTS.md` already records once: *"`cargo test` did not have
   # the five programs, and every ffmpeg test was EMPTY"*. There the variables
   # were missing and the tests left by the back door in silence; here they are
   # missing and the crate does not even COMPILE, which is a better failure and

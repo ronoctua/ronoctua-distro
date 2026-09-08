@@ -35,7 +35,7 @@
 # every row of every view is drawn to a GPU surface and none of it reaches a
 # journal, so "the row says the brightness is on the monitor's own buttons" is
 # not a thing this file can assert. Those are proved on the owner's machine, by
-# photograph — `CLAUDE.md`'s rule that a screen is looked at before anybody
+# photograph — `AGENTS.md`'s rule that a screen is looked at before anybody
 # says it is done.
 {
   pkgs,

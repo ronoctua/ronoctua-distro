@@ -26,7 +26,7 @@
 #
 # WHAT CANNOT BE PROVED HERE: a device's kind glyph, a percentage, a pairing
 # question, the danger colour. QEMU has no Bluetooth controller. Those are
-# proved on the owner's laptop, by eye — `CLAUDE.md`'s rule that a screen is
+# proved on the owner's laptop, by eye — `AGENTS.md`'s rule that a screen is
 # looked at before the word "pronto".
 {
   pkgs,
@@ -217,7 +217,7 @@ pkgs.testers.runNixOSTest {
           # appear: the line is `info!(view = what, "refused: …")`, and
           # tracing renders the MESSAGE first and the fields after it —
           # `refused: … view="bluetooth-open"`. So the assertion was true of
-          # every possible journal, which is CLAUDE.md's own trap: a check
+          # every possible journal, which is AGENTS.md's own trap: a check
           # against the criterion and not against the code closes an empty
           # milestone.
           assert "refused: another view is open" not in journal, journal

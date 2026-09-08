@@ -120,7 +120,7 @@ in
     # answers when the work is done and the manager can re-read the directory
     # knowing the answer. The binary is EXTRACTED from the workspace
     # (`rust.filesRoot`) rather than being the whole of it — the trap
-    # `CLAUDE.md` records: a derivation references what its bytes cite, and
+    # `AGENTS.md` records: a derivation references what its bytes cite, and
     # shipping the shell here would put wgpu, the wasm runtime and the renderer
     # in a unit that runs as root.
     systemd.services.ronoctua-files-root = {

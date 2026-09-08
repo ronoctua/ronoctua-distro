@@ -944,7 +944,7 @@ pub fn stream_args(stream: &Stream<'_>) -> Vec<std::ffi::OsString> {
 /// Where ffmpeg is, so the player can spawn it BY PATH.
 ///
 /// The `PATH` under a systemd unit is minimal, and a spawn by name fails far
-/// from its cause — the trap `CLAUDE.md` names. This is the same lookup the
+/// from its cause — the trap `AGENTS.md` names. This is the same lookup the
 /// still-frame path already does.
 ///
 /// # Errors

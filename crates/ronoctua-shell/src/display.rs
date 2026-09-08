@@ -1196,7 +1196,7 @@ impl View {
     /// refusal — including the ones that matched no question, which are most
     /// of them: `Esc` on a question and then a wheel down the sheet, and the
     /// refusal arriving for the already-answered `Try` yanked the page back.
-    /// A DAEMON'S ARRIVAL DOES NOT FOLLOW THE CURSOR is the rule (CLAUDE.md
+    /// A DAEMON'S ARRIVAL DOES NOT FOLLOW THE CURSOR is the rule (AGENTS.md
     /// states it in Portuguese; this is what it says), and it is the one
     /// the comment beside those calls cites.
     #[must_use]

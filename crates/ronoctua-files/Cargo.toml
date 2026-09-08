@@ -36,7 +36,7 @@ tracing.workspace = true
 rustix = { workspace = true, features = [ "fs", "process", "event" ] }
 # THE SIDEBAR'S FILE, and this crate builds a ROOT BINARY, so the line deserves
 # a word. `serde` is code and not a store reference, so neither
-# `files-runs-by-path` nor the `${../.}` trap `CLAUDE.md` records is affected —
+# `files-runs-by-path` nor the `${../.}` trap `AGENTS.md` records is affected —
 # `ronoctua-files-root` gets a few kilobytes and no new closure.
 #
 # `ronoctua-disks` is the dependency that was refused for exactly that reason.
@@ -51,7 +51,7 @@ serde_json.workspace = true
 # THE PRIVILEGED HELPER, as its own binary.
 #
 # A `[[bin]]` and not part of the shell, so `nix/rust.nix` can extract JUST this
-# — the trap `CLAUDE.md` records: a derivation references what its BYTES cite,
+# — the trap `AGENTS.md` records: a derivation references what its BYTES cite,
 # and shipping the whole workspace to run four syscalls as root would put the
 # renderer, wgpu and the wasm runtime in a unit that runs as root.
 [[bin]]

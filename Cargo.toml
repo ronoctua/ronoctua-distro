@@ -123,7 +123,7 @@ serde_json = "1"
 # --- WASM runtime (sections 5.2, 7.8 and 7.9) -------------------------
 # `memory_init_cow` and `pooling-allocator` are NOT optional optimisations: without
 # them the glyphdb's ~1.5 MB become a memcpy per instance and blow the 5 ms
-# budget on their own. See the trap in CLAUDE.md.
+# budget on their own. See the trap in AGENTS.md.
 wasmtime = { version = "38", default-features = false, features = [
   "runtime", "component-model", "cranelift", "pooling-allocator", "std",
 ] }

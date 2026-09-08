@@ -32,7 +32,7 @@
 //! already there; what the radio finds afterwards arrives through
 //! `ronoctua_network::watch_scan`. Blocking until the radio answers would
 //! freeze the whole footer for seconds — the `systemd-run --scope` trap
-//! CLAUDE.md records.
+//! AGENTS.md records.
 //!
 //! # The typing is the footer's
 //!

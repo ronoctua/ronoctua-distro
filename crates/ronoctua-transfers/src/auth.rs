@@ -189,7 +189,7 @@ fn pot_flags_of(home: Option<&str>, deno: Option<&str>) -> Vec<String> {
     vec![
         // THE PATH AND NOT THE NAME. A systemd unit's `PATH` is minimal, and a
         // runtime looked up by name fails far from the cause — the trap
-        // `CLAUDE.md` records for every program this project spawns.
+        // `AGENTS.md` records for every program this project spawns.
         "--js-runtimes".to_owned(),
         format!("deno:{deno}"),
         // A DIFFERENT extractor key from the manual token's `youtube:`, so the

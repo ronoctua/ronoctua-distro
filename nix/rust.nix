@@ -345,7 +345,7 @@ let
     #
     # It does `exec cat` to serve the selection to whatever process pastes. Under a
     # systemd unit PATH is minimal, and `cat` is not there: the copy
-    # failed with `exec cat: No such file or directory` — CLAUDE.md's trap one
+    # failed with `exec cat: No such file or directory` — AGENTS.md's trap one
     # level deeper, because what spawns by NAME is the program we
     # spawn by path.
     RONOCTUA_WL_COPY_PATH = lib.makeBinPath [ coreutils ];

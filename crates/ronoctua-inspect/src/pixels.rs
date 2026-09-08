@@ -652,7 +652,7 @@ pub fn wave_args(path: &Path, target: u32, ink: &str) -> Vec<std::ffi::OsString>
 /// for the same page that was going to the file.
 ///
 /// The test that was meant to guard this asserted `last() == "-"` — the code as
-/// written rather than the thing wanted, which is the shape `CLAUDE.md` names.
+/// written rather than the thing wanted, which is the shape `AGENTS.md` names.
 /// Its replacement runs the real binary and counts what comes back.
 #[must_use]
 pub fn page_args(path: &Path, target: u32) -> Vec<std::ffi::OsString> {

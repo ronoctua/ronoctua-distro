@@ -275,7 +275,7 @@ fn id_of(path: &Path, root: &Path) -> Option<String> {
 /// Because whoever launches needs it. The `.desktop` writes `Exec=firefox`, and
 /// that name only resolves against the `PATH` of **whoever scanned** — the application starts
 /// inside a `systemd-run --scope`, where `PATH` is minimal. It is the trap
-/// `CLAUDE.md` records in so many words: *spawning in a systemd unit, use a PATH,
+/// `AGENTS.md` records in so many words: *spawning in a systemd unit, use a PATH,
 /// never a name* — and the failure shows up far from the cause.
 ///
 /// As a bonus it is what makes the message line always say the same thing: without

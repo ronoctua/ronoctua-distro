@@ -5,7 +5,7 @@
 //! `option_env!` with a store path is a CLOSURE REFERENCE: the derivation that
 //! compiles this crate would cite `ffmpeg-full`, and every binary built out of
 //! this workspace would carry it whether it ever runs a preview or not. That is
-//! the measured trap `CLAUDE.md` records — "a switch that does not switch" —
+//! the measured trap `AGENTS.md` records — "a switch that does not switch" —
 //! and `nix/modules/media.nix` already went the other way once for
 //! `RONOCTUA_SWAPPY`, which is the shape copied here.
 //!
@@ -319,7 +319,7 @@ mod tests {
         let ffmpeg = Tool::Ffmpeg;
         if ffmpeg.there() {
             // THE PATH IS WHAT THE VARIABLE SAID, never a name looked up on
-            // `PATH` — the trap `CLAUDE.md` records as "spawn in a systemd
+            // `PATH` — the trap `AGENTS.md` records as "spawn in a systemd
             // unit: use the path, never the name".
             let named = std::env::var_os(ffmpeg.variable()).expect("the variable is set");
             assert_eq!(ffmpeg.path().expect("there is a path").as_os_str(), named);

@@ -89,7 +89,7 @@ fn call(method: &str, path: &str) -> Option<String> {
 /// An integer from a JSON field, with no JSON parser.
 ///
 /// The same decision as the buffers, for the same reason recorded in the
-/// CLAUDE.md: there is no parser here, so no string field may carry a raw
+/// AGENTS.md: there is no parser here, so no string field may carry a raw
 /// character. These fields are numbers from Syncthing itself.
 fn number_of(json: &str, field: &str) -> Option<u64> {
     let target = format!("\"{field}\":");

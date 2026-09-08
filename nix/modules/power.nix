@@ -29,7 +29,7 @@
 # on a battery that has them, and the shell writes the number. `GROUP=` and
 # `MODE=` in a rule only reach device nodes; a sysfs attribute needs a `RUN`,
 # and the programs it runs are store paths — a unit's `PATH` is minimal, the
-# trap `CLAUDE.md` records. `TEST==` keeps the rule inert on a battery that has
+# trap `AGENTS.md` records. `TEST==` keeps the rule inert on a battery that has
 # no threshold file, and `change` re-applies it after a resume.
 {
   config,

@@ -569,7 +569,7 @@ pub fn track_px(left: f32, wide: f32, cell: f32, clock: u16) -> Option<(f32, f32
 /// press missed the track, fell through to the row's own field, and that field
 /// is [`Hit::Play`].
 ///
-/// It is the trap `CLAUDE.md` records for `#[repr(C)]`, in ordinary Rust: a
+/// It is the trap `AGENTS.md` records for `#[repr(C)]`, in ordinary Rust: a
 /// layout that is promised rather than checked. Named fields are the check.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Foot {

@@ -220,7 +220,7 @@ pub fn elide_end(s: &str, max: u16) -> String {
 /// Because those are BYTES, and this counts CLUSTERS — the same ruler
 /// [`width`] and [`elide_end`] use. Cutting by byte lands inside a character
 /// and invents a drawing; cutting by codepoint splits a cluster and invents a
-/// different one, which is the trap `CLAUDE.md` records about eliding.
+/// different one, which is the trap `AGENTS.md` records about eliding.
 ///
 /// What it is for: a preview panel is twenty-four cells at its floor and a
 /// line of code is not, so the panel shows a window onto the line and the

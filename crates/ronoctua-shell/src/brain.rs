@@ -305,7 +305,7 @@ pub fn at(line: Option<&Line>, column: u16) -> Option<&Piece> {
 
 /// The `systemctl`, by path and never by name.
 ///
-/// A unit's `PATH` is minimal (`CLAUDE.md`), and a bare name fails far from its
+/// A unit's `PATH` is minimal (`AGENTS.md`), and a bare name fails far from its
 /// cause. Outside Nix — `cargo run` — it falls back to the name and the shell's
 /// own `PATH` resolves it, which is the shape `crate::keyboard` already uses.
 const SYSTEMCTL: &str = match option_env!("RONOCTUA_SYSTEMCTL") {

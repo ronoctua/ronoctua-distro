@@ -4,7 +4,7 @@
 //!
 //! `option_env!`, filled by `nix/rust.nix`, exactly as `ronoctua-rescue` does.
 //! The shell runs inside a `systemd-run --scope` where `PATH` is minimal, and a
-//! bare name fails far from its cause — the trap `CLAUDE.md` already records.
+//! bare name fails far from its cause — the trap `AGENTS.md` already records.
 //! A missing variable comes back as [`Missing`](Trouble::Missing) naming the
 //! VARIABLE, because that is a defect in the Nix and not on the machine.
 //!

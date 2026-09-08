@@ -2,7 +2,7 @@
 #
 # # Why a commit and not a tag, against this project's own rule
 #
-# `CLAUDE.md` says to pin a tag and never `main`, and the reason is good: `main`
+# `AGENTS.md` says to pin a tag and never `main`, and the reason is good: `main`
 # moves under you and a `nix flake update` brings a different API with no
 # warning. It is broken here on purpose, and the cost is stated rather than
 # hidden.

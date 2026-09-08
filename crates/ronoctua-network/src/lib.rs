@@ -533,7 +533,7 @@ pub fn hotspot_password() -> Result<String> {
     // with no end, so `read_to_end` grows a `Vec` until the kernel kills the
     // process — and this is called on the door's own event-loop thread, so
     // what dies is the footer, and `systemd-oomd` takes the whole cgroup with
-    // it (the trap CLAUDE.md records). Eight bytes per character is room for
+    // it (the trap AGENTS.md records). Eight bytes per character is room for
     // the rejection sampling below to throw some away.
     let mut bytes = vec![0u8; LENGTH * 8];
     std::fs::File::open("/dev/urandom")
@@ -1281,7 +1281,7 @@ impl Manager {
 ///
 /// `RequestScan` returns at once and the radio answers seconds later. Blocking
 /// the footer's loop would freeze keyboard, painting and niri events for those
-/// seconds — the same `systemd-run --scope` trap CLAUDE.md records. And polling
+/// seconds — the same `systemd-run --scope` trap AGENTS.md records. And polling
 /// on a timer would spend a frame on a list that has not moved.
 ///
 /// `LastScan` changes exactly when there is something new to read. The thread

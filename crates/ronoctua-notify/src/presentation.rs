@@ -251,7 +251,7 @@ pub struct Presentation {
 ///
 /// # Why a list, and why the manager reads it
 ///
-/// The `CLAUDE.md` records the trap by name: a switch that switches nothing off —
+/// The `AGENTS.md` records the trap by name: a switch that switches nothing off —
 /// a switch that switches nothing off, and the day one finds out is the day
 /// something did not happen. Two of these fields are in that state on purpose
 /// (see [`Presentation::vibrate`] and [`Presentation::audio`]).

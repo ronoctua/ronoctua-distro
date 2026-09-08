@@ -393,7 +393,7 @@ in
     # `dbus-broker`, so the unit is `dbus-broker.service`; writing
     # `systemd.services.dbus.*` would create a PHANTOM unit that configures
     # nothing and reads as done. It is the same class as the switches that did
-    # not switch, recorded in `CLAUDE.md`.
+    # not switch, recorded in `AGENTS.md`.
 
     # -----------------------------------------------------------------
     # 6. Swap that does not thrash the disk

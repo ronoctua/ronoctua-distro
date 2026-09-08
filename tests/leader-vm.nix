@@ -500,7 +500,7 @@ pkgs.testers.runNixOSTest {
         # into `View::key` and prove the view does the right thing WITH the
         # key; what is asked here is whether the key ARRIVES — through Xvfb,
         # through niri, through the layer surface, with the leader's own
-        # modifiers discounted. That is three of the causes `CLAUDE.md` lists
+        # modifiers discounted. That is three of the causes `AGENTS.md` lists
         # under "nenhum atalho funciona", and they all look the same on screen.
         # FEW FILES, ON PURPOSE. The region has a ceiling of twelve lines, and a
         # listing that hits it measures the same before and after — the height

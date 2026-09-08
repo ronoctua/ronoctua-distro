@@ -93,7 +93,7 @@ pub const APP_ID_RESCUE: &str = "br.ronoctua.rescue";
 ///
 /// The `app_id` above and the rule's regex have to be the same string, and it
 /// would exist in THREE places — this file, `nix/modules/niri.nix` and
-/// `nix/dev.nix`. A string that crosses a border needs a check (`CLAUDE.md`),
+/// `nix/dev.nix`. A string that crosses a border needs a check (`AGENTS.md`),
 /// and generating it is the check that cannot go stale: `export-niri-window-rules`
 /// prints this, and both configs take it in — the same arrangement as the
 /// chords in `nix/niri-binds.nix`.

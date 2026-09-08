@@ -338,7 +338,7 @@ impl Verdict {
 ///
 /// An unknown word is NOT turned into a verdict. A silent fallback here would
 /// draw *"it worked"* over a run that did something else — the failure mode
-/// `CLAUDE.md` names as needing a check rather than a shrug.
+/// `AGENTS.md` names as needing a check rather than a shrug.
 #[must_use]
 pub fn verdict_of(word: &str) -> Option<Verdict> {
     match word {
@@ -983,7 +983,7 @@ struct UpdateWindow {
     /// `get_keyboard_with_repeat`, and that wants a `LoopHandle` — so this is
     /// carried rather than reached for. Without it `repeat_key` below is dead
     /// code and holding an arrow moves exactly one row, which is the trap
-    /// CLAUDE.md records and which nine windows inherited.
+    /// AGENTS.md records and which nine windows inherited.
     handle: calloop::LoopHandle<'static, Self>,
     /// The watch on `theme.json` — the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,

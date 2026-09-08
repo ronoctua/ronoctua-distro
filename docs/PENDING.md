@@ -3,7 +3,7 @@
 ## Regra de manutenção — leia antes de mexer
 
 **Ao concluir um item daqui, remova-o.** Se ele mudar *como o sistema funciona*, escreva uma linha
-no `CLAUDE.md` (se todo agente precisa saber) ou no `docs/ARCHITECTURE.md` (se é o porquê de uma
+no `AGENTS.md` (se todo agente precisa saber) ou no `docs/ARCHITECTURE.md` (se é o porquê de uma
 decisão). Se não mudar nada de fundo — é só trabalho feito —, **apenas apague**.
 
 Esta lista não guarda histórico. Item riscado, marcado como pronto ou mantido "para registro" a
@@ -91,7 +91,7 @@ multiplicar o lado pela escala e desenhar na caixa lógica. **O ícone custa uma
 localizador é indexado pelo nome nu do `Icon=` (`surface.rs`, `im.missing(key)`), e
 `request_visible_icons` filtra o que já está em `self.icons` — então uma vez decodificado a 18 px ele
 nunca é pedido de novo, nem numa troca de escala nem numa troca de tamanho do texto. É a mesma classe
-que o CLAUDE.md já registra para o tema ("leva o tema na CHAVE do cache"), com `scale` e `size`
+que o AGENTS.md já registra para o tema ("leva o tema na CHAVE do cache"), com `scale` e `size`
 faltando; o `files::Stamp::key()` já carrega o passo de decodificação e está certo por isso.
 
 **Como saber que acabou:** uma foto do localizador numa saída em `scale 2` com o ícone e a letra ao
@@ -339,7 +339,7 @@ que ninguém as descubra achando que achou um defeito.
   novo, zero cor nova. É esse o ponto da forma.
 
 - acabou quando: o item que se resolveu sai desta lista; nenhum deles muda como o sistema funciona,
-  então nenhum precisa de linha no `CLAUDE.md`
+  então nenhum precisa de linha no `AGENTS.md`
 
 ### 0.0002. Nenhum buffer wasm usa o realce ainda · pequeno
 

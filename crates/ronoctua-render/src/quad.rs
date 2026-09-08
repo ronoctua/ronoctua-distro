@@ -88,7 +88,7 @@ impl Quads {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("quad"),
             // wgpu 30 wraps both in `Option` and swapped `push_constant_ranges`
-            // for `immediate_size`. See the graphics API trap in CLAUDE.md — read
+            // for `immediate_size`. See the graphics API trap in AGENTS.md — read
             // the source, do not assume.
             bind_group_layouts: &[],
             immediate_size: 0,
