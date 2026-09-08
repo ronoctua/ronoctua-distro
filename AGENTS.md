@@ -789,9 +789,26 @@ isso moram aqui, no único arquivo que chega sozinho ao contexto.
   árvore antes de disparar bateria** — o Nix a fotografa na avaliação, e editar um comentário no meio
   obriga a refazer tudo. Diga sempre no relatório qual recorte rodou e qual não.
 - **ITERE NO `cargo`, NUNCA NO NIX.** Tocar `crates/ronoctua-protocol` invalida `rust.workspace`, de
-  que **todo** driver depende: cada rodada paga um build release do workspace. Lógica nova nasce com
+  que **todo** driver depende: cada rodada paga um build do workspace. Lógica nova nasce com
   `#[cfg(test)]` ao lado e roda em `cargo test -p <crate>` (segundos). Ao Nix, uma vez — ele prova a
   travessia do WIT e o pixel, não serve para descobrir semântica.
+- **O LAÇO TEM PERFIL PRÓPRIO, e quem instala não o vê** (`[profile.loop]`, na raiz do
+  `Cargo.toml`). O `release` é afinado para o binário que roda por meses — `lto = "thin"` e
+  `codegen-units = 1` —, e `crates/ronoctua-shell` tem 178 mil linhas num crate só: com uma unidade
+  de codegen, a geração de código dele roda numa THREAD. Medido nesta máquina de 12 núcleos, **uma
+  linha editada custava 148 s e passou a custar 19**; e um build FRIO no perfil do laço, com os 483
+  crates de terceiros junto, são 139 s — menos que um incremental no perfil de produção. Usam o laço:
+  o `.#dev`, o `rust.tests` e o `rust.clippy` (o hook e o `most`). Ficam em `release`: `.#vm`,
+  `.#iso`, `.#install`, `.#bench` e os módulos. **É o lado RÁPIDO que tem nome**, para o esquecimento
+  cair no lado seguro — um `iso` sem LTO não tem sintoma nenhum; cobra o
+  `the-loop-profile-is-never-installed`. O preço é uma camada de dependências POR PERFIL (paga uma
+  vez por `Cargo.lock`) e um segundo diretório no `CARGO_TARGET_DIR`.
+- **O hot reload do `.#dev` estava MORTO, e o sintoma era o laço parecer lento.** A linha tinha
+  `--bin ronoctua-rescue` sem `-p ronoctua-rescue`, e `--bin` nomeia alvo DENTRO dos pacotes que o
+  `-p` escolheu: o cargo recusava o comando inteiro, o laço caía no `else` dizendo "a compilação
+  falhou" e seguia com o rodapé velho. Toda edição de Rust, de toda sessão. O
+  `dev-rebuilds-what-sits-beside` não pegou porque conferia o NOME; agora confere o PACOTE, contra
+  os manifestos que declaram cada binário.
 - **`nix run .#png` ANTES DA PALAVRA "PRONTO".** Verde não é prova, e desde que olhar custa 0,2 s não
   há desculpa. Teste que compara ESTADO não vê espaço em branco, sobreposição nem faixa de seleção.
 - **ARQUIVO NOVO PRECISA DE `git add -N`** — o que o git não rastreia não entra na fonte do flake, e

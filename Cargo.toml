@@ -198,3 +198,42 @@ codegen-units = 1
 # The first-frame target is 200 ms (section 5.2); symbols do not help with that,
 # but they help diagnose when it is missed.
 debug = 1
+
+# THE LOOP'S PROFILE — never the one that is installed.
+#
+# # What it is for
+#
+# `release` above is tuned for the binary somebody RUNS for months: `lto` walks
+# the whole program at link time and `codegen-units = 1` gives LLVM one unit per
+# crate to optimise as a whole. Both trade build time for run time, and both are
+# right for the ISO.
+#
+# They are wrong for the nested loop, which exists to LOOK at the interface and
+# is the most-run command in the project. `crates/ronoctua-shell` is 178 thousand
+# lines in one crate, so `codegen-units = 1` gives its code generation a single
+# thread — measured on this machine, eleven of twelve cores idle, and one edited
+# line costs 148 seconds.
+#
+# # Why the FAST side is the one with a name
+#
+# Because forgetting has to fall the safe way. Named like this, anything that
+# does not ask for `loop` gets `release` — slow to build, correct to ship. The
+# other arrangement (a cheap `release` and a `dist` profile for delivery) makes a
+# forgotten call site put an unoptimised binary on the ISO, with no symptom but
+# a machine that is quietly slower. `tests/slow.nix` made the same choice for the
+# same reason, from the other end.
+#
+# # The price
+#
+# A dependency layer per profile: the 483 third-party crates built for `release`
+# cannot be reused for `loop`, so the first build after this pays a fresh
+# `buildDepsOnly` — and `$CARGO_TARGET_DIR` grows a second directory.
+[profile.loop]
+inherits = "release"
+# Fast enough to judge a frame; the two settings above are what cost the minutes.
+opt-level = 2
+codegen-units = 16
+lto = false
+# `release` keeps `debug = 1` to diagnose a missed frame target. Here the
+# symbols are only object size and link time.
+debug = 0

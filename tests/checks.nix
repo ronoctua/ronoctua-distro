@@ -7568,8 +7568,21 @@ let
   #
   # Installed, they are next door: `rust.shell` is a `symlinkJoin` over the
   # whole workspace. In the nested loop they are next door too — until the FIRST
-  # edit, when `RONOCTUA_FOOTER_BIN` moves to `$CARGO_TARGET_DIR/release/` and
+  # edit, when `RONOCTUA_FOOTER_BIN` moves to `$CARGO_TARGET_DIR/loop/` and
   # only what `cargo build` named is there.
+  #
+  # AND THE LINE HAS TO BE A COMMAND CARGO ACCEPTS, which is the second half and
+  # was not here. `--bin` names a target inside the packages `-p` selected, so
+  # `--bin ronoctua-rescue` with no `-p ronoctua-rescue` is not a build missing
+  # one binary: cargo refuses the WHOLE command with "no bin target named
+  # `ronoctua-rescue` in `ronoctua-shell`". The dev loop caught that in its
+  # `else` branch, printed "the compilation failed" and kept the old footer —
+  # so hot reload had quietly stopped existing, for every edit of every session,
+  # and what it looked like was a loop one had to restart by hand.
+  #
+  # Checking the NAME is what let that through: the name was there, spelt
+  # correctly, in a command that could not run. So the packages are checked too,
+  # against the manifests that declare the binaries.
   #
   # The symptom is the worst kind there is: everything works, and then one edit
   # quietly takes a feature away. A missing transfer queue looks exactly like
@@ -7577,7 +7590,12 @@ let
   # that does nothing. This check is what noticed that the rescue console had
   # been in that state the whole time.
   dev-rebuilds-what-sits-beside =
-    mkCheck "dev-rebuilds-what-sits-beside" [ pkgs.gnugrep pkgs.coreutils ]
+    mkCheck "dev-rebuilds-what-sits-beside"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+        pkgs.python3
+      ]
       ''
         shell=${../crates/ronoctua-shell/src}
         queue=${../crates/ronoctua-transfers/src}
@@ -7606,7 +7624,122 @@ let
         done
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: $(echo "$beside" | wc -l) binaries beside it, and the loop builds them all"
+        echo "ok: $(echo "$beside" | wc -l) binaries beside it, and the loop names them all"
+
+        # AND EVERY `--bin` IS INSIDE A PACKAGE THE SAME LINE SELECTED.
+        #
+        # Which package owns a binary comes from the MANIFESTS, never from a
+        # list here: `[[bin]] name = "x"` in a crate, or the crate's own name
+        # when the binary is the package's default.
+        python3 - <<'PY'
+        import pathlib, re, sys
+
+        dev = pathlib.Path("${../nix/dev.nix}").read_text()
+        # The reload's command: from `cargo build` to the `; then` that ends it.
+        line = re.search(r"cargo build (.*?)2>&1", dev, re.S)
+        if not line:
+            sys.exit("ERROR: the dev loop no longer runs a `cargo build` — what does it run?")
+        words = line.group(1).replace("\\\n", " ").split()
+        chosen = {w for f, w in zip(words, words[1:]) if f == "-p"}
+        wanted = [w for f, w in zip(words, words[1:]) if f == "--bin"]
+        if not chosen or not wanted:
+            sys.exit("ERROR: the command selects no package or names no binary")
+
+        # Every binary the tree declares, and which package declares it.
+        owner = {}
+        for manifest in sorted(pathlib.Path("${../crates}").glob("*/Cargo.toml")):
+            text = manifest.read_text()
+            crate = re.search(r'^name = "([\w-]+)"', text, re.M)
+            if crate:
+                owner.setdefault(crate.group(1), crate.group(1))
+            for block in text.split("[[bin]]")[1:]:
+                named = re.search(r'^name = "([\w-]+)"', block, re.M)
+                if named and crate:
+                    owner[named.group(1)] = crate.group(1)
+
+        gaps = []
+        for b in wanted:
+            has = owner.get(b)
+            if has is None:
+                gaps.append(f"`--bin {b}` is a binary no crate in this tree declares")
+            elif has not in chosen:
+                gaps.append(
+                    f"`--bin {b}` lives in `{has}`, and the line selects "
+                    + ", ".join("`" + c + "`" for c in sorted(chosen))
+                )
+        if gaps:
+            print("ERROR: the dev loop's `cargo build` is not a command cargo accepts:")
+            for g in gaps:
+                print("  - " + g)
+            print("")
+            print("       cargo refuses the WHOLE command, so the loop falls into its")
+            print("       `else`, says the compilation failed, and keeps the old footer.")
+            print("       Hot reload stops existing, for every edit of every session.")
+            sys.exit(1)
+        print(f"OK: {len(wanted)} binaries beside it, each inside a package the line selects")
+        PY
+      '';
+
+  # AND THE LOOP'S PROFILE NEVER REACHES A MACHINE.
+  #
+  # `[profile.loop]` trades run time for build time: no `lto`, sixteen codegen
+  # units, no symbols. That is right for `nix run .#dev`, where one LOOKS at the
+  # interface, and wrong for everything that is installed.
+  #
+  # # Why a check and not care
+  #
+  # Because the failure has no symptom. A binary built at the loop's profile
+  # runs, draws, and passes every test and every driver — it is merely slower,
+  # on somebody else's machine, months later. Nothing on a screen says which
+  # profile a program was built at, and `nix why-depends` is not run on a
+  # Tuesday.
+  #
+  # It reads the CLOSURE of the seven things a machine actually installs: the
+  # wrapper the unit starts and the six extracted binaries. A loop-profile path
+  # in any of them is the mistake, whether it arrived by an edited `flake.nix`,
+  # a module, or an `overrideAttrs` nobody read.
+  the-loop-profile-is-never-installed =
+    let
+      installed = pkgs.closureInfo {
+        rootPaths = [
+          rust.shell
+          rust.installer
+          rust.rescue
+          rust.transfers
+          rust.brain
+          rust.filesRoot
+          rust.formatDisk
+        ];
+      };
+    in
+    mkCheck "the-loop-profile-is-never-installed"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        # THE TWO PROFILES HAVE TO BE TWO. Without this the check would pass on
+        # the day somebody made them the same thing — the closure would be clean
+        # because there would be nothing left to find.
+        loop=${rust.loopWorkspace.drvPath}
+        plain=${rust.workspace.drvPath}
+        [ "$loop" != "$plain" ] || {
+          echo "ERROR: the loop's workspace and the installed one are one derivation." >&2
+          echo "      Then this check proves nothing — see the root Cargo.toml." >&2
+          exit 1
+        }
+
+        failed=0
+        for mark in -ronoctua-loop- -ronoctua-shell-loop- -ronoctua-deps-loop-; do
+          if found=$(grep -e "$mark" ${installed}/store-paths); then
+            echo "ERROR: something installed was built at the loop's profile:" >&2
+            echo "$found" >&2
+            echo "      It runs, and it is slower, and nothing on a screen says so." >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: the seven installed programs carry no loop-profile build"
       '';
 
   # THE QUEUE'S UNIT IS A COPY, NOT A DESKTOP.
@@ -8485,12 +8618,17 @@ let
   # named in `nix/rust.nix`'s deps call, they arrived carried by a variable.
   deps-layer-is-lean =
     let
-      leaked = lib.filter (lib.hasPrefix "RONOCTUA_") (lib.attrNames rust.cargoArtifacts.drvAttrs);
+      # BOTH LAYERS, because there are two: one per cargo profile, and the
+      # loop's is the one the tests, clippy and `nix run .#dev` all wait on.
+      # Checking only the first would leave the layer that is rebuilt most
+      # often unguarded.
+      of = layer: lib.filter (lib.hasPrefix "RONOCTUA_") (lib.attrNames layer.drvAttrs);
+      leaked = of rust.cargoArtifacts ++ of rust.loopArtifacts;
     in
     mkCheck "deps-layer-is-lean" [ ] ''
       leaked="${lib.concatStringsSep " " leaked}"
       if [ -n "$leaked" ]; then
-        echo "ERROR: the dependency layer was given variables it does not use:" >&2
+        echo "ERROR: a dependency layer was given variables it does not use:" >&2
         for v in $leaked; do echo "  $v" >&2; done
         echo >&2
         echo "      They come in through \`commonArgs\`; the layer has to take the" >&2
@@ -8499,7 +8637,7 @@ let
         echo "      somebody edits the buffer." >&2
         exit 1
       fi
-      echo "OK: the dependency layer carries no RONOCTUA_* at all"
+      echo "OK: neither dependency layer carries a RONOCTUA_* at all"
     '';
 
   lean-tree = mkCheck "lean-tree" [ ] ''
@@ -13773,6 +13911,7 @@ let
       transfers-socket-is-private
       transfers-words-are-total
       dev-rebuilds-what-sits-beside
+      the-loop-profile-is-never-installed
       graphics-does-not-mix-libc
       mime-table-generated
       mime-unknown-icon-fails
@@ -13832,6 +13971,7 @@ let
       transfers-socket-is-private
       transfers-words-are-total
       dev-rebuilds-what-sits-beside
+      the-loop-profile-is-never-installed
       graphics-does-not-mix-libc
       mime-table-generated
       mime-unknown-icon-fails

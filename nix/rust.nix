@@ -489,9 +489,35 @@ let
   # No explicit `dummySrc`: crane already resolves it correctly, and pinning one
   # here would be fixing what is not broken.
   cargoArtifacts = craneLib.buildDepsOnly (buildBase // { pname = "ronoctua-deps"; });
+
+  # THE SAME DEPENDENCIES, AT THE LOOP'S PROFILE.
+  #
+  # A profile is part of what an artifact IS: objects built with `lto = "thin"`
+  # and one codegen unit are not the ones a build without LTO links, so the two
+  # profiles cannot share a layer. This is the price of `[profile.loop]` and it
+  # is paid ONCE per lockfile, not per edit — see the root `Cargo.toml`.
+  #
+  # It takes `buildBase` for the reason the layer above does: `deps-layer-is-lean`
+  # refuses a `RONOCTUA_*` in either of them, and a value nothing reads must not
+  # be a reason to compile 483 crates again.
+  loopArtifacts = craneLib.buildDepsOnly (
+    buildBase
+    // {
+      pname = "ronoctua-deps-loop";
+      CARGO_PROFILE = loopProfile;
+    }
+  );
+
+  # The name cargo knows the fast profile by. One string, because it is written
+  # in four places — the two layers, the two builds — and a typo in one of them
+  # is a silent second full compilation.
+  loopProfile = "loop";
 in
 rec {
   inherit cargoArtifacts craneLib;
+  # The loop's layer is exported for the same reason the other one is: a check
+  # reads its attributes, at evaluation time and without a build.
+  inherit loopArtifacts;
   # Exposed so the devshell can offer the SAME environment as crane — see the
   # comment over there.
   inherit
@@ -513,7 +539,10 @@ rec {
   # six of these out by hand and missing twenty-five; the hot reload's binary
   # therefore had no `btop`, no clipboard, no `ghostty-vt` and no terminfo. It
   # went unnoticed because the reload was wired to a command that did not exist,
-  # so no edit ever replaced the store's binary.
+  # so no edit ever replaced the store's binary. That masking outlived the fix:
+  # the command went on being one cargo refuses — a `--bin` whose package the
+  # line did not select — until `dev-rebuilds-what-sits-beside` was taught to
+  # check the packages and not the spelling.
   #
   # Exported whole, the list stops being copied — and
   # `dev-exports-what-the-build-bakes` fails if a new one is added here and not
@@ -545,6 +574,38 @@ rec {
       nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ stdenv.cc.bintools ];
     }
   );
+
+  # THE SAME WORKSPACE, BUILT FOR THE LOOP.
+  #
+  # `nix run .#dev` is the most-run command in the project and it is where one
+  # LOOKS at the interface — never where one measures it. `[profile.loop]` in
+  # the root `Cargo.toml` carries the measurement and the reasoning; what it
+  # buys here is that the nested loop stops paying `lto` and one codegen unit
+  # for a binary nobody installs.
+  #
+  # A derivation of its own and not a replacement: everything that does not ask
+  # for this one keeps `workspace`, so forgetting falls on the side of the
+  # binary being right.
+  loopWorkspace = workspace.overrideAttrs (old: {
+    pname = "ronoctua-loop";
+    cargoArtifacts = loopArtifacts;
+    CARGO_PROFILE = loopProfile;
+  });
+
+  # And its wrapper, which is what `nix/dev.nix` actually runs — the components
+  # travel on the wrapper for the reason `shell` gives just below.
+  loopShell = symlinkJoin {
+    name = "ronoctua-shell-loop";
+    paths = [ loopWorkspace ];
+    nativeBuildInputs = [ makeBinaryWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/ronoctua-shell --inherit-argv0 ${
+        lib.concatStringsSep " " (
+          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") bufferComponents
+        )
+      }
+    '';
+  };
 
   # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the six components.
   #
@@ -723,7 +784,12 @@ rec {
   tests = craneLib.cargoTest (
     commonArgs
     // {
-      inherit cargoArtifacts;
+      # THE LOOP'S PROFILE, and the tests are the reason it is worth having
+      # twice. What is proved here is BEHAVIOUR; `lto` and one codegen unit
+      # change how fast the answer arrives, never what it is. The owner runs
+      # this many times a day and installs the system rarely.
+      cargoArtifacts = loopArtifacts;
+      CARGO_PROFILE = loopProfile;
       pname = "ronoctua-tests";
       RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
       RONOCTUA_FFPROBE = "${pkgs.ffmpeg-full}/bin/ffprobe";
@@ -737,7 +803,11 @@ rec {
   clippy = craneLib.cargoClippy (
     commonArgs
     // {
-      inherit cargoArtifacts;
+      # The loop's profile too: clippy reads code and never links a program,
+      # so the profile only decides which artifacts it may reuse — and sharing
+      # the tests' layer is what keeps it from being a third compilation.
+      cargoArtifacts = loopArtifacts;
+      CARGO_PROFILE = loopProfile;
       pname = "ronoctua-clippy";
       cargoClippyExtraArgs = "--all-targets -- --deny warnings";
     }

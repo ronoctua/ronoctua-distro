@@ -435,7 +435,16 @@
           rustToolchain
           ;
         niri = inputs.niri.packages.${system}.niri;
-        ronoctua-shell = rust.shell;
+        # `rust.loopShell` AND NOT `rust.shell`: the nested loop is where one
+        # LOOKS at the interface, never where one measures it, and it is the
+        # most-run command in the project. Measured on this machine, the same
+        # edited line is 148 s at the installed profile and 19 s at this one.
+        # See `[profile.loop]` in the root `Cargo.toml`.
+        #
+        # `benchFrames` right below keeps `rust.shell`, deliberately: that one
+        # exists to measure, and measuring a build nobody installs would answer
+        # about the wrong binary.
+        ronoctua-shell = rust.loopShell;
         # THE WHOLE TABLE THE COMPILATION GETS, and not six values copied out of
         # it: the loop compiles the binary itself, so what it does not export the
         # binary does not have. See `nix/dev.nix`'s `bakedExports`.

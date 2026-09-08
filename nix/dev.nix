@@ -548,7 +548,7 @@ let
         ${bakedExports}
         # WHICH BINARY THE FOOTER IS, and it starts as the store's.
         #
-        # It used to be `$CARGO_TARGET_DIR/release/ronoctua-shell`, written into
+        # It used to be `$CARGO_TARGET_DIR/loop/ronoctua-shell`, written into
         # the restart line — which only exists after a `cargo build` has
         # succeeded. Editing a BUFFER restarts the footer without compiling any
         # Rust, so the path has to be whatever is running now.
@@ -620,7 +620,7 @@ let
               # because both come out of the same build and a store path baked
               # into one would be that build referencing itself. Before the
               # first reload "next door" is the wrapper's `bin/`, where it is;
-              # after one it is `$CARGO_TARGET_DIR/release/`, where it would not
+              # after one it is `$CARGO_TARGET_DIR/loop/`, where it would not
               # have been.
               #
               # The symptom would have been the worst kind: everything works,
@@ -636,11 +636,27 @@ let
               #
               # It costs nothing: one workspace, one build, and neither binary
               # links wgpu or the wasm runtime.
-              if cargo build --release -p ronoctua-shell --bin ronoctua-shell \
-                   --bin ronoctua-rescue \
+              #
+              # `-p ronoctua-rescue` AND `--bin ronoctua-rescue`, and the `-p`
+              # was missing. `--bin` names a target inside the packages `-p`
+              # selected, so cargo answered "no bin target named
+              # `ronoctua-rescue` in `ronoctua-shell`" and the WHOLE command
+              # failed — every Rust edit of every session fell into the `else`
+              # below, which says the compilation failed and keeps the old
+              # footer running. Hot reload had stopped existing, and what it
+              # looked like was a loop that had to be restarted for each change.
+              #
+              # `dev-rebuilds-what-sits-beside` did not catch it because it
+              # greps for the NAME. It checks the packages now.
+              #
+              # AND THE PROFILE IS THE LOOP'S, not the one that is installed.
+              # See `[profile.loop]` in the root `Cargo.toml` for the
+              # measurement: the same edit is 148 s in `release`.
+              if cargo build --profile loop -p ronoctua-shell --bin ronoctua-shell \
+                   -p ronoctua-rescue --bin ronoctua-rescue \
                    -p ronoctua-transfers --bin ronoctua-transfers \
                    -p ronoctua-brain --bin ronoctua-brain 2>&1 | tail -20; then
-                export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/release/ronoctua-shell"
+                export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/loop/ronoctua-shell"
                 restart_footer
               else
                 echo "  the compilation failed; the previous footer is still running"

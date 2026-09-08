@@ -163,6 +163,45 @@ sistemas NixOS e o ISO —, e é essa a linha que separa as três baterias: `#qu
 ~1 min), `#most` (todo o resto) e `#gate` (tudo). Só o gate fecha o invariante 7; ver
 "Três baterias" abaixo.
 
+#### E a quinta não foi por entrada nenhuma: era o PERFIL, e o laço estava morto
+
+As quatro acima são sobre **o que invalida** um build. A quinta é sobre **quanto custa** um, e sobre
+uma linha que fazia o laço não existir.
+
+O `[profile.release]` da raiz é afinado para o binário que roda por meses: `lto = "thin"` e
+`codegen-units = 1`. Uma unidade de codegen é o que dá ao LLVM o crate inteiro para otimizar de uma
+vez — e `crates/ronoctua-shell` tem **178 mil linhas num crate só**, então a geração de código dele
+roda numa THREAD. Medido nesta máquina de 12 núcleos:
+
+| | `release` | `[profile.loop]` |
+|---|---:|---:|
+| uma linha editada no shell, incremental | **148 s** | **19 s** |
+| build FRIO, com os 483 crates de terceiros | — | **139 s** |
+
+O build frio no perfil do laço é mais rápido que um incremental no de produção. Nada disso serve para
+olhar a interface num compositor aninhado; serve para o ISO — e o mesmo perfil era pago pelo `cargo
+test` e pelo `clippy` do hook, que se roda dezenas de vezes por dia contra uma instalação que se faz
+raramente.
+
+**Nomear o lado RÁPIDO é a decisão.** Um `release` barato com um `dist` para a entrega seria mais
+econômico e faria o esquecimento cair para o lado errado: um binário sem LTO no ISO não tem sintoma
+nenhum além de ser mais lento, na máquina de outra pessoa, meses depois. Assim, quem não pedir o
+perfil do laço recebe o de produção. Cobra o `the-loop-profile-is-never-installed`, que lê o FECHO
+dos sete programas que uma máquina instala. O preço é uma camada de dependências por perfil, paga
+uma vez por `Cargo.lock`.
+
+**E o laço estava morto, o que é a metade que ninguém tinha medido.** A linha do hot reload em
+`nix/dev.nix` era `--bin ronoctua-rescue` sem `-p ronoctua-rescue`. `--bin` nomeia um alvo DENTRO dos
+pacotes que o `-p` escolheu, então o cargo não construía quatro binários menos um: recusava o comando
+inteiro com *"no bin target named `ronoctua-rescue` in `ronoctua-shell`"*. O laço caía no `else`,
+dizia "a compilação falhou" e seguia com o rodapé antigo — **toda edição de Rust, de toda sessão**. O
+que isso parece, de fora, é um laço que precisa ser reiniciado a cada mudança; e é por isso que o
+custo do build do Nix era o que se sentia.
+
+O `dev-rebuilds-what-sits-beside` existia e passava: ele conferia que o NOME aparecia na linha. O
+nome aparecia, escrito certo, num comando que não roda. Agora ele deriva dos manifestos qual pacote
+declara cada binário e recusa um `--bin` fora dos `-p` — que é a forma de errar que aconteceu.
+
 #### E a quarta foi pela REFERÊNCIA — que quem compila não devia pagar
 
 A separação acima consertou a camada de dependências e deixou o resto de pé. Editar um **comentário**
