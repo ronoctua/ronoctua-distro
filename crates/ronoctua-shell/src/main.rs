@@ -63,7 +63,10 @@ mod fold;
 mod foreign;
 mod hidpi;
 mod keyboard;
+mod language;
 mod leader;
+mod locale;
+mod locale_window;
 mod manual;
 mod minibuffer;
 mod motion;
@@ -85,6 +88,7 @@ mod theme;
 mod theme_chooser;
 mod toolkits;
 mod transfers;
+mod world;
 // `LEADER s u`, the animated mark on the modeline, and the window that watches
 // a run happen. It knows no step: the sequence is `assets/updates.nix`.
 mod update_window;
@@ -113,6 +117,10 @@ fn main() -> Result<()> {
     // the windows, a buffer's host — draws through the same three sources,
     // read once here. The short-lived subcommands pay one file read.
     theme::resolve_at_start();
+    // AND THE DATE'S SHAPE, by the same means and at the same moment: it is
+    // a process-wide value the way the theme is, so that a date resolves
+    // through it wherever one is written. See `locale::prefs::current`.
+    locale::prefs::adopt();
     // AND THE SIZE OF THE TEXT, on the same footing and for the same reason.
     // It is not the theme's business — a palette and a size are two choices —
     // but they are read at the same moment because they are both properties
@@ -274,6 +282,9 @@ fn main() -> Result<()> {
         }
         Some("power") => {
             return power_window::host_it().context("host the power view");
+        }
+        Some("locale") => {
+            return locale_window::host_it().context("host the language and region view");
         }
         // `ronoctua-shell network` — the network in a window of its own. The
         // SAME `network::View` the footer draws from; what it cannot do here

@@ -452,7 +452,7 @@ impl TerminalWindow {
         // Node i18n: EVERY terminal text is the program's data, never an interface
         // label. Translating the output of `ls` would be absurd, and that is why
         // `Command::Grid` only carries `String`.
-        let texts = ronoctua_i18n::Texts::from_env();
+        let texts = crate::language::texts();
         // The window's COLUMNS: the host guarantees that nothing leaks past the
         // edge, and a terminal line wider than the window is the common case.
         let spans = crate::paint::spans_of(&list, &texts, self.columns);

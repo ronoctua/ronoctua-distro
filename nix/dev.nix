@@ -21,7 +21,7 @@
   themes,
   xwayland-satellite,
   ronoctua-shell,
-  bufferComponents,
+  atRunTime,
   generated,
   nix,
   fonts,
@@ -83,7 +83,7 @@ let
   # the SOURCE lines, and interpolated content goes in as it is — with no
   # separator the second `export` would land in column zero.
   bakedExports = lib.concatStringsSep "\n  " (
-    lib.mapAttrsToList (name: value: ''export ${name}="${value}"'') (generated // bufferComponents)
+    lib.mapAttrsToList (name: value: ''export ${name}="${value}"'') (generated // atRunTime)
   );
 
   # niri's config for nested mode.

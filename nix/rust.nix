@@ -77,6 +77,14 @@
   iconSuperpack,
   lucideFontFile,
   marksFontFile,
+  # The faces the declared fallback chain names, and the chain itself as Rust.
+  # The FONTS travel on the wrapper (read at run time, 54 MB, and a store path
+  # in the compiler's environment rebuilds all thirty-three crates); the chain
+  # is baked, because it is code.
+  coverageFonts,
+  chainRs,
+  widthRs,
+  worldRs,
   primaryFontFile,
   src,
 }:
@@ -230,6 +238,13 @@ let
     RONOCTUA_FONT_EMOJI = emojiFont;
     RONOCTUA_FONT_LUCIDE = lucideFont;
     RONOCTUA_FONT_MARKS = marksFont;
+    # The fallback chain, generated from nix/fontconfig.nix — see nix/chain.nix.
+    RONOCTUA_CHAIN_RS = "${chainRs}/chain.rs";
+    # How many cells a character takes — Unicode's own answer, not ours.
+    # See nix/width.nix; `ronoctua-protocol` is what reads it.
+    RONOCTUA_WIDTH_RS = "${widthRs}/width.rs";
+    # The glance's places, generated from assets/world.nix — see nix/world.nix.
+    RONOCTUA_WORLD_RS = "${worldRs}/world.rs";
 
     # THE TWO PROGRAMS THE SHELL SPAWNS, BY PATH AND NOT BY NAME.
     #
@@ -479,6 +494,28 @@ let
     RONOCTUA_BUFFER_BRAIN = "${bufferBrain}/lib/ronoctua_buffer_brain.wasm";
   };
 
+  # EVERYTHING THE WRAPPER SETS, and not only the components.
+  #
+  # The eight above are `.wasm`; this adds what is read at run time for the same
+  # reason and is not one — the coverage faces. Keeping the two apart is not
+  # tidiness: `buffer-components-are-wired` asserts every name in
+  # `bufferComponents` ends in `.wasm`, which is exactly the guard that catches
+  # a component pointed at the wrong kind of thing, and a font directory in
+  # there would have had to weaken it.
+  atRunTime = bufferComponents // {
+    # THE FALLBACK FACES. Absent, the renderer keeps its four embedded ones and
+    # says how many it has (`Text::coverage`) — which is what the installer and
+    # the rescue console run with, and they draw two Latin languages.
+    RONOCTUA_COVERAGE_FONTS = "${coverageFonts}";
+    # THE ZONE FILES, for the glance's other places.
+    #
+    # `tzdata` was already here as a BUILD input (`RONOCTUA_TZ_TAB`, the
+    # installer's list of zones); this is the first thing that needs the
+    # DIRECTORY at run time. `/etc/localtime` answers for the machine's own
+    # zone and the glance asks about several.
+    RONOCTUA_ZONEINFO = "${tzdata}/share/zoneinfo";
+  };
+
   # The dependencies, compiled once.
   #
   # `buildBase` and NOT `commonArgs`: see the comment on the split. Editing our
@@ -529,7 +566,7 @@ rec {
   # THE ONE TRUTH about where the components are. The wrapper below reads it;
   # so do the devshell and the nested loop, which run a binary `cargo` built and
   # that therefore has no wrapper. Three readers, one table.
-  inherit bufferComponents;
+  inherit bufferComponents atRunTime;
   # AND THE WHOLE TABLE OF WHAT THE BUILD BAKES, for the same readers and one
   # sharper reason.
   #
@@ -601,7 +638,7 @@ rec {
     postBuild = ''
       wrapProgram $out/bin/ronoctua-shell --inherit-argv0 ${
         lib.concatStringsSep " " (
-          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") bufferComponents
+          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") atRunTime
         )
       }
     '';
@@ -640,7 +677,7 @@ rec {
     postBuild = ''
       wrapProgram $out/bin/ronoctua-shell --inherit-argv0 ${
         lib.concatStringsSep " " (
-          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") bufferComponents
+          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") atRunTime
         )
       }
     '';

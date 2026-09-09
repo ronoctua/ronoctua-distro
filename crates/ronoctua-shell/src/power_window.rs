@@ -78,7 +78,7 @@ pub fn host_it() -> Result<()> {
 
     let surface_of = compositor.create_surface(&qh);
     let window = xdg.create_window(surface_of, WindowDecorations::RequestServer, &qh);
-    let texts = std::rc::Rc::new(ronoctua_i18n::Texts::from_env());
+    let texts = std::rc::Rc::new(crate::language::texts());
     window.set_title(format!("*{}*", texts.t(ronoctua_i18n::key::POWER_TITLE)));
     window.set_app_id(APP_ID);
     window.commit();
@@ -99,6 +99,22 @@ pub fn host_it() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
+    // THE LANGUAGE'S FILE, watched for the theme's reason and by the theme's
+    // means: a language chosen in the footer has to reach this window
+    // without it being reopened. A door that adopted it only at its next
+    // start is the incomplete preview the owner read off the screen when
+    // the theme did exactly that.
+    let (language_sender, language_changed) = channel::channel::<()>();
+    let _language_watch = crate::language::watch(move || language_sender.send(()).is_ok());
+    handle
+        .insert_source(language_changed, |event, (), state: &mut PowerWindow| {
+            if let channel::Event::Msg(()) = event {
+                state.texts = std::rc::Rc::new(crate::language::texts());
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the language channel: {e}"))?;
 
     // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
     // means. A size chosen anywhere moves this window without it being

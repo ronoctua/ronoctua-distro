@@ -51,6 +51,22 @@ pub enum Content {
     /// ~2 MB in the file. What decodes is what is going to draw, and only the focused
     /// item.
     Image(Vec<u8>),
+    /// Something was copied, and nothing here can read it.
+    ///
+    /// # Why it is kept at all
+    ///
+    /// Because it happened. A selection that claims to be text in an encoding
+    /// nobody declared used to be dropped where it was read, and a dropped
+    /// copy is indistinguishable on screen from a copy that never occurred —
+    /// the owner presses the key, the list does not change, and there is
+    /// nothing to look at. Keeping it makes the list able to say what arrived
+    /// and why it is not there, which is the same rule the preview panel
+    /// follows: a refusal is a VALUE, not an absence.
+    ///
+    /// It holds no bytes. Whatever they were, they cannot be shown, cannot be
+    /// pasted back and cannot be searched — carrying them would be a megabyte
+    /// per entry in exchange for nothing.
+    Unreadable(crate::Undecodable),
 }
 
 impl Content {
@@ -59,7 +75,16 @@ impl Content {
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::Text(t) => Some(t),
-            Self::Image(_) => None,
+            Self::Image(_) | Self::Unreadable(_) => None,
+        }
+    }
+
+    /// Why this could not be read, when that is what it is.
+    #[must_use]
+    pub const fn unreadable(&self) -> Option<&crate::Undecodable> {
+        match self {
+            Self::Unreadable(no) => Some(no),
+            Self::Text(_) | Self::Image(_) => None,
         }
     }
 
@@ -69,6 +94,18 @@ impl Content {
         match self {
             Self::Text(t) => t.as_bytes(),
             Self::Image(b) => b,
+            // WHAT ARRIVED, not what is held: the size is the one fact about
+            // the payload that survived, and the screen has a column for it.
+            Self::Unreadable(_) => &[],
+        }
+    }
+
+    /// How many bytes arrived, whether or not any of them could be kept.
+    #[must_use]
+    pub fn arrived(&self) -> usize {
+        match self {
+            Self::Unreadable(no) => no.bytes,
+            _ => self.bytes().len(),
         }
     }
 
@@ -126,8 +163,14 @@ impl Entry {
     pub fn image(&self) -> Option<&[u8]> {
         match &self.content {
             Content::Image(b) => Some(b),
-            Content::Text(_) => None,
+            Content::Text(_) | Content::Unreadable(_) => None,
         }
+    }
+
+    /// Why this entry could not be read, when that is what it is.
+    #[must_use]
+    pub const fn unreadable(&self) -> Option<&crate::Undecodable> {
+        self.content.unreadable()
     }
 
     /// Is this offer from a password manager?

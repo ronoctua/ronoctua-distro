@@ -108,6 +108,16 @@ fn main() -> Result<()> {
     if n != FACES {
         bail!("the database has {n} faces and should have {FACES}");
     }
+
+    // THE COVERAGE FACES, exactly as `Text::new` loads them. Without them the
+    // four embedded ones stand alone and every check below that names a script
+    // is skipped — which is the installer's situation, and is reported rather
+    // than passed over.
+    let coverage = std::env::var_os("RONOCTUA_COVERAGE_FONTS");
+    if let Some(dir) = coverage.as_ref() {
+        db.load_fonts_dir(dir);
+        println!("coverage: {} faces from {dir:?}", db.faces().count() - n);
+    }
     let families: Vec<String> = db
         .faces()
         .map(|f| {
@@ -118,7 +128,14 @@ fn main() -> Result<()> {
         .collect();
     println!("faces: {families:?}");
 
-    let mut fs = FontSystem::new_with_locale_and_db("en-GB".to_owned(), db);
+    // OUR fallback, not the platform's — the whole reason `chain.rs` exists.
+    // With upstream's, every CJK question below would be answered by the
+    // PROPORTIONAL face and the advances would not fit the cell grid.
+    let mut fs = FontSystem::new_with_locale_and_db_and_fallback(
+        ronoctua_render::chain::DEFAULT_LOCALE.to_owned(),
+        db,
+        ronoctua_render::chain::Chain,
+    );
 
     // 1. PLAIN TEXT goes to the primary face.
     let (family, _) = who_draws(&mut fs, "A")?;
@@ -267,6 +284,100 @@ fn main() -> Result<()> {
         "OK: the widest icon advances {:.2} px in a cell of {cell:.2} px",
         worst.0
     );
+
+    // 8. EVERY SCRIPT THE CHAIN PROMISES IS ACTUALLY DRAWN.
+    //
+    // This is the half that makes the chain a promise instead of a table. A
+    // family can be named in `nix/fontconfig.nix`, collected into the coverage
+    // derivation, loaded into the database — and still not be REACHED, because
+    // the fallback is resolved per script and a script spelt wrongly falls into
+    // the empty arm. The symptom is tofu, which reads as a broken font.
+    //
+    // It ran once with Hangul missing from the table and everything else right.
+    if coverage.is_some() {
+        let mut drawn = 0usize;
+        for (family, probe) in ronoctua_render::chain::PROMISED {
+            let (got, glyph) = who_draws(&mut fs, &probe.to_string())?;
+            if glyph == 0 {
+                bail!(
+                    "U+{:04X} fell through to `.notdef`. The chain promises \
+                     `{family}` draws it, and on screen it is a little box.",
+                    *probe as u32
+                );
+            }
+            if got != *family {
+                bail!(
+                    "U+{:04X} was drawn by `{got}`, and the chain promises \
+                     `{family}`. Some other face answers for it first, which is \
+                     the Lucide defect in a new place: it draws, and it is wrong.",
+                    *probe as u32
+                );
+            }
+            drawn += 1;
+        }
+
+        // AND THE CJK, which is the one the whole monospaced cut is for. Not in
+        // `PROMISED` because its family depends on the locale, so it is the one
+        // question that has to be asked of a locale rather than of a table.
+        for (locale, want, sample) in [
+            ("ja", "Noto Sans Mono CJK JP", '\u{6F22}'),
+            ("ko", "Noto Sans Mono CJK KR", '\u{D55C}'),
+            ("en-GB", "Noto Sans Mono CJK SC", '\u{6F22}'),
+        ] {
+            fs = FontSystem::new_with_locale_and_db_and_fallback(
+                locale.to_owned(),
+                fs.db().clone(),
+                ronoctua_render::chain::Chain,
+            );
+            let (got, glyph) = who_draws(&mut fs, &sample.to_string())?;
+            if glyph == 0 {
+                bail!(
+                    "U+{:04X} is tofu with the interface in {locale}",
+                    sample as u32
+                );
+            }
+            if got != want {
+                bail!(
+                    "with the interface in {locale}, U+{:04X} was drawn by \
+                     `{got}` and should be `{want}`. A reader of that language \
+                     sees the wrong glyph shapes, and nothing looks broken.",
+                    sample as u32
+                );
+            }
+        }
+        println!("OK: all {drawn} promised scripts draw, and the Han follows the locale");
+
+        // 9. AND A WIDE CHARACTER REALLY IS TWO CELLS OF INK.
+        //
+        // `ronoctua_protocol::cells` says an ideograph is two, and the whole
+        // footer places columns on that. If the FACE disagrees the arithmetic
+        // is still self-consistent and the screen is not: too narrow leaves a
+        // gap, too wide draws over the column next door. Only the second is
+        // dangerous, so the tolerance is asymmetric and says so.
+        let cell = tokens::metrics::cell_width(tokens::font::SIZE_BASE);
+        for (name, s, cells) in [
+            ("ideograph", "\u{6F22}", 2.0),
+            ("hiragana", "\u{3042}", 2.0),
+            ("hangul", "\u{D55C}", 2.0),
+            ("latin in the CJK face", "\u{3000}", 2.0),
+        ] {
+            let w = advance(&mut fs, s)?;
+            let in_cells = w / cell;
+            println!("     {name}: {w:.2} px = {in_cells:.3} cells (claimed {cells:.0})");
+            if in_cells > cells + 0.02 {
+                bail!(
+                    "`{name}` advances {in_cells:.3} cells and is budgeted {cells:.0}. \
+                     It draws over the column next door, which is the one \
+                     direction that costs something."
+                );
+            }
+        }
+    } else {
+        println!(
+            "SKIPPED: RONOCTUA_COVERAGE_FONTS is not set, so only the four \
+             embedded faces were examined"
+        );
+    }
 
     println!(
         "OK: {FACES} faces — text on Iosevka, emoji on the emoji one, icon on Lucide's, \

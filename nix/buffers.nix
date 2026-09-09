@@ -27,6 +27,9 @@
   designCrate ? ../crates/ronoctua-design,
   syntaxCrate ? ../crates/ronoctua-syntax,
   syntaxRs,
+  # The cell-width table, for `ronoctua-protocol`'s build script — same reason
+  # as the syntax one just above: it runs on the host and refuses to generate.
+  widthRs,
 }:
 
 let
@@ -173,6 +176,12 @@ let
         # the finished table has to be named here, exactly as `nix/rust.nix`
         # names it for the host's own build.
         RONOCTUA_SYNTAX_RS = "${syntaxRs}/syntax.rs";
+
+        # THE CELL-WIDTH TABLE, for `ronoctua-protocol`'s build script. A buffer
+        # reserves cells with `budget::wide`, which is `cells` in that crate,
+        # and the host places with the same function — so the table has to be
+        # here or the two sides would measure an ideograph differently.
+        RONOCTUA_WIDTH_RS = "${widthRs}/width.rs";
 
         buildPhase = ''
           runHook preBuild

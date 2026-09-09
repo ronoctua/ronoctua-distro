@@ -518,17 +518,115 @@ pub fn when_text(
     say_zone: bool,
     texts: &ronoctua_i18n::Texts,
 ) -> String {
-    let c = ronoctua_files::when::civil(secs, zone);
-    let args = c.args();
-    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // THE SHAPE IS THE PERSON'S, and it reaches here the way the theme
+    // reaches a colour: through the process's current value, not through five
+    // signatures. See `locale::prefs::current`.
+    let choice = crate::locale::prefs::current();
+    let date = date_text(secs, zone, choice.order, texts);
+    let time = clock_text(secs, zone, choice.clock, texts);
     texts.t_with(
         if say_zone && zone.is_utc() {
             ronoctua_i18n::key::FILES_WHEN_UTC
         } else {
             ronoctua_i18n::key::FILES_WHEN
         },
+        &[("date", date.as_str()), ("time", time.as_str())],
+    )
+}
+
+/// A clock, in the form the person chose.
+///
+/// # Why the twelve-hour half is not a `.ftl` format string
+///
+/// Because `am`/`pm` is a WORD and the number in front of it is arithmetic:
+/// `14` becomes `2`, and `0` becomes `12` rather than `0`. A key with
+/// `{ $hh }:{ $mm } { $half }` would put that arithmetic in whoever calls it,
+/// twice, and get the midnight case wrong once. Here the two halves are named
+/// keys and the hour is computed in one place.
+#[must_use]
+pub fn clock_text(
+    secs: i64,
+    zone: &ronoctua_files::when::Zone,
+    clock: crate::locale::Clock,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    let c = ronoctua_files::when::civil(secs, zone);
+    match clock {
+        crate::locale::Clock::TwentyFour => texts.t_with(
+            ronoctua_i18n::key::LOCALE_CLOCK_SAMPLE_24,
+            &[
+                ("hh", &format!("{:02}", c.hour)),
+                ("mm", &format!("{:02}", c.minute)),
+            ],
+        ),
+        crate::locale::Clock::Twelve => {
+            // NOON AND MIDNIGHT ARE THE CASES THAT GO WRONG. `0` is twelve at
+            // night and `12` is twelve at noon; a bare `hour % 12` gives zero
+            // for both.
+            let hour = match c.hour % 12 {
+                0 => 12,
+                h => h,
+            };
+            let half = texts.t(if c.hour < 12 {
+                ronoctua_i18n::key::LOCALE_CLOCK_AM
+            } else {
+                ronoctua_i18n::key::LOCALE_CLOCK_PM
+            });
+            texts.t_with(
+                ronoctua_i18n::key::LOCALE_CLOCK_SAMPLE_12,
+                &[
+                    ("hh", &hour.to_string()),
+                    ("mm", &format!("{:02}", c.minute)),
+                    ("half", &half),
+                ],
+            )
+        }
+    }
+}
+
+/// A date, in the order the person chose.
+///
+/// The ORDER is the key's, as it always was — a language may write its own —
+/// and which of the three keys is asked for is the preference. The padding
+/// stays in Rust for the reason `Civil::args` gives: a translation cannot pad,
+/// and a column that does not line up cannot be scanned.
+#[must_use]
+pub fn date_text(
+    secs: i64,
+    zone: &ronoctua_files::when::Zone,
+    order: crate::locale::Order,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    let c = ronoctua_files::when::civil(secs, zone);
+    let args = c.args();
+    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    texts.t_with(
+        match order {
+            crate::locale::Order::BigEndian => ronoctua_i18n::key::LOCALE_DATE_YMD,
+            crate::locale::Order::DayFirst => ronoctua_i18n::key::LOCALE_DATE_DMY,
+            crate::locale::Order::MonthFirst => ronoctua_i18n::key::LOCALE_DATE_MDY,
+        },
         &args,
     )
+}
+
+/// The name of the zone `/etc/localtime` points at — `Europe/London`.
+///
+/// # Why the symlink and not the file
+///
+/// Because a TZif file does not carry its own name: it is a table of
+/// transitions, and the name is the PATH it was installed at. On NixOS
+/// `/etc/localtime` is a symlink into the tzdata package, so the name is the
+/// tail of the target after `zoneinfo/`. Where it is a copy rather than a
+/// link — some containers do that — there is no name to be had, and saying so
+/// is better than inventing one from the offset, which would call every
+/// British winter `UTC`.
+#[must_use]
+pub fn zone_name() -> Option<String> {
+    let target = std::fs::read_link("/etc/localtime").ok()?;
+    let text = target.to_str()?;
+    text.split_once("zoneinfo/")
+        .map(|(_, name)| name.to_owned())
 }
 
 /// How a key is DRAWN, as against how it is written down.

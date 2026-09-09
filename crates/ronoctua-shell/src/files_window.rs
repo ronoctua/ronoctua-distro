@@ -198,6 +198,22 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
 
+    // THE LANGUAGE'S FILE, watched for the theme's reason and by the theme's
+    // means: a language chosen in the footer has to reach this window
+    // without it being reopened. A door that adopted it only at its next
+    // start is the incomplete preview the owner read off the screen when
+    // the theme did exactly that.
+    let (language_sender, language_changed) = channel::channel::<()>();
+    let _language_watch = crate::language::watch(move || language_sender.send(()).is_ok());
+    handle
+        .insert_source(language_changed, |event, (), state: &mut FilesWindow| {
+            if let channel::Event::Msg(()) = event {
+                state.texts = std::rc::Rc::new(crate::language::texts());
+                state.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the language channel: {e}"))?;
+
     // AND THE SIZE OF THE TEXT, watched for the same reason and by the same
     // means. A size chosen anywhere moves this window without it being
     // reopened — and without it this door would sit beside the footer at a
@@ -248,7 +264,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
 
-    let texts = std::rc::Rc::new(ronoctua_i18n::Texts::from_env());
+    let texts = std::rc::Rc::new(crate::language::texts());
     // The catalogue is swept HERE and not inherited: this is a process of its
     // own, and `open with` needs to know who declares a type. 128 entries in
     // 68 ms, measured — once, at startup, like the launcher's.

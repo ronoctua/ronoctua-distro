@@ -618,6 +618,7 @@ echo-qr-large = O conteúdo é grande demais para um QR code
 echo-clipcascade-missing = O ClipCascade ainda não está integrado
 echo-copy-only-text = Por ora só dá para recopiar texto
 clipboard-image = Imagem
+clipboard-unreadable = Copiado, e ilegível aqui: { $kind }
 
 # --- The application launcher (LEADER a) -----------------------------------
 cmd-apps-open = Abrir aplicativo
@@ -1155,8 +1156,8 @@ files-size-tib = { $whole },{ $tenth } TiB
 
 # A data em ordem ISO nos dois idiomas: ela ordena sozinha e não confunde
 # dia com mês, que é o único jeito de uma coluna de datas não mentir.
-files-when = { $y }-{ $m }-{ $d } { $hh }:{ $mm }
-files-when-utc = { $y }-{ $m }-{ $d } { $hh }:{ $mm } UTC
+files-when = { $date } { $time }
+files-when-utc = { $date } { $time } UTC
 
 files-order-name = nome
 files-order-size = tamanho
@@ -2883,3 +2884,96 @@ keyboard-choice-alt = Alt
 keyboard-choice-backspace = Backspace
 keyboard-choice-capslock = Caps Lock
 keyboard-choice-noop = nada
+
+# ---------------------------------------------------------------------------
+# LEADER s l — language, clock, date and what the system decides.
+# ---------------------------------------------------------------------------
+language-en-gb = English
+language-pt-br = Português
+locale-heading-language = Interface
+locale-speaking = em uso
+locale-from-file = Você escolheu este idioma; ele fica no language.json.
+locale-from-system = Este é o idioma da máquina, vindo da configuração do sistema.
+locale-from-default = Ninguém escolheu; este é o primeiro idioma declarado.
+locale-heading-time = Relógio e data
+locale-clock-24h = Relógio de 24 horas
+locale-clock-12h = Relógio de 12 horas
+locale-clock-sample-24 = { $hh }:{ $mm }
+locale-clock-sample-12 = { $hh }:{ $mm } { $half }
+locale-clock-am = da manhã
+locale-clock-pm = da tarde
+locale-order-ymd = Ano primeiro
+locale-order-dmy = Dia primeiro
+locale-order-mdy = Mês primeiro
+locale-date-ymd = { $y }-{ $m }-{ $d }
+locale-date-dmy = { $d }/{ $m }/{ $y }
+locale-date-mdy = { $m }/{ $d }/{ $y }
+locale-heading-machine = Decidido pelo sistema
+locale-zone = Fuso horário
+locale-zone-unknown = desconhecido
+locale-zone-is-declared = O fuso é declarado na configuração do sistema; mudá-lo é um rebuild.
+locale-decimal = Separador decimal
+locale-decimal-is-the-languages = O separador é do idioma, e acompanha ele.
+locale-measurement = Medidas
+locale-metric = Métrico
+locale-not-written = A escolha não pôde ser gravada no disco.
+locale-measurement-is-declared = Métrico seja qual for o idioma, e isso é decisão, não padrão.
+cmd-locale-open = Idioma e região, no rodapé
+cmd-locale-window = Idioma e região, em janela
+cmd-locale-up = Linha anterior
+cmd-locale-down = Próxima linha
+cmd-locale-enter = Escolher
+group-locale = +idioma/região
+
+# ---------------------------------------------------------------------------
+# LEADER d — the glance: what time it is somewhere, and the weather and money.
+# ---------------------------------------------------------------------------
+world-place-europe-london = Londres
+world-place-america-sao-paulo = Brasília
+world-temperature = { $degrees } °C
+world-rate = 1 { $from } = { $much } { $to }
+cmd-world-glance = Um relance: a hora, o tempo e o câmbio
+locale-heading-places = Os lugares do relance
+locale-no-places = Nenhum lugar é observado; o { $keys } não mostraria nada.
+locale-shows-clock = Hora
+locale-shows-date = Data
+locale-shows-weather = Tempo
+locale-shows-rate = Câmbio
+locale-on = aparece
+locale-off = escondido
+locale-heading-sources = Quem é perguntado
+locale-asked = perguntado
+locale-not-asked = não perguntado
+locale-sources-are-asked = Cada busca conta a esse host o endereço desta máquina e quais lugares ela observa.
+locale-title = Idioma e região
+locale-up = cima
+locale-down = baixo
+locale-enter = escolher
+locale-language = Idioma
+locale-clock = Relógio
+locale-date = Data
+locale-zone-is-yours = Você escolheu este fuso; o da máquina fica na configuração do sistema.
+locale-zone-is-the-machines = O fuso da máquina. Escolher um aqui muda o que esta interface mostra, não o que o sistema roda.
+locale-heading-numbers = Números e unidades
+locale-decimal-language = { $mark } — o do idioma
+locale-decimal-point = { $mark } — ponto, seja qual for o idioma
+locale-decimal-comma = { $mark } — vírgula, seja qual for o idioma
+locale-units-metric = Métrico — °C
+locale-units-imperial = Imperial — °F
+locale-drop-place = Remover este lugar
+locale-add-place = Acrescentar um lugar
+locale-add-place-how = um fuso, como Europe/Lisbon
+locale-ask-zone = Fuso do relógio desta interface:
+locale-ask-place = Fuso do lugar a acrescentar:
+locale-ask-where = Latitude e longitude, dois números:
+locale-no-such-zone = Não existe fuso com esse nome.
+locale-not-a-coordinate = Isso não é uma latitude e uma longitude.
+locale-in-the-footer = Digitar é no rodapé — { $keys } abre isto lá.
+cmd-locale-less = Valor anterior
+cmd-locale-more = Próximo valor
+cmd-locale-zone = Escolher o fuso em que esta interface mostra as horas
+cmd-locale-place = Acrescentar um lugar ao relance
+cmd-locale-where = Dizer onde fica um lugar
+locale-less = anterior
+locale-more = próximo
+world-temperature-f = { $degrees } °F

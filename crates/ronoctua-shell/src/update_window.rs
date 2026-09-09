@@ -832,7 +832,7 @@ pub fn host_it() -> Result<()> {
 
     let compositor = CompositorState::bind(&globals, &qh).context("no wl_compositor")?;
     let xdg = XdgShell::bind(&globals, &qh).context("the compositor does not expose xdg_shell")?;
-    let texts = ronoctua_i18n::Texts::from_env();
+    let texts = crate::language::texts();
 
     let surface_of = compositor.create_surface(&qh);
     // `RequestServer`: decoration belongs to the COMPOSITOR (invariant 4).

@@ -581,6 +581,72 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   **`View::fresh_at` não lia o cartão** — abrir pela marca da modeline, que é o caminho mais
   curto, dava ficha sem perfil de áudio; a lista dá uma linha por FRASE, e o encanamento (`1800`,
   `1801`) não é desenhado.
+- **`LEADER d` é o RELANCE** (`assets/world.nix` → `ronoctua-world` → `shell/world.rs`): uma linha
+  acima da modeline que some sozinha, com hora, data, clima e câmbio dos lugares declarados.
+  **Ela fica ENTRE a faixa e a modeline** — acima da modeline pela razão da faixa (a modeline é a
+  única linha que diz onde você está), e abaixo da faixa porque notificação chega na hora dela e
+  não pode empurrar uma linha que alguém está lendo. Uma linha SÓ, nunca função da largura, e
+  quando não cabe o `layout::resolve` da modeline DERRUBA lugares inteiros: meia temperatura é
+  pior que nenhuma, e o principal encolhe em vez de sair. **Não conta no teto da expansão**, como
+  a faixa. Relógio e data custam ZERO rede (`RONOCTUA_ZONEINFO` no embrulho, o leitor de TZif já
+  existia); clima e câmbio são **a primeira TLS do workspace** — rustls sobre `std::net`, sem
+  tokio e sem hyper, provedor `ring` (o padrão pede cmake e Go), e **raízes do SISTEMA**
+  (`/etc/ssl/certs`), nunca `webpki-roots`, que envelhece dentro do binário. Uma thread busca e
+  escreve `world.json` em `$XDG_STATE_HOME` — **o arquivo é o broadcast**, e quem desenha lê o
+  arquivo: quem desenha recebe microssegundos ou nada. **O que não chegou não é desenhado** e não
+  reserva espaço, senão a linha pularia de lado quando a resposta viesse. Sem lugar pedindo rede,
+  **nenhuma thread sobe e nenhum socket abre**. O prazo é `Instant` (monotônico). Medido ao vivo:
+  Londres 15,3 °C e 1 GBP = 6,9233 BRL; Londres 23:05 contra Brasília 19:05.
+  **E os lugares são do DONO**, não da build: `assets/world.nix` é o chão e
+  `$XDG_CONFIG_HOME/ronoctua/world.json` vence INTEIRO — lista mesclada entrada a entrada com a
+  de outra pessoa é lista que ninguém prevê. O `chosen` distingue "lista vazia minha" de "nunca
+  escolhi", senão desligar o último lugar traria os dois da distro de volta na próxima partida,
+  para sempre. O `LEADER s l` tem os quatro interruptores POR LUGAR e **nomeia os dois hosts**
+  (`api.open-meteo.com`, `api.frankfurter.dev`), cada um com o seu — desligar uma fonte é decisão
+  sobre uma PARTE, não sobre uma abstração, e com os dois desligados nenhuma thread sobe.
+  Lugar que não mostra nada não é desenhado e **não é recusado**: recusar a quarta tecla de
+  quatro é uma tela que briga. Lugar do dono não tem chave de texto e desenha a ZONA —
+  `[world-place-…]` leria como defeito, e pedir tradução de uma cidade que a pessoa acabou de
+  acrescentar é pedir à pessoa errada.
+  **Lugar se ACRESCENTA e se REMOVE** (`a` e a linha `Remove`), e o que se digita é o FUSO, no
+  minibuffer do rodapé — a janela DIZ isso, como a rede já faz com senha e caminho. Um fuso é
+  aceito se existir ARQUIVO dele (`a_real_zone`, que também recusa `..` e caminho absoluto): fuso
+  que se lê é fuso que se mostra. Lugar novo nasce com o relógio; clima precisa de COORDENADA e
+  por isso ligá-lo PERGUNTA onde é, em vez de virar um interruptor que não faz nada — não há
+  geocodificador aqui, e um seria um terceiro serviço de rede.
+- **A BARRA DO RELANCE TEM A PIZZA DA NOTIFICAÇÃO**, do mesmíssimo `band::countdown_glyph`: dois
+  contadores num rodapé não podem vir a parecer diferentes. **O ponteiro em qualquer lugar dela
+  para o relógio** e a pizza vira PAUSA (`world::Showing`, que é o `Queue::hold`/`release` de
+  novo: soltar empurra o `since`, senão a linha sumiria no instante em que a mão saísse; e o vão
+  conta de `max(hold, since)`). **O FUNDO ALTERNA por lugar** — o primeiro fica com o da faixa,
+  o segundo dois degraus abaixo (`glance.ground` e `.ground-alternate`, com portão de ΔE): com
+  vários lugares lado a lado, um separador deixa o olho com uma fileira de palavras e nada que as
+  agrupe, e mudar o chão é o único recurso que o invariante 15 deixa.
+- **`LEADER s l` é IDIOMA E REGIÃO** (`locale.rs`, uma `View` e DUAS portas — `s l l` no rodapé,
+  `s l w` em janela): cinco seções, e a
+  divisão delas É o desenho. **O idioma é NOSSO** e troca AO VIVO — `language.json`, na forma de
+  três fontes do `ronoctua-power/prefs` (arquivo > ambiente > chão), difundido como o tema:
+  `Notice::on_file` com `Pace::AtOnce` (a segunda assim), e as dez portas trocam o `Rc<Texts>` e
+  repintam. `LANG` continua sendo a resposta da MÁQUINA e leva um rebuild (inv. 6), e é por isso
+  que o arquivo existe: escolher entre duas traduções não é decisão do tamanho de um rebuild.
+  **O relógio (12/24 h) e a ORDEM da data também são nossos** (`locale.json`), e alcançam TODA
+  data do sistema porque `chrome::when_text` os lê de um valor do PROCESSO
+  (`locale::prefs::current`) — a mesma forma do tema, e não um parâmetro em cinco assinaturas.
+  A chave `files-when` virou `{ $date } { $time }`. **O fuso, as medidas e o separador decimal
+  a vista só DIZ**, cada um apontando quem decide: uma tela que oferecesse os quatro e honrasse
+  dois seria pior que uma que oferece dois. Trocar de idioma também move a locale do RENDERER
+  (`Text::set_locale`) — é ela que decide, entre as quatro faces Han unificadas, se o ideograma
+  sai japonês ou chinês.
+- **UMA LINHA POR AJUSTE, e o valor é um ANEL** — `S-<setas>` o giram, `RET` o gira para a frente
+  (porque `RET` é o que um CLIQUE vira, e uma linha só alcançável por seta com shift seria linha
+  que o mouse não usa). Era uma linha por VALOR — `24-hour` acima de `12-hour`, três para a data,
+  uma por idioma —, e o dono leu na tela e disse o que é: **aquilo não são vários ajustes, é um
+  ajuste e suas alternativas**. **E o cursor NASCE numa linha que age**: ele nascia em zero, que é
+  o primeiro TÍTULO — toda seção abre com um —, então nada ficava aceso e o `RET` caía em
+  `Target::Nothing`. De fora isso é uma tela onde tecla nenhuma faz nada, que foi exatamente o
+  relato. **O fuso, o separador decimal e as medidas deixaram de ser FATOS**: o fuso é o que ESTA
+  interface lê um carimbo em (o `time.timeZone` continua sendo do sistema e a linha diz isso), o
+  separador pode vencer o idioma, e a unidade alcança o °C/°F do relance.
 - **`LEADER s k` são os TECLADOS** (`ronoctua-keyboards` + `buffers/keyboard`), e é o único ajuste
   POR DISPOSITIVO que existe: o niri tem **um** `input { keyboard { … } }` para todos e não expõe
   dispositivo nenhum por IPC, então layout, acentos e repetição são globais **por construção** — a
@@ -725,7 +791,12 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   **Uma derivação referencia o que os BYTES dela citam**: extraia o binário (`rust.installer`,
   `rust.rescue`, `rust.filesRoot`, `rust.transfers`) — o workspace inteiro punha Zig+clang+LLVM no ISO.
   **Interruptor que não interrompe**: `notoExtra` e `icons.superpack` desligavam e o pacote entrava
-  por outra porta — meça com `nix why-depends`, não confie no `mkIf`. **`option_env!` com caminho de
+  por outra porta — meça com `nix why-depends`, não confie no `mkIf`. **E o número que justifica
+  um interruptor envelhece**: o `notoExtra` prometia poupar "mais de 1 GB" e poupava **49,1 MB**
+  (medido, `nix path-info -S`) desde que o `noto-fonts-extra` foi absorvido no `noto-fonts` na
+  26.05. A opção morreu em 2026-09-08 e o `noto-fonts` é incondicional: um perfil ficava sem
+  árabe, hebraico, devanágari e tailandês por cinquenta megabytes que lhe disseram serem mil.
+  Meça de novo antes de confiar num tamanho escrito num comentário. **`option_env!` com caminho de
   store é referência, e quem COMPILA a paga**: ícones e os buffers vêm do AMBIENTE, senão editar
   buffer reconstrói o workspace; ela sobe uma derivação (`rust.shell`) e nunca some.
 - **`Color` é PAPEL, não valor**: `u16` que resolve em `themes::TABLE[tema][papel]` ao desenhar; `==` compara papel; `to_rgba8()` não é `const`. Tudo que uma CRIANÇA pinta com o valor (waveform do ffmpeg, `currentColor` de SVG) leva o tema na CHAVE do cache, senão a textura velha fica no GPU. Só UM teste chama `theme::set` (no tokens) — os testes correm em paralelo. Consumidor Nix lê o STORE (`${themed}/…`), nunca `colors.nix`: lá não há valor.
@@ -752,6 +823,39 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
 - **`LD_LIBRARY_PATH` vence o `DT_RUNPATH`**: pôr `/usr/lib64` lá para achar UMA lib traz a `libc` do host junto, e ela só combina com o `ld.so` da MESMA build (`undefined symbol ... GLIBC_PRIVATE`). O driver vem do Nix (`mesa`); do host, só para NVIDIA. **ICD Vulkan ausente custa 650 ms mudo** — filtre por vendor. **`memory_init_cow`** é obrigatório (p99 95× pior); **`Queue::present`** precisa do frame, que o `Drop` DESCARTA sem erro.
 - **O backend DRM do niri rejeita EGL por software**: numa VM sem GPU sobe com **zero output**, e layer-shell sem output nunca é criada. Use **winit** com `Xvfb` + `LD_LIBRARY_PATH` das libs X. **`RUST_LOG` nosso filtra o niri**, que sobe MUDO — ache o display por `niri.<display>.<pid>.sock`.
 - **Quem tem o codepoint primeiro GANHA** — a face pedida por nome vence o fallback. Custou 634 da PUA (Lucide → `U+F2000`) e 75 emoji da Iosevka (`Emoji_Presentation`); `FE0F` vira dois glifos.
+- **A CADEIA DE FALLBACK É DECLARADA E TEM UM DONO SÓ**: `nix/fontconfig.nix`. De lá saem TRÊS
+  coisas — o `.conf` do fontconfig, o `nix/coverage-fonts.nix` (família → arquivo, e **recusa a
+  build** se uma família não tiver face) e o `nix/chain.nix`, que gera o `impl
+  cosmic_text::Fallback` do renderer. Por um ano a segunda cadeia foi só um comentário: o
+  `chainJson` era gerado e lido por nada, o banco eram QUATRO faces embutidas, e todo japonês,
+  árabe, hebraico, devanágari e coreano da tela era **tofu** — mudo até no log, porque o aviso do
+  cosmic-text cai em `log::debug` e nada aqui liga o `log` ao `tracing`. O motor nunca faltou: o
+  cosmic-text 0.19 traz **harfrust**, `unicode-bidi` e `unicode-script`, e o `Shaping::Advanced`
+  já era pedido. Faltavam FACES. Pedimos a CJK **monoespaçada** (a tabela do upstream pede a
+  proporcional, que uma grade não coloca), e as 44 faces viajam no EMBRULHO
+  (`RONOCTUA_COVERAGE_FONTS`, 54 MB) — nunca em `generated`, que reconstruiria os 33 crates.
+  Ausência não é erro: instalador e resgate seguem com as quatro, e `Text::coverage` diz quantas
+  subiram. **A face de emoji é a PRIMEIRA da cauda comum** — atrás do `Noto Sans Symbols 2` ela
+  perdia `U+1F550`, e o relógio voltava a sair monocromático. **Sonda que a face primária desenha
+  não prova nada** (a primária é pedida por NOME e ganha de toda cadeia): o gerador recusa uma, e
+  a do armênio é `U+FB13` porque a Iosevka tem 91 dos 96 codepoints armênios.
+- **A CÉLULA NÃO É UMA CONTAGEM** — `ronoctua_protocol::cells` soma `East_Asian_Width` (W/F) mais
+  `Emoji_Presentation`, de tabela gerada dos arquivos do Unicode (`nix/width.nix`, 123 faixas).
+  `日本語` são três grafemas e SEIS células. `A` (ambíguo) fica ESTREITO: é cirílico, grego e o
+  box-drawing de que a interface é feita. `cells_of` continua grafemas — é por onde se CORTA — e
+  por isso `elide_end`, `elide_middle`, `window` e `wrap` **orçam em células e cortam em
+  grafemas** (`prefix_of`/`suffix_of`); `take(max)` de grafemas contra orçamento de células
+  transborda para cima da coluna vizinha. `ronoctua_render::layout::width` era uma SEGUNDA cópia
+  e virou a função do protocolo. Medido: o ideograma anda **1,667 célula** das 2 reservadas (o
+  hangul 1,533) — sobra vão, nada se sobrepõe; o check recusa só acima de 2,02.
+- **O clipboard LÊ O QUE LHE OFERECEM** (`ronoctua_clipboard::decode`): UTF-16 nas duas ordens com
+  e sem BOM, a assinatura UTF-8 (que sai), e `STRING` como Latin-1, que é a ICCCM e não um
+  costume. Era `String::from_utf8` seco, e uma cópia de app Java ou Wine **sumia** — nem mojibake
+  nem erro: não entrava no histórico, e um `debug!` era o único rastro. O que ele não sabe ler
+  vira `Content::Unreadable` e uma LINHA na lista com o tipo, porque histórico vazio e tipo
+  recusado são iguais na tela. `COMPOUND_TEXT` fica de fora de propósito: é com estado e
+  sequências de escape, que sairiam como letras. E o `Backspace` do minibuffer apaga um GRAFEMA,
+  não um `char` — a máscara de senha ao lado já contava grafemas.
 - **As fontes são asset de Release, nunca git** — 4,1 GB; o input é **`file+https://`**, senão o Nix infere tarball e descompacta no store. **O console não consome TTF**; **`/etc/nixos` e `/etc/fonts/conf.d` são read-only** (`localConf`). Genérico é `sans-serif`; ISO é `image.baseName`. Glifo **não** leva `nf-`.
 - **`systemd.oomd.enable` JÁ é `true` e não vigia nada** — arma é `ManagedOOMMemoryPressure=kill` numa slice. `session.slice` é IRMÃ da `app.slice`: vigiar só a segunda tira o desktop do conjunto por construção, e `enableRootSlice`/`enableUserSlices` desfazem isso. **`memory.min` é limitado por TODOS os ancestrais** — quatro drop-ins ou vale zero. Porcentagem o systemd resolve na MÁQUINA. **`OOMScoreAdjust` em unidade de usuário é ignorado em silêncio**: suba o app com `choom`. **`grep -r` não segue symlink**, e todo `/etc` do NixOS é symlink: `-R`.
 - **No btrfs, `nodatacow`/`compress` são do SISTEMA DE ARQUIVOS**: a 1ª montagem vence em silêncio; hibernação depende do NOCOW (`lsattr` → `C`). **PCR 15 exige UKI medida.**

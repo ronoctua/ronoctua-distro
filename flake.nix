@@ -179,6 +179,32 @@
         inherit fonts;
       };
 
+      # THE FACES THE FALLBACK CHAIN NAMES — every script the renderer promises
+      # to draw, one file per family, refusing to build if a family has none.
+      # The chain itself is declared in `nix/fontconfig.nix`, which is also
+      # where fontconfig's half comes from: one list, two consumers.
+      coverageFonts = pkgs.callPackage ./nix/coverage-fonts.nix {
+        inherit (fontconfigConf) chainJson;
+      };
+
+      # The same chain, as Rust. Generated rather than written twice — the
+      # renderer must not be able to disagree with fontconfig about which face
+      # draws a script. See nix/chain.nix.
+      # How many cells a character takes. Unicode's own property, baked; the
+      # cell arithmetic of the whole footer rests on it. See nix/width.nix.
+      widthRs = pkgs.callPackage ./nix/width.nix { };
+
+      # The glance's places (`LEADER d`). One declaration, and the build
+      # refuses a zone `zone1970.tab` does not know — see nix/world.nix.
+      worldRs = pkgs.callPackage ./nix/world.nix {
+        worldFile = ./assets/world.nix;
+      };
+
+      chainRs = pkgs.callPackage ./nix/chain.nix {
+        inherit (fontconfigConf) chainJson;
+        primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
+      };
+
       # The Lucide icon browser's database (`LEADER i l`). Here the font does not
       # DELIMIT the database, it is REWRITTEN: Lucide's source codepoints
       # collide with 634 Nerd Fonts ones in the Iosevka, and the primary face wins the
@@ -305,6 +331,7 @@
         inherit unicodedb lucidedb;
         inherit wit;
         inherit rustToolchain glyphdb;
+        inherit widthRs;
         # `ronoctua-design` names the highlighter as an OPTIONAL path
         # dependency, so cargo resolves it in every buffer's tree even where
         # the feature is off — and its build script wants the finished table.
@@ -374,6 +401,12 @@
         # it: the marks this repository draws itself, because a UI icon is a
         # glyph (invariant 10) and there was no glyph to be had.
         marksFontFile = "${marksdb.db}/NoctuaMarks.ttf";
+        inherit
+          coverageFonts
+          chainRs
+          widthRs
+          worldRs
+          ;
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
         niri = inputs.niri.packages.${system}.niri;
         src = ./.;
@@ -448,7 +481,7 @@
         # THE WHOLE TABLE THE COMPILATION GETS, and not six values copied out of
         # it: the loop compiles the binary itself, so what it does not export the
         # binary does not have. See `nix/dev.nix`'s `bakedExports`.
-        inherit (rust) bufferComponents generated;
+        inherit (rust) atRunTime generated;
         inherit fonts fontconfigConf iconSuperpack;
         inherit themed themes;
       };
@@ -693,6 +726,14 @@
         # The COMPLETE file, for `FONTCONFIG_FILE` — see nix/fontconfig.nix.
         fontconfig-full = fontconfigConf.fullConf;
         fallback-chain = fontconfigConf.chainJson;
+        # The faces that chain names, one file per family — see
+        # nix/coverage-fonts.nix. Buildable on its own so the manifest can be
+        # read without a shell in front of it.
+        coverage-fonts = coverageFonts;
+        # The same chain as Rust, so it can be read without a compiler.
+        chain-rs = chainRs;
+        width-rs = widthRs;
+        world-rs = worldRs;
 
         # Generated glyph layer: icons.json, glyphs.json, coverage.md.
         glyphdb = glyphdb.db;
@@ -1264,6 +1305,13 @@
           export VK_DRIVER_FILES=${xvfbIcd}
           export VK_ICD_FILENAMES=${xvfbIcd}
           export LIBGL_ALWAYS_SOFTWARE=1
+          # THE COVERAGE FACES, because this is the tool the working rules
+          # point at before the word "ready" — and a screenshot taken without
+          # them would show tofu where the installed system shows Japanese.
+          # It is set here and not inherited: `rust.workspace` is deliberately
+          # unwrapped (the wrapper is `rust.shell`, and it wraps the footer
+          # only), so this launcher is one of the nine that has to say it.
+          export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
           exec ${rust.workspace}/bin/ronoctua-render-png "$@"
         '';
       };
@@ -1276,7 +1324,7 @@
         inherit pkgs inputs;
         # THE WHOLE TABLE, and not values copied out of it — see the comment on
         # `env` over there.
-        inherit (rust) bufferComponents generated;
+        inherit (rust) atRunTime generated;
         inherit iconSuperpack;
       };
 

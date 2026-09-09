@@ -53,23 +53,69 @@ use alloc::vec::Vec;
 ///
 /// # What it is NOT
 ///
-/// It is a count of things, not an advance. An emoji cluster advances
-/// `1.245 em` against the cell's `0.600`, so it covers TWO cells while counting
-/// as one. Nothing here can know that — the answer is in the font, and what
-/// reads the font is the database generator, which writes `width: 2` beside the
-/// character. A buffer that draws such a datum budgets from that field
-/// (`Symbol::ink`), never from this function. The two are different questions
-/// and this crate only answers the first.
+/// It is where the text may be CUT, and it is not the width. Those were the
+/// same answer for as long as the only face was the Iosevka — monospaced at
+/// `0.600 em`, one cluster one cell — and [`cells`] simply counted these. They
+/// stopped being the same answer the day the fallback chain reached the CJK
+/// faces: 日本語 is three clusters and six cells. Cutting still happens here,
+/// because cutting anywhere else invents a drawing; measuring is [`cells`].
 pub fn cells_of(text: &str) -> impl Iterator<Item = &str> {
     unicode_segmentation::UnicodeSegmentation::graphemes(text, true)
 }
 
+include!(concat!(env!("OUT_DIR"), "/width.rs"));
+
+/// Does this code point take two cells rather than one?
+///
+/// A binary search over the generated table: `East_Asian_Width` W or F, plus
+/// `Emoji_Presentation`. The table is sorted and disjoint, which is what makes
+/// `partition_point` the whole of the lookup.
+fn wide_char(c: char) -> bool {
+    let c = c as u32;
+    let i = WIDE.partition_point(|(_, hi)| *hi < c);
+    WIDE.get(i).is_some_and(|(lo, hi)| *lo <= c && c <= *hi)
+}
+
+/// How many cells one grapheme cluster occupies.
+///
+/// # Why ANY wide code point makes the cluster wide
+///
+/// Because a cluster is drawn as one thing, and what decides its advance is
+/// its base character — but the base is not always first, and finding it means
+/// implementing the grapheme-break rules a second time. Asking whether any
+/// member is wide gives the same answer for everything that exists: the
+/// combining marks that follow a narrow base are all narrow themselves, and a
+/// sequence that contains a wide member (an emoji with a variation selector, a
+/// flag, an ideograph with a combining mark) is drawn wide.
+///
+/// A cluster is never ZERO cells here, and that is deliberate: a lone
+/// combining mark is drawn on a dotted circle, which occupies one, and a run
+/// of zero cells would let two pieces of text be placed at the same column.
+#[must_use]
+pub fn cells_of_one(cluster: &str) -> u16 {
+    if cluster.chars().any(wide_char) { 2 } else { 1 }
+}
+
 /// How many cells a piece of literal text occupies, at the body's size.
 ///
-/// [`cells_of`] carries the reasoning; this is its count.
+/// **The one ruler.** The buffer reserves with it, the host confers with it,
+/// and the renderer places with it — `ronoctua_render::layout::width` is this
+/// function, reached through this crate rather than written again.
+///
+/// # Why it is not the cluster count any more
+///
+/// Because an ideograph is designed on the em square and advances twice what a
+/// Latin letter does, in every monospaced CJK cut there is. With the count,
+/// 日本語 measured three and drew six, and every column after it on the line
+/// was placed at half the distance it needed — not a rounding error, half the
+/// width of the text. The emoji were the same defect with a smaller blast
+/// radius, and had been known about long enough to be written in this
+/// crate's own comments.
 #[must_use]
 pub fn cells(text: &str) -> u16 {
-    u16::try_from(cells_of(text).count()).unwrap_or(u16::MAX)
+    cells_of(text)
+        .map(cells_of_one)
+        .fold(0u16, |total, one| total.saturating_add(one))
 }
 
 /// A colour token, **by name**.
@@ -2482,5 +2528,84 @@ mod tests {
         // it also cannot send everything as a key — a glyph's name has no
         // translation.
         assert_ne!(Text::datum("nf-fa-folder"), Text::key("nf-fa-folder"));
+    }
+
+    /// THE DEFECT THIS CATCHES: the ruler going back to counting things.
+    ///
+    /// An ideograph is designed on the em square and advances twice what a Latin
+    /// letter does, in every monospaced CJK cut there is. With the count,
+    /// 日本語 measured three and drew six, and every column after it on the
+    /// line was placed at half the distance it needed.
+    #[test]
+    fn an_ideograph_is_two_cells_and_a_letter_is_one() {
+        assert_eq!(cells("abc"), 3);
+        assert_eq!(
+            cells("\u{65E5}\u{672C}\u{8A9E}"),
+            6,
+            "three clusters, six cells"
+        );
+        assert_eq!(
+            cells_of("\u{65E5}\u{672C}\u{8A9E}").count(),
+            3,
+            "still three to cut on"
+        );
+        // Mixed, which is the case a line of code or a file name actually is.
+        assert_eq!(cells("a\u{65E5}b"), 4);
+    }
+
+    /// Kana and Hangul are wide too, and they are the two that a table of
+    /// "the CJK blocks" written by hand tends to miss.
+    #[test]
+    fn the_other_wide_scripts_are_wide() {
+        for (name, s) in [
+            ("hiragana", "\u{3042}"),
+            ("katakana", "\u{30A2}"),
+            ("hangul syllable", "\u{D55C}"),
+            ("fullwidth A", "\u{FF21}"),
+            ("ideographic space", "\u{3000}"),
+        ] {
+            assert_eq!(cells(s), 2, "{name}");
+        }
+    }
+
+    /// AMBIGUOUS IS NARROW, and that is a decision rather than an oversight.
+    ///
+    /// `East_Asian_Width=A` covers Cyrillic, Greek and the box drawing this
+    /// interface is built out of. Treating those as two cells is what a
+    /// terminal does for a CJK legacy encoding, and here it would double the
+    /// width of every rule and every arrow on screen.
+    #[test]
+    fn the_ambiguous_ones_stay_narrow() {
+        for (name, s) in [
+            ("greek alpha", "\u{03B1}"),
+            ("cyrillic a", "\u{0430}"),
+            ("box drawing", "\u{2500}"),
+            ("bullet", "\u{2022}"),
+            ("degree", "\u{00B0}"),
+        ] {
+            assert_eq!(cells(s), 1, "{name}");
+        }
+    }
+
+    /// An emoji is one thing and two cells; a combining mark adds neither a
+    /// cluster nor a cell; and nothing is ever zero cells wide.
+    #[test]
+    fn a_cluster_is_never_nothing() {
+        assert_eq!(cells("\u{1F600}"), 2, "emoji");
+        assert_eq!(cells("e\u{0301}"), 1, "e with a combining acute");
+        assert_eq!(cells("\u{1F1E7}\u{1F1F7}"), 2, "a flag is one cluster");
+        // A LONE COMBINING MARK is drawn on a dotted circle and occupies one.
+        // Zero would let two runs be placed at the same column.
+        assert_eq!(cells("\u{0301}"), 1);
+    }
+
+    /// The ruler is the same one the CUT walks, so a text can always be cut
+    /// into pieces that add up to it.
+    #[test]
+    fn the_pieces_add_up_to_the_whole() {
+        for s in ["abc", "\u{65E5}\u{672C}\u{8A9E}", "a\u{1F600}b\u{D55C}", ""] {
+            let sum: u16 = cells_of(s).map(cells_of_one).sum();
+            assert_eq!(sum, cells(s), "{s:?}");
+        }
     }
 }

@@ -372,9 +372,19 @@ impl Minibuffer {
                 }
             }
             Sym::Backspace => {
-                if self.query.pop().is_none() {
+                // ONE CLUSTER, not one `char`. `String::pop` takes a code
+                // point, and a cluster is up to six of them: backspacing an
+                // emoji left the halves of it in the query, and the password
+                // mask beside this counts CLUSTERS (`layout::width`), so the
+                // number of dots and the number of characters stopped
+                // agreeing. It is the same rule the cut has followed since the
+                // couple-with-a-heart defect; this was the one place that
+                // still typed by code point.
+                let Some(last) = ronoctua_render::layout::cells_of(&self.query).last() else {
                     return Action::Nothing;
-                }
+                };
+                let keep = self.query.len() - last.len();
+                self.query.truncate(keep);
                 self.filter_by(registry);
                 Action::Changed
             }
@@ -958,5 +968,52 @@ mod tests {
         assert_eq!(m.prompt(), "M-x ");
         type_in(&mut m, &r, "sai");
         assert_eq!(m.prompt(), "M-x sai");
+    }
+
+    /// THE DEFECT THIS CATCHES: backspace taking one CODE POINT.
+    ///
+    /// `String::pop` removes a code point and a cluster is up to six of them,
+    /// so one press left the wreckage of an emoji in the query — and the
+    /// password mask beside it counts clusters, so the row of dots and the
+    /// text behind it stopped agreeing about how much had been typed.
+    #[test]
+    fn backspace_removes_a_whole_cluster() {
+        let r = registry();
+        let mut m = Minibuffer::default();
+        m.open(&r);
+        // Six code points, one cluster: the couple with a heart.
+        for c in "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}".chars() {
+            m.key(t(Sym::Char(c)), &r);
+        }
+        m.key(t(Sym::Char('a')), &r);
+        assert_eq!(
+            m.prompt(),
+            "M-x \u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}a"
+        );
+
+        m.key(t(Sym::Backspace), &r);
+        assert_eq!(
+            m.prompt(),
+            "M-x \u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}"
+        );
+        // ONE more press, and the whole couple goes — not a fifth of it.
+        m.key(t(Sym::Backspace), &r);
+        assert_eq!(m.prompt(), "M-x ");
+        // And an empty query still reports that there was nothing to remove.
+        assert_eq!(m.key(t(Sym::Backspace), &r), Action::Nothing);
+    }
+
+    /// An ideograph is one cluster too, and the query is where a person types
+    /// a file name.
+    #[test]
+    fn backspace_removes_an_ideograph_in_one_press() {
+        let r = registry();
+        let mut m = Minibuffer::default();
+        m.open(&r);
+        for c in "\u{65E5}\u{672C}".chars() {
+            m.key(t(Sym::Char(c)), &r);
+        }
+        m.key(t(Sym::Backspace), &r);
+        assert_eq!(m.prompt(), "M-x \u{65E5}");
     }
 }

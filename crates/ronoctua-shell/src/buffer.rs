@@ -828,7 +828,7 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
     // The `app_id` is NOT translated, and that is deliberate: niri's window
     // rules match on it, and a rule that only fires in one language is a rule
     // that fails on the machine of whoever changed `LANG`.
-    let texts = ronoctua_i18n::Texts::from_env();
+    let texts = crate::language::texts();
     let title = texts.t(&format!("buffer-{}", d.name));
 
     // THE PHRASES, BEFORE THE FIRST FRAME.

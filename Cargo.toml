@@ -38,6 +38,7 @@ members = [
   "crates/ronoctua-bluetooth",
   "crates/ronoctua-keyboards",
   "crates/ronoctua-tunnel",
+  "crates/ronoctua-world",
   "crates/ronoctua-lan",
   "crates/ronoctua-brain",
   "crates/ronoctua-files",
@@ -77,6 +78,11 @@ raw-window-handle = "0.6"
 wgpu = "30.0"
 glyphon = "0.12"
 cosmic-text = "0.19"
+# The script of a codepoint, so the fallback chain can name one. It is NOT a
+# new dependency in the tree: `cosmic-text` already brings it, and the version
+# is pinned to the same so the `Script` in our table is the `Script` in its
+# trait — two copies of that enum would not even compile together.
+unicode-script = "0.5"
 
 # --- niri IPC (invariant 3: IPC and layer-shell only) ------------------
 # The types on niri's side are OURS, narrow, in `ronoctua-niri`. See why

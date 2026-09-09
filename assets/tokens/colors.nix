@@ -470,6 +470,36 @@
   # The owner's decision, and it replaced two earlier readings of the ask: a
   # floating toast (forbidden) and the modeline itself (which would push the
   # buffer's name off the one line that says where you are).
+  # -------------------------------------------------------------------
+  # THE GLANCE — `LEADER d`, one line above the modeline
+  # -------------------------------------------------------------------
+  #
+  # It draws several PLACES side by side on one line, and where one ends and
+  # the next begins has to be readable. A separator alone was not enough: with
+  # four places the line is a row of words and the eye has nothing to group
+  # them by.
+  #
+  # So the ground ALTERNATES, place by place. Not a border, not a box, not a
+  # radius (invariant 15) — a change of ground, which is the one device this
+  # system already uses for exactly this (`surface.shelf`, and the modeline
+  # against the band).
+  #
+  # The FIRST place keeps the band's own ground, because the glance sits under
+  # the band and a first place that changed colour would read as a third rung
+  # of that ladder rather than as a stripe.
+  #
+  # The alternate is the CHROME, two rungs down and not one. One rung — the
+  # modeline's — measured six values out of 255 on the screen, which is the
+  # `surface.shelf` register: right for a container that is merely present,
+  # too quiet for a stripe whose whole job is to say where one place ends. The
+  # owner asked for the second place to GAIN a background, and at one rung it
+  # had not gained a visible one. Two rungs is still two dark greys with no
+  # hue between them — quiet, and legible.
+  glance = {
+    ground = "neutral.chrome-loud";
+    ground-alternate = "neutral.chrome";
+  };
+
   notification = {
     # ONE TONE ABOVE the modeline's, which is itself one above the chrome. The
     # three together are a ramp the eye reads as "content, footer, and the

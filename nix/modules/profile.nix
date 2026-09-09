@@ -68,7 +68,6 @@ in
     # comes from `nix/primary-font.nix` and is installed either way — a reduced
     # machine looks like this distro, it does not look like a fallback.
     fonts.full = lib.mkDefault full;
-    fonts.notoExtra = lib.mkDefault full;
 
     # The 0,61 GiB superpack is a PIXMAP FALLBACK for foreign applications
     # (invariant 10) — no component of the design system consults it, so a

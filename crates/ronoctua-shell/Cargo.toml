@@ -93,6 +93,7 @@ ronoctua-keyboards = { path = "../ronoctua-keyboards" }
 # signals, so the crate polls on a thread of its own; a machine with neither
 # installed pays one `connect` that fails.
 ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+ronoctua-world = { path = "../ronoctua-world" }
 # WHO ELSE IS ON THIS NETWORK: the unprivileged ICMP sweep and the vendor
 # behind a hardware address. No daemon and no privilege — see the crate.
 ronoctua-lan = { path = "../ronoctua-lan" }

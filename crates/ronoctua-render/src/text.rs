@@ -428,6 +428,13 @@ pub struct Text {
     /// So: the doors keep handing over logical everything and say what the
     /// scale is; this is the one place it is applied.
     scale: f32,
+    /// How many of the chain's coverage faces actually loaded.
+    ///
+    /// Not a boolean, because the two ends of the range mean different things:
+    /// zero is an installer or a rescue console, which is expected; fewer than
+    /// declared is a build that lost a file, which is not. See
+    /// [`Text::coverage`].
+    coverage: usize,
 }
 
 impl Text {
@@ -609,11 +616,12 @@ impl Text {
         db.set_monospace_family(tokens::font::FAMILY_MONO);
         db.set_sans_serif_family(tokens::font::FAMILY_UI);
         db.set_serif_family(tokens::font::FAMILY_UI);
-        let face = glyphon::FontSystem::new_with_locale_and_db("en-GB".to_owned(), db);
 
-        // It fails loudly if the embedded face did not load: carrying on from here would
-        // only produce invisible text, which is worse to diagnose.
-        let n = face.db().faces().count();
+        // IT FAILS LOUDLY IF AN EMBEDDED FACE DID NOT LOAD, and it is counted
+        // BEFORE the coverage faces join — otherwise the number would depend on
+        // what a directory happened to hold, and an exact number is the whole
+        // point of this guard (see `FACES`).
+        let n = db.faces().count();
         anyhow::ensure!(
             n == FACES,
             "the database has {n} faces and should have {FACES} (Iosevka, emoji, Lucide \
@@ -622,6 +630,33 @@ impl Text {
              on screen."
         );
         tracing::debug!(faces = n, "the embedded faces are loaded");
+
+        // THE COVERAGE FACES — every script the chain promises.
+        //
+        // By PATH and not embedded, and the difference is not a detail: they are
+        // 44 files and about 54 MB. `include_bytes!` would put them in the
+        // binary AND — the expensive half — put a store path in the environment
+        // of the derivation that compiles the workspace, where Nix addresses by
+        // input and any change to it rebuilds all thirty-three crates. That is
+        // the fourth incident in the architecture document, and the answer it
+        // arrived at is this one: the path travels on the wrapper.
+        //
+        // Absence is NOT an error. The installer and the rescue console run
+        // without it and draw the two Latin languages this system speaks with
+        // the four faces above. What is refused instead is silence: `coverage`
+        // reports how many arrived, so a screen can say the interface is
+        // reduced rather than showing tofu and letting somebody guess.
+        let coverage = Self::load_the_coverage(&mut db);
+
+        let face = glyphon::FontSystem::new_with_locale_and_db_and_fallback(
+            // THE LOCALE IS A DRAWING, not a formality: it is what decides,
+            // among the four unified Han faces, whether 直 comes out Japanese or
+            // Chinese. It starts at the default and `set_locale` moves it when
+            // the interface's language changes.
+            crate::chain::DEFAULT_LOCALE.to_owned(),
+            db,
+            crate::chain::Chain,
+        );
 
         let cache = glyphon::Cache::new(device);
         let viewport = glyphon::Viewport::new(device, &cache);
@@ -653,7 +688,106 @@ impl Text {
             // REFUSED, AND LOUDLY, the way `draw_scaled` refuses it — see
             // `rasterised_at`, which is the one conversion.
             scale: rasterised_at(scale),
+            coverage,
         })
+    }
+
+    /// Draws the unified Han the way this language expects, from the next
+    /// frame on. `true` if it moved.
+    ///
+    /// # Why a renderer has a language at all
+    ///
+    /// It has exactly one, and only for this: 直 is a single codepoint with
+    /// four accepted drawings, and Unicode left the choice to whoever renders.
+    /// Nothing else here knows what a language is — the texts, the date order
+    /// and the decimal mark all live in `ronoctua-i18n`, and must not move.
+    ///
+    /// # Why it rebuilds the font system
+    ///
+    /// Because cosmic-text resolves the fallback ONCE per `FontSystem` and
+    /// caches it, so a locale changed underneath would take effect for text
+    /// shaped after it and not for text already in the cache — a screen with
+    /// two Han faces on it, which is worse than either. Rebuilding is the same
+    /// answer the theme takes for its textures. It costs the database's faces
+    /// being re-registered, not re-read: fontdb keeps `Source::File` lazy.
+    pub fn set_locale(&mut self, locale: &str) -> bool {
+        if self.face.locale() == locale {
+            return false;
+        }
+        let mut db = glyphon::fontdb::Database::new();
+        for face in self.face.db().faces() {
+            db.push_face_info(face.clone());
+        }
+        self.face = glyphon::FontSystem::new_with_locale_and_db_and_fallback(
+            locale.to_owned(),
+            db,
+            crate::chain::Chain,
+        );
+        true
+    }
+
+    /// How many faces of the declared chain are loaded, and how many it names.
+    ///
+    /// A screen that wants to say "this machine cannot draw Japanese" asks
+    /// here. The alternative is tofu, and tofu is a silent fallback wearing
+    /// different clothes — the sentence this whole module is organised around.
+    #[must_use]
+    pub const fn coverage(&self) -> (usize, usize) {
+        (self.coverage, crate::chain::COVERAGE.len())
+    }
+
+    /// Which face draws a codepoint, by family name. `None` when nothing does.
+    ///
+    /// It exists for `ronoctua-test-faces`, which is what turns the declared
+    /// chain from a comment into a promise: it asks the assembled database who
+    /// answers for each of the chain's probes.
+    #[must_use]
+    pub fn who_draws(&mut self, c: char) -> Option<String> {
+        let mut buffer = glyphon::Buffer::new(&mut self.face, glyphon::Metrics::new(16.0, 16.0));
+        buffer.set_text(
+            &c.to_string(),
+            &glyphon::Attrs::new().family(glyphon::Family::Name(tokens::font::FAMILY_MONO)),
+            glyphon::Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut self.face, false);
+        let run = buffer.layout_runs().next()?;
+        let glyph = run.glyphs.first()?;
+        // GLYPH ZERO IS `.notdef`, and reporting the face that owns it would
+        // name a face that drew nothing. Tofu has to answer `None`.
+        if glyph.glyph_id == 0 {
+            return None;
+        }
+        let info = self.face.db().face(glyph.font_id)?;
+        info.families.first().map(|(name, _)| name.clone())
+    }
+
+    /// Loads every coverage face the wrapper points at, and says how many.
+    ///
+    /// # Why it does not read the manifest
+    ///
+    /// Because the manifest maps FAMILY to file, and fontdb files a face under
+    /// the family its own name table declares — `nameID 16` when present, which
+    /// is the difference between `Noto Sans Hebrew` and `Noto Sans Hebrew
+    /// Light`. Loading the directory and letting fontdb name what it finds
+    /// keeps one authority for that. The manifest is what the DERIVATION uses
+    /// to refuse a missing family, which is the other half of the promise.
+    fn load_the_coverage(db: &mut glyphon::fontdb::Database) -> usize {
+        let Some(dir) = std::env::var_os("RONOCTUA_COVERAGE_FONTS") else {
+            tracing::debug!(
+                "RONOCTUA_COVERAGE_FONTS is not set; only the embedded faces are available"
+            );
+            return 0;
+        };
+        let before = db.len();
+        db.load_fonts_dir(&dir);
+        let loaded = db.len() - before;
+        tracing::debug!(
+            faces = loaded,
+            directory = ?dir,
+            "the coverage faces are loaded"
+        );
+        loaded
     }
 
     /// The width of one cell, in PHYSICAL px — the scale is already in it.

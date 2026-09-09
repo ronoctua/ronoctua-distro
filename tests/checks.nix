@@ -4092,6 +4092,12 @@ let
   # wrong symbol. The day that changes, the check fails and someone re-reads the
   # decision instead of rediscovering it through the screen.
   renderer-loads-four-faces = mkCheck "renderer-loads-four-faces" [ ] ''
+    # THE COVERAGE FACES ARE SET HERE, and that is what makes this check the
+    # guard for the declared chain rather than only for the four embedded
+    # faces. Without the variable the binary says SKIPPED and passes, which is
+    # correct for the installer and useless as a check — so the check supplies
+    # it, exactly as the wrapper supplies it to the footer.
+    export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
     ${rust.workspace}/bin/ronoctua-test-faces
   '';
 
@@ -4488,12 +4494,17 @@ let
   # wired to a command that did not exist, so no edit ever replaced the store's
   # binary.
   #
-  # The list is not written here: it is read from the table the compilation gets.
+  # The list is not written here: it is read from the table the compilation
+  # gets — and from `atRunTime`, which is what the WRAPPER sets. That second
+  # half used to be `bufferComponents` and covered the eight `.wasm` alone; the
+  # coverage faces travel the same road and their absence would not have been
+  # noticed, which is a nested loop drawing tofu where the installed system
+  # draws Japanese.
   dev-exports-what-the-build-bakes = mkCheck "dev-exports-what-the-build-bakes" [ pkgs.gnugrep ] ''
     script=${devApp}/bin/ronoctua-dev
     failed=0
 
-    for v in ${lib.concatStringsSep " " (lib.attrNames (rust.generated // rust.bufferComponents))}; do
+    for v in ${lib.concatStringsSep " " (lib.attrNames (rust.generated // rust.atRunTime))}; do
       grep -q "^  export $v=" "$script" || {
         echo "ERROR: the build bakes $v in and the loop does not export it — the hot" >&2
         echo "      reload goes without it, and the failure shows up far from here." >&2
@@ -11756,8 +11767,11 @@ let
         "height", "weight", "freight", "sleigh", "veil", "vein", "reign",
         "foreign", "sovereign", "counterfeit", "forfeit", "surfeit",
         # AND THE NAMES OF THINGS. `COLLADA` is a 3D format this tree reads,
-        # and `-ada` is its last three letters by accident.
-        "collada",
+        # and `-ada` is its last three letters by accident. `Kannada` is a
+        # WRITING SYSTEM, named in the fallback chain beside thirty-six others,
+        # and it is in the same accident — the ruler reads `-ada` as a
+        # Portuguese participle.
+        "collada", "kannada",
     }
     # THE TWO PROSE RULERS, and they are read by two passes.
     #

@@ -1,0 +1,40 @@
+[package]
+name = "ronoctua-world"
+description = "The glance's data: clocks by zone, and weather and rates over HTTPS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+# THE HAND-WRITTEN HTTP/1.1 THIS PROJECT ALREADY HAS.
+#
+# `ronoctua-tunnel` owns it — `status_of` and `dechunked` are transport-free
+# and this crate is their second user. The dependency reads oddly by its name
+# and is right by its content: the alternative is a second chunked decoder,
+# and the first one exists because a chunk boundary inside a multi-byte
+# character panicked a thread and killed every tunnel key for a session.
+ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+ronoctua-store = { path = "../ronoctua-store" }
+
+# TLS, AND THE FIRST IN THIS WORKSPACE.
+#
+# `aria2.rs` refuses an HTTP client in writing — "it would bring tokio, hyper
+# and a TLS stack into a Cargo.lock every crate in the workspace shares" — and
+# that comment is still two thirds right: there is no tokio here and no hyper.
+# The stack is rustls over `std::net::TcpStream`, blocking, on a thread.
+#
+# `ring` and not `aws-lc-rs`: the default provider needs cmake and a Go
+# toolchain in the build closure, for a feature that fetches two numbers.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+rustls-pemfile = "2"
+
+[lints]
+workspace = true

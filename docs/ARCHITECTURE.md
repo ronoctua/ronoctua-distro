@@ -100,6 +100,112 @@ duas cadeias precisam **concordar**, senão o mesmo texto renderiza diferente de
 nossos buffers; por isso `nix/fontconfig.nix` gera as duas de uma lista só, e um check compara as
 escolhas em codepoints-sonda.
 
+#### E por um ano a segunda cadeia não existiu
+
+A frase acima descrevia uma intenção. O `chainJson` era gerado, instalado em
+`/etc/ronoctua/fallback-chain.json`, e **lido por nada** — o comentário no
+`nix/fontconfig.nix` dizia *"the ronoctua-render crate reads this at build time"* e nenhum `.rs`
+mencionava o arquivo. O banco do renderer eram QUATRO faces embutidas por `include_bytes!`, e a
+tabela interna do cosmic-text pede famílias por NOME (`Script::Arabic => ["Noto Sans Arabic"]`):
+nenhum desses nomes existia no banco, então o iterador varria as quatro e devolvia `glyph_id == 0`.
+
+**Todo japonês, árabe, hebraico, devanágari, tailandês e coreano da tela era tofu**, e nem no log
+aparecia — o aviso do cosmic-text cai em `log::debug`, e nada aqui liga o `log` ao `tracing`.
+
+O motor nunca foi o problema. O `cosmic-text` 0.19 traz **harfrust** (o porte do HarfBuzz),
+`unicode-bidi` e `unicode-script`, e o `Text::prepare` já pedia `Shaping::Advanced` — ligadura
+árabe, reordenação devanágari e bidi RTL rodariam desde sempre. Faltavam FACES.
+
+O conserto tem três peças, e a primeira é a que faz a frase de cima virar verdade:
+
+- **`nix/fontconfig.nix` ganhou a metade que faltava** — `scripts` (37 escritas → família),
+  `han` (a unificação Han por locale), `hanScripts` (quem segue o locale e quem não segue) e
+  `common`. Dali saem TRÊS consumidores: o `.conf` do fontconfig, o `nix/coverage-fonts.nix`
+  (que resolve família → arquivo e **recusa a build** se uma não tiver face) e o
+  `nix/chain.nix`, que gera o `impl cosmic_text::Fallback` do renderer. Uma declaração, e agora
+  o renderer realmente a lê.
+- **A cadeia continua DECLARADA** (§6.4): `new_with_locale_and_db_and_fallback` recebe a nossa,
+  e é por isso que ela pode pedir a CJK **monoespaçada** — a do upstream pede a proporcional, e
+  numa grade de células isso não tem como ser colocado.
+- **As faces viajam no EMBRULHO** (`RONOCTUA_COVERAGE_FONTS`), nunca em `generated`: são 44
+  arquivos e 54 MB, e um caminho de store no ambiente de quem compila reconstrói os 33 crates —
+  o quarto incidente desta seção, chegando pelo mesmo lado.
+
+Ausência não é erro: o instalador e o resgate seguem com as quatro embutidas e `Text::coverage`
+diz quantas subiram, para uma tela poder dizer que a interface está reduzida em vez de mostrar
+caixinhas.
+
+**Duas medições que viraram desenho.** A primeira: pôr `Noto Sans Symbols 2` na cauda comum fez
+ele responder por `U+1F550` ANTES da face de emoji — o relógio voltou a sair monocromático, que é
+exatamente o defeito que o `strip-emoji.py` existe para impedir, chegando por outra porta. A face
+de emoji passou a ser a PRIMEIRA da cauda. A segunda: a sonda do armênio era `U+0531`, e a Iosevka
+desenha 91 dos 96 codepoints armênios — uma sonda que a face primária responde não prova nada,
+porque a primária é pedida por NOME e ganha de toda cadeia. O gerador agora **recusa** uma sonda
+assim, e a do armênio virou `U+FB13`, uma ligadura que a Iosevka não tem.
+
+#### A primeira TLS deste workspace, e por que ela não contradiz o `aria2`
+
+O `aria2.rs` recusa um cliente HTTP por escrito: *"traria tokio, hyper e uma pilha TLS para um
+`Cargo.lock` que todo crate do workspace compartilha, para poupar umas sessenta linhas que nunca
+vão mudar."* Isso continua **dois terços certo** — não há tokio aqui e não há hyper. O que mudou é
+o terço restante: o aria2 fala com `127.0.0.1`, e o relance fala com a máquina de outra pessoa,
+onde não existe versão aceitável de "sem TLS".
+
+Então o corte é onde este projeto sempre o põe — a dependência entra quando o problema dela
+aparece, e entra do tamanho do problema:
+
+- **rustls sobre `std::net::TcpStream`**, bloqueante, numa thread. Sem runtime assíncrono.
+- **Provedor `ring` e não `aws-lc-rs`**, que é o padrão da 0.23: o padrão quer cmake e uma
+  toolchain Go no closure de build, para buscar dois números.
+- **Raízes do SISTEMA** (`/etc/ssl/certs/ca-certificates.crt`, que o `security.pki` monta), nunca
+  `webpki-roots`. Raiz embutida envelhece DENTRO do binário, e o dia em que uma expira o sintoma é
+  toda busca falhando numa máquina cujo navegador está bem. Sem o arquivo, o crate diz uma vez e
+  não busca nada — feature que não funciona, e não certificado ignorado.
+- **Sem redirecionamento, proxy, keep-alive, compressão, cookie ou autenticação.** Dois hosts
+  respondem um `GET` com JSON e `Connection: close`.
+- **O decodificador de `chunked` não é novo**: é o do `ronoctua-tunnel`, e é por isso que a
+  dependência aponta para lá. Ela lê estranho pelo nome e certo pelo conteúdo — a alternativa era
+  um segundo decodificador, e o primeiro existe porque uma fronteira de chunk no meio de um
+  caractere multi-byte estourou uma thread e matou toda tecla de túnel de uma sessão.
+
+**Medido ao vivo, contra os hosts reais:** Londres 15,3 °C, 1 GBP = 6,9233 BRL. E as zonas de
+verdade: Londres 23:05 contra Brasília 19:05.
+
+**Um teste que passava pela razão errada, e foi reescrito.** O primeiro `a_place_keeps_what_it_had`
+chamava `once()` e afirmava que os valores antigos sobreviviam, na premissa de que a máquina de
+teste não tem rede — e esta tem: a busca funcionou, Londres voltou a 15,3 °C, e a asserção falhou
+pelo único motivo que era boa notícia. Num sandbox ela teria passado sem provar nada, e continuaria
+passando depois de alguém trocar o `Err` por limpar o campo. A regra da mesclagem virou função com
+nome (`fetch::keep`) e o teste passou a testar ELA — sem rede, em 0,00 s.
+
+#### A célula deixou de ser uma contagem
+
+`ronoctua_protocol::cells` contava grafemas, e estava certo enquanto a única face era a Iosevka:
+monoespaçada em `0,600 em`, um grafema uma célula. Com a cadeia alcançando o CJK isso virou
+mentira — `日本語` são três grafemas e **seis** células, e cada coluna depois dele era colocada na
+metade da distância que precisava.
+
+A régua passa a somar `East_Asian_Width` (W e F) mais `Emoji_Presentation`, de uma tabela
+**gerada dos arquivos do próprio Unicode** (`nix/width.nix`, 123 faixas). `A` (ambíguo) fica
+ESTREITO de propósito: ele cobre cirílico, grego e o box-drawing de que esta interface é feita, e
+alargá-los quebraria toda tela existente para ajudar um caso que este sistema não tem.
+
+`cells_of` continua devolvendo grafemas — é por onde se CORTA, e cortar por outra coisa inventa
+desenho. As duas respostas passaram a ser diferentes, então `elide_end`, `elide_middle`, `window`
+e o `wrap` ganharam `prefix_of`/`suffix_of`: **orçam em CÉLULAS e cortam em GRAFEMAS**. Antes eles
+faziam `take(max)` de grafemas contra um orçamento de células, o que transborda — e transborda na
+única direção que custa alguma coisa, desenhando por cima da coluna vizinha.
+E o `ronoctua_render::layout::width`, que era uma SEGUNDA cópia do mesmo `graphemes().count()`,
+passou a ser a função do protocolo: duas réguas que concordavam por acidente.
+
+**Medido, com a face monoespaçada da Noto CJK**: o ideograma anda 18,00 px numa célula de
+10,80 px, ou **1,667 célula**, contra as 2 que a régua reserva; o hangul, 1,533. A tinta é mais
+ESTREITA que o reservado, então nada se sobrepõe — sobra vão. Fechá-lo seria reescalar a face para
+`upem 833` (o em da CJK é 1,0 e a nossa célula 0,6; 1,0/0,833 = 1,2 em = 2 células), e isso é
+cirurgia de tabela em cinco faces com `CFF2` e `FontMatrix` — cosmético contra um risco real, e
+por isso ficou em `docs/PENDING.md` com o número. O check refuta só a direção perigosa: acima de
+2,02 células ele para a build.
+
 ---
 
 ### Onde as fontes vivem, e por quê
@@ -6458,8 +6564,16 @@ terminal ficam. O que sai é aplicativo — o que se instala para USAR, não o q
 
 Duas coisas apareceram ao medir isto, e as duas eram interruptores que não interruptavam:
 
-- **`ronoctua.fonts.notoExtra` não fazia nada.** O `noto-fonts` estava na lista incondicional *e* na
-  opcional; o `vm.nix` desligava acreditando poupar, e o pacote entrava pelo outro caminho.
+- **`ronoctua.fonts.notoExtra` não fazia nada, e depois passou a fazer a coisa errada.** Primeiro
+  o `noto-fonts` estava na lista incondicional *e* na opcional: o `vm.nix` desligava acreditando
+  poupar e o pacote entrava pelo outro caminho. Tirada a duplicata, o interruptor passou a
+  interromper — e aí o número que o justificava é que estava errado. A opção dizia *"the single
+  largest item in the font closure (over 1 GB on its own)"*; medido com `nix path-info -S` contra
+  a nixpkgs pinada, **49,1 MB**. Errado por vinte vezes, porque o número envelheceu quando o
+  `noto-fonts-extra` foi absorvido no `noto-fonts` na 26.05 — a mesma renomeação que o AGENTS.md
+  já anota, chegando como medição velha em vez de erro de avaliação. **A opção não existe mais**
+  (decisão do dono, 2026-09-08, com o número na mesa): um perfil ficava sem árabe, hebraico,
+  devanágari e tailandês para poupar cinquenta megabytes que lhe disseram serem mil.
 - **`ronoctua.icons.superpack` não tira os 0,61 GiB do closure.** O `ronoctua-shell` carrega o
   caminho do superpacote GRAVADO por `option_env!` (`RONOCTUA_ICONS`), e é instalado nos dois
   perfis. Por isso ele está **fora** da tabela: listá-lo seria anunciar uma economia que não

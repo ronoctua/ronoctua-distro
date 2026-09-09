@@ -653,6 +653,13 @@ DISTANCE_GATES = (
     # other is pressed — and for a while they were the same colour. This is
     # what says they cannot go back to it in some theme nobody looked at.
     ("notification.quiet", "notification.acts", 0.04, 0.05),
+    # THE GLANCE'S TWO GROUNDS, which are drawn EDGE TO EDGE on one line: one
+    # place ends where the next begins, with nothing between them. If a theme
+    # ever solved them to the same tone the alternation would simply not be
+    # there, and the line would go back to being a row of words the eye cannot
+    # group. The floor is low on purpose — this is meant to be the smallest
+    # step there is, the `surface.shelf` register — but it is not zero.
+    ("glance.ground", "glance.ground-alternate", 0.008, 0.012),
 )
 #: Pairs reported but never gated: they are never drawn side by side.
 DISTANCE_NOTES = (

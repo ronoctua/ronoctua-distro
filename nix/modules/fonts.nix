@@ -25,20 +25,6 @@ in
     '';
   };
 
-  options.ronoctua.fonts.notoExtra = lib.mkOption {
-    type = lib.types.bool;
-    default = true;
-    description = ''
-      Installs the wide Noto coverage. It is the single largest item in the font
-      closure (over 1 GB on its own). Removable without touching the design.
-
-      The package is `noto-fonts`: in nixpkgs 26.05 `noto-fonts-extra` was
-      absorbed into it, and the RENAMED alias brings the evaluation down instead of
-      warning — the same class as the other renames already noted in
-      AGENTS.md.
-    '';
-  };
-
   config = {
     # Section 6.4: no NixOS default fonts sneaking in from behind.
     fonts.enableDefaultPackages = false;
@@ -57,12 +43,24 @@ in
     ++ (with pkgs; [
       # --- the complete Noto, enumerated (section 6.4) --------------
       #
-      # `noto-fonts` IS NOT HERE, and its absence is the point: it is listed at
-      # the bottom, under `ronoctua.fonts.notoExtra`. It used to be in both
-      # places, which made the switch a dead one — `vm.nix` turned it off
-      # believing it saved a gigabyte, and the package came in through this list
-      # anyway. A switch that does nothing is worse than no switch: it is a
-      # measurement everybody trusts and nobody takes.
+      # `noto-fonts` IS HERE, unconditionally, and it used not to be.
+      #
+      # It sat behind `ronoctua.fonts.notoExtra`, which the minimal profile and
+      # the dev VM turned off, and the option's own text said why: "the single
+      # largest item in the font closure (over 1 GB on its own)". MEASURED with
+      # `nix path-info -S`, against the pinned nixpkgs: **49,1 MB**. Wrong by
+      # twenty times.
+      #
+      # The number aged when `noto-fonts-extra` was absorbed into `noto-fonts`
+      # in nixpkgs 26.05 — the same rename already noted in AGENTS.md, arriving
+      # as a stale measurement rather than as an evaluation error. Nobody
+      # re-measured, and a profile went without Arabic, Hebrew, Devanagari and
+      # Thai to save fifty megabytes it was told were a thousand.
+      #
+      # Two hundred and twenty-nine files, and what they carry is every writing
+      # system a foreign application might put on this screen. The owner's
+      # decision, once the real number was on the table: stop avoiding it.
+      noto-fonts
       noto-fonts-cjk-sans
       noto-fonts-cjk-serif
       # Section 6.4 lists "noto-fonts-emoji"; in nixpkgs 26.05 that name
@@ -80,8 +78,7 @@ in
       # Real mathematics, with a MATH table. Noto Math is a symbol
       # repertoire, not a maths typesetting font.
       stix-two
-    ])
-    ++ lib.optional config.ronoctua.fonts.notoExtra pkgs.noto-fonts;
+    ]);
 
     fonts.fontconfig = {
       enable = true;

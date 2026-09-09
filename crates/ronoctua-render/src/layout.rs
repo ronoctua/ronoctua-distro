@@ -127,20 +127,21 @@ pub fn cells_of(s: &str) -> impl Iterator<Item = &str> {
     units(s)
 }
 
-/// Width in cells. It counts CLUSTERS, not bytes and not codepoints.
+/// Width in cells.
 ///
-/// It holds because the font is genuinely monospaced: every cluster takes one
-/// cell, including the 10,473 Nerd Fonts glyphs (Mono variant). In a
-/// proportional font this would be wrong, and that is why the `fonts-metrics` check
-/// reasserts the monospacing on every build.
+/// **It is `ronoctua_protocol::cells`, and not a copy of it.** It was a copy —
+/// the same `units(s).count()` written again here — and the two agreed for as
+/// long as the answer was "one cluster, one cell". The day the fallback chain
+/// reached the CJK faces the protocol's had to learn that an ideograph is two
+/// and this one did not, which is the definition of two rulers: the buffer
+/// would reserve six cells and the renderer would place the next run at three.
 ///
-/// Emoji are the known exception: their advance is `1.245 at` against the cell's
-/// `0.600`, so an emoji cluster takes more than one. What knows that is the
-/// database's generator, which marks `width: 2` — here the count is still
-/// "how many things there are", which is what the cut needs to know.
+/// The cut stays here ([`cells_of`]), because cutting is this module's job and
+/// it must happen on cluster boundaries. Measuring is one function for the
+/// whole system, and it lives in the crate both sides compile.
 #[must_use]
 pub fn width(s: &str) -> u16 {
-    u16::try_from(units(s).count()).unwrap_or(u16::MAX)
+    ronoctua_protocol::cells(s)
 }
 
 /// Is this a CHROME GLYPH — an icon from the font, and not a letter?
@@ -176,6 +177,49 @@ pub fn leading_glyph(s: &str) -> Option<(&str, &str)> {
     Some(s.split_at(first.len()))
 }
 
+/// The longest prefix of `s` that fits in `max` CELLS, cut on a cluster.
+///
+/// # Why the two units are different, and why that is not pedantry
+///
+/// The budget is cells, because that is what the layout has to give away. The
+/// cut is on clusters, because cutting anywhere else invents a drawing. While
+/// every cluster was one cell those were the same walk and every function here
+/// did `take(max)`; with an ideograph at two cells, `take` overflows — and it
+/// overflows in the one direction that costs something, drawing over the
+/// column next door.
+///
+/// A cluster that does not fit is not partly taken. So asking for one cell of
+/// a line that starts with an ideograph gives the empty string, which is
+/// correct: half an ideograph is not a narrower ideograph.
+fn prefix_of(s: &str, max: u16) -> &str {
+    let mut used = 0u16;
+    let mut end = 0usize;
+    for cluster in units(s) {
+        let w = ronoctua_protocol::cells_of_one(cluster);
+        if used + w > max {
+            break;
+        }
+        used += w;
+        end += cluster.len();
+    }
+    &s[..end]
+}
+
+/// The longest SUFFIX of `s` that fits in `max` cells. See [`prefix_of`].
+fn suffix_of(s: &str, max: u16) -> &str {
+    let mut used = 0u16;
+    let mut start = s.len();
+    for cluster in units(s).collect::<Vec<_>>().into_iter().rev() {
+        let w = ronoctua_protocol::cells_of_one(cluster);
+        if used + w > max {
+            break;
+        }
+        used += w;
+        start -= cluster.len();
+    }
+    &s[start..]
+}
+
 /// Elides in the middle, preserving both ends.
 #[must_use]
 pub fn elide_middle(s: &str, max: u16) -> String {
@@ -186,15 +230,14 @@ pub fn elide_middle(s: &str, max: u16) -> String {
     if max <= 1 {
         return "…".repeat(max as usize);
     }
-    let units: Vec<&str> = units(s).collect();
-    // -1 for the ellipsis. An uneven remainder goes to the LEFT: the start of
-    // the path identifies better than the end.
-    let left_over = (max - 1) as usize;
-    let dir = left_over / 2;
-    let left = left_over - dir;
-    let mut out: String = units[..left].concat();
+    // -1 for the ellipsis, which is one cell. An uneven remainder goes to the
+    // LEFT: the start of a path identifies it better than the end.
+    let left_over = max - 1;
+    let right = left_over / 2;
+    let left = left_over - right;
+    let mut out = String::from(prefix_of(s, left));
     out.push('…');
-    out.push_str(&units[units.len() - dir..].concat());
+    out.push_str(suffix_of(s, right));
     out
 }
 
@@ -208,7 +251,7 @@ pub fn elide_end(s: &str, max: u16) -> String {
     if max == 0 {
         return String::new();
     }
-    let mut out: String = units(s).take((max - 1) as usize).collect();
+    let mut out = String::from(prefix_of(s, max - 1));
     out.push('…');
     out
 }
@@ -232,7 +275,18 @@ pub fn window(s: &str, from: u16, max: u16) -> String {
     if max == 0 {
         return String::new();
     }
-    units(s).skip(from as usize).take(max as usize).collect()
+    // The skip is in CELLS too, and it lands on a cluster boundary: a window
+    // that started half an ideograph in would draw the other half of it.
+    let mut skipped = 0u16;
+    let mut start = 0usize;
+    for cluster in units(s) {
+        if skipped >= from {
+            break;
+        }
+        skipped += ronoctua_protocol::cells_of_one(cluster);
+        start += cluster.len();
+    }
+    prefix_of(&s[start..], max).to_owned()
 }
 
 /// Breaks a text into lines of up to `width` cells.
@@ -270,11 +324,21 @@ pub fn wrap(text: &str, width: u16, ceiling: usize) -> Vec<String> {
                 // cut between the two halves of an emoji sequence does not
                 // shorten the word, it draws a different one — the same fault
                 // `elide_end` exists to avoid.
-                let mut rest: Vec<&str> = cells_of(word).collect();
-                while rest.len() > width && out.len() < ceiling {
-                    out.push(rest.drain(..width).collect());
+                let mut rest = word;
+                #[allow(clippy::cast_possible_truncation)]
+                let cells = width as u16;
+                while usize::from(self::width(rest)) > width && out.len() < ceiling {
+                    let piece = prefix_of(rest, cells);
+                    if piece.is_empty() {
+                        // A SINGLE CLUSTER WIDER THAN THE LINE. It cannot be
+                        // cut and it cannot fit; giving it its own line is the
+                        // only answer that neither loops nor drops it.
+                        break;
+                    }
+                    rest = &rest[piece.len()..];
+                    out.push(piece.to_owned());
                 }
-                line = rest.into_iter().collect();
+                line = rest.to_owned();
                 continue;
             }
             let fits =
@@ -872,18 +936,23 @@ mod tests {
     #[test]
     fn an_emoji_cluster_is_not_split() {
         let couple = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}";
-        assert_eq!(width(couple), 1, "six codepoints, one cluster");
+        assert_eq!(cells_of(couple).count(), 1, "six codepoints, one cluster");
+        // TWO CELLS, and one cluster. Those were the same number until the
+        // fallback chain arrived, and this test asserted the count as if it
+        // were the width. The emoji face draws at `1.245 em` against the
+        // cell's `0.600`, which the symbol browser's database has recorded as
+        // `width: 2` since long before the ruler learnt it.
+        assert_eq!(width(couple), 2, "an emoji is one thing and two cells");
         assert_eq!(
             elide_end(couple, 4),
             couple,
             "it fitted: there is nothing to cut"
         );
-        assert_eq!(
-            elide_end(couple, 1),
-            couple,
-            "one cell still fits ONE cluster"
-        );
-        assert!(!elide_end(couple, 1).contains('…'));
+        // AND ONE CELL DOES NOT FIT IT. It used to be returned whole, which
+        // drew two cells into a budget of one — over whatever was next door.
+        // Half an emoji is not a narrower emoji, so what is left is the mark
+        // that says something was dropped.
+        assert_eq!(elide_end(couple, 1), "…");
     }
 
     /// The flag, the skin tone and the combining mark — the other three ways
@@ -896,7 +965,7 @@ mod tests {
             ("a mark over the circle", "\u{25CC}\u{0301}"),
             ("keyboard", "1\u{FE0F}\u{20E3}"),
         ] {
-            assert_eq!(width(s), 1, "{name}");
+            assert_eq!(cells_of(s).count(), 1, "{name}: one cluster");
             assert_eq!(elide_end(s, 2), s, "{name}");
         }
     }
@@ -905,8 +974,13 @@ mod tests {
     #[test]
     fn several_clusters_still_elide() {
         let three = "\u{1F600}\u{1F601}\u{1F602}";
-        assert_eq!(width(three), 3);
-        assert_eq!(elide_end(three, 2), "\u{1F600}…");
+        assert_eq!(cells_of(three).count(), 3, "three clusters");
+        assert_eq!(width(three), 6, "and six cells: an emoji is two");
+        // A BUDGET OF TWO buys the ellipsis and one cell, and one cell buys no
+        // emoji at all. Before the ruler knew that, this returned one emoji
+        // plus the mark and drew three cells into two.
+        assert_eq!(elide_end(three, 2), "…");
+        assert_eq!(elide_end(three, 3), "\u{1F600}…");
         assert_eq!(elide_end("abcdef", 4), "abc…");
     }
 
@@ -915,14 +989,18 @@ mod tests {
         // The long address, which is what gets copied most. Cutting between the
         // halves of an emoji sequence does not shorten the word, it draws a
         // different one — the fault `elide_end` exists to avoid.
+        // FIVE EMOJI IN A LINE OF TWO CELLS is one emoji per line, not two:
+        // each is two cells wide. The assertion that matters is the last one —
+        // no line may be wider than the line — and it was passing before only
+        // because the ruler agreed with the cut about the wrong number.
         let out = wrap("\u{1F600}\u{1F600}\u{1F600}\u{1F600}\u{1F600}", 2, 99);
-        assert_eq!(
-            out,
-            vec!["\u{1F600}\u{1F600}", "\u{1F600}\u{1F600}", "\u{1F600}"]
-        );
+        assert_eq!(out.len(), 5, "one emoji per line of two cells");
         for l in &out {
             assert!(width(l) <= 2, "{l} is wider than the line");
         }
+        // And the Latin case, unchanged: it is where one cluster is one cell.
+        let latin = wrap("abcdefg", 3, 99);
+        assert_eq!(latin, vec!["abc", "def", "g"]);
     }
 
     #[test]

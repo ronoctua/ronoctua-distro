@@ -523,6 +523,15 @@ struct Footer {
     files_notice: Option<ronoctua_files::notice::Notice>,
     /// The watch on `theme.json`: the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on `language.json`. Held so it lives as long as the footer.
+    _language_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on the glance's cache. Held so it lives as long as the footer.
+    _world_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on the glance's PLACES — a different file, in a different
+    /// directory, from the cache above.
+    _places_watch: Option<ronoctua_files::notice::Notice>,
+    /// The thread that fills that cache. Held for the same reason.
+    _world_thread: Option<std::thread::JoinHandle<()>>,
     /// The last reading of the machine's disks.
     ///
     /// Kept even with no view on screen, so opening the manager draws the
@@ -566,6 +575,48 @@ struct Footer {
     tunnel_hand: Option<ronoctua_tunnel::Hand>,
     /// `LEADER s t`, while it is open. The cursor previews; `RET` commits.
     theme_chooser: Option<crate::theme_chooser::View>,
+    /// The language and region view, when it is open. `LEADER s l l`.
+    locale: Option<crate::locale::View>,
+    /// What the language view is waiting to be told, while it waits.
+    locale_asking: Option<crate::locale::Asking>,
+    /// The glance, and when it goes away. `LEADER d`.
+    ///
+    /// An `Instant` and MONOTONIC, which is the rule this project has paid
+    /// for: the display view's countdown once froze at fifteen seconds for
+    /// ever because a resume let `systemd-timesyncd` pull the wall clock
+    /// backwards. A glance that never went away would be the chrome invariant
+    /// 14 forbids, arriving by accident.
+    glance: Option<crate::world::Showing>,
+    /// The grounds under the glance's places, as they were DRAWN.
+    ///
+    /// Remembered rather than recomputed, for the reason `band_placed` is:
+    /// the rectangle painted has to be the rectangle the layout produced, and
+    /// a second resolve in the painter is a second answer.
+    glance_stripes: Vec<crate::world::Stripe>,
+    /// What the fetcher has found, as this door last read it.
+    ///
+    /// Read from the FILE and never fetched here: whoever draws gets
+    /// microseconds or nothing, and a socket is neither.
+    world: ronoctua_world::Cache,
+    /// The zone of each place, read ONCE.
+    ///
+    /// Once and not per frame, for the reason `buffer.rs` gives about
+    /// `/etc/localtime`: a TZif file is a table of transitions and reading one
+    /// per drawn line is a syscall per line, for an answer that changes twice
+    /// a year.
+    /// The places in force — the person's if they chose, else the distro's.
+    ///
+    /// Re-read when `world.json` changes, like everything else here. It is
+    /// the person's list and not the generated table: choosing a city is not
+    /// a rebuild-sized decision (invariant 6 makes the file necessary).
+    world_places: Vec<ronoctua_world::prefs::Wanted>,
+    /// The zone of each place, read once per change of the places.
+    ///
+    /// Not per frame, for the reason `buffer.rs` gives about
+    /// `/etc/localtime`: a TZif file is a table of transitions, and reading
+    /// one per drawn line is a syscall per line for an answer that changes
+    /// twice a year.
+    world_zones: Vec<(String, ronoctua_files::when::Zone)>,
     /// The last reading of the machine's power — kept with the view closed,
     /// because the modeline draws its two marks from it.
     power_snapshot: Option<ronoctua_power::Snapshot>,
@@ -768,6 +819,10 @@ enum ViewState {
     /// branch runs before the manager's, and a cursor over a list of facts
     /// holds nothing a person built by hand.
     Power,
+    /// The language and region view. Modal, and ranked with the theme
+    /// chooser for the same reason: a cursor over a list of facts holds
+    /// nothing a person built by hand, so it yields to everything above it.
+    Locale,
     /// The screens. Modal, and BELOW the radio, which IS the pairing
     /// question — the one thing on this list another machine is waiting on,
     /// and the reason the radio outranks everything here.
@@ -1031,6 +1086,8 @@ enum Click {
     Theme(usize),
     /// A row of the power view: the cursor goes there, `RET` acts.
     Power(usize),
+    /// A row of the language and region view.
+    Locale(usize),
     /// A row of the screens' view.
     Display(usize),
     /// A row of the bluetooth view.
@@ -1789,7 +1846,7 @@ pub fn run() -> Result<()> {
         mods: Modifiers::default(),
         inheritance: Inheritance::default(),
         leader: Leader::default(),
-        texts: std::rc::Rc::new(ronoctua_i18n::Texts::from_env()),
+        texts: std::rc::Rc::new(crate::language::texts()),
         tree,
         inputs: Vec::new(),
         buffer_bindings: Vec::new(),
@@ -1868,6 +1925,13 @@ pub fn run() -> Result<()> {
         tunnels: ronoctua_tunnel::Scene::default(),
         tunnel_hand: None,
         theme_chooser: None,
+        locale: None,
+        locale_asking: None,
+        glance: None,
+        glance_stripes: Vec::new(),
+        world: crate::world::cached(),
+        world_places: ronoctua_world::prefs::places(),
+        world_zones: crate::world::zones(&ronoctua_world::prefs::places()),
         power_snapshot: None,
         power_orders: None,
         power: None,
@@ -1910,6 +1974,10 @@ pub fn run() -> Result<()> {
         disks_watching: false,
         files_notice: None,
         _theme_watch: None,
+        _language_watch: None,
+        _world_watch: None,
+        _places_watch: None,
+        _world_thread: None,
         rack: None,
         catalogue: std::sync::Arc::default(),
         apps_stamp: Vec::new(),
@@ -2006,6 +2074,80 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
+    // THE LANGUAGE'S FILE, watched like the theme's. The footer WRITES it when
+    // somebody chooses in `LEADER s l`, and adopts it on the spot so the frame
+    // after the keystroke is already in the new language; this watch is for
+    // the other direction — a window, or a hand editing the file.
+    let (language_sender, language_changed) = channel::channel::<()>();
+    state._language_watch = crate::language::watch(move || language_sender.send(()).is_ok());
+    handle
+        .insert_source(language_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.adopt_the_language();
+                state.draw_and_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the language channel: {e}"))?;
+
+    // THE GLANCE'S CACHE, watched like the theme and the language.
+    //
+    // The thread below writes it; this is what tells the drawing loop that a
+    // temperature has arrived, without the loop ever asking a socket anything.
+    let (world_sender, world_changed) = channel::channel::<()>();
+    state._world_watch = ronoctua_files::notice::Notice::on_file(
+        &ronoctua_store::state_dir().unwrap_or_else(std::env::temp_dir),
+        ronoctua_world::store::FILE,
+        // COALESCED, unlike the theme's: what arrives here is a fetch every
+        // half hour, not a hand moving down a list, and there is no preview
+        // whose latency anybody can see.
+        ronoctua_files::notice::Pace::Coalesced,
+        move || world_sender.send(()).is_ok(),
+    )
+    .ok();
+    handle
+        .insert_source(world_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.world = crate::world::cached();
+                // ONLY WHEN IT IS ON SCREEN. A temperature arriving while the
+                // glance is down is a file changing, not a frame owed.
+                if state.glance.is_some() {
+                    state.draw_and_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the glance channel: {e}"))?;
+
+    // AND THE PLACES THEMSELVES, which are a DIFFERENT file in a different
+    // directory — the person's choices, not what was fetched.
+    //
+    // Watching only the cache was a defect the owner found on the screen:
+    // every switch flipped in the window wrote `world.json` under the config
+    // directory, and the footer was listening to `world-cache.json` under the
+    // state one. The two were both called `world.json` at the time, which is
+    // how a watch on the wrong file reads as a watch on the right one.
+    let (places_sender, places_changed) = channel::channel::<()>();
+    state._places_watch = ronoctua_files::notice::Notice::on_file(
+        &ronoctua_store::config_dir().unwrap_or_else(std::env::temp_dir),
+        ronoctua_world::prefs::FILE,
+        // AT ONCE, like the theme's: what arrives is a person's hand on a
+        // switch, and a quarter of a second of hold-off between the key and
+        // the line is exactly what the theme's watch was changed to avoid.
+        ronoctua_files::notice::Pace::AtOnce,
+        move || places_sender.send(()).is_ok(),
+    )
+    .ok();
+    handle
+        .insert_source(places_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.adopt_the_places();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the places channel: {e}"))?;
+
+    // AND WHAT FILLS IT. `None` when no place asks for anything over the
+    // network, in which case nothing here opens a socket at all.
+    state._world_thread = ronoctua_world::fetch::watch();
 
     // THE FRAMES OF A MOVING FILE, on a channel of their own — see the window
     // door's twin for why they are not on the reports': a frame arrives ten
@@ -2576,6 +2718,15 @@ pub fn run() -> Result<()> {
                 // that is not on screen.
                 state.update_tick = state.update_tick.wrapping_add(1);
                 let updating = crate::update_window::running(state.brain.as_ref());
+                // AND THE GLANCE RETIRES ON THIS CLOCK. One line, one boolean,
+                // no timer of its own — the rule every region here follows.
+                //
+                // The redraw is asked for on EVERY tick while it is up, and
+                // not only on the one that retires it: the clock it draws is a
+                // clock, and a clock that only repaints when it disappears
+                // would show the minute it was opened at for six seconds.
+                let glancing = state.glance.is_some();
+                let glance_over = state.retire_the_glance(now);
                 let beat = state.notifications.tick(now);
                 // WHOEVER SENT IT IS WAITING TO BE TOLD. A client that offered a
                 // button, or that meant to replace this notification with the next
@@ -2592,6 +2743,11 @@ pub fn run() -> Result<()> {
                     // may have taken it. The height changes with it, and so does
                     // the record on disk.
                     state.after_the_queue_moved();
+                } else if glance_over {
+                    // THE HEIGHT CHANGED, so it is a geometry change and not
+                    // only a repaint — the surface has one line fewer.
+                    state.apply_geometry(state.interactivity());
+                    state.draw_and_paint();
                 } else if won
                     || changed
                     || bar
@@ -2600,6 +2756,7 @@ pub fn run() -> Result<()> {
                     || counting
                     || updating
                     || watching
+                    || glancing
                 {
                     state.draw_and_paint();
                 }
@@ -3958,6 +4115,10 @@ impl PointerHandler for Footer {
                     } else {
                         held_changed |= self.notifications.release(std::time::Instant::now());
                     }
+                    // AND THE GLANCE'S CLOCK, by the same rule and for the
+                    // same reason: what is being read is the line, and the
+                    // gaps between its places are as much of it as the words.
+                    held_changed |= self.glance_holds(e.position.0, e.position.1);
                     pointed_at = Some(e.position);
                     // AND THE BRAIN'S LINE, the same way and on the same line:
                     // whatever explains itself does it on the message line and
@@ -4017,6 +4178,10 @@ impl PointerHandler for Footer {
                     // notification held at the edge would stay held until the
                     // hand came back — which is for ever, if it does not.
                     held_changed |= self.notifications.release(std::time::Instant::now());
+                    // AND THE GLANCE'S, for the reason just above: a pointer
+                    // that leaves sends no motion on the way out, so a glance
+                    // held at the edge would stay held for ever.
+                    held_changed |= self.glance_lets_go();
                     self.under_pointer = false;
                     self.row_under_pointer = None;
                     self.cell_under_pointer = None;
@@ -4786,6 +4951,11 @@ impl Footer {
             "display-forget" => self.display_press(crate::display::Press::Forget),
             "display-arrange" => self.display_press(crate::display::Press::Arrange),
             "power-open" => self.open_power(None, None),
+            "locale-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["locale".to_owned()], None);
+                }
+            }
             "power-window" => {
                 if let Ok(me) = std::env::current_exe() {
                     self.open_foreign(&me.to_string_lossy(), &["power".to_owned()], None);
@@ -5138,6 +5308,36 @@ impl Footer {
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
+            // THE GLANCE. It takes no keyboard and no region: it is a line
+            // that appears above the modeline and goes away by itself, so
+            // there is no `region_is_free` to ask and nothing to close.
+            // Asking again while it is up RESTARTS its clock, which is what
+            // pressing the key again means.
+            "world-glance" => {
+                let life = ronoctua_notify::Life::by_id(ronoctua_world::LIFE)
+                    .unwrap_or_default()
+                    .how_long();
+                let was = self.glance_rows();
+                self.glance = Some(crate::world::Showing::new(std::time::Instant::now(), life));
+                if self.glance_rows() != was {
+                    self.apply_geometry(self.interactivity());
+                }
+                self.draw_and_paint();
+            }
+            // THE LANGUAGE AND THE REGION. Same rule as the theme chooser
+            // above: not over the footer's manager, and a second open keeps
+            // the live view rather than building one that has forgotten where
+            // the cursor was.
+            "locale-open" => {
+                if !self.region_is_free("locale-open") {
+                    return;
+                }
+                if self.locale.is_none() {
+                    self.locale = Some(crate::locale::View::fresh());
+                }
+                self.first_page();
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
             "theme-apply" => {
                 let Some(v) = self.theme_chooser.as_mut() else {
                     // No key runs it outside the list; a name typed into
@@ -5190,6 +5390,18 @@ impl Footer {
             "network-forget" => self.network_press(crate::network::Press::Forget),
             // THE FILE IS READ AND LOOKED AT FIRST, and imported only after
             // somebody answered the reading — see `ronoctua_network::vpn`.
+            // THE THREE TYPED ANSWERS OF THE LANGUAGE VIEW. Each is checked
+            // before it is kept: a zone that cannot be read would draw a clock
+            // in UTC under that name, which is the defect `nix/world.nix`
+            // refuses at build time for the distro's own places.
+            "locale-zone" => self.locale_was_told(argument, crate::locale::Asking::Zone),
+            "locale-place" => self.locale_was_told(argument, crate::locale::Asking::Place),
+            "locale-where" => {
+                let asking = self
+                    .locale_asking
+                    .unwrap_or(crate::locale::Asking::Where(0));
+                self.locale_was_told(argument, asking);
+            }
             "network-import" => match argument {
                 Some(path) => self.network_looked_at(path.to_owned()),
                 None => self.network_press(crate::network::Press::Import),
@@ -5412,6 +5624,211 @@ impl Footer {
     /// does on its own. A renderer with no compositor, a test, a nested loop
     /// that went away — none of those is news, and all of them would print it
     /// once per keystroke of a preview.
+    /// What the language and region view asked for.
+    ///
+    /// # Why the language is not applied by this door alone
+    ///
+    /// Because it has to reach ten processes, and the control socket only
+    /// goes INTO the footer. So the answer is the theme's answer: WRITE THE
+    /// FILE, which every door watches. This one then re-reads it like all the
+    /// others, through the same path, so there is one way a language changes
+    /// and not a fast path here and a slow path everywhere else.
+    fn locale_errand(&mut self, errand: crate::locale::Errand) {
+        match errand {
+            crate::locale::Errand::Nothing => self.draw_and_paint(),
+            crate::locale::Errand::Close => {
+                self.locale = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            crate::locale::Errand::Speak(id) => {
+                if let Err(e) = crate::language::persist(id) {
+                    tracing::warn!(error = %e, language = id, "the language could not be written");
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN));
+                } else {
+                    // AND THIS DOOR TAKES IT THE SAME WAY THE OTHERS WILL —
+                    // through the file. The watch would ring anyway; doing it
+                    // here as well is what keeps the frame that follows this
+                    // keystroke from being drawn in the old language.
+                    self.adopt_the_language();
+                }
+                self.draw_and_paint();
+            }
+            crate::locale::Errand::Keep(choice) => {
+                if let Err(e) = crate::locale::prefs::keep(&choice) {
+                    tracing::warn!(error = %e, "the date preferences could not be written");
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN));
+                }
+                // ADOPTED HERE AND NOT LEFT TO A WATCH, so the frame that
+                // follows this keystroke already writes dates the new way.
+                crate::locale::prefs::set(choice);
+                if let Some(v) = self.locale.as_mut() {
+                    v.reread();
+                }
+                self.draw_and_paint();
+            }
+            crate::locale::Errand::Glance(prefs) => {
+                if let Err(e) = crate::locale::glance_keep(&prefs) {
+                    tracing::warn!(error = %e, "the glance's places could not be written");
+                    self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN));
+                }
+                // ADOPTED HERE, so the next `LEADER d` draws what was just
+                // chosen. The watch would bring it too, at the pace a file
+                // watch answers; a person who just flipped a switch is
+                // looking at the screen now.
+                // THROUGH THE SAME DOOR THE WATCH USES. The watch will ring
+                // too; doing it here as well is what keeps the frame that
+                // follows this keystroke from drawing the old places.
+                self.adopt_the_places();
+                if let Some(v) = self.locale.as_mut() {
+                    v.reread();
+                }
+                self.draw_and_paint();
+            }
+            // SOMETHING HAS TO BE TYPED, and typing happens in the minibuffer
+            // — the network view's arrangement, and for its reason: one place
+            // to type is one thing that can be got right.
+            crate::locale::Errand::Ask(asking) => {
+                self.locale_asking = Some(asking);
+                self.mx.request(
+                    match asking {
+                        crate::locale::Asking::Zone => "locale-zone",
+                        crate::locale::Asking::Place => "locale-place",
+                        crate::locale::Asking::Where(_) => "locale-where",
+                    },
+                    false,
+                );
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+        }
+    }
+
+    /// Re-reads the language and repaints in it.
+    ///
+    /// The renderer is told too, and that is not a formality: the locale is
+    /// what decides, among the four unified Han faces, whether an ideograph
+    /// comes out Japanese or Chinese.
+    fn adopt_the_language(&mut self) {
+        let (id, _) = crate::language::resolve();
+        let Some(texts) = ronoctua_i18n::Texts::fresh(&id) else {
+            tracing::error!(language = id, "a declared language did not load");
+            return;
+        };
+        self.texts = std::rc::Rc::new(texts);
+        // THE RENDERER IS TOLD TOO, on every screen this footer has. It is not
+        // a formality: the locale is what decides, among the four unified Han
+        // faces, whether an ideograph comes out Japanese or Chinese, and a
+        // screen left behind would draw the same character two ways.
+        for screen in &mut self.screens {
+            if let Some(t) = screen.text.as_mut() {
+                t.set_locale(&id);
+            }
+        }
+        if let Some(v) = self.locale.as_mut() {
+            v.reread();
+        }
+    }
+
+    /// The minibuffer came back with what the language view asked for.
+    ///
+    /// `None` is the question being opened rather than answered — the command
+    /// runs once to ask and once to be told, which is `network-import`'s
+    /// shape.
+    fn locale_was_told(&mut self, argument: Option<&str>, asking: crate::locale::Asking) {
+        let Some(said) = argument else {
+            self.locale_asking = Some(asking);
+            return;
+        };
+        self.locale_asking = None;
+        let said = said.trim().to_owned();
+        if said.is_empty() {
+            return;
+        }
+        let outcome = match asking {
+            crate::locale::Asking::Zone => crate::locale::took_a_zone(&said),
+            crate::locale::Asking::Place => crate::locale::took_a_place(&said),
+            crate::locale::Asking::Where(n) => crate::locale::took_a_coordinate(n, &said),
+        };
+        match outcome {
+            Ok(()) => {
+                crate::locale::prefs::adopt();
+                self.adopt_the_places();
+                if let Some(v) = self.locale.as_mut() {
+                    v.reread();
+                }
+            }
+            Err(key) => self.echo_message(self.texts.t(key)),
+        }
+        self.draw_and_paint();
+    }
+
+    /// Re-reads the glance's places and repaints if it is up.
+    ///
+    /// The zones come with them: a place that was just added has a zone file
+    /// nobody has opened yet, and reading one per frame is a syscall per
+    /// drawn line for an answer that changes twice a year.
+    fn adopt_the_places(&mut self) {
+        self.world_places = ronoctua_world::prefs::places();
+        self.world_zones = crate::world::zones(&self.world_places);
+        if self.glance.is_some() {
+            self.draw_and_paint();
+        }
+    }
+
+    /// The pointer is at `(x, y)`: hold the glance, or let it go. `true` if
+    /// that changed anything.
+    ///
+    /// ANYWHERE ON THE LINE, and not only on a piece — the band's rule, and
+    /// the same reasoning: a line is read across its whole width.
+    fn glance_holds(&mut self, x: f64, y: f64) -> bool {
+        // THE ROW IS WORKED OUT BEFORE THE BORROW: `glance_line_at` reads
+        // `self`, and `as_mut` holds it.
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let top = f64::from(self.glance_line_at()) * line_height;
+        let Some(showing) = self.glance.as_mut() else {
+            return false;
+        };
+        let on_it = line_height > 0.0 && x >= 0.0 && y >= top && y < top + line_height;
+        let was = showing.held();
+        if on_it {
+            showing.hold(std::time::Instant::now());
+        } else {
+            showing.release(std::time::Instant::now());
+        }
+        showing.held() != was
+    }
+
+    /// The pointer left the surface: the glance's clock goes on.
+    fn glance_lets_go(&mut self) -> bool {
+        let Some(showing) = self.glance.as_mut() else {
+            return false;
+        };
+        let was = showing.held();
+        showing.release(std::time::Instant::now());
+        showing.held() != was
+    }
+
+    /// Takes the glance away when its time is up. `true` if it went.
+    ///
+    /// MONOTONIC, and the deadline was computed monotonically too. A wall
+    /// clock stepped backwards by NTP after a resume would otherwise leave the
+    /// line on screen until the machine caught up with itself — which is the
+    /// display view's frozen countdown, in a region that has no `Esc`.
+    fn retire_the_glance(&mut self, now: std::time::Instant) -> bool {
+        match self.glance {
+            // A HELD GLANCE NEVER GOES — `Showing::over` says so, and the
+            // gesture that undoes the hold is taking the hand away.
+            Some(showing) if showing.over(now) => {
+                self.glance = None;
+                self.glance_stripes.clear();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn tell_the_compositor_to_reread(&self) {
         let asked = ronoctua_niri::Niri::connect().and_then(|mut n| n.reload_config());
         if let Err(e) = asked {
@@ -7018,6 +7435,38 @@ impl Footer {
         // moving the cursor is a PREVIEW, so the theme is set on the way and put
         // back on `Esc`. See `theme_chooser.rs` for why the preview is this
         // door's alone.
+        // THE LANGUAGE AND REGION VIEW. Four keys and no preview: choosing a
+        // language WRITES, because the file is how the other doors hear about
+        // it, and there is nothing to put back on `Esc`.
+        if self.view() == ViewState::Locale {
+            use ronoctua_keymap::Sym;
+            let press = match key.sym {
+                Sym::Esc => Some(crate::locale::Press::Escape),
+                Sym::Down => Some(crate::locale::Press::Down),
+                Sym::Up => Some(crate::locale::Press::Up),
+                Sym::Enter => Some(crate::locale::Press::Enter),
+                // `S-<arrows>` TURN THE RING, which is this system's rule
+                // wherever a row has a value: the bluetooth volume, the
+                // display view's modes, the manager's sections. The plain
+                // arrows walk the list and are handled above.
+                Sym::Left if key.mods.shift => Some(crate::locale::Press::Less),
+                Sym::Right if key.mods.shift => Some(crate::locale::Press::More),
+                _ => None,
+            };
+            if let Some(press) = press {
+                let zone = std::mem::take(&mut self.zone);
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = self
+                    .locale
+                    .as_mut()
+                    .map(|v| v.press(press, &zone, &texts))
+                    .unwrap_or(crate::locale::Errand::Nothing);
+                self.zone = zone;
+                self.locale_errand(errand);
+            }
+            return;
+        }
+
         if self.view() == ViewState::Themes {
             use ronoctua_keymap::Sym;
             match key.sym {
@@ -8047,6 +8496,8 @@ impl Footer {
             ViewState::Network
         } else if self.theme_chooser.is_some() {
             ViewState::Themes
+        } else if self.locale.is_some() {
+            ViewState::Locale
         } else if self.bluetooth.is_some() {
             // ABOVE THE POWER VIEW, and the key branch says the same: a
             // pairing question is the one thing on this list that another
@@ -8107,6 +8558,28 @@ impl Footer {
         crate::band::rows(self.notifications.showing()).min(BAND_CEILING)
     }
 
+    /// How many lines the glance takes: one while it is up, none otherwise.
+    ///
+    /// # Where it sits, and why there
+    ///
+    /// BETWEEN the notification band and the modeline. Above the modeline for
+    /// the band's reason — the modeline is the one line on screen that says
+    /// where you are, and nothing may take it. Below the band because a
+    /// notification arriving must not shift a line somebody is in the middle
+    /// of reading, and the band is the region that comes and goes on somebody
+    /// else's schedule.
+    ///
+    /// Not a function of the width, like the two regions either side of it:
+    /// see [`crate::world::rows`].
+    fn glance_rows(&self) -> u16 {
+        crate::world::rows(self.glance.is_some())
+    }
+
+    /// Which line of the surface the glance is on, when it is up.
+    fn glance_line_at(&self) -> u16 {
+        self.band_rows()
+    }
+
     /// A sequence as the person would type it, leader included.
     ///
     /// The trigger's own notation comes from the ENVIRONMENT (`crate::leader`):
@@ -8143,12 +8616,12 @@ impl Footer {
     /// move on the SCREEN. That is the whole point of the band being up there
     /// rather than on the modeline itself.
     fn modeline_line(&self) -> u16 {
-        self.band_rows()
+        self.band_rows() + self.glance_rows()
     }
 
     /// Which line of the surface the minibuffer is on. Glued under the modeline.
     fn minibuffer_line(&self) -> u16 {
-        self.band_rows() + 1
+        self.modeline_line() + 1
     }
 
     /// How many lines the OPENED minibuffer line takes. `0` while it is folded.
@@ -8165,7 +8638,7 @@ impl Footer {
     /// continuing: a drawer that opened somewhere else would be a second thing
     /// on screen rather than the same one, longer.
     fn fold_line_at(&self) -> u16 {
-        self.band_rows() + FOOTER_LINES
+        self.modeline_line() + FOOTER_LINES
     }
 
     /// Which line of the surface the brain's is on, when it is on one.
@@ -8178,7 +8651,7 @@ impl Footer {
     /// which is exactly the defect [`Self::first_of_expansion`] exists to
     /// remove.
     fn brain_line_at(&self) -> u16 {
-        self.band_rows() + FOOTER_LINES + self.fold_rows()
+        self.modeline_line() + FOOTER_LINES + self.fold_rows()
     }
 
     /// The first line of the expanded region.
@@ -8188,7 +8661,7 @@ impl Footer {
     /// the same thing, and the one that gets it wrong is the one nobody looks
     /// at: the cursor describes the line above.
     fn first_of_expansion(&self) -> u16 {
-        self.band_rows() + FOOTER_LINES + self.fold_rows() + self.brain_rows()
+        self.modeline_line() + FOOTER_LINES + self.fold_rows() + self.brain_rows()
     }
 
     /// The height wanted right now, in px.
@@ -8207,10 +8680,17 @@ impl Footer {
         // yields to both.
         //
         // The band is added and not ordered against them: it is not a use of
-        // the expanded region, it is a region of its own, above the pair.
-        let lines =
-            u32::from(FOOTER_LINES + self.band_rows() + self.fold_rows() + self.brain_rows())
-                + u32::try_from(self.expansion_rows()).unwrap_or(0);
+        // the expanded region, it is a region of its own, above the pair. THE
+        // GLANCE IS A THIRD SUCH REGION, added the same way and for the same
+        // reason — and, like the band, deliberately NOT counted against the
+        // expansion's ceiling; see `expansion_ceiling`.
+        let lines = u32::from(
+            FOOTER_LINES
+                + self.band_rows()
+                + self.glance_rows()
+                + self.fold_rows()
+                + self.brain_rows(),
+        ) + u32::try_from(self.expansion_rows()).unwrap_or(0);
         (tokens::metrics::line_height(tokens::text::size()) * lines as f32).ceil() as u32
     }
 
@@ -8251,6 +8731,11 @@ impl Footer {
         // lines of band are not counted against the ceiling. Whether it should
         // join is a separate question — the band is transient in a way these
         // are not — and it is flagged rather than folded in silently.
+        // THE GLANCE IS NOT IN IT EITHER, for the band's reason and by the
+        // same deliberate choice: it is one line, it goes away by itself, and
+        // counting it would shrink an open manager for six seconds and grow it
+        // back — a region resizing under somebody's hand because a clock was
+        // asked for elsewhere.
         // AND THE OPENED LINE IS FIXED TOO while it is open: it is a constant
         // number of rows the footer is spending, exactly as the brain's line
         // is, and leaving it out would let the two together walk past the
@@ -8901,10 +9386,25 @@ impl Footer {
                     // two captures apart in the list.
                     text: e.text().map_or_else(
                         || {
-                            format!(
-                                "{} · {} KB",
-                                self.texts.t("clipboard-image"),
-                                e.content.bytes().len() / 1024
+                            // AND A REFUSAL SAYS WHAT ARRIVED. Without this
+                            // line the row would read as an image of nought
+                            // kilobytes — an entry that says nothing about
+                            // itself is the defect this variant exists to
+                            // remove, not a smaller version of it.
+                            e.unreadable().map_or_else(
+                                || {
+                                    format!(
+                                        "{} · {} KB",
+                                        self.texts.t("clipboard-image"),
+                                        e.content.bytes().len() / 1024
+                                    )
+                                },
+                                |no| {
+                                    self.texts.t_with(
+                                        ronoctua_i18n::key::CLIPBOARD_UNREADABLE,
+                                        &[("kind", no.kind.as_str())],
+                                    )
+                                },
                             )
                         },
                         one_line,
@@ -9243,6 +9743,26 @@ impl Footer {
                 .enumerate()
                 .map(|(n, r)| ExpansionRow {
                     click: (!r.heading).then_some(Click::Power(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Locale
+            && let Some(v) = self.locale.as_ref()
+        {
+            // THE LANGUAGE AND REGION ROWS, as `fields` — the power view's
+            // precedent. A heading is not a row to click on, and neither is a
+            // note: both answer `heading`, so both are skipped here for the
+            // same reason the cursor skips them.
+            let width = self.screen_columns();
+            return v
+                .rows(width, &self.zone, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Locale(n)),
                     fields: r.fields,
                     foot: false,
                     ..ExpansionRow::empty_one()
@@ -10676,6 +11196,28 @@ impl Footer {
                 }
                 self.draw_and_paint();
             }
+            Some(Click::Locale(n)) => {
+                // THE CLICK IS THE `RET` OF THE ROW IT LANDS ON, which is the
+                // rule these views follow: aim, then act, in one gesture.
+                // Nothing here empties the screen — the worst a row does is
+                // change the language, which the next row changes back.
+                // THE PAIR IS TAKEN INSIDE THE BORROW AND ACTED ON OUTSIDE
+                // IT: `v` holds `self`, and writing a file is the footer's
+                // own business. It is the shape the theme chooser's arrows
+                // already have, and for the same borrow.
+                let width = self.screen_columns();
+                let zone = std::mem::take(&mut self.zone);
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = self.locale.as_mut().map(|v| {
+                    let rows = v.rows(width, &zone, &texts);
+                    v.clicked(n, &rows);
+                    v.press(crate::locale::Press::Enter, &zone, &texts)
+                });
+                self.zone = zone;
+                if let Some(errand) = errand {
+                    self.locale_errand(errand);
+                }
+            }
             Some(Click::Power(n)) => {
                 // THE MOUSE AIMS, THE KEYS ACT: a click puts the cursor on the
                 // row, and `RET` is what applies, arms and confirms — the four
@@ -10930,6 +11472,7 @@ impl Footer {
                 .as_ref()
                 .map(crate::theme_chooser::View::row),
             ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
+            ViewState::Locale => self.locale.as_ref().map(crate::locale::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
             // The manager's cursor, so the region scrolls with it — the same
@@ -11439,6 +11982,7 @@ impl Footer {
         // closure below borrows and cannot reach back into `self`.
         let (records, book) = (self.notifications.history(), &self.book);
         let power = &self.power;
+        let locale = &self.locale;
         let display = &self.display;
         // THE READING TOO, because this view's hint depends on whether the
         // screen its level is about is still there — see `display::View::hint`.
@@ -11484,6 +12028,10 @@ impl Footer {
                     )
                 }),
                 ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
+                // THE LANGUAGE AND REGION VIEW: `RET` chooses and nothing on
+                // a row says so, which is the same reason every view above
+                // has a line here.
+                ViewState::Locale => locale.as_ref().map(|v| v.hint(texts)),
                 ViewState::Display => display
                     .as_ref()
                     .map(|v| v.hint(screens, std::time::Instant::now(), texts)),
@@ -11910,6 +12458,39 @@ impl Footer {
                 }
             }
             self.band_placed = band;
+
+            // THE GLANCE, between the band and the modeline.
+            //
+            // Nothing is remembered for the pointer as a CONTROL — none of it
+            // is one, and clicking it does nothing. What the pointer does ask
+            // about is the LINE: resting anywhere on it stops the clock, the
+            // way resting on the notification band does.
+            if self.glance.is_some() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+                let drawn = crate::world::line(
+                    &self.world_places,
+                    &self.world,
+                    columns,
+                    now,
+                    self.glance,
+                    &self.world_zones,
+                    &self.texts,
+                );
+                self.glance_stripes = drawn.stripes;
+                for piece in drawn.pieces {
+                    spans.extend(glyph_and_text(
+                        &piece.text,
+                        piece.at,
+                        self.glance_line_at(),
+                        piece.color,
+                        false,
+                    ));
+                }
+            } else {
+                self.glance_stripes.clear();
+            }
 
             // THE BRAIN'S LINE, under the minibuffer.
             //
@@ -12687,6 +13268,28 @@ impl Footer {
                     width: width as f32,
                     height: f32::from(modeline_line) * line_height,
                     color: tokens::color::NOTIFICATION_BACKGROUND,
+                });
+            }
+
+            // AND THE GLANCE'S STRIPES, one per place, alternating.
+            //
+            // AFTER the band's ground and BEFORE the text, which is the whole
+            // arrangement: the band paints the region from the top down to the
+            // modeline in one tone, and these lay the alternation over the one
+            // line that is the glance's. Painted before the letters because
+            // the order in this list is the order on the screen.
+            //
+            // What they are FOR: with several places side by side, a separator
+            // alone leaves the eye a row of words with nothing to group them
+            // by. A change of ground is the one device invariant 15 leaves —
+            // no border, no radius, no shadow.
+            for stripe in &self.glance_stripes {
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: f32::from(stripe.at) * cell,
+                    y: f32::from(self.glance_line_at()) * line_height,
+                    width: f32::from(stripe.cells) * cell,
+                    height: line_height,
+                    color: stripe.color,
                 });
             }
 

@@ -18,8 +18,10 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod decode;
 pub mod image;
 pub mod qr;
 pub mod queue;
 
+pub use decode::{Undecodable, decode};
 pub use queue::{Content, Entry, Queue};

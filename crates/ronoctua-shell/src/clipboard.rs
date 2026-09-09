@@ -46,13 +46,33 @@ use wayland_protocols_wlr::data_control::v1::client::{
 
 /// What the watcher accepts, in ORDER OF PREFERENCE.
 ///
-/// Explicit UTF-8 first, because it is the only one that declares the
-/// encoding. `text/plain` with no charset is a guess that almost always gets
-/// it right, and `STRING` is the X legacy that XWayland still emits.
-const TEXT_KINDS: [&str; 4] = [
+/// # The order is by how much the type TELLS US
+///
+/// The two that name UTF-8 come first, because a declared encoding needs no
+/// interpretation at all. Then UTF-16, in its three spellings — the encoding
+/// Java, Qt on Windows and Wine offer, and the one the owner asked about by
+/// name. Then `text/plain` bare, which every modern application means as
+/// UTF-8. Last `STRING`, which is Latin-1 by the ICCCM: exact, but it can only
+/// carry 256 characters, so preferring it over a UTF-8 offer of the same
+/// selection would throw away every accent on purpose.
+///
+/// `COMPOUND_TEXT` is deliberately NOT here. It is stateful, with embedded
+/// escape sequences that switch character set mid-string; accepting it and
+/// decoding it as anything simpler would put those sequences on screen as
+/// letters. An application offering only that is refused, and the refusal is
+/// reported — which is the honest end of a type nothing here can read.
+///
+/// Which one of these actually arrives is also what tells
+/// `ronoctua_clipboard::decode` how to read the bytes, so the two lists cannot
+/// drift: this is the list, and it is passed on with the payload.
+const TEXT_KINDS: [&str; 8] = [
     "text/plain;charset=utf-8",
-    "text/plain",
     "UTF8_STRING",
+    "text/plain;charset=utf-16",
+    "text/plain;charset=utf-16le",
+    "text/plain;charset=utf-16be",
+    "text/plain",
+    "text/plain;charset=iso-8859-1",
     "STRING",
 ];
 
@@ -180,10 +200,30 @@ impl Watcher {
         let content = if is_image {
             ronoctua_clipboard::Content::Image(raw)
         } else {
-            match String::from_utf8(raw) {
+            // THE TYPE SAYS HOW TO READ THE BYTES, and until this was written
+            // the answer was always UTF-8: a copy from an application that
+            // offers UTF-16 was dropped here, with a `debug!` line as the only
+            // trace. Nothing on screen, nothing in the history, no way to tell
+            // it from a copy that never happened.
+            match ronoctua_clipboard::decode(kind, &raw) {
                 Ok(t) => ronoctua_clipboard::Content::Text(t),
-                Err(_) => {
-                    tracing::debug!(kind, "the selection claimed to be text and is not UTF-8");
+                Err(no) => {
+                    // REFUSAL IS A VALUE. It goes down the same channel as an
+                    // entry, so the footer can say what arrived and could not
+                    // be read — a blank history and a refused type look the
+                    // same on screen, and only one of them is worth a word.
+                    tracing::debug!(
+                        kind = no.kind,
+                        bytes = no.bytes,
+                        "the selection claims to be text in an encoding nothing here reads"
+                    );
+                    if let Some(c) = &self.channel {
+                        let _ = c.send(ronoctua_clipboard::Entry {
+                            content: ronoctua_clipboard::Content::Unreadable(no),
+                            kinds,
+                            pinned: false,
+                        });
+                    }
                     return;
                 }
             }

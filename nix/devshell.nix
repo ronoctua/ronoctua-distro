@@ -7,7 +7,7 @@
   inputs,
   gitHooks,
   wit,
-  bufferComponents,
+  atRunTime,
   generated,
   iconSuperpack,
 }:
@@ -98,7 +98,7 @@ pkgs.mkShell {
   # Splatted, the nineteenth arrives on its own. `nix/dev.nix` reads the same
   # table for the same reason, and `dev-exports-what-the-build-bakes` is the
   # guard on that side.
-  env = generated // bufferComponents;
+  env = generated // atRunTime;
   # The icon superpackage, for the PIXMAP step of the app
   # launcher. Without it `nix run .#dev` would show only the glyphs, and half
   # of the path that depends most on the screen would never be seen here.

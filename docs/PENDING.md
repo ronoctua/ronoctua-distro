@@ -19,6 +19,52 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.000004. O que falta de `LEADER s l`, e o relance que não existe · médio cada
+
+A vista de idioma e região existe no RODAPÉ (`s l`), troca de idioma ao vivo nas dez portas, e
+o relógio e a ordem da data alcançam toda data do sistema. Duas coisas do pedido do dono ficaram
+de fora, e nenhuma está começada — não há meio código no caminho de ninguém.
+
+- **A MOEDA de um lugar ainda não se escolhe na tela.** Acrescentar e remover lugares, escolher o
+  fuso desta interface e o que cada lugar mostra já são teclas (`LEADER s l`); o par de câmbio
+  (`GBP` → `BRL`) continua vindo do `assets/world.nix` e um lugar acrescentado à mão nasce sem
+  nenhum, então a linha do câmbio dele fica desligada. São três letras digitadas de cada lado, e
+  o caminho já existe — é o mesmo `Asking` do fuso e da coordenada. **Como saber que acabou:**
+  acrescentar Lisboa, ligar o câmbio dela e ver `1 EUR = …` no relance.
+
+- **Não há completação ao digitar um fuso.** O minibuffer pergunta e o nome é conferido contra o
+  ARQUIVO (`a_real_zone`), então errar diz "não existe fuso com esse nome" — o que é honesto e
+  não é ajuda. São umas quatrocentas zonas e o instalador já lê a lista
+  (`available_timezones`, do `zone1970.tab`). **Como saber que acabou:** digitar `Lis` e ver
+  `Europe/Lisbon` oferecido.
+
+### 0.000005. O que a exibição de escritas ainda não alcança · pequeno cada
+
+A cadeia de fallback existe, 37 escritas desenham e a régua da célula conhece a largura leste-
+asiática (ver `docs/ARCHITECTURE.md`, "Duas cadeias de fallback"). Três coisas ficam de fora, e
+nenhuma é um defeito escondido: são limites medidos.
+
+- **A tinta do CJK é mais estreita que a célula reservada.** Medido: o ideograma anda 1,667
+  célula das 2 que a régua dá, e o hangul 1,533. Nada se sobrepõe — sobra vão, e uma linha de
+  japonês fica com entreletra folgada. Fechar exige reescalar as cinco faces `NotoSansMonoCJK`
+  para `upem 833` mexendo em `head` E no `FontMatrix` do `CFF2`, porque com `CFF2` os contornos
+  têm escala própria. **Como saber que acabou:** o `ronoctua-test-faces` imprimir 2,000 para o
+  ideograma, e uma foto de um parágrafo em japonês ao lado do mesmo em latim mostrar a mesma
+  cor de página.
+
+- **Não dá para DIGITAR japonês, só exibir.** Não há `zwp_text_input_v3` nem
+  `zwp_input_method_v2` em lugar nenhum da árvore, então não há pré-edição nem string de commit;
+  e o `Input::Char` do WIT é um `char`, então `buffer.rs` toma `utf8?.chars().next()?` e joga
+  fora o resto. Com IME isso perderia a composição inteira. O pedido do dono era exibição, e é o
+  que existe. **Como saber que acabou:** um IME de verdade (fcitx5, ibus) compondo numa janela
+  nossa, com a pré-edição desenhada.
+
+- **RTL se reordena DENTRO do span, e o layout à volta é da esquerda para a direita.** O
+  cosmic-text roda o algoritmo bidi em cada `Buffer`, que é o que faz o hebraico do clipboard
+  sair na ordem certa. O que não existe é uma tela cuja direção seja RTL — rótulo à direita,
+  valor à esquerda —, e nem precisa: os dois idiomas declarados são LTR. **Como saber que
+  acabou:** só se um idioma RTL for declarado; até lá, isto é registro do limite, não tarefa.
+
 ### 0.00001. O tamanho do texto: o que ele ainda não alcança · pequeno cada
 
 O texto do shell anda de 70% a 200%, **tudo** que o host desenha anda junto, as dez portas ouvem o

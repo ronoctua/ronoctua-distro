@@ -30,6 +30,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod chain;
 pub mod gpu;
 
 /// The instant from which the "first frame" is counted.

@@ -38,6 +38,10 @@ path = "src/bin/test-faces.rs"
 # comment on `layout::units`.
 unicode-segmentation = "1"
 ronoctua-tokens = { path = "../ronoctua-tokens" }
+# THE ONE RULER lives there, and `layout::width` is it. It used to be a second
+# copy of the same `graphemes().count()`, which was harmless while the answer
+# was always one cell and became two rulers the day an ideograph was two.
+ronoctua-protocol = { path = "../ronoctua-protocol" }
 
 # Section 7.7: wgpu + cosmic-text + glyphon, NO vello. The workload is glyphs,
 # rectangles and one-line rules; UI icons are glyphs (6.3), so there is no
@@ -45,6 +49,10 @@ ronoctua-tokens = { path = "../ronoctua-tokens" }
 wgpu.workspace = true
 glyphon.workspace = true
 cosmic-text.workspace = true
+# Named by the generated fallback chain (`src/chain.rs`). Same pin as the one
+# `cosmic-text` uses, because the `Script` we match on has to be the `Script`
+# its trait hands us.
+unicode-script.workspace = true
 
 raw-window-handle.workspace = true
 pollster.workspace = true

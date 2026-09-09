@@ -1505,6 +1505,59 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // No `theme-next`: `check-keymap` refuses a command with no key, and a
         // key outside the list would cycle a palette nobody can see the name of.
         // ---------------------------------------------------------------
+        // THE GLANCE. At the FIRST level, where `a`, `c` and `.` are, and
+        // the owner chose it there: a glance exists to be instant, and at
+        // three keys it competes with looking at a clock some other way.
+        Command {
+            id: "world-glance",
+            label: key::CMD_WORLD_GLANCE,
+        },
+        // THE LANGUAGE AND THE REGION. Under `s` because what it changes
+        // is what the MACHINE says back — the same group as the theme, the
+        // screens and the clock's zone, and not something one does WITH the
+        // machine.
+        Command {
+            id: "locale-open",
+            label: key::CMD_LOCALE_OPEN,
+        },
+        Command {
+            id: "locale-window",
+            label: key::CMD_LOCALE_WINDOW,
+        },
+        Command {
+            id: "locale-up",
+            label: key::CMD_LOCALE_UP,
+        },
+        Command {
+            id: "locale-down",
+            label: key::CMD_LOCALE_DOWN,
+        },
+        Command {
+            id: "locale-enter",
+            label: key::CMD_LOCALE_ENTER,
+        },
+        Command {
+            id: "locale-less",
+            label: key::CMD_LOCALE_LESS,
+        },
+        Command {
+            id: "locale-more",
+            label: key::CMD_LOCALE_MORE,
+        },
+        // THE THREE THE MINIBUFFER ANSWERS. Reachable by name like every
+        // other command, and run twice: once to ask, once to be told.
+        Command {
+            id: "locale-zone",
+            label: key::CMD_LOCALE_ZONE,
+        },
+        Command {
+            id: "locale-place",
+            label: key::CMD_LOCALE_PLACE,
+        },
+        Command {
+            id: "locale-where",
+            label: key::CMD_LOCALE_WHERE,
+        },
         Command {
             id: "theme-open",
             label: key::CMD_THEME_OPEN,
@@ -1810,6 +1863,13 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
         // any one buffer's: the same drawer as memory, format and the brain.
         ("s t", "theme-open", None),
+        // `s l` — LANGUAGE, and the letter is free under `s`.
+        // `w` for WINDOW, the letter every view with a second door uses.
+        ("s l l", "locale-open", None),
+        ("s l w", "locale-window", None),
+        // `d` for DATE — the first free letter of the first level, and a
+        // glance is asked for often enough to earn one.
+        ("d", "world-glance", None),
         // `s q` — THE WAYS OUT, under SYSTEM at the owner's word.
         //
         // They held a letter of their own at the first level, and what they do
@@ -1929,6 +1989,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s d", key::GROUP_DISPLAY),
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
+        ("s l", key::GROUP_LOCALE),
         ("s q", key::GROUP_QUIT),
     ];
 
@@ -2025,6 +2086,17 @@ pub fn default_of() -> Result<(Tree, Registry)> {
 /// length: in a list of NAMES the letter is query, so anything that is a
 /// command has to be something a name never is. In the manager's MENU the same
 /// idea is a bare `s`, because a menu row is not a list of names.
+/// The glance's key, BESIDE its binding.
+///
+/// A sentence that needs to teach it interpolates this plus `crate::leader()`
+/// — never the letters written out. A key spelt into a `.ftl` ages the day the
+/// key moves, and `n h` taught `n h` for weeks after it became `n n`.
+pub const GLANCE_KEYS: &str = "d";
+
+/// The language and region view's keys, BESIDE its binding — see
+/// [`GLANCE_KEYS`] for why a sentence may not spell them out.
+pub const LOCALE_KEYS: &str = "s l l";
+
 pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
 
 /// The commands the clipboard VIEW reaches, with each one's key.
@@ -2101,6 +2173,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .map(|(_, id)| *id),
     );
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::locale::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::display::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id)| *id));
@@ -2721,6 +2794,17 @@ mod tests {
             "power-more",
             "power-up",
             "power-down",
+            "world-glance",
+            "locale-open",
+            "locale-window",
+            "locale-less",
+            "locale-more",
+            "locale-zone",
+            "locale-place",
+            "locale-where",
+            "locale-enter",
+            "locale-up",
+            "locale-down",
             "bluetooth-more",
             "bluetooth-settings",
             "bluetooth-less",
@@ -2807,6 +2891,14 @@ mod tests {
             "network-open",
             "network-airplane",
             "theme-open",
+            "world-glance",
+            "locale-open",
+            "locale-window",
+            "locale-less",
+            "locale-more",
+            "locale-zone",
+            "locale-place",
+            "locale-where",
             "theme-apply",
             "network-scan",
             "network-connect",

@@ -416,21 +416,34 @@ mod tests {
         }
     }
 
-    /// The budget is in CELLS, and a cell is a cluster.
+    /// The budget is in CELLS, the cut is on CLUSTERS, and they are not the
+    /// same number.
     ///
-    /// Every other test here uses Latin-1, where a character and a cluster are
-    /// the same thing — so all of them passed just as happily when this file
-    /// measured with `chars()`. The couple is six codepoints and one cell: it
-    /// fits in a budget of one, and cutting it by codepoint would not shorten
-    /// it but redraw it as two different emoji.
+    /// Every other test here uses Latin-1, where a character, a cluster and a
+    /// cell are all one thing — so all of them passed just as happily when
+    /// this file measured with `chars()`. The couple is six codepoints, ONE
+    /// cluster and TWO cells: cutting it by codepoint would not shorten it but
+    /// redraw it as two different emoji, and budgeting it as one cell would
+    /// draw it over the column next door.
     #[test]
-    fn a_cluster_is_one_cell_however_many_codepoints_it_has() {
+    fn a_cluster_is_one_thing_and_may_be_two_cells() {
         let couple = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}";
         assert_eq!(couple.chars().count(), 6, "six codepoints");
-        assert_eq!(ronoctua_render::layout::width(couple), 1, "one cell");
+        assert_eq!(
+            ronoctua_render::layout::cells_of(couple).count(),
+            1,
+            "one cluster"
+        );
+        assert_eq!(ronoctua_render::layout::width(couple), 2, "two cells");
         assert_eq!(elide_to_budget(couple, 4, 0, 80), couple);
-        assert_eq!(elide_to_budget(couple, 1, 0, 80), couple);
-        assert!(!elide_to_budget(couple, 1, 0, 80).contains('\u{2026}'));
+        // A BUDGET OF ONE CANNOT HOLD IT, and used to be handed it anyway.
+        assert_eq!(elide_to_budget(couple, 1, 0, 80), "\u{2026}");
+        // And the ideograph, which is the case this ruler was taught for.
+        assert_eq!(ronoctua_render::layout::width("\u{65E5}\u{672C}"), 4);
+        assert_eq!(
+            elide_to_budget("\u{65E5}\u{672C}", 4, 0, 80),
+            "\u{65E5}\u{672C}"
+        );
     }
 
     #[test]
