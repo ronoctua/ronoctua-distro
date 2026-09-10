@@ -108,6 +108,12 @@ in
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_PDFINFO =
     "${pkgs.poppler-utils}/bin/pdfinfo";
 
+  # PLAYERCTL IS NOT HERE, and that is the point: it moved to
+  # `nix/modules/base.nix`. The media keys are bound by the compositor's config
+  # unconditionally, so the program they call has to exist unconditionally too
+  # — under this switch, `ronoctua.profile = "minimal"` would leave three bare
+  # keys dead with nothing on screen saying why.
+
   # THE VA-API DRIVERS ARE NOT UNDER THE SWITCH, at the bottom of the file: they
   # are hardware enablement and not an application. A reduced machine has the
   # same GPU, and the compositor decodes with them.
@@ -157,7 +163,6 @@ in
         # ---- audio, the session's own ----
         pavucontrol
         crosspipe # the PipeWire patchbay (helvum was removed upstream)
-        playerctl # MPRIS: what a media key talks to
         alsa-utils
 
         # `vainfo` is how one finds out whether hardware decoding actually took.

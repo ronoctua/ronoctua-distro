@@ -35,6 +35,7 @@ members = [
   "crates/ronoctua-memory",
   "crates/ronoctua-power",
   "crates/ronoctua-display",
+  "crates/ronoctua-audio",
   "crates/ronoctua-bluetooth",
   "crates/ronoctua-keyboards",
   "crates/ronoctua-tunnel",

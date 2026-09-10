@@ -84,6 +84,23 @@ pub fn assemble(texts: &Texts, chord: &str) -> Vec<Line> {
         });
     }
 
+    // THE KEYBOARD'S TOP ROW, for the emergency binds' reason: a key that is
+    // bound and appears in no list is a key nobody can find out about. These
+    // are the only bare binds besides those four, and they are the ones a
+    // person is most likely to press without ever reading anything.
+    out.push(Line {
+        key: String::new(),
+        description: texts.t(key::HELP_MEDIA),
+        title: true,
+    });
+    for (key, _, command) in crate::actions::media() {
+        out.push(Line {
+            key: key.to_owned(),
+            description: texts.t(&format!("{}{command}", ronoctua_cmd::KEY_PREFIX_OF)),
+            title: false,
+        });
+    }
+
     out
 }
 
@@ -110,6 +127,15 @@ mod tests {
             assert!(
                 m.iter().any(|l| l.key == key),
                 "the emergency bind `{key}` does not appear in the manual"
+            );
+        }
+        // AND THE MEDIA KEYS. They are bare binds too, and the manual is the
+        // only place they are written down — the hint line never teaches
+        // them, because they belong to no view.
+        for (key, _, _) in crate::actions::media() {
+            assert!(
+                m.iter().any(|l| l.key == key),
+                "the media bind `{key}` does not appear in the manual"
             );
         }
     }

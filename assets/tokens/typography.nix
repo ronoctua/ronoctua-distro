@@ -188,6 +188,27 @@
     # here rather than in a `.ftl` because a resolution is not a sentence: it
     # is one number, a sign, and another number, in every language.
     times = "×";
+    # THE BAR, and there is ONE of it in the system.
+    #
+    # A volume, a microphone's level and anything else that is "this much of
+    # that" are the same drawing at different scales, and `chrome::meter` is
+    # the one function that builds it. They are here and not in
+    # `assets/tokens/icons.nix` for the reason the separator is: that file
+    # maps a token to a NERD FONTS GLYPH NAME, and these are ordinary
+    # characters of the text face.
+    #
+    # Not a rectangle of quads, either. Invariant 10 says the icons of this
+    # interface are glyphs of the font, and a bar drawn as quads would need
+    # its own colour, its own rounding and its own answer to how wide a cell
+    # is — three questions the text pipeline has already answered.
+    #
+    # MEASURED in the real face (`NoctuaIosevkaNerdFontMono-Regular.ttf`,
+    # upem 1000): both advance **600**, which is exactly one cell. They are
+    # also East_Asian_Width AMBIGUOUS, which `ronoctua_protocol::cells` calls
+    # NARROW on purpose — so a bar of n glyphs is n cells and the budget
+    # arithmetic never has to know it is a bar.
+    "meter-full" = "▮";
+    "meter-empty" = "▯";
     "arrow-left" = "←";
     "arrow-right" = "→";
     "arrow-up" = "↑";

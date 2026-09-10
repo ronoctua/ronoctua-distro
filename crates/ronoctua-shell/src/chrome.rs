@@ -1245,6 +1245,59 @@ pub fn value_column(left: u16, room: u16) -> u16 {
     left + tokens::space::VIEW_LABELCELLS.min(room / 2).max(1)
 }
 
+/// A bar, `cells` wide, `percent` of it filled.
+///
+/// # Why there is one of these
+///
+/// A volume, a microphone's level and anything else that is "this much of
+/// that" are the same drawing, and three of them written in three places
+/// would be three answers to how a half-filled cell rounds.
+///
+/// # Why it is glyphs and not a rectangle
+///
+/// Invariant 10: the icons of this interface are glyphs of the font. A bar of
+/// quads would need its own colour, its own rounding and its own answer to how
+/// wide a cell is — three questions the text pipeline has already answered —
+/// and it could not be cut by the same budget arithmetic as the words beside
+/// it. The two marks are measured at exactly one cell each in the real face,
+/// and `ronoctua_protocol::cells` calls them narrow, so a bar of `n` glyphs is
+/// `n` cells and nothing downstream has to know it is a bar.
+///
+/// # The rounding
+///
+/// It ROUNDS rather than truncating, but a percentage above zero never draws
+/// as empty and one below full never draws as full. A meter that showed
+/// nothing at 2% would say the microphone is dead, and one that showed full at
+/// 99% would say a volume is at the top when a key can still move it.
+#[must_use]
+pub fn meter(percent: u8, cells: u16) -> String {
+    if cells == 0 {
+        return String::new();
+    }
+    let room = u32::from(cells);
+    let percent = u32::from(percent).min(100);
+    // ROUND HALF UP, written as the arithmetic and not as a pair of nested
+    // divisions: `(p*c + 50) / 100` is `round(p*c/100)`, and the version this
+    // replaced truncated a half — 75% of ten cells drew seven.
+    let mut filled = (percent * room + 50) / 100;
+    if percent > 0 {
+        filled = filled.max(1);
+    }
+    if percent < 100 {
+        filled = filled.min(room.saturating_sub(1));
+    }
+    let filled = usize::try_from(filled.min(room)).unwrap_or(0);
+    let empty = usize::try_from(room).unwrap_or(0).saturating_sub(filled);
+    let mut out = String::with_capacity(filled + empty);
+    for _ in 0..filled {
+        out.push(tokens::mark::METER_FULL);
+    }
+    for _ in 0..empty {
+        out.push(tokens::mark::METER_EMPTY);
+    }
+    out
+}
+
 /// The label and the value of one row, placed and cut.
 ///
 /// An EMPTY value gives the label the whole row, because a row with nothing on
@@ -1367,6 +1420,71 @@ pub(crate) const fn syntax_color(role: ronoctua_syntax::Role) -> tokens::Color {
         Role::Tag => tokens::color::SYNTAX_TAG,
         Role::Added => tokens::color::SYNTAX_ADDED,
         Role::Removed => tokens::color::SYNTAX_REMOVED,
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::meter;
+    use ronoctua_render::layout;
+    use ronoctua_tokens as tokens;
+
+    fn filled(bar: &str) -> usize {
+        bar.chars()
+            .filter(|c| *c == tokens::mark::METER_FULL)
+            .count()
+    }
+
+    #[test]
+    fn a_bar_is_exactly_as_many_cells_as_it_was_asked_for() {
+        // WHAT THE BUDGET ARITHMETIC DEPENDS ON. Both marks are measured at
+        // one cell in the real face and `ronoctua_protocol::cells` calls them
+        // narrow; a bar that came out wider would push the number beside it
+        // off the end without anything saying so.
+        for cells in [1_u16, 2, 10, 14, 40] {
+            for percent in [0_u8, 1, 37, 50, 99, 100] {
+                let bar = meter(percent, cells);
+                assert_eq!(
+                    layout::width(&bar),
+                    cells,
+                    "{percent}% in {cells} cells came out {bar:?}"
+                );
+            }
+        }
+        assert_eq!(meter(50, 0), "");
+    }
+
+    #[test]
+    fn nothing_and_everything_are_never_confused_with_the_rest() {
+        // A meter that showed nothing at 2% would say the microphone is dead;
+        // one that showed full at 99% would say a volume is at the top when a
+        // key can still move it. Both are lies a rounding rule tells.
+        assert_eq!(filled(&meter(0, 10)), 0);
+        assert_eq!(filled(&meter(1, 10)), 1, "2% is not silence");
+        assert_eq!(filled(&meter(99, 10)), 9, "99% is not full");
+        assert_eq!(filled(&meter(100, 10)), 10);
+    }
+
+    #[test]
+    fn the_bar_rounds_to_the_nearest_cell() {
+        // 40% of fourteen is 5.6, and the eye reads six.
+        assert_eq!(filled(&meter(40, 14)), 6);
+        assert_eq!(filled(&meter(50, 10)), 5);
+        assert_eq!(filled(&meter(38, 10)), 4);
+        assert_eq!(filled(&meter(75, 10)), 8);
+    }
+
+    #[test]
+    fn a_bar_never_goes_backwards() {
+        // A louder volume can never draw a shorter bar, at any width.
+        for cells in [3_u16, 10, 14] {
+            let mut last = 0;
+            for percent in 0..=100_u8 {
+                let now = filled(&meter(percent, cells));
+                assert!(now >= last, "{percent}% in {cells} cells went backwards");
+                last = now;
+            }
+        }
     }
 }
 

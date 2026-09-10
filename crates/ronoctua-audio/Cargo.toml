@@ -1,0 +1,29 @@
+[package]
+name = "ronoctua-audio"
+description = "The one boundary with PipeWire: cards, sinks, sources, streams, volume and the level meter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE THREE PROGRAMS ENTER `pipewire.rs` AND NOWHERE ELSE. `graph.rs` is a pure
+# merge over `serde_json::Value`, and `lib.rs` is pure over plain structs — so
+# every rule in this crate is testable with no PipeWire running, which is what
+# a build sandbox and a laptop with the daemon stopped both are.
+#
+# The closure gains NOTHING: `pw-dump`, `pw-cat` and `wpctl` come out of the
+# same two packages `nix/rust.nix` already names for the Bluetooth profile.
+#
+# NO `[[bin]]`: nothing here is a daemon. The footer raises the threads, the
+# same way it raises the power ones.
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ronoctua-store = { path = "../ronoctua-store" }
+
+[lints]
+workspace = true

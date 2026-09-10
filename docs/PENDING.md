@@ -109,6 +109,26 @@ ninguém olha enquanto muda é preço antes de necessidade.
 **Como saber que acabou:** com a janela aberta, parear o teclado Bluetooth e ver a linha aparecer
 sem tocar em nada. **Tamanho:** pequeno.
 
+### 0.0000104. O que o som ainda não faz · pequeno cada
+
+O `LEADER s a` cobre o que a máquina toca, o que ela ouve, o que cada programa faz com os dois, e a
+placa por trás disso. Quatro coisas ficaram de fora, e cada uma tem uma razão:
+
+- **Um programa não se manda para outro aparelho.** A linha de um fluxo mexe no volume e no mudo
+  dele, e não o move do alto-falante para o fone. O PipeWire faz isso por metadata (`target.object`)
+  e não por `wpctl`, então seria uma segunda forma de escrever no grafo — a fronteira hoje escreve
+  por um programa só, e essa é a linha de segurança que ela tem.
+- **Nada é gravado em arquivo.** O `pw-cat --record` já está lá, e apontá-lo para um arquivo em vez
+  de para o medidor seria uma feature de captura: um lugar onde escrever, um nome, um formato, uma
+  fila. É outra obra e ninguém a pediu.
+- **Não há equalizador nem balanço.** O `channelMap` e os `channelVolumes` por canal estão lidos e
+  guardados no `Node`; o que falta é a tela. O balanço é o mais próximo de existir — são dois
+  números que já chegam.
+- **O `pro-audio` aparece como o PipeWire o dá.** É um perfil na lista e gira como qualquer outro;
+  o que ele significa (canais crus, sem conversão) não ganha frase própria.
+
+- acabou quando: alguém pedir um deles, e não antes
+
 ### 0.000013. As telas não se empilham na vertical · pequeno
 
 A disposição (`s d d` → `m`) move a tela sob o cursor com `←`/`→` e grava só o `x`
@@ -488,20 +508,6 @@ O que falta decidir é se ela DEVE entrar: a faixa é transitória de um jeito q
 são, e descontá-la faria a lista encolher e crescer sozinha enquanto uma notificação passa.
 
 - decidir: se a faixa entra no termo fixo; se entrar, é um argumento a mais na chamada
-
-### 0.02. Notificação não toca som · pequeno
-
-O campo `audio` existe ponta a ponta — protocolo, catálogo, filtro, gerenciador, disco — e **não
-faz nada**. Ele não está mudo: `ronoctua_notify::INERT` diz por quê, o gerenciador desenha a razão
-ao lado do interruptor e o check `switches-that-do-nothing-say-so` cobra os três. Mas ele continua
-sendo um interruptor que não interrompe, e este item é a dívida.
-
-O caminho já está medido: o pipewire que a distro liga traz `pw-play`, e o
-`sound-theme-freedesktop` são uns 400 KB com `bell.oga`, `message.oga` e `dialog-warning.oga`. O que
-falta decidir é qual som para qual nível — e isso é escolha do dono, não de quem implementa.
-
-- acabou quando: uma notificação com `audio = true` toca, o `INERT` perde a linha do `audio`, e o
-  check acusa se ela voltar
 
 ### 0.03. Glifo por nome só vale para o que é DECLARADO · pequeno, e é uma decisão
 

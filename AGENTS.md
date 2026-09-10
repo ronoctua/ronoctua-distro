@@ -697,6 +697,51 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
 - **Todo teclado repete** (`get_keyboard_with_repeat`), e nenhum repetia: SCTK só repete para um
   teclado criado assim, então nove janelas tinham `repeat_key` como código morto — segurar seta andava
   uma linha. Cobra o `every-window-repeats`; o rodapé é a exceção escrita (repetir leader é erro).
+- **`LEADER s a` é o SOM** (`ronoctua-audio`, a única fronteira com o PipeWire): uma `View`
+  (`audio.rs`), duas portas (`s a a` no rodapé, `s a w` em janela), cinco seções — saída, entrada,
+  programas, a placa e os ajustes. **É EVENTO, não relógio**: `pw-dump --monitor` imprime o grafo
+  uma vez e depois só o que mudou; medido, o delta depois de um `wpctl` chega em **6 ms** e o filho
+  parado não gasta CPU. Nenhum temporizador novo, e o `wpctl` que escreve NÃO relê — a thread do
+  monitor conta sozinha, senão segurar uma seta seria um `fork` por quadro.
+  **O número que o PipeWire guarda não é o que a pessoa lê**: `channelVolumes` é amplitude linear e
+  o `wpctl` fala a RAIZ CÚBICA dela, nos dois sentidos (medido: 0,056895 lê 0,38, e `set-volume
+  0,384614` grava 0,056895). Converte-se UMA vez, na fronteira; o `pactl` mostra uma terceira
+  convenção e não é a nossa. **O `ronoctua-bluetooth` deixou de ter `pw-dump` próprio** — eram dois
+  leitores de um daemon, e o `one-pipewire-boundary` cobra.
+  **O medidor do microfone é a única coisa que abre um microfone** (`pw-cat`, 8 kHz mono, 16 KB/s):
+  ele existe só sob a linha em foco, a tela DIZ que está ouvindo, e é um VALOR com guarda de `Drop`
+  — não um interruptor. **E o medidor acende a marca do microfone e aparece na seção de programas**,
+  como qualquer outro: esconder o nosso seria a única mentira capaz de tornar a marca inútil.
+  A guarda de `Drop` cobre todo caminho ORDINÁRIO e nenhum sinal, então o filho roda sob
+  `setpriv --pdeathsig KILL` — o truque do `setsid --ctty` do terminal, um binário auditado no lugar
+  de um `pre_exec` inseguro. Medido antes: rodapé morto com `SIGKILL`, `pw-cat` vivo em
+  `epoll_wait` com o aparelho aberto; um cano de saída sem leitor NÃO o mata. Isso faz a linha do nível existir só sob a fonte em foco, e por isso **toda
+  linha em que o cursor para tem uma identidade** (`Spot`): mover o cursor por ÍNDICE através da
+  reconstrução o deixa uma linha fora, e **a decisão do medidor vem ANTES da reconstrução**, senão
+  as linhas ainda carregam o nível da fonte que se acabou de deixar.
+  **O `metadata` do PipeWire chega PARCIAL, como os `params`** — um `default` mudado traz UM item —,
+  e substituir o array inteiro apagava os outros três: lido na tela, entre duas fotos, como o
+  marcador "em uso" sumindo do microfone padrão.
+  **Duas marcas na modeline, e em repouso ela segue muda**: `muted` só quando o sink PADRÃO está
+  mudo (um HDMI mudo que ninguém usa não é a máquina em silêncio) e `microphone` só quando existe
+  fluxo de ENTRADA, que é privacidade e sai do grafo, não de um palpite. Não há escada de volume:
+  o gerador mede a tinta e `md-volume_low` sai a 15 px contra 22 do alto, o que faria a linha tremer
+  a cada passo — a BARRA (`chrome::meter`, dois `mark`s de uma célula) é que diz quanto.
+  **O aparelho escolhido é do PipeWire** (`default.configured.*`) e não guardamos cópia; o
+  `audio.json` fica com o passo, o teto acima de 100% e se a linha aparece.
+- **A LINHA ACIMA DA MODELINE TEM DOIS INQUILINOS**: o relance (`LEADER d`) e o retorno do volume,
+  e o último a pedir fica com ela. Uma aritmética só (`above_rows`/`above_line_at`), um `Showing` só
+  — a pizza, a pausa no ponteiro e o prazo são da FILEIRA e não do que está nela, senão seriam dois
+  contadores num rodapé que tem um. Na linha estreita cai a barra primeiro (ela repete o número),
+  depois o nome do aparelho, e o número nunca — cortado, `38%` vira `3…`, que é um número falso.
+- **As teclas de mídia são a segunda família de binds NUS** (`actions::media`, ao lado de
+  `emergency`), e são sete: volume, mudo, mudo-do-microfone, play, faixa. Não entram na lista dos
+  quatro de resgate porque o argumento daquela é RECUPERAÇÃO; o desta é outro e mais simples —
+  **buffer nenhum recebe um `XF86Audio*`**, então o que se toma é uma tecla que ninguém tinha. Até
+  aqui a distro não tratava nenhuma: o `gen-default-binds.py` as recusa por construção dizendo que
+  "esperam o sistema tratar as teclas de mídia", e o sistema é este. As três de mídia falam com o
+  `playerctl`, que vem do AMBIENTE (`mkIf` do `media.nix`) — e a ausência dele é uma FRASE no
+  rodapé, nunca silêncio.
 - **`LEADER s p` é energia** (`ronoctua-power`, a fronteira com UPower, power-profiles-daemon e logind — molde do `ronoctua-disks`, três threads e o snapshot inteiro): uma `View` (`power.rs`), duas portas (`s p p`/`s p w`), oito seções como linhas. **Modeline em repouso é muda**: bateria só abaixo de 99% e fora de `FullyCharged` (limite de carga a 80% diz `FullyCharged` para sempre), `%` só a ≤30, `state.error` a ≤15 (regra literal, carregando ou não); perfil só quando NÃO é o topo que o daemon oferece — **o padrão da distro é `performance`** (`ronoctua.power.profile`, piso; `power.json` vence; aplicado UMA vez por sessão, nunca sobre um hold e **nunca quando ninguém nomeou** — o `nix run .#dev` não mexe no perfil do dono). Limites de carga escrevem no sysfs por regra udev (grupo `users`); as travas de sono/tampa são fds na thread de ordens do RODAPÉ (a janela encaminha `power-keep-*`); `s q s/h/r/p` abrem a vista ARMADA e `RET` confirma. **Nenhuma regra polkit nossa** (logind e PPD já dão `yes`; há check). Alarmes `battery-low/critical/charged` por TRANSIÇÃO (`alarms`), pelo catálogo.
 - **`LEADER s d` são as telas** (`ronoctua-display`, a fronteira com o niri por IPC e com o kernel
   por `/sys` e `/dev/i2c-*`): uma `View` (`display.rs`), DUAS portas (`s d d` rodapé, `s d w` janela),

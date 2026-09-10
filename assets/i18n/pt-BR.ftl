@@ -2923,7 +2923,7 @@ cmd-locale-window = Idioma e região, em janela
 cmd-locale-up = Linha anterior
 cmd-locale-down = Próxima linha
 cmd-locale-enter = Escolher
-group-locale = +idioma/região
+group-locale = idioma/região
 
 # ---------------------------------------------------------------------------
 # LEADER d — the glance: what time it is somewhere, and the weather and money.
@@ -2977,3 +2977,96 @@ cmd-locale-where = Dizer onde fica um lugar
 locale-less = anterior
 locale-more = próximo
 world-temperature-f = { $degrees } °F
+
+# =====================================================================
+# SOM — `LEADER s a`, duas portas, e as marcas que a modeline desenha
+# =====================================================================
+group-audio = som
+audio-title = Som
+
+cmd-audio-open = Som, no rodapé
+cmd-audio-window = Som, em janela
+cmd-audio-up = Linha anterior
+cmd-audio-down = Próxima linha
+cmd-audio-enter = Usar este
+cmd-audio-less = Mais baixo, ou o valor anterior
+cmd-audio-more = Mais alto, ou o próximo valor
+cmd-audio-mute = Silenciar, ou devolver o som
+cmd-audio-default = Tocar por este de agora em diante
+
+audio-up = subir
+audio-down = descer
+audio-enter = usar
+audio-less = baixar
+audio-more = aumentar
+audio-mute = silenciar
+audio-default = usar sempre
+
+# Os títulos, na ordem em que se lê.
+audio-heading-output = Tocando por
+audio-heading-input = Ouvindo por
+audio-heading-apps = Programas
+audio-heading-card = A placa
+audio-heading-settings = Ajustes
+
+audio-chosen-elsewhere = Escolhido: { $device }, que não está aqui
+audio-nothing-plays = Não há por onde tocar.
+audio-nothing-listens = Não há microfone.
+audio-nothing-runs = Nenhum programa está tocando nem gravando.
+audio-no-pipewire = O servidor de som não responde.
+audio-muted = mudo
+audio-in-use = em uso
+
+audio-profile = O que a placa está fazendo
+audio-socket-out = Sai pela
+audio-socket-in = Grava pela
+audio-port-none = Nenhuma tomada em uso.
+audio-unplugged = nada conectado
+audio-card-off = Esta placa está desligada.
+
+audio-listening-now = ouvindo agora
+
+audio-setting-step = Uma tecla move
+audio-setting-over = Permitir acima do cheio
+audio-setting-flash = Mostrar a linha acima da modeline
+audio-on = sim
+audio-off = não
+audio-step-points = { $points }%
+
+audio-media-none = Este build não tem tocador de mídia para conversar.
+
+# As tomadas para as quais temos palavra própria. O resto sai nas do PipeWire.
+audio-port-speaker = Alto-falantes
+audio-port-headphones = Fones de ouvido
+audio-port-headset = Fone com microfone
+audio-port-headset-mic = Microfone do fone
+audio-port-internal-mic = Microfone interno
+audio-port-microphone = Microfone
+audio-port-line-in = Entrada de linha
+audio-port-line-out = Saída de linha
+
+cmd-volume-up = Aumentar o volume
+cmd-volume-down = Baixar o volume
+cmd-volume-mute = Silenciar a máquina
+cmd-mic-mute = Silenciar o microfone
+cmd-media-play = Tocar, ou pausar
+cmd-media-next = Próxima faixa
+cmd-media-previous = Faixa anterior
+
+hint-volume = { $device } a { $percent }% — som
+hint-volume-muted = { $device }, mudo — som
+hint-microphone = Algo está ouvindo — som
+sound-muted = mudo
+
+echo-audio-refused = O servidor de som { $why } ({ $words })
+audio-refused-gone = não tem mais esse aparelho
+audio-refused-absent = não está respondendo
+audio-refused-invalid = não aceitou esse valor
+audio-refused-other = recusou
+help-media = As teclas do próprio teclado
+
+# As duas janelas que não são buffers wasm e chegam à mesma modeline.
+# O `daemon::mode_label` transforma `br.ronoctua.<id>` em `mode-<id>` seja o
+# que for a janela; sem estas a modeline desenhava `[mode-audio]`.
+mode-audio = som
+mode-locale = idioma/região

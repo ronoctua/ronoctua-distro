@@ -2565,6 +2565,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-store",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-bluetooth"
 version = "0.1.0"
 dependencies = [
@@ -2572,7 +2583,7 @@ dependencies = [
  "async-io",
  "futures-channel",
  "futures-lite",
- "serde_json",
+ "ronoctua-audio",
  "tracing",
  "zbus",
 ]
@@ -2827,6 +2838,7 @@ dependencies = [
  "raw-window-handle",
  "resvg",
  "ronoctua-apps",
+ "ronoctua-audio",
  "ronoctua-bluetooth",
  "ronoctua-brain",
  "ronoctua-clipboard",

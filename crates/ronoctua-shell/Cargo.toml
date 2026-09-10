@@ -86,6 +86,11 @@ ronoctua-disks = { path = "../ronoctua-disks" }
 ronoctua-power = { path = "../ronoctua-power" }
 # The screens: what they can do, how bright they are, and how big the text is.
 ronoctua-display = { path = "../ronoctua-display" }
+# THE ONE BOUNDARY WITH PIPEWIRE. The modeline draws two marks off it at
+# rest and the bare volume keys act through it with no view open, so the
+# footer holds its threads for the whole session — the power crate's
+# arrangement, and its reason.
+ronoctua-audio = { path = "../ronoctua-audio" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
 ronoctua-keyboards = { path = "../ronoctua-keyboards" }
 # THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the

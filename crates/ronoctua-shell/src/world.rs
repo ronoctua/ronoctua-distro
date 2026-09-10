@@ -368,7 +368,10 @@ pub fn line(
 }
 
 /// What the pie spends: the glyph and the air before it.
-const PIE_CELLS: u16 = 2;
+///
+/// `pub(crate)` because the sound line is the second tenant of this row and
+/// reserves the same two cells for the same glyph — see `sound.rs`.
+pub(crate) const PIE_CELLS: u16 = 2;
 
 /// The zone of every place, read once.
 ///

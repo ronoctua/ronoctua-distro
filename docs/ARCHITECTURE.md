@@ -7267,6 +7267,18 @@ duas tabelas dele), então entra como terceira palavra e não como resposta. At�
 ≤15, os mesmos dois números da bateria da máquina e pela mesma regra literal. Clicar numa marca abre
 AQUELE dispositivo inteiro, com o mesmo comando que o `RET` na linha dele roda.
 
+#### A notificação não toca som, e isso é uma decisão
+
+O campo `audio` existe ponta a ponta — protocolo, catálogo, filtro, gerenciador, disco — e não faz
+nada. Ele não está mudo sobre isso: `ronoctua_notify::INERT` diz por quê, o gerenciador desenha a
+razão ao lado do interruptor, e o `switches-that-do-nothing-say-so` cobra que continue dizendo.
+
+Isto foi item do `PENDING` por meses, com o caminho medido (o `pw-play` que o pipewire já traz, mais
+uns 400 KB de `sound-theme-freedesktop`) e uma pergunta aberta que era do dono: qual som para qual
+nível. **Em 2026-09-10 ele respondeu que está fora do escopo**, e o item saiu de lá. Fica escrito
+aqui para que não volte como dívida: o interruptor continua inerte de propósito, e a tela continua
+dizendo isso.
+
 #### O perfil de áudio não está no barramento que este crate fala
 
 O `MediaTransport1` diz o que ESTÁ tocando: um UUID, um estado, um codec, um volume. Ele não diz o
@@ -7288,6 +7300,12 @@ apresenta.
 `pw-dump` LÊ e `wpctl` ESCREVE, e essa também é a linha de segurança: nada muda até uma tecla ser
 apertada. A leitura acontece quando o nível do dispositivo ABRE e em mais lugar nenhum: o `pw-dump`
 imprime o grafo inteiro, e perguntar por quadro seria um `fork` dentro do laço do rodapé.
+
+**E os dois programas não são mais chamados daqui.** Este crate os rodava e analisava o JSON por
+conta, o que fazia DOIS leitores de um daemon dentro de um repositório que escreve um cabeçalho
+inteiro contra isso (`ronoctua-disks`, "uma fronteira, um crate"). No dia em que discordassem sobre
+um volume, nada diria qual estava certo. A análise mudou para o `ronoctua-audio`; o que ficou aqui
+é a pergunta do Bluetooth feita a ele, POR ENDEREÇO. Cobra o `one-pipewire-boundary`.
 
 **Sem placa, sem linha** — e sem a linha, a dica também não a ensina. Um teclado não tem placa de
 áudio, e a primeira foto depois de escrito mostrava `→ o próximo perfil de áudio` na página de um

@@ -27,6 +27,7 @@
   # `assets/notifications.nix` in the same shape as the tokens.
   notificationsRs,
   bluetoothProfilesRs,
+  audioNamesRs,
   keyboardsRs,
   keyd,
   # The update sequence, generated from `assets/updates.nix`.
@@ -201,6 +202,11 @@ let
     # THE SERVICE CATALOGUE, read by `ronoctua-bluetooth`'s build script for
     # the same reason: a table in Nix, a `match` nowhere.
     RONOCTUA_BLUETOOTH_PROFILES_RS = "${bluetoothProfilesRs}/profiles.rs";
+    # OUR OWN WORD FOR A SOUND PORT, where we have one. ALSA calls a socket
+    # `[Out] Speaker` and nobody upstream translates it; what is not in the
+    # table draws with PipeWire's description, which is why this is a small
+    # file and not an attempt at every port that exists.
+    RONOCTUA_AUDIO_NAMES_RS = "${audioNamesRs}/names.rs";
     # THE KEYBOARD VOCABULARY, and the leader's own rule with it: the module
     # that configures the daemon and the shell that renders per-keyboard files
     # both read `assets/keyboards.nix`, so the rule cannot drift between them.
@@ -253,6 +259,21 @@ let
     # display" in the app, "failed to execute" on the terminal's SCREEN. With the
     # store path, the binary carries the reference and Nix guarantees it exists.
     RONOCTUA_SETSID = "${util-linux}/bin/setsid";
+    # `setpriv`, ITS SIBLING, and for the sibling's reason.
+    #
+    # The level meter's `pw-cat` has to die when the footer does, and the
+    # mechanism is `PR_SET_PDEATHSIG` — one prctl between the fork and the
+    # exec. In Rust that is `Command::pre_exec`, which is `unsafe`, in the one
+    # place in a program where nothing is safe. `setpriv --pdeathsig KILL`
+    # makes exactly that call, in a binary from the same package as `setsid`,
+    # audited by far more people. The cost is one extra `exec` per meter, and
+    # a meter is started when a cursor lands on a microphone.
+    #
+    # MEASURED, and it is why this exists at all: without it a footer killed
+    # with `SIGKILL` left `pw-cat` recording. Watched on this machine — the
+    # parent gone, the child still in `epoll_wait` with the device open. A
+    # broken stdout pipe does NOT end it.
+    RONOCTUA_SETPRIV = "${util-linux}/bin/setpriv";
     # `choom` raises a foreign application's `oom_score_adj` so the kernel
     # reaches for it before it reaches for the compositor — see `foreign.rs`.
     RONOCTUA_CHOOM = "${util-linux}/bin/choom";
@@ -300,6 +321,14 @@ let
     # `services.pipewire` puts them there. `pactl` is not.
     RONOCTUA_WPCTL = "${wireplumber}/bin/wpctl";
     RONOCTUA_PW_DUMP = "${pipewire}/bin/pw-dump";
+    # `pw-cat` IS THE LEVEL METER, and it is the third program out of the two
+    # packages already named above — so the closure gains nothing again.
+    #
+    # It is the ONE thing in this repository that opens a microphone, and it
+    # runs only while a row for that source is under the cursor. See
+    # `crates/ronoctua-audio/src/meter.rs` for why that guard is a value with
+    # a `Drop` and not a flag.
+    RONOCTUA_PW_CAT = "${pipewire}/bin/pw-cat";
     # `RONOCTUA_EMACSCLIENT` IS NOT SET HERE, and its absence is the point —
     # the same point `RONOCTUA_ICONS` makes below, learned twice.
     #

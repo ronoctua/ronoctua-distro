@@ -888,6 +888,77 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "display-arrange",
             label: key::CMD_DISPLAY_ARRANGE,
         },
+        // `LEADER s a` — SOUND: what plays, what listens, and what each
+        // program is doing with either. `s a a` opens it in the footer and
+        // `s a w` in a window, the doubled letter and the `w` every view of
+        // this shape uses.
+        Command {
+            id: "audio-open",
+            label: key::CMD_AUDIO_OPEN,
+        },
+        Command {
+            id: "audio-window",
+            label: key::CMD_AUDIO_WINDOW,
+        },
+        // AND THE VIEW'S OWN GESTURES, reached through `audio::OF_THE_VIEW`.
+        Command {
+            id: "audio-up",
+            label: key::CMD_AUDIO_UP,
+        },
+        Command {
+            id: "audio-down",
+            label: key::CMD_AUDIO_DOWN,
+        },
+        Command {
+            id: "audio-enter",
+            label: key::CMD_AUDIO_ENTER,
+        },
+        Command {
+            id: "audio-less",
+            label: key::CMD_AUDIO_LESS,
+        },
+        Command {
+            id: "audio-more",
+            label: key::CMD_AUDIO_MORE,
+        },
+        Command {
+            id: "audio-mute",
+            label: key::CMD_AUDIO_MUTE,
+        },
+        Command {
+            id: "audio-default",
+            label: key::CMD_AUDIO_DEFAULT,
+        },
+        // THE KEYBOARD'S OWN TOP ROW. No leader: see `actions::media` for why
+        // these seven are a family of their own and not four more emergencies.
+        Command {
+            id: "volume-up",
+            label: key::CMD_VOLUME_UP,
+        },
+        Command {
+            id: "volume-down",
+            label: key::CMD_VOLUME_DOWN,
+        },
+        Command {
+            id: "volume-mute",
+            label: key::CMD_VOLUME_MUTE,
+        },
+        Command {
+            id: "mic-mute",
+            label: key::CMD_MIC_MUTE,
+        },
+        Command {
+            id: "media-play",
+            label: key::CMD_MEDIA_PLAY,
+        },
+        Command {
+            id: "media-next",
+            label: key::CMD_MEDIA_NEXT,
+        },
+        Command {
+            id: "media-previous",
+            label: key::CMD_MEDIA_PREVIOUS,
+        },
         // `LEADER s p` — POWER: the battery, the charger, the profile, sleep.
         // The view's own rows do the rest; these are the things worth a key
         // without opening it — a profile, the two locks, the four actions.
@@ -1832,6 +1903,8 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `e` (pErformance — `p` is the prefix itself), `b` balanced and `s`
         // saver; `k` keeps the machine awake, `l` ignores the lid, `t` opens
         // the view on the thresholds.
+        ("s a a", "audio-open", None),
+        ("s a w", "audio-window", None),
         ("s p p", "power-open", None),
         ("s p w", "power-window", None),
         ("s p e", "power-profile-performance", None),
@@ -1987,6 +2060,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s n", key::GROUP_NETWORK),
         ("s s", key::GROUP_SYNCTHING),
         ("s d", key::GROUP_DISPLAY),
+        ("s a", key::GROUP_AUDIO),
         ("s p", key::GROUP_POWER),
         ("s b", key::GROUP_BLUETOOTH),
         ("s l", key::GROUP_LOCALE),
@@ -2173,6 +2247,10 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .map(|(_, id)| *id),
     );
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::audio::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    // THE KEYBOARD'S TOP ROW, which the compositor binds directly — the same
+    // arrangement as the four emergency keys just above.
+    out.extend(crate::actions::media().into_iter().map(|(_, _, id)| id));
     out.extend(crate::locale::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::display::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
@@ -2777,6 +2855,26 @@ mod tests {
             "display-automatic",
             "display-forget",
             "display-arrange",
+            // SOUND: the two doors, the view's seven gestures, and the
+            // keyboard's own top row. The last seven have no leader at all —
+            // niri binds them bare — but they are commands like everything
+            // else, so this list is where they are accounted for.
+            "audio-open",
+            "audio-window",
+            "audio-up",
+            "audio-down",
+            "audio-enter",
+            "audio-less",
+            "audio-more",
+            "audio-mute",
+            "audio-default",
+            "volume-up",
+            "volume-down",
+            "volume-mute",
+            "mic-mute",
+            "media-play",
+            "media-next",
+            "media-previous",
             "power-open",
             "power-window",
             "power-profile-performance",

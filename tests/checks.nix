@@ -63,6 +63,7 @@
   # own shape, and the text keys it demands of both languages.
   notificationsRs,
   bluetoothProfilesRs,
+  audioNamesRs,
   keyboardsRs,
   syntaxTable,
   mimeDb,
@@ -1950,6 +1951,9 @@ let
         # THE WAY OUT'S THREE MARKS AND THE TWO TUNNELS THAT ARE NOT NM'S.
         # Each opens the view on its own row, and the aeroplane toggles.
         "net-off", "airplane", "vpn", "tailscale", "tor",
+        # AND SOUND'S TWO. Both run `audio-open`, which is what `LEADER s a a`
+        # runs — the mouse reaches no door the keyboard lacks.
+        "muted", "microphone",
     }
     if acted != agreed:
         gaps.append(
@@ -1961,6 +1965,9 @@ let
     # command, so the mouse reaches no door the keyboard lacks.
     if clicked.count('"power-open"') < 2:
         gaps.append("clicking the battery or the profile does not open the power view")
+    # THE SAME, FOR SOUND: silence and the microphone each open `LEADER s a a`.
+    if clicked.count('"audio-open"') < 2:
+        gaps.append("clicking the mute mark or the microphone does not open the sound view")
     # THE UPDATE'S MARK, and BOTH halves of it.
     #
     # The mark only exists while something is running, so a click is the
@@ -5316,6 +5323,271 @@ let
   #
   # `bsdtar`, `fstrim` and `pkexec`. Same two sides as the rescue console's:
   # the variables the crate reads, and the table `nix/rust.nix` sets.
+  # ONE BOUNDARY WITH PIPEWIRE, and the same shape as `files-runs-by-path`:
+  # every variable the crate reads has to be in `nix/rust.nix`, and no program
+  # may be spawned by NAME. A `Command::new("wpctl")` works in the devshell and
+  # fails inside a systemd scope, far from the cause.
+  audio-runs-by-path = mkCheck "audio-runs-by-path" [ pkgs.gnugrep ] ''
+    src=${../crates/ronoctua-audio/src}
+    failed=0
+
+    read_it=$(grep -ohE 'option_env!\("RONOCTUA_[A-Z_]+"\)' "$src"/*.rs \
+      | grep -oE 'RONOCTUA_[A-Z_]+' | sort -u)
+    [ -n "$read_it" ] || {
+      echo "ERROR: the crate reads no variable at all — what does the grep match?" >&2
+      exit 1
+    }
+
+    for v in $read_it; do
+      grep -qE "^ *$v = " ${../nix/rust.nix} || {
+        echo "ERROR: $v is read by the crate and is not in nix/rust.nix" >&2
+        echo "      The program would fail far from the cause, with a minimal PATH." >&2
+        failed=1
+      }
+    done
+
+    bare=$(grep -nE 'Command::new\("[a-z]' "$src"/*.rs || true)
+    [ -z "$bare" ] || { echo "ERROR: a program by NAME, not by path:" >&2; echo "$bare" >&2; failed=1; }
+
+    [ "$failed" = 0 ] || exit 1
+    echo "OK: $(echo "$read_it" | wc -l) programs, all by store path"
+  '';
+
+  # THE THREE PROGRAMS ARE NAMED IN ONE FILE, and `pw-cat` in one place.
+  #
+  # This is the rule `ronoctua-disks` writes a header about — one border, one
+  # crate — turned into a check, because this repository has already broken it
+  # once: `ronoctua-bluetooth` ran its own `pw-dump` and parsed the graph
+  # itself, so there were two readers of one daemon and no way to say which was
+  # right the day they disagreed.
+  #
+  # The microphone gets a rule of its own on top. `pw-cat --record` is the ONE
+  # thing here that opens a recording device, and what keeps it honest is that
+  # there is a single place to look at to know when it runs.
+  one-pipewire-boundary = mkCheck "one-pipewire-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    boundary = crates / "ronoctua-audio" / "src" / "pipewire.rs"
+    wrong = []
+
+    NAMES = ("pw-dump", "wpctl", "pw-cat", "RONOCTUA_PW_DUMP", "RONOCTUA_WPCTL",
+             "RONOCTUA_PW_CAT")
+
+    for f in sorted(crates.rglob("*.rs")):
+        if f == boundary:
+            continue
+        text = f.read_text()
+        # THE PRODUCT, NOT ITS TESTS — the rule `bluetooth-profiles-have-text`
+        # already keeps. A test NAME (`wpctl_is_not_given_an_amplitude`) and a
+        # fixture holding what a missing program prints are both the right
+        # thing to write and neither is a call.
+        #
+        # The TRAILING module, matched with its `mod tests`, so a `cfg(test)`
+        # on something else does not hide the rest of the file.
+        cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
+        if cut:
+            text = text[: cut[-1].start()]
+        # AND COMMENTS ARE PROSE. Several files explain at length why the
+        # programs live where they do, and a rule that could not tell a
+        # sentence from a call would be a rule nobody could write near.
+        code = "\n".join(re.sub(r"//.*", "", line) for line in text.splitlines())
+        for name in NAMES:
+            if name in code:
+                wrong.append(f"{f.relative_to(crates)} names `{name}` outside the boundary")
+
+    if not boundary.exists():
+        wrong.append("crates/ronoctua-audio/src/pipewire.rs is gone; what is this checking?")
+    else:
+        body = boundary.read_text()
+        for name in ("pw-dump", "wpctl", "pw-cat"):
+            if name not in body:
+                wrong.append(f"the boundary no longer names `{name}` — has it moved?")
+        opens = body.count('"--record"')
+        if opens != 1:
+            wrong.append(f"`--record` is built {opens} times; it has to be exactly one")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print("OK: one crate, one module and one door to the microphone")
+    END
+  '';
+
+  # THE VOLUME IS CONVERTED ONCE, AND IN BOTH DIRECTIONS.
+  #
+  # `channelVolumes` is linear amplitude and `wpctl` speaks its cube root.
+  # Measured on the owner's laptop: stored 0.056895 reads back as 0.38, and
+  # `set-volume 0.384614` stores 0.056895 again. A second copy of that rule, or
+  # one side of it losing the root, makes every volume in the system wrong in a
+  # way that reads as a miscalibrated slider — and a one-sided test still passes.
+  volume-is-perceived = mkCheck "volume-is-perceived" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    lib = crates / "ronoctua-audio" / "src" / "lib.rs"
+    wrong = []
+
+    body = lib.read_text()
+    if "pub fn perceived" not in body or "pub fn stored" not in body:
+        wrong.append("`perceived` and `stored` are what the conversion IS; one of them is gone")
+    if "cbrt" not in body:
+        wrong.append("the cube root left `lib.rs`, which is where the boundary converts")
+
+    # AND NOWHERE ELSE. A second `cbrt` on a volume is a second answer, free to
+    # drift; the tokens crate has one for a colour, which is another thing.
+    for f in sorted(crates.rglob("*.rs")):
+        if f == lib or "ronoctua-tokens" in str(f):
+            continue
+        code = "\n".join(re.sub(r"//.*", "", line) for line in f.read_text().splitlines())
+        if "cbrt" in code:
+            wrong.append(f"{f.relative_to(crates)} takes a cube root of its own")
+
+    if "fn the_round_trip_holds" not in body:
+        wrong.append("the round-trip test is gone; a one-sided one would still pass")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print("OK: one conversion, both directions, one test")
+    END
+  '';
+
+  # THE MEDIA KEYS COME OUT BARE, AND THEY COME OUT AT ALL.
+  #
+  # `nix/scripts/gen-default-binds.py` refuses the `XF86*` family by
+  # construction, saying they "wait for the system to handle media keys" — and
+  # for a year the system did not: measured, there was not one `XF86` string in
+  # the repository, so the volume keys of every laptop running this did nothing.
+  #
+  # Now they are declared in `actions::media` and printed by
+  # `export-niri-binds`. Two ways for that to go silently wrong: one of them
+  # comes out with the leader's PREFIX, which makes it a chord nobody would
+  # guess; or the list stops being printed at all, and the keys are dead again
+  # with nothing saying so.
+  media-keys-are-bare =
+    let
+      # THE REAL OUTPUT, and not a reading of the table that produces it.
+      # `nix/niri-binds.nix` is what the compositor's config splices in, so
+      # this asks the same derivation the same question — a table that is
+      # right and a printer that puts a prefix on it would pass a source scan
+      # and fail here.
+      binds =
+        (pkgs.callPackage ../nix/niri-binds.nix {
+          ronoctua-shell = rust.shell;
+        }).forPrefix
+          "Mod";
+    in
+    mkCheck "media-keys-are-bare" [ pkgs.gnugrep ] ''
+      # NOT `out`. `mkCheck` ends in `touch $out`, and a shell variable of that
+      # name points it at the store path this reads — the check then PASSES and
+      # the derivation fails on a permission error, which reads as a broken
+      # check rather than a broken product.
+      kdl=${binds}
+      failed=0
+
+      for key in XF86AudioRaiseVolume XF86AudioLowerVolume XF86AudioMute \
+                 XF86AudioMicMute XF86AudioPlay XF86AudioNext XF86AudioPrev; do
+        if ! grep -qF "    $key " "$kdl"; then
+          echo "ERROR: the media bind $key did not come out." >&2
+          echo "      The key would do nothing, which is what it did before." >&2
+          failed=1
+        fi
+        if grep -qF "Mod+$key " "$kdl"; then
+          echo "ERROR: $key came out with the leader's prefix." >&2
+          echo "      A media key held behind a leader is worse than the key alone." >&2
+          failed=1
+        fi
+      done
+
+      # AND THEY REACH OUR OWN COMMANDS, not the compositor's. A bind that
+      # spawned the wrong id would be a `warn` in a log and a dead key.
+      for id in volume-up volume-down volume-mute mic-mute media-play; do
+        grep -qF "\"command\" \"$id\"" "$kdl" || {
+          echo "ERROR: no bind runs \`$id\`." >&2
+          failed=1
+        }
+      done
+
+      [ "$failed" = 0 ] || exit 1
+      echo "OK: seven media keys, all bare, all reaching a command"
+    '';
+
+  # THE MICROPHONE HAS ONE DOOR, AND THE DOOR HAS A GUARD.
+  #
+  # `pw-cat --record` is the only thing in this system that opens a recording
+  # device. `one-pipewire-boundary` keeps it to one FILE; this keeps it to one
+  # decision: the meter is a VALUE whose `Drop` closes the child, and it is
+  # started from an order that the view sends when the cursor lands on a
+  # microphone and unsends when it leaves.
+  #
+  # What it would catch is the guard being quietly loosened — the meter
+  # becoming a flag, or the view opening one without the cursor being on it.
+  the-microphone-has-one-door = mkCheck "the-microphone-has-one-door" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    meter = crates / "ronoctua-audio" / "src" / "meter.rs"
+    view = crates / "ronoctua-shell" / "src" / "audio.rs"
+    wrong = []
+
+    body = meter.read_text()
+    # A VALUE WITH A GUARD, not a flag. Dropping it is what closes the device,
+    # and that is what ties "nobody is looking" to "nothing is listening".
+    if "impl Drop for Reaped" not in body:
+        wrong.append("the meter's child lost its `Drop` guard; nothing closes the device")
+    if "fn listen_to" not in body:
+        wrong.append("`Meter::listen_to` is gone; what starts the recording now?")
+
+    # AND THE GUARD A SIGNAL CANNOT DEFEAT. The `Drop` covers every ordinary
+    # path and nothing at all covers `SIGKILL`, because nothing in the process
+    # runs after one. MEASURED before this was here: the footer killed, and
+    # `pw-cat` still sitting in `epoll_wait` with the microphone open, for as
+    # long as the machine stayed up.
+    # THE CODE, NOT THE COMMENT. Written without this strip, the rule read the
+    # very paragraph above `record` that explains the death signal — so
+    # deleting the argument left the check green over prose about an argument
+    # that was no longer passed. It is the "a check that reads its own
+    # evidence" trap, caught by sabotage.
+    spawn = "\n".join(
+        re.sub(r"//.*", "", line)
+        for line in (crates / "ronoctua-audio" / "src" / "pipewire.rs").read_text().splitlines()
+    )
+    if "--pdeathsig" not in spawn or "RONOCTUA_SETPRIV" not in spawn:
+        wrong.append(
+            "the recorder no longer runs under a death signal; a killed footer "
+            "would leave a microphone open"
+        )
+
+    # AND THE VIEW DECIDES BY THE CURSOR. `listening` is answered from the row
+    # the cursor is on and from nothing else.
+    seen = view.read_text()
+    if "Spot::Source(id) => Some(id)" not in seen:
+        wrong.append("the view no longer derives the open microphone from the cursor's row")
+    if "pub const fn listening" not in seen:
+        wrong.append("`View::listening` is gone; the doors would have to guess")
+
+    # THE DOORS SEND THE ORDER, and both of them send the closing one.
+    for door in ("surface.rs", "audio_window.rs"):
+        text = (crates / "ronoctua-shell" / "src" / door).read_text()
+        if "Order::Listen(None)" not in text:
+            wrong.append(f"{door} never closes the microphone")
+        if "follow_the_microphone" not in text:
+            wrong.append(f"{door} does not move the meter with the cursor")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        sys.exit(1)
+    print("OK: one door, one guard, and both doors shut it")
+    END
+  '';
+
   files-runs-by-path = mkCheck "files-runs-by-path" [ pkgs.gnugrep ] ''
     src=${../crates/ronoctua-files/src}
     failed=0
@@ -5695,6 +5967,7 @@ let
                 "theme_chooser",
                 "bluetooth",
                 "power",
+                "audio",
                 "display",
                 "notifications_open",
                 "mx",
@@ -10411,6 +10684,57 @@ let
   # The plumbing (`1800`, `1801`) is deliberately absent from `keys.txt`: it is
   # in the table so the view knows to HIDE it, and something not drawn owes no
   # sentence.
+  # THE PORT NAMES BOTH LANGUAGES OWE, and the table reaching the code.
+  #
+  # The same shape as `bluetooth-profiles-have-text`, and the same reason: the
+  # keys existing proves nothing if the crate stopped consulting the generated
+  # table. It would answer `None` for every socket, every row would fall back
+  # to PipeWire's English, and both languages would still be perfectly
+  # translated — a fallback that works is exactly the kind that hides.
+  audio-names-have-text = mkCheck "audio-names-have-text" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+
+    keys = pathlib.Path("${audioNamesRs}/keys.txt").read_text().split()
+    if len(keys) < 6:
+        print(f"ERROR: only {len(keys)} sockets carry a word of their own — the table lost its content")
+        sys.exit(1)
+
+    failed = False
+    for language in ${builtins.toJSON languages}:
+        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        missing = [k for k in keys if k not in have]
+        if missing:
+            print(f"ERROR: {language} does not have: {', '.join(missing)}")
+            failed = True
+        else:
+            print(f"ok  {language}: the table's {len(keys)} sentences are there")
+
+    crate = pathlib.Path("${../crates/ronoctua-audio/src}/lib.rs").read_text()
+    # THE PRODUCT, NOT ITS TESTS: the fixtures below name the same things, and
+    # a check that read them would be reading its own evidence.
+    crate = crate.split("#[cfg(test)]")[0]
+    for wanted, why in [
+        ("include!(concat!(env!(\"OUT_DIR\"), \"/names.rs\"))",
+         "the generated table is not included"),
+        ("PORTS", "nothing reads the table"),
+        # AND THE NORMALISATION IS APPLIED, not merely defined. The table is
+        # keyed on what `plain` answers; a `key()` that looked the raw name up
+        # would match nothing, for ever, in silence.
+        ("let plain = self.plain();",
+         "`key` no longer normalises, so every lookup misses and every socket keeps PipeWire's word"),
+    ]:
+        if wanted not in crate:
+            print(f"ERROR: {why} (looked for `{wanted}`)")
+            failed = True
+
+    if failed:
+        sys.exit(1)
+    print(f"OK: {len(keys)} socket names, in every language, and the crate reads them")
+    PY
+  '';
+
   bluetooth-profiles-have-text = mkCheck "bluetooth-profiles-have-text" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
@@ -14014,6 +14338,12 @@ let
       power-adds-no-polkit-rule-of-its-own
       power-thresholds-rule-lands
       power-never-asks
+      audio-runs-by-path
+      one-pipewire-boundary
+      volume-is-perceived
+      media-keys-are-bare
+      the-microphone-has-one-door
+      audio-names-have-text
       display-brightness-rule-lands
       display-adds-no-polkit-rule-of-its-own
       display-fragment-validates

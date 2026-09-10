@@ -279,6 +279,13 @@
         profilesFile = ./assets/bluetooth-profiles.nix;
       };
 
+      # WHAT A SOUND PORT IS CALLED. ALSA names the sockets and nobody upstream
+      # translates them; this turns our own words into the table, the owed keys,
+      # and the refusal of an entry matched against nothing.
+      audioNamesRs = pkgs.callPackage ./nix/audio-names.nix {
+        namesFile = ./assets/audio-names.nix;
+      };
+
       # WHAT A KEY CAN BE MADE INTO, and the leader's own rule. Two places read
       # it — the NixOS module that configures keyd, and the shell that renders
       # a file per keyboard — so it is declared once.
@@ -379,6 +386,7 @@
           mimeDb
           notificationsRs
           bluetoothProfilesRs
+          audioNamesRs
           keyboardsRs
           updatesRs
           syntaxRs
@@ -766,6 +774,7 @@
         mime-db = mimeDb;
         notifications-rs = notificationsRs;
         bluetooth-profiles-rs = bluetoothProfilesRs;
+        audio-names-rs = audioNamesRs;
         keyboards-rs = keyboardsRs;
         niri-actions = niriActions;
         # THE SEVEN COMPONENTS, each buildable on its own.
@@ -1003,6 +1012,7 @@
           tokensRs
           notificationsRs
           bluetoothProfilesRs
+          audioNamesRs
           keyboardsRs
           niriActions
           torrentShim

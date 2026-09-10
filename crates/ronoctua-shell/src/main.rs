@@ -43,6 +43,9 @@ use ronoctua_tokens as tokens;
 
 mod actions;
 mod apps;
+mod audio;
+mod audio_window;
+mod audio_words;
 mod band;
 mod bluetooth;
 mod bluetooth_window;
@@ -79,6 +82,7 @@ mod paint;
 mod power;
 mod power_window;
 mod power_words;
+mod sound;
 mod stage;
 mod surface;
 mod syncthing;
@@ -227,6 +231,13 @@ fn main() -> Result<()> {
             for (key, kdl, _) in actions::emergency() {
                 println!("    {key}{} {{ {kdl}; }}", repeat_of(&kdl));
             }
+            // AND THE MEDIA KEYS, bare for a different reason — see
+            // `actions::media`. They come out of the same table for the same
+            // reason as everything above: a key written in two configs is a
+            // key that one day differs between them.
+            for (key, kdl, _) in actions::media() {
+                println!("    {key}{} {{ {kdl}; }}", repeat_of(&kdl));
+            }
             return Ok(());
         }
         // The `window-rule`s, for the same reason as the binds above: the
@@ -282,6 +293,9 @@ fn main() -> Result<()> {
         }
         Some("power") => {
             return power_window::host_it().context("host the power view");
+        }
+        Some("audio") => {
+            return audio_window::host_it().context("host the sound view");
         }
         Some("locale") => {
             return locale_window::host_it().context("host the language and region view");
@@ -532,6 +546,18 @@ pub struct Marks<'a> {
     /// resolved by `bluetooth::modeline`, which is where the owner's rule
     /// about the percentage and the danger colour lives.
     pub devices: &'a [crate::bluetooth::Shown],
+    /// The machine is SILENT — the default sink is muted.
+    ///
+    /// It asks the default and not "any sink": a muted HDMI output nobody is
+    /// using is not the machine being silent. At any other volume there is no
+    /// mark at all, because a modeline at rest says nothing.
+    pub silent: bool,
+    /// Something is RECORDING — some program holds a capture stream open.
+    ///
+    /// A privacy mark before it is an audio one, and derived from PipeWire's
+    /// graph rather than guessed: the node exists exactly while the stream
+    /// does.
+    pub listening: bool,
     /// A link that leads NOWHERE — the portal, the router with no uplink.
     /// Not "there is no internet": nothing connected is not a fault.
     pub adrift: bool,
@@ -681,6 +707,37 @@ pub fn segments(
             id: "battery",
             text: b.to_owned(),
             priority: 8,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // SILENCE, AND THE MICROPHONE. Two marks and no ladder: a volume is
+    // drawn nowhere at rest, because a machine that is simply playing at some
+    // volume has nothing to report. What IS worth a cell is the machine
+    // having gone quiet — a key that seems not to work is usually this — and
+    // something holding the microphone open, which is a privacy fact and the
+    // only way to see it without opening the view.
+    //
+    // They sit at priority 2 with the network's two faults, which is the rung
+    // for "a thing is not as you would assume".
+    if marks.silent {
+        out.push(Segment {
+            id: "muted",
+            text: tokens::icon::VOLUME_MUTE.to_string(),
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    if marks.listening {
+        out.push(Segment {
+            id: "microphone",
+            text: tokens::icon::MICROPHONE.to_string(),
+            priority: 2,
             min_cols: 1,
             side: Side::Right,
             shrink: Shrink::Cut,
@@ -905,6 +962,11 @@ mod tests {
                         battery: Some(&format!("{} 12%", tokens::icon::BATTERY_DANGER)),
                         profile: Some(&tokens::icon::PROFILE_POWER_SAVER.to_string()),
                         devices: &devices,
+                        // AND THE TWO SOUND MARKS, both at once: a machine can
+                        // be muted while something records, and the narrowest
+                        // line has to survive the pair.
+                        silent: true,
+                        listening: true,
                         // AND THE WAY OUT'S TWO THAT CAN SHOW AT ONCE: the
                         // aeroplane and the fault are exclusive by rule, so
                         // the fullest line carries the fault and a tunnel.

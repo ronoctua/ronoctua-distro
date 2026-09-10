@@ -336,7 +336,32 @@ in
       jq
       ripgrep
       fd
+      # MPRIS: what a media key talks to.
+      #
+      # IT IS HERE AND NOT UNDER `ronoctua.media.enable` because the keys are
+      # bound unconditionally — `actions::media` puts `XF86AudioPlay` and its
+      # two neighbours in the compositor's config for every profile — and a key
+      # that is bound to a program that is not installed is a key that does
+      # nothing. The footer would say so, which is better than silence, but
+      # saying "this build has no media player" on a machine that plays media
+      # is a poor answer.
+      #
+      # MEASURED, and it is what made this a base package rather than a
+      # sentence: `nix path-info -r` on `playerctl` against the same on
+      # `dconf` — which every build already references, through
+      # `RONOCTUA_DCONF` — differ by exactly ONE path, `playerctl` itself, at
+      # **480.7 KiB**. Everything under it (glib and below) is already there.
+      playerctl
     ];
+
+    # AND ITS PATH, for the footer. From the ENVIRONMENT and not baked with
+    # `option_env!`: a store path in the compilation is a reference every
+    # closure carries, which is the trap the icon superpack and Emacs each paid
+    # to learn. `Footer::media` answers with a sentence when it is unset, which
+    # is what `nix run .#dev` gets.
+    environment.sessionVariables.RONOCTUA_PLAYERCTL = "${pkgs.playerctl}/bin/playerctl";
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_PLAYERCTL =
+      "${pkgs.playerctl}/bin/playerctl";
 
     system.stateVersion = lib.mkDefault "26.05";
   };

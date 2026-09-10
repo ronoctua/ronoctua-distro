@@ -321,10 +321,16 @@ pkgs.testers.runNixOSTest {
         )
 
     with subtest("a prefix key narrows the list"):
-        # `i` and not `b`: `b` today has as many bindings as the root, and
-        # "it narrowed" would become a coincidence. What is asserted is that the
-        # list became the PREFIX's, and `i` has only one.
-        press_key("i")
+        # `h` AND NOT `i`. This pressed `i` for as long as the three browsers
+        # lived at the top level; they moved under `m` (`m i`), `i` stopped
+        # being a prefix, and pressing it did nothing at all — so the second
+        # `inputs=` never appeared and this subtest had been red ever since,
+        # in a battery nobody had run over the tree.
+        #
+        # `h` and not `b`: `b` today has as many bindings as the root, and
+        # "it narrowed" would become a coincidence. What is asserted is that
+        # the list became the PREFIX's, and `h` has one item.
+        press_key("h")
         journal = machine.succeed("journalctl -u footer --no-pager")
         # What is asserted is that it NARROWED, not a number: how many commands
         # exist at the top changes with the keymap.
@@ -339,9 +345,10 @@ pkgs.testers.runNixOSTest {
         # the line below, and there was nothing there: pressing the leader and seeing
         # the same screen is indistinguishable from "it did not register the key".
         journal = machine.succeed("journalctl -u footer --no-pager")
-        # `LEADER i-`: the label from the environment, and Doom's notation (`-`, and
-        # not ` …`). `SPC` here would be the fallback, and would prove the opposite.
-        assert "LEADER i-" in journal, journal
+        # `LEADER h-`: the label from the environment, and Doom's notation (`-`,
+        # and not ` …`). `SPC` here would be the fallback, and would prove the
+        # opposite.
+        assert "LEADER h-" in journal, journal
 
         w, h, x, y = niri_geometry()
         # POLLED, like every other read of a height that has just changed:
@@ -380,8 +387,11 @@ pkgs.testers.runNixOSTest {
         echo_line = [l for l in journal.splitlines() if "echo area" in l][-1]
         print(f"echo: {echo_line}")
         # THE MESSAGE cites the whole sequence, not only the last key:
-        # `LEADER i z` is what the user typed, and `z` on its own would not help.
-        assert "LEADER i z" in echo_line, echo_line
+        # `LEADER h z` is what the user typed, and `z` on its own would not
+        # help. The prefix is `h` because the subtest above pressed it — it
+        # used to be `i`, which stopped being a prefix when the three browsers
+        # moved under `m`.
+        assert "LEADER h z" in echo_line, echo_line
         # And in pt-BR, translated — not the raw key.
         assert "echo-" not in echo_line, echo_line
 
@@ -647,6 +657,10 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
+        # `m i n`, and not `i n`: the three browsers moved under MISCELLANEOUS
+        # and `i` stopped being a top-level prefix. The old sequence reached
+        # nothing, silently.
+        press_key("m")
         press_key("i")
         press_key("n")
         # The QUOTES are part of it: `tracing` formats a `Debug` value between
@@ -711,25 +725,39 @@ pkgs.testers.runNixOSTest {
         # arrangement exists to prevent.
         assert "text=normal" in state[-1], state[-1]
 
-    with subtest("`i u` opens the SYMBOL browser, and it is another window"):
+    with subtest("the SYMBOL browser opens too, and it is another window"):
         # THE DEFECT THIS CATCHES is the same as the subtest above, and that is why
         # it exists again for the second buffer: a command can show up in which-key,
         # "run", and fall into a log `warn`. On screen, nothing.
         #
-        # The assertion is about the COUNT: `i n` has already opened a window, so
-        # after `i u` there have to be TWO. Waiting for "a window exists" would pass
-        # with the second command doing nothing.
+        # The assertion is about the COUNT: the glyph browser has already opened a
+        # window, so after this there have to be TWO. Waiting for "a window exists"
+        # would pass with the second command doing nothing.
+        #
+        # BY NAME AND NOT BY `m i u`, and the reason is a collision this test found:
+        # `ronoctua_protocol::LOCAL_PREFIX` is `"m"`, so at the ROOT of a sequence
+        # `LEADER m` belongs to the FOCUSED BUFFER's own keymap whenever that buffer
+        # published one — and the tree's MISCELLANEOUS group, which is where the
+        # three browsers live, is unreachable from any of our buffer windows.
+        # Measured here: the footer received the `m` (`the key after the discount
+        # … Char('m')`), handed it to the buffer, which redrew, and the leader
+        # never narrowed.
+        #
+        # The subtest above still proves the KEY path, because it runs before any
+        # buffer window exists. This one proves the second WINDOW, which is what it
+        # says it is about, and it reaches the command the way `LEADER :` does.
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
-            "${ronoctua-shell}/bin/ronoctua-shell leader"
+            "${ronoctua-shell}/bin/ronoctua-shell command unicode-symbols"
         )
+        # WITHOUT THE QUOTES, and that is not a detail. The subtest above waits
+        # for `command="glyphs-nerd-fonts"` because the LEADER logs a `Debug`
+        # value, which `tracing` puts between quotes. The control socket logs a
+        # `&str`, which it does not. Grepping for the quoted form here waited
+        # thirty seconds for a line that had already gone past.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
-        )
-        press_key("i")
-        press_key("u")
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'command=\"unicode-symbols\"'",
+            "journalctl -u footer --no-pager "
+            "| grep -q 'command through the control socket command=unicode-symbols'",
             timeout=30,
         )
         try:
@@ -763,6 +791,9 @@ pkgs.testers.runNixOSTest {
             )
 
         machine.succeed("journalctl --rotate && journalctl --vacuum-time=1s")
+        # AND THE FOCUS ONCE MORE, BEFORE THE LEADER, for the reason written
+        # above the second browser sequence — including the order.
+        focus_niri()
         xdo("keydown", "alt")
         try:
             machine.succeed(
@@ -772,7 +803,11 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
             )
-            xdo("key", "i")
+            # `h` AND NOT `m`, for the collision written above the subtest
+            # before this one: two buffer windows are open by now, and at the
+            # root of a sequence `m` is the FOCUSED BUFFER's prefix, not the
+            # tree's. `h` is a group of the tree and reaches it.
+            xdo("key", "h")
             machine.sleep(1)
         finally:
             # In the `finally` on purpose: an Alt stuck in Xvfb would spoil any
@@ -781,11 +816,11 @@ pkgs.testers.runNixOSTest {
             xdo("keyup", "alt")
 
         journal = machine.succeed("journalctl -u footer --no-pager")
-        # THE PROOF: `i` opened the group. With the defect, the log carries
-        # `is not bound` and the pending sequence never reaches `LEADER i-`.
-        assert "LEADER i-" in journal, (
-            "with the Alt held, `LEADER i` did not open the icon group.\n"
-            "The key came out as `M-i` and matched nothing.\n\n" + journal
+        # THE PROOF: `h` opened the group. With the defect, the log carries
+        # `is not bound` and the pending sequence never reaches `LEADER h-`.
+        assert "LEADER h-" in journal, (
+            "with the Alt held, `LEADER h` did not open the help group.\n"
+            "The key came out as `M-h` and matched nothing.\n\n" + journal
         )
   '';
 }

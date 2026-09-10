@@ -624,6 +624,29 @@ struct Footer {
     power_orders: Option<ronoctua_power::Handle>,
     /// The power view, when open — `LEADER s p p`.
     power: Option<crate::power::View>,
+    /// The last reading of the machine's sound — kept with the view closed,
+    /// because the modeline draws its two marks from it and the volume keys
+    /// act without a view.
+    audio_snapshot: Option<ronoctua_audio::Snapshot>,
+    /// The way to ask PipeWire for something.
+    audio_orders: Option<ronoctua_audio::Handle>,
+    /// The sound view, when open — `LEADER s a a`.
+    audio: Option<crate::audio::View>,
+    /// Which source this door has asked to have open.
+    ///
+    /// It shadows `View::listening` so the order goes out when it CHANGES.
+    /// Repeating it would drop the open child and build another, and a
+    /// microphone reopened on every arrow is a meter that flickers.
+    audio_listening: Option<u32>,
+    /// The sound view's own settings, read from `audio.json`.
+    ///
+    /// Kept OUTSIDE the view because the volume keys use the step with no
+    /// view open — which is the common case, since they are bare keys.
+    audio_prefs: ronoctua_audio::prefs::Preferences,
+    /// What the line above the modeline is saying about sound, if it is.
+    sound: Option<crate::sound::Said>,
+    /// The watch on `audio.json`.
+    _audio_watch: Option<ronoctua_files::notice::Notice>,
     /// The screens' view, when it is open.
     display: Option<crate::display::View>,
     /// The last reading of the screens. It is kept whether or not the view is
@@ -823,6 +846,11 @@ enum ViewState {
     /// chooser for the same reason: a cursor over a list of facts holds
     /// nothing a person built by hand, so it yields to everything above it.
     Locale,
+    /// The sound view. Modal, and ranked beside the power one: a cursor over
+    /// a list of devices holds nothing a person built by hand. It sits BELOW
+    /// the radio for the radio's own reason — a pairing question is waiting
+    /// for an answer, and a volume row is not.
+    Audio,
     /// The screens. Modal, and BELOW the radio, which IS the pairing
     /// question — the one thing on this list another machine is waiting on,
     /// and the reason the radio outranks everything here.
@@ -1086,6 +1114,8 @@ enum Click {
     Theme(usize),
     /// A row of the power view: the cursor goes there, `RET` acts.
     Power(usize),
+    /// A row of the sound view: the cursor goes there, `RET` acts.
+    Audio(usize),
     /// A row of the language and region view.
     Locale(usize),
     /// A row of the screens' view.
@@ -1796,6 +1826,36 @@ impl Inheritance {
 pub const PINNED_MARK: &str = "*";
 
 /// Brings the surface up and runs the event loop.
+/// Watch one file in a directory the CALLER found, making it if it is not there.
+///
+/// # Why this is not two lines inside `run`
+///
+/// Because `run` is the application: it finds the roots, once, and hands them
+/// over. A function that writes must not also decide where — the rule
+/// `persistence-takes-its-root-as-a-parameter` keeps, and the reason is that
+/// `cargo test` otherwise writes into the home of whoever runs it.
+///
+/// Two watches had grown their own `create_dir_all` inside `run`, which made
+/// `run` a function that writes AND finds. This is the one place that makes a
+/// directory before watching it, and it is handed the directory.
+fn watch_the_file(
+    dir: &std::path::Path,
+    file: &'static str,
+    wake: impl Fn() -> bool + Send + 'static,
+) -> Option<ronoctua_files::notice::Notice> {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!(error = %e, %file, "no directory to watch it in");
+        return None;
+    }
+    ronoctua_files::notice::Notice::on_file(
+        dir,
+        file,
+        ronoctua_files::notice::Pace::Coalesced,
+        wake,
+    )
+    .ok()
+}
+
 pub fn run() -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
@@ -1929,6 +1989,13 @@ pub fn run() -> Result<()> {
         locale_asking: None,
         glance: None,
         glance_stripes: Vec::new(),
+        audio_snapshot: None,
+        audio_orders: None,
+        audio: None,
+        audio_listening: None,
+        audio_prefs: ronoctua_audio::prefs::store().read(),
+        sound: None,
+        _audio_watch: None,
         world: crate::world::cached(),
         world_places: ronoctua_world::prefs::places(),
         world_zones: crate::world::zones(&ronoctua_world::prefs::places()),
@@ -2416,6 +2483,52 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the power channel: {e}"))?;
 
+    // PIPEWIRE, and EAGERLY for the power thread's reason: the modeline draws
+    // two marks off it at rest, and the volume keys act with no view open —
+    // which is the common case for a key on the keyboard's own top row.
+    //
+    // It is an EVENT stream and not a clock: `pw-dump --monitor` prints the
+    // graph once and then only what changed, measured at six milliseconds
+    // after a `wpctl`. Nothing here rides the one-second tick.
+    let (audio_sender, audio_events) = channel::channel::<ronoctua_audio::Event>();
+    match ronoctua_audio::watch(move |e| {
+        let _ = audio_sender.send(e);
+    }) {
+        Ok(h) => state.audio_orders = Some(h),
+        Err(e) => tracing::warn!(error = %e, "no sound server; the modeline draws no sound mark"),
+    }
+    handle
+        .insert_source(audio_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.audio_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the audio channel: {e}"))?;
+
+    // AND `audio.json`, watched the way the theme is: the window door writes
+    // it too, and a step chosen there has to reach the bare volume keys here
+    // without the footer being restarted.
+    let (audio_wish, audio_wish_changed) = channel::channel::<()>();
+    state._audio_watch = ronoctua_audio::prefs::home().and_then(|dir| {
+        watch_the_file(&dir, ronoctua_audio::prefs::FILE, move || {
+            audio_wish.send(()).is_ok()
+        })
+    });
+    handle
+        .insert_source(audio_wish_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                let fresh = ronoctua_audio::prefs::store().read();
+                if fresh != state.audio_prefs {
+                    state.audio_prefs = fresh;
+                    if let Some(v) = state.audio.as_mut() {
+                        v.took_preferences(fresh);
+                    }
+                    state.draw_and_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the audio.json watch: {e}"))?;
+
     // THE SCREENS, on a thread of their own — the arrangement above, and its
     // reason. A reading walks `/sys/class/drm` and asks the compositor twice,
     // and a monitor that answers over DDC/CI takes a fifth of a second: none
@@ -2548,17 +2661,9 @@ pub fn run() -> Result<()> {
     state.power_wanted = wanted;
     state.power_named = source != ronoctua_power::prefs::Source::Default;
     state._power_watch = ronoctua_power::prefs::home().and_then(|dir| {
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!(error = %e, "no configuration directory to watch power.json in");
-            return None;
-        }
-        ronoctua_files::notice::Notice::on_file(
-            &dir,
-            ronoctua_power::prefs::FILE,
-            ronoctua_files::notice::Pace::Coalesced,
-            move || power_file_sender.send(()).is_ok(),
-        )
-        .ok()
+        watch_the_file(&dir, ronoctua_power::prefs::FILE, move || {
+            power_file_sender.send(()).is_ok()
+        })
     });
     handle
         .insert_source(power_file, |event, (), state: &mut Footer| {
@@ -2845,6 +2950,17 @@ impl Footer {
                 battery: self.battery_segment().as_deref(),
                 profile: self.profile_segment().as_deref(),
                 devices: &devices,
+                // SOUND, out of the last reading. Both are absent at rest:
+                // a machine playing at some volume reports nothing, and one
+                // with no microphone open reports nothing either.
+                silent: self
+                    .audio_snapshot
+                    .as_ref()
+                    .is_some_and(ronoctua_audio::Snapshot::is_silent),
+                listening: self
+                    .audio_snapshot
+                    .as_ref()
+                    .is_some_and(ronoctua_audio::Snapshot::is_listening),
                 adrift: self.net.adrift(),
                 airplane: self.net.airplane(),
                 tunnel: self.net.tunnel().is_some(),
@@ -3109,6 +3225,16 @@ impl Footer {
             self.run_command("power-open");
             return;
         }
+        // AND SO DO THE TWO SOUND MARKS, by the same command a key runs —
+        // the mouse never reaches a door the keyboard cannot.
+        if id == "muted" {
+            self.run_command("audio-open");
+            return;
+        }
+        if id == "microphone" {
+            self.run_command("audio-open");
+            return;
+        }
         // THE WAY OUT'S THREE. Two of them open the network view — the same
         // command `LEADER s n n` runs — and the aeroplane TOGGLES, because
         // the one thing to do about aeroplane mode is to leave it.
@@ -3275,6 +3401,22 @@ impl Footer {
             // THE BATTERY'S SENTENCE: the number the segment stopped carrying
             // above 30%, the state, the time, the rate — everything the glyph
             // stands for, on the line the pointer already explains things on.
+            // SILENCE SAYS WHICH DEVICE IS SILENT, because "muted" alone
+            // does not tell you whether the key you pressed reached the
+            // speaker or the headset you forgot was still connected.
+            "muted" => {
+                let s = self.audio_snapshot.as_ref()?;
+                let device = s.default_of(ronoctua_audio::Kind::Sink)?;
+                Some(self.texts.t_with(
+                    ronoctua_i18n::key::HINT_VOLUME_MUTED,
+                    &[("device", &device.description)],
+                ))
+            }
+            // AND THE MICROPHONE SAYS THAT SOMETHING IS LISTENING. It does
+            // not name the program: a capture stream's `application.name` is
+            // the program's own word for itself, and the sentence is about
+            // the machine.
+            "microphone" => Some(self.texts.t(ronoctua_i18n::key::HINT_MICROPHONE)),
             "battery" => {
                 let s = self.power_snapshot.as_ref()?;
                 let b = s.display.as_ref()?;
@@ -4951,6 +5093,31 @@ impl Footer {
             "display-forget" => self.display_press(crate::display::Press::Forget),
             "display-arrange" => self.display_press(crate::display::Press::Arrange),
             "power-open" => self.open_power(None, None),
+            "audio-open" => self.open_audio(),
+            "audio-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["audio".to_owned()], None);
+                }
+            }
+            // THE VIEW'S OWN GESTURES. They are commands so the registry can
+            // name them, the hint line can be generated from them and
+            // `LEADER :` can reach them; with the view shut they do nothing,
+            // which is what a gesture of a closed view means.
+            "audio-up" | "audio-down" | "audio-enter" | "audio-less" | "audio-more"
+            | "audio-mute" | "audio-default" => {
+                if let Some(press) = crate::audio::press_of(id) {
+                    self.audio_press(press);
+                }
+            }
+            // THE BARE KEYS. These reach the machine's sound with NO view
+            // open, which is the common case for a key on the keyboard's own
+            // top row — so they act on the default device and say so on the
+            // line above the modeline.
+            "volume-up" => self.volume_by(true),
+            "volume-down" => self.volume_by(false),
+            "volume-mute" => self.silence(ronoctua_audio::Kind::Sink),
+            "mic-mute" => self.silence(ronoctua_audio::Kind::Source),
+            "media-play" | "media-next" | "media-previous" => self.media(id),
             "locale-window" => {
                 if let Ok(me) = std::env::current_exe() {
                     self.open_foreign(&me.to_string_lossy(), &["locale".to_owned()], None);
@@ -5317,9 +5484,14 @@ impl Footer {
                 let life = ronoctua_notify::Life::by_id(ronoctua_world::LIFE)
                     .unwrap_or_default()
                     .how_long();
-                let was = self.glance_rows();
+                let was = self.above_rows();
+                // THE ROW HAS ONE TENANT AT A TIME, and asking for the glance
+                // takes it: a line that showed a volume from four seconds ago
+                // under a clock somebody just asked for would answer a
+                // question nobody put.
+                self.sound = None;
                 self.glance = Some(crate::world::Showing::new(std::time::Instant::now(), life));
-                if self.glance_rows() != was {
+                if self.above_rows() != was {
                     self.apply_geometry(self.interactivity());
                 }
                 self.draw_and_paint();
@@ -5783,10 +5955,10 @@ impl Footer {
     /// ANYWHERE ON THE LINE, and not only on a piece — the band's rule, and
     /// the same reasoning: a line is read across its whole width.
     fn glance_holds(&mut self, x: f64, y: f64) -> bool {
-        // THE ROW IS WORKED OUT BEFORE THE BORROW: `glance_line_at` reads
+        // THE ROW IS WORKED OUT BEFORE THE BORROW: `above_line_at` reads
         // `self`, and `as_mut` holds it.
         let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
-        let top = f64::from(self.glance_line_at()) * line_height;
+        let top = f64::from(self.above_line_at()) * line_height;
         let Some(showing) = self.glance.as_mut() else {
             return false;
         };
@@ -5822,6 +5994,7 @@ impl Footer {
             // gesture that undoes the hold is taking the hand away.
             Some(showing) if showing.over(now) => {
                 self.glance = None;
+                self.sound = None;
                 self.glance_stripes.clear();
                 true
             }
@@ -7628,6 +7801,23 @@ impl Footer {
             return;
         }
 
+        if self.view() == ViewState::Audio {
+            use ronoctua_keymap::Sym;
+            // BOTH DOORS THROUGH ONE TABLE. This turns the footer's own key
+            // into the notation `audio::OF_THE_VIEW` holds, exactly as the
+            // window turns SCTK's keysym into it — so a key written in one
+            // place is answered in both, and a key written nowhere is
+            // answered in neither.
+            let press = match key.sym {
+                Sym::Esc => Some(crate::audio::Press::Escape),
+                other => crate::audio::pressed(&ronoctua_keymap::Key::simple(other).notation()),
+            };
+            if let Some(press) = press {
+                self.audio_press(press);
+            }
+            return;
+        }
+
         // THE FILE MANAGER intercepts before the leader, and before the rest of
         // the modals for the same reason `view()` ranks it first: it holds a
         // directory somebody navigated to, a set of marks and possibly an armed
@@ -8506,6 +8696,8 @@ impl Footer {
             ViewState::Bluetooth
         } else if self.power.is_some() {
             ViewState::Power
+        } else if self.audio.is_some() {
+            ViewState::Audio
         } else if self.display.is_some() {
             ViewState::Display
         } else if self.files.is_some() {
@@ -8571,12 +8763,20 @@ impl Footer {
     ///
     /// Not a function of the width, like the two regions either side of it:
     /// see [`crate::world::rows`].
-    fn glance_rows(&self) -> u16 {
+    /// How many lines the row above the modeline claims: one when somebody is
+    /// on it, none when nobody is.
+    ///
+    /// TWO TENANTS AND ONE ARITHMETIC. The glance (`LEADER d`) and the volume
+    /// flash share this row, and the last thing asked for holds it — a second
+    /// row of the same kind would be a second term in six functions of this
+    /// file, a second thing outside the expansion's budget, and a second
+    /// countdown for a person to tell apart.
+    fn above_rows(&self) -> u16 {
         crate::world::rows(self.glance.is_some())
     }
 
-    /// Which line of the surface the glance is on, when it is up.
-    fn glance_line_at(&self) -> u16 {
+    /// Which line of the surface that row is on, when it is up.
+    fn above_line_at(&self) -> u16 {
         self.band_rows()
     }
 
@@ -8616,7 +8816,7 @@ impl Footer {
     /// move on the SCREEN. That is the whole point of the band being up there
     /// rather than on the modeline itself.
     fn modeline_line(&self) -> u16 {
-        self.band_rows() + self.glance_rows()
+        self.band_rows() + self.above_rows()
     }
 
     /// Which line of the surface the minibuffer is on. Glued under the modeline.
@@ -8687,7 +8887,7 @@ impl Footer {
         let lines = u32::from(
             FOOTER_LINES
                 + self.band_rows()
-                + self.glance_rows()
+                + self.above_rows()
                 + self.fold_rows()
                 + self.brain_rows(),
         ) + u32::try_from(self.expansion_rows()).unwrap_or(0);
@@ -9743,6 +9943,22 @@ impl Footer {
                 .enumerate()
                 .map(|(n, r)| ExpansionRow {
                     click: (!r.heading).then_some(Click::Power(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Audio
+            && let Some(v) = self.audio.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(self.audio_snapshot.as_ref(), width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Audio(n)),
                     fields: r.fields,
                     foot: false,
                     ..ExpansionRow::empty_one()
@@ -11218,6 +11434,20 @@ impl Footer {
                     self.locale_errand(errand);
                 }
             }
+            Some(Click::Audio(n)) => {
+                // THE MOUSE AIMS, THE KEYS ACT — and here it also moves a
+                // microphone: the meter follows the cursor, and a click is a
+                // way of moving the cursor.
+                let width = self.screen_columns();
+                let snapshot = self.audio_snapshot.take();
+                if let Some(v) = self.audio.as_mut() {
+                    let rows = v.rows(snapshot.as_ref(), width, &self.texts);
+                    v.clicked(n, &rows, snapshot.as_ref(), &self.texts);
+                }
+                self.audio_snapshot = snapshot;
+                self.follow_the_microphone();
+                self.draw_and_paint();
+            }
             Some(Click::Power(n)) => {
                 // THE MOUSE AIMS, THE KEYS ACT: a click puts the cursor on the
                 // row, and `RET` is what applies, arms and confirms — the four
@@ -11472,6 +11702,7 @@ impl Footer {
                 .as_ref()
                 .map(crate::theme_chooser::View::row),
             ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
+            ViewState::Audio => self.audio.as_ref().map(crate::audio::View::cursor),
             ViewState::Locale => self.locale.as_ref().map(crate::locale::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
@@ -11982,6 +12213,10 @@ impl Footer {
         // closure below borrows and cannot reach back into `self`.
         let (records, book) = (self.notifications.history(), &self.book);
         let power = &self.power;
+        let audio = &self.audio;
+        // THE READING TOO: this view's hint depends on which row the cursor
+        // is on, and which rows exist depends on what PipeWire reported.
+        let sound = self.audio_snapshot.as_ref();
         let locale = &self.locale;
         let display = &self.display;
         // THE READING TOO, because this view's hint depends on whether the
@@ -12028,6 +12263,9 @@ impl Footer {
                     )
                 }),
                 ViewState::Power => power.as_ref().map(|v| v.hint(texts)),
+                // SOUND: the keys it teaches depend on the row, so a cursor
+                // on a setting is not told about `m`.
+                ViewState::Audio => audio.as_ref().map(|v| v.hint(sound, texts)),
                 // THE LANGUAGE AND REGION VIEW: `RET` chooses and nothing on
                 // a row says so, which is the same reason every view above
                 // has a line here.
@@ -12466,24 +12704,32 @@ impl Footer {
             // about is the LINE: resting anywhere on it stops the clock, the
             // way resting on the notification band does.
             if self.glance.is_some() {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
-                let drawn = crate::world::line(
-                    &self.world_places,
-                    &self.world,
-                    columns,
-                    now,
-                    self.glance,
-                    &self.world_zones,
-                    &self.texts,
-                );
+                // WHICHEVER OF THE TWO ASKED LAST. `sound` being set is what
+                // says the volume holds the row; the countdown, the pause and
+                // the pie are the same either way, because they belong to the
+                // ROW and not to what is on it.
+                let drawn = if let Some(said) = self.sound.as_ref() {
+                    crate::sound::line(said, columns, self.glance, &self.texts)
+                } else {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+                    crate::world::line(
+                        &self.world_places,
+                        &self.world,
+                        columns,
+                        now,
+                        self.glance,
+                        &self.world_zones,
+                        &self.texts,
+                    )
+                };
                 self.glance_stripes = drawn.stripes;
                 for piece in drawn.pieces {
                     spans.extend(glyph_and_text(
                         &piece.text,
                         piece.at,
-                        self.glance_line_at(),
+                        self.above_line_at(),
                         piece.color,
                         false,
                     ));
@@ -13286,7 +13532,7 @@ impl Footer {
             for stripe in &self.glance_stripes {
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: f32::from(stripe.at) * cell,
-                    y: f32::from(self.glance_line_at()) * line_height,
+                    y: f32::from(self.above_line_at()) * line_height,
                     width: f32::from(stripe.cells) * cell,
                     height: line_height,
                     color: stripe.color,
@@ -14160,6 +14406,67 @@ impl Footer {
     /// daemon —, and the screen repaints only when one of the two marks
     /// changed or the view is open: UPower polls every thirty seconds, and a
     /// frame for a reading that draws the same pixels is a frame wasted.
+    /// What PipeWire's threads sent.
+    fn audio_event(&mut self, e: ronoctua_audio::Event) {
+        match e {
+            ronoctua_audio::Event::Snapshot(s) => self.sound_arrived(*s),
+            // A LEVEL IS NOT A SNAPSHOT. It arrives ten times a second and the
+            // graph does not; folding one into the other would redraw the
+            // whole list for a bar that may not have moved a cell.
+            ronoctua_audio::Event::Level(level) => {
+                let width = self.screen_columns();
+                if self
+                    .audio
+                    .as_mut()
+                    .is_some_and(|v| v.took_level(level, width))
+                {
+                    self.draw_and_paint();
+                }
+            }
+            ronoctua_audio::Event::Done { refused, .. } => {
+                if let Some((why, words)) = refused {
+                    let said = crate::audio_words::refused(why, &words, &self.texts);
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                }
+            }
+        }
+    }
+
+    /// A fresh reading of the machine's sound.
+    fn sound_arrived(&mut self, s: ronoctua_audio::Snapshot) {
+        // A READING THAT DRAWS THE SAME PIXELS SPENDS NO FRAME — the power
+        // view's rule. PipeWire reports a change per client that comes and
+        // goes, and most of them are nothing to us.
+        let marks_before = (
+            self.audio_snapshot
+                .as_ref()
+                .is_some_and(ronoctua_audio::Snapshot::is_silent),
+            self.audio_snapshot
+                .as_ref()
+                .is_some_and(ronoctua_audio::Snapshot::is_listening),
+        );
+        self.audio_snapshot = Some(s);
+        let marks_after = (
+            self.audio_snapshot
+                .as_ref()
+                .is_some_and(ronoctua_audio::Snapshot::is_silent),
+            self.audio_snapshot
+                .as_ref()
+                .is_some_and(ronoctua_audio::Snapshot::is_listening),
+        );
+        if self.audio.is_some() {
+            // A DEVICE CAN BE UNPLUGGED WHILE ITS ROW IS UNDER THE CURSOR, and
+            // then the microphone this door asked for is a source that is
+            // gone. `settle` moves the cursor; this is what tells the meter.
+            self.settle_the_sound_view();
+        }
+        if marks_before != marks_after || self.audio.is_some() {
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+    }
+
     fn power_arrived(&mut self, s: ronoctua_power::Snapshot) {
         let before = self.power_snapshot.take();
         let now = std::time::Instant::now();
@@ -14739,6 +15046,262 @@ impl Footer {
         self.follow_cursor();
         self.apply_geometry(KeyboardInteractivity::Exclusive);
         self.draw_and_paint();
+    }
+
+    /// One press of a volume key, on the machine's own output.
+    ///
+    /// It acts on the DEFAULT sink and not on whatever a view has under its
+    /// cursor: this is a key on the keyboard's top row, and it is pressed with
+    /// no view open far more often than with one.
+    fn volume_by(&mut self, up: bool) {
+        let Some(node) = self
+            .audio_snapshot
+            .as_ref()
+            .and_then(|s| s.default_of(ronoctua_audio::Kind::Sink))
+        else {
+            // NOTHING TO PLAY THROUGH IS A SENTENCE. A key that did nothing
+            // and a machine with no sound card look the same from outside.
+            let said = self.texts.t(ronoctua_i18n::key::AUDIO_NOTHING_PLAYS);
+            self.echo_message(said);
+            self.draw_and_paint();
+            return;
+        };
+        let (id, percent, muted, description) =
+            (node.id, node.volume, node.muted, node.description.clone());
+        let wanted = self.audio_prefs.stepped(percent, up);
+        self.ask_the_sound_server(ronoctua_audio::Order::Volume {
+            node: id,
+            percent: wanted,
+        });
+        // THE LINE SHOWS WHAT WAS ASKED FOR, not what has arrived. The
+        // monitor answers in about six milliseconds and the line would jump
+        // from the old number to the new one in front of somebody's eyes.
+        self.flash_the_sound(crate::sound::Said {
+            device: description,
+            percent: wanted,
+            muted,
+            listening: false,
+        });
+    }
+
+    /// Silence the machine's output or its microphone, or give it back.
+    fn silence(&mut self, kind: ronoctua_audio::Kind) {
+        let Some(node) = self
+            .audio_snapshot
+            .as_ref()
+            .and_then(|s| s.default_of(kind))
+        else {
+            let said = self.texts.t(if kind == ronoctua_audio::Kind::Sink {
+                ronoctua_i18n::key::AUDIO_NOTHING_PLAYS
+            } else {
+                ronoctua_i18n::key::AUDIO_NOTHING_LISTENS
+            });
+            self.echo_message(said);
+            self.draw_and_paint();
+            return;
+        };
+        let (id, percent, muted, description) =
+            (node.id, node.volume, node.muted, node.description.clone());
+        self.ask_the_sound_server(ronoctua_audio::Order::Mute {
+            node: id,
+            muted: !muted,
+        });
+        self.flash_the_sound(crate::sound::Said {
+            device: description,
+            percent,
+            muted: !muted,
+            listening: kind == ronoctua_audio::Kind::Source,
+        });
+    }
+
+    /// Put the volume on the line above the modeline, if that line is wanted.
+    fn flash_the_sound(&mut self, said: crate::sound::Said) {
+        if !self.audio_prefs.flash {
+            self.draw_and_paint();
+            return;
+        }
+        // THE ROW'S OWN LIFE, and it is the glance's because the row is the
+        // glance's row. Two tenants with two lifetimes would be two things to
+        // learn about one line — and the line is where the countdown is drawn,
+        // so the pie would run at two speeds depending on what was in it.
+        let life = ronoctua_notify::Life::by_id(ronoctua_world::LIFE)
+            .unwrap_or_default()
+            .how_long();
+        let was = self.above_rows();
+        self.sound = Some(said);
+        // ASKING AGAIN RESTARTS THE CLOCK, which is what pressing the key
+        // again means — the glance's rule, and the same `Showing`.
+        self.glance = Some(crate::world::Showing::new(std::time::Instant::now(), life));
+        self.glance_stripes.clear();
+        if self.above_rows() != was {
+            self.apply_geometry(self.interactivity());
+        }
+        self.draw_and_paint();
+    }
+
+    /// Hand a media key to whatever is playing.
+    ///
+    /// # Why this is a PROGRAM and not a boundary of ours
+    ///
+    /// What a media key talks to is MPRIS, which is a D-Bus interface every
+    /// player implements its own way, and `playerctl` is the program that
+    /// already knows all of them. A crate of ours would be a fourth boundary
+    /// for a key that says "next".
+    ///
+    /// # Why its absence is a SENTENCE
+    ///
+    /// It comes from the ENVIRONMENT and not from `option_env!`, so
+    /// `ronoctua.media.enable = false` really removes it — the rule the icon
+    /// superpack and Emacs both paid to learn. When it is not there the key
+    /// says so, because a key that silently does nothing is indistinguishable
+    /// from a key that is not bound.
+    fn media(&mut self, id: &str) {
+        let verb = match id {
+            "media-next" => "next",
+            "media-previous" => "previous",
+            _ => "play-pause",
+        };
+        let Some(program) = std::env::var("RONOCTUA_PLAYERCTL")
+            .ok()
+            .filter(|p| !p.is_empty())
+        else {
+            let said = self.texts.t(ronoctua_i18n::key::AUDIO_MEDIA_NONE);
+            self.echo_message(said);
+            self.draw_and_paint();
+            return;
+        };
+        // NOT `status()`, WHICH WAITS. This runs inside the calloop callback,
+        // and a player that is slow to answer would freeze the footer.
+        match std::process::Command::new(&program)
+            .arg(verb)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => drop(child),
+            Err(e) => tracing::warn!(error = %e, %program, "could not run the media player"),
+        }
+    }
+
+    /// Opens the sound view in the footer.
+    fn open_audio(&mut self) {
+        // ALREADY OPEN: leave it exactly as it is — the power view's rule, and
+        // for the same reason. The way in here is the MOUSE: a click on the
+        // mute mark runs `audio-open`, and rebuilding the view would move a
+        // cursor somebody had put somewhere.
+        if self.audio.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("audio-open") {
+            return;
+        }
+        self.audio = Some(crate::audio::View::fresh(self.audio_prefs));
+        self.first_page();
+        self.follow_cursor();
+        // THE CURSOR IS ON A ROW NOW, and if that row is a microphone the
+        // meter belongs open. Opening the view IS the first move of the
+        // cursor.
+        self.settle_the_sound_view();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A key in the sound view.
+    fn audio_press(&mut self, press: crate::audio::Press) {
+        let Some(v) = self.audio.as_mut() else {
+            return;
+        };
+        let errand = v.key(press, self.audio_snapshot.as_ref(), &self.texts);
+        // THE SURFACE FIRST, THEN THE CURSOR — the order every view of this
+        // shape keeps.
+        self.region_resized();
+        self.follow_cursor();
+        self.follow_the_microphone();
+        self.audio_errand(errand);
+    }
+
+    /// What the sound view asked for.
+    fn audio_errand(&mut self, errand: crate::audio::Errand) {
+        use crate::audio::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            Errand::Speak(key) => {
+                let said = self.texts.t(key);
+                self.echo_message(said);
+            }
+            Errand::Order(order) => self.ask_the_sound_server(order),
+            Errand::Keep(prefs) => self.keep_the_sound_settings(prefs),
+            Errand::Close => {
+                self.audio = None;
+                // THE MICROPHONE CLOSES WITH THE VIEW, and it closes HERE
+                // rather than by the view being dropped: the handle lives on
+                // past the view, so nothing else would ever send the order.
+                self.stop_listening();
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// Ask PipeWire for something, and say so if there is nobody to ask.
+    fn ask_the_sound_server(&mut self, order: ronoctua_audio::Order) {
+        match &self.audio_orders {
+            Some(h) => h.send(order),
+            None => {
+                let said = self.texts.t(ronoctua_i18n::key::AUDIO_NO_PIPEWIRE);
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// Write the sound view's settings, and keep the copy the keys use.
+    fn keep_the_sound_settings(&mut self, prefs: ronoctua_audio::prefs::Preferences) {
+        self.audio_prefs = prefs;
+        if let Err(e) = ronoctua_audio::prefs::store().write(&prefs) {
+            tracing::warn!(error = %e, "could not write audio.json");
+        }
+    }
+
+    /// Put the cursor somewhere real, and move the meter with it.
+    fn settle_the_sound_view(&mut self) {
+        let snapshot = self.audio_snapshot.take();
+        if let Some(v) = self.audio.as_mut() {
+            v.settle_in(snapshot.as_ref(), &self.texts);
+        }
+        self.audio_snapshot = snapshot;
+        self.follow_the_microphone();
+    }
+
+    /// Tell the meter which source the cursor is on, when that changed.
+    fn follow_the_microphone(&mut self) {
+        let want = self.audio.as_ref().and_then(crate::audio::View::listening);
+        if want == self.audio_listening {
+            return;
+        }
+        self.audio_listening = want;
+        if let Some(h) = &self.audio_orders {
+            h.send(ronoctua_audio::Order::Listen(want));
+        }
+    }
+
+    /// Close whatever microphone this door has open.
+    fn stop_listening(&mut self) {
+        if self.audio_listening.is_none() {
+            return;
+        }
+        self.audio_listening = None;
+        if let Some(h) = &self.audio_orders {
+            h.send(ronoctua_audio::Order::Listen(None));
+        }
     }
 
     /// What the radio's threads sent.

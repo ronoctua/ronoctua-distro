@@ -343,6 +343,57 @@ pub fn full_chords() -> Vec<Chord> {
     out
 }
 
+/// The keyboard's own top row — the media keys.
+///
+/// # Why this is a family of its own and not four more emergencies
+///
+/// [`emergency`] below is four keys that exist for when the leader does NOT
+/// respond, and its "why only four" is an argument about RECOVERY. Adding a
+/// volume key to that list would make the argument false without changing a
+/// word of it.
+///
+/// These are here for a different and simpler reason: **no buffer receives
+/// them.** `XF86AudioRaiseVolume` is not on any keymap a program types into,
+/// so the objection §7.4 raises against bare binds — every one is a key the
+/// buffers stop receiving — does not apply. What is being taken is a key
+/// nobody had.
+///
+/// # Why they were not here before
+///
+/// `nix/scripts/gen-default-binds.py` says the `XF86*` keys "wait for the
+/// system to handle media keys", and structurally it cannot emit one: its
+/// regex only matches lines beginning `Mod+`. The system it was waiting for is
+/// this one, and until now this one never handled them — measured, there was
+/// not a single `XF86` string in the whole repository, so on this distro the
+/// volume keys of every laptop did nothing at all.
+///
+/// # What each one reaches
+///
+/// The first four go to `ronoctua-audio` through the footer's socket, which
+/// is what makes them agree with the view: one command, one answer, whether
+/// it came from a key on the keyboard or a row on a screen.
+///
+/// The last three go to `playerctl`, and its absence is a SENTENCE rather
+/// than silence — see `Footer::media`.
+///
+/// It returns `(key in niri, action in KDL, command)`, like [`emergency`].
+#[must_use]
+pub fn media() -> Vec<(&'static str, String, &'static str)> {
+    let shell = shell_path();
+    [
+        ("XF86AudioRaiseVolume", "volume-up"),
+        ("XF86AudioLowerVolume", "volume-down"),
+        ("XF86AudioMute", "volume-mute"),
+        ("XF86AudioMicMute", "mic-mute"),
+        ("XF86AudioPlay", "media-play"),
+        ("XF86AudioNext", "media-next"),
+        ("XF86AudioPrev", "media-previous"),
+    ]
+    .into_iter()
+    .map(|(key, id)| (key, format!("spawn \"{shell}\" \"command\" \"{id}\""), id))
+    .collect()
+}
+
 /// The binds that exist **outside** the leader, on purpose.
 ///
 /// # Why they are not chords
@@ -357,6 +408,12 @@ pub fn full_chords() -> Vec<Chord> {
 /// Every bind here is a key the buffers stop receiving, and §7.4 wants
 /// **one** keymap. Two of them close the loop: one to reach the command
 /// list, another to fix the most likely cause of it not opening.
+///
+/// [`media`] above is bare too and is NOT one of these four, deliberately:
+/// this list is about recovery, and a volume key is not. The argument that
+/// keeps this list short — a bare bind costs the buffers a key — is also the
+/// argument that lets that one exist, because no buffer ever receives an
+/// `XF86Audio*`.
 ///
 /// The third is `Ctrl+Alt+Esc`, and it earns its place by the same argument
 /// rather than by convenience. What one reaches for when the machine stops

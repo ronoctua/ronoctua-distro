@@ -29,10 +29,11 @@ tracing.workspace = true
 futures-channel.workspace = true
 futures-lite.workspace = true
 async-io.workspace = true
-# `pw-dump` prints JSON, and the audio profile is the one thing BlueZ cannot
-# answer — see `audio.rs`. Reading it by hand would be a second parser for a
-# format somebody else owns.
-serde_json.workspace = true
+# THE AUDIO PROFILE AND THE VOLUME ARE PIPEWIRE'S, and `ronoctua-audio` is the
+# one boundary with it. This crate used to run `pw-dump` and parse the graph
+# itself, which made two readers of one daemon — and `audio.rs` says what that
+# cost. What is left here is the Bluetooth question, asked by address.
+ronoctua-audio = { path = "../ronoctua-audio" }
 
 [lints]
 workspace = true

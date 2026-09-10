@@ -1,4 +1,5 @@
-//! The audio profile of a Bluetooth device — the one thing BlueZ cannot say.
+//! The audio profile and volume of a Bluetooth device — the one thing BlueZ
+//! cannot say.
 //!
 //! # Why this is not on the bus this crate speaks
 //!
@@ -9,30 +10,23 @@
 //! and it cannot do both at once. Which of the two it is in is PipeWire's,
 //! because PipeWire is what owns the card.
 //!
-//! # Why two programs and not a library
+//! # Why this file no longer runs a program
 //!
-//! Because the closure gains nothing: `nix path-info -r` on the system's own
-//! toplevel finds `wpctl` and `pw-dump` in `sw/bin` already —
-//! `services.pipewire` puts them there. Linking PipeWire's C API would be a
-//! second FFI boundary in this repository (`nix/rust.nix` says why the first
-//! one costs what it does), for a question asked when somebody opens one row.
+//! It used to spawn `pw-dump` and `wpctl` and parse the graph itself. That
+//! made **two** readers of one daemon in one repository — the shape
+//! `ronoctua-disks` writes a whole header against — and the day they
+//! disagreed about a volume, nothing would say which was right.
 //!
-//! `pw-dump` READS and `wpctl` WRITES, which is also the safety line: nothing
-//! here changes anything until a key is pressed.
+//! The parsing lives in `ronoctua-audio` now, which is the one boundary with
+//! PipeWire. What is left here is the Bluetooth question asked of it: **by
+//! ADDRESS**, because PipeWire has never heard of a BlueZ object path.
 //!
-//! # The trap
+//! # The trap that survives the move
 //!
-//! **PipeWire's id is not BlueZ's path.** A card is `bluez_card.AA_BB_CC_…`,
-//! built from the ADDRESS with `:` turned into `_` — so the match is on the
-//! address and never on the object path, which PipeWire has never heard of.
+//! `wpctl set-profile` takes a **DEVICE** and `wpctl set-volume` takes a
+//! **NODE**, and on the headset this was measured against they are 84 and 83.
 
-use anyhow::{Context as _, Result};
-
-/// Where `pw-dump` lives, baked at build time.
-const PW_DUMP: Option<&str> = option_env!("RONOCTUA_PW_DUMP");
-
-/// Where `wpctl` lives, baked at build time.
-const WPCTL: Option<&str> = option_env!("RONOCTUA_WPCTL");
+use anyhow::Result;
 
 /// One profile a card can be put in.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -79,51 +73,9 @@ impl Card {
             return None;
         }
         let at = usable.iter().position(|p| p.index == self.active)?;
-        let step = if forward {
-            (at + 1) % usable.len()
-        } else {
-            (at + usable.len() - 1) % usable.len()
-        };
-        usable.get(step).copied()
+        let step = if forward { 1 } else { usable.len() - 1 };
+        Some(usable[(at + step) % usable.len()])
     }
-}
-
-/// Reads the card of the device at this ADDRESS.
-///
-/// # Errors
-///
-/// `pw-dump` is not installed, did not run, or answered something that is not
-/// the array of objects it documents.
-pub fn card(address: &str) -> Result<Option<Card>> {
-    let program = PW_DUMP.context("this build has no pw-dump")?;
-    let out = std::process::Command::new(program)
-        .output()
-        .context("running pw-dump")?;
-    if !out.status.success() {
-        anyhow::bail!("pw-dump refused: {}", out.status);
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    Ok(card_of(&text, address))
-}
-
-/// Puts the device's card in a profile.
-///
-/// # Errors
-///
-/// `wpctl` is not installed, or refused.
-pub fn choose(card: u32, profile: i32) -> Result<()> {
-    let program = WPCTL.context("this build has no wpctl")?;
-    let out = std::process::Command::new(program)
-        .args(["set-profile", &card.to_string(), &profile.to_string()])
-        .output()
-        .context("running wpctl")?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "wpctl refused: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
 }
 
 /// A node that plays sound — what a VOLUME belongs to.
@@ -146,6 +98,17 @@ pub struct Sink {
     pub muted: bool,
 }
 
+/// The card of the device at this ADDRESS.
+///
+/// # Errors
+///
+/// `pw-dump` is not installed, did not run, or answered something that is not
+/// the array of objects it documents.
+pub fn card(address: &str) -> Result<Option<Card>> {
+    let dump = ronoctua_audio::pipewire::dump()?;
+    Ok(card_of(&dump, address))
+}
+
 /// The sink of the device at this ADDRESS.
 ///
 /// # Errors
@@ -153,14 +116,20 @@ pub struct Sink {
 /// `pw-dump` is not installed, did not run, or answered something that is not
 /// the array of objects it documents.
 pub fn sink(address: &str) -> Result<Option<Sink>> {
-    let program = PW_DUMP.context("this build has no pw-dump")?;
-    let out = std::process::Command::new(program)
-        .output()
-        .context("running pw-dump")?;
-    if !out.status.success() {
-        anyhow::bail!("pw-dump refused: {}", out.status);
-    }
-    Ok(sink_of(&String::from_utf8_lossy(&out.stdout), address))
+    let dump = ronoctua_audio::pipewire::dump()?;
+    Ok(sink_of(&dump, address))
+}
+
+/// Puts the device's card in a profile.
+///
+/// # Errors
+///
+/// `wpctl` is not installed, or refused.
+pub fn choose(card: u32, profile: i32) -> Result<()> {
+    ronoctua_audio::pipewire::carry_out(&ronoctua_audio::Order::Profile {
+        device: card,
+        index: profile,
+    })
 }
 
 /// Sets the volume of a node, as a percentage.
@@ -169,18 +138,7 @@ pub fn sink(address: &str) -> Result<Option<Sink>> {
 ///
 /// `wpctl` is not installed, or refused.
 pub fn set_volume(node: u32, percent: u8) -> Result<()> {
-    let program = WPCTL.context("this build has no wpctl")?;
-    let out = std::process::Command::new(program)
-        .args(["set-volume", &node.to_string(), &format!("{percent}%")])
-        .output()
-        .context("running wpctl")?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "wpctl refused: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
+    ronoctua_audio::pipewire::carry_out(&ronoctua_audio::Order::Volume { node, percent })
 }
 
 /// Silences a node, or gives it back.
@@ -189,18 +147,16 @@ pub fn set_volume(node: u32, percent: u8) -> Result<()> {
 ///
 /// `wpctl` is not installed, or refused.
 pub fn set_mute(node: u32, muted: bool) -> Result<()> {
-    let program = WPCTL.context("this build has no wpctl")?;
-    let out = std::process::Command::new(program)
-        .args(["set-mute", &node.to_string(), if muted { "1" } else { "0" }])
-        .output()
-        .context("running wpctl")?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "wpctl refused: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
+    ronoctua_audio::pipewire::carry_out(&ronoctua_audio::Order::Mute { node, muted })
+}
+
+/// The name PipeWire gives the card of a Bluetooth address.
+///
+/// `bluez_card.AA_BB_CC_…`, built from the ADDRESS with `:` turned into `_`.
+/// The match is on this and never on the BlueZ object path, which PipeWire
+/// has never heard of.
+fn card_name(address: &str) -> String {
+    format!("bluez_card.{}", address.replace(':', "_")).to_lowercase()
 }
 
 /// The sink for an address, out of what `pw-dump` printed.
@@ -215,146 +171,45 @@ pub fn set_mute(node: u32, muted: bool) -> Result<()> {
 /// which way the sound goes.
 #[must_use]
 pub fn sink_of(dump: &str, address: &str) -> Option<Sink> {
-    let objects: Vec<serde_json::Value> = serde_json::from_str(dump).ok()?;
-    for o in objects {
-        // A MISS SKIPS THE OBJECT; IT NEVER ANSWERS FOR THE DUMP.
-        //
-        // `pw-dump` prints the WHOLE graph, and most of it is not a node:
-        // measured here, 81 objects of which the FIRST is the core — it has
-        // props, and it has no `media.class`. A `?` on that lookup does not
-        // skip the core, it returns `None` from this function on the first
-        // line of every real dump, and the headset's node was number 83. The
-        // fixtures below are trimmed to what is read, so every test passed
-        // over a function that had never found anything on a real machine.
-        let Some(info) = o.get("info") else { continue };
-        let Some(props) = info.get("props") else {
-            continue;
-        };
-        if props.get("media.class").and_then(serde_json::Value::as_str) != Some("Audio/Sink") {
-            continue;
-        }
-        let theirs = props.get("api.bluez5.address").and_then(|a| a.as_str());
-        if !theirs.is_some_and(|a| a.eq_ignore_ascii_case(address)) {
-            continue;
-        }
-        let Some(id) = o
-            .get("id")
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|n| u32::try_from(n).ok())
-        else {
-            continue;
-        };
-        let settings = info
-            .get("params")
-            .and_then(|p| p.get("Props"))
-            .and_then(|p| p.as_array())
-            .and_then(|a| a.first());
-        let muted = settings
-            .and_then(|p| p.get("mute"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        // THE NUMBER PIPEWIRE KEEPS IS NOT THE NUMBER A PERSON READS.
-        //
-        // `channelVolumes` is linear amplitude; every mixer, `wpctl` included,
-        // shows its CUBE ROOT. The headset this was measured against reported
-        // `0.367886` while `wpctl status` said `0.72`, and 0.72 cubed is
-        // 0.373. Showing the stored number would say 37% about a headset
-        // playing at 72%, and the row would disagree with every other volume
-        // control on the machine.
-        let linear = settings
-            .and_then(|p| p.get("channelVolumes"))
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.first())
-            .or_else(|| settings.and_then(|p| p.get("volume")))
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "the cube root of a number clamped to 0..=1, times 100"
-        )]
-        let volume = (linear.cbrt() * 100.0).round() as u8;
-        return Some(Sink {
-            id,
-            volume: volume.min(100),
-            muted,
-        });
-    }
-    None
+    let graph = ronoctua_audio::graph::Graph::once(dump).ok()?;
+    let wanted = address.to_lowercase();
+    graph
+        .of(ronoctua_audio::Kind::Sink)
+        .into_iter()
+        .find(|n| {
+            n.address
+                .as_deref()
+                .is_some_and(|a| a.to_lowercase() == wanted)
+        })
+        .map(|n| Sink {
+            id: n.id,
+            volume: n.volume,
+            muted: n.muted,
+        })
 }
 
 /// The card for an address, out of what `pw-dump` printed.
-///
-/// A free function so the parsing is testable without PipeWire: the fixture
-/// beside it is one real object trimmed to the fields this reads.
 #[must_use]
 pub fn card_of(dump: &str, address: &str) -> Option<Card> {
-    let wanted = format!("bluez_card.{}", address.replace(':', "_")).to_lowercase();
-    let objects: Vec<serde_json::Value> = serde_json::from_str(dump).ok()?;
-    for o in objects {
-        // The same rule as `sink_of`: a miss skips the OBJECT, not the dump.
-        // Six of this machine's eighty-one objects carry no `info` at all,
-        // and the first of all of them carries no `device.name`.
-        let Some(props) = o.get("info").and_then(|i| i.get("props")) else {
-            continue;
-        };
-        let Some(name) = props.get("device.name").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        if name.to_lowercase() != wanted {
-            continue;
-        }
-        let Some(id) = o
-            .get("id")
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|n| u32::try_from(n).ok())
-        else {
-            continue;
-        };
-        let Some(params) = o.get("info").and_then(|i| i.get("params")) else {
-            continue;
-        };
-        let active = params
-            .get("Profile")
-            .and_then(|p| p.as_array())
-            .and_then(|a| a.first())
-            .and_then(|p| p.get("index"))
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|n| i32::try_from(n).ok())
-            .unwrap_or(-1);
-        let profiles = params
-            .get("EnumProfile")
-            .and_then(|p| p.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|p| {
-                        Some(Profile {
-                            index: i32::try_from(p.get("index")?.as_i64()?).ok()?,
-                            name: p.get("name")?.as_str()?.to_owned(),
-                            // ZERO IS "no", and anything else is yes: PipeWire
-                            // spells this `available` with the enum values
-                            // `unknown`, `no` and `yes`, and the numbers are
-                            // 0, 1 and 2 — but some versions print the WORD.
-                            // Both are read, because a profile wrongly called
-                            // unavailable is a row that disappears.
-                            available: match p.get("available") {
-                                Some(serde_json::Value::String(s)) => s != "no",
-                                Some(serde_json::Value::Number(n)) => n.as_i64() != Some(1),
-                                _ => true,
-                            },
-                        })
-                    })
-                    .collect()
+    let graph = ronoctua_audio::graph::Graph::once(dump).ok()?;
+    let wanted = card_name(address);
+    let device = graph
+        .devices
+        .iter()
+        .find(|d| d.name.to_lowercase() == wanted)?;
+    Some(Card {
+        id: device.id,
+        active: device.active_profile,
+        profiles: device
+            .profiles
+            .iter()
+            .map(|p| Profile {
+                index: p.index,
+                name: p.name.clone(),
+                available: p.available.usable(),
             })
-            .unwrap_or_default();
-        return Some(Card {
-            id,
-            profiles,
-            active,
-        });
-    }
-    None
+            .collect(),
+    })
 }
 
 #[cfg(test)]
@@ -365,7 +220,7 @@ mod tests {
     /// is invented (invariant 13), and the two node names disagree with each
     /// other on purpose — that is the trap the property match exists for.
     const NODES: &str = r#"[
-      { "id": 83,
+      { "id": 83, "type": "PipeWire:Interface:Node",
         "info": { "props": { "media.class": "Audio/Sink",
                              "node.name": "bluez_output.AA_BB_CC_DD_EE_FF.1",
                              "api.bluez5.address": "AA:BB:CC:DD:EE:FF",
@@ -373,7 +228,7 @@ mod tests {
                   "params": { "Props": [ { "volume": 0.367886,
                                            "mute": false,
                                            "channelVolumes": [0.367886, 0.367886] } ] } } },
-      { "id": 91,
+      { "id": 91, "type": "PipeWire:Interface:Node",
         "info": { "props": { "media.class": "Audio/Source",
                              "node.name": "bluez_input.AA:BB:CC:DD:EE:FF",
                              "api.bluez5.address": "AA:BB:CC:DD:EE:FF" },
@@ -445,9 +300,12 @@ mod tests {
     /// ONE object, in the shape `pw-dump` prints, trimmed to what is read.
     /// The address is invented (invariant 13).
     const DUMP: &str = r#"[
-      { "id": 7, "info": { "props": { "device.name": "alsa_card.pci-0000_00_1f.3" } } },
-      { "id": 42, "info": {
-          "props": { "device.name": "bluez_card.00_00_00_00_00_02" },
+      { "id": 7, "type": "PipeWire:Interface:Device",
+        "info": { "props": { "media.class": "Audio/Device",
+                             "device.name": "alsa_card.pci-0000_00_1f.3" } } },
+      { "id": 42, "type": "PipeWire:Interface:Device", "info": {
+          "props": { "media.class": "Audio/Device",
+                     "device.name": "bluez_card.00_00_00_00_00_02" },
           "params": {
             "Profile": [ { "index": 1, "name": "a2dp-sink" } ],
             "EnumProfile": [
@@ -508,5 +366,15 @@ mod tests {
         assert!(card_of("", "00:00:00:00:00:02").is_none());
         assert!(card_of("pw-dump: command not found", "00:00:00:00:00:02").is_none());
         assert!(card_of("[]", "00:00:00:00:00:02").is_none());
+    }
+
+    #[test]
+    fn the_volume_is_no_longer_computed_twice() {
+        // The reason this file stopped parsing: one boundary, one answer. If
+        // the cube root ever came back here it would be a second copy, free
+        // to drift from `ronoctua_audio::perceived` without a test noticing.
+        assert_eq!(ronoctua_audio::perceived(0.367886), 72);
+        let sink = sink_of(NODES, "AA:BB:CC:DD:EE:FF").expect("the headset has a sink");
+        assert_eq!(sink.volume, ronoctua_audio::perceived(0.367886));
     }
 }

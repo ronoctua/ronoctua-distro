@@ -363,6 +363,33 @@
   wifi = "md-wifi";
   bluetooth = "fa-bluetooth";
   volume = "md-volume_high";
+
+  # SILENCE, and it is the modeline's mark and nothing else.
+  #
+  # `md-volume_off` above is the film preview's "this panel does not speak";
+  # this one is "the machine does not". Two names because they are two facts,
+  # and the day one moves the other must not follow it.
+  #
+  # THERE IS NO LADDER, and that is measured rather than chosen. A quiet, a
+  # medium and a loud speaker exist in Material and the generator sizes each
+  # glyph against the digit beside it: `md-volume_low` came out at **15 px**,
+  # `md-volume_medium` at **19** and `md-volume_high` at **22**. Three glyphs
+  # taking turns in one cell would resize the row every time somebody touched
+  # the volume — the same twitch the `play`/`pause` comment above exists to
+  # avoid, and there it was only two glyphs. So a row draws ONE glyph and the
+  # BAR says how loud, and the mark is present or absent rather than one of
+  # three.
+  volume-mute = "md-volume_mute";
+
+  # THE MICROPHONE, and it is a PRIVACY mark before it is an audio one.
+  #
+  # On the modeline it is drawn whenever anything holds a capture stream —
+  # derived from the graph, never guessed — so what it says is "something is
+  # listening", and that is worth a cell on its own. Present or absent, again:
+  # a second glyph for "not listening" would be a mark that is always there,
+  # which the modeline does not do at rest.
+  microphone = "md-microphone";
+
   battery = "md-battery";
   monitor = "md-monitor";
   keyboard = "md-keyboard";
