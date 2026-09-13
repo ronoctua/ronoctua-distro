@@ -2074,7 +2074,7 @@ impl Builder<'_> {
                 if target == Target::Nothing {
                     tokens::color::TEXT_READ_STRONG
                 } else {
-                    tokens::color::TEXT_PRIMARY
+                    tokens::color::TEXT_ANSWER
                 },
             ),
         };
@@ -2177,7 +2177,7 @@ impl Builder<'_> {
                 if target == Target::Nothing {
                     tokens::color::TEXT_READ_STRONG
                 } else {
-                    tokens::color::TEXT_PRIMARY
+                    tokens::color::TEXT_ANSWER
                 },
             ),
         };

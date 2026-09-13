@@ -2363,7 +2363,7 @@ impl Builder<'_> {
                 // one came to read stays perfectly legible, it just stops
                 // being the loudest thing on the line.
                 match (acts, listed) {
-                    (true, false) => tokens::color::TEXT_PRIMARY,
+                    (true, false) => tokens::color::TEXT_ANSWER,
                     (true, true) => tokens::color::TEXT_SECONDARY,
                     (false, false) => tokens::color::TEXT_READ_STRONG,
                     (false, true) => tokens::color::TEXT_READ_WEAK,

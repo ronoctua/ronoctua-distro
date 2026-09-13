@@ -1227,7 +1227,16 @@ impl Builder<'_> {
                 } else {
                     tokens::color::TEXT_LABEL_ACTS
                 },
-                tokens::color::TEXT_PRIMARY,
+                // AND THE VALUE SAYS THE SAME FROM THE OTHER SIDE, which this
+                // view alone was not doing: it drew every value in the body
+                // text's tone, so a fact and a door looked alike on the half
+                // of the line the eye goes to. Every other view of this shape
+                // already asked the question; this one now asks it too.
+                if target == Target::Nothing {
+                    tokens::color::TEXT_READ_STRONG
+                } else {
+                    tokens::color::TEXT_ANSWER
+                },
             )
         };
         self.out.push(Row {

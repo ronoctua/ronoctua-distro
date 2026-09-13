@@ -30,7 +30,20 @@
   };
   text = {
     hue = 85;
-    chroma = 0.26;
+    # MORE OF THE HUE, at the owner's word: the values of a row one can act on
+    # and of a row one can only read "are still very similar to the human eye",
+    # and they asked for the warm one to carry more colour.
+    #
+    # The ceiling is the FROZEN REFERENCE and not a contrast gate: above 0.40
+    # `text.secondary` drifts 0.04 from `owl.reference.nix`, which allows 0.03.
+    # A deviation with a reason is the sanctioned route past it and was not
+    # needed — what this knob buys is small either way (see below).
+    #
+    # AND IT IS THE SMALLER HALF OF THE FIX. Measured, the pair is told apart
+    # almost entirely by LUMINANCE: of ΔE 0.0838 between the two values, 0.0794
+    # is lightness and 0.0268 is colour. Warming the ramp from 0.26 to 0.40
+    # moves the pair by 8%; dropping the grey a second step moves it by 50%.
+    chroma = 0.40;
   };
   # The desk under the windows when the person asks for the theme's own
   # instead of black (`LEADER s t`, second column).
@@ -102,24 +115,64 @@
     #
     # A hue of its own because the label is another KIND of thing than the
     # value beside it: the value is the screen's content and the label is the
-    # question the content answers. Inside the family, `text` is a row that
-    # ANSWERS `RET` and `text-muted` a row one can only read — luminance for
-    # importance, which is this palette's other half of the rule.
+    # question the content answers.
+    #
+    # THE DISTINCTION USED TO BE LUMINANCE — `text` for a row that answers
+    # `RET`, `text-muted` for one that can only be read. It is CHROMA now, and
+    # the two halves of that live in two seeds: this one carries the hue, and
+    # `label-read` below is the same step drained of it. The owner asked for
+    # the change twice, and the second time the measurement said why: at the
+    # old pair the two labels were ΔE 0.0236 apart, which is under the 0.03
+    # this palette's own regression gate calls a noticeable difference. A
+    # column nobody can tell from the column beside it is not a distinction.
     #
     # 155° is the seat between `success` (130) and `alternate` (183), 25° from
     # each and the widest gap this palette had left.
     #
-    # AND IT IS SOBER, which the owner asked for after seeing the first one on
-    # screen: *"por ser labels, essas novas cores deveriam ser mais sóbrias"*.
-    # It started at `alternate`'s chroma with the loud text step, and a whole
-    # COLUMN at that weight competes with the values it is naming — a label is
-    # the quiet half of its line. Measured against the neutral ramp the pair
-    # now sits a little above it (Lc 54 and 29 against the ramp's 48 and 23):
-    # quiet enough not to shout, bright enough that the hue is still a hue and
-    # not another grey.
+    # IT IS STILL THE QUIET HALF OF ITS LINE, and that is not the same as the
+    # dim half — which is what the first attempt confused. The owner asked for
+    # sobriety once (*"por ser labels, essas novas cores deveriam ser mais
+    # sóbrias"*), and what was loud then was the LOUD TEXT STEP: a whole column
+    # at that weight competes with the values it is naming. The step is what
+    # came down, and it stays down — Lc 54 against the ramp's 48.
+    #
+    # The chroma went the other way, from 0.20 to 0.40, because it is the only
+    # axis left: both labels sit at one luminance now, so colour is the whole
+    # of the difference between them. 0.40 is a muted green (#81B291) and
+    # nowhere near a state colour; the ladder allows more if a screen ever asks
+    # for it.
     label = {
       hue = 155;
-      text-chroma = 0.20;
+      text-chroma = 0.40;
+      text-shift = 6;
+    };
+
+    # THE LABEL OF A ROW ONE CANNOT ACT ON — the same hue, drained of it.
+    #
+    # It was `label.text-muted`, twenty-five Lc BELOW the label beside it, and
+    # the owner read that off the screen: a whole column of questions rendered
+    # dark, as if the rows one can only read were half switched off. A label is
+    # the quiet half of its line, not the dim half — what it has to say is
+    # WHICH question this is, and that has to be legible whether or not the
+    # answer can be changed.
+    #
+    # So the distinction moves from LUMINANCE to CHROMA. Same hue, same step,
+    # same shift — a third of the colour. Against the acting label it reads as
+    # the same word with the life taken out of it, which is exactly what it is;
+    # against the neutral ramp it is still a hue and not another grey.
+    #
+    # It is a family and not a step because the ladder gives one chroma per
+    # family: two chromas at one luminance is two families, and this is the
+    # cheaper half of the pair.
+    #
+    # AND THE CHROMA IS NOUGHT, so the hue below is not drawn — it is kept at
+    # the acting label's own so that the two seeds read as a pair, and so that
+    # raising it is one edit if a theme ever wants a tinted fact label. The
+    # owner asked twice for more distinction, and a hue against no hue at one
+    # luminance is the most this axis has to give.
+    label-read = {
+      hue = 155;
+      text-chroma = 0.00;
       text-shift = 6;
     };
 
@@ -135,11 +188,42 @@
     grey = {
       hue = 85;
       text-chroma = 0.0;
-      # EIGHT Lc DOWN THE LADDER, at the owner's word: at the strong step
-      # a grey with no colour in it is still a near-white (#E0E0E0), and
-      # he read it that way — *"está muito branco"*. Sixteen Lc below the
-      # cream it sits beside, and twenty-three above the ramp's own `text`:
-      # far enough to be grey, near enough that nothing is harder to read.
+      # SIXTEEN Lc DOWN THE LADDER, and it took two askings to get here.
+      #
+      # The first was eight, at the owner's word: at the strong step a grey
+      # with no colour in it is still a near-white (#E0E0E0), and he read it
+      # that way — *"está muito branco"*.
+      #
+      # The second was eight more, and the reason is a MEASUREMENT. The owner
+      # said the two values "are still very similar to the human eye" and asked
+      # for the warm one to carry more colour; measured, that is the smaller
+      # half of the answer. Of the ΔE 0.0838 between the pair, 0.0794 is
+      # lightness and 0.0268 is colour — so warming the ramp moves them 8% and
+      # dropping this grey one more step moves them 50%. Both were done; this
+      # is the half that does the work.
+      #
+      # AND IT STOPS HERE. At −16 the value sits at Lc 63; a third step would
+      # put it at 59, and APCA's floor for body text is 60. This is the thing
+      # one came to READ, and dimming it past legibility would be the same
+      # complaint the owner made about the labels, moved one column right.
+      text-shift = -20;
+    };
+
+    # THE SAME GREY, FOR A LIST ITEM, AND IT DID NOT FOLLOW THE DROP.
+    #
+    # `grey` went a second step down so the ANSWER of a row could be told from
+    # the answer of a row one can act on. A list item's value shares the family
+    # and would have gone with it — from Lc 40 to 32, and APCA's floor for text
+    # of any size is 30. The thing this palette was being tuned for is a pair
+    # in a sheet; dragging a different screen's list under the floor to get
+    # there is not a trade, it is an accident.
+    #
+    # So the weight that moved keeps its own seed and this one keeps the eight
+    # it already had. The ladder gives ONE shift per family, and two weights
+    # that no longer move together are two families.
+    grey-listed = {
+      hue = 85;
+      text-chroma = 0.0;
       text-shift = -8;
     };
     # The brain's line: a blue-cast ground with neutral near-white text.

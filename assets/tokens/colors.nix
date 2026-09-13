@@ -191,6 +191,31 @@
   # changes temperature halfway, and the eye reads that as dirt.
   text = {
     primary = "neutral.text-strong";
+    # THE VALUE OF A ROW ONE CAN ACT ON, and it is the counterpart `text.read`
+    # never had.
+    #
+    # The pair was asymmetric: a row one cannot act on had a role of its own
+    # (`read`), and a row one CAN act on borrowed the body-text token. So the
+    # only way to give the answer more colour was to warm every word on every
+    # screen — and measured, that does not even work: past a relative chroma of
+    # 0.40 what moves is the ramp's DIM end (`text.dim`, the notification
+    # tones, the modeline's normal state, all of which drift past
+    # `owl.reference.nix`), while the bright step where a value lives barely
+    # changes, because the ladder squeezes chroma as it approaches white.
+    #
+    # A MULTIPLIER ON ONE RECIPE is the whole of the fix: the same primitive,
+    # the same luminance, its chroma scaled. Nothing else on any screen moves,
+    # and no frozen key drifts, because this token is new.
+    #
+    # 2.4 AND NOT MORE, AND THE CEILING IS THE SCREEN. At 2.4 the red channel
+    # sits at FE; at 2.5 it clips to FF and stays there, so every larger number
+    # draws the same pixel. A chroma the report states and the display cannot
+    # show is a number that has stopped describing anything — the owner picked
+    # this one knowing that is where it stops.
+    answer = {
+      of = "neutral.text-strong";
+      chroma = 2.4;
+    };
     secondary = "neutral.text";
     # Lower-priority modeline segments, before they vanish in the elision
     # (section 7 of the plan).
@@ -285,7 +310,15 @@
     # A label is the quiet half of its line; it is the VALUE one reads.
     label = {
       acts = "label.text";
-      fact = "label.text-muted";
+      # AND THE FACT'S LABEL IS THE SAME WORD WITH THE LIFE TAKEN OUT.
+      #
+      # It was `label.text-muted` — twenty-five Lc below the label beside it —
+      # and the owner read it off the screen as a column half switched off. A
+      # label is the quiet half of its line, not the dim half: what it says is
+      # WHICH question this is, and that is worth reading whether or not the
+      # answer can be changed. So the distinction is CHROMA now, at the same
+      # luminance: see the `label-read` seed.
+      fact = "label-read.text";
     };
     # THE VALUE OF A ROW ONE CANNOT ACT ON.
     #
@@ -301,7 +334,11 @@
     # all, the thing one came to read.
     read = {
       strong = "grey.text-loud";
-      weak = "grey.text";
+      # AND THE LIST ITEM'S KEEPS THE WEIGHT IT HAD. `grey` dropped a second
+      # step to separate the pair in a sheet; this one is a different screen's
+      # list, and following it there would have put it at Lc 32 — under APCA's
+      # floor for text of any size. See the `grey-listed` seed.
+      weak = "grey-listed.text";
     };
 
     # WHAT THE PERSON WROTE THEMSELVES.

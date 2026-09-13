@@ -90,7 +90,36 @@
     # this theme's ACCENT lives: a green theme cannot spend green on a column.
     label = {
       hue = 255;
-      text-chroma = 0.20;
+      text-chroma = 0.40;
+      text-shift = 6;
+    };
+
+    # THE LABEL OF A ROW ONE CANNOT ACT ON — the same hue, drained of it.
+    #
+    # It was `label.text-muted`, twenty-five Lc BELOW the label beside it, and
+    # the owner read that off the screen: a whole column of questions rendered
+    # dark, as if the rows one can only read were half switched off. A label is
+    # the quiet half of its line, not the dim half — what it has to say is
+    # WHICH question this is, and that has to be legible whether or not the
+    # answer can be changed.
+    #
+    # So the distinction moves from LUMINANCE to CHROMA. Same hue, same step,
+    # same shift — a third of the colour. Against the acting label it reads as
+    # the same word with the life taken out of it, which is exactly what it is;
+    # against the neutral ramp it is still a hue and not another grey.
+    #
+    # It is a family and not a step because the ladder gives one chroma per
+    # family: two chromas at one luminance is two families, and this is the
+    # cheaper half of the pair.
+    #
+    # AND THE CHROMA IS NOUGHT, so the hue below is not drawn — it is kept at
+    # the acting label's own so that the two seeds read as a pair, and so that
+    # raising it is one edit if a theme ever wants a tinted fact label. The
+    # owner asked twice for more distinction, and a hue against no hue at one
+    # luminance is the most this axis has to give.
+    label-read = {
+      hue = 255;
+      text-chroma = 0.00;
       text-shift = 6;
     };
 
@@ -106,11 +135,42 @@
     grey = {
       hue = 140;
       text-chroma = 0.0;
-      # EIGHT Lc DOWN THE LADDER, at the owner's word: at the strong step
-      # a grey with no colour in it is still a near-white (#E0E0E0), and
-      # he read it that way — *"está muito branco"*. Sixteen Lc below the
-      # cream it sits beside, and twenty-three above the ramp's own `text`:
-      # far enough to be grey, near enough that nothing is harder to read.
+      # SIXTEEN Lc DOWN THE LADDER, and it took two askings to get here.
+      #
+      # The first was eight, at the owner's word: at the strong step a grey
+      # with no colour in it is still a near-white (#E0E0E0), and he read it
+      # that way — *"está muito branco"*.
+      #
+      # The second was eight more, and the reason is a MEASUREMENT. The owner
+      # said the two values "are still very similar to the human eye" and asked
+      # for the warm one to carry more colour; measured, that is the smaller
+      # half of the answer. Of the ΔE 0.0838 between the pair, 0.0794 is
+      # lightness and 0.0268 is colour — so warming the ramp moves them 8% and
+      # dropping this grey one more step moves them 50%. Both were done; this
+      # is the half that does the work.
+      #
+      # AND IT STOPS HERE. At −16 the value sits at Lc 63; a third step would
+      # put it at 59, and APCA's floor for body text is 60. This is the thing
+      # one came to READ, and dimming it past legibility would be the same
+      # complaint the owner made about the labels, moved one column right.
+      text-shift = -20;
+    };
+
+    # THE SAME GREY, FOR A LIST ITEM, AND IT DID NOT FOLLOW THE DROP.
+    #
+    # `grey` went a second step down so the ANSWER of a row could be told from
+    # the answer of a row one can act on. A list item's value shares the family
+    # and would have gone with it — from Lc 40 to 32, and APCA's floor for text
+    # of any size is 30. The thing this palette was being tuned for is a pair
+    # in a sheet; dragging a different screen's list under the floor to get
+    # there is not a trade, it is an accident.
+    #
+    # So the weight that moved keeps its own seed and this one keeps the eight
+    # it already had. The ladder gives ONE shift per family, and two weights
+    # that no longer move together are two families.
+    grey-listed = {
+      hue = 140;
+      text-chroma = 0.0;
       text-shift = -8;
     };
     brain = {

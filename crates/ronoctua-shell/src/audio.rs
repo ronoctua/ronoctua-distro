@@ -965,7 +965,7 @@ impl Builder<'_> {
         let (label_colour, value_colour) = match (focused, disabled) {
             (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
-            (false, false) => (tokens::color::TEXT_LABEL_ACTS, tokens::color::TEXT_PRIMARY),
+            (false, false) => (tokens::color::TEXT_LABEL_ACTS, tokens::color::TEXT_ANSWER),
         };
         self.out.push(Row {
             fields: crate::chrome::field_pair(

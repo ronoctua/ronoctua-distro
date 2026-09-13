@@ -1527,7 +1527,7 @@ fn draft_rows(d: &Draft, left: u16, room: u16, texts: &ronoctua_i18n::Texts) -> 
                     if focused {
                         tokens::color::STATE_ACCENT
                     } else {
-                        tokens::color::TEXT_PRIMARY
+                        tokens::color::TEXT_ANSWER
                     },
                 ),
             }
@@ -2190,7 +2190,7 @@ impl View {
             let value = if focused {
                 tokens::color::STATE_ACCENT
             } else {
-                tokens::color::TEXT_PRIMARY
+                tokens::color::TEXT_ANSWER
             };
             // A SWITCH THAT SWITCHES NOTHING OFF STILL SAYS SO — but on the
             // MESSAGE LINE, when the row is focused, and not as a third column
@@ -2581,7 +2581,10 @@ impl View {
                     value_of(&now, Knob::Life, texts),
                 ),
                 tokens::color::TEXT_LABEL_FACT,
-                tokens::color::TEXT_PRIMARY,
+                // A FACT'S LABEL WANTS A FACT'S VALUE. This one row drew the
+                // question in the fact tone and the answer in the body text's,
+                // which is the pair contradicting itself.
+                tokens::color::TEXT_READ_STRONG,
             ),
         });
         out.push(Row { fields: Vec::new() });

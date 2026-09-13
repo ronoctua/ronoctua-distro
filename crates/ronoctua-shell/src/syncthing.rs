@@ -1694,7 +1694,7 @@ impl Builder<'_> {
                     tokens::color::TEXT_LABEL_FACT
                 },
                 if acts {
-                    tokens::color::TEXT_PRIMARY
+                    tokens::color::TEXT_ANSWER
                 } else {
                     tokens::color::TEXT_READ_STRONG
                 },
