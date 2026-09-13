@@ -1,0 +1,21 @@
+[package]
+name = "ronoctua-http"
+description = "HTTP/1.1 by hand, for the local daemons: one framer, two transports, a deadline on every read."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO DEPENDENCY BUT `anyhow`, and that is the point of the crate.
+#
+# A real HTTP client solves TLS, redirection, proxying, connection pools and
+# content negotiation. None of those exist on a loopback socket. What DOES
+# exist — a deadline, chunked framing, and a body that may split a character —
+# is written here once instead of in every crate that talks to a daemon.
+
+[dependencies]
+anyhow.workspace = true
+
+[lints]
+workspace = true

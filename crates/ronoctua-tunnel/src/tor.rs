@@ -210,8 +210,8 @@ impl Control {
     pub fn open(socket: &Path, cookie: &Path) -> anyhow::Result<Self> {
         let stream = UnixStream::connect(socket)
             .map_err(|e| anyhow::anyhow!("{}: {e}", socket.display()))?;
-        stream.set_read_timeout(Some(crate::http::PATIENCE))?;
-        stream.set_write_timeout(Some(crate::http::PATIENCE))?;
+        stream.set_read_timeout(Some(ronoctua_http::PATIENCE))?;
+        stream.set_write_timeout(Some(ronoctua_http::PATIENCE))?;
         let reader = BufReader::new(stream.try_clone()?);
         let mut me = Self { stream, reader };
         let bytes =

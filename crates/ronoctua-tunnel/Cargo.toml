@@ -12,6 +12,10 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# THE FRAMER IS NOT OURS ANY MORE. It was written here for Tailscale, and its
+# own first line said it was the shape `shell::syncthing` already had; the
+# Syncthing view would have made a third copy. One crate, two transports.
+ronoctua-http = { path = "../ronoctua-http" }
 # The watching thread outlives whoever asked for it, and when a daemon goes
 # away there is nobody to return an error to — so it says so to the log.
 tracing.workspace = true

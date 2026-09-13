@@ -2665,6 +2665,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "ronoctua-i18n"
 version = "0.1.0"
 dependencies = [
@@ -2861,6 +2868,7 @@ dependencies = [
  "ronoctua-render",
  "ronoctua-runtime",
  "ronoctua-store",
+ "ronoctua-syncthing",
  "ronoctua-syntax",
  "ronoctua-term",
  "ronoctua-tokens",
@@ -2884,6 +2892,18 @@ name = "ronoctua-store"
 version = "0.1.0"
 dependencies = [
  "ronoctua-xdg",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "ronoctua-syncthing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-http",
+ "ronoctua-store",
  "serde",
  "serde_json",
  "tracing",
@@ -2921,6 +2941,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ronoctua-files",
+ "ronoctua-http",
  "ronoctua-torrent",
  "rustix 1.1.4",
  "serde",
@@ -2934,6 +2955,7 @@ name = "ronoctua-tunnel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-http",
  "serde",
  "serde_json",
  "tracing",
@@ -2944,8 +2966,8 @@ name = "ronoctua-world"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-http",
  "ronoctua-store",
- "ronoctua-tunnel",
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",

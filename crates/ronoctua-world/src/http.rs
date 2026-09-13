@@ -148,15 +148,15 @@ pub fn get(host: &str, path: &str) -> Result<Vec<u8>> {
     socket.set_write_timeout(Some(PATIENCE))?;
 
     let mut tls = rustls::Stream::new(&mut session, &mut socket);
-    write!(
-        tls,
-        "GET {path} HTTP/1.1\r\n\
-         Host: {host}\r\n\
-         User-Agent: ronoctua\r\n\
-         Accept: application/json\r\n\
-         Connection: close\r\n\r\n"
-    )
-    .with_context(|| format!("could not send the request to {host}"))?;
+    // THE REQUEST IS BUILT BY `ronoctua-http`, and the TRANSPORT is ours: this
+    // is the only call in the workspace that goes over TLS to another machine,
+    // and none of the crate's transports does that. What it does own — the
+    // request line, the framing, the chunk decoder — is the part that was
+    // written three times.
+    let call = ronoctua_http::Call::new("GET", path, host)
+        .with_headers(&[("User-Agent", "ronoctua"), ("Accept", "application/json")]);
+    std::io::Write::write_all(&mut tls, ronoctua_http::request_of(&call).as_bytes())
+        .with_context(|| format!("could not send the request to {host}"))?;
     tls.flush().ok();
 
     let mut raw = Vec::new();
@@ -171,7 +171,7 @@ pub fn get(host: &str, path: &str) -> Result<Vec<u8>> {
 
     // BYTES, NOT `&str`, up to the split. The head is ASCII by the grammar,
     // and the body is not ours to assume anything about — the panic that
-    // taught this is written up in `ronoctua_tunnel::http`.
+    // taught this is written up in `ronoctua_http`.
     let at = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -179,14 +179,14 @@ pub fn get(host: &str, path: &str) -> Result<Vec<u8>> {
     let head = String::from_utf8_lossy(&raw[..at]).into_owned();
     let body = &raw[at + 4..];
 
-    match ronoctua_tunnel::http::status_of(&head) {
+    match ronoctua_http::status_of(&head) {
         Some(200) => {}
         Some(status) => bail!("{host} answered {status}"),
         None => bail!("{host}'s answer has no status line"),
     }
     // THE SAME DECHUNKER, and not a second one. See this crate's manifest for
     // why the dependency points where it does.
-    Ok(ronoctua_tunnel::http::dechunked(&head, body))
+    Ok(ronoctua_http::dechunked(&head, body))
 }
 
 #[cfg(test)]
@@ -198,7 +198,7 @@ mod tests {
     /// builds in. What is worth holding is the SHAPE of the request.
     #[test]
     fn the_patience_is_longer_than_a_local_sockets_and_bounded() {
-        assert!(PATIENCE > ronoctua_tunnel::http::PATIENCE);
+        assert!(PATIENCE > ronoctua_http::PATIENCE);
         assert!(PATIENCE <= Duration::from_secs(30));
     }
 

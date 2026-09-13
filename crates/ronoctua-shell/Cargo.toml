@@ -91,6 +91,7 @@ ronoctua-display = { path = "../ronoctua-display" }
 # footer holds its threads for the whole session — the power crate's
 # arrangement, and its reason.
 ronoctua-audio = { path = "../ronoctua-audio" }
+ronoctua-syncthing = { path = "../ronoctua-syncthing" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
 ronoctua-keyboards = { path = "../ronoctua-keyboards" }
 # THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the

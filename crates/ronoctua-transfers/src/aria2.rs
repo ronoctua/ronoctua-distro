@@ -31,8 +31,6 @@ use crate::ledger::Shared;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_files::watch::{Control, Flow};
 use serde_json::{Value, json};
-use std::io::{Read as _, Write as _};
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -93,33 +91,26 @@ fn call(method: &str, mut params: Vec<Value>) -> Result<Value> {
         "params": params,
     }))?;
 
-    let mut socket = TcpStream::connect(ENDPOINT)
-        .with_context(|| format!("aria2 is not answering at {ENDPOINT}"))?;
-    socket.set_read_timeout(Some(PATIENCE))?;
-    socket.set_write_timeout(Some(PATIENCE))?;
-    write!(
-        socket,
-        "POST /jsonrpc HTTP/1.1\r\n\
-         Host: 127.0.0.1\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {body}",
-        body.len()
-    )?;
-    socket.flush()?;
-
-    let mut answer = Vec::new();
-    socket.read_to_end(&mut answer)?;
-    let answer = String::from_utf8_lossy(&answer);
-    // `Connection: close` means the body runs to the end of the stream, which
-    // is what makes chunked decoding unnecessary here.
-    let payload = answer
-        .split_once("\r\n\r\n")
-        .map(|(_, b)| b)
-        .context("aria2's answer has no body")?;
-    let parsed: Value = serde_json::from_str(payload)
+    // THE FRAMER IS `ronoctua-http`'S, AND IT IS NOT OURS ANY MORE.
+    //
+    // This wrote its own request line and split its own answer, which was the
+    // third copy of that in the workspace — and the only one of the three
+    // whose reply was read as a `String` before it was split, so a chunked
+    // answer with a multi-byte character in it had the panic the other two had
+    // already paid for waiting in it. `one-http-writer` is what says one.
+    let at: std::net::SocketAddr = ENDPOINT
+        .parse()
+        .with_context(|| format!("`{ENDPOINT}` is not an address"))?;
+    // AND THE DEADLINE STAYS THIS CRATE'S. The framer's default is two
+    // seconds, which is right for a daemon that either answers at once or is
+    // not there; aria2 is asked to start a download and chose five.
+    let call = ronoctua_http::Call::new("POST", "/jsonrpc", "127.0.0.1")
+        .with_body(&body)
+        .waiting(PATIENCE);
+    let payload = ronoctua_http::over_tcp(at, &call)
+        .with_context(|| format!("aria2 is not answering at {ENDPOINT}"))?
+        .body;
+    let parsed: Value = serde_json::from_str(&payload)
         .with_context(|| format!("aria2's answer is not JSON: {payload}"))?;
     if let Some(e) = parsed.get("error") {
         let message = e

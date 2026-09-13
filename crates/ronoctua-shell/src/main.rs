@@ -86,6 +86,7 @@ mod sound;
 mod stage;
 mod surface;
 mod syncthing;
+mod syncthing_window;
 mod terminal;
 // WHICH THEME THIS PROCESS DRAWS IN, and how the doors hear about a change.
 mod theme;
@@ -293,6 +294,9 @@ fn main() -> Result<()> {
         }
         Some("power") => {
             return power_window::host_it().context("host the power view");
+        }
+        Some("syncthing") => {
+            return syncthing_window::host_it().context("host the syncthing view");
         }
         Some("audio") => {
             return audio_window::host_it().context("host the sound view");
@@ -558,6 +562,14 @@ pub struct Marks<'a> {
     /// graph rather than guessed: the node exists exactly while the stream
     /// does.
     pub listening: bool,
+    /// SYNCTHING, and it is the only mark whose very existence is a choice.
+    ///
+    /// `None` draws nothing, which is what an ordinary day looks like: the
+    /// default is to say something only when nothing is travelling. `Some(true)`
+    /// is "it is syncing" and `Some(false)` is "it is not" — two glyphs, and
+    /// only ever one of them, because the person chose which question they
+    /// wanted answered. See `ronoctua_syncthing::prefs::Mark`.
+    pub syncthing: Option<bool>,
     /// A link that leads NOWHERE — the portal, the router with no uplink.
     /// Not "there is no internet": nothing connected is not a fault.
     pub adrift: bool,
@@ -726,6 +738,24 @@ pub fn segments(
         out.push(Segment {
             id: "muted",
             text: tokens::icon::VOLUME_MUTE.to_string(),
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // SYNCTHING, at the same rung and for the same reason: "a thing is not as
+    // you would assume". Which of the two glyphs it is was decided where the
+    // preference is read; here it is only placed.
+    if let Some(syncing) = marks.syncthing {
+        out.push(Segment {
+            id: "syncthing",
+            text: if syncing {
+                tokens::icon::SYNCTHING.to_string()
+            } else {
+                tokens::icon::SYNCTHING_OFF.to_string()
+            },
             priority: 2,
             min_cols: 1,
             side: Side::Right,
@@ -967,6 +997,11 @@ mod tests {
                         // line has to survive the pair.
                         silent: true,
                         listening: true,
+                        // AND SYNCTHING'S, which the fullest line has to
+                        // carry too: it is a mark somebody chose to have, so
+                        // the worst case is a line that has it AND everything
+                        // else.
+                        syncthing: Some(false),
                         // AND THE WAY OUT'S TWO THAT CAN SHOW AT ONCE: the
                         // aeroplane and the fault are exclusive by rule, so
                         // the fullest line carries the fault and a tunnel.

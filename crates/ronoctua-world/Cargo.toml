@@ -15,12 +15,14 @@ serde_json.workspace = true
 
 # THE HAND-WRITTEN HTTP/1.1 THIS PROJECT ALREADY HAS.
 #
-# `ronoctua-tunnel` owns it — `status_of` and `dechunked` are transport-free
-# and this crate is their second user. The dependency reads oddly by its name
-# and is right by its content: the alternative is a second chunked decoder,
-# and the first one exists because a chunk boundary inside a multi-byte
-# character panicked a thread and killed every tunnel key for a session.
-ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+# It used to be `ronoctua-tunnel`, and the comment here said the dependency
+# read oddly by its name and was right by its content — a world clock pulling
+# in Tor and Tailscale for a chunk decoder. It now reads right by both: the
+# framer is its own crate, because the Syncthing view would have made a third
+# copy of it. The alternative was always a second chunked decoder, and the
+# first one exists because a chunk boundary inside a multi-byte character
+# panicked a thread and killed every tunnel key for a session.
+ronoctua-http = { path = "../ronoctua-http" }
 ronoctua-store = { path = "../ronoctua-store" }
 
 # TLS, AND THE FIRST IN THIS WORKSPACE.

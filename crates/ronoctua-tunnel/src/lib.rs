@@ -27,7 +27,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod http;
 pub mod tailscale;
 pub mod tor;
 

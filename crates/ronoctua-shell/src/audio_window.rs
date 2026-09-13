@@ -456,8 +456,10 @@ impl AudioWindow {
             // there is anything to overwrite.
             Errand::Keep(prefs) => {
                 let store = ronoctua_audio::prefs::store();
-                if let Err(e) = store.write(&prefs) {
+                if let Err(e) = ronoctua_audio::prefs::keep(&store, prefs) {
                     tracing::warn!(error = %e, "could not write audio.json");
+                    self.message =
+                        Some(self.texts.t(ronoctua_i18n::key::ECHO_AUDIO_WILL_NOT_PARSE));
                 }
             }
         }

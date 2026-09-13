@@ -647,6 +647,20 @@ struct Footer {
     sound: Option<crate::sound::Said>,
     /// The watch on `audio.json`.
     _audio_watch: Option<ronoctua_files::notice::Notice>,
+    /// The last reading of Syncthing — kept with the view closed, because the
+    /// modeline may draw a mark from it.
+    syncthing_snapshot: Option<ronoctua_syncthing::Snapshot>,
+    /// The way to ask Syncthing for something.
+    syncthing_orders: Option<ronoctua_syncthing::Handle>,
+    /// The Syncthing view, when open — `LEADER s s s`.
+    syncthing: Option<crate::syncthing::View>,
+    /// The Syncthing view's own preference, read from `syncthing.json`.
+    ///
+    /// Kept OUTSIDE the view because the modeline reads it with no view open,
+    /// which is every moment of an ordinary day.
+    syncthing_prefs: ronoctua_syncthing::prefs::Preferences,
+    /// The watch on `syncthing.json`.
+    _syncthing_watch: Option<ronoctua_files::notice::Notice>,
     /// The screens' view, when it is open.
     display: Option<crate::display::View>,
     /// The last reading of the screens. It is kept whether or not the view is
@@ -851,6 +865,8 @@ enum ViewState {
     /// the radio for the radio's own reason — a pairing question is waiting
     /// for an answer, and a volume row is not.
     Audio,
+    /// Syncthing — `LEADER s s s`.
+    Syncthing,
     /// The screens. Modal, and BELOW the radio, which IS the pairing
     /// question — the one thing on this list another machine is waiting on,
     /// and the reason the radio outranks everything here.
@@ -1116,6 +1132,8 @@ enum Click {
     Power(usize),
     /// A row of the sound view: the cursor goes there, `RET` acts.
     Audio(usize),
+    /// A row of the Syncthing view.
+    Syncthing(usize),
     /// A row of the language and region view.
     Locale(usize),
     /// A row of the screens' view.
@@ -1996,6 +2014,11 @@ pub fn run() -> Result<()> {
         audio_prefs: ronoctua_audio::prefs::store().read(),
         sound: None,
         _audio_watch: None,
+        syncthing_snapshot: None,
+        syncthing_orders: None,
+        syncthing: None,
+        syncthing_prefs: ronoctua_syncthing::prefs::store().read(),
+        _syncthing_watch: None,
         world: crate::world::cached(),
         world_places: ronoctua_world::prefs::places(),
         world_zones: crate::world::zones(&ronoctua_world::prefs::places()),
@@ -2529,6 +2552,47 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the audio.json watch: {e}"))?;
 
+    // SYNCTHING, and it is an EVENT stream too — `/rest/events` is a LONG
+    // POLL that holds the connection open and answers the moment something
+    // happens. Measured against 2.1.3, which is the version this flake pins: a
+    // real change comes back in 17 ms and a blocked poll spends no CPU at all.
+    // Nothing here rides the one-second tick either.
+    let (syncthing_sender, syncthing_events) = channel::channel::<ronoctua_syncthing::Event>();
+    state.syncthing_orders = Some(ronoctua_syncthing::watch(move |e| {
+        let _ = syncthing_sender.send(e);
+    }));
+    handle
+        .insert_source(syncthing_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.syncthing_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the syncthing channel: {e}"))?;
+
+    // AND `syncthing.json`, watched the way `audio.json` is: the window door
+    // writes it too, and a mark chosen there has to reach this modeline
+    // without the footer being restarted.
+    let (syncthing_wish, syncthing_wish_changed) = channel::channel::<()>();
+    state._syncthing_watch = ronoctua_syncthing::prefs::home().and_then(|dir| {
+        watch_the_file(&dir, ronoctua_syncthing::prefs::FILE, move || {
+            syncthing_wish.send(()).is_ok()
+        })
+    });
+    handle
+        .insert_source(syncthing_wish_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                let fresh = ronoctua_syncthing::prefs::store().read();
+                if fresh != state.syncthing_prefs {
+                    state.syncthing_prefs = fresh;
+                    if let Some(v) = state.syncthing.as_mut() {
+                        v.took_preferences(fresh);
+                    }
+                    state.draw_and_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the syncthing.json watch: {e}"))?;
+
     // THE SCREENS, on a thread of their own — the arrangement above, and its
     // reason. A reading walks `/sys/class/drm` and asks the compositor twice,
     // and a monitor that answers over DDC/CI takes a fifth of a second: none
@@ -2961,6 +3025,10 @@ impl Footer {
                     .audio_snapshot
                     .as_ref()
                     .is_some_and(ronoctua_audio::Snapshot::is_listening),
+                // SYNCTHING, and it is the only mark that may draw while all
+                // is WELL. That is the owner's choice and it is theirs to
+                // make; the default is the house rule — nothing at rest.
+                syncthing: self.syncthing_mark(),
                 adrift: self.net.adrift(),
                 airplane: self.net.airplane(),
                 tunnel: self.net.tunnel().is_some(),
@@ -3235,6 +3303,12 @@ impl Footer {
             self.run_command("audio-open");
             return;
         }
+        // AND SYNCTHING'S, by the same command the key runs — the mouse
+        // reaches no door the keyboard lacks.
+        if id == "syncthing" {
+            self.run_command("syncthing-open");
+            return;
+        }
         // THE WAY OUT'S THREE. Two of them open the network view — the same
         // command `LEADER s n n` runs — and the aeroplane TOGGLES, because
         // the one thing to do about aeroplane mode is to leave it.
@@ -3417,6 +3491,14 @@ impl Footer {
             // the program's own word for itself, and the sentence is about
             // the machine.
             "microphone" => Some(self.texts.t(ronoctua_i18n::key::HINT_MICROPHONE)),
+            // AND SYNCTHING'S SAYS WHICH OF THE TWO IT IS. One glyph means
+            // "everything is travelling" and the other means "nothing is",
+            // and which of them is drawn depends on a preference — so the
+            // sentence has to name the state and not the mark.
+            "syncthing" => Some(self.texts.t(match self.syncthing_mark() {
+                Some(true) => ronoctua_i18n::key::HINT_SYNCTHING_ON,
+                _ => ronoctua_i18n::key::HINT_SYNCTHING_OFF,
+            })),
             "battery" => {
                 let s = self.power_snapshot.as_ref()?;
                 let b = s.display.as_ref()?;
@@ -5093,6 +5175,55 @@ impl Footer {
             "display-forget" => self.display_press(crate::display::Press::Forget),
             "display-arrange" => self.display_press(crate::display::Press::Arrange),
             "power-open" => self.open_power(None, None),
+            // SYNCTHING. The view has two doors and the page has one key;
+            // the four commands that were here before opened a browser and
+            // echoed one line, which was the whole of it.
+            "syncthing-open" => self.open_syncthing(),
+            "syncthing-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["syncthing".to_owned()], None);
+                }
+            }
+            "syncthing-web" => {
+                let address = crate::syncthing::web_address(self.syncthing_snapshot.as_ref());
+                self.open_the_syncthing_page(&address);
+            }
+            "syncthing-pause-all" => self.ask_syncthing(ronoctua_syncthing::Order::Pause(None)),
+            "syncthing-resume-all" => self.ask_syncthing(ronoctua_syncthing::Order::Resume(None)),
+            // WHAT WAS TYPED IN THE MINIBUFFER comes back as this command's
+            // argument, and the view is what knows which question it answers.
+            // ADDING ONE. With nothing typed yet this opens the question;
+            // with an argument it IS the answer. The same shape `s n v` has,
+            // and it works with no view open at all — which is the point of
+            // giving them a leader key.
+            "syncthing-add-device" | "syncthing-add-folder" => match argument {
+                Some(said) if !said.trim().is_empty() => self.syncthing_typed(id, said),
+                _ => {
+                    self.mx.request(
+                        if id == "syncthing-add-device" {
+                            "syncthing-add-device"
+                        } else {
+                            "syncthing-add-folder"
+                        },
+                        false,
+                    );
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
+                    self.draw_and_paint();
+                }
+            },
+            // `RET` CARRIES A TYPED VALUE when there is one, and is a key when
+            // there is not — the shape `bluetooth-accept` has, where the same
+            // id answers `y` and carries the PIN the minibuffer took.
+            "syncthing-enter" if argument.is_some_and(|a| !a.trim().is_empty()) => {
+                self.syncthing_typed(id, argument.unwrap_or_default());
+            }
+            "syncthing-up" | "syncthing-down" | "syncthing-less" | "syncthing-more"
+            | "syncthing-enter" | "syncthing-pause" | "syncthing-rescan" | "syncthing-add"
+            | "syncthing-forget" => {
+                if let Some(press) = crate::syncthing::press_of(id) {
+                    self.syncthing_press(press);
+                }
+            }
             "audio-open" => self.open_audio(),
             "audio-window" => {
                 if let Ok(me) = std::env::current_exe() {
@@ -5596,67 +5727,32 @@ impl Footer {
                 None => self.network_press(crate::network::Press::Enter),
             },
             // ---------------------------------------------------------
-            // SYNCTHING. It comes installed with the distro, and a service
-            // the distro installs needs a path through the leader.
+            // SYNCTHING'S ONE-LINE ECHO. The view says all of this and more,
+            // and the echo stays because a line that appears and goes is
+            // cheaper than a view when the question is only "is it fine?" —
+            // the same argument `LEADER d` makes for the glance.
             // ---------------------------------------------------------
             "syncthing-state" => {
-                let m = match crate::syncthing::state() {
-                    Some(e) => self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_SYNCTHING_STATE,
-                        &[
-                            ("connected", &e.connected.to_string()),
-                            ("percent", &e.percent.to_string()),
-                            (
-                                "up",
-                                &crate::network::readable_bytes(e.sent, self.texts.decimal_mark()),
-                            ),
-                            (
-                                "down",
-                                &crate::network::readable_bytes(
-                                    e.received,
-                                    self.texts.decimal_mark(),
+                let m = match self.syncthing_snapshot.as_ref() {
+                    Some(s) if s.service.is_up() => {
+                        let mark = self.texts.decimal_mark();
+                        self.texts.t_with(
+                            ronoctua_i18n::key::ECHO_SYNCTHING_STATE,
+                            &[
+                                ("connected", &s.connected().to_string()),
+                                ("percent", &s.completion.to_string()),
+                                ("up", &crate::network::readable_bytes(s.traffic.sent, mark)),
+                                (
+                                    "down",
+                                    &crate::network::readable_bytes(s.traffic.received, mark),
                                 ),
-                            ),
-                        ],
-                    ),
-                    None => self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED),
+                            ],
+                        )
+                    }
+                    _ => self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED),
                 };
                 self.echo_message(m);
             }
-            "syncthing-pause" => {
-                let key = if crate::syncthing::pause() {
-                    ronoctua_i18n::key::ECHO_SYNCTHING_PAUSED
-                } else {
-                    ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED
-                };
-                let m = self.texts.t(key);
-                self.echo_message(m);
-            }
-            "syncthing-resume" => {
-                let key = if crate::syncthing::resume() {
-                    ronoctua_i18n::key::ECHO_SYNCTHING_RESUMED
-                } else {
-                    ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED
-                };
-                let m = self.texts.t(key);
-                self.echo_message(m);
-            }
-            // The Syncthing interface is a page; opening it is the default
-            // browser's job. `xdg-open` by its STORE PATH: in a systemd
-            // unit the PATH is minimal, and the name would fail far from
-            // the cause (AGENTS.md).
-            "syncthing-open" => match XDG_OPEN_PATH {
-                Some(abridor) => self.open_foreign(
-                    abridor,
-                    &[format!("http://{}", crate::syncthing::address())],
-                    None,
-                ),
-                None => {
-                    tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
-                    let m = self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED);
-                    self.echo_message(m);
-                }
-            },
             // OUR terminal, and not Ghostty: section 7.10 wants the VT
             // engine inside the shell, with the grid crossing the protocol.
             // It comes up in its OWN systemd scope, like any buffer — that
@@ -7801,6 +7897,33 @@ impl Footer {
             return;
         }
 
+        // SYNCTHING: the arrows, `S-<arrows>`, `RET`, `Esc` and five bare
+        // letters, read out of `syncthing::OF_THE_VIEW` by NOTATION. The
+        // notation is built WITH shift, unlike the sound view's, because this
+        // view's value keys ARE the shifted arrows — `Key::simple` would drop
+        // the modifier and turn `S-<right>` into a plain one, which walks.
+        if self.view() == ViewState::Syncthing {
+            use ronoctua_keymap::Sym;
+            let press = match key.sym {
+                Sym::Esc => Some(crate::syncthing::Press::Escape),
+                other => {
+                    let notation = ronoctua_keymap::Key {
+                        mods: ronoctua_keymap::Mods {
+                            shift: key.mods.shift,
+                            ..ronoctua_keymap::Mods::default()
+                        },
+                        sym: other,
+                    }
+                    .notation();
+                    crate::syncthing::pressed(&notation)
+                }
+            };
+            if let Some(press) = press {
+                self.syncthing_press(press);
+            }
+            return;
+        }
+
         if self.view() == ViewState::Audio {
             use ronoctua_keymap::Sym;
             // BOTH DOORS THROUGH ONE TABLE. This turns the footer's own key
@@ -8696,6 +8819,8 @@ impl Footer {
             ViewState::Bluetooth
         } else if self.power.is_some() {
             ViewState::Power
+        } else if self.syncthing.is_some() {
+            ViewState::Syncthing
         } else if self.audio.is_some() {
             ViewState::Audio
         } else if self.display.is_some() {
@@ -9943,6 +10068,22 @@ impl Footer {
                 .enumerate()
                 .map(|(n, r)| ExpansionRow {
                     click: (!r.heading).then_some(Click::Power(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        if self.view() == ViewState::Syncthing
+            && let Some(v) = self.syncthing.as_ref()
+        {
+            let width = self.screen_columns();
+            return v
+                .rows(self.syncthing_snapshot.as_ref(), width, &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Syncthing(n)),
                     fields: r.fields,
                     foot: false,
                     ..ExpansionRow::empty_one()
@@ -11434,6 +11575,16 @@ impl Footer {
                     self.locale_errand(errand);
                 }
             }
+            Some(Click::Syncthing(n)) => {
+                let width = self.screen_columns();
+                let snapshot = self.syncthing_snapshot.take();
+                if let Some(v) = self.syncthing.as_mut() {
+                    let rows = v.rows(snapshot.as_ref(), width, &self.texts);
+                    v.clicked(n, &rows, snapshot.as_ref(), &self.texts);
+                }
+                self.syncthing_snapshot = snapshot;
+                self.draw_and_paint();
+            }
             Some(Click::Audio(n)) => {
                 // THE MOUSE AIMS, THE KEYS ACT — and here it also moves a
                 // microphone: the meter follows the cursor, and a click is a
@@ -11703,6 +11854,7 @@ impl Footer {
                 .map(crate::theme_chooser::View::row),
             ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
             ViewState::Audio => self.audio.as_ref().map(crate::audio::View::cursor),
+            ViewState::Syncthing => self.syncthing.as_ref().map(crate::syncthing::View::cursor),
             ViewState::Locale => self.locale.as_ref().map(crate::locale::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
@@ -12217,6 +12369,11 @@ impl Footer {
         // THE READING TOO: this view's hint depends on which row the cursor
         // is on, and which rows exist depends on what PipeWire reported.
         let sound = self.audio_snapshot.as_ref();
+        let syncthing = &self.syncthing;
+        // AND ITS READING, for the same reason: which rows exist here depends
+        // on what Syncthing reported, and the hint is about the row under the
+        // cursor.
+        let syncthing_state = self.syncthing_snapshot.as_ref();
         let locale = &self.locale;
         let display = &self.display;
         // THE READING TOO, because this view's hint depends on whether the
@@ -12266,6 +12423,7 @@ impl Footer {
                 // SOUND: the keys it teaches depend on the row, so a cursor
                 // on a setting is not told about `m`.
                 ViewState::Audio => audio.as_ref().map(|v| v.hint(sound, texts)),
+                ViewState::Syncthing => syncthing.as_ref().map(|v| v.hint(syncthing_state, texts)),
                 // THE LANGUAGE AND REGION VIEW: `RET` chooses and nothing on
                 // a row says so, which is the same reason every view above
                 // has a line here.
@@ -15252,6 +15410,242 @@ impl Footer {
         self.draw_and_paint();
     }
 
+    /// Opens the Syncthing view in the footer.
+    fn open_syncthing(&mut self) {
+        if self.syncthing.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        if !self.region_is_free("syncthing-open") {
+            return;
+        }
+        self.syncthing = Some(crate::syncthing::View::fresh(self.syncthing_prefs));
+        self.first_page();
+        self.follow_cursor();
+        self.settle_the_syncthing_view();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A key in the Syncthing view.
+    fn syncthing_press(&mut self, press: crate::syncthing::Press) {
+        let Some(v) = self.syncthing.as_mut() else {
+            return;
+        };
+        let errand = v.key(press, self.syncthing_snapshot.as_ref(), &self.texts);
+        // THE SURFACE FIRST, THEN THE CURSOR — the order every view of this
+        // shape keeps.
+        self.region_resized();
+        self.follow_cursor();
+        self.syncthing_errand(errand);
+    }
+
+    /// What the Syncthing view asked for.
+    fn syncthing_errand(&mut self, errand: crate::syncthing::Errand) {
+        use crate::syncthing::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            Errand::Speak(key) => {
+                let said = self.texts.t(key);
+                self.echo_message(said);
+            }
+            Errand::Order(order) => self.ask_syncthing(*order),
+            Errand::Keep(prefs) => self.keep_the_syncthing_settings(prefs),
+            Errand::Web(address) => self.open_the_syncthing_page(&address),
+            // THE MINIBUFFER IS WHERE ANYTHING IS TYPED, and the view is told
+            // WHAT it is being asked so that the answer knows what it answers.
+            Errand::Ask(ask) => {
+                let command = ask.command();
+                if let Some(v) = self.syncthing.as_mut() {
+                    v.asked(ask);
+                }
+                self.mx.request(command, false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            Errand::Close => {
+                self.syncthing = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// Ask Syncthing for something, and say so if there is nobody to ask.
+    fn ask_syncthing(&mut self, order: ronoctua_syncthing::Order) {
+        match &self.syncthing_orders {
+            Some(h) => h.send(order),
+            None => {
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_NOT_RUNNING);
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// Write the Syncthing view's preference.
+    ///
+    /// `parsed` AND NOT `read`, through the crate's own `keep`: this writes the
+    /// whole value back, and a reader's default over a file that will not parse
+    /// is how somebody loses what they chose. The crate refuses; this says so.
+    fn keep_the_syncthing_settings(&mut self, prefs: ronoctua_syncthing::prefs::Preferences) {
+        self.syncthing_prefs = prefs;
+        if let Err(e) = ronoctua_syncthing::prefs::keep(&ronoctua_syncthing::prefs::store(), prefs)
+        {
+            tracing::warn!(error = %e, "could not write syncthing.json");
+            let said = self
+                .texts
+                .t(ronoctua_i18n::key::ECHO_SYNCTHING_WILL_NOT_PARSE);
+            self.echo_message(said);
+        }
+    }
+
+    /// Put the cursor somewhere real in the Syncthing view.
+    fn settle_the_syncthing_view(&mut self) {
+        let snapshot = self.syncthing_snapshot.take();
+        if let Some(v) = self.syncthing.as_mut() {
+            v.settle_in(snapshot.as_ref(), &self.texts);
+        }
+        self.syncthing_snapshot = snapshot;
+    }
+
+    /// Take what was typed and turn it into an order.
+    ///
+    /// THE VIEW ANSWERS FIRST, because it is what knows which question was
+    /// asked — a path may be a new folder's or an offered one's, and the two
+    /// are different orders. With no view open, the COMMAND says: `s s d` and
+    /// `s s f` are leader keys of their own and work with nothing on screen.
+    fn syncthing_typed(&mut self, id: &str, said: &str) {
+        let snapshot = self.syncthing_snapshot.take();
+        let order = self
+            .syncthing
+            .as_mut()
+            .and_then(|v| v.typed(said, snapshot.as_ref()));
+        self.syncthing_snapshot = snapshot;
+        let said = said.trim();
+        let order = order.or_else(|| match (id, said.is_empty()) {
+            // NOTHING TYPED IS NOT A FAILURE: it is `Esc` in the minibuffer,
+            // which is how a person says never mind.
+            (_, true) => None,
+            ("syncthing-add-device", _) => Some(ronoctua_syncthing::Order::AddDevice {
+                id: said.to_owned(),
+                name: String::new(),
+            }),
+            ("syncthing-add-folder", _) => Some(ronoctua_syncthing::Order::AddFolder {
+                // SYNCTHING MAKES THE ID, and it makes a random one when the
+                // field is empty. Typing one is how two machines end up
+                // sharing a folder they never meant to share.
+                id: String::new(),
+                label: String::new(),
+                path: said.to_owned(),
+            }),
+            _ => None,
+        });
+        if let Some(order) = order {
+            self.ask_syncthing(order);
+        }
+        self.draw_and_paint();
+    }
+
+    /// Open Syncthing's own page in whatever opens links here.
+    ///
+    /// ONE FUNCTION, TWO CALLERS: `LEADER s s a` and the view's `w`. The page
+    /// is not chrome of ours (invariant 14 is about what THIS system draws) and
+    /// it stays because it has graphs and a history a list of labels and values
+    /// does not replace.
+    fn open_the_syncthing_page(&mut self, address: &str) {
+        match XDG_OPEN_PATH {
+            Some(opener) if !address.is_empty() => {
+                self.open_foreign(opener, &[format!("http://{address}")], None);
+            }
+            Some(_) => {
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED);
+                self.echo_message(said);
+            }
+            None => {
+                tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED);
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// A reading of Syncthing arrived.
+    fn syncthing_event(&mut self, e: ronoctua_syncthing::Event) {
+        match e {
+            ronoctua_syncthing::Event::Snapshot(s) => self.syncthing_arrived(*s),
+            // A REFUSAL IS A SENTENCE, and it is Syncthing's own classification
+            // rather than ours — the shape the power view set.
+            ronoctua_syncthing::Event::Done { refused, .. } => {
+                let Some(why) = refused else { return };
+                let said = self.texts.t(crate::syncthing::refusal_key(why));
+                self.echo_message(said);
+                self.draw_and_paint();
+            }
+        }
+    }
+
+    /// A new reading of Syncthing.
+    fn syncthing_arrived(&mut self, s: ronoctua_syncthing::Snapshot) {
+        // A READING THAT DRAWS THE SAME PIXELS SPENDS NO FRAME — the power
+        // view's rule. Syncthing reports progress about once a second during a
+        // transfer, and with the view closed only the mark can change.
+        let before = self.syncthing_mark();
+        self.syncthing_snapshot = Some(s);
+        let after = self.syncthing_mark();
+        if self.syncthing.is_some() {
+            self.settle_the_syncthing_view();
+        }
+        if before != after || self.syncthing.is_some() {
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+    }
+
+    /// Whether the modeline draws the Syncthing mark, and which one.
+    ///
+    /// `None` is no mark at all, which is what an ordinary day looks like: the
+    /// default is to say something only when nothing is travelling.
+    fn syncthing_mark(&self) -> Option<bool> {
+        // A READING THAT HAS NOT ARRIVED IS NOT A FACT.
+        //
+        // With no snapshot at all the old arithmetic said "not syncing" and
+        // the mark came on — so the modeline carried a glyph for the first
+        // second of every boot, and for ever on a machine where the long poll
+        // never answers. `modeline-vm` measures `segments=0` at rest and is
+        // what caught it.
+        //
+        // A service that is genuinely down is a different case and still draws:
+        // the watching thread sends a snapshot SAYING so, which is a fact.
+        let snapshot = self.syncthing_snapshot.as_ref()?;
+        // AND THE MARK IS ONLY DRAWN WHERE IT CAN BE JUSTIFIED.
+        //
+        // `Absent` is a machine that never installed Syncthing — this distro
+        // always does, so that is somebody else's machine, and a glyph about a
+        // program that is not there is noise. `Unknown` is a machine where
+        // systemd could not be asked at all, and a mark nobody can account for
+        // is the same noise wearing a different hat.
+        //
+        // `modeline-vm` is what caught it: its machine has no Syncthing and the
+        // modeline drew `segments=1` where the rule is nothing at rest.
+        if matches!(
+            snapshot.unit,
+            ronoctua_syncthing::unit::Standing::Absent
+                | ronoctua_syncthing::unit::Standing::Unknown
+        ) {
+            return None;
+        }
+        let syncing = snapshot.syncing();
+        self.syncthing_prefs.mark.shows(syncing).then_some(syncing)
+    }
+
     /// Ask PipeWire for something, and say so if there is nobody to ask.
     fn ask_the_sound_server(&mut self, order: ronoctua_audio::Order) {
         match &self.audio_orders {
@@ -15266,8 +15660,14 @@ impl Footer {
     /// Write the sound view's settings, and keep the copy the keys use.
     fn keep_the_sound_settings(&mut self, prefs: ronoctua_audio::prefs::Preferences) {
         self.audio_prefs = prefs;
-        if let Err(e) = ronoctua_audio::prefs::store().write(&prefs) {
+        // `parsed` AND NOT `read`, through the crate's own `keep`. This wrote
+        // the whole value back from a `read()`, and a reader's default over a
+        // file that will not parse is how somebody loses what they chose — one
+        // press of `S-<right>` over a broken `audio.json` and it was gone.
+        if let Err(e) = ronoctua_audio::prefs::keep(&ronoctua_audio::prefs::store(), prefs) {
             tracing::warn!(error = %e, "could not write audio.json");
+            let said = self.texts.t(ronoctua_i18n::key::ECHO_AUDIO_WILL_NOT_PARSE);
+            self.echo_message(said);
         }
     }
 

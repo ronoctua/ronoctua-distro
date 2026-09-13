@@ -12,6 +12,8 @@ publish.workspace = true
 # far along, and the switch that pauses or stops it. It does not draw, does not
 # translate and does not speak Wayland.
 [dependencies]
+# THE HTTP FRAMER, and not a fourth copy of one. See `one-http-writer`.
+ronoctua-http = { path = "../ronoctua-http" }
 # The disk. Every local operation in the queue is one of this crate's, watched —
 # there is no second implementation of "copy a tree" here.
 ronoctua-files = { path = "../ronoctua-files" }

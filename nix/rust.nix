@@ -28,6 +28,7 @@
   notificationsRs,
   bluetoothProfilesRs,
   audioNamesRs,
+  syncthingOptionsRs,
   keyboardsRs,
   keyd,
   # The update sequence, generated from `assets/updates.nix`.
@@ -207,6 +208,11 @@ let
     # table draws with PipeWire's description, which is why this is a small
     # file and not an attempt at every port that exists.
     RONOCTUA_AUDIO_NAMES_RS = "${audioNamesRs}/names.rs";
+    # EVERY OPTION SYNCTHING EXPOSES, and which of them the flake owns. The
+    # module PUTs twelve of them into the running service at each activation,
+    # so offering those as editable would be offering a key whose effect the
+    # next `nixos-rebuild` undoes in silence — invariant 6, on the screen.
+    RONOCTUA_SYNCTHING_OPTIONS_RS = "${syncthingOptionsRs}/options.rs";
     # THE KEYBOARD VOCABULARY, and the leader's own rule with it: the module
     # that configures the daemon and the shell that renders per-keyboard files
     # both read `assets/keyboards.nix`, so the rule cannot drift between them.

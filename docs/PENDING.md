@@ -1,5 +1,22 @@
 # O que falta
 
+### Syncthing — o que a vista deliberadamente NÃO faz
+
+Tudo abaixo é decisão, não esquecimento. Está aqui para que ninguém o refaça achando que faltou.
+
+- **A metade de uma quantidade.** `minDiskFree` e `minHomeDiskFree` são um objeto com duas
+  metades — um número e uma unidade — e a linha move o NÚMERO. Duas metades querem duas linhas, que
+  é uma forma que nenhuma outra das 121 opções tem, e o que quase sempre se quer dizer é um número
+  maior na unidade que já está lá. A unidade continua sendo a que o Syncthing tem.
+- **A ignorância por pasta (`.stignore`).** É um editor de texto dentro de uma vista de rótulo e
+  valor, e merece decisão própria — não meia.
+- **A chave da API e a senha da interface.** São lidas para assinar um pedido e não entram no
+  snapshot, quanto mais numa linha. O `one-syncthing-boundary` cobra.
+- **Gráfico e histórico.** A página do próprio Syncthing continua a uma tecla (`s s a`) porque tem
+  os dois, e uma lista de rótulo e valor não os substitui. Fingir o contrário seria pior.
+- **Renomear uma pasta pelo id.** O Syncthing não muda o id de uma pasta; a linha do id é um FATO,
+  e `RET` nela copia.
+
 ## Regra de manutenção — leia antes de mexer
 
 **Ao concluir um item daqui, remova-o.** Se ele mudar *como o sistema funciona*, escreva uma linha

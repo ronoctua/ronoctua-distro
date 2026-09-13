@@ -1684,25 +1684,95 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "network-section-previous",
             label: key::CMD_NETWORK_SECTION_PREVIOUS,
         },
-        // SYNCTHING. It ships with the distro (nix/modules/
-        // syncthing.nix), and a service the distro installs needs a
-        // path through the leader — otherwise the only way to look at it is typing
-        // `systemctl` in a terminal, which is the opposite of section 13.
+        // SYNCTHING. It ships with the distro (nix/modules/syncthing.nix) and
+        // for a long time offered four keys, one of which opened a WEB PAGE in
+        // a browser: adding a folder, letting a machine in or changing any of
+        // its hundred and twenty-one options meant leaving the system for a
+        // page, which is the outside chrome invariant 14 refuses. Now it is a
+        // view with two doors, and the page stays one key away because it has
+        // graphs a list of labels and values does not replace.
+        //
+        // `pause` and `resume` are `-all` because the VIEW has a `p` that
+        // pauses what the cursor is on: two different ideas, and an id may
+        // only mean one of them.
         Command {
             id: "syncthing-open",
             label: key::CMD_SYNCTHING_OPEN,
+        },
+        Command {
+            id: "syncthing-window",
+            label: key::CMD_SYNCTHING_WINDOW,
+        },
+        Command {
+            id: "syncthing-web",
+            label: key::CMD_SYNCTHING_WEB,
         },
         Command {
             id: "syncthing-state",
             label: key::CMD_SYNCTHING_STATE,
         },
         Command {
+            id: "syncthing-pause-all",
+            label: key::CMD_SYNCTHING_PAUSE_ALL,
+        },
+        Command {
+            id: "syncthing-resume-all",
+            label: key::CMD_SYNCTHING_RESUME_ALL,
+        },
+        // THE VIEW'S OWN GESTURES. They carry no sequence — a key inside a
+        // view is not a leader key — but they are registered, because the hint
+        // line is generated from `OF_THE_VIEW` and reads a `cmd-<id>` label
+        // for every one of them.
+        Command {
+            id: "syncthing-up",
+            label: key::CMD_SYNCTHING_UP,
+        },
+        Command {
+            id: "syncthing-down",
+            label: key::CMD_SYNCTHING_DOWN,
+        },
+        Command {
+            id: "syncthing-less",
+            label: key::CMD_SYNCTHING_LESS,
+        },
+        Command {
+            id: "syncthing-more",
+            label: key::CMD_SYNCTHING_MORE,
+        },
+        Command {
+            id: "syncthing-enter",
+            label: key::CMD_SYNCTHING_ENTER,
+        },
+        Command {
             id: "syncthing-pause",
             label: key::CMD_SYNCTHING_PAUSE,
         },
         Command {
-            id: "syncthing-resume",
-            label: key::CMD_SYNCTHING_RESUME,
+            id: "syncthing-rescan",
+            label: key::CMD_SYNCTHING_RESCAN,
+        },
+        Command {
+            id: "syncthing-add",
+            label: key::CMD_SYNCTHING_ADD,
+        },
+        Command {
+            id: "syncthing-forget",
+            label: key::CMD_SYNCTHING_FORGET,
+        },
+        // ADDING ONE, FROM THE TREE OR FROM THE VIEW. The command that asks is
+        // the command that answers — `s n v` and `s b y` both work this way,
+        // and the minibuffer's question is the command's own `ask-<id>`.
+        //
+        // They are leader keys in their own right because they are worth one:
+        // pairing a machine is something a person does holding a phone, and
+        // walking into a view first to press `a` is a step for nothing.
+        Command {
+            id: "syncthing-add-device",
+            label: key::CMD_SYNCTHING_ADD_DEVICE,
+        },
+        Command {
+            id: "syncthing-add-folder",
+            label: key::CMD_SYNCTHING_ADD_FOLDER,
         },
     ];
 
@@ -2015,10 +2085,19 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s n v", "network-import", None),
         // SYNCTHING is `s s` — its own prefix under SYSTEM, beside the
         // network it rides on, and no longer inside it.
-        ("s s a", "syncthing-open", None),
-        ("s s s", "syncthing-state", None),
-        ("s s p", "syncthing-pause", None),
-        ("s s r", "syncthing-resume", None),
+        //
+        // THE DOUBLED LETTER IS THE FOOTER AND `w` IS THE WINDOW, as it is for
+        // the files, the notifications, the power, the radio, the network and
+        // the sound. `s s s` used to be the one-line status echo; that moved
+        // to `s s t`, because the doubled letter belongs to the door.
+        ("s s s", "syncthing-open", None),
+        ("s s w", "syncthing-window", None),
+        ("s s a", "syncthing-web", None),
+        ("s s t", "syncthing-state", None),
+        ("s s p", "syncthing-pause-all", None),
+        ("s s r", "syncthing-resume-all", None),
+        ("s s d", "syncthing-add-device", None),
+        ("s s f", "syncthing-add-folder", None),
     ];
 
     /// The digits as `&'static str`, so the binding can carry them.
@@ -2248,6 +2327,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     );
     out.extend(crate::power::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::audio::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
+    out.extend(crate::syncthing::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     // THE KEYBOARD'S TOP ROW, which the compositor binds directly — the same
     // arrangement as the four emergency keys just above.
     out.extend(crate::actions::media().into_iter().map(|(_, _, id)| id));
@@ -3012,9 +3092,22 @@ mod tests {
             "network-wifi-toggle",
             "network-link",
             "syncthing-open",
+            "syncthing-window",
+            "syncthing-web",
             "syncthing-state",
+            "syncthing-pause-all",
+            "syncthing-resume-all",
+            "syncthing-up",
+            "syncthing-down",
+            "syncthing-less",
+            "syncthing-more",
+            "syncthing-enter",
             "syncthing-pause",
-            "syncthing-resume",
+            "syncthing-rescan",
+            "syncthing-add",
+            "syncthing-forget",
+            "syncthing-add-device",
+            "syncthing-add-folder",
         ];
         let (tree, registry) = default_of().unwrap();
         for id in super::reachable(&tree) {

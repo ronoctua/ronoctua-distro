@@ -13,6 +13,29 @@
 # from beginning to end. What was wrong cost 16× in speed; what remained
 # afterwards is what these values attack. Each one states what was observed.
 #
+# THE ONE PRIVILEGED THING, AND THE POLKIT RULE IT NEEDS
+# -------------------------------------------------------
+# Everything `LEADER s s` offers goes over the loopback and asks nobody:
+# pausing, resuming, rescanning, adding a folder, writing any of the hundred
+# and twenty-two options, even restarting the process. What is privileged is
+# telling systemd to STOP the unit, and there is no way around it — this is a
+# SYSTEM unit running as the owner, and `manage-units` on one of those is root's.
+#
+# Without the rule, "turn Syncthing off" would be the only thing in that view
+# that answered by sending somebody to a terminal, which is the failure the
+# whole shell exists to remove.
+#
+# The rule is `nix/modules/tor.nix`'s, to the character: the `manage-units`
+# action, the verbs `start` and `stop`, THIS unit, that one user, and a refusal
+# for everything else. `syncthing-polkit-is-narrow` reads the installed rule and
+# `ronoctua_syncthing::unit::UNIT` and compares them in BOTH directions, so a
+# rule that grew and a rule that stopped matching the crate each fail.
+#
+# THE PARENTHESES AROUND THE DISJUNCTION ARE NOT DECORATION. `&&` binds tighter,
+# so `id && verb == a || verb == b` reads as `(id && verb == a) || verb == b` —
+# and everything after the first alternative is granted for ANY action and ANY
+# subject. `rescue.nix` shipped exactly that for a commit.
+#
 # WHAT THIS MODULE DOES NOT DECLARE
 # ---------------------------------
 # No folder and no device. A device id and a folder path are personal data
@@ -198,6 +221,22 @@ in
 
     # Syncthing's ports are opened by `openDefaultPorts`; mDNS stays in the
     # network module. Each service opens the port it uses.
+
+    # THE RULE. See the header for why it exists and how wide it is.
+    #
+    # There is no polkit agent in this session (`nix/modules/update.nix`), so it
+    # answers `YES` rather than asking. What buys that width back is that the
+    # door is one millimetre wide.
+    security.polkit.extraConfig = ''
+      polkit.addRule(function (action, subject) {
+        if (action.id == "org.freedesktop.systemd1.manage-units" &&
+            (action.lookup("verb") == "start" || action.lookup("verb") == "stop") &&
+            action.lookup("unit") == "syncthing.service" &&
+            subject.user == "${user_name}") {
+          return polkit.Result.YES;
+        }
+      });
+    '';
 
     systemd.services.ronoctua-syncthing-tune = {
       description = "Tunes Syncthing's folder and device defaults";

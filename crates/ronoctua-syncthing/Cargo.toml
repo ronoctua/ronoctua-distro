@@ -1,0 +1,36 @@
+[package]
+name = "ronoctua-syncthing"
+description = "The one boundary with Syncthing: its REST API, its event stream, its folders, devices and every option it exposes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# `rest.rs` IS THE ONLY MODULE THAT KNOWS A `/rest/…` PATH EXISTS, and `unit.rs`
+# the only one that knows about systemd. Everything else — the merge, the option
+# table, the preferences — is pure over plain values, so every rule in this
+# crate is testable with no Syncthing running, which is what a build sandbox and
+# a laptop with the service stopped both are.
+#
+# The closure gains NOTHING: `syncthing` is already installed by
+# `nix/modules/syncthing.nix`, and `systemctl` was already named in `nix/rust.nix`.
+#
+# NO `[[bin]]`: nothing here is a daemon. The footer and the window raise the
+# threads, the same way they do for PipeWire and the batteries.
+
+[dependencies]
+anyhow.workspace = true
+# The watching thread outlives whoever asked for it, and when the service goes
+# away there is nobody to return an error to — so it says so to the log.
+tracing.workspace = true
+# Syncthing answers JSON and its config objects carry a hundred and thirty-one
+# keys. Every field is read with `#[serde(default)]` so that a release adding,
+# removing or renaming one takes a fact off the screen instead of emptying it.
+serde = { workspace = true }
+serde_json.workspace = true
+ronoctua-http = { path = "../ronoctua-http" }
+ronoctua-store = { path = "../ronoctua-store" }
+
+[lints]
+workspace = true

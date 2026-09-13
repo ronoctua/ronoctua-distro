@@ -6025,6 +6025,76 @@ Uma busca construída a partir do que se espera achar devolve o que se espera ac
 
 ---
 
+
+#### O Syncthing ganhou vista, e o argumento é o invariante 14
+
+Por anos esta distro instalou e AFINOU o Syncthing — os valores do módulo saíram de uma
+transferência medida de 592 GB — e não ofereceu tela nenhuma sobre ele. `LEADER s s` tinha quatro
+teclas: uma abria a interface WEB num navegador, uma ecoava o estado numa linha, duas pausavam e
+retomavam. Acrescentar uma pasta, deixar uma máquina entrar ou mudar qualquer uma das 121 opções
+significava sair do sistema e ir para uma página. É exatamente a chrome de fora que o invariante 14
+existe para negar, e foi o que este trabalho fechou.
+
+A página continua a uma tecla (`s s a`), e isso é deliberado: ela tem gráfico e histórico que uma
+lista de rótulo e valor não substitui, e fingir o contrário seria pior do que dizê-lo.
+
+#### Evento, não relógio — e por que a mudança RELÊ em vez de fundir
+
+`/rest/events?since=N&timeout=60` é um LONG POLL: segura a conexão e responde no instante em que
+algo acontece. Medido contra a 2.1.3, que é a versão que o flake pina: um poll ocioso bloqueia o
+minuto inteiro e devolve lista vazia, uma mudança real volta em **17 ms**, e o cliente bloqueado
+gasta **zero** tique de CPU em 25 segundos. Nenhum temporizador novo entrou no sistema.
+
+O que chega é um lote de eventos, e o crate **relê tudo** em vez de fundir cada um. A fusão é onde
+moram os defeitos: o som aprendeu isso caro, com o `metadata` do PipeWire chegando parcial e sendo
+substituído inteiro — e o único jeito de alguém notar foi comparar duas fotos da mesma tela. O
+Syncthing traz o mesmo perigo em mais formas: vinte tipos de evento, alguns com o objeto inteiro e
+outros com um campo. Reler são dez chamadas de poucos milissegundos na loopback, e só quando algo
+mudou; um piso de meio segundo impede que uma transferência — que emite progresso a cada segundo —
+vire laço.
+
+#### 121 opções declaradas, e as três naturezas de uma linha
+
+`assets/syncthing-options.nix` declara cada opção: a chave JSON, a espécie, a faixa, se o flake a
+fixa, se é avançada. Dali saem a tabela Rust, as chaves que os dois idiomas devem, e o
+`syncthing-options-are-declared`, que compara a declaração com o ESQUEMA REAL do Syncthing nos dois
+sentidos — uma opção que ele acrescentou e uma que nós inventamos falham a build em vez de
+simplesmente não estarem lá.
+
+1. **O flake fixa 14.** Desenhadas, alcançáveis e RECUSANDO, com a frase dizendo de onde vem o
+   valor. É o invariante 6 na tela: oferecê-las como editáveis seria oferecer uma tecla cujo efeito
+   o próximo `nixos-rebuild` desfaz em silêncio. **Duas das catorze são padrão do nixpkgs e não do
+   nosso módulo** — `localAnnouncePort` e `maxFolderConcurrency` —, e só o
+   `syncthing-flake-owned-rows-refuse` as viu: as duas estavam declaradas editáveis.
+2. **As suas.** Nada no flake as repõe, e sobrevivem ao rebuild porque o módulo declara
+   `overrideFolders` e `overrideDevices` desligados.
+3. **As avançadas**, numa GAVETA fechada. O chevron é dela e de mais nada na vista — por argumento
+   do próprio dono, que o recusou numa linha que age dizendo que aquilo *"é utilizado em elementos
+   de descolapsar/colapsar"*.
+
+#### A marca, e a única regra polkit nova desde o Tor
+
+A marca da modeline é a única do sistema cuja EXISTÊNCIA é uma escolha: `Never`, `WhenOff` (padrão)
+e `WhenOn`. `WhenOff` acende quando nada está viajando — pausado OU serviço fora do ar, que do
+outro lado da tela são o mesmo fato —, e a vista é que diz qual dos dois. Uma máquina sem nada
+configurado não acende nada: marca que nasce acesa no primeiro boot não quer dizer nada no segundo
+dia.
+
+Parar a unidade é a ÚNICA coisa privilegiada de toda a vista. Pausar, retomar, varrer, acrescentar
+pasta, escrever qualquer opção, até reiniciar o processo — tudo vai pela loopback e não pergunta a
+ninguém. Parar o `syncthing.service` não pode: é unidade de SISTEMA rodando como o dono, e
+`manage-units` sobre uma dessas é do root. Sem a regra, "desligar o Syncthing" seria a única coisa
+da vista que responde mandando a pessoa abrir um terminal.
+
+#### Um HTTP à mão, e ele deixou de ser dois
+
+`ronoctua-tunnel` tinha um framer HTTP cuja primeira linha dizia ser *"a forma que o
+`shell::syncthing` já tem"*. Eram dois, e o Syncthing faria um terceiro. Agora é um crate
+(`ronoctua-http`), e escrever o check custou uma descoberta: havia um TERCEIRO já, no `aria2.rs`,
+e era o único dos três cuja resposta era lida como `String` antes de ser cortada — com o pânico que
+os outros dois já tinham pagado esperando dentro dele. O `ronoctua-world` deixou de depender do
+crate dos túneis para ter um decodificador de chunk.
+
 ### Quem espera o rádio é uma thread, não o quadro
 
 `RequestScan` volta na hora; o rádio responde alguns segundos depois. Esperar no `calloop` congelaria

@@ -64,6 +64,9 @@
   notificationsRs,
   bluetoothProfilesRs,
   audioNamesRs,
+  # The generated Syncthing option table, so `syncthing-options-have-text`
+  # reads the list the generator DERIVED instead of a hand-written copy of it.
+  syncthingOptionsRs,
   keyboardsRs,
   syntaxTable,
   mimeDb,
@@ -134,6 +137,14 @@ let
   # VM test of the footer: it proves that it DRAWS, not only that it compiles.
   # Under lavapipe (section 9.3 of the plan) — correctness, never performance.
   footerVm = import ./footer-vm.nix {
+    inherit pkgs lib fonts;
+    niri = inputs.niri.packages.${system}.niri;
+    ronoctua-shell = rust.shell;
+  };
+
+  # A REAL SYNCTHING, and the view that reads it. Also the only place the
+  # polkit rule is exercised end to end, as the owner and with no agent.
+  syncthingVm = import ./syncthing-vm.nix {
     inherit pkgs lib fonts;
     niri = inputs.niri.packages.${system}.niri;
     ronoctua-shell = rust.shell;
@@ -1954,6 +1965,12 @@ let
         # AND SOUND'S TWO. Both run `audio-open`, which is what `LEADER s a a`
         # runs — the mouse reaches no door the keyboard lacks.
         "muted", "microphone",
+        # AND SYNCTHING'S ONE. It runs `syncthing-open`, which is `LEADER s s s`.
+        # It is also the only mark in the system whose very EXISTENCE is a
+        # preference — see `ronoctua_syncthing::prefs::Mark` — and that changes
+        # nothing here: a mark that is drawn is a mark that can be clicked, and
+        # what it does has to be a door the keyboard already has.
+        "syncthing",
     }
     if acted != agreed:
         gaps.append(
@@ -1968,6 +1985,11 @@ let
     # THE SAME, FOR SOUND: silence and the microphone each open `LEADER s a a`.
     if clicked.count('"audio-open"') < 2:
         gaps.append("clicking the mute mark or the microphone does not open the sound view")
+    # AND SYNCTHING'S, which is ONE mark and therefore one call. The keyboard
+    # reaches the same door at `LEADER s s s`, and the `keymap` read below is
+    # what says that door exists there too.
+    if '"syncthing-open"' not in clicked:
+        gaps.append("clicking the syncthing mark does not open its view")
     # THE UPDATE'S MARK, and BOTH halves of it.
     #
     # The mark only exists while something is running, so a click is the
@@ -7034,13 +7056,13 @@ let
       # comment is the audit: adding a line here is claiming somebody read the
       # rule and decided the door is the right width.
       AGREED = {
-          # OURS — five modules, and every one of them names ONE unit inside
+          # OURS — seven modules, and every one of them names ONE unit inside
           # the same action. `files` and `rescue` return `AUTH_SELF_KEEP` (they
           # ask, once, and remember); `keyboard`, `memory`, `update` and `tor`
           # return `YES`, because nothing this system does on its own may ask.
           # Each has a check of its own about which unit and which verbs.
           "org.freedesktop.systemd1.manage-units":
-              "ours: files, rescue, keyboard, memory, update, tor",
+              "ours: files, rescue, keyboard, memory, update, tor, syncthing",
           # nix/modules/rescue.nix — the rescue console's way out, and the
           # `-multiple-sessions` twins that logind asks separately about.
           "org.freedesktop.login1.power-off": "ours: rescue",
@@ -7153,6 +7175,510 @@ let
   # the RESULT or for what else the rule allows. That is AGENTS.md's own trap:
   # a check against the code and not against the criterion closes an empty
   # milestone.
+
+  # ONE BOUNDARY WITH SYNCTHING, and it is a crate.
+  #
+  # `one-pipewire-boundary`'s twin, and it exists for the defect that one
+  # names: for a long time `ronoctua-bluetooth` ran its own `pw-dump`, and two
+  # readers of one daemon's JSON is two places to fix the day it changes. The
+  # Syncthing client used to live inside `ronoctua-shell`, hand-parsing JSON
+  # with `str::find`; it is a crate now, and this is what keeps it one.
+  one-syncthing-boundary = mkCheck "one-syncthing-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    boundary = crates / "ronoctua-syncthing" / "src" / "rest.rs"
+    unit = crates / "ronoctua-syncthing" / "src" / "unit.rs"
+    wrong = []
+
+    # THE PATHS AND THE FILE THE KEY LIVES IN. A second reader of either is a
+    # second place that has to be right about Syncthing's shape.
+    NAMES = ("/rest/", "config.xml", "RONOCTUA_SYNCTHING_CONFIG",
+             "RONOCTUA_SYNCTHING_GUI", "X-API-Key")
+
+    # A `tests.rs` IS a test module — `#[cfg(test)] mod tests;` in the file
+    # beside it — and a test that asserts a path is the right thing to write.
+    # The same argument `one-pipewire-boundary` makes about a test's NAME.
+    # That it really is one is not taken on trust: the crate's own `lib.rs` has
+    # to declare it under `cfg(test)`.
+    for f in sorted(crates.rglob("tests.rs")):
+        # WHOEVER DECLARES IT is `lib.rs` beside it, or the `<name>.rs` one
+        # level up that owns the directory — both are how Rust 2018 spells a
+        # module with a directory under it.
+        owners = [f.with_name("lib.rs"), f.parent.with_suffix(".rs")]
+        if not any(
+            o.exists() and "#[cfg(test)]\nmod tests;" in o.read_text() for o in owners
+        ):
+            wrong.append(f"{f.relative_to(crates)} is skipped and nothing declares it a test module")
+
+    for f in sorted(crates.rglob("*.rs")):
+        if f in (boundary, unit) or f.name == "tests.rs":
+            continue
+        text = f.read_text()
+        # THE PRODUCT, NOT ITS TESTS, and not its prose. Several files explain
+        # at length why the boundary is where it is; a rule that could not tell
+        # a sentence from a call would be a rule nobody could write near.
+        cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
+        if cut:
+            text = text[: cut[-1].start()]
+        code = "\n".join(re.sub(r"//.*", "", line) for line in text.splitlines())
+        for name in NAMES:
+            if name in code:
+                wrong.append(f"{f.relative_to(crates)} names `{name}` outside the boundary")
+
+    if not boundary.exists():
+        wrong.append("crates/ronoctua-syncthing/src/rest.rs is gone; what is this checking?")
+    else:
+        body = boundary.read_text()
+        for name in ("/rest/events", "/rest/system/status", "X-API-Key"):
+            if name not in body:
+                wrong.append(f"the boundary no longer names `{name}` — has it moved?")
+        # AND THE KEY IS PRIVATE. It is read to sign a request and for nothing
+        # else; a `pub fn key` is one careless row away from the screen.
+        if re.search(r"pub\s+(const\s+)?fn\s+key\b", body):
+            wrong.append("the API key has a public reader")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: one crate speaks to Syncthing, and the key stays inside it")
+    END
+  '';
+
+  # ONE HAND-WRITTEN HTTP, and it is a crate too.
+  #
+  # There were two: `ronoctua-tunnel` had one for Tailscale, and its own first
+  # line said it was the shape `shell::syncthing` already had. The Syncthing
+  # view would have made a third. What a third copy costs is not lines — it is
+  # that the chunked decoder in `ronoctua-http` exists because a chunk boundary
+  # inside a multi-byte character panicked a thread and killed every tunnel key
+  # for a session, and a copy that has not learned that is a copy that will.
+  one-http-writer = mkCheck "one-http-writer" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    crates = pathlib.Path("${../crates}")
+    framer = crates / "ronoctua-http" / "src" / "lib.rs"
+    wrong = []
+
+    # WHAT ONLY A FRAMER WRITES. Not "HTTP" — a comment says that, and so does
+    # a URL — but the request line and the framing itself.
+    NAMES = ("HTTP/1.1\\r\\n", "Transfer-Encoding", "Content-Length: ",
+             "Connection: close")
+
+    for f in sorted(crates.rglob("*.rs")):
+        if f == framer:
+            continue
+        text = f.read_text()
+        cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
+        if cut:
+            text = text[: cut[-1].start()]
+        code = "\n".join(re.sub(r"//.*", "", line) for line in text.splitlines())
+        for name in NAMES:
+            if name in code:
+                wrong.append(
+                    f"{f.relative_to(crates)} frames HTTP by hand (`{name}`); "
+                    "`ronoctua-http` is where that lives"
+                )
+
+    if not framer.exists():
+        wrong.append("crates/ronoctua-http/src/lib.rs is gone; what is this checking?")
+    else:
+        body = framer.read_text()
+        for name in ("fn dechunked", "fn status_of", "fn over_unix", "fn over_tcp"):
+            if name not in body:
+                wrong.append(f"the framer no longer has `{name}` — has it moved?")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: one crate writes HTTP, and the two transports are its")
+    END
+  '';
+
+  # THE OPTION TABLE AGAINST A REAL SYNCTHING'S SHAPE, in BOTH directions.
+  #
+  # `assets/syncthing-options.nix` declares a hundred and twenty-two options
+  # across four objects. Without this, the day Syncthing renames one the row
+  # goes blank and nothing says so, and the day it ADDS one the view simply
+  # never offers it — the silent failure this repository spends its checks on.
+  #
+  # The fixture is SHAPE ONLY: key names and JSON types. Every value in a real
+  # config is the owner's (invariant 13), and this repository is public.
+  syncthing-options-are-declared =
+    mkCheck "syncthing-options-are-declared"
+      [
+        pkgs.python3
+        pkgs.nix
+      ]
+      ''
+        cat > declared.json <<'DECLARED'
+        ${builtins.toJSON (import ../assets/syncthing-options.nix)}
+        DECLARED
+        python3 - <<'END'
+        import json, pathlib, sys
+
+        declared = json.load(open("declared.json"))
+        schema = json.loads(pathlib.Path("${../tests/fixtures/syncthing-schema.json}").read_text())
+        wrong = []
+
+        # WHAT IS DELIBERATELY NOT OFFERED, and why. Every name here is a
+        # decision somebody signed; a key that is neither declared nor on this
+        # list fails, which is the point.
+        OMITTED = {
+            "folder": {
+                # Identity: Syncthing will not change a folder's id, and which
+                # machines it is shared with is a LIST OF ROWS on the sheet.
+                "id", "devices",
+                # An object with a shape of its own, whose leaves are declared
+                # separately by `within`.
+                "minDiskFree", "versioning", "xattrFilter",
+            },
+            "device": {
+                # Identity and bookkeeping: the view draws these as facts.
+                "deviceID", "certName", "introducedBy",
+            },
+            "global": {
+                # Bookkeeping Syncthing keeps for itself. Offering a row for
+                # `urUniqueId` would be offering to edit a serial number.
+                "urSeen", "urUniqueId", "unackedNotificationIDs", "featureFlags",
+                # An object with a shape of its own; its leaves are `amount`.
+                "minHomeDiskFree",
+            },
+            "interface": {
+                # THE TWO SECRETS. They are read to sign a request and never
+                # reach a snapshot, let alone a row — see `one-syncthing-boundary`.
+                "apiKey", "password",
+                # Bookkeeping.
+                "sessionCookiePath",
+            },
+        }
+
+        # `minHomeDiskFree` and `minDiskFree` ARE offered, as one `amount` row
+        # each: the key is declared and the object is what the row edits.
+        ALSO_DECLARED = {"minDiskFree", "minHomeDiskFree"}
+
+        for scope in ("folder", "device", "global", "interface"):
+            have = set(schema[scope])
+            mine = {e["key"] for e in declared[scope] if "within" not in e}
+            nested = {e["within"] for e in declared[scope] if "within" in e}
+            omitted = OMITTED[scope] - ALSO_DECLARED
+
+            # 1. NOTHING WE DECLARE IS MISSING FROM SYNCTHING.
+            invented = (mine | nested) - have
+            for key in sorted(invented):
+                wrong.append(f"{scope}.{key} is declared and Syncthing has no such key")
+
+            # 2. NOTHING SYNCTHING HAS IS UNACCOUNTED FOR.
+            forgotten = have - mine - nested - omitted
+            for key in sorted(forgotten):
+                wrong.append(
+                    f"{scope}.{key} exists and is neither declared nor on the omitted list"
+                )
+
+            # 3. AND THE OMITTED LIST DOES NOT NAME A GHOST.
+            for key in sorted(omitted - have):
+                wrong.append(f"{scope}.{key} is omitted and does not exist")
+
+            # 4. THE KIND MATCHES THE TYPE. A `switch` on a string is a row
+            #    whose key writes `true` into a field that wants a word, and
+            #    Syncthing answers 400 — which reads as "the daemon is broken".
+            fits = {
+                "switch": {"bool"},
+                "number": {"number"},
+                "text": {"text"},
+                "ring": {"text"},
+                "list": {"list"},
+                "amount": {"object"},
+            }
+            for entry in declared[scope]:
+                if "within" in entry:
+                    continue
+                kind, key = entry["kind"], entry["key"]
+                if key in have and schema[scope][key] not in fits[kind]:
+                    wrong.append(
+                        f"{scope}.{key} is a {schema[scope][key]} and is declared `{kind}`"
+                    )
+
+        for w in wrong:
+            print(f"ERROR: {w}", file=sys.stderr)
+        if wrong:
+            print("", file=sys.stderr)
+            print(
+                "       The fixture is tests/fixtures/syncthing-schema.json, and its "
+                "header says how to refresh it against the version the flake pins.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        counted = sum(len(declared[s]) for s in ("folder", "device", "global", "interface"))
+        print(f"OK: {counted} options declared, and Syncthing {schema['version']} has every one")
+        END
+      '';
+
+  # THE ROWS THE FLAKE OWNS ARE THE ONES THE MODULE ACTUALLY WRITES.
+  #
+  # Invariant 6, on the screen. `nix/modules/syncthing.nix` PUTs a set of
+  # options into the running service at every activation; a row for one of
+  # those that could be changed would be a key whose effect the next
+  # `nixos-rebuild` undoes IN SILENCE, which is the exact failure this project
+  # spends its checks hunting. A row marked `fixed` that the module does NOT
+  # write is the opposite mistake: a setting refused for no reason.
+  syncthing-flake-owned-rows-refuse =
+    let
+      written = builtins.attrNames syncthingEval.services.syncthing.settings.options;
+    in
+    mkCheck "syncthing-flake-owned-rows-refuse" [ pkgs.python3 ] ''
+      cat > declared.json <<'DECLARED'
+      ${builtins.toJSON (import ../assets/syncthing-options.nix)}
+      DECLARED
+      cat > written.txt <<'WRITTEN'
+      ${builtins.concatStringsSep "\n" written}
+      WRITTEN
+      python3 - <<'END'
+      import json, pathlib, sys
+
+      declared = json.load(open("declared.json"))
+      written = {l.strip() for l in pathlib.Path("written.txt").read_text().split() if l.strip()}
+      fixed = {e["key"] for e in declared["global"] if e.get("fixed")}
+      wrong = []
+
+      if not written:
+          sys.exit("ERROR: the module writes no option at all; the eval is not reaching it")
+
+      for key in sorted(written - fixed):
+          wrong.append(
+              f"the module writes `{key}` and the row for it is editable — "
+              "the next rebuild would undo whatever somebody chose, in silence"
+          )
+      for key in sorted(fixed - written):
+          wrong.append(
+              f"`{key}` is drawn refusing and the module does not write it — "
+              "a setting refused for no reason"
+          )
+
+      # AND THE INTERFACE'S ADDRESS, which is `guiAddress` and not one of the
+      # `settings.options`. It is the one `fixed` row outside the global scope,
+      # and it is fixed because the page stays on the loopback: on the network
+      # it would be an administrative port with no password.
+      face = {e["key"] for e in declared["interface"] if e.get("fixed")}
+      if face != {"address"}:
+          wrong.append(f"the interface's fixed rows are {sorted(face)}, and may be ['address']")
+
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          raise SystemExit(1)
+      print(
+          f"OK: the {len(fixed)} global rows the flake owns are the {len(written)} it "
+          f"writes, and the interface's one is its address"
+      )
+      END
+    '';
+
+  # THE MODELINE IS SILENT AT REST, BY DEFAULT.
+  #
+  # This mark is the only one in the system whose very existence is a choice,
+  # and one of its three settings deliberately draws while everything is WELL —
+  # asked for by the owner, and theirs to ask for. What may not change without
+  # somebody deciding it is the DEFAULT: a distro whose modeline carries a
+  # glyph on a machine where nothing is wrong has given up the rule that line
+  # is built on.
+  syncthing-mark-is-silent-by-default =
+    mkCheck "syncthing-mark-is-silent-by-default"
+      [
+        pkgs.python3
+      ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+
+        crate = pathlib.Path("${../crates/ronoctua-syncthing/src}")
+        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+        prefs = (crate / "prefs.rs").read_text()
+        wrong = []
+
+        # 1. THE DEFAULT IS `WhenOff`, and it is derived rather than written out —
+        #    so the `#[default]` attribute is the whole of it.
+        body = prefs.split("#[cfg(test)]")[0]
+        marked = re.findall(r"#\[default\]\s*\n\s*(\w+)", body)
+        if marked != ["WhenOff"]:
+            wrong.append(f"the default is {marked}, and may only be ['WhenOff']")
+
+        # 2. AND `WhenOff` DRAWS NOTHING WHILE IT IS SYNCING. The arithmetic is one
+        #    function; this is what says it did not get turned round.
+        shows = re.search(r"pub const fn shows\(self, syncing: bool\) -> bool \{(.+?)\n    \}", body, re.S)
+        if not shows:
+            wrong.append("`Mark::shows` went away or changed shape")
+        else:
+            arms = shows.group(1)
+            if "Self::WhenOff => !syncing" not in arms:
+                wrong.append("`WhenOff` no longer means `nothing is travelling`")
+            if "Self::Never => false" not in arms:
+                wrong.append("`Never` no longer means never")
+
+        # 3. AND THE FOOTER ASKS THE PREFERENCE BEFORE IT DRAWS. A modeline that
+        #    read the snapshot alone would draw the mark for everybody.
+        surface = (shell / "surface.rs").read_text()
+        if "self.syncthing_prefs.mark.shows(syncing)" not in surface:
+            wrong.append("the footer draws the mark without asking the preference")
+
+        # 4. AND IT WAITS FOR A READING. With no snapshot at all the arithmetic
+        #    answered "not syncing" and the mark came on — a glyph for the first
+        #    second of every boot, and for ever on a machine where the long poll
+        #    never answers. `modeline-vm` measures `segments=0` at rest and is
+        #    what caught it; this is the same promise read off the source, so a
+        #    rewrite that loses the `?` fails here instead of in a VM ten
+        #    minutes later. A service that is genuinely DOWN still draws: the
+        #    watching thread sends a snapshot saying so, which is a fact.
+        mark = re.search(
+            r"fn syncthing_mark\(&self\) -> Option<bool> \{(.+?)\n    \}", surface, re.S
+        )
+        if not mark:
+            wrong.append("`syncthing_mark` went away or changed shape")
+        elif "self.syncthing_snapshot.as_ref()?" not in mark.group(1):
+            wrong.append("the mark is drawn before any reading has arrived")
+        elif not (
+            "Standing::Absent" in mark.group(1) and "Standing::Unknown" in mark.group(1)
+        ):
+            wrong.append(
+                "the mark is drawn where it cannot be justified — `Absent` is a "
+                "machine that never installed Syncthing (`is-active` answers "
+                "`inactive` for one of those too, and only `LoadState` tells them "
+                "apart), and `Unknown` is one where systemd could not be asked"
+            )
+
+        for w in wrong:
+            print(f"ERROR: {w}", file=sys.stderr)
+        if wrong:
+            raise SystemExit(1)
+        print("OK: at its default the mark is drawn only when nothing is travelling")
+        END
+      '';
+
+  # THE POLKIT RULE IS ONE MILLIMETRE WIDE — `tor-polkit-is-narrow`'s twin.
+  #
+  # Seven of our modules write a polkit rule and every one of them names ONE
+  # unit inside `manage-units` — the census in `polkit-rules-are-the-ones-we-know`
+  # is where they are signed for. What each needs beside that census is a check
+  # of its own about WHICH unit and WHICH verbs, and this is Syncthing's: one
+  # action, two verbs, one unit, one user, and nothing else in the condition.
+  #
+  # Read from the installed rule and from `ronoctua_syncthing::unit::UNIT`, and
+  # compared in BOTH directions, so a rule that grew and a rule that stopped
+  # matching the crate each fail.
+  syncthing-polkit-is-narrow =
+    let
+      rules = self.nixosConfigurations.vm.config.security.polkit.extraConfig;
+    in
+    mkCheck "syncthing-polkit-is-narrow"
+      [
+        pkgs.python3
+        pkgs.gnugrep
+      ]
+      ''
+        crate=${../crates/ronoctua-syncthing/src}/unit.rs
+        unit=$(grep -oE 'pub const UNIT: &str = "[^"]+"' "$crate" | grep -oE '"[^"]+"' | tr -d '"')
+        [ -n "$unit" ] || { echo "ERROR: the crate does not name the unit" >&2; exit 1; }
+        export RONOCTUA_UNIT="$unit"
+        export RONOCTUA_USER=${self.nixosConfigurations.vm.config.ronoctua.user}
+        cat > rules.js <<'RULES'
+        ${rules}
+        RULES
+        python3 - <<'END'
+        import os, re, sys
+
+        unit = os.environ["RONOCTUA_UNIT"]
+        user = os.environ["RONOCTUA_USER"]
+        text = open("rules.js").read()
+        wrong = []
+
+        rules = re.split(r"polkit\.addRule", text)[1:]
+        ours = [r for r in rules if unit in r]
+        if len(ours) != 1:
+            wrong.append(f"{len(ours)} rules mention {unit}; there may be one")
+
+        for rule in ours:
+            results = set(re.findall(r"polkit\.Result\.(\w+)", rule))
+            if results != {"YES"}:
+                wrong.append(f"the rule answers {sorted(results)}, and may only answer YES")
+
+            actions = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule))
+            if actions != {"org.freedesktop.systemd1.manage-units"}:
+                wrong.append(f"the rule is about {sorted(actions)}")
+
+            units = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+            if units != {unit}:
+                wrong.append(f"the rule names the units {sorted(units)}, and may name {unit}")
+
+            # START AND STOP, AND NOTHING WIDER. `restart` and `reload` are
+            # wider doors and `enable` survives a reboot — and Syncthing
+            # restarts ITSELF over the loopback, with no privilege at all, so
+            # there is nothing a wider verb would buy.
+            verbs = set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule))
+            if verbs != {"start", "stop"}:
+                wrong.append(f"the rule allows the verbs {sorted(verbs)}")
+
+            users = set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule))
+            if users != {user}:
+                wrong.append(f"the rule is for {sorted(users)}, and may be for {user}")
+
+            # AND THE CONDITION IS NOTHING BUT THOSE FOUR TESTS. Every
+            # recognised comparison is struck out and what is left has to be
+            # punctuation: a surviving word is something nobody audited.
+            condition = rule[rule.index("if") : rule.index("return")]
+            for pattern in (
+                r'action\.id\s*==\s*"[^"]+"',
+                r'action\.lookup\("(?:unit|verb)"\)\s*==\s*"[^"]+"',
+                r'subject\.user\s*==\s*"[^"]+"',
+            ):
+                condition = re.sub(pattern, " ", condition)
+            leftover = re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", condition)
+            leftover = [w for w in leftover if w != "if"]
+            if leftover:
+                wrong.append(f"the condition also tests {sorted(set(leftover))}")
+
+        for w in wrong:
+            print(f"ERROR: {w}", file=sys.stderr)
+        if wrong:
+            raise SystemExit(1)
+        print(f"OK: start and stop of {unit}, for {user}, and nothing else")
+        END
+      '';
+
+  # EVERY OPTION'S LABEL EXISTS IN BOTH LANGUAGES — `audio-names-have-text`'s
+  # twin, and it matters more here: there are a hundred and fifty-one keys and
+  # they come out of a generator, so nobody is going to notice one missing by
+  # reading. On screen a key nobody wrote draws as `[syncthing-opt-…]`.
+  syncthing-options-have-text = mkCheck "syncthing-options-have-text" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    owed = pathlib.Path("${syncthingOptionsRs}/keys.txt").read_text().split()
+    root = pathlib.Path("${../assets/i18n}")
+    wrong = []
+
+    if len(owed) < 100:
+        sys.exit(f"ERROR: only {len(owed)} keys are owed; the generator is not reaching this")
+
+    for ftl in sorted(root.glob("*.ftl")):
+        have = set(re.findall(r"^([a-z0-9-]+) *=", ftl.read_text(), re.M))
+        for key in owed:
+            if key not in have:
+                wrong.append(f"{ftl.name} does not carry `{key}`")
+
+    for w in wrong[:20]:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if len(wrong) > 20:
+        print(f"ERROR: … and {len(wrong) - 20} more", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print(f"OK: {len(owed)} option keys, in every declared language")
+    END
+  '';
+
   tor-polkit-is-narrow =
     let
       # The merged rule text of the real system, and the crate's unit name.
@@ -14235,6 +14761,7 @@ let
       screenshots-land-in-a-declared-directory
       files-polkit-is-narrow
       tor-polkit-is-narrow
+      syncthing-polkit-is-narrow
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -14260,6 +14787,7 @@ let
 
     # Exposed so they can be run on their own during the work.
     footer-vm = footerVm;
+    syncthing-vm = syncthingVm;
     niri-contract = niriContract;
     modeline-vm = modelineVm;
     leader-vm = leaderVm;
@@ -14344,6 +14872,13 @@ let
       media-keys-are-bare
       the-microphone-has-one-door
       audio-names-have-text
+      one-syncthing-boundary
+      one-http-writer
+      syncthing-options-are-declared
+      syncthing-flake-owned-rows-refuse
+      syncthing-mark-is-silent-by-default
+      syncthing-polkit-is-narrow
+      syncthing-options-have-text
       display-brightness-rule-lands
       display-adds-no-polkit-rule-of-its-own
       display-fragment-validates
@@ -14504,6 +15039,7 @@ let
       # wgpu assembles a context over it and a frame comes out. None of that shows
       # up in `cargo build` — all four are runtime.
       footerVm
+      syncthingVm
       # The nested loop, and the proof that it RELOADS — not only that it exists.
       devApp
       reload-reloads

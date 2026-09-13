@@ -112,9 +112,67 @@ pub fn store() -> ronoctua_store::Store<Preferences> {
     ronoctua_store::Store::at(home(), FILE)
 }
 
+/// Writes the whole record back, and REFUSES over a file that will not parse.
+///
+/// # Why this is a function here and not a `store().write()` at the call site
+///
+/// Because this view SHIPPED the mistake. Both doors wrote their settings
+/// straight from a value that came out of `Store::read`, and `read` falls back
+/// to the default: read the fallback, lay one keystroke over it, write, and an
+/// `audio.json` that merely would not parse is an `audio.json` that is gone.
+///
+/// `Store::parsed` says "there is a file and it does not parse" and nothing
+/// else, which is exactly the case a writer must stop on — its own doc puts it
+/// as *"a reader degrades, a writer must refuse"*, and `display.rs` and
+/// `buffer.rs` had been doing it right all along. Putting the rule in the
+/// crate means the two doors cannot disagree about it.
+///
+/// # Errors
+///
+/// There is a file and it will not parse — in which case NOTHING is written,
+/// and the caller is expected to say so on screen. Or the write itself failed.
+pub fn keep(store: &ronoctua_store::Store<Preferences>, prefs: Preferences) -> anyhow::Result<()> {
+    if store.path().is_some() && store.parsed().is_none() {
+        anyhow::bail!("{FILE} will not parse, and writing would replace it");
+    }
+    store.write(&prefs)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_writer_refuses_over_a_file_that_will_not_parse() {
+        // THE DEFECT THIS CLOSES, and it was shipped: `read()` hands a writer
+        // the DEFAULT for an unparseable file, and the write then replaces the
+        // file with it. One press of `S-<right>` and what was there is gone.
+        let dir = std::env::temp_dir().join(format!("ronoctua-audio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = ronoctua_store::Store::<Preferences>::at(Some(dir.clone()), FILE);
+
+        assert!(
+            keep(
+                &store,
+                Preferences {
+                    step: 10,
+                    ..Preferences::default()
+                }
+            )
+            .is_ok()
+        );
+        assert_eq!(store.read().step, 10);
+
+        std::fs::write(dir.join(FILE), b"{ not json").unwrap();
+        assert!(keep(&store, Preferences::default()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.join(FILE)).unwrap(),
+            "{ not json",
+            "the unparseable file was replaced anyway"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_missing_file_still_moves_the_volume() {

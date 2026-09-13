@@ -381,7 +381,43 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   lado do binding mais o `crate::leader()`, num `{ $keys }`. Escrita, ela envelhece no dia em que a
   tecla anda (`n h` ensinou `n h` por semanas depois de virar `n n`) e a palavra "LEADER" não é
   tecla de ninguém — em produção é `SUPER`, no aninhado é `CTRL ALT SPC`.
-- **`LEADER s n` é rede; `LEADER s s`, Syncthing** (os dois moraram em `r`, que morreu — rede é do SISTEMA, ao lado de memória e disco). Só o `ronoctua-network` fala NetworkManager; `overrideFolders` FICA `false` (`true` apaga as pastas a cada rebuild). A senha do Wi-Fi não fica em arquivo: `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
+- **`LEADER s n` é rede; `LEADER s s`, Syncthing** (os dois moraram em `r`, que morreu — rede é do SISTEMA, ao lado de memória e disco). Só o `ronoctua-network` fala NetworkManager; `overrideFolders` FICA `false` (`true` apaga as pastas a cada rebuild).
+- **`LEADER s s` é o Syncthing INTEIRO** (`ronoctua-syncthing`, a única fronteira): uma `View`
+  (`syncthing.rs`), duas portas (`s s s` rodapé, `s s w` janela), **quatro níveis** (a lista, uma
+  pasta, uma máquina, os ajustes) e `Esc` sobe um. Por anos a distro instalava e afinava o
+  Syncthing e não oferecia tela nenhuma: quatro teclas, uma das quais abria uma PÁGINA WEB no
+  navegador. Acrescentar pasta, deixar máquina entrar ou mudar qualquer opção era sair do sistema —
+  a chrome de fora que o inv. 14 nega. A página fica a uma tecla (`s s a`) porque tem gráficos e
+  histórico que lista de rótulo e valor não substitui.
+  **É EVENTO, não relógio**: `/rest/events` é LONG POLL — medido contra a 2.1.3, que é a versão que
+  o flake pina, uma mudança real volta em **17 ms** e o cliente bloqueado gasta **zero** tique de
+  CPU em 25 s. Nenhum temporizador novo. **Mudança RELÊ tudo em vez de fundir o evento**: são vinte
+  tipos de evento, alguns com o objeto inteiro e outros com um campo, e a fusão é onde moram os
+  defeitos — o `metadata` do PipeWire ensinou isso caro. Dez chamadas de poucos ms na loopback, e só
+  quando algo mudou; um piso de 0,5 s (`FLOOR`) impede que uma transferência vire laço.
+  **As 121 opções são DECLARADAS** (`assets/syncthing-options.nix` → tabela Rust + as chaves que os
+  dois idiomas devem + o check que compara com o esquema REAL nos dois sentidos). Três naturezas:
+  **o flake fixa 14** — desenhadas e RECUSANDO, com a frase dizendo de onde vem o valor (inv. 6; e
+  DUAS delas são padrão do nixpkgs e não do nosso módulo, o que só o
+  `syncthing-flake-owned-rows-refuse` viu); as suas; e as **avançadas, numa GAVETA** com o chevron —
+  que é do colapso pela palavra do dono (*"não quero mais o chevron, pois isso é utilizado em
+  elementos de descolapsar/colapsar"*), e nenhuma outra linha da vista o desenha.
+  **Os CONVITES só existem quando existem**, e eram a única coisa que só a página mostrava.
+  **Uma marca na modeline, e ela é a única cuja existência é ESCOLHA**: `Never`, `WhenOff`
+  (padrão — acende quando nada está viajando, pausado OU serviço fora do ar, que do outro lado da
+  tela são o mesmo fato) e `WhenOn`. Máquina sem nada configurado NÃO acende: marca que nasce acesa
+  no primeiro boot não quer dizer nada no segundo dia.
+  **Parar a unidade é a ÚNICA coisa privilegiada da vista** — tudo o mais vai pela loopback e não
+  pergunta a ninguém —, e é por isso que o módulo ganhou regra polkit: uma ação, dois verbos,
+  uma unidade, um usuário, medidos pelo `syncthing-polkit-is-narrow`.
+  **O que se digita, digita-se no rodapé**, e a janela DIZ isso; comando que pergunta é comando que
+  recebe (`s s d`, `s s f`, e o `RET` que carrega o valor), porque comando sem tecla nenhuma é
+  comando que só quem leu o código sabe que existe — o teste do keymap achou três.
+- **UM HTTP à mão, e é um crate** (`ronoctua-http`): eram dois — o do `ronoctua-tunnel`, cuja
+  primeira linha dizia ser *"a forma que o `shell::syncthing` já tem"* — e o `one-http-writer`
+  achou um TERCEIRO no `aria2.rs`, cuja resposta ainda era lida como `String` antes de ser cortada.
+  Uma cópia morreu em vez de nascer. O `ronoctua-world` deixou de depender do túnel para ter um
+  decodificador de chunk. A senha do Wi-Fi não fica em arquivo: `psk-flags` mais o agente entregando do TPM2 (**sem PCR** — com PCR, atualizar o kernel a quebra).
 - **A rede é UMA `View` com DUAS portas** (`s n n` rodapé, `s n w` janela) e DEZ seções como
   linhas, no molde da energia: relance, enlaces, Wi-Fi, redes lembradas, túneis, tailnet, Tor,
   portas, esta rede e monitor. **Dica GERADA da `OF_THE_VIEW`**; senha e caminho se digitam no
@@ -413,8 +449,11 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   `(id && user && unit==a) || unit==b`: tudo depois da primeira alternativa liberado para QUALQUER
   ação e QUALQUER sujeito. O `rescue.nix` foi assim por um commit, e nada via — o
   `polkit-rules-are-the-ones-we-know` lia id de ação e resultado, e os dois estavam na lista
-  auditada; agora ele recusa a condição. **Tor não sobe no boot** e a ÚNICA
-  regra polkit nova do sistema é `start`/`stop` de `tor.service` (`tor-polkit-is-narrow`).
+  auditada; agora ele recusa a condição. **Tor não sobe no boot**, e a regra polkit dele é
+  `start`/`stop` de `tor.service` — uma ação, dois verbos, uma unidade, um usuário. **SETE módulos
+  nossos escrevem uma regra**, e o censo assinado é o `polkit-rules-are-the-ones-we-know`; cada uma
+  ganha além dele um check próprio sobre QUAL unidade e QUAIS verbos (`tor-polkit-is-narrow`,
+  `syncthing-polkit-is-narrow`, que leem a regra instalada e a constante do crate nos DOIS sentidos).
 - **`ronoctua-memory::net` é a fronteira do `/proc/net`** (sockets, ARP) e o `ronoctua-lan` faz a
   varredura ICMP **sem privilégio nenhum** (`SOCK_DGRAM`+`IPPROTO_ICMP`, `ping_group_range`). Duas
   medições viraram desenho: o endereço em `/proc/net/tcp` é LITTLE-ENDIAN (lido ao contrário,

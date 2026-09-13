@@ -262,10 +262,21 @@ pub fn scene_of(status: &str, prefs: &str) -> Option<Scene> {
 /// on a machine that never logged in, and is drawn as nothing at all.
 #[must_use]
 pub fn look(socket: &Path) -> Option<Scene> {
-    let status = crate::http::call(socket, HOST, "GET", "/localapi/v0/status", None).ok()?;
-    let prefs =
-        crate::http::call(socket, HOST, "GET", "/localapi/v0/prefs", None).unwrap_or_default();
+    let status = ask(socket, "GET", "/localapi/v0/status", None).ok()?;
+    let prefs = ask(socket, "GET", "/localapi/v0/prefs", None).unwrap_or_default();
     scene_of(&status, &prefs)
+}
+
+/// One call to the local API.
+///
+/// The framing is [`ronoctua_http`]'s; what belongs to Tailscale and stays
+/// here is the `Host` it insists on and the rule that only a 2xx is an answer.
+fn ask(socket: &Path, method: &str, path: &str, body: Option<&str>) -> anyhow::Result<String> {
+    let mut call = ronoctua_http::Call::new(method, path, HOST);
+    if let Some(body) = body {
+        call = call.with_body(body);
+    }
+    ronoctua_http::over_unix(socket, &call)?.ok()
 }
 
 /// One masked preference, which is how the local API takes a change: the
@@ -280,9 +291,8 @@ fn masked(field: &str, value: &str) -> String {
 ///
 /// The socket is not there, or the daemon refused.
 pub fn set(socket: &Path, field: &str, value: &str) -> anyhow::Result<()> {
-    crate::http::call(
+    ask(
         socket,
-        HOST,
         "PATCH",
         "/localapi/v0/prefs",
         Some(&masked(field, value)),
@@ -338,7 +348,7 @@ pub fn set_exit_node(socket: &Path, id: Option<&str>) -> anyhow::Result<()> {
 ///
 /// The socket is not there, or the daemon refused.
 pub fn login(socket: &Path) -> anyhow::Result<Option<String>> {
-    crate::http::call(socket, HOST, "POST", "/localapi/v0/login-interactive", None)?;
+    ask(socket, "POST", "/localapi/v0/login-interactive", None)?;
     // THE URL ARRIVES IN THE STATUS, not in the answer to this call: the
     // daemon starts the login and publishes the address when it has one —
     // which takes a moment, because it has to reach the coordination server
@@ -361,7 +371,7 @@ pub fn login(socket: &Path) -> anyhow::Result<Option<String>> {
 ///
 /// The socket is not there, or the daemon refused.
 pub fn logout(socket: &Path) -> anyhow::Result<()> {
-    crate::http::call(socket, HOST, "POST", "/localapi/v0/logout", None).map(|_| ())
+    ask(socket, "POST", "/localapi/v0/logout", None).map(|_| ())
 }
 
 #[cfg(test)]

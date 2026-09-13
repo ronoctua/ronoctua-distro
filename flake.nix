@@ -286,6 +286,15 @@
         namesFile = ./assets/audio-names.nix;
       };
 
+      # EVERY OPTION SYNCTHING EXPOSES, declared once. 119 rows across four
+      # configuration objects; written by hand on the screen side that would be
+      # 119 decisions nobody could audit, and a rename upstream would be
+      # invisible. This makes the Rust table, the keys both languages owe, and
+      # the refusal of a duplicate id, a rangeless number or a ring of one.
+      syncthingOptionsRs = pkgs.callPackage ./nix/syncthing-options.nix {
+        optionsFile = ./assets/syncthing-options.nix;
+      };
+
       # WHAT A KEY CAN BE MADE INTO, and the leader's own rule. Two places read
       # it — the NixOS module that configures keyd, and the shell that renders
       # a file per keyboard — so it is declared once.
@@ -387,6 +396,7 @@
           notificationsRs
           bluetoothProfilesRs
           audioNamesRs
+          syncthingOptionsRs
           keyboardsRs
           updatesRs
           syntaxRs
@@ -775,6 +785,7 @@
         notifications-rs = notificationsRs;
         bluetooth-profiles-rs = bluetoothProfilesRs;
         audio-names-rs = audioNamesRs;
+        syncthing-options-rs = syncthingOptionsRs;
         keyboards-rs = keyboardsRs;
         niri-actions = niriActions;
         # THE SEVEN COMPONENTS, each buildable on its own.
@@ -1013,6 +1024,7 @@
           notificationsRs
           bluetoothProfilesRs
           audioNamesRs
+          syncthingOptionsRs
           keyboardsRs
           niriActions
           torrentShim

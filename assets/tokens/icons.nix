@@ -245,6 +245,19 @@
   # a cursor passes over a file is a panel one turns off.
   volume-off = "md-volume_off";
   sync = "cod-sync";
+
+  # SYNCTHING'S TWO, and they are neighbours in one face on purpose.
+  #
+  # `md-sync` is U+F04E6 and `md-sync_off` is U+F04E8 — the same designer, the
+  # same metrics. The sound view's volume ladder was dropped because two faces
+  # measured 15 px against 22 and the modeline twitched at every step; only one
+  # of these two is ever drawn at a time, and even so they are a matched pair.
+  #
+  # NOT the `sync` above, which the toolkit row and the update window already
+  # draw: changing that one to make this pair match would have redrawn two
+  # screens nobody asked about.
+  syncthing = "md-sync";
+  syncthing-off = "md-sync_off";
   save = "cod-save";
   trash = "cod-trash";
   edit = "cod-edit";
