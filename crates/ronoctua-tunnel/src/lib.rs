@@ -27,6 +27,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod options;
+pub mod prefs;
 pub mod tailscale;
 pub mod tor;
 
@@ -35,7 +37,13 @@ use std::path::PathBuf;
 /// How often the thread asks, at rest.
 pub const BEAT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Where the two daemons are.
+/// Where everything this crate touches is.
+///
+/// `systemctl` and the fragment directory joined the three sockets when Tor
+/// grew a way to be STARTED: both used to be parameters threaded through
+/// `watch`, and both are answers to "where is it", which is what this struct
+/// is. A test can still point them somewhere harmless, which is the only
+/// reason they are not bare constants.
 #[derive(Debug, Clone)]
 pub struct Places {
     /// Tailscale's local API.
@@ -44,6 +52,10 @@ pub struct Places {
     pub tor: PathBuf,
     /// Tor's cookie.
     pub cookie: PathBuf,
+    /// `systemctl`, by store path.
+    pub systemctl: PathBuf,
+    /// The directory whose torrc fragment this system owns.
+    pub fragment: PathBuf,
 }
 
 impl Default for Places {
@@ -52,6 +64,8 @@ impl Default for Places {
             tailscale: PathBuf::from(tailscale::SOCKET),
             tor: PathBuf::from(tor::SOCKET),
             cookie: PathBuf::from(tor::COOKIE),
+            systemctl: PathBuf::from(tor::SYSTEMCTL),
+            fragment: PathBuf::from(tor::FRAGMENT_DIR),
         }
     }
 }
@@ -66,6 +80,29 @@ pub struct Scene {
     pub tailscale: Option<tailscale::Scene>,
     /// Tor, when its control socket answered.
     pub tor: Option<tor::Scene>,
+    /// What systemd says about `tor.service`.
+    ///
+    /// A SECOND FACT, not the same one. The control socket answers only when
+    /// Tor is running, so `tor: None` used to be the only thing the screen
+    /// knew — and it conflated "stopped", "never installed" and "you are not
+    /// in the `tor` group" into one silence with no row under it. The comment
+    /// in `network.rs` already said the unit and the circuit are different
+    /// facts; this is the other one, finally read.
+    pub standing: tor::Standing,
+    /// Whether Tor is to come up with the session.
+    ///
+    /// OURS, not systemd's — see [`prefs`] for why `systemctl enable` is not
+    /// an option here. It rides on the `Scene` rather than on the view's
+    /// `Facts` so that no door, no click and no test grows a field for it: the
+    /// thread already reads three things per beat and this is a fourth small
+    /// file.
+    pub autostart: bool,
+    /// The torrc fragment this system owns, as it is on disk.
+    ///
+    /// Read rather than remembered: the file is what survives a reboot and
+    /// what a second door also writes, so a copy kept in memory would be a
+    /// second truth that drifts. It is a few hundred bytes.
+    pub settings: tor::fragment::Lines,
 }
 
 impl Scene {
@@ -84,12 +121,15 @@ impl Scene {
     }
 }
 
-/// Reads both, once.
+/// Reads everything, once.
 #[must_use]
 pub fn look(places: &Places) -> Scene {
     Scene {
         tailscale: tailscale::look(&places.tailscale),
         tor: tor::look(&places.tor, &places.cookie),
+        standing: tor::standing(&places.systemctl),
+        autostart: prefs::read().autostart,
+        settings: tor::fragment::read(&places.fragment),
     }
 }
 
@@ -112,6 +152,21 @@ pub enum Order {
     Tor(bool),
     /// Ask Tor for fresh circuits.
     NewIdentity,
+    /// Write the torrc fragment, and make a running Tor re-read it.
+    ///
+    /// ONE ORDER FOR BOTH HALVES, and deliberately: a write without a reload
+    /// is a setting that takes effect at the next restart and looks broken
+    /// until then, and a reload without a write is a setting that vanishes at
+    /// the next one. They are not two things a door should be able to get
+    /// wrong separately.
+    ///
+    /// With Tor stopped the write still happens and the reload is skipped —
+    /// there is nothing running to tell. That is not an error: it is how a
+    /// person configures bridges BEFORE turning Tor on for the first time,
+    /// which on a censored network is the only order that works.
+    Configure(Box<tor::fragment::Lines>),
+    /// Remember, or stop remembering, that Tor comes up with the session.
+    Autostart(bool),
 }
 
 /// What a door hears back.
@@ -155,7 +210,7 @@ impl Hand {
 /// # Errors
 ///
 /// The thread could not be started.
-pub fn watch<F>(places: Places, systemctl: PathBuf, on_event: F) -> anyhow::Result<Hand>
+pub fn watch<F>(places: Places, on_event: F) -> anyhow::Result<Hand>
 where
     F: Fn(Event) + Send + 'static,
 {
@@ -172,7 +227,7 @@ where
                 // who pressed a key is owed an answer before the next beat.
                 match inbox.recv_timeout(BEAT) {
                     Ok(order) => {
-                        let refused = carry_out(&places, &systemctl, &order, &on_event);
+                        let refused = carry_out(&places, &order, &on_event);
                         on_event(Event::Done { order, refused });
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -191,12 +246,7 @@ where
 }
 
 /// Does one order, and says what went wrong when something did.
-fn carry_out<F>(
-    places: &Places,
-    systemctl: &std::path::Path,
-    order: &Order,
-    on_event: &F,
-) -> Option<String>
+fn carry_out<F>(places: &Places, order: &Order, on_event: &F) -> Option<String>
 where
     F: Fn(Event) + Send + 'static,
 {
@@ -223,7 +273,7 @@ where
         // AGENTS.md records, and it shows up far from its cause.
         Order::Tor(on) => {
             let verb = if *on { "start" } else { "stop" };
-            match std::process::Command::new(systemctl)
+            match std::process::Command::new(&places.systemctl)
                 .args([verb, tor::UNIT])
                 .output()
             {
@@ -232,26 +282,59 @@ where
                 Err(e) => Some(e.to_string()),
             }
         }
+        Order::Configure(lines) => said(configure(places, lines)),
+        Order::Autostart(on) => said(
+            prefs::write(&prefs::Preferences { autostart: *on })
+                .map_err(|e| anyhow::anyhow!("{e}")),
+        ),
     }
+}
+
+/// Writes the fragment, and tells a running Tor to re-read it.
+///
+/// The reload is skipped when nothing is running, and that is not a failure —
+/// see [`Order::Configure`]. It is also skipped when the control socket will
+/// not open, which is the same situation from one step further away.
+fn configure(places: &Places, lines: &tor::fragment::Lines) -> anyhow::Result<()> {
+    tor::fragment::write(&places.fragment, lines)?;
+    if !matches!(tor::standing(&places.systemctl), tor::Standing::Running) {
+        return Ok(());
+    }
+    // THE REFUSAL IS THE DAEMON'S OWN WORDS. A torrc Tor cannot parse comes
+    // back here as a sentence naming the line, and that sentence is the only
+    // thing on screen that could tell a person which bridge they pasted wrong.
+    tor::Control::open(&places.tor, &places.cookie)?.reload()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Places that point at nothing, for the tests that must not touch a real
+    /// daemon, a real `systemctl` or a real `/var/lib`.
+    fn nowhere() -> Places {
+        Places {
+            tailscale: PathBuf::from("/nonexistent/tailscaled.sock"),
+            tor: PathBuf::from("/nonexistent/tor"),
+            cookie: PathBuf::from("/nonexistent/cookie"),
+            systemctl: PathBuf::from("/nonexistent/systemctl"),
+            fragment: PathBuf::from("/nonexistent/fragment"),
+        }
+    }
+
     #[test]
     fn a_machine_with_neither_daemon_draws_nothing() {
         // THE ORDINARY CASE, and the one the modeline's rule is about: two
         // sockets that are not there, and no mark of either.
-        let places = Places {
-            tailscale: PathBuf::from("/nonexistent/tailscaled.sock"),
-            tor: PathBuf::from("/nonexistent/tor"),
-            cookie: PathBuf::from("/nonexistent/cookie"),
-        };
-        let scene = look(&places);
+        let scene = look(&nowhere());
         assert_eq!(scene, Scene::default());
         assert!(!scene.on_tailnet());
         assert!(!scene.through_tor());
+        // AND `systemctl` THAT CANNOT BE RUN IS `Unknown`, NOT `Stopped`.
+        // A build sandbox and a laptop whose Tor is off must not be one word:
+        // the sandbox has nothing to say, and the laptop has a switch.
+        assert_eq!(scene.standing, tor::Standing::Unknown);
+        assert!(!scene.standing.actionable());
     }
 
     #[test]
@@ -265,6 +348,7 @@ mod tests {
                 bootstrap: 45,
                 ..tor::Scene::default()
             }),
+            ..Scene::default()
         };
         // INSTALLED IS NOT RUNNING: a daemon that has not finished starting
         // draws no mark, and the view is where the 45% is read.
@@ -279,8 +363,48 @@ mod tests {
                 established: true,
                 ..tor::Scene::default()
             }),
+            ..Scene::default()
         };
         assert!(up.on_tailnet());
         assert!(up.through_tor());
+    }
+
+    #[test]
+    fn a_stopped_tor_is_the_state_that_can_be_started() {
+        // THE DEFECT THIS CLOSES. The switch's boolean was the literal `false`
+        // at its one construction site, so `Order::Tor(true)` existed in this
+        // crate and was reachable from nowhere in the shell — the owner
+        // reported that he could not find a way to turn Tor on, and he was
+        // right. The unit's standing is what the row asks now.
+        assert!(tor::Standing::Stopped.starts());
+        assert!(!tor::Standing::Running.starts());
+        // AND THE TWO THAT ARE NOT A SWITCH AT ALL. `Absent` has no unit to
+        // act on and `Unknown` has nothing to say; drawing a switch for either
+        // would be a key that does nothing and says nothing.
+        assert!(!tor::Standing::Absent.actionable());
+        assert!(!tor::Standing::Unknown.actionable());
+        assert!(tor::Standing::Stopped.actionable());
+        assert!(tor::Standing::Moving.actionable());
+    }
+
+    #[test]
+    fn configuring_writes_the_fragment_even_with_tor_stopped() {
+        // THIS IS THE ORDER THAT HAS TO WORK ON A CENSORED NETWORK: bridges
+        // are configured BEFORE Tor is turned on for the first time, because
+        // without them it will not bootstrap at all. A `Configure` that needed
+        // a running daemon would make that impossible and would look like a
+        // key that does nothing.
+        let dir = std::env::temp_dir().join(format!("ronoctua-tor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let places = Places {
+            fragment: dir.clone(),
+            ..nowhere()
+        };
+        let mut lines = tor::fragment::Lines::new();
+        lines.insert("UseBridges".to_owned(), vec!["1".to_owned()]);
+        assert_eq!(configure(&places, &lines).ok(), Some(()));
+        // AND IT READS BACK AS WHAT WENT IN.
+        assert_eq!(tor::fragment::read(&dir), lines);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

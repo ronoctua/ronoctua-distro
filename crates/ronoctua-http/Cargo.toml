@@ -1,21 +1,48 @@
 [package]
 name = "ronoctua-http"
-description = "HTTP/1.1 by hand, for the local daemons: one framer, two transports, a deadline on every read."
+description = "HTTP/1.1 by hand: one framer, three transports, a deadline on every read — and the WebSocket that grows out of one."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# NO DEPENDENCY BUT `anyhow`, and that is the point of the crate.
+# THE BASE CRATE STILL HAS NO DEPENDENCY BUT `anyhow`, and that is still the
+# point of it. A loopback socket needs a deadline, chunk framing and a body
+# that may split a character; it does not need a client.
 #
-# A real HTTP client solves TLS, redirection, proxying, connection pools and
-# content negotiation. None of those exist on a loopback socket. What DOES
-# exist — a deadline, chunked framing, and a body that may split a character —
-# is written here once instead of in every crate that talks to a daemon.
+# WHAT THE TWO FEATURES ARE FOR, AND WHY THEY ARE FEATURES
+# --------------------------------------------------------
+# `ronoctua-tunnel`, `ronoctua-syncthing` and `ronoctua-transfers` talk to
+# `127.0.0.1` and to sockets in `/run`. Handing them rustls because ClipCascade
+# needs it would put a TLS stack in three crates that will never open one, and
+# pay for it on every build of the workspace.
+#
+# So the transports that cost something are OPTIONAL, and each crate takes the
+# one whose problem it actually has:
+#
+#   tls   the world clock and ClipCascade — another machine, another network
+#   ws    ClipCascade only — the one duplex protocol in the tree
+#
+# All four dependencies were already in the lock underneath the world clock.
+# Nothing new enters the closure; what changes is that there is one copy.
+
+[features]
+default = [ ]
+tls = [ "dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:tracing" ]
+# A WebSocket is an HTTP handshake that never ends, so `ws` implies nothing
+# about TLS: `ws://` over plain TCP is the same framing as `wss://` over a TLS
+# stream, and the frame code is generic over what it writes into.
+ws = [ "dep:ring", "dep:base64" ]
 
 [dependencies]
 anyhow.workspace = true
+tracing = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-pki-types = { workspace = true, optional = true }
+rustls-pemfile = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 
 [lints]
 workspace = true

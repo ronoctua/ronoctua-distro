@@ -1,0 +1,69 @@
+[package]
+name = "ronoctua-clipcascade"
+description = "ClipCascade's protocol, spoken natively: the login, the cipher, and STOMP over a WebSocket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHY THE CLIENT IS OURS AND NOT THE UPSTREAM ONE
+#
+# ClipCascade ships a Python desktop client, and running it as a side-car was
+# the obvious route. It is the wrong one for this system, twice.
+#
+# It watches the clipboard ITSELF, with `wl-paste`. The footer already does,
+# and two watchers are two histories — so the panel could say "running" and
+# never "integrated", which is the word the screen has been owing since the
+# placeholder went in. Spoken here, what the footer already holds IS what
+# syncs, in both directions.
+#
+# And it is a GUI application with a tray icon. Invariant 14 says there is no
+# chrome beyond the footer, so it would have to be started with `--gui false`
+# for ever — a promise held by a command-line flag rather than by construction.
+#
+# The protocol is small: a form login with a CSRF token, PBKDF2 into
+# AES-256-GCM, and STOMP frames over a WebSocket. All of it is measured in
+# `src/login.rs`, `src/cipher.rs` and `src/stomp.rs`, against the 3.2.0 the
+# flake pins.
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+base64.workspace = true
+
+# THE FRAMER, THE TLS AND THE WEBSOCKET, all from the one crate that owns them.
+ronoctua-http = { path = "../ronoctua-http", features = [ "tls", "ws" ] }
+ronoctua-options = { path = "../ronoctua-options" }
+ronoctua-store = { path = "../ronoctua-store" }
+# THE HISTORY ITSELF. This crate reads what an entry IS — a password
+# manager announces its own MIME type — so the filter that keeps a
+# password off the network lives at the boundary rather than in a view.
+ronoctua-clipboard = { path = "../ronoctua-clipboard" }
+
+# PBKDF2 AND RANDOMNESS come from `ring`, which rustls already put in the lock.
+ring.workspace = true
+
+# AND THE CIPHER DOES NOT, WHICH WAS MEASURED RATHER THAN ASSUMED.
+#
+# The plan for this work said the cryptography would cost nothing new, because
+# `ring` has AES-256-GCM. It does, with a TWELVE-byte nonce, hard-coded:
+# `ring::aead::NONCE_LEN` is 12 and there is no other constructor.
+#
+# ClipCascade's nonces are SIXTEEN bytes. Its client calls
+# `AES.new(key, AES.MODE_GCM)` with no nonce, and pycryptodome's default for
+# GCM is 16 — measured on the 3.2.0 installed on this machine, five times, all
+# 16. GCM with a nonce that is not 96 bits derives its counter block through
+# GHASH instead of by concatenation, so this is not a length check to relax:
+# `ring` would compute a different J0 and every message would fail to
+# authenticate, with nothing on either side saying why.
+#
+# `aes-gcm` is generic over the nonce length and does the GHASH derivation.
+# Pure Rust, no C, no store path. The vector in `src/cipher.rs` is captured
+# from the upstream Python and is what proves the two agree.
+aes-gcm = "0.10"
+
+[lints]
+workspace = true

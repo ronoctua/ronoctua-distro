@@ -1471,7 +1471,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         },
         // THE CLIPBOARD. `clipboard-open` has a key in the tree (`LEADER c c`); the
         // others have keys INSIDE the view, and that is why they go into
-        // `OF_CLIPBOARD_VIEW` — otherwise the orphan-command check flags them, and
+        // `crate::clipboard_view::OF_THE_VIEW` — otherwise the orphan-command check flags them, and
         // rightly: a command with no path at all is a command nobody uses.
         Command {
             id: "clipboard-open",
@@ -1506,9 +1506,21 @@ pub fn default_of() -> Result<(Tree, Registry)> {
             id: "clipboard-clear",
             label: key::CMD_CLIPBOARD_CLEAR,
         },
+        // THE CLIPBOARD'S OWN GESTURES. `clipboard-sync` replaces what was
+        // `clipboard-clipcascade-configure`, a command that existed to say the
+        // integration did not — honest, and a placeholder. It does something
+        // now.
         Command {
-            id: "clipboard-clipcascade-configure",
-            label: key::CMD_CLIPBOARD_CLIPCASCADE_CONFIGURE,
+            id: "clipboard-down",
+            label: key::CMD_CLIPBOARD_DOWN,
+        },
+        Command {
+            id: "clipboard-up",
+            label: key::CMD_CLIPBOARD_UP,
+        },
+        Command {
+            id: "clipboard-sync",
+            label: key::CMD_CLIPBOARD_SYNC,
         },
         Command {
             id: "notif-dismiss",
@@ -1683,6 +1695,78 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         Command {
             id: "network-section-previous",
             label: key::CMD_NETWORK_SECTION_PREVIOUS,
+        },
+        // THE SHELL'S HISTORY — the first screen this distro has ever had for
+        // it. `atuin` was installed and configured by a rebuild, and choosing
+        // between two search modes is not a decision the size of one.
+        Command {
+            id: "atuin-open",
+            label: key::CMD_ATUIN_OPEN,
+        },
+        Command {
+            id: "atuin-window",
+            label: key::CMD_ATUIN_WINDOW,
+        },
+        Command {
+            id: "atuin-sync",
+            label: key::CMD_ATUIN_SYNC,
+        },
+        Command {
+            id: "atuin-down",
+            label: key::CMD_ATUIN_DOWN,
+        },
+        Command {
+            id: "atuin-up",
+            label: key::CMD_ATUIN_UP,
+        },
+        Command {
+            id: "atuin-enter",
+            label: key::CMD_ATUIN_ENTER,
+        },
+        Command {
+            id: "clipboard-more",
+            label: key::CMD_CLIPBOARD_MORE,
+        },
+        Command {
+            id: "clipboard-less",
+            label: key::CMD_CLIPBOARD_LESS,
+        },
+        Command {
+            id: "atuin-more",
+            label: key::CMD_ATUIN_MORE,
+        },
+        Command {
+            id: "atuin-less",
+            label: key::CMD_ATUIN_LESS,
+        },
+        Command {
+            id: "atuin-back",
+            label: key::CMD_ATUIN_BACK,
+        },
+        // TOR'S SHEET. Its keys live in `network::OF_THE_VIEW` like the rest
+        // of the view's gestures — they are taught there, the manual names
+        // them here, and the orphan check covers them because that table is
+        // what `reachable` reads.
+        // THE WAY STRAIGHT TO TOR. `s n n` opens the view at the top and the
+        // section ring is ten long, so reaching Tor meant counting `TAB`s —
+        // and the number is not a constant: a machine with no radio and no
+        // cable has fewer sections. `fresh_at` puts the section's TITLE at the
+        // top, which is what the modeline marks already do.
+        Command {
+            id: "network-tor-open",
+            label: key::CMD_NETWORK_TOR_OPEN,
+        },
+        Command {
+            id: "network-tor-more",
+            label: key::CMD_NETWORK_TOR_MORE,
+        },
+        Command {
+            id: "network-tor-less",
+            label: key::CMD_NETWORK_TOR_LESS,
+        },
+        Command {
+            id: "network-tor-back",
+            label: key::CMD_NETWORK_TOR_BACK,
         },
         // SYNCTHING. It ships with the distro (nix/modules/syncthing.nix) and
         // for a long time offered four keys, one of which opened a WEB PAGE in
@@ -2066,6 +2150,12 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // `s` scans, `r` is the RADIO — `w` was Wi-Fi, but `w` is the second
         // door's letter everywhere else in this keymap.
         // ---------------------------------------------------------------
+        // THE SHELL'S HISTORY. `s h` was the one letter of the `s` group still
+        // free, and history is the machine doing something to ITSELF — which is
+        // the sentence that defines the group.
+        ("s h h", "atuin-open", None),
+        ("s h w", "atuin-window", None),
+        ("s h s", "atuin-sync", None),
         ("s n n", "network-open", None),
         // AND `w` IS THE WINDOW, as it is for the files, the notifications,
         // the power and the radio: the same view, through the other door.
@@ -2082,6 +2172,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         ("s n l", "network-lan", None),
         // `v` FOR A VPN FROM A FILE. It reads the file, says what it would do,
         // and only then offers to bring it in.
+        ("s n t", "network-tor-open", None),
         ("s n v", "network-import", None),
         // SYNCTHING is `s s` — its own prefix under SYSTEM, beside the
         // network it rides on, and no longer inside it.
@@ -2136,6 +2227,7 @@ pub fn default_of() -> Result<(Tree, Registry)> {
         // what one is doing with it: memory, disks, the update, the theme —
         // and the network and Syncthing, which moved in from the first level.
         ("s", key::GROUP_SYSTEM),
+        ("s h", key::GROUP_ATUIN),
         ("s n", key::GROUP_NETWORK),
         ("s s", key::GROUP_SYNCTHING),
         ("s d", key::GROUP_DISPLAY),
@@ -2252,24 +2344,13 @@ pub const LOCALE_KEYS: &str = "s l l";
 
 pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = &[("C-s", "apps-pin")];
 
-/// The commands the clipboard VIEW reaches, with each one's key.
-///
-/// They are not in the leader's tree because the view captures the whole
-/// keyboard while it is open — `d` there removes, and it is not `LEADER d`. But
-/// they **are commands with keys**, and that is why they go into [`reachable`]: without
-/// this the orphan check would flag them, and it would be right to flag them if the list
-/// did not exist.
-///
-/// Declared as DATA, and not hidden in a `match`, for the same reason as the
-/// chords: the list is what the manual and the check read.
-pub const OF_CLIPBOARD_VIEW: &[(&str, &str)] = &[
-    ("RET", "clipboard-copy-of-new"),
-    ("d", "clipboard-remove"),
-    ("f", "clipboard-pin"),
-    ("q", "clipboard-qrcode"),
-    ("D", "clipboard-clear"),
-    ("c", "clipboard-clipcascade-configure"),
-];
+// THE CLIPBOARD VIEW'S KEYS USED TO LIVE HERE, and they live in the view now.
+//
+// It was the only view whose table was kept in `leader.rs`, and that was not a
+// tidy exception: it was the symptom. With no module of its own the clipboard
+// had nowhere to put a table, so it had no `hint()` either, and its action
+// strip was written by hand from the LONG `cmd-…` labels — which is what the
+// owner photographed. See `crate::clipboard_view::OF_THE_VIEW`.
 
 /// The commands the THEME CHOOSER reaches, with each one's key — one. `RET`
 /// applies the pair under the two cursors; `<up>`/`<down>` preview,
@@ -2296,7 +2377,7 @@ pub const OF_THEME_VIEW: &[(&str, &str)] = &[("RET", "theme-apply")];
 /// check would then report.
 ///
 /// The header used to say "the three places" and sat, with no blank line, on
-/// top of two other items' documentation — so `OF_CLIPBOARD_VIEW` and this
+/// top of two other items' documentation — so `crate::clipboard_view::OF_THE_VIEW` and this
 /// function were both undocumented and a reader met the wrong text over each.
 #[must_use]
 pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
@@ -2311,7 +2392,8 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
             .filter(|id| *id != crate::actions::LEADER_ALTERNATE),
     );
     out.extend(OF_LAUNCHER_VIEW.iter().map(|(_, id)| *id));
-    out.extend(OF_CLIPBOARD_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::history::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::clipboard_view::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(
         crate::notifications::OF_THE_VIEW
             .iter()
@@ -2334,7 +2416,7 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     out.extend(crate::locale::OF_THE_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::display::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(crate::bluetooth::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
-    out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id)| *id));
+    out.extend(crate::network::OF_THE_VIEW.iter().map(|(_, id, _)| *id));
     out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
     out
 }
@@ -3061,7 +3143,11 @@ mod tests {
             "clipboard-pin",
             "clipboard-qrcode",
             "clipboard-clear",
-            "clipboard-clipcascade-configure",
+            "clipboard-sync",
+            "clipboard-down",
+            "clipboard-up",
+            "clipboard-more",
+            "clipboard-less",
             // NETWORK and SYNCTHING — the seventh view and the service the distro
             // installs. `network-connect` and `network-forget` act on the focused
             // row and that is why they only have keys INSIDE the view; the others
@@ -3088,6 +3174,19 @@ mod tests {
             "network-lan",
             "network-import",
             "network-section-next",
+            "atuin-open",
+            "atuin-window",
+            "atuin-sync",
+            "atuin-down",
+            "atuin-up",
+            "atuin-enter",
+            "atuin-more",
+            "atuin-less",
+            "atuin-back",
+            "network-tor-open",
+            "network-tor-more",
+            "network-tor-less",
+            "network-tor-back",
             "network-section-previous",
             "network-wifi-toggle",
             "network-link",

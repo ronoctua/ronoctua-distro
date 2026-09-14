@@ -29,8 +29,18 @@
   bluetoothProfilesRs,
   audioNamesRs,
   syncthingOptionsRs,
+  torOptionsRs,
+  atuinOptionsRs,
+  atuin,
   keyboardsRs,
   keyd,
+  # THE TWO PLUGGABLE TRANSPORTS. They are store paths and not names because
+  # the view writes them into a torrc as a `ClientTransportPlugin exec` line,
+  # and Tor runs that line with a minimal environment — a bare name there fails
+  # at EXEC, and the symptom is a bootstrap that stalls at 5% with nothing
+  # saying why.
+  lyrebird,
+  snowflake,
   # The update sequence, generated from `assets/updates.nix`.
   updatesRs,
   syntaxRs,
@@ -92,6 +102,10 @@
 }:
 
 let
+  # WHERE TOR LISTENS AND WHERE ITS FRAGMENT GOES, from the one file
+  # `nix/modules/tor.nix` reads too. See `nix/tor.nix` for why the two
+  # sides may not each carry their own copy of the number.
+  torFacts = import ./tor.nix;
   # `crane.mkLib` takes the whole `pkgs`, not an attrset with `system`.
   craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
@@ -213,6 +227,12 @@ let
     # so offering those as editable would be offering a key whose effect the
     # next `nixos-rebuild` undoes in silence — invariant 6, on the screen.
     RONOCTUA_SYNCTHING_OPTIONS_RS = "${syncthingOptionsRs}/options.rs";
+    RONOCTUA_TOR_OPTIONS_RS = "${torOptionsRs}/options.rs";
+    RONOCTUA_ATUIN_OPTIONS_RS = "${atuinOptionsRs}/options.rs";
+    # THE BINARY, by store path: `LEADER s h` runs it from a shell process
+    # whose `PATH` is whatever the session has, and a bare name fails far
+    # from its cause.
+    RONOCTUA_ATUIN = "${atuin}/bin/atuin";
     # THE KEYBOARD VOCABULARY, and the leader's own rule with it: the module
     # that configures the daemon and the shell that renders per-keyboard files
     # both read `assets/keyboards.nix`, so the rule cannot drift between them.
@@ -286,6 +306,24 @@ let
     # `keyboard-restore`'s `systemctl`. It runs from inside a user unit, where
     # PATH is minimal — see `crates/.../keyboard.rs`.
     RONOCTUA_SYSTEMCTL = "${systemd}/bin/systemctl";
+
+    # TOR: WHERE IT LISTENS, WHERE ITS FRAGMENT GOES, AND THE TWO BRIDGES.
+    #
+    # The address comes from `nix/tor.nix`, which `nix/modules/tor.nix` reads
+    # too. It used to be a literal in the crate against a module that declared
+    # no `SOCKSPort` at all — the two agreed because the nixpkgs default was
+    # the same number, and nothing would have said otherwise the day either
+    # moved. `tor-socks-is-declared-once` compares them both ways now.
+    RONOCTUA_TOR_SOCKS = "${torFacts.socks.address}:${toString torFacts.socks.port}";
+    RONOCTUA_TOR_FRAGMENT = torFacts.fragmentDirectory;
+    # `lyrebird` is obfs4's current name upstream, and it speaks `meek_lite`
+    # and `scramblesuit` from the same binary — which is why one path covers
+    # three transports in the fragment the view writes.
+    RONOCTUA_TOR_OBFS4 = "${lyrebird}/bin/lyrebird";
+    # `client` and NOT `proxy`: the proxy is what you run to CARRY other
+    # people's traffic, and pointing a client at it stalls the bootstrap
+    # with no error either side.
+    RONOCTUA_TOR_SNOWFLAKE = "${snowflake}/bin/client";
     # The URL opener, for Syncthing's interface (`LEADER s s a`).
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.

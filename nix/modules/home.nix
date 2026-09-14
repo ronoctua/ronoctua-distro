@@ -159,17 +159,32 @@ in
         # `--disable-up-arrow`, and two inits fight over Ctrl+R.
         enableZshIntegration = false;
         enableBashIntegration = false;
-        settings = {
-          # NO SYNC. Syncing shell history to a third-party server would put
-          # every command — including the ones with a token in argv — outside
-          # this machine. Section 9 does not allow that quietly.
-          auto_sync = false;
-          update_check = false;
-          style = "compact";
-          inline_height = 20;
-          search_mode = "fuzzy";
-          filter_mode_shell_up_key_binding = "session";
-        };
+
+        # THE SETTINGS MOVED TO `nix/modules/atuin.nix`, AND SO DID THE
+        # DECISION THEY CARRIED.
+        #
+        # What used to be here was `auto_sync = false` with this reason:
+        #
+        #     NO SYNC. Syncing shell history to a third-party server would put
+        #     every command — including the ones with a token in argv —
+        #     outside this machine. Section 9 does not allow that quietly.
+        #
+        # It was right about the risk and it decided for the person, and the
+        # owner asked for the other answer. Two things that sentence did not
+        # weigh: Atuin's sync is END TO END ENCRYPTED, so the server holds
+        # bytes nobody there can read; and with `ronoctua.atuin.server.enable`
+        # the server can be this household's, so "third party" need not
+        # describe the arrangement at all. The command with a token in its
+        # argv is still a command — which is why `secrets_filter` and
+        # `history_filter` are DRAWN ROWS of `LEADER s h` rather than defaults
+        # nobody reads.
+        #
+        # And `settings` is gone rather than moved, because home-manager writes
+        # it as a symlink INTO THE STORE: read-only, so choosing between two
+        # search modes would need a `nixos-rebuild`. That is the sentence
+        # `LEADER s l` exists to remove. `nix/modules/atuin.nix` seeds the file
+        # once, the way `~/.shellrc.local` below is seeded, and the view edits
+        # it a line at a time.
       };
     };
   };

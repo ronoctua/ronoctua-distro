@@ -55,6 +55,7 @@ mod brain;
 mod buffer;
 mod chrome;
 mod clipboard;
+mod clipboard_view;
 mod daemon;
 mod disks;
 mod display;
@@ -65,6 +66,8 @@ mod files_window;
 mod fold;
 mod foreign;
 mod hidpi;
+mod history;
+mod history_window;
 mod keyboard;
 mod language;
 mod leader;
@@ -294,6 +297,9 @@ fn main() -> Result<()> {
         }
         Some("power") => {
             return power_window::host_it().context("host the power view");
+        }
+        Some("history") => {
+            return history_window::host_it();
         }
         Some("syncthing") => {
             return syncthing_window::host_it().context("host the syncthing view");
@@ -570,6 +576,14 @@ pub struct Marks<'a> {
     /// only ever one of them, because the person chose which question they
     /// wanted answered. See `ronoctua_syncthing::prefs::Mark`.
     pub syncthing: Option<bool>,
+    /// The clipboard's sync, when there is anything to say about it.
+    ///
+    /// The same three-word ring, and the same silence: a machine that never
+    /// told ClipCascade where a server is draws nothing at all. See
+    /// `ronoctua_clipcascade::prefs::Mark`.
+    pub clip: Option<bool>,
+    /// The shell history's sync, likewise — `ronoctua_atuin::prefs::Mark`.
+    pub history: Option<bool>,
     /// A link that leads NOWHERE — the portal, the router with no uplink.
     /// Not "there is no internet": nothing connected is not a fault.
     pub adrift: bool,
@@ -738,6 +752,40 @@ pub fn segments(
         out.push(Segment {
             id: "muted",
             text: tokens::icon::VOLUME_MUTE.to_string(),
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    // THE CLIPBOARD'S SYNC AND THE SHELL HISTORY'S, at the same rung and for
+    // the same reason as Syncthing: "a thing is not as you would assume".
+    // Which of the two glyphs each is was decided where the preference is
+    // read; here they are only placed.
+    if let Some(syncing) = marks.clip {
+        out.push(Segment {
+            id: "clip",
+            text: if syncing {
+                tokens::icon::CLIP_ON.to_string()
+            } else {
+                tokens::icon::CLIP_OFF.to_string()
+            },
+            priority: 2,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+    if let Some(syncing) = marks.history {
+        out.push(Segment {
+            id: "history",
+            text: if syncing {
+                tokens::icon::SHELL_HISTORY_ON.to_string()
+            } else {
+                tokens::icon::SHELL_HISTORY_OFF.to_string()
+            },
             priority: 2,
             min_cols: 1,
             side: Side::Right,
@@ -1002,6 +1050,11 @@ mod tests {
                         // the worst case is a line that has it AND everything
                         // else.
                         syncthing: Some(false),
+                        // THE TWO SYNC MARKS, on the fullest line this test
+                        // measures: they sit at the same rung as Syncthing's
+                        // and have to fit beside it.
+                        clip: Some(false),
+                        history: Some(false),
                         // AND THE WAY OUT'S TWO THAT CAN SHOW AT ONCE: the
                         // aeroplane and the fault are exclusive by rule, so
                         // the fullest line carries the fault and a tunnel.

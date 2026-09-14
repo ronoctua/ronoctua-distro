@@ -48,14 +48,6 @@ use ronoctua_tokens as tokens;
 
 use crate::files::{Field, Hit as FilesHit};
 
-/// The `systemctl`, by PATH and never by name: a user unit's `PATH` is
-/// minimal, and a bare name fails at EXEC — far from its cause. It is the
-/// same constant `brain.rs` and `keyboard.rs` carry, for the same reason.
-pub const SYSTEMCTL: &str = match option_env!("RONOCTUA_SYSTEMCTL") {
-    Some(p) => p,
-    None => "systemctl",
-};
-
 /// `xdg-open`, baked at build time — what opens a tailnet's login page.
 ///
 /// A LOGIN IS A PAGE, and this system has no browser of its own: the address
@@ -99,10 +91,64 @@ pub const WIRELESS: &str = "802-11-wireless";
 ///
 /// The four movements come first — down, up, act, and the section ring — and
 /// the rest follows in the order somebody meets it.
-pub const OF_THE_VIEW: &[(&str, &str)] = &[
-    ("<down>", "network-down"),
-    ("<up>", "network-up"),
-    ("RET", "network-connect"),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Where {
+    /// Every screen: the arrows, and `RET`.
+    Anywhere,
+    /// Only the list of sections — the keys that act on a link or a network.
+    OnTheList,
+    /// Only Tor's own sheet.
+    ///
+    /// THE HINT TEACHES THE LEVEL, which is the lesson the owner photographed
+    /// on the radio: a sheet that went on offering `s` to scan and `f` to
+    /// forget would be teaching six keys that do nothing where you are.
+    OnTor,
+}
+
+/// Where one id's key is taught.
+///
+/// Read by this view's own tests, which are what hold the rule that a key the
+/// hint teaches does something on the level it is taught on.
+#[cfg(test)]
+pub(crate) fn where_of(id: &str) -> Option<Where> {
+    OF_THE_VIEW
+        .iter()
+        .find(|(_, other, _)| *other == id)
+        .map(|(_, _, w)| *w)
+}
+
+impl Where {
+    /// Is this key worth teaching on the screen that is showing?
+    #[must_use]
+    pub const fn shown(self, level: Level) -> bool {
+        match self {
+            Self::Anywhere => true,
+            Self::OnTheList => matches!(level, Level::List),
+            Self::OnTor => matches!(level, Level::Tor),
+        }
+    }
+}
+
+/// Which screen of the view is showing.
+///
+/// TWO, AND THE SECOND ONE IS WHY THIS EXISTS. Tor has thirty-four settings,
+/// and a list that already carries ten sections has no room for them — nor for
+/// the six bare letters they would need. It is the shape the Bluetooth view
+/// uses for a device: a field says where you are, a `match` draws it, and `Esc`
+/// goes back one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Level {
+    /// The ten sections.
+    #[default]
+    List,
+    /// Tor, whole.
+    Tor,
+}
+
+pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
+    ("<down>", "network-down", Where::Anywhere),
+    ("<up>", "network-up", Where::Anywhere),
+    ("RET", "network-connect", Where::Anywhere),
     // THE SECTIONS, and this is the ring the owner asked for: ten sections in
     // one list is a lot of `<down>`, and `TAB` is the key this system already
     // uses to walk a ring (`files`, `notifications`).
@@ -110,16 +156,27 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // `S-TAB` is the keysym `ISO_Left_Tab` — xkb has already applied the shift
     // by the time a door sees it, which is why the notation carries the
     // modifier and the window does not test for one.
-    ("TAB", "network-section-next"),
-    ("S-TAB", "network-section-previous"),
-    ("s", "network-scan"),
-    ("r", "network-wifi-toggle"),
-    ("d", "network-disconnect"),
-    ("f", "network-forget"),
-    ("a", "network-airplane"),
-    ("i", "network-link"),
-    ("l", "network-lan"),
-    ("v", "network-import"),
+    ("TAB", "network-section-next", Where::OnTheList),
+    ("S-TAB", "network-section-previous", Where::OnTheList),
+    ("s", "network-scan", Where::OnTheList),
+    ("r", "network-wifi-toggle", Where::OnTheList),
+    ("d", "network-disconnect", Where::OnTheList),
+    ("f", "network-forget", Where::OnTheList),
+    ("a", "network-airplane", Where::OnTheList),
+    ("i", "network-link", Where::OnTheList),
+    ("l", "network-lan", Where::OnTheList),
+    ("v", "network-import", Where::OnTheList),
+    // TOR'S SHEET. `S-<arrows>` change the VALUE, which is this system's rule
+    // everywhere a row carries one — the bare arrows walk the list, and a row
+    // that stole them would be a row you could not get past.
+    ("S-<right>", "network-tor-more", Where::OnTor),
+    ("S-<left>", "network-tor-less", Where::OnTor),
+    // `ESC`, and not `Esc`: `ronoctua_keymap::Sym::Esc` writes itself in
+    // capitals, and a notation the parser does not accept is a key the
+    // hint silently drops. The count in
+    // `the_rows_land_at_the_inset_and_the_hint_teaches_every_key` is what
+    // caught it: five ids taught where six were declared.
+    ("ESC", "network-tor-back", Where::OnTor),
 ];
 
 /// A key, already reduced to what the view cares about.
@@ -153,6 +210,14 @@ pub enum Press {
     Section,
     /// To the first row of the previous section.
     SectionBack,
+    /// Turn the value under the cursor forwards.
+    ///
+    /// `S-<right>`, and not the bare arrow: a sheet is a LIST, the bare arrows
+    /// walk it, and a row that took them would be a row nobody could get past.
+    /// It is the rule the Bluetooth and locale views already follow.
+    More,
+    /// Turn it back.
+    Less,
 }
 
 /// What `RET` on a row does.
@@ -183,6 +248,19 @@ pub enum Target {
     Drop,
     /// Become an access point, or stop being one.
     Hotspot(bool),
+    /// Open Tor's own sheet.
+    TorSheet,
+    /// One declared Tor setting, by its id.
+    ///
+    /// THE ID AND NOT THE `&'static Setting`, so a `Target` stays comparable
+    /// and cloneable the way every other one is — the table is a lookup away
+    /// (`options::by_id`), and a row that named a setting the table does not
+    /// hold is a programming error rather than a state.
+    TorSetting(&'static str),
+    /// Open or close the sheet's drawer.
+    TorDrawer,
+    /// Start Tor when the session comes up, or stop doing that.
+    TorAutostart(bool),
 }
 
 /// One of the switches the two tunnel sections carry.
@@ -311,6 +389,16 @@ pub enum Errand {
     Bring(String, ronoctua_network::vpn::Kind),
     /// Become an access point, or stop being one.
     Hotspot(bool),
+    /// Write Tor's fragment, and make a running Tor re-read it.
+    TorConfigure(Box<ronoctua_tunnel::tor::fragment::Lines>),
+    /// Ask for this Tor setting's value to be typed.
+    ///
+    /// The DOOR decides where: the footer opens its minibuffer, and the window
+    /// says so — the rule the Wi-Fi password and the VPN path already follow,
+    /// because the one place anything is typed in this system is the footer.
+    TorEdit(&'static str),
+    /// Remember, or stop remembering, that Tor should come up with the session.
+    TorAutostart(bool),
     /// Close the view.
     Close,
 }
@@ -329,6 +417,11 @@ pub struct Facts<'a> {
     /// What `/proc` says: the sockets and the counters.
     pub watch: &'a Watch,
     /// What the two tunnels say.
+    ///
+    /// TOR'S AUTOSTART RIDES ON THIS and not on a field of its own: the
+    /// `Scene` already carries what the daemon, systemd and the fragment say,
+    /// and a fourth field here would be a field in both doors, the click and
+    /// every test — which is exactly what this struct exists to avoid.
     pub tunnels: &'a ronoctua_tunnel::Scene,
 }
 
@@ -545,6 +638,26 @@ pub struct View {
     /// entry, which is the same thing as nought, and adding a sixth shelf is
     /// then a variant and nothing else.
     shelves: std::collections::BTreeMap<Shelf, usize>,
+    /// Which screen is showing.
+    level: Level,
+    /// Is Tor's drawer of rarely-touched settings open?
+    ///
+    /// IN THE VIEW AND NOT ON DISK, the same answer `fold::Fold::toggle`
+    /// gives: a drawer somebody opened once is not a preference, and closing
+    /// the view is what forgets it.
+    drawer: bool,
+    /// Tor's settings as the sheet has them — the fragment, plus whatever has
+    /// been turned since it was read.
+    ///
+    /// # Why the view holds a copy at all
+    ///
+    /// Because a key press has to change what is DRAWN before the thread has
+    /// written the file and the next reading has come back. Without it, every
+    /// arrow on the sheet would show the old value until the beat caught up,
+    /// which reads as a key that does not work. The order goes out in the same
+    /// breath; `Facts` replaces this whenever the file's own version differs,
+    /// so the file stays the truth and this is only ever a moment ahead of it.
+    tor_edits: Option<ronoctua_tunnel::tor::fragment::Lines>,
 }
 
 /// Where a row's cells begin and how wide they are, in the ROW's cells —
@@ -669,6 +782,9 @@ impl View {
             bringing: None,
             sharing: None,
             anchor: None,
+            level: Level::List,
+            drawer: false,
+            tor_edits: None,
             shelves: std::collections::BTreeMap::new(),
         }
     }
@@ -687,6 +803,24 @@ impl View {
             // section whose name is off the screen.
             v.anchor = Self::title_above(&rows, i);
         }
+        v
+    }
+
+    /// The view, opened straight onto Tor's sheet.
+    ///
+    /// A LEVEL, AND NOT A ROW, which is why [`Self::fresh_at`] cannot reach
+    /// it: that one looks for a row and puts the cursor on it, and the sheet is
+    /// the second SCREEN of this view. Worse, on a machine with no Tor at all
+    /// the row it would look for is not drawn — a machine says nothing about a
+    /// program it does not have — so the search found nothing and the view
+    /// opened at the top of the list. That is what came out of `.#shots`: a
+    /// picture of "at a glance" and the Wi-Fi section under a name that
+    /// promises Tor, which is the SECOND wrong photograph this door has
+    /// produced. The first counted `TAB`s.
+    #[must_use]
+    pub fn fresh_on_the_tor_sheet() -> Self {
+        let mut v = Self::fresh();
+        v.level = Level::Tor;
         v
     }
 
@@ -825,7 +959,78 @@ impl View {
     /// doors. Without it there is nothing on screen that says `f` forgets.
     #[must_use]
     pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
-        crate::chrome::hint_of(OF_THE_VIEW, texts)
+        // THE HINT TEACHES THE LEVEL. A sheet that went on offering `s` to
+        // scan and `f` to forget would teach six keys that do nothing where
+        // you are — which is what the owner photographed on the radio.
+        let here: Vec<(&str, &str)> = OF_THE_VIEW
+            .iter()
+            .filter(|(_, _, w)| w.shown(self.level))
+            .map(|(k, id, _)| (*k, *id))
+            .collect();
+        crate::chrome::hint_of(&here, texts)
+    }
+
+    /// A Tor setting's value, as it was typed in the footer's minibuffer.
+    ///
+    /// The DOOR collects it — the footer is the only place anything is typed
+    /// in this system — and hands it back here, because what to do with it is
+    /// the view's to decide and both doors must decide it the same way.
+    #[must_use]
+    pub fn tor_typed(&mut self, facts: &Facts<'_>, id: &str, values: Vec<String>) -> Errand {
+        let Some(setting) = ronoctua_tunnel::options::by_id(id) else {
+            return Errand::Nothing;
+        };
+        if setting.fixed {
+            return Errand::Nothing;
+        }
+        self.tor_put(facts, setting, values)
+    }
+
+    /// What a key does to one Tor setting.
+    ///
+    /// ONE FUNCTION FOR `RET` AND BOTH `S-<arrows>`, because the difference
+    /// between them is one boolean and nothing else. Splitting it was how the
+    /// Bluetooth view ended up with a `RET` that turned a ring one way and an
+    /// arrow that turned a different ring.
+    fn tor_key(&mut self, facts: &Facts<'_>, id: &'static str, forwards: bool) -> Errand {
+        let Some(setting) = ronoctua_tunnel::options::by_id(id) else {
+            // A ROW NAMING A SETTING THE TABLE DOES NOT HOLD is a programming
+            // error, not a state: the rows are built from the same table.
+            debug_assert!(false, "a row named `{id}`, which is not in the table");
+            return Errand::Nothing;
+        };
+        if setting.fixed {
+            return Errand::Nothing;
+        }
+        let lines = self.tor_lines(facts);
+        match setting.turned(&lines, forwards) {
+            Some(value) => self.tor_put(facts, setting, vec![value]),
+            // TYPED, NOT TURNED. The door decides where the typing happens.
+            None => Errand::TorEdit(id),
+        }
+    }
+
+    /// Tor's settings as the sheet has them.
+    ///
+    /// The fragment as it was read, with whatever has been turned since laid
+    /// over it. See [`View::tor_edits`] for why the view holds a copy.
+    fn tor_lines(&self, facts: &Facts<'_>) -> ronoctua_tunnel::tor::fragment::Lines {
+        self.tor_edits
+            .clone()
+            .unwrap_or_else(|| facts.tunnels.settings.clone())
+    }
+
+    /// Puts a value into the sheet's copy and asks for it to be written.
+    fn tor_put(
+        &mut self,
+        facts: &Facts<'_>,
+        setting: &'static ronoctua_tunnel::options::Setting,
+        values: Vec<String>,
+    ) -> Errand {
+        let mut lines = self.tor_lines(facts);
+        setting.put(&mut lines, values);
+        self.tor_edits = Some(lines.clone());
+        Errand::TorConfigure(Box::new(lines))
     }
 
     /// A file has been read: show what it would do.
@@ -959,6 +1164,27 @@ impl View {
             // ESCAPE WALKS BACK ONE LEVEL, and a file waiting to be brought
             // in is a level: closing the whole view on it would throw away
             // the reading without saying so.
+            // ONE LEVEL BACK, and only then the view. It is the rule every
+            // levelled view in this system follows, and the reason `Esc` is in
+            // the sheet's hint: without it the only way out of thirty-four
+            // settings would be to close the whole thing.
+            // `S-<arrows>` CHANGE THE VALUE. Nothing else in this view has
+            // one to change, so they are inert on the list — which is better
+            // than borrowing them for something, since a key that means two
+            // things is a key nobody trusts.
+            Press::More | Press::Less => match target {
+                Target::TorSetting(id) => self.tor_key(facts, id, press == Press::More),
+                _ => Errand::Nothing,
+            },
+            Press::Escape if self.level == Level::Tor => {
+                self.level = Level::List;
+                self.cursor = 0;
+                // WHAT WAS TURNED IS ALREADY WRITTEN. Each key sent its own
+                // order, so leaving does not discard anything — and the copy
+                // goes, because the next reading of the file is the truth.
+                self.tor_edits = None;
+                Errand::Nothing
+            }
             Press::Escape if self.bringing.is_some() => {
                 self.bringing = None;
                 Errand::Nothing
@@ -1018,6 +1244,24 @@ impl View {
                     self.bringing = None;
                     Errand::Nothing
                 }
+                // INTO THE SHEET. The cursor starts at the top of it, and
+                // not where it happened to be in the list.
+                Target::TorSheet => {
+                    self.level = Level::Tor;
+                    self.cursor = 0;
+                    self.tor_edits = None;
+                    Errand::Nothing
+                }
+                Target::TorDrawer => {
+                    self.drawer = !self.drawer;
+                    Errand::Nothing
+                }
+                Target::TorAutostart(on) => Errand::TorAutostart(on),
+                // `RET` TURNS WHAT CAN BE TURNED AND OPENS WHAT MUST BE TYPED.
+                // A ring and a switch have somewhere to go; a bridge line has
+                // to be typed, and the only place anything is typed in this
+                // system is the footer's minibuffer.
+                Target::TorSetting(id) => self.tor_key(facts, id, true),
                 Target::Tunnels(switch, on) => Errand::Tunnel(match switch {
                     Switch::Tailnet => ronoctua_tunnel::Order::Tailscale(on),
                     Switch::Login if on => ronoctua_tunnel::Order::Login,
@@ -1057,6 +1301,14 @@ impl View {
             shelf: None,
             offsets: &self.shelves,
         };
+
+        // TOR'S SHEET IS A SCREEN OF ITS OWN, and it returns here: everything
+        // below is the LIST, and drawing both would be a sheet with ten
+        // sections of network underneath it.
+        if self.level == Level::Tor {
+            self.tor_sheet_rows(&mut b, facts);
+            return b.out;
+        }
 
         // 1. WHAT THE MACHINE BELIEVES ABOUT THE WAY OUT.
         //
@@ -1293,10 +1545,17 @@ impl View {
             Self::tailnet_rows(&mut b, t);
         }
 
-        // 6. TOR, likewise.
-        if let Some(t) = facts.tunnels.tor.as_ref() {
+        // 6. TOR — AND THIS ONE IS DRAWN WHETHER IT IS RUNNING OR NOT.
+        //
+        // It used to be `if let Some(scene)`, and the control socket only
+        // answers when Tor is already up. So a stopped Tor had no heading, no
+        // row and no key: there was no way in the whole shell to turn it on,
+        // and the screen did not say the program existed. The owner reported
+        // exactly that. What decides now is the UNIT's standing, which is a
+        // different question and the one this section is about.
+        if facts.tunnels.standing.actionable() || facts.tunnels.tor.is_some() {
             b.heading(key::NETWORK_HEADING_TOR);
-            Self::tor_rows(&mut b, t);
+            Self::tor_rows(&mut b, facts);
         }
 
         // 7. THE PORTS — what this machine is answering on.
@@ -1491,75 +1750,271 @@ impl View {
     }
 
     /// Tor: how far it got, what it has, and the two things to do to it.
-    fn tor_rows(b: &mut Builder<'_>, t: &ronoctua_tunnel::tor::Scene) {
+    /// Tor, in the LIST: what it is doing, the switch, and the way in.
+    ///
+    /// THE SWITCH COMES FROM THE UNIT AND THE WORDS FROM THE CIRCUIT. They are
+    /// different facts, and reading one as the other has now been a defect
+    /// twice. First the circuit was read as the switch, so `!established` sent
+    /// `systemctl start` to a unit already up. The fix made the row
+    /// stop-ONLY — a literal `false` — and that was the second defect: with
+    /// the section itself only drawn when Tor answered, `Order::Tor(true)` was
+    /// reachable from nowhere in the shell. `Standing` is the fact that was
+    /// missing both times.
+    fn tor_rows(b: &mut Builder<'_>, facts: &Facts<'_>) {
         use ronoctua_i18n::key;
-        // THE SWITCH IS ABOUT THE UNIT, AND THE WORDS ARE ABOUT THE CIRCUIT.
-        //
-        // They are different facts, and reading the circuit as the switch was
-        // a defect: this section only exists when the control socket answered
-        // — that is, when the daemon is RUNNING — so `!established` sent
-        // `systemctl start` to a unit that is already up, a no-op with no
-        // message, and a Tor that was bootstrapping or had lost its circuits
-        // could not be stopped at all.
-        b.pair(
-            b.texts.t(key::NETWORK_TOR_STATE),
-            b.texts.t(if t.established {
-                key::NETWORK_TOR_READY
+        let standing = facts.tunnels.standing;
+        let scene = facts.tunnels.tor.as_ref();
+
+        // WHAT THE UNIT IS, IN ITS OWN WORD. Five standings, five sentences:
+        // a machine with no Tor installed and a machine whose Tor is off are
+        // not the same thing, and neither is a sandbox that cannot ask.
+        let said = b.texts.t(match standing {
+            ronoctua_tunnel::tor::Standing::Running => key::NETWORK_TOR_RUNNING,
+            ronoctua_tunnel::tor::Standing::Stopped => key::NETWORK_TOR_STOPPED,
+            ronoctua_tunnel::tor::Standing::Moving => key::NETWORK_TOR_MOVING,
+            ronoctua_tunnel::tor::Standing::Absent => key::NETWORK_TOR_ABSENT,
+            ronoctua_tunnel::tor::Standing::Unknown => key::NETWORK_TOR_UNKNOWN,
+        });
+        if standing.actionable() {
+            b.pair(
+                b.texts.t(key::NETWORK_TOR_STATE),
+                said,
+                Target::Tunnels(Switch::Tor, standing.starts()),
+                // MOVING REFUSES. A unit halfway up takes a `start` and does
+                // nothing with it, and the screen would show a key that
+                // appeared to fail.
+                standing == ronoctua_tunnel::tor::Standing::Moving,
+            );
+            // WHAT THE KEY WOULD DO, in words, under the state it would change.
+            b.note(if standing.starts() {
+                key::NETWORK_TOR_START
             } else {
-                key::NETWORK_TOR_NOT_READY
-            }),
-            Target::Tunnels(Switch::Tor, false),
-            false,
-        );
-        if !t.established {
-            // THE BOOTSTRAP IS THE ANSWER TO "why not yet", and it is only
-            // worth a row while the answer is not "it works".
-            let said = b.texts.t_args(
-                key::NETWORK_TOR_BOOTSTRAP,
-                &[(
-                    "percent",
-                    ronoctua_i18n::Arg::Number(i64::from(t.bootstrap)),
-                )],
+                key::NETWORK_TOR_STOP
+            });
+        } else {
+            // NOT INSTALLED, OR UNASKABLE. A row that acts would be a key
+            // about a program that is not there.
+            b.fact(key::NETWORK_TOR_STATE, said);
+        }
+
+        if let Some(t) = scene {
+            if !t.established {
+                // THE BOOTSTRAP IS THE ANSWER TO "why not yet", and it is only
+                // worth a row while the answer is not "it works".
+                let said = b.texts.t_args(
+                    key::NETWORK_TOR_BOOTSTRAP,
+                    &[(
+                        "percent",
+                        ronoctua_i18n::Arg::Number(i64::from(t.bootstrap)),
+                    )],
+                );
+                // THE DAEMON'S OWN SUMMARY, VERBATIM AND IN ENGLISH. It is the
+                // only string on this screen that is not ours, and translating
+                // it is not possible: Tor writes forty of them and they change
+                // with its releases. A sentence that says "starting, 45%"
+                // beside it is what carries the meaning; the summary is the
+                // detail, in the words the person will find in Tor's own log.
+                b.pair(said, t.summary.clone(), Target::Nothing, false);
+            } else {
+                b.fact(key::NETWORK_TOR_STATE, b.texts.t(key::NETWORK_TOR_READY));
+            }
+            if t.circuits > 0 {
+                let said = b.texts.t_args(
+                    key::NETWORK_TOR_CIRCUITS,
+                    &[(
+                        "count",
+                        ronoctua_i18n::Arg::Number(i64::try_from(t.circuits).unwrap_or(i64::MAX)),
+                    )],
+                );
+                b.sentence(said);
+            }
+            if !t.version.is_empty() {
+                b.fact(key::NETWORK_FACT_VERSION, t.version.clone());
+            }
+            b.fact(
+                key::NETWORK_FACT_RECEIVED,
+                readable_bytes(t.received, b.texts.decimal_mark()),
             );
-            // THE DAEMON'S OWN SUMMARY, VERBATIM AND IN ENGLISH. It is the
-            // only string on this screen that is not ours, and translating it
-            // is not possible: Tor writes forty of them and they change with
-            // its releases. A sentence that says "starting, 45%" beside it is
-            // what carries the meaning; the summary is the detail, in the
-            // words the person will find in Tor's own log.
-            b.pair(said, t.summary.clone(), Target::Nothing, false);
-        }
-        if t.circuits > 0 {
-            let said = b.texts.t_args(
-                key::NETWORK_TOR_CIRCUITS,
-                &[(
-                    "count",
-                    ronoctua_i18n::Arg::Number(i64::try_from(t.circuits).unwrap_or(i64::MAX)),
-                )],
+            b.fact(
+                key::NETWORK_FACT_SENT,
+                readable_bytes(t.sent, b.texts.decimal_mark()),
             );
-            b.sentence(said);
         }
-        if !t.version.is_empty() {
-            b.fact(key::NETWORK_FACT_VERSION, t.version.clone());
-        }
-        b.fact(
-            key::NETWORK_FACT_RECEIVED,
-            readable_bytes(t.received, b.texts.decimal_mark()),
-        );
-        b.fact(
-            key::NETWORK_FACT_SENT,
-            readable_bytes(t.sent, b.texts.decimal_mark()),
-        );
+
+        // THE SOCKS ADDRESS, and it comes from the FLAKE now. It used to be a
+        // literal in the crate against a module that declared no `SOCKSPort`
+        // at all: the two agreed because the nixpkgs default happened to be
+        // the same number, and the day either moved this row would have named
+        // a port nothing listened on.
         b.fact(
             key::NETWORK_FACT_SOCKS,
             ronoctua_tunnel::tor::SOCKS.to_owned(),
         );
+
+        if scene.is_some() {
+            b.pair(
+                b.texts.t(key::NETWORK_TOR_IDENTITY),
+                String::new(),
+                Target::Tunnels(Switch::Identity, true),
+                !scene.is_some_and(|t| t.established),
+            );
+        }
+
+        // THE WAY INTO THE SHEET, and it is here rather than on the heading
+        // because a heading is not a row the cursor stops on. It is offered
+        // with Tor stopped too, and deliberately: bridges are configured
+        // BEFORE the first start, since without them a censored network never
+        // bootstraps at all.
         b.pair(
-            b.texts.t(key::NETWORK_TOR_IDENTITY),
+            b.texts.t(key::NETWORK_TOR_SETTINGS),
             String::new(),
-            Target::Tunnels(Switch::Identity, true),
-            !t.established,
+            Target::TorSheet,
+            !standing.actionable(),
         );
+    }
+
+    /// Tor's own sheet — the second screen of this view.
+    ///
+    /// `Esc` goes back to the list. Everything here writes into the torrc
+    /// fragment this system owns; what `nix/modules/tor.nix` declares is drawn
+    /// REFUSING, because the generated torrc reads `%include` first and
+    /// overrides it — see `assets/tor-options.nix`.
+    fn tor_sheet_rows(&self, b: &mut Builder<'_>, facts: &Facts<'_>) {
+        use ronoctua_i18n::key;
+        use ronoctua_tunnel::options::{self, Scope};
+        let lines = self.tor_lines(facts);
+        let standing = facts.tunnels.standing;
+
+        b.heading(key::NETWORK_TOR_HEADING_SERVICE);
+        let said = b.texts.t(match standing {
+            ronoctua_tunnel::tor::Standing::Running => key::NETWORK_TOR_RUNNING,
+            ronoctua_tunnel::tor::Standing::Stopped => key::NETWORK_TOR_STOPPED,
+            ronoctua_tunnel::tor::Standing::Moving => key::NETWORK_TOR_MOVING,
+            ronoctua_tunnel::tor::Standing::Absent => key::NETWORK_TOR_ABSENT,
+            ronoctua_tunnel::tor::Standing::Unknown => key::NETWORK_TOR_UNKNOWN,
+        });
+        b.pair(
+            b.texts.t(key::NETWORK_TOR_STATE),
+            said,
+            Target::Tunnels(Switch::Tor, standing.starts()),
+            !standing.actionable() || standing == ronoctua_tunnel::tor::Standing::Moving,
+        );
+        // START IT WITH THE SESSION, and it is OURS rather than systemd's.
+        // `systemctl enable` would need a third verb in the polkit rule, and
+        // `tor-polkit-is-narrow` refuses one with a reason: `enable` survives
+        // a reboot, which is a different kind of power from starting something
+        // now. So the footer reads a preference when the session comes up.
+        let autostart = facts.tunnels.autostart;
+        b.pair(
+            b.texts.t(key::NETWORK_TOR_AUTOSTART),
+            // ON OR OFF, not what the unit is doing — the sibling of the
+            // defect in `tor_setting_row`, and this one was PHOTOGRAPHED: the
+            // sheet read "start it with the session   stopped", one row under
+            // "the Tor service   stopped", which are two different facts
+            // wearing one word.
+            b.texts.t(if autostart {
+                key::NETWORK_ON
+            } else {
+                key::NETWORK_OFF
+            }),
+            Target::TorAutostart(!autostart),
+            false,
+        );
+        for setting in options::of_scope(Scope::Service) {
+            self.tor_setting_row(b, setting, &lines);
+        }
+
+        for (heading, scope) in [
+            (key::NETWORK_TOR_HEADING_PATH, Scope::Path),
+            (key::NETWORK_TOR_HEADING_BRIDGES, Scope::Bridges),
+            (key::NETWORK_TOR_HEADING_ONION, Scope::Onion),
+        ] {
+            let plain: Vec<_> = options::of_scope(scope).filter(|s| !s.advanced).collect();
+            if plain.is_empty() {
+                continue;
+            }
+            b.heading(heading);
+            for setting in plain {
+                self.tor_setting_row(b, setting, &lines);
+            }
+        }
+
+        // THE DRAWER, and the chevron is its and nobody else's — the owner
+        // refused one on a row that acts, saying it is what collapse and
+        // expand use.
+        b.drawer(key::NETWORK_TOR_HEADING_ADVANCED, self.drawer);
+        if !self.drawer {
+            return;
+        }
+        // ONE DRAWER FOR ALL OF THEM, whatever scope declared them. The
+        // scopes are the sheet's SHAPE and `advanced` is how often a thing is
+        // touched; four drawers of three rows each would be four chevrons to
+        // open before finding anything.
+        b.note(key::NETWORK_TOR_ADVANCED_ABOUT);
+        for setting in options::SETTINGS.iter().filter(|s| s.advanced) {
+            self.tor_setting_row(b, setting, &lines);
+        }
+    }
+
+    /// One declared Tor setting's row.
+    fn tor_setting_row(
+        &self,
+        b: &mut Builder<'_>,
+        setting: &'static ronoctua_tunnel::options::Setting,
+        lines: &ronoctua_tunnel::tor::fragment::Lines,
+    ) {
+        use ronoctua_options::Kind;
+        let label = b.texts.t(setting.label);
+        // WHAT THE FLAKE OWNS SAYS SO INSTEAD OF SAYING ITS VALUE. The value
+        // in the fragment is not what Tor is using, because the generated
+        // torrc overrides it — so printing it would be printing a number that
+        // is not in force.
+        if setting.fixed {
+            b.pair(
+                label,
+                b.texts.t(ronoctua_i18n::key::NETWORK_TOR_FROM_FLAKE),
+                Target::TorSetting(setting.id),
+                true,
+            );
+            return;
+        }
+        let value = match setting.kind {
+            // A SWITCH SAYS ON OR OFF, not what the SERVICE is doing. These
+            // two read `network-tor-running`/`-stopped`, which belong to the
+            // unit: fourteen declared switches drew "use bridges   running".
+            //
+            // AND THEY ARE THIS VIEW'S OWN WORDS, not a new pair: a second key
+            // saying "on" in the same file is what
+            // `labels-of-a-view-are-distinct` refuses, and it is right to —
+            // two keys drift, and then one row says "on" while another says
+            // "enabled" about the same kind of thing.
+            Kind::Switch => b.texts.t(if setting.is_on(lines) {
+                ronoctua_i18n::key::NETWORK_ON
+            } else {
+                ronoctua_i18n::key::NETWORK_OFF
+            }),
+            Kind::Ring(_) => setting
+                .word(lines)
+                .map(|k| b.texts.t(&k))
+                .unwrap_or_default(),
+            Kind::Number { unit, .. } => {
+                let now = setting.one(lines).unwrap_or("").to_owned();
+                match (now.is_empty(), unit) {
+                    (true, _) => b.texts.t(ronoctua_i18n::key::NETWORK_TOR_FROM_FLAKE),
+                    (false, Some(u)) => format!("{now} {}", b.texts.t(u)),
+                    (false, None) => now,
+                }
+            }
+            // A LIST SAYS HOW MANY, not all of them: three bridge lines are
+            // sixty characters each and the row is one line. The count is what
+            // a person checks at a glance, and `RET` is what shows them.
+            Kind::List => {
+                let held = setting.read(lines).map_or(0, Vec::len);
+                held.to_string()
+            }
+            Kind::Text | Kind::Amount => setting.one(lines).unwrap_or("").to_owned(),
+        };
+        b.pair(label, value, Target::TorSetting(setting.id), false);
     }
 
     /// How many established sockets of ours are read before the rest become a
@@ -2246,6 +2701,44 @@ impl Builder<'_> {
     }
 
     /// A sentence that stands for a whole section — "no networks in range".
+    /// The drawer's own line: a chevron, and the word.
+    ///
+    /// THE CHEVRON IS THE DRAWER'S AND NOBODY ELSE'S. The owner refused one on
+    /// a row that acts, saying it is what collapse and expand use; by that
+    /// argument it belongs here, and this is the only place in this view that
+    /// draws one.
+    fn drawer(&mut self, key: &str, open: bool) {
+        let focused = self.cursor == self.out.len();
+        let glyph = if open {
+            tokens::icon::COLLAPSE
+        } else {
+            tokens::icon::EXPAND
+        };
+        let colour = if focused {
+            tokens::color::STATE_ACCENT
+        } else {
+            tokens::color::TEXT_GROUP
+        };
+        // THE GLYPH IS ONE CELL AND THE WORD STARTS AFTER IT, with a space
+        // between: a mark against the letters is the "glifo encostado na
+        // borda" the owner has had to point out before.
+        self.out.push(Row {
+            fields: vec![
+                Self::piece(self.left, glyph.to_string(), colour),
+                Self::piece(
+                    self.left + 2,
+                    layout::elide_end(&self.texts.t(key), self.room.saturating_sub(2)),
+                    colour,
+                ),
+            ],
+            focused,
+            heading: false,
+            target: Target::TorDrawer,
+            disabled: false,
+            shelf: None,
+        });
+    }
+
     fn note(&mut self, key: &str) {
         let text = self.texts.t(key);
         self.sentence(text);
@@ -2482,7 +2975,7 @@ mod tests {
             ssid: None,
         }];
         let facts = facts(&snap, &[]);
-        for (notation, id) in OF_THE_VIEW {
+        for (notation, id, _) in OF_THE_VIEW {
             let Some(press) = crate::network_words::press_of(id) else {
                 panic!("`{id}` is taught and resolves to no press");
             };
@@ -2490,19 +2983,30 @@ mod tests {
             // honest about the row it is on — `RET` on a fact does nothing,
             // and should — so the property is "somewhere on this screen", not
             // "wherever the cursor happened to land".
-            let v = View::fresh();
-            let rows = v.rows(&facts, 80, &t);
+            // ON THE LEVEL THE KEY BELONGS TO. `S-<right>` turns a Tor
+            // setting and does nothing in the list, which is not a defect —
+            // it is what `Where` says. Asking only about the list would fail
+            // every key of the sheet, and asking about neither would let a
+            // dead key through.
             let mut worked = false;
-            for row in 0..rows.len() {
-                let mut here = v.clone();
-                here.clicked(row, &rows);
-                let was = here.cursor();
-                let did = here.key(press, &facts, &t);
-                worked |= did != Errand::Nothing || here.cursor() != was;
+            for level in [Level::List, Level::Tor] {
+                if !where_of(id).is_some_and(|w| w.shown(level)) {
+                    continue;
+                }
+                let mut v = View::fresh();
+                v.level = level;
+                let rows = v.rows(&facts, 80, &t);
+                for row in 0..rows.len() {
+                    let mut here = v.clone();
+                    here.clicked(row, &rows);
+                    let was = here.cursor();
+                    let did = here.key(press, &facts, &t);
+                    worked |= did != Errand::Nothing || here.cursor() != was || here.level != level;
+                }
             }
             assert!(
                 worked,
-                "`{notation}` ({id}) does nothing on any row of this view"
+                "`{notation}` ({id}) does nothing on any row of any level"
             );
         }
     }
@@ -2664,12 +3168,27 @@ mod tests {
         let t = texts();
         let (at, _) = extent(80);
         assert_eq!(at + crate::chrome::FIELDS_LEAD, crate::chrome::INSET);
-        let ids = OF_THE_VIEW
-            .iter()
-            .map(|(_, id)| *id)
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(View::fresh().hint(&t).len(), 3 * ids.len() - 1);
-        for (_, id) in OF_THE_VIEW {
+        // THE HINT TEACHES THE LEVEL, and the count follows from that rather
+        // than from the whole table: a piece is a key, a word and a separator
+        // between them, so `3n - 1` for the `n` distinct ids that are shown
+        // WHERE YOU ARE.
+        let shown = |level: Level| {
+            OF_THE_VIEW
+                .iter()
+                .filter(|(_, _, w)| w.shown(level))
+                .map(|(_, id, _)| *id)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let mut list = View::fresh();
+        assert_eq!(list.hint(&t).len(), 3 * shown(Level::List).len() - 1);
+        list.level = Level::Tor;
+        assert_eq!(list.hint(&t).len(), 3 * shown(Level::Tor).len() - 1);
+        // AND THE TWO ARE NOT THE SAME LINE. A sheet that went on teaching `s`
+        // to scan and `f` to forget would be teaching keys that do nothing
+        // where you are — which is what the owner photographed on the radio.
+        assert_ne!(shown(Level::List), shown(Level::Tor));
+
+        for (_, id, _) in OF_THE_VIEW {
             for key in [(*id).to_owned(), format!("cmd-{id}")] {
                 // THE BRACKETS ARE THE ANSWER, not the key itself: a key
                 // nobody wrote resolves to `[key]` (`Texts::t_marked`), so
@@ -3632,6 +4151,8 @@ mod tests {
                 summary: "Asking for relay descriptors".to_owned(),
                 ..ronoctua_tunnel::tor::Scene::default()
             }),
+            standing: ronoctua_tunnel::tor::Standing::Running,
+            ..ronoctua_tunnel::Scene::default()
         };
         let facts = Facts {
             net: &snap,
@@ -3659,11 +4180,12 @@ mod tests {
             Errand::Tunnel(ronoctua_tunnel::Order::ExitNode(Some("n3".to_owned())))
         );
 
-        // TOR'S ROW STOPS THE DAEMON, whatever the circuit is doing: the
-        // section only exists because the control socket answered, which is
-        // to say the unit is running. Reading the circuit here sent `start`
-        // to a unit that was already up — a no-op with no message — and left
-        // a bootstrapping Tor with no way to be stopped.
+        // TOR'S ROW ASKS THE UNIT, not the circuit. That distinction has now
+        // been a defect twice: first the circuit WAS the switch, so
+        // `!established` sent `start` to a unit already up; then the fix made
+        // the row stop-only with a literal `false`, and `Order::Tor(true)`
+        // became reachable from nowhere in the shell — which is what the
+        // owner reported. `Standing::Running` is what makes this row say stop.
         let stop = target(&Target::Tunnels(Switch::Tor, false)).unwrap();
         v.clicked(stop, &rows);
         assert_eq!(
@@ -3704,6 +4226,7 @@ mod tests {
                 ..ronoctua_tunnel::tailscale::Scene::default()
             }),
             tor: None,
+            ..ronoctua_tunnel::Scene::default()
         };
         let facts = Facts {
             net: &snap,
@@ -3723,6 +4246,74 @@ mod tests {
             Errand::Tunnel(ronoctua_tunnel::Order::ExitNode(None)),
             "a second press on the node in use takes it off"
         );
+    }
+
+    #[test]
+    fn a_tor_switch_says_on_or_off_and_never_what_the_unit_is_doing() {
+        // `Kind::Switch` RESOLVED TO THE UNIT'S WORDS. Fourteen declared
+        // switches — `use-bridges`, `strict-nodes`, `safe-socks` and the rest
+        // — drew `network-tor-running` / `-stopped`, so the sheet read "use
+        // bridges   running", which is a sentence about a different thing.
+        let t = texts();
+        let running = t.t(ronoctua_i18n::key::NETWORK_TOR_RUNNING);
+        let stopped = t.t(ronoctua_i18n::key::NETWORK_TOR_STOPPED);
+        let mut lines = ronoctua_tunnel::tor::fragment::Lines::default();
+        let mut switches = 0;
+        for setting in ronoctua_tunnel::options::SETTINGS {
+            if matches!(setting.kind, ronoctua_options::Kind::Switch) && !setting.fixed {
+                let on = setting.turned(&lines, true).expect("a switch always turns");
+                setting.put(&mut lines, vec![on]);
+                switches += 1;
+            }
+        }
+        assert!(switches > 0, "no switch to measure");
+        let tunnels = ronoctua_tunnel::Scene {
+            settings: lines,
+            ..ronoctua_tunnel::Scene::default()
+        };
+        let snap = Snapshot::default();
+        let facts = Facts {
+            net: &snap,
+            seen: &[],
+            watch: &Watch::default(),
+            tunnels: &tunnels,
+        };
+        let mut v = View::fresh();
+        v.level = Level::Tor;
+        let rows = v.rows(&facts, 80, &t);
+        let mut measured = 0;
+        for row in &rows {
+            let Target::TorSetting(id) = &row.target else {
+                continue;
+            };
+            let Some(setting) = ronoctua_tunnel::options::SETTINGS
+                .iter()
+                .find(|s| s.id == *id)
+            else {
+                continue;
+            };
+            if !matches!(setting.kind, ronoctua_options::Kind::Switch) || setting.fixed {
+                continue;
+            }
+            measured += 1;
+            for f in &row.fields {
+                assert_ne!(f.text, running, "`{id}` answers with the unit's word");
+                assert_ne!(f.text, stopped, "`{id}` answers with the unit's word");
+            }
+        }
+        assert!(measured > 0, "no switch was drawn, so nothing was measured");
+
+        // AND THE AUTOSTART ROW, which is not a declared setting and had the
+        // same defect — photographed, one line under the service's own row:
+        // "start it with the session   stopped".
+        let autostart = rows
+            .iter()
+            .find(|r| matches!(r.target, Target::TorAutostart(_)))
+            .expect("the sheet drew no autostart row");
+        for f in &autostart.fields {
+            assert_ne!(f.text, running, "autostart answers with the unit's word");
+            assert_ne!(f.text, stopped, "autostart answers with the unit's word");
+        }
     }
 
     #[test]

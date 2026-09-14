@@ -6330,13 +6330,54 @@ Os buffers têm de 79 a 100 KB (`ronoctua_buffer_format.wasm` são 100 627 bytes
 fonte. Um buffer que não colore código cresceria metade do próprio tamanho para carregar uma tabela
 que nunca lê. Com a feature desligada e o crate na árvore, o `format` mediu **+366 bytes**.
 
-#### O ClipCascade diz a verdade
+#### O ClipCascade dizia a verdade, e agora a verdade é outra
 
-O painel mostra `ClipCascade: não integrado`, e o comando de configurar existe dizendo o mesmo. A
-integração está no `PENDING.md`. Um indicador que fingisse "conectado" seria a fachada que este
-projeto passou meses desfazendo — e a legenda das ações sai da **mesma tabela** que o check de órfão
-lê (`leader::OF_CLIPBOARD_VIEW`), porque uma legenda escrita à mão é a segunda cópia que mente no
-dia em que uma tecla mudar.
+Por meses o painel mostrou `ClipCascade: não integrado`, com o comando de configurar dizendo o
+mesmo. Era honesto e era um lugar reservado: o `PENDING.md` guardava a pergunta com o único marcador
+`· decidir antes` que aquele arquivo já teve — **o histórico de clipboard deve sair deste
+computador?**
+
+O dono respondeu que sim, e o `ronoctua-clipcascade` é a resposta construída. Três decisões dentro
+dela valem mais que o código:
+
+**O cliente é NOSSO, não o do upstream.** O cliente Python vigia a área de transferência ele mesmo,
+com `wl-paste`. Rodá-lo ao lado significaria DOIS vigias e DUAS histórias, e o painel só poderia
+dizer "rodando" — nunca "integrado". Falando o protocolo aqui, o que o rodapé já guarda **é** o que
+sincroniza, nos dois sentidos. O protocolo é pequeno: login por formulário com CSRF, PBKDF2-SHA256
+para AES-256-GCM, e quadros STOMP sobre WebSocket.
+
+**O nonce tem dezesseis bytes, e foi isso que decidiu a dependência.** O plano deste trabalho dizia
+que a cripto não custaria nada novo, porque o `ring` tem AES-256-GCM. Tem — com nonce de DOZE bytes,
+fixo: `ring::aead::NONCE_LEN` é 12 e não há outro construtor. O pycryptodome usa 16 por padrão
+(medido cinco vezes na 3.2.0 instalada), e GCM com nonce que não é de 96 bits deriva o J0 por GHASH
+em vez de concatenação — o `ring` calcularia outro J0 e **nenhuma** mensagem autenticaria, em
+silêncio. O `aes-gcm` é genérico no tamanho, e o vetor capturado do Python do upstream é o que prova
+que os dois concordam.
+
+**O que o clipboard marcou como senha não atravessa a rede**, e o filtro fica na fronteira do crate
+(`worth_sending`) e não na vista: uma segunda porta sobre este crate não pode esquecê-lo.
+
+**O `salt` e as `hash_rounds` são da PESSOA, e não há endpoint que os sirva.** Esta é a segunda
+suposição sobre a cripto que a fonte do upstream desmentiu, e ela é pior que a do nonce porque
+falha em SILÊNCIO. A primeira versão deste crate pedia os dois ao `/max-size` — com um comentário
+afirmando que "o ClipCascade os entrega junto com o login, o sal é por instalação e as rodadas são
+configuráveis". Medido na 3.2.0 instalada: `/max-size` responde `{"maxsize": n}` e mais nada; o
+`core/config.py` inicia `salt` em `""` e `hash_rounds` em `664937`; o `cli/login.py` e o
+`gui/login.py` PERGUNTAM os dois, com a frase *"use exatamente o mesmo sal em todos os
+dispositivos"* ao lado. Ou seja: são parâmetros que a pessoa escolhe uma vez e repete em cada
+máquina, e o servidor nunca soube deles.
+
+A versão errada funcionava por acaso — o campo ausente lia `""` e o `unwrap_or` caía em 664937, que
+são justamente os padrões do upstream — e teria quebrado na primeira instalação que mudasse
+qualquer um dos dois, derivando uma chave que não decifra nada. **O sintoma seria um clipboard
+vazio**, que é indistinguível de "ninguém copiou nada". Hoje os dois são preferências desta máquina
+e LINHAS da vista, ao lado do endereço e da conta, pelo mesmo motivo que aqueles são preferências:
+descrevem a instalação de alguém, e nada disso entra no repositório (invariante 13).
+
+E a legenda das ações não existe mais: ela era escrita à mão dentro do painel, a partir dos rótulos
+LONGOS `cmd-*`, e numa tela com poucos itens caía **em cima da linha do minibuffer** — o dono
+fotografou. Hoje é uma dica como a de toda outra vista (`chrome::hint_of`), gerada da tabela que a
+própria vista carrega.
 
 ---
 

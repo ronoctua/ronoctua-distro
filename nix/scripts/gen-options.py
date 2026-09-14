@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
-"""Turn `assets/syncthing-options.nix` into the Rust table and the owed keys.
+"""Turn a declared option table into the Rust table and the owed keys.
 
 The same shape as `gen-audio-names.py`, and for the same reason: the
 declaration is the source of truth, this only translates it, and anything it
 cannot translate takes the build down NAMING the entry.
+
+ONE GENERATOR, FOUR TABLES. It was Syncthing's alone and it is not about
+Syncthing: a hundred and thirty-one keys across four objects is the same
+problem as Tor's bridges and exit nodes, ClipCascade's client and server, and
+Atuin's seventy. What differs between them is two strings — the key prefix and
+the list of scopes — so they are arguments rather than a second copy of two
+hundred lines, which is the defect this repository keeps naming.
+
+The SCOPES ARE ORDERED ON THE COMMAND LINE and not read off the table, because
+the order is the order the screen draws in and `builtins.toJSON` sorts an
+attribute set alphabetically. Declaring it at the call site is what keeps a
+sheet's shape an argument rather than an accident — the same reason
+`assets/themes/themes.nix` grew an `order` beside its list.
 
 What it refuses is chosen to catch the ways a table of a hundred options can
 lie without anybody noticing:
@@ -18,7 +31,7 @@ lie without anybody noticing:
     either do nothing or run away;
   * a `ring` with fewer than two words, which is a ring that cannot turn;
   * `fixed` on anything the flake does not actually fix. That one is checked
-    against `nix/modules/syncthing.nix` by `syncthing-flake-owned-rows-refuse`,
+    against the domain’s own module by e.g. `syncthing-flake-owned-rows-refuse`,
     not here, because this script never sees the module.
 """
 
@@ -28,15 +41,18 @@ import re
 import sys
 
 KEBAB = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-JSON_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+
+
+def variant_of(scope: str) -> str:
+    """The Rust variant name for a scope id: `exit-path` becomes `ExitPath`."""
+    return "".join(part.capitalize() for part in scope.split("-"))
+
+# THE KEY IN THE FILE THE DOMAIN OWNS, and the four domains spell them
+# three ways: Syncthing is `camelCase` JSON, Tor is `PascalCase` torrc, and
+# Atuin is `snake_case` TOML. The underscore was missing and the message
+# said "Syncthing" — which is what a rule generalised by copying looks like.
+FIELD_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 KINDS = {"switch", "number", "text", "ring", "list", "amount"}
-# The four objects `/rest/config` carries, and the two default templates.
-SCOPES = {
-    "folder": "Folder",
-    "device": "Device",
-    "global": "Global",
-    "interface": "Interface",
-}
 FIELDS = {"id", "key", "within", "kind", "least", "most", "unit", "ring", "fixed", "advanced"}
 
 
@@ -51,36 +67,60 @@ def word_of(value: str) -> str:
     Syncthing writes them three ways — `sendreceive`, `smallestFirst`,
     `copy_file_range` — and an empty string means "none", which is a word on
     the screen like any other and cannot be a key with nothing in it.
+
+    A SPACE BECOMES A HYPHEN, and that was a latent hole rather than a feature
+    request: Tor's `Log` takes `notice syslog` as one value, and the key that
+    came out was `tor-word-notice syslog`. A text key with a space in it is not
+    a key — `gen-i18n.py` reads `^([a-z0-9-]+) *=` and would simply never see
+    it, so the screen would draw `[tor-word-notice syslog]` and no check would
+    have said why. Anything still not a key after this is REFUSED below rather
+    than emitted broken.
     """
     if value == "":
         return "none"
     spaced = re.sub(r"(?<!^)(?=[A-Z])", "-", value)
-    return spaced.replace("_", "-").lower()
+    spaced = re.sub(r"[\s_]+", "-", spaced)
+    return spaced.strip("-").lower()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--domain", required=True, help="the text-key prefix, e.g. `tor`")
+    parser.add_argument(
+        "--scopes",
+        required=True,
+        help="the scopes, comma-separated, IN THE ORDER THE SCREEN DRAWS THEM",
+    )
     parser.add_argument("--options", required=True, help="the table, as JSON")
     parser.add_argument("--out", required=True, help="where the Rust table goes")
     parser.add_argument("--out-keys", required=True, help="where the owed keys go")
     args = parser.parse_args()
 
+    if not KEBAB.match(args.domain):
+        refuse(f"`{args.domain}` is not a kebab-case domain, and the text keys are built from it")
+    scopes = {s: variant_of(s) for s in args.scopes.split(",") if s}
+    if not scopes:
+        refuse("no scopes were given; a table with none has nowhere to draw a row")
+    for scope in scopes:
+        if not KEBAB.match(scope):
+            refuse(f"`{scope}` is not a kebab-case scope")
+
     with open(args.options, encoding="utf-8") as handle:
         table = json.load(handle)
 
-    unknown = set(table) - set(SCOPES)
+    unknown = set(table) - set(scopes)
     if unknown:
-        refuse(f"the table has a scope that does not exist: {sorted(unknown)}")
-    for scope in SCOPES:
+        refuse(f"the table has a scope that was not declared: {sorted(unknown)}")
+    for scope in scopes:
         if scope not in table:
-            refuse(f"the table has no `{scope}` — every one of the four is owed")
+            refuse(f"the table has no `{scope}` — every declared scope is owed")
 
     rows: list[dict] = []
     seen_ids: dict[str, str] = {}
     seen_fields: dict[tuple[str, str, str], str] = {}
     words: set[str] = set()
 
-    for scope, arm in SCOPES.items():
+    for scope, arm in scopes.items():
         entries = table[scope]
         if not isinstance(entries, list) or not entries:
             refuse(f"`{scope}` is not a non-empty list")
@@ -103,12 +143,12 @@ def main() -> None:
             seen_ids[ident] = scope
 
             key = entry.get("key")
-            if not isinstance(key, str) or not JSON_KEY.match(key):
-                refuse(f"`{ident}`: `{key}` is not a JSON key Syncthing could spell")
+            if not isinstance(key, str) or not FIELD_KEY.match(key):
+                refuse(f"`{ident}`: `{key}` is not a key {args.domain} could spell")
 
             within = entry.get("within")
-            if within is not None and (not isinstance(within, str) or not JSON_KEY.match(within)):
-                refuse(f"`{ident}`: `{within}` is not a JSON key")
+            if within is not None and (not isinstance(within, str) or not FIELD_KEY.match(within)):
+                refuse(f"`{ident}`: `{within}` is not a section {args.domain} could spell")
 
             field = (scope, within or "", key)
             if field in seen_fields:
@@ -148,7 +188,19 @@ def main() -> None:
                 for value in ring:
                     if not isinstance(value, str):
                         refuse(f"`{ident}` has a ring word that is not a string")
-                    words.add(word_of(value))
+                    word = word_of(value)
+                    # A WORD THAT IS NOT A KEY IS REFUSED, NOT EMITTED.
+                    # `gen-i18n.py` reads `^([a-z0-9-]+) *=`, so a stem with a
+                    # space, a slash or a colon in it would never be matched in
+                    # either `.ftl` — the screen would draw the key in brackets
+                    # and `options-have-text` would be looking for something
+                    # nobody could have written.
+                    if not KEBAB.match(word):
+                        refuse(
+                            f"`{ident}`: the ring word {value!r} becomes `{word}`, "
+                            "which is not a text key anything could carry"
+                        )
+                    words.add(word)
             elif "ring" in entry:
                 refuse(f"`{ident}` is a `{kind}` and carries a ring")
 
@@ -168,14 +220,14 @@ def main() -> None:
                 }
             )
 
-    owed = sorted({f"syncthing-opt-{row['id']}" for row in rows})
-    owed += sorted({f"syncthing-unit-{row['unit']}" for row in rows if row["unit"]})
-    owed += sorted({f"syncthing-word-{word}" for word in words})
+    owed = sorted({f"{args.domain}-opt-{row['id']}" for row in rows})
+    owed += sorted({f"{args.domain}-unit-{row['unit']}" for row in rows if row["unit"]})
+    owed += sorted({f"{args.domain}-word-{word}" for word in words})
 
     with open(args.out, "w", encoding="utf-8") as out:
-        out.write("// GENERATED from assets/syncthing-options.nix. Do not edit.\n")
+        out.write(f"// GENERATED from assets/{args.domain}-options.nix. Do not edit.\n")
         out.write("\n")
-        out.write("/// Every option Syncthing exposes that this system offers.\n")
+        out.write(f"/// Every option this system offers for `{args.domain}`.\n")
         out.write("///\n")
         out.write("/// In the order the screen draws them, which is the order the table\n")
         out.write("/// declares — an attribute set would sort alphabetically, and the\n")
@@ -188,7 +240,7 @@ def main() -> None:
             if row["kind"] == "switch":
                 kind = "Kind::Switch"
             elif row["kind"] == "number":
-                unit = "None" if row["unit"] is None else f'Some("syncthing-unit-{row["unit"]}")'
+                unit = "None" if row["unit"] is None else f'Some("{args.domain}-unit-{row["unit"]}")'
                 kind = (
                     f'Kind::Number {{ least: {row["least"]}, most: {row["most"]}, '
                     f"unit: {unit} }}"
@@ -204,7 +256,7 @@ def main() -> None:
                 kind = f"Kind::Ring(&[{words_of}])"
             out.write("    Setting {\n")
             out.write(f'        id: "{row["id"]}",\n')
-            out.write(f'        label: "syncthing-opt-{row["id"]}",\n')
+            out.write(f'        label: "{args.domain}-opt-{row["id"]}",\n')
             out.write(f'        key: "{row["key"]}",\n')
             out.write(f"        within: {within},\n")
             out.write(f"        scope: Scope::{row['scope']},\n")
@@ -221,8 +273,8 @@ def main() -> None:
     fixed = sum(1 for row in rows if row["fixed"])
     advanced = sum(1 for row in rows if row["advanced"])
     print(
-        f"{len(rows)} options ({fixed} the flake owns, {advanced} in the drawer), "
-        f"{len(owed)} keys",
+        f"{args.domain}: {len(rows)} options ({fixed} the flake owns, "
+        f"{advanced} in the drawer), {len(owed)} keys",
         file=sys.stderr,
     )
 

@@ -37,8 +37,159 @@ pub const COOKIE: &str = match option_env!("RONOCTUA_TOR_COOKIE") {
     None => "/run/tor/control_auth_cookie",
 };
 
-/// The SOCKS address the browser is pointed at.
-pub const SOCKS: &str = "127.0.0.1:9050";
+/// Where systemd is, baked at build time.
+///
+/// By its STORE PATH and not by name: in a unit the `PATH` is minimal, and the
+/// failure would show up far from the cause (AGENTS.md).
+pub const SYSTEMCTL: &str = match option_env!("RONOCTUA_SYSTEMCTL") {
+    Some(p) => p,
+    None => "systemctl",
+};
+
+/// The SOCKS address Tor listens on.
+///
+/// IT COMES FROM THE FLAKE NOW, and that is a fix rather than a tidy-up. It
+/// used to be this literal alone, while `nix/modules/tor.nix` declared no
+/// `SOCKSPort` at all — so the two agreed because the nixpkgs default happened
+/// to be the same number. Nothing would have said otherwise the day either
+/// moved: the row on screen would have named a port nothing listened on, and a
+/// browser pointed at it would have failed with a connection refused that
+/// blames the network.
+///
+/// The module now declares it, passes it here, and `tor-socks-is-declared-once`
+/// compares the two in BOTH directions.
+pub const SOCKS: &str = match option_env!("RONOCTUA_TOR_SOCKS") {
+    Some(s) => s,
+    None => "127.0.0.1:9050",
+};
+
+/// The directory whose torrc fragment this system owns.
+///
+/// `%include`d by the flake's torrc, group-writable by `tor`, created by
+/// tmpfiles — the shape `/var/lib/ronoctua/keyd` already has for the keyboards.
+/// See [`fragment`] for why the configuration lives in a file rather than in
+/// `SETCONF`.
+pub const FRAGMENT_DIR: &str = match option_env!("RONOCTUA_TOR_FRAGMENT") {
+    Some(s) => s,
+    None => "/var/lib/ronoctua/tor",
+};
+
+/// The file inside it. One file, rewritten whole.
+pub const FRAGMENT: &str = "ronoctua.conf";
+
+/// Whether the unit is up.
+///
+/// THE SECTION EXISTS BECAUSE OF THIS TYPE. Before it, the whole Tor section
+/// of the network view lived behind `if let Some(scene)` — and the control
+/// socket only answers when Tor is RUNNING. So a stopped Tor drew no heading,
+/// no row and no key: there was no way to turn it on, and the screen did not
+/// say the program existed. The owner reported exactly that.
+///
+/// `Absent` is not `Stopped`, and the difference reaches the screen: a machine
+/// that never installed Tor has nothing to offer, and a row about it would be
+/// a row about a program that is not there. Only `LoadState` tells them apart —
+/// `is-active` answers `inactive` for both.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Standing {
+    /// systemd says it is active.
+    Running,
+    /// systemd says it is not. THIS is the state that had no screen.
+    Stopped,
+    /// Coming up or going down.
+    Moving,
+    /// There is no such unit on this machine.
+    Absent,
+    /// `systemctl` could not be asked — a build sandbox, a container with no
+    /// systemd. NOT the same as stopped, and the screen says a different thing.
+    #[default]
+    Unknown,
+}
+
+impl Standing {
+    /// The id, which is the stem of the text key.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Moving => "moving",
+            Self::Absent => "absent",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Is there a unit here at all to act on?
+    ///
+    /// What the view asks before drawing the switch: `Absent` and `Unknown`
+    /// both mean there is nothing to start, and for different reasons.
+    #[must_use]
+    pub const fn actionable(self) -> bool {
+        matches!(self, Self::Running | Self::Stopped | Self::Moving)
+    }
+
+    /// Which way the switch points — `true` means "pressing it starts Tor".
+    ///
+    /// This replaces a hard-coded `false` at the one place the row was built.
+    /// The comment beside that literal explained the defect it was fixing —
+    /// reading the CIRCUIT as the switch — and fixed it by making the row
+    /// stop-only, which left `Order::Tor(true)` unreachable from the whole
+    /// shell. The unit's own standing is the answer that was missing.
+    #[must_use]
+    pub const fn starts(self) -> bool {
+        matches!(self, Self::Stopped)
+    }
+
+    /// What `systemctl show -p LoadState -p ActiveState --value` said.
+    ///
+    /// Two lines, in that order.
+    #[must_use]
+    pub fn of(said: &str) -> Self {
+        let mut lines = said.trim().lines();
+        let loaded = lines.next().unwrap_or("").trim();
+        let active = lines.next().unwrap_or("").trim();
+        if loaded == "not-found" {
+            return Self::Absent;
+        }
+        if loaded.is_empty() {
+            return Self::Unknown;
+        }
+        match active {
+            "active" => Self::Running,
+            "inactive" | "failed" => Self::Stopped,
+            "activating" | "deactivating" | "reloading" => Self::Moving,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Asks systemd how the unit is.
+///
+/// TWO QUESTIONS IN ONE CALL. `is-active` answers `inactive` both for a unit
+/// that is stopped and for one that DOES NOT EXIST; only `LoadState` tells
+/// them apart. The exit code is not the answer either: `is-active` exits
+/// non-zero for an inactive unit, so reading it would make "stopped" and
+/// "systemctl is not here" the same thing.
+#[must_use]
+pub fn standing(systemctl: &Path) -> Standing {
+    match std::process::Command::new(systemctl)
+        .args([
+            "show",
+            "-p",
+            "LoadState",
+            "-p",
+            "ActiveState",
+            "--value",
+            UNIT,
+        ])
+        .output()
+    {
+        Ok(out) => Standing::of(&String::from_utf8_lossy(&out.stdout)),
+        Err(e) => {
+            tracing::debug!(error = %e, "systemctl could not be asked about tor");
+            Standing::Unknown
+        }
+    }
+}
 
 /// What Tor says, as of one reading.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -262,6 +413,47 @@ impl Control {
         Ok(value_of(&reply, key))
     }
 
+    /// Makes the running daemon re-read its torrc.
+    ///
+    /// This is how the fragment reaches a Tor that is already up, and it goes
+    /// through the CONTROL SOCKET rather than through systemd on purpose:
+    /// `systemctl reload` would need a third verb in the polkit rule, and
+    /// `tor-polkit-is-narrow` refuses anything but `start` and `stop` — with a
+    /// reason, since a wider rule is a wider door for ever. A signal on a
+    /// socket the owner is already allowed to use costs nothing.
+    ///
+    /// # Errors
+    ///
+    /// The socket closed, or the daemon refused — which is what a torrc it
+    /// cannot parse looks like, and the message carries its words.
+    pub fn reload(&mut self) -> anyhow::Result<()> {
+        let answer = self.ask("SIGNAL RELOAD")?;
+        anyhow::ensure!(
+            answer.starts_with("250"),
+            "Tor would not reload its configuration: {}",
+            answer.trim()
+        );
+        Ok(())
+    }
+
+    /// What the daemon says an option is set to, right now.
+    ///
+    /// The proof that a fragment was actually read: writing a file and
+    /// signalling a reload are two things that can both succeed while the
+    /// value never changes — a typo in the option name is silently ignored by
+    /// Tor, and the screen would go on showing what the person typed.
+    ///
+    /// # Errors
+    ///
+    /// The socket closed. An option Tor does not know is `Ok(None)`.
+    pub fn conf(&mut self, key: &str) -> anyhow::Result<Option<String>> {
+        let reply = self.ask(&format!("GETCONF {key}"))?;
+        if !reply.starts_with("250") {
+            return Ok(None);
+        }
+        Ok(value_of(&reply, key))
+    }
+
     /// A new identity — the daemon builds fresh circuits.
     ///
     /// # Errors
@@ -310,6 +502,169 @@ impl Control {
 #[must_use]
 pub fn look(socket: &Path, cookie: &Path) -> Option<Scene> {
     Control::open(socket, cookie).ok()?.look().ok()
+}
+
+/// The configuration this system writes, and how it reaches Tor.
+///
+/// # Why a file and not `SETCONF`
+///
+/// The control socket can change a running Tor's configuration, and that was
+/// the obvious route. It is the wrong one twice over.
+///
+/// `SETCONF` does not survive a restart, so every setting would quietly revert
+/// the next time the unit came up — which is the silent-undo failure this
+/// project spends its checks hunting. `SAVECONF` does survive, and writes into
+/// the torrc, which here is a file in `/nix/store` and read-only by
+/// construction (invariant 6).
+///
+/// So the module `%include`s a directory this system owns, the view writes one
+/// file into it, and `SIGNAL RELOAD` makes the running daemon re-read the lot.
+/// The file is what survives the reboot; the signal is what makes the running
+/// daemon agree with it — the same division `ronoctua-display` uses for niri.
+///
+/// # And the flake still wins
+///
+/// `%include` comes out FIRST in the generated torrc, because Nix sorts
+/// attribute names and `%` sorts before letters. Tor takes the LAST value it
+/// sees for an option, so anything `nix/modules/tor.nix` declares overrides
+/// what is written here. That is not an accident to work around — it is
+/// invariant 6 on the screen: the flake keeps the cookie authentication, the
+/// control socket and the SOCKS port, those rows are drawn REFUSING, and
+/// everything else is the person's.
+pub mod fragment {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    /// One option's lines. A `Vec` because torrc has LINELISTS: `Bridge`
+    /// legitimately appears many times, and a single `String` would have made
+    /// "one bridge" the only expressible number.
+    pub type Lines = BTreeMap<String, Vec<String>>;
+
+    /// Where the file goes.
+    #[must_use]
+    pub fn path(dir: &Path) -> PathBuf {
+        dir.join(super::FRAGMENT)
+    }
+
+    /// Is this a name torrc could have?
+    ///
+    /// Letters and digits only, starting with a letter. It is not politeness:
+    /// a key is written straight into the file, so anything that can hold a
+    /// newline or a space is a way to write a directive nobody asked for.
+    #[must_use]
+    pub fn a_name(key: &str) -> bool {
+        !key.is_empty()
+            && key.starts_with(|c: char| c.is_ascii_alphabetic())
+            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+
+    /// Is this a value torrc could hold on one line?
+    ///
+    /// THE ONE THAT MATTERS. A bridge line is PASTED — the person copies it
+    /// out of a browser or an e-mail — and a pasted value that carries a
+    /// newline would end the `Bridge` directive and start whatever the rest of
+    /// the paste says. `ExitPolicy accept *:*` on the end of a bridge address
+    /// is a working torrc and a very different Tor.
+    ///
+    /// A carriage return counts, and so does a NUL: both end a line for some
+    /// reader somewhere, and neither is visible when it is pasted.
+    #[must_use]
+    pub fn a_value(value: &str) -> bool {
+        !value.contains(['\n', '\r', '\0'])
+    }
+
+    /// The fragment's text.
+    ///
+    /// Pure, so every rule above is testable with no Tor and no filesystem —
+    /// which a build sandbox is.
+    ///
+    /// # Errors
+    ///
+    /// A key or a value that could not go in a torrc safely. It names the one
+    /// it refused: a person who pasted something odd is owed the reason.
+    pub fn render(lines: &Lines) -> anyhow::Result<String> {
+        let mut out = String::from(
+            "# Written by ronoctua. Edited by hand, this file is overwritten.\n\
+             # What the flake declares wins over what is here: see\n\
+             # `ronoctua_tunnel::tor::fragment`.\n",
+        );
+        for (key, values) in lines {
+            anyhow::ensure!(a_name(key), "`{key}` is not a name torrc could have");
+            for value in values {
+                anyhow::ensure!(
+                    a_value(value),
+                    "`{key}` was given a value with a line break in it"
+                );
+                let value = value.trim();
+                if value.is_empty() {
+                    continue;
+                }
+                out.push_str(key);
+                out.push(' ');
+                out.push_str(value);
+                out.push('\n');
+            }
+        }
+        Ok(out)
+    }
+
+    /// Writes the fragment, atomically.
+    ///
+    /// Through a neighbouring temporary file and a rename, and the temporary
+    /// carries the PID: two doors are two PROCESSES, and two opens of one name
+    /// with truncate interleave into a file that is neither. The lesson is
+    /// `ronoctua-store`'s, and it cost a `display.json` that would not parse.
+    ///
+    /// # Errors
+    ///
+    /// The directory is not writable — which is what an owner outside the
+    /// `tor` group meets — or a value was refused by [`render`].
+    pub fn write(dir: &Path, lines: &Lines) -> anyhow::Result<()> {
+        let text = render(lines)?;
+        let final_path = path(dir);
+        let draft = dir.join(format!("{}.{}.new", super::FRAGMENT, std::process::id()));
+        std::fs::write(&draft, text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("{}: {e}", draft.display()))?;
+        // GROUP-READABLE, because it is TOR that reads it and this runs as the
+        // owner. `0640` and not `0644`: nothing outside the group has business
+        // reading which bridges this machine uses.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&draft, std::fs::Permissions::from_mode(0o640));
+        }
+        std::fs::rename(&draft, &final_path).map_err(|e| {
+            let _ = std::fs::remove_file(&draft);
+            anyhow::anyhow!("{}: {e}", final_path.display())
+        })
+    }
+
+    /// Reads back what was written, as lines.
+    ///
+    /// Used to fill the view: the file is the truth about what this system
+    /// asked for, and keeping a second copy in a preferences file would be two
+    /// truths. Comments and blank lines are skipped; anything else is
+    /// `key value`.
+    #[must_use]
+    pub fn read(dir: &Path) -> Lines {
+        let mut out = Lines::new();
+        let Ok(text) = std::fs::read_to_string(path(dir)) else {
+            return out;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once(char::is_whitespace) else {
+                continue;
+            };
+            out.entry(key.to_owned())
+                .or_default()
+                .push(value.trim().to_owned());
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -420,5 +775,128 @@ mod tests {
         assert_eq!(built, 1, "the block is one line with its rows inside");
         let whole = lines_of(reply)[0].1.clone();
         assert!(whole.contains("$ccc~three"), "a row was dropped: {whole}");
+    }
+
+    #[test]
+    fn absent_stopped_and_unaskable_are_three_different_words() {
+        // THE ONE THAT DECIDES WHAT THE SCREEN SAYS. `is-active` answers
+        // `inactive` both for a unit that is stopped and for one that does not
+        // exist, so a machine that never installed Tor would carry a switch
+        // for a program it does not have. Only `LoadState` tells them apart.
+        assert_eq!(Standing::of("loaded\nactive"), Standing::Running);
+        assert_eq!(Standing::of("loaded\ninactive\n"), Standing::Stopped);
+        assert_eq!(Standing::of("loaded\nfailed"), Standing::Stopped);
+        assert_eq!(Standing::of("loaded\nactivating"), Standing::Moving);
+        assert_eq!(Standing::of("loaded\ndeactivating"), Standing::Moving);
+        assert_eq!(Standing::of("not-found\ninactive"), Standing::Absent);
+        // AND A BUILD SANDBOX, where there is no systemd to ask at all.
+        assert_eq!(Standing::of(""), Standing::Unknown);
+        assert_eq!(Standing::of("loaded\nsomething new"), Standing::Unknown);
+        assert_eq!(Standing::default(), Standing::Unknown);
+        // EVERY ONE HAS ITS OWN WORD, because the screen says a different
+        // sentence for each and a shared id would make two of them one.
+        let ids = [
+            Standing::Running,
+            Standing::Stopped,
+            Standing::Moving,
+            Standing::Absent,
+            Standing::Unknown,
+        ]
+        .map(Standing::id);
+        let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "two standings share one word");
+    }
+
+    #[test]
+    fn a_pasted_bridge_cannot_smuggle_a_second_directive() {
+        // THE ONE THAT MATTERS IN THIS FILE. A bridge line is PASTED — out of
+        // a browser, out of an e-mail — and a pasted value carrying a newline
+        // would end the `Bridge` directive and start whatever came after it.
+        // `ExitPolicy accept *:*` on the end of a bridge address is a working
+        // torrc and a very different Tor.
+        let mut lines = fragment::Lines::new();
+        lines.insert(
+            "Bridge".to_owned(),
+            vec!["obfs4 10.0.0.1:443 CERT=x\nExitPolicy accept *:*".to_owned()],
+        );
+        let said = fragment::render(&lines).unwrap_err().to_string();
+        assert!(said.contains("Bridge"), "{said}");
+        assert!(said.contains("line break"), "{said}");
+        // A CARRIAGE RETURN AND A NUL COUNT TOO: both end a line for some
+        // reader somewhere, and neither is visible when it is pasted.
+        for bad in ["a\rb", "a\0b"] {
+            assert!(!fragment::a_value(bad), "`{bad:?}` was accepted");
+        }
+        // AND AN ORDINARY BRIDGE IS FINE.
+        assert!(fragment::a_value("obfs4 10.0.0.1:443 CERT=abc iat-mode=0"));
+    }
+
+    #[test]
+    fn a_key_that_is_not_a_torrc_name_is_refused() {
+        // A key goes straight into the file, so anything that can hold a space
+        // or a newline is another way to write a directive nobody asked for.
+        for bad in ["", "1Bridge", "Use Bridges", "Bridge\nExitPolicy", "-x"] {
+            assert!(!fragment::a_name(bad), "`{bad:?}` was accepted as a name");
+        }
+        for good in [
+            "UseBridges",
+            "ExitNodes",
+            "ClientTransportPlugin",
+            "Socks5Proxy",
+        ] {
+            assert!(fragment::a_name(good), "`{good}` was refused as a name");
+        }
+    }
+
+    #[test]
+    fn a_linelist_comes_out_as_one_line_each() {
+        // `Bridge` legitimately appears many times, and a single `String`
+        // would have made "one bridge" the only expressible number.
+        let mut lines = fragment::Lines::new();
+        lines.insert("UseBridges".to_owned(), vec!["1".to_owned()]);
+        lines.insert(
+            "Bridge".to_owned(),
+            vec!["obfs4 a:1 CERT=x".to_owned(), "obfs4 b:2 CERT=y".to_owned()],
+        );
+        // An empty value is DROPPED rather than written as a bare key: a
+        // `ExitNodes` with nothing after it is a torrc parse error, and the
+        // view produces one whenever a field is cleared.
+        lines.insert("ExitNodes".to_owned(), vec!["  ".to_owned()]);
+        let text = fragment::render(&lines).unwrap();
+        assert!(text.contains("\nBridge obfs4 a:1 CERT=x\n"), "{text}");
+        assert!(text.contains("\nBridge obfs4 b:2 CERT=y\n"), "{text}");
+        assert!(text.contains("\nUseBridges 1\n"), "{text}");
+        assert!(!text.contains("ExitNodes"), "{text}");
+        // AND IT SAYS WHOSE FILE IT IS, because somebody will find it and
+        // wonder whether editing it does anything.
+        assert!(text.starts_with("# Written by ronoctua."), "{text}");
+    }
+
+    #[test]
+    fn what_is_written_reads_back_as_what_went_in() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-torfrag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut lines = fragment::Lines::new();
+        lines.insert("UseBridges".to_owned(), vec!["1".to_owned()]);
+        lines.insert(
+            "Bridge".to_owned(),
+            vec!["obfs4 a:1 CERT=x".to_owned(), "obfs4 b:2 CERT=y".to_owned()],
+        );
+        fragment::write(&dir, &lines).unwrap();
+        assert_eq!(fragment::read(&dir), lines);
+        // THE DRAFT IS GONE: a rename that left its temporary behind would
+        // fill this directory with one file per write, for ever.
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(left, vec![FRAGMENT.to_owned()], "a draft was left behind");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_fragment_that_is_not_there_is_no_settings_and_not_a_failure() {
+        // The ordinary case on a machine where nobody has configured Tor.
+        assert!(fragment::read(std::path::Path::new("/nonexistent/x")).is_empty());
     }
 }

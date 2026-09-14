@@ -212,6 +212,20 @@
   list = "cod-list_unordered";
   history = "cod-history";
 
+  # THE CLIPBOARD'S PIN. It was the literal `"*"` in `surface.rs`, which is a
+  # codepoint written by hand into a view — invariant 9 with no exception
+  # claimed for it, and the only glyph in the tree that was.
+  pinned = "cod-pinned";
+  # AND THE TWO THE CLIPBOARD'S SYNC DRAWS on the modeline, which are the same
+  # pair Syncthing's mark uses: a thing travelling, and a thing that is not.
+  clip-on = "md-clipboard_check_outline";
+  clip-off = "md-clipboard_off_outline";
+  # AND THE SHELL HISTORY'S PAIR. `history` above is the file manager's — a
+  # list of where you have been — and this is about whether the history is
+  # CROSSING THE NETWORK, which is a different fact and owes a different glyph.
+  shell-history-on = "md-history";
+  shell-history-off = "md-cloud_off_outline";
+
   # Generic — step 3 of section 4.2's resolution chain, when neither the table
   # nor the pixmap resolves. It has to be neutral and legible in one cell.
   generic = "cod-primitive_square";

@@ -99,6 +99,18 @@ ronoctua-keyboards = { path = "../ronoctua-keyboards" }
 # signals, so the crate polls on a thread of its own; a machine with neither
 # installed pays one `connect` that fails.
 ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+# THE SHARED ARITHMETIC OF A DECLARED SETTING. The Tor sheet asks a
+# `Kind` what a key should do to a row, and three more tables will.
+ronoctua-options = { path = "../ronoctua-options" }
+# CLIPCASCADE, SPOKEN NATIVELY. The clipboard panel has carried
+# "not integrated" since the placeholder went in; this is what makes
+# the word true, and it is why the footer's own history is what syncs
+# rather than a second watcher of the same clipboard.
+ronoctua-clipcascade = { path = "../ronoctua-clipcascade" }
+# THE SHELL HISTORY. `LEADER s h` is the first screen this distro has ever
+# had for it: `atuin` was installed and configured by a rebuild, and
+# choosing between two search modes is not a decision the size of one.
+ronoctua-atuin = { path = "../ronoctua-atuin" }
 ronoctua-world = { path = "../ronoctua-world" }
 # WHO ELSE IS ON THIS NETWORK: the unprivileged ICMP sweep and the vendor
 # behind a hardware address. No daemon and no privilege — see the crate.

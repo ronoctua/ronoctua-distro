@@ -147,7 +147,19 @@ pkgs.testers.runNixOSTest {
           machine.succeed("systemctl start tor.service")
 
       with subtest("the control socket answers, and answers honestly with no way out"):
-          machine.wait_for_file("/run/tor/control")
+          # THE UNIT FIRST, AND THEN THE FILE. `systemctl start` above returns
+          # as soon as systemd has forked it, so this used to wait fifteen
+          # minutes on a path that a unit which never came up was never going
+          # to create — and the failure said "file did not appear", which
+          # names the symptom and not the cause. `wait_for_unit` fails in
+          # seconds and with Tor's own words in the journal.
+          try:
+              machine.wait_for_unit("tor.service", timeout=120)
+          except Exception:
+              print(machine.succeed("systemctl status tor.service --no-pager -l || true"))
+              print(machine.succeed("journalctl -u tor --no-pager | tail -40 || true"))
+              raise
+          machine.wait_for_file("/run/tor/control", timeout=120)
           # THE COOKIE IS THE WHOLE OF THE AUTHENTICATION, and the owner reads
           # it by being in the group — not by a rule of ours.
           groups = machine.succeed(f"groups {user}")

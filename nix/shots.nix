@@ -130,6 +130,19 @@ pkgs.testers.runNixOSTest {
     ]
     ++ xvfb.packages;
 
+    # TOR, INSTALLED AND STOPPED — which is the state the owner reported: he
+    # could not find a way to switch the network ON. `Standing` comes from
+    # `systemctl show -p LoadState -p ActiveState`, so the unit has to EXIST
+    # for the sheet to say anything but "not installed"; and it must not be
+    # started, because a machine that boots into Tor is not this distro's
+    # arrangement (`nix/modules/tor.nix`, and the polkit rule's two verbs).
+    #
+    # `services.tor` and not `ronoctua.tor`: this node is a bare NixOS with a
+    # handful of packages, not the distro, and importing the module would pull
+    # the whole option tree in for one unit file.
+    services.tor.enable = true;
+    systemd.services.tor.wantedBy = lib.mkForce [ ];
+
     fonts.enableDefaultPackages = false;
     fonts.packages = [ fonts.noctua-iosevka-core ];
 
@@ -237,12 +250,21 @@ pkgs.testers.runNixOSTest {
         return n
 
 
-    def lacks_colour(hex_value, of):
-        """The other half of `has_colour`: not one pixel of `of` is that colour,
-        at the same twelve per cent. What proves a theme LEFT the screen."""
+    def lacks_colour(hex_value, of, fuzz=12):
+        """The other half of `has_colour`: not one pixel of `of` is that colour.
+        What proves a theme LEFT the screen.
+
+        `fuzz` IS A PARAMETER, and twelve is not always right. Twelve per cent
+        absorbs the antialiasing of ONE colour; telling two colours APART needs
+        less, and the theme chooser is where that showed. With `cyber` in force
+        its two titles are drawn in `text.group`, `#96A6F7`, and every theme
+        within four rows of it has an accent inside twelve per cent of that —
+        midnight 9.5, industrial 10.2, owl 6.6, darkside 5.9, all measured. So
+        the assertion "the row below has not appeared yet" was reading the
+        chooser's own headings and failing about the wrong thing."""
         n = int(
             machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick {of} -fuzz 12% "
+                f"${pkgs.imagemagick}/bin/magick {of} -fuzz {fuzz}% "
                 f"-fill '#000000' +opaque '{hex_value}' -fill '#FFFFFF' "
                 f"-opaque '{hex_value}' -format '%[fx:int(mean*w*h+0.5)]' info:"
             ).strip()
@@ -291,6 +313,100 @@ pkgs.testers.runNixOSTest {
         "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
         timeout=90,
     )
+
+    with subtest("the clipboard with an EMPTY history — the photographed defect"):
+        # -----------------------------------------------------------------
+        # THIS IS THE STATE THE OWNER SENT A PHOTOGRAPH OF. The panel used to
+        # reserve three lines and draw them at `end - 3`, `end - 2` and
+        # `end - 1`, where `end` is the top of the region plus the number of
+        # rows — and with no history that number is ONE. Nothing clamped them,
+        # so `ClipCascade: not integrated` landed on the MINIBUFFER's line and
+        # the actions strip landed on the row that says the history is empty.
+        #
+        # An empty history is the FIRST state to photograph and was the only
+        # one nobody had: there was no layout test of the clipboard at all.
+        #
+        # IT RUNS FIRST, before anything opens a WINDOW: it gives the region
+        # back with `Escape`, and an `Escape` with a window focused closes that
+        # window — which took the file manager out from under the theme
+        # chooser's subtest when this sat in the middle.
+        # -----------------------------------------------------------------
+        control("clipboard-open")
+        shot("30-clipboard-empty", lines=10)
+        # THE REGION CARRIES MORE THAN ONE LINE OF INK, and that is the
+        # measurement — not a word on it.
+        #
+        # Before the fix the drawn list was ONE row ("Nothing copied yet") and
+        # the other three lines were painted OUTSIDE the region entirely, at
+        # `end - 3`, `end - 2` and `end - 1`, which with `grid.lines == 1`
+        # land on the modeline, the minibuffer and that single row. So the
+        # region itself held one inked row while the screen showed four lines
+        # of clipboard. Now every one of them is a ROW, and the region is as
+        # tall as they are.
+        w, h, x, y = niri_geometry()
+        region = f"{w}x{10 * LINE}+{x}+{y + h - 10 * LINE}"
+        inked = rows_with_ink(region)
+        assert inked > LINE, (
+            f"the clipboard's region has {inked} rows of ink with an empty "
+            "history; the sections were drawn somewhere else"
+        )
+        focus_niri()
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.sleep(1)
+
+    with subtest("Tor: the section exists with the daemon STOPPED"):
+        # -----------------------------------------------------------------
+        # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way
+        # to turn Tor on. The section lived behind `if let Some(scene)`, and
+        # the control socket only answers when Tor is already running — so a
+        # stopped Tor drew no heading, no row and no key.
+        #
+        # This machine does not run Tor, which is exactly the case being
+        # photographed: the heading has to be there anyway, with a row that
+        # says what the UNIT is doing.
+        #
+        # `network-tor-open` AND NOT A COUNT OF `TAB`s. The first version of
+        # this pressed `TAB` nine times and the picture came out on the Wi-Fi
+        # section — the ring's length depends on what hardware the machine
+        # has, and this VM has neither radio nor cable. A guess that produces
+        # a picture is worse than no picture.
+        # -----------------------------------------------------------------
+        # THE LIST FIRST, so the sheet can be told from it. This subtest had
+        # NO ASSERTION, and that is how it passed twice on a picture of the
+        # wrong screen: first the nine `TAB`s that landed on Wi-Fi, then
+        # `fresh_at` looking for a row that a machine without Tor does not
+        # draw. Two pictures that are equal prove the door opened nothing.
+        control("network-open")
+        machine.sleep(1)
+        shot("31a-network-list", lines=12)
+        focus_niri()
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.sleep(1)
+
+        control("network-tor-open")
+        shot("31-tor-stopped", lines=12)
+        list_shot = machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/31a-network-list.png -format '%#' info:"
+        ).strip()
+        sheet_shot = machine.succeed(
+            "${pkgs.imagemagick}/bin/magick /tmp/31-tor-stopped.png -format '%#' info:"
+        ).strip()
+        assert list_shot != sheet_shot, (
+            "`network-tor-open` drew the same screen as `network-open`: "
+            "the sheet was never opened"
+        )
+        # AND IT IS NOT A BLANK SCREEN EITHER. The sheet is a definition list
+        # — the service, the path, the bridges, the onion services and the
+        # drawer — so nearly every line of it carries ink, which a view that
+        # opened on nothing would not.
+        w, h, x, y = niri_geometry()
+        tall = LINE * 12
+        assert rows_with_ink(f"{w}x{tall}+{x}+{y + h - tall}") > tall // 2, (
+            "the Tor sheet came out mostly blank"
+        )
+        focus_niri()
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.sleep(1)
 
     with subtest("the footer at rest — two lines, and no bell"):
         shot("1-footer-at-rest", lines=2)
@@ -1278,17 +1394,30 @@ pkgs.testers.runNixOSTest {
             control("theme-open")
             shot("26-theme-chooser", lines=2 + CHOOSER_ROWS)
             has_colour(first_accent, at_least=20, of="/tmp/26-theme-chooser.png")
-            lacks_colour(second_accent, of="/tmp/26-theme-chooser.png")
+            lacks_colour(second_accent, of="/tmp/26-theme-chooser.png", fuzz=6)
 
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
             machine.sleep(1)
             shot("27-theme-preview", lines=2 + CHOOSER_ROWS)
             has_colour(second_accent, at_least=20, of="/tmp/27-theme-preview.png")
-            lacks_colour(first_accent, of="/tmp/27-theme-preview.png")
-            # The preview is the footer's alone: the window still wears the first.
+            lacks_colour(first_accent, of="/tmp/27-theme-preview.png", fuzz=6)
+            # THE PREVIEW REACHES THE WINDOW TOO, and this line used to assert
+            # the opposite — "the preview is the footer's alone: the window
+            # still wears the first". That WAS true, and the owner read it on
+            # screen and called it a theme worn by a strip of the display: the
+            # minibuffer changed colour while the windows, the desk and the
+            # terminals stayed in the old one. The answer was
+            # `theme::show_everywhere`, which writes `theme.json` — the channel
+            # the other doors already watch — so moving the cursor dresses
+            # every door. The assertion is inverted because the promise was.
+            #
+            # This is `docs/PENDING.md` item 8c's second layer, answered: it was
+            # never a broadcast defect. It was a subtest left asserting a
+            # promise that the themes delivery deliberately reversed, and it
+            # went unread because `.#shots` had not been run since.
             crop(upper, "/tmp/window-during-preview.png")
-            has_colour(first_accent, at_least=20, of="/tmp/window-during-preview.png")
-            lacks_colour(second_accent, of="/tmp/window-during-preview.png")
+            has_colour(second_accent, at_least=20, of="/tmp/window-during-preview.png")
+            lacks_colour(first_accent, of="/tmp/window-during-preview.png", fuzz=6)
 
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
             machine.sleep(2)
@@ -1326,11 +1455,32 @@ pkgs.testers.runNixOSTest {
             shot("29-theme-desk", lines=2 + CHOOSER_ROWS)
             # THE MOVE IS UPWARDS NOW. The cursor opens on the answer in
             # force, and that is the theme's own desk — so what this proves is
-            # the OTHER one: `<up>` lands on black, the compositor is shown it
-            # at once because the fragment IS the preview, and the file still
-            # says `theme` until `RET`.
+            # the OTHER one: `<up>` lands on black and the compositor is shown
+            # it at once, because the fragment IS the preview.
             machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
-            machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json || ! grep -q backdrop /root/.config/ronoctua/theme.json")
+            # AND THE FILE ALREADY SAYS IT, which is the documented PRICE of
+            # the preview being the broadcast: `theme::show_everywhere` writes
+            # the whole pair, because that file is the channel the other doors
+            # watch and a second one would be a second thing to keep in step.
+            # This line asserted the opposite — "the file still says `theme`
+            # until `RET`" — which was true before that change and has not been
+            # since; it went unread because `.#shots` had not been run.
+            machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
+            # `Esc` IS WHAT PAYS FOR IT, and that is the promise with teeth:
+            # looking at a list may not give a machine a choice it never made.
+            # Here a pair WAS committed, so what comes back is that pair —
+            # `View::chosen_before`, asked once when the chooser opened.
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+            machine.sleep(2)
+            machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
+            machine.succeed(
+                f"grep -q 'background-color \"{second_desk}\"' "
+                "/root/.config/ronoctua/niri-theme.kdl"
+            )
+            # AND NOW FOR REAL: the same three keys, and `RET` at the end.
+            control("theme-open")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
             machine.sleep(2)
             machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")

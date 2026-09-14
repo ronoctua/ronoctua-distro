@@ -212,8 +212,12 @@ pub fn host_it() -> Result<()> {
     // daemon signals, so somebody has to ask.
     let (tunnel_sender, tunnel_events) = channel::channel::<ronoctua_tunnel::Event>();
     let hand = match ronoctua_tunnel::watch(
+        // `systemctl` AND THE FRAGMENT DIRECTORY ARE IN `Places` NOW. They
+        // used to be a second parameter and a constant; both are answers to
+        // "where is it", which is what `Places` is, and Tor needed to be able
+        // to ask systemd where the unit stands before it could offer to start
+        // it.
         ronoctua_tunnel::Places::default(),
-        std::path::PathBuf::from(crate::network::SYSTEMCTL),
         move |e| {
             let _ = tunnel_sender.send(e);
         },
@@ -705,6 +709,44 @@ impl NetworkWindow {
                     self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                 }
             },
+            // TOR'S SETTINGS GO THROUGH THE SAME THREAD, and the sentence
+            // afterwards is not the same one: a fragment written while Tor is
+            // stopped is written and NOT reloaded, which is the ordinary way
+            // to configure bridges before the first start. Saying "written"
+            // when nothing was told about it would be the façade this project
+            // undoes.
+            Errand::TorConfigure(lines) => {
+                let running = matches!(
+                    self.tunnels.standing,
+                    ronoctua_tunnel::tor::Standing::Running
+                );
+                match self.hand.as_ref() {
+                    Some(h) => {
+                        h.send(ronoctua_tunnel::Order::Configure(lines));
+                        self.message = Some(self.texts.t(if running {
+                            key::ECHO_TOR_WRITTEN
+                        } else {
+                            key::ECHO_TOR_NOT_RUNNING
+                        }));
+                    }
+                    None => {
+                        self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                    }
+                }
+            }
+            Errand::TorAutostart(on) => match self.hand.as_ref() {
+                Some(h) => h.send(ronoctua_tunnel::Order::Autostart(on)),
+                None => {
+                    self.message = Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                }
+            },
+            // THE ONE THING THIS DOOR CANNOT DO IS TYPE. The minibuffer is the
+            // footer's, and this window has none — so it says where to go,
+            // which is what it already does for a Wi-Fi password and a VPN
+            // path.
+            Errand::TorEdit(_) => {
+                self.message = Some(self.texts.t(key::NETWORK_ANSWER_IN_THE_FOOTER));
+            }
             Errand::Delete(at) => {
                 let name = name_of(
                     self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
@@ -1131,8 +1173,8 @@ fn press_of(event: &KeyEvent) -> Option<crate::network::Press> {
             let typed = event.utf8.as_deref()?;
             let id = crate::network::OF_THE_VIEW
                 .iter()
-                .find(|(notation, _)| *notation == typed)
-                .map(|(_, id)| *id)?;
+                .find(|(notation, _, _)| *notation == typed)
+                .map(|(_, id, _)| *id)?;
             crate::network_words::press_of(id)?
         }
     })

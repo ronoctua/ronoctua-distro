@@ -571,6 +571,61 @@ struct Footer {
     /// modeline draws a mark for each — and empty on a machine that has
     /// neither, which is what draws nothing.
     tunnels: ronoctua_tunnel::Scene,
+    /// Which Tor setting the minibuffer is collecting a value for.
+    ///
+    /// The minibuffer answers by COMMAND ID, and one id serves all thirty-four
+    /// settings — so the id alone cannot say which row asked. Remembering it
+    /// here is what the Wi-Fi password does with its network, for the same
+    /// reason: the question is on screen, and the answer arrives later.
+    tor_editing: Option<&'static str>,
+    /// The clipboard's view — its cursor, and which entry is a QR code.
+    clip_view: crate::clipboard_view::View,
+    /// The shell history's view, while it is open.
+    history: Option<crate::history::View>,
+    /// What Atuin says, from this door's own thread.
+    atuin: ronoctua_atuin::Snapshot,
+    /// The handle that carries orders to it.
+    atuin_hand: Option<ronoctua_atuin::Hand>,
+    /// The channel the Atuin thread answers on.
+    ///
+    /// KEPT SO THE THREAD CAN BE RAISED LATE. `atuin status` is a PROCESS, not
+    /// a socket — the one place in this tree where a beat costs a fork — so a
+    /// machine that never opens `LEADER s h` must not pay one every thirty
+    /// seconds. The calloop source has to exist from the start, though, so the
+    /// sender is made here and the thread on the first open.
+    atuin_sender: Option<calloop::channel::Sender<ronoctua_atuin::Event>>,
+    /// Which Atuin setting the minibuffer is collecting a value for.
+    atuin_editing: Option<&'static str>,
+    /// What was typed for the password, for the one question between it and
+    /// the order.
+    ///
+    /// It is `take`n by the next answer and never written anywhere: `argv` is
+    /// world-readable through `/proc/*/cmdline`, and `cli::login` hands it to
+    /// `atuin` on STDIN for that reason.
+    atuin_password: Option<String>,
+    /// The login's answers so far — the address, then the account.
+    ///
+    /// THE PASSWORD IS NEVER HERE. It is the LAST question, and what it is
+    /// typed into goes straight into the order, which hands it to `atuin` on
+    /// STDIN and drops it. The shape ClipCascade's login already has.
+    atuin_login: Option<(String, String)>,
+    /// The handle that carries orders to ClipCascade's thread.
+    clipcascade_hand: Option<ronoctua_clipcascade::Hand>,
+    /// The channel that thread answers on.
+    clipcascade_sender: Option<calloop::channel::Sender<ronoctua_clipcascade::Event>>,
+    /// The two halves of a login, while they are being collected.
+    ///
+    /// THREE QUESTIONS AND ONE MINIBUFFER: the address, the account and the
+    /// password arrive one at a time, and the first two have to wait
+    /// somewhere. The PASSWORD never lands here — it goes straight into the
+    /// order, which derives the key and drops it.
+    clip_login: Option<(String, String)>,
+    /// What ClipCascade says, when its thread is up.
+    ///
+    /// `Snapshot::default()` is a machine that has not been set up, which
+    /// is the honest answer before anybody has said where a server is —
+    /// and it is what the rows draw from.
+    clipcascade: ronoctua_clipcascade::Snapshot,
     /// The thread that reads them and carries out their orders.
     tunnel_hand: Option<ronoctua_tunnel::Hand>,
     /// `LEADER s t`, while it is open. The cursor previews; `RET` commits.
@@ -661,6 +716,10 @@ struct Footer {
     syncthing_prefs: ronoctua_syncthing::prefs::Preferences,
     /// The watch on `syncthing.json`.
     _syncthing_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on `atuin.json` — the ring the modeline reads.
+    _atuin_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on `clipcascade.json`, likewise.
+    _clipcascade_watch: Option<ronoctua_files::notice::Notice>,
     /// The screens' view, when it is open.
     display: Option<crate::display::View>,
     /// The last reading of the screens. It is kept whether or not the view is
@@ -867,6 +926,12 @@ enum ViewState {
     Audio,
     /// Syncthing — `LEADER s s s`.
     Syncthing,
+    /// The shell's history — `LEADER s h h`.
+    ///
+    /// Ranked beside Syncthing, and for its reason: a cursor over a list of
+    /// settings holds nothing a person built by hand, so it yields to
+    /// everything above it.
+    History,
     /// The screens. Modal, and BELOW the radio, which IS the pairing
     /// question — the one thing on this list another machine is waiting on,
     /// and the reason the radio outranks everything here.
@@ -1071,6 +1136,17 @@ enum Click {
     Key(ronoctua_keymap::Key),
     /// Choose the candidate at index `n` in the finder and confirm.
     Candidate(usize),
+    /// A row of the shell history's view, by its place in the drawn list.
+    History(usize),
+    /// A row of the clipboard, by its place in the drawn list.
+    ///
+    /// ITS OWN VARIANT, and the reason is a defect that shipped: the clipboard
+    /// handed out `Candidate`, which routes into the `M-x` finder — so with
+    /// `M-x` closed the candidate list was empty, `choose` answered
+    /// `Action::Nothing`, and clicking a clipboard row did nothing at all. The
+    /// doc two variants down warns about this exact collision for the
+    /// application list, which got a variant of its own for it.
+    Clipboard(usize),
     /// Open the application at index `n` of the visible list.
     ///
     /// Its OWN variant, and not `Candidate`: the two lists take the same region
@@ -1345,14 +1421,6 @@ fn highlight_line(
     }
     push(&line[cursor..], cursor, tokens::color::TEXT_PRIMARY);
     out
-}
-
-/// A multi-line text on a single line.
-///
-/// The history list is one line per item: a text of five lines would take
-/// five items, and the history would become a single item on the screen.
-fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// How much of the width the clipboard list takes.
@@ -1846,12 +1914,12 @@ impl Inheritance {
     }
 }
 
-/// The mark of a PINNED entry in the clipboard history.
-///
-/// One character, in the column the list already reserves for the key. It is
-/// not a font icon on purpose: one cell fits there, and a Nerd Fonts glyph
-/// would depend on the icon table to say what an asterisk already says.
-pub const PINNED_MARK: &str = "*";
+// `PINNED_MARK` IS GONE, AND THAT IS INVARIANT 9 CLOSING.
+//
+// It was the literal `"*"` — a codepoint written by hand into a view, which is
+// the one thing invariant 9 has no exception for, and the only glyph in the
+// tree that was one. It is `assets/tokens/icons.nix`'s `pinned` now, and
+// `crate::clipboard_view` is what draws it.
 
 /// Brings the surface up and runs the event loop.
 /// Watch one file in a directory the CALLER found, making it if it is not there.
@@ -2011,6 +2079,23 @@ pub fn run() -> Result<()> {
         network_watch: crate::network::Watch::default(),
         lan_sender: None,
         tunnels: ronoctua_tunnel::Scene::default(),
+        tor_editing: None,
+        clip_view: crate::clipboard_view::View::fresh(),
+        history: None,
+        // THE MODELINE IS RIGHT FROM THE FIRST FRAME, at the price of two
+        // file reads. `default()` says "no account", so a machine that syncs
+        // its history drew nothing until somebody opened the view — which is a
+        // mark that answers a question by being absent.
+        atuin: ronoctua_atuin::at_rest(),
+        atuin_hand: None,
+        atuin_sender: None,
+        atuin_editing: None,
+        atuin_password: None,
+        atuin_login: None,
+        clipcascade: ronoctua_clipcascade::at_rest(),
+        clipcascade_hand: None,
+        clipcascade_sender: None,
+        clip_login: None,
         tunnel_hand: None,
         theme_chooser: None,
         locale: None,
@@ -2029,6 +2114,8 @@ pub fn run() -> Result<()> {
         syncthing: None,
         syncthing_prefs: ronoctua_syncthing::prefs::store().read(),
         _syncthing_watch: None,
+        _atuin_watch: None,
+        _clipcascade_watch: None,
         world: crate::world::cached(),
         world_places: ronoctua_world::prefs::places(),
         world_zones: crate::world::zones(&ronoctua_world::prefs::places()),
@@ -2418,8 +2505,20 @@ pub fn run() -> Result<()> {
         .insert_source(copies, |event, (), state: &mut Footer| {
             if let channel::Event::Msg(e) = event {
                 let bytes = e.content.bytes().len();
+                // IT CROSSES THE NETWORK FROM HERE, and that is what makes
+                // the word "integrated" true: the footer's own history IS what
+                // syncs, so there is no second watcher and no second history.
+                // The filter that keeps a PASSWORD off the wire is at the
+                // crate's boundary (`worth_sending`), not here — a second door
+                // onto it must not be able to forget.
+                let leaving = ronoctua_clipcascade::worth_sending(&e.kinds)
+                    .then(|| e.text().map(ToOwned::to_owned))
+                    .flatten();
                 if state.clipboard.register(e) {
                     tracing::debug!(bytes, "new entry in the clipboard history");
+                    if let Some(text) = leaving {
+                        state.tell_clipcascade(ronoctua_clipcascade::Order::Send(text));
+                    }
                     // It only redraws if the view is OPEN. Copying with the clipboard
                     // closed must not cost a frame.
                     if state.clipboard_open {
@@ -2603,6 +2702,48 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the syncthing.json watch: {e}"))?;
 
+    // AND THE TWO NEW RINGS, for exactly the same reason: `atuin.json` and
+    // `clipcascade.json` each have TWO writers — this footer and a window —
+    // and the modeline reads both with no view open. Only the MARK is taken
+    // here: the rest of each snapshot belongs to that crate's thread, and a
+    // door that overwrote it from a file would be a second reading with its
+    // own idea of what is true.
+    let (atuin_wish, atuin_wish_changed) = channel::channel::<()>();
+    state._atuin_watch = ronoctua_store::config_dir().and_then(|dir| {
+        watch_the_file(&dir, ronoctua_atuin::prefs::FILE, move || {
+            atuin_wish.send(()).is_ok()
+        })
+    });
+    handle
+        .insert_source(atuin_wish_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                let fresh = ronoctua_atuin::prefs::read().mark;
+                if fresh != state.atuin.mark {
+                    state.atuin.mark = fresh;
+                    state.draw_and_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the atuin.json watch: {e}"))?;
+
+    let (clip_wish, clip_wish_changed) = channel::channel::<()>();
+    state._clipcascade_watch = ronoctua_store::config_dir().and_then(|dir| {
+        watch_the_file(&dir, ronoctua_clipcascade::prefs::FILE, move || {
+            clip_wish.send(()).is_ok()
+        })
+    });
+    handle
+        .insert_source(clip_wish_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                let fresh = ronoctua_clipcascade::prefs::read().mark;
+                if fresh != state.clipcascade.mark {
+                    state.clipcascade.mark = fresh;
+                    state.draw_and_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the clipcascade.json watch: {e}"))?;
+
     // THE SCREENS, on a thread of their own — the arrangement above, and its
     // reason. A reading walks `/sys/class/drm` and asks the compositor twice,
     // and a monitor that answers over DDC/CI takes a fifth of a second: none
@@ -2666,8 +2807,12 @@ pub fn run() -> Result<()> {
     // apart.
     let (tunnel_sender, tunnel_events) = channel::channel::<ronoctua_tunnel::Event>();
     state.tunnel_hand = match ronoctua_tunnel::watch(
+        // `systemctl` AND THE FRAGMENT DIRECTORY ARE IN `Places` NOW. They
+        // used to be a second parameter and a constant; both are answers to
+        // "where is it", which is what `Places` is, and Tor needed to be able
+        // to ask systemd where the unit stands before it could offer to start
+        // it.
         ronoctua_tunnel::Places::default(),
-        std::path::PathBuf::from(crate::network::SYSTEMCTL),
         move |e| {
             let _ = tunnel_sender.send(e);
         },
@@ -2685,6 +2830,37 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the tunnel channel: {e}"))?;
+
+    // CLIPCASCADE. The channel is hung always; the THREAD only when this
+    // machine has already been told where a server is — a machine that never
+    // configured it opens no socket and costs nothing, which is the whole
+    // reason the clipboard's own panel could say "not integrated" honestly for
+    // so long.
+    let (clip_sender, clip_events) = channel::channel::<ronoctua_clipcascade::Event>();
+    state.clipcascade_sender = Some(clip_sender);
+    handle
+        .insert_source(clip_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.clipcascade_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the clipcascade channel: {e}"))?;
+    state.raise_clipcascade_if_configured();
+
+    // ATUIN, AND ITS CHANNEL IS HUNG WITHOUT ITS THREAD. `atuin status` is a
+    // process, so a beat costs a fork — and a machine that never opens
+    // `LEADER s h` must not pay one every thirty seconds for a view it does
+    // not use. The source exists from the start because calloop wants it to;
+    // the thread is raised by `open_history`.
+    let (atuin_sender, atuin_events) = channel::channel::<ronoctua_atuin::Event>();
+    state.atuin_sender = Some(atuin_sender);
+    handle
+        .insert_source(atuin_events, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(e) = event {
+                state.atuin_event(e);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the atuin channel: {e}"))?;
 
     // THE RADIO, on its own four threads — EAGERLY, for the power crate's
     // reason: the modeline draws a mark per connected device, and it draws it
@@ -3039,6 +3215,8 @@ impl Footer {
                 // is WELL. That is the owner's choice and it is theirs to
                 // make; the default is the house rule — nothing at rest.
                 syncthing: self.syncthing_mark(),
+                clip: self.clip_mark(),
+                history: self.history_mark(),
                 adrift: self.net.adrift(),
                 airplane: self.net.airplane(),
                 tunnel: self.net.tunnel().is_some(),
@@ -3361,6 +3539,16 @@ impl Footer {
             ));
             return;
         }
+        // THE TWO SYNC MARKS OPEN THEIR OWN VIEW, by the same command the key
+        // runs: the mouse reaches no door the keyboard does not.
+        if id == "clip" {
+            self.run_command("clipboard-open");
+            return;
+        }
+        if id == "history" {
+            self.run_command("atuin-open");
+            return;
+        }
         // A DEVICE'S MARK OPENS THAT DEVICE, whole — the owner's words: every
         // piece of information and every option for the one that was clicked.
         // It is the command `RET` on its row runs, with the path as the
@@ -3450,6 +3638,16 @@ impl Footer {
                 )
             }
             "tor" => Some(self.texts.t(ronoctua_i18n::key::HINT_TOR)),
+            "clip" => Some(self.texts.t(if self.clipcascade.syncing() {
+                ronoctua_i18n::key::HINT_CLIP_ON
+            } else {
+                ronoctua_i18n::key::HINT_CLIP_OFF
+            })),
+            "history" => Some(self.texts.t(if self.atuin.crossing() {
+                ronoctua_i18n::key::HINT_HISTORY_ON
+            } else {
+                ronoctua_i18n::key::HINT_HISTORY_OFF
+            })),
             "vpn" => {
                 let name = self.net.tunnel().map(|t| t.id.clone())?;
                 Some(
@@ -5188,6 +5386,101 @@ impl Footer {
             // SYNCTHING. The view has two doors and the page has one key;
             // the four commands that were here before opened a browser and
             // echoed one line, which was the whole of it.
+            // THE SHELL'S HISTORY — `LEADER s h h`. It is the first screen
+            // this distro has ever had for `atuin`: the binary was installed
+            // and configured by a rebuild, and choosing between two search
+            // modes is not a decision the size of one.
+            "atuin-open" => self.open_history(),
+            "atuin-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["history".to_owned()], None);
+                }
+            }
+            "atuin-sync" => self.ask_atuin(ronoctua_atuin::Order::Sync),
+            "atuin-down" => self.history_press(crate::history::Press::Down),
+            "atuin-up" => self.history_press(crate::history::Press::Up),
+            "atuin-enter" => self.history_press(crate::history::Press::Enter),
+            "atuin-more" => self.history_press(crate::history::Press::More),
+            "atuin-less" => self.history_press(crate::history::Press::Less),
+            "atuin-back" => self.history_press(crate::history::Press::Escape),
+            // WHAT WAS TYPED comes back as this command's argument, and the
+            // view is what knows which question it answers.
+            // THE FOUR ANSWERS OF A LOGIN, one at a time, because there is one
+            // minibuffer.
+            //
+            // IT USED TO BE NONE OF THEM. `Errand::AskServer` opened the
+            // question under the id `atuin-setting`, whose arm needs
+            // `atuin_editing` to hold a setting — and a login sets nothing
+            // there, so the arm returned at once and what was typed was thrown
+            // away. `Order::LogIn` existed in the crate and was reachable from
+            // nowhere in the shell, which is the same defect the Tor section
+            // was reported for.
+            "atuin-server" => {
+                let Some(said) = argument else { return };
+                if said.trim().is_empty() {
+                    return;
+                }
+                self.atuin_login = Some((said.trim().to_owned(), String::new()));
+                self.mx.request("atuin-account", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            "atuin-account" => {
+                let (Some((address, _)), Some(said)) = (self.atuin_login.take(), argument) else {
+                    return;
+                };
+                if said.trim().is_empty() {
+                    return;
+                }
+                self.atuin_login = Some((address, said.trim().to_owned()));
+                // THE ONLY MASKED ONE. An address and an account are typed to
+                // be READ BACK and corrected; a password is not.
+                self.mx.request("atuin-password", true);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            "atuin-password" => {
+                let (Some((address, username)), Some(password)) =
+                    (self.atuin_login.take(), argument)
+                else {
+                    return;
+                };
+                // THE KEY IS THE FOURTH, and it is the FIRST MACHINE'S. Empty
+                // is the right answer on the machine that is registering; on
+                // the second one, leaving it empty gives an account whose
+                // history will not decrypt. The question says so.
+                self.atuin_login = Some((address, username));
+                self.atuin_password = Some(password.to_owned());
+                self.mx.request("atuin-key", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            "atuin-key" => {
+                let (Some((address, username)), Some(password)) =
+                    (self.atuin_login.take(), self.atuin_password.take())
+                else {
+                    return;
+                };
+                self.ask_atuin(ronoctua_atuin::Order::LogIn {
+                    address,
+                    username,
+                    password,
+                    key: argument.unwrap_or_default().trim().to_owned(),
+                });
+            }
+            "atuin-setting" => {
+                let (Some(which), Some(said)) = (self.atuin_editing.take(), argument) else {
+                    return;
+                };
+                let Some(setting) = ronoctua_atuin::options::by_id(which) else {
+                    return;
+                };
+                self.ask_atuin(ronoctua_atuin::Order::Set {
+                    section: setting.within.map(ToOwned::to_owned),
+                    key: setting.key.to_owned(),
+                    value: setting.typed(said),
+                });
+            }
             "syncthing-open" => self.open_syncthing(),
             "syncthing-window" => {
                 if let Ok(me) = std::env::current_exe() {
@@ -5486,11 +5779,88 @@ impl Footer {
                     m
                 };
             }
-            "clipboard-clipcascade-configure" => {
-                // IT DOES NOT EXIST YET, and the screen says so. A command that
-                // "opens" a setting that does not exist would be the façade this
-                // project spent months undoing — see docs/PENDING.md.
-                self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_CLIPCASCADE_MISSING));
+            // IT EXISTS NOW. This arm used to echo "ClipCascade is not
+            // integrated yet" — honest, and a placeholder held open by
+            // `docs/PENDING.md`'s only `decidir antes` item. The owner
+            // answered that question, and `ronoctua-clipcascade` is the
+            // answer; the key opens the rows that set it up.
+            "clipboard-sync" => self.clipboard_press(crate::clipboard_view::Press::Sync),
+            // THE THREE ANSWERS OF A LOGIN, one at a time, because there is
+            // one minibuffer. The password is the LAST and is never kept: it
+            // goes into the order, which derives the key and drops it.
+            "clipboard-server" => {
+                let Some(said) = argument else { return };
+                if said.trim().is_empty() {
+                    return;
+                }
+                self.clip_login = Some((said.trim().to_owned(), String::new()));
+                self.mx.request("clipboard-account", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            "clipboard-account" => {
+                let Some(said) = argument else { return };
+                let Some((server, _)) = self.clip_login.take() else {
+                    return;
+                };
+                if said.trim().is_empty() {
+                    return;
+                }
+                self.clip_login = Some((server, said.trim().to_owned()));
+                // THE ONLY MASKED ONE IN THIS FLOW. A server address and an
+                // account are typed to be READ BACK and corrected; a password
+                // is not.
+                self.mx.request("clipboard-password", true);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+            }
+            "clipboard-password" => {
+                let (Some((server, username)), Some(password)) = (self.clip_login.take(), argument)
+                else {
+                    return;
+                };
+                self.tell_clipcascade(ronoctua_clipcascade::Order::LogIn {
+                    server,
+                    username,
+                    password: password.to_owned(),
+                });
+            }
+            "clipboard-down" => self.clipboard_press(crate::clipboard_view::Press::Down),
+            "clipboard-up" => self.clipboard_press(crate::clipboard_view::Press::Up),
+            "clipboard-more" => self.clipboard_press(crate::clipboard_view::Press::More),
+            "clipboard-less" => self.clipboard_press(crate::clipboard_view::Press::Less),
+            // THE THREE TYPED SETTINGS. Each keeps the WHOLE record, taken
+            // from the reading on screen with one field replaced — the same
+            // merge the ring does, for the same reason.
+            "clipboard-salt" | "clipboard-rounds" | "clipboard-cap" => {
+                let Some(said) = argument else { return };
+                let said = said.trim();
+                let mut next = ronoctua_clipcascade::prefs::Settings {
+                    salt: self.clipcascade.salt.clone(),
+                    rounds: self.clipcascade.rounds,
+                    images: self.clipcascade.images,
+                    notify: self.clipcascade.notify,
+                    cap: self.clipcascade.cap,
+                    mark: self.clipcascade.mark,
+                };
+                match id {
+                    // AN EMPTY SALT IS A VALUE, and the upstream's default:
+                    // this is the one of the three where clearing the line
+                    // means something, so it is not refused.
+                    "clipboard-salt" => next.salt = said.to_owned(),
+                    // A NUMBER THAT WILL NOT PARSE IS NOT A ZERO. Zero rounds
+                    // derives a key against nothing and zero bytes would mean
+                    // "send nothing"; refusing leaves what was there.
+                    "clipboard-rounds" => match said.parse::<u32>() {
+                        Ok(n) if n > 0 => next.rounds = n,
+                        _ => return,
+                    },
+                    _ => match said.parse::<u64>() {
+                        Ok(n) => next.cap = n,
+                        Err(_) => return,
+                    },
+                }
+                self.clipboard_errand(crate::clipboard_view::Errand::Keep(Box::new(next)));
             }
             // THE MANUAL. It keeps the keyboard while open, like the `M-x`:
             // without that the arrows would go to the buffers and scroll nothing.
@@ -5715,12 +6085,81 @@ impl Footer {
                     .unwrap_or(crate::locale::Asking::Where(0));
                 self.locale_was_told(argument, asking);
             }
+            // TOR'S TYPED SETTINGS. One id for a single value and one for a
+            // list, because the two questions are different: a list is ADDED
+            // to, and an empty answer is how it is cleared. Sharing one
+            // sentence would have made "empty clears them all" appear over a
+            // field where it is not true.
+            "tor-setting" | "tor-lines" => {
+                let Some(which) = self.tor_editing.take() else {
+                    return;
+                };
+                let Some(setting) = ronoctua_tunnel::options::by_id(which) else {
+                    return;
+                };
+                let Some(said) = argument else {
+                    // ESCAPED. Nothing was typed, so nothing changes — and
+                    // that is not the same as an empty answer, which clears.
+                    return;
+                };
+                let mut values: Vec<String> =
+                    if matches!(setting.kind, ronoctua_options::Kind::List) {
+                        setting
+                            .read(&self.tunnels.settings)
+                            .cloned()
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                if said.trim().is_empty() {
+                    values.clear();
+                } else if matches!(setting.kind, ronoctua_options::Kind::List) {
+                    values.push(said.to_owned());
+                } else {
+                    values = vec![said.to_owned()];
+                }
+                // THE SEEN NETWORKS COME OFF THE WIRE, which is where this
+                // door keeps them — the same way `open_network_at` builds its
+                // facts a few hundred lines down. Taking it and putting it
+                // back is what lets the view borrow `self` mutably in between.
+                let wire = self.network_wire.take();
+                let seen: &[ronoctua_network::Network] =
+                    wire.as_ref().map_or(&[], crate::network::Wire::seen);
+                let facts = crate::network::Facts {
+                    net: &self.net,
+                    seen,
+                    watch: &self.network_watch,
+                    tunnels: &self.tunnels,
+                };
+                let errand = self
+                    .network
+                    .as_mut()
+                    .map(|v| v.tor_typed(&facts, setting.id, values));
+                self.network_wire = wire;
+                if let Some(errand) = errand {
+                    self.network_errand(errand);
+                }
+            }
             "network-import" => match argument {
                 Some(path) => self.network_looked_at(path.to_owned()),
                 None => self.network_press(crate::network::Press::Import),
             },
             "network-up" => self.network_press(crate::network::Press::Up),
             "network-down" => self.network_press(crate::network::Press::Down),
+            // TOR'S SHEET. They are commands because `network::OF_THE_VIEW`
+            // teaches them, and the keymap check is right to demand that
+            // everything it teaches can be RUN: a key in the list that does
+            // nothing is what that check exists to find.
+            // AT THE TOR SECTION, with its title at the top — the same door
+            // the modeline's mark uses, and the only deterministic way in:
+            // the section ring's length depends on what hardware the machine
+            // has, so a count of `TAB`s is a guess.
+            "network-tor-open" => {
+                self.open_network_with(crate::network::View::fresh_on_the_tor_sheet());
+            }
+            "network-tor-more" => self.network_press(crate::network::Press::More),
+            "network-tor-less" => self.network_press(crate::network::Press::Less),
+            "network-tor-back" => self.network_press(crate::network::Press::Escape),
             // CONNECT TO THE FOCUSED NETWORK.
             //
             // Three paths, and the difference between them is what the person
@@ -6683,6 +7122,31 @@ impl Footer {
     /// bus can refuse — polkit, a daemon on its way down — and a screen that
     /// said "radio on" when it did not turn on would be the footer lying
     /// about the hardware.
+    /// Opens the minibuffer for one Tor setting's value.
+    ///
+    /// TWO QUESTIONS, because a list is added to and a single value is
+    /// replaced — and an empty answer means "clear them all" only for the
+    /// first of those. One sentence over both would be wrong over one of them.
+    fn ask_for_tor_setting(&mut self, id: &'static str) {
+        let Some(setting) = ronoctua_tunnel::options::by_id(id) else {
+            return;
+        };
+        self.tor_editing = Some(setting.id);
+        // NOT A SECRET. A bridge line and a list of countries are typed to be
+        // READ BACK and corrected; the dots are for a password, and somebody
+        // who cannot see what they typed cannot fix a typo in a fingerprint.
+        self.mx.request(
+            if matches!(setting.kind, ronoctua_options::Kind::List) {
+                "tor-lines"
+            } else {
+                "tor-setting"
+            },
+            false,
+        );
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
     fn network_errand(&mut self, errand: crate::network::Errand) {
         use ronoctua_i18n::key;
         let Some(mut wire) = self.network_wire.take() else {
@@ -6884,6 +7348,44 @@ impl Footer {
                         self.echo_message(said);
                     }
                 }
+                None
+            }
+            // TOR'S SETTINGS, and the sentence depends on whether there is a
+            // daemon to tell. A fragment written while Tor is stopped is
+            // written and not reloaded — which is the ordinary way to
+            // configure bridges before the first start, and saying "written"
+            // as if something had been applied would be a small lie on the
+            // one screen that exists to stop them.
+            crate::network::Errand::TorConfigure(lines) => {
+                let running = matches!(
+                    self.tunnels.standing,
+                    ronoctua_tunnel::tor::Standing::Running
+                );
+                match self.tunnel_hand.as_ref() {
+                    Some(h) => {
+                        h.send(ronoctua_tunnel::Order::Configure(lines));
+                        Some(self.texts.t(if running {
+                            key::ECHO_TOR_WRITTEN
+                        } else {
+                            key::ECHO_TOR_NOT_RUNNING
+                        }))
+                    }
+                    None => Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE)),
+                }
+            }
+            crate::network::Errand::TorAutostart(on) => {
+                match self.tunnel_hand.as_ref() {
+                    Some(h) => h.send(ronoctua_tunnel::Order::Autostart(on)),
+                    None => {
+                        let said = self.texts.t(key::ECHO_NETWORK_UNAVAILABLE);
+                        self.echo_message(said);
+                    }
+                }
+                None
+            }
+            // THE MINIBUFFER IS HERE, so this door is the one that asks.
+            crate::network::Errand::TorEdit(id) => {
+                self.ask_for_tor_setting(id);
                 None
             }
             crate::network::Errand::Delete(at) => {
@@ -7474,10 +7976,27 @@ impl Footer {
     fn theme_changed(&mut self) {
         let changed = crate::theme::reload();
         if let Some(v) = self.theme_chooser.as_mut() {
-            v.committed_became(crate::theme::Choice {
+            let on_disk = crate::theme::Choice {
                 theme: tokens::theme::current(),
                 backdrop: crate::theme::committed_backdrop(),
-            });
+            };
+            // A DOOR DOES NOT LEARN ITS OWN PREVIEW BACK AS A CHOICE.
+            //
+            // This moved `committed` unconditionally, and since a preview
+            // WRITES the file (`theme::show_everywhere`, which is what makes
+            // the preview reach the other doors), the watcher handed this door
+            // its own write a moment later and `Esc` was left with nothing to
+            // return to. One arrow was enough. Measured in `.#shots`: the file
+            // read `{"backdrop":"black","theme":"midnight"}` both before and
+            // after `Esc`, with the key itself arriving in the journal.
+            //
+            // The rule the module header states is unchanged — what is on disk
+            // wins over what is being tried — because what this skips is not
+            // somebody else's write. It is this door's own, and this door is
+            // the one that knows it is only a preview.
+            if v.previewed() != Some(on_disk) {
+                v.committed_became(on_disk);
+            }
         }
         // A file written by hand (or by another footer) carries no fragments
         // with it; this door is the one that copies them.
@@ -7626,7 +8145,7 @@ impl Footer {
         // THE CLIPBOARD: with it open, the whole keyboard is its — `d`
         // removes, and does not fire `LEADER d`.
         if self.view() == ViewState::Clipboard {
-            self.clipboard_key(key.sym);
+            self.clipboard_key(key);
             return;
         }
 
@@ -7700,8 +8219,8 @@ impl Footer {
                     let notation = ronoctua_keymap::Key::simple(otherwise).notation();
                     crate::network::OF_THE_VIEW
                         .iter()
-                        .find(|(t, _)| *t == notation)
-                        .and_then(|(_, id)| crate::network_words::press_of(id))
+                        .find(|(t, _, _)| *t == notation)
+                        .and_then(|(_, id, _)| crate::network_words::press_of(id))
                 }
             };
             if let Some(press) = press {
@@ -7790,6 +8309,9 @@ impl Footer {
                         shown = Some(c);
                     }
                     if let Some(c) = shown {
+                        if let Some(v) = self.theme_chooser.as_mut() {
+                            v.previewing(c);
+                        }
                         self.show_theme_everywhere(c);
                     }
                     self.draw_and_paint();
@@ -7930,6 +8452,38 @@ impl Footer {
             };
             if let Some(press) = press {
                 self.syncthing_press(press);
+            }
+            return;
+        }
+
+        // THE SHELL'S HISTORY intercepts for the same reason as the other
+        // modals: with it open the whole keyboard is its, and `s` syncs rather
+        // than starting a leader sequence.
+        if self.view() == ViewState::History {
+            use ronoctua_keymap::Sym;
+            // BOTH THE SHIFTED ARROWS AND THE BARE LETTERS THROUGH ONE TABLE.
+            // The footer's own key becomes the notation `history::OF_THE_VIEW`
+            // holds, so a key written in one place is answered here and taught
+            // on the hint line by the same row.
+            let press = match key.sym {
+                Sym::Esc => Some(crate::history::Press::Escape),
+                other => {
+                    let notation = ronoctua_keymap::Key {
+                        mods: ronoctua_keymap::Mods {
+                            shift: key.mods.shift,
+                            ..ronoctua_keymap::Mods::default()
+                        },
+                        sym: other,
+                    }
+                    .notation();
+                    crate::history::OF_THE_VIEW
+                        .iter()
+                        .find(|(t, _)| *t == notation)
+                        .and_then(|(_, id)| crate::history::press_of(id))
+                }
+            };
+            if let Some(press) = press {
+                self.history_press(press);
             }
             return;
         }
@@ -8232,59 +8786,216 @@ impl Footer {
         ));
     }
 
-    /// A key with the clipboard view open.
+    /// One press, through the clipboard's own view.
     ///
-    /// It does **not** fall into the leader's keymap: the view captured the
-    /// keyboard, and `d` there is remove, not `LEADER d`. Each key fires a NAMED
-    /// command — the same ones as [`crate::leader::OF_CLIPBOARD_VIEW`],
-    /// which is the list the orphan check reads.
-    fn clipboard_key(&mut self, sym: ronoctua_keymap::Sym) {
-        use ronoctua_keymap::Sym;
-        let how_many = self.clipboard.how_many();
-        match sym {
-            Sym::Esc => {
+    /// ONE FUNCTION FOR THE KEY, THE MOUSE AND THE NAMED COMMAND. The view
+    /// decides what a row does; this carries out what it answered. A second
+    /// path would be a click that stopped agreeing with `RET` the day a row
+    /// moved — which is exactly what the old `Click::Candidate` was.
+    fn clipboard_press(&mut self, press: crate::clipboard_view::Press) {
+        let sync = self.clipcascade.clone();
+        let columns = self.screen_columns();
+        let (errand, at) = {
+            let facts = crate::clipboard_view::Facts {
+                queue: &self.clipboard,
+                sync: &sync,
+            };
+            let errand = self.clip_view.key(press, &facts, columns, &self.texts);
+            let at = self.clip_view.target_at(&facts, columns, &self.texts);
+            (errand, at)
+        };
+        // THE TWO CURSORS ARE ONE THING SEEN TWICE. The view's counts ROWS —
+        // entries, then the sync section — and `clip_cursor` counts ENTRIES,
+        // which is what the preview, the QR and the four `clipboard-*`
+        // commands are addressed by. The view is the one that MOVED, so it is
+        // the one that is believed; a row that is not an entry leaves
+        // `clip_cursor` where it was, because there is no entry to point at.
+        if let crate::clipboard_view::Target::Entry(n) = at
+            && n != self.clip_cursor
+        {
+            self.clip_cursor = n;
+            // The QR belonged to the PREVIOUS item. Leaving it on screen would
+            // show one thing's code beside another thing's text.
+            self.clip_qr = None;
+            self.decode_preview();
+        }
+        self.follow_cursor();
+        self.clipboard_errand(errand);
+    }
+
+    /// What the view asked for.
+    fn clipboard_errand(&mut self, errand: crate::clipboard_view::Errand) {
+        use crate::clipboard_view::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
                 self.clipboard_open = false;
+                self.clip_view.no_qr();
                 self.clip_qr = None;
                 self.first_page();
                 self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
                 return;
             }
-            // STEPPING THROUGH THE LIST. Without wrapping around: a list that goes
-            // back to the top by itself makes the finger lose where it was.
-            Sym::Down | Sym::Up => {
-                if how_many == 0 {
-                    return;
-                }
-                let fresh = if sym == Sym::Down {
-                    self.clip_cursor.saturating_add(1).min(how_many - 1)
-                } else {
-                    self.clip_cursor.saturating_sub(1)
-                };
-                if fresh == self.clip_cursor {
-                    return;
-                }
-                self.clip_cursor = fresh;
-                self.decode_preview();
-                // The QR belonged to the PREVIOUS item. Leaving it on screen would
-                // show one thing's code beside another thing's text.
-                self.clip_qr = None;
-                self.follow_cursor();
+            Errand::Copy(n) => {
+                self.clip_cursor = n;
+                self.run_command("clipboard-copy-of-new");
+                return;
             }
-            otherwise => {
-                // THE REST ARE NAMED COMMANDS, by the same table the orphan
-                // check reads. A key that is not there does nothing — and does
-                // not end the view, because ending on a wrong key would lose
-                // the place in the list.
-                let notation = ronoctua_keymap::Key::simple(otherwise).notation();
-                let Some((_, id)) = crate::leader::OF_CLIPBOARD_VIEW
+            Errand::Remove(n) => {
+                self.clip_cursor = n;
+                self.run_command("clipboard-remove");
+                return;
+            }
+            Errand::Pin(n) => {
+                self.clip_cursor = n;
+                self.run_command("clipboard-pin");
+                return;
+            }
+            Errand::Qr(n) => {
+                self.clip_cursor = n;
+                // THE VIEW SAYS WHICH ENTRY IS A CODE, and the surface keeps
+                // the matrix. Asking it here is what stops the two drifting:
+                // `q` is a toggle, and a matrix that outlived the toggle would
+                // be one item's code beside another item's text.
+                if self.clip_view.qr().is_none() {
+                    self.clip_qr = None;
+                    self.draw_and_paint();
+                    return;
+                }
+                self.run_command("clipboard-qrcode");
+                return;
+            }
+            Errand::Clear => {
+                self.run_command("clipboard-clear");
+                return;
+            }
+            // THE THREE THAT REACH CLIPCASCADE. Typing happens in the
+            // minibuffer, which is this door's and nobody else's.
+            Errand::AskServer => {
+                self.mx.request("clipboard-server", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            Errand::AskAccount => {
+                self.mx.request("clipboard-account", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            // THESE TWO REACHED NOBODY. They moved the local SNAPSHOT and
+            // nothing else — so the switch flipped back the moment the thread
+            // sent its next reading, the preferences file never changed, and
+            // "forget this account" forgot nothing: the derived key stayed at
+            // `0600` and the next start logged straight back in. `Order::Enable`
+            // and `Order::LogOut` existed in the crate and were unreachable
+            // from the whole shell, which is the defect this delivery began by
+            // fixing one crate over, in the Tor section.
+            //
+            // The snapshot is still moved, and that is the display view's
+            // `text_pending`: the row answers the key at once, and the thread's
+            // reading confirms it a moment later.
+            Errand::Sync(on) => {
+                self.clipcascade.enabled = on;
+                self.tell_clipcascade(ronoctua_clipcascade::Order::Enable(on));
+                let said = self.texts.t(if on {
+                    ronoctua_i18n::key::ECHO_CLIPBOARD_SYNCED
+                } else {
+                    ronoctua_i18n::key::ECHO_CLIPBOARD_SYNC_OFF
+                });
+                self.echo_message(said);
+            }
+            Errand::LogOut => {
+                self.tell_clipcascade(ronoctua_clipcascade::Order::LogOut);
+                self.clipcascade = ronoctua_clipcascade::Snapshot::default();
+                let said = self.texts.t(ronoctua_i18n::key::ECHO_CLIPBOARD_SYNC_OFF);
+                self.echo_message(said);
+            }
+            Errand::Keep(settings) => {
+                // THE WHOLE RECORD, so the file never holds half of two
+                // changes. The snapshot takes them at once for the same reason
+                // as the switch above, and the boundary is what writes.
+                self.clipcascade.salt.clone_from(&settings.salt);
+                self.clipcascade.rounds = settings.rounds;
+                self.clipcascade.images = settings.images;
+                self.clipcascade.notify = settings.notify;
+                self.clipcascade.cap = settings.cap;
+                self.clipcascade.mark = settings.mark;
+                self.tell_clipcascade(ronoctua_clipcascade::Order::Keep(settings));
+            }
+            // THE THREE THAT ARE TYPED. One minibuffer, one question at a
+            // time — the shape the login already has.
+            Errand::AskSalt => {
+                self.mx.request("clipboard-salt", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            Errand::AskRounds => {
+                self.mx.request("clipboard-rounds", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            Errand::AskCap => {
+                self.mx.request("clipboard-cap", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+        }
+        self.follow_cursor();
+        self.draw_and_paint();
+    }
+
+    /// A key with the clipboard view open.
+    ///
+    /// It does **not** fall into the leader's keymap: the view captured the
+    /// keyboard, and `d` there is remove, not `LEADER d`. Each key fires a NAMED
+    /// command — the same ones as [`crate::leader::OF_CLIPBOARD_VIEW`],
+    /// which is the list the orphan check reads.
+    fn clipboard_key(&mut self, key: ronoctua_keymap::Key) {
+        use ronoctua_keymap::Sym;
+        // EVERY KEY GOES THROUGH THE VIEW, the arrows included.
+        //
+        // THEY DID NOT, AND IT COST TWO THINGS. `<down>` moved `clip_cursor`
+        // here — an index into the ENTRIES, clamped to `how_many - 1` — and
+        // left the view's own cursor where it was. So the highlight and the
+        // row `RET` acted on were two different rows: three presses of `<down>`
+        // and a `RET` copied entry ZERO. And because the clamp is the entry
+        // count, everything drawn BELOW the list — the whole ClipCascade
+        // section — could not be reached by the keyboard at all, only by the
+        // mouse. With an empty history the arrows returned at once and nothing
+        // moved anywhere.
+        //
+        // THE SHIFT IS KEPT, which `Key::simple` threw away: `S-<left>` and
+        // `<left>` reached this as one key, so a ring could not be turned. It
+        // is the shape `ViewState::History` already has, three screens up.
+        let press = match key.sym {
+            // `Esc` GOES THROUGH THE VIEW TOO, because the view is what knows
+            // whether a QR code is on screen — and a code is a thing that is
+            // open, so the key that dismisses things has to dismiss it first.
+            Sym::Esc => Some(crate::clipboard_view::Press::Escape),
+            other => {
+                let notation = ronoctua_keymap::Key {
+                    mods: ronoctua_keymap::Mods {
+                        shift: key.mods.shift,
+                        ..ronoctua_keymap::Mods::default()
+                    },
+                    sym: other,
+                }
+                .notation();
+                crate::clipboard_view::OF_THE_VIEW
                     .iter()
                     .find(|(t, _)| *t == notation)
-                else {
-                    return;
-                };
-                self.run_command(id);
+                    .and_then(|(_, id)| crate::clipboard_view::press_of(id))
             }
+        };
+        // A KEY THAT IS NOT IN THE TABLE DOES NOTHING — and does not end the
+        // view, because ending on a wrong key would lose the place in the list.
+        if let Some(press) = press {
+            self.clipboard_press(press);
         }
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
@@ -8831,6 +9542,8 @@ impl Footer {
             ViewState::Power
         } else if self.syncthing.is_some() {
             ViewState::Syncthing
+        } else if self.history.is_some() {
+            ViewState::History
         } else if self.audio.is_some() {
             ViewState::Audio
         } else if self.display.is_some() {
@@ -9148,7 +9861,12 @@ impl Footer {
             return Grid {
                 columns: 1,
                 lines: self.expansion_ceiling().min(total.max(1)),
-                width: list_columns(columns),
+                // THE WHOLE WIDTH, because the row already resolved its own two
+                // columns against the screen (`clipboard_view::rows`). It used
+                // to be `list_columns`, which was right while the right-hand
+                // half was painted free-hand — and that half is what ended up
+                // on the minibuffer.
+                width: columns,
                 colon: 0,
                 icon: 0,
             };
@@ -9720,66 +10438,57 @@ impl Footer {
         }
         // THE CLIPBOARD beats everything else: like the manual and the `M-x`, it
         // captured the whole keyboard, and the region is its while it is open.
+        //
+        // IT GOES THROUGH ITS OWN VIEW NOW, and its rows carry BOTH halves —
+        // the history on the left and the item's facts on the right, as
+        // `fields` at known columns. It used to build the left half here and
+        // paint the right half free-hand at three absolute line numbers, and
+        // with a short history those numbers were above the top of the region:
+        // the owner photographed `ClipCascade: not integrated` sitting on the
+        // minibuffer. Nothing here computes a line.
         if self.view() == ViewState::Clipboard {
-            if self.clipboard.how_many() == 0 {
-                return vec![ExpansionRow {
-                    text: self.texts.t("clipboard-empty"),
-                    text_color: tokens::color::TEXT_DIM,
-                    ..ExpansionRow::empty_one()
-                }];
-            }
+            let sync = self.clipcascade.clone();
+            let facts = crate::clipboard_view::Facts {
+                queue: &self.clipboard,
+                sync: &sync,
+            };
             return self
-                .clipboard
-                .inputs()
-                .iter()
+                .clip_view
+                .rows(&facts, self.screen_columns(), &self.texts)
+                .into_iter()
                 .enumerate()
-                .map(|(i, e)| ExpansionRow {
-                    // The PIN in the key's column: it is the list's only mark, and
-                    // it fits where there is already a reserved column.
-                    key: if e.pinned {
-                        PINNED_MARK.to_owned()
-                    } else {
-                        String::new()
-                    },
-                    // ONE LINE. A line break becomes a space: a text of five
-                    // lines would take five items of the list and the history
-                    // would become a single item on the screen.
-                    //
-                    // AN IMAGE HAS NO LINE OF TEXT. The label is translated
-                    // (invariant 8) and carries the size, which is what tells
-                    // two captures apart in the list.
-                    text: e.text().map_or_else(
-                        || {
-                            // AND A REFUSAL SAYS WHAT ARRIVED. Without this
-                            // line the row would read as an image of nought
-                            // kilobytes — an entry that says nothing about
-                            // itself is the defect this variant exists to
-                            // remove, not a smaller version of it.
-                            e.unreadable().map_or_else(
-                                || {
-                                    format!(
-                                        "{} · {} KB",
-                                        self.texts.t("clipboard-image"),
-                                        e.content.bytes().len() / 1024
-                                    )
-                                },
-                                |no| {
-                                    self.texts.t_with(
-                                        ronoctua_i18n::key::CLIPBOARD_UNREADABLE,
-                                        &[("kind", no.kind.as_str())],
-                                    )
-                                },
-                            )
-                        },
-                        one_line,
-                    ),
-                    text_color: if i == self.clip_cursor {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        tokens::color::TEXT_SECONDARY
-                    },
-                    key_color: tokens::color::STATE_SUCCESS,
-                    click: Some(Click::Candidate(i)),
+                .map(|(n, r)| ExpansionRow {
+                    // THE CLICK IS THE ROW, and the view turns it into a
+                    // target. It used to be `Click::Candidate`, which routes
+                    // into the `M-x` finder — so with `M-x` closed the
+                    // candidate list was empty and clicking a clipboard row
+                    // did NOTHING. It had been that way since the view was
+                    // written, and the `Click` enum's own doc warns about this
+                    // exact collision for another variant.
+                    click: Some(Click::Clipboard(n)),
+                    fields: r.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+        // THE SHELL'S HISTORY, through its own view — the same shape the
+        // network and the transfers use: its rows already resolved their own
+        // columns, so the region only places them.
+        if let Some(view) = self
+            .history
+            .as_ref()
+            .filter(|_| self.view() == ViewState::History)
+        {
+            let facts = crate::history::Facts { shot: &self.atuin };
+            return view
+                .rows(&facts, self.screen_columns(), &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: Some(Click::History(n)),
+                    fields: r.fields,
+                    foot: false,
                     ..ExpansionRow::empty_one()
                 })
                 .collect();
@@ -11481,6 +12190,20 @@ impl Footer {
                 let effect = self.leader.key(&self.tree, t);
                 self.apply_leader_effect(effect);
             }
+            // THE CLIPBOARD'S ROW, and the VIEW turns it into a target. It
+            // used to hand out `Candidate`, which routes into the `M-x`
+            // finder — so with `M-x` closed the candidate list was empty and
+            // clicking a clipboard row did nothing at all.
+            Some(Click::History(n)) => {
+                if let Some(v) = self.history.as_mut() {
+                    v.clicked(n);
+                }
+                self.history_press(crate::history::Press::Enter);
+            }
+            Some(Click::Clipboard(n)) => {
+                self.clip_view.clicked(n);
+                self.clipboard_press(crate::clipboard_view::Press::Enter);
+            }
             Some(Click::Application(n)) => {
                 let Some(l) = self.apps.as_mut() else {
                     return;
@@ -11672,6 +12395,10 @@ impl Footer {
                     let shown = moved.then(|| {
                         let c = v.focused_choice();
                         tokens::theme::set(c.theme);
+                        // THE POINTER'S PREVIEW IS MARKED TOO, for the reason
+                        // `theme_changed` gives: this door wrote the file, and
+                        // it must not read that back as somebody's choice.
+                        v.previewing(c);
                         c
                     });
                     if let Some(c) = shown {
@@ -11891,6 +12618,12 @@ impl Footer {
             ViewState::Power => self.power.as_ref().map(crate::power::View::cursor),
             ViewState::Audio => self.audio.as_ref().map(crate::audio::View::cursor),
             ViewState::Syncthing => self.syncthing.as_ref().map(crate::syncthing::View::cursor),
+            // THE ROW THE VIEW DREW, and not `clip_cursor`, which counts
+            // ENTRIES: the drawn list has a heading above them, so the two are
+            // off by one from the first press and the page would scroll to the
+            // wrong line.
+            ViewState::Clipboard => Some(self.clip_view.cursor()),
+            ViewState::History => self.history.as_ref().map(crate::history::View::cursor),
             ViewState::Locale => self.locale.as_ref().map(crate::locale::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
@@ -12417,6 +13150,8 @@ impl Footer {
         let screens = &self.display_snapshot;
         let bluetooth = &self.bluetooth;
         let network = &self.network;
+        let clipboard = &self.clip_view;
+        let history = &self.history;
         // AND WHICH VIEW IS ON SCREEN, decided in the ONE place that decides
         // it. The chain below used to ask in its own order — power, then the
         // radio, then the network — while `Footer::view()` ranks them the
@@ -12472,6 +13207,17 @@ impl Footer {
                 // connects or `f` forgets.
                 ViewState::Bluetooth => bluetooth.as_ref().map(|v| v.hint(texts)),
                 ViewState::Network => network.as_ref().map(|v| v.hint(texts)),
+                // THE CLIPBOARD, which was the ONE arm of this match that fell
+                // through to `None`. Its keys were taught by a strip the panel
+                // painted itself, from the LONG `cmd-…` labels, in one colour,
+                // with the separator written into the Rust — and on a short
+                // history that strip landed on a row of the list. It is a hint
+                // like every other now: on the minibuffer's line, elided with
+                // an ellipsis, and the rest reachable through the fold.
+                ViewState::Clipboard => Some(clipboard.hint(texts)),
+                // THE SHELL'S HISTORY: `s` syncs and `S-<arrows>` turn a
+                // value, and nothing on a row says so.
+                ViewState::History => history.as_ref().map(|v| v.hint(texts)),
                 _ => None,
             }
             .filter(|h| !h.is_empty())
@@ -13603,70 +14349,21 @@ impl Footer {
                     }
                 }
 
-                // WHAT THE ITEM IS: types and size, on a single dimmed line.
-                if let Some(e) = chosen {
-                    let sheet = format!(
-                        "{}  {}  ·  {}  {} B",
-                        self.texts.t("clipboard-types"),
-                        e.kinds.first().map(String::as_str).unwrap_or("-"),
-                        self.texts.t("clipboard-size"),
-                        e.content.bytes().len()
-                    );
-                    spans.push(ronoctua_render::Span {
-                        size: ronoctua_render::Size::Grid,
-                        text: layout::elide_end(&sheet, panel),
-                        line: end.saturating_sub(3),
-                        column: start,
-                        color: tokens::color::TEXT_DIM,
-                        edge: false,
-                        foot: false,
-                    });
-                }
-
-                // CLIPCASCADE, telling the truth. The integration does not exist
-                // yet (docs/PENDING.md), and an indicator that pretended
-                // "connected" would be the façade this project undoes.
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Grid,
-                    text: layout::elide_end(
-                        &format!(
-                            "{}: {}",
-                            self.texts.t("clipboard-clipcascade"),
-                            self.texts.t("clipboard-clipcascade-missing")
-                        ),
-                        panel,
-                    ),
-                    line: end.saturating_sub(2),
-                    column: start,
-                    color: tokens::color::STATE_WARNING,
-                    edge: false,
-                    foot: false,
-                });
-
-                // THE ACTIONS, with each one's key. They come out of the SAME
-                // table the orphan check reads — a legend written by hand would be
-                // the second copy that lies the day a key changes.
-                let actions = crate::leader::OF_CLIPBOARD_VIEW
-                    .iter()
-                    .map(|(t, id)| {
-                        format!(
-                            "{t} {}",
-                            self.command_registry
-                                .search(id)
-                                .map_or_else(|| (*id).to_owned(), |c| self.texts.t(c.label))
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("  ·  ");
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Grid,
-                    text: layout::elide_end(&actions, panel),
-                    line: end.saturating_sub(1),
-                    column: start,
-                    color: tokens::color::TEXT_DIM,
-                    edge: false,
-                    foot: false,
-                });
+                // THE THREE FIXED LINES ARE GONE, AND THAT IS THE FIX.
+                //
+                // They were drawn at `end - 3`, `end - 2` and `end - 1`, where
+                // `end` is the top of the region plus the number of rows — and
+                // with an empty history that number is ONE. Nothing clamped
+                // them to the top of the region, so `end - 2` landed on the
+                // MINIBUFFER and `end - 1` on the row that says the history is
+                // empty. That is exactly the photograph the owner sent, and it
+                // held for any history shorter than four entries.
+                //
+                // What those lines said now comes out of
+                // `crate::clipboard_view::View::rows` as ROWS, which the
+                // region places — and the actions strip is a HINT, on the
+                // minibuffer's line, elided with an ellipsis and reachable
+                // through the fold like every other view's.
             }
 
             // THE MODELINE'S BACKGROUND, one tone above the rest.
@@ -15470,6 +16167,237 @@ impl Footer {
     }
 
     /// Opens the Syncthing view in the footer.
+    /// Raises ClipCascade's thread, if this machine has been set up.
+    ///
+    /// NOT ON EVERY START. A machine that never told it where a server is
+    /// opens no socket — and this is what a laptop that only ever copies
+    /// locally should cost, which is nothing.
+    fn raise_clipcascade_if_configured(&mut self) {
+        if self.clipcascade_hand.is_some() {
+            return;
+        }
+        let prefs = ronoctua_clipcascade::prefs::read();
+        if prefs.server.is_empty() || prefs.username.is_empty() || !prefs.enabled {
+            return;
+        }
+        self.raise_clipcascade();
+    }
+
+    /// Raises it, whatever the preferences say.
+    ///
+    /// Called by the login, which has just written a server into them — and
+    /// which cannot wait for the next start to find out whether it worked.
+    fn raise_clipcascade(&mut self) {
+        if self.clipcascade_hand.is_some() {
+            return;
+        }
+        let Some(to_me) = self.clipcascade_sender.clone() else {
+            return;
+        };
+        self.clipcascade_hand = ronoctua_clipcascade::watch(move |e| {
+            let _ = to_me.send(e);
+        })
+        .ok();
+    }
+
+    /// Sends one order, raising the thread if it is not up.
+    fn tell_clipcascade(&mut self, order: ronoctua_clipcascade::Order) {
+        // A `Send` WITH NOTHING CONFIGURED IS DROPPED IN SILENCE. Every copy
+        // would otherwise raise a thread on a machine that never asked to
+        // sync, and then echo a refusal about it.
+        if self.clipcascade_hand.is_none() && matches!(order, ronoctua_clipcascade::Order::Send(_))
+        {
+            return;
+        }
+        self.raise_clipcascade();
+        match self.clipcascade_hand.as_ref() {
+            Some(h) => h.send(order),
+            None => {
+                let said = self.texts.t(ronoctua_i18n::key::CLIPBOARD_SYNC_DOWN);
+                self.echo_message(said);
+            }
+        }
+    }
+
+    /// A fresh reading, or something that arrived, from ClipCascade's thread.
+    fn clipcascade_event(&mut self, event: ronoctua_clipcascade::Event) {
+        match event {
+            ronoctua_clipcascade::Event::Snapshot(shot) => {
+                self.clipcascade = *shot;
+                // NOT `follow_cursor`: a reading ARRIVING is not a key press.
+                self.settle_region();
+            }
+            // WHAT CAME FROM ANOTHER MACHINE GOES INTO THE SAME HISTORY, by
+            // the same door a local copy uses. One history, which is the whole
+            // argument for speaking this protocol rather than running the
+            // upstream client beside our own watcher.
+            ronoctua_clipcascade::Event::Arrived(text) => {
+                let entry = ronoctua_clipboard::Entry {
+                    content: ronoctua_clipboard::Content::Text(text),
+                    kinds: vec!["text/plain".to_owned()],
+                    pinned: false,
+                };
+                if self.clipboard.register(entry) && self.clipboard_open {
+                    self.apply_geometry(self.interactivity());
+                }
+            }
+            ronoctua_clipcascade::Event::Done { refused, .. } => {
+                if let Some(reason) = refused {
+                    let said = self.texts.t_with(
+                        ronoctua_i18n::key::ECHO_CLIPBOARD_SYNC_FAILED,
+                        &[("reason", &reason)],
+                    );
+                    self.echo_message(said);
+                }
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// A fresh reading, or an order's answer, from Atuin's thread.
+    fn atuin_event(&mut self, event: ronoctua_atuin::Event) {
+        match event {
+            ronoctua_atuin::Event::Snapshot(shot) => {
+                self.atuin = *shot;
+                // NOT `follow_cursor`: a reading ARRIVING is not a key press,
+                // and a thirty-second beat that scrolled the page back would
+                // undo whatever somebody was doing. `settle_region` is the
+                // rule the network and the radio already follow.
+                self.settle_region();
+            }
+            ronoctua_atuin::Event::Key(key) => {
+                if let Some(v) = self.history.as_mut() {
+                    v.took_the_key(key);
+                }
+            }
+            ronoctua_atuin::Event::Done { refused, .. } => {
+                let said = refused.map_or_else(
+                    || self.texts.t(ronoctua_i18n::key::ECHO_ATUIN_SYNCED),
+                    |reason| {
+                        self.texts.t_with(
+                            ronoctua_i18n::key::ECHO_ATUIN_REFUSED,
+                            &[("reason", &reason)],
+                        )
+                    },
+                );
+                self.echo_message(said);
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// Opens the shell history's view in the footer.
+    fn open_history(&mut self) {
+        if self.history.is_some() {
+            self.follow_cursor();
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+            return;
+        }
+        // THE SAME GUARD THE OTHER TEN HAVE — see `region_is_free`. With any
+        // view open the others refuse AND SAY SO.
+        if !self.region_is_free("atuin-open") {
+            return;
+        }
+        // THE THREAD IS RAISED ON THE FIRST OPEN and kept: `atuin status` is a
+        // process, not a socket, and a machine that never opens this view must
+        // not pay a fork every thirty seconds for it.
+        if self.atuin_hand.is_none() {
+            let Some(to_me) = self.atuin_sender.clone() else {
+                return;
+            };
+            self.atuin_hand = ronoctua_atuin::watch(move |e| {
+                let _ = to_me.send(e);
+            })
+            .ok();
+        }
+        self.history = Some(crate::history::View::fresh());
+        self.first_page();
+        self.follow_cursor();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// One press, through the history's own view.
+    fn history_press(&mut self, press: crate::history::Press) {
+        let columns = self.screen_columns();
+        let errand = {
+            let facts = crate::history::Facts { shot: &self.atuin };
+            let Some(v) = self.history.as_mut() else {
+                return;
+            };
+            v.key(press, &facts, columns, &self.texts)
+        };
+        self.region_resized();
+        self.follow_cursor();
+        self.history_errand(errand);
+    }
+
+    /// What the history view asked for.
+    fn history_errand(&mut self, errand: crate::history::Errand) {
+        use crate::history::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.history = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+                return;
+            }
+            Errand::Order(order) => self.ask_atuin(order),
+            Errand::ShowKey => {
+                // THE KEY IS FETCHED ON THE THREAD, because `atuin key` is a
+                // process and the footer's loop is one thread — the
+                // `systemd-run --scope` trap, again.
+                match ronoctua_atuin::cli::key() {
+                    Ok(key) => {
+                        if let Some(v) = self.history.as_mut() {
+                            v.took_the_key(key);
+                        }
+                    }
+                    Err(e) => {
+                        let said = self.texts.t_with(
+                            ronoctua_i18n::key::ECHO_ATUIN_REFUSED,
+                            &[("reason", &e.to_string())],
+                        );
+                        self.echo_message(said);
+                    }
+                }
+            }
+            // TYPING HAPPENS IN THE MINIBUFFER, which is this door's.
+            Errand::AskServer => {
+                self.atuin_login = None;
+                self.atuin_password = None;
+                self.mx.request("atuin-server", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+            Errand::Edit(id) => {
+                self.atuin_editing = Some(id);
+                // NOT A SECRET: a filter and a frequency are typed to be READ
+                // BACK and corrected. The dots are for a password.
+                self.mx.request("atuin-setting", false);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+                self.draw_and_paint();
+                return;
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// Sends one order to Atuin's thread.
+    fn ask_atuin(&mut self, order: ronoctua_atuin::Order) {
+        match self.atuin_hand.as_ref() {
+            Some(h) => h.send(order),
+            None => {
+                let said = self.texts.t(ronoctua_i18n::key::ATUIN_ABSENT);
+                self.echo_message(said);
+            }
+        }
+    }
+
     fn open_syncthing(&mut self) {
         if self.syncthing.is_some() {
             self.follow_cursor();
@@ -15666,6 +16594,39 @@ impl Footer {
             self.apply_geometry(self.interactivity());
             self.draw_and_paint();
         }
+    }
+
+    /// Whether the clipboard's sync says anything, and which way.
+    ///
+    /// A MACHINE THAT NEVER SET IT UP SAYS NOTHING, whatever the ring holds —
+    /// the rule lives in `prefs::Mark::shows`, with the Syncthing mark's own
+    /// words for why.
+    ///
+    /// THE RING COMES OUT OF THE SNAPSHOT and not out of a field of this
+    /// struct. It was `self.clip_prefs`, read ONCE at start-up and never
+    /// again: turning the ring in the view wrote the file, and the modeline
+    /// went on drawing the old answer until the footer was restarted — a
+    /// setting that appears to do nothing until the next boot. The file is the
+    /// broadcast and the boundary is its reader; one reading, one answer.
+    fn clip_mark(&self) -> Option<bool> {
+        let syncing = self.clipcascade.syncing();
+        self.clipcascade
+            .mark
+            .shows(self.clipcascade.configured, syncing)
+            .then_some(syncing)
+    }
+
+    /// The same, for the shell's history — and out of the snapshot for the
+    /// same reason.
+    fn history_mark(&self) -> Option<bool> {
+        let syncing = self.atuin.crossing();
+        // CONFIGURED HERE MEANS "logged in": a machine with `atuin` installed
+        // and no account has nothing to say about syncing, and a glyph about
+        // it would be a glyph about a decision nobody has made.
+        self.atuin
+            .mark
+            .shows(self.atuin.logged_in, syncing)
+            .then_some(syncing)
     }
 
     /// Whether the modeline draws the Syncthing mark, and which one.

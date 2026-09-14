@@ -639,19 +639,58 @@ o `diskoScript` no `system.extraDependencies` para a avaliação ter menos a faz
 
 - acabou quando: `--execute` roda até o fim contra um disco virtual, e o sistema que ele instala boota
 
-### 5. Clipboard: o ClipCascade não está empacotado · decidir antes
+### 6. A porta-janela do clipboard · decidir antes, e a decisão MUDOU
 
-O painel mostra `ClipCascade: não integrado` e o comando de configurar diz o mesmo — honesto, e
-reservando o lugar.
+O clipboard virou uma vista (`clipboard_view.rs`) com tabela, dica gerada, seções e os ajustes do
+ClipCascade — mas continua tendo UMA porta, o rodapé. Todas as outras vistas do sistema têm duas.
 
-**O obstáculo é anterior ao código: ele não existe no nixpkgs.** Integrar exigiria empacotá-lo
-primeiro, e ele não é um binário solto — é um cliente que fala com um **servidor próprio**, com
-credenciais e um endereço para guardar. Isso traz duas coisas que este sistema trata com cuidado:
-mais um segredo (invariante 13) e a área de transferência saindo da máquina.
+**E o obstáculo não é a tecla, é o DESENHO.** O histórico do clipboard não é um arquivo nem um
+programa: é um `VecDeque` na memória do rodapé, alimentado pelo `zwlr_data_control` daquele processo.
+Uma segunda porta teria de abrir um segundo vigia e passaria a guardar uma SEGUNDA história — que é
+exatamente o defeito que o `ronoctua-clipcascade` existe para evitar um crate ao lado, e a razão de
+o cliente ser nativo em vez de ser o programa do upstream rodando ao lado do nosso.
 
-A pergunta que vem antes de qualquer linha: **o histórico de clipboard deve sair deste computador?**
-O `atuin` já respondeu não para o histórico do shell, e pelo mesmo motivo — um comando com token no
-argv não deve atravessar a rede. Um clipboard carrega senha colada com a mesma frequência.
+O histórico do Atuin não tem esse obstáculo (é um binário e um arquivo, e um segundo processo lê os
+dois), e é por isso que a janela DELE existe e a deste não.
 
-- decidir: se sim, o item vira empacotar o ClipCascade e guardar a credencial como os outros
-  segredos; se não, o lugar reservado no painel sai e o comando some do keymap
+- decidir: ou a janela fala com o rodapé pelo socket de controle e não vigia nada (uma história,
+  duas telas — é trabalho de protocolo, não de vista), ou o clipboard fica com uma porta só e a
+  linha do `AGENTS.md` sobre "duas portas" ganha a exceção escrita
+- e a TECLA continua em aberto: o `AGENTS.md` registra, com motivo, que `m` é a miscelânea *"e é o
+  que libera `c` para ser o clipboard SOZINHO — comando, não prefixo"*. `LEADER m c` respeita essa
+  linha; `c c`/`c w` a desmente e obriga a reescrevê-la
+
+### 9. Os checks das quatro superfícies novas · médio
+
+O plano previa dez. **Um está escrito** — o `every-modal-view-has-a-hint`, que é a classe do defeito
+fotografado: ele lê o `enum ViewState` e exige um braço no `match` de dicas para toda vista que pega
+o teclado, com quatro exceções nomeadas e justificadas. Foi sabotado (o braço do clipboard removido),
+a mensagem exata observada, e o arquivo restaurado por md5. Achou de quebra que o localizador de apps
+também não tinha braço — e essa é uma exceção legítima, agora escrita.
+
+Os outros nove faltam, e cada um fecha um buraco que hoje só um teste de unidade cobre:
+
+- `clipboard-draws-inside-its-region` — qualquer linha do clipboard calculada contra `end`
+- `text-keys-are-constants` — uma `.t("literal")` fora de teste
+- `one-http-writer` estendido — um quarto HTTP, ou um segundo TLS à mão
+- `one-clipcascade-boundary` — um segundo crate falando `/clipsocket`
+- `clipcascade-cipher-matches-upstream` — o vetor divergindo
+- `tor-socks-is-declared-once` — o literal do Rust contra o `SOCKSPort` do torrc
+- `tor-flake-owned-rows-refuse` — uma linha `fixed` que o módulo não fixa
+- `atuin-options-have-text` e `tor-options-have-text` — chave de tabela sem texto num idioma
+- `atuin-config-is-seeded-once` — o `config.toml` deixando de ser semeado e voltando a ser link
+
+- pronto quando: cada um existir, tiver sido quebrado de propósito, a mensagem exata observada, e o
+  arquivo restaurado por md5
+
+### 5. Migrar o `options.rs` do Syncthing para o `ronoctua-options` · pequeno
+
+O crate `ronoctua-options` nasceu com as tabelas do Tor, do ClipCascade e do Atuin: o que cada uma
+precisa — para que palavra um anel gira, que passo uma seta dá, que chave de texto uma palavra tem —
+é idêntico, e sem ele seriam três cópias.
+
+O Syncthing tem a sua própria, mais velha e moldada em `serde_json::Value`, e ela **não** foi
+migrada: cento e vinte e uma opções funcionando não valem um refactor no meio de outra entrega.
+
+- pronto quando: `crates/ronoctua-syncthing/src/options.rs` usar o `Kind`, o `turn`, o `nudge` e o
+  `word_key` compartilhados, e a bateria passar sem mudar uma linha de `assets/syncthing-options.nix`

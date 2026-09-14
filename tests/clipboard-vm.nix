@@ -104,7 +104,7 @@ pkgs.testers.runNixOSTest {
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
             raise
 
-    with subtest("`LEADER c c` opens the view with both entries"):
+    with subtest("`LEADER c` opens the view with both entries"):
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
@@ -112,10 +112,17 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
-        # `c` IS A PREFIX now that the screen capture moved under it: `c c` is
-        # the clipboard and `c s` the capture. A lone `c` only narrows
-        # which-key, which is exactly what this test saw when it changed.
-        press_key("c")
+        # `c` IS A LEAF, not a prefix. It was the other way round for one
+        # delivery, and the screen capture has lived under `m s` since — the
+        # `AGENTS.md` line says why in the owner's own terms: miscellany is the
+        # drawer for what belongs to no group, and that is what frees `c` to be
+        # the clipboard ALONE, a command and not a prefix.
+        #
+        # THE SECOND `c` WAS NOT A NO-OP. It reached the view that the first
+        # one had just opened, where `c` is `clipboard-sync` — so it opened the
+        # minibuffer's "where is the server" question, and the `<down>` and
+        # `RET` below were answering THAT. The `RET` submitted an empty server
+        # and nothing was ever recopied.
         press_key("c")
         journal = machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'clipboard opened'", timeout=30
@@ -190,10 +197,17 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep -q 'leader active'", timeout=30
         )
-        # `c` IS A PREFIX now that the screen capture moved under it: `c c` is
-        # the clipboard and `c s` the capture. A lone `c` only narrows
-        # which-key, which is exactly what this test saw when it changed.
-        press_key("c")
+        # `c` IS A LEAF, not a prefix. It was the other way round for one
+        # delivery, and the screen capture has lived under `m s` since — the
+        # `AGENTS.md` line says why in the owner's own terms: miscellany is the
+        # drawer for what belongs to no group, and that is what frees `c` to be
+        # the clipboard ALONE, a command and not a prefix.
+        #
+        # THE SECOND `c` WAS NOT A NO-OP. It reached the view that the first
+        # one had just opened, where `c` is `clipboard-sync` — so it opened the
+        # minibuffer's "where is the server" question, and the `<down>` and
+        # `RET` below were answering THAT. The `RET` submitted an empty server
+        # and nothing was ever recopied.
         press_key("c")
 
         try:

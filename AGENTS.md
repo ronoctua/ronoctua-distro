@@ -444,13 +444,33 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   (HTTP sobre socket, `--operator=<user>` é o que dispensa root; toda preferência vai MASCARADA, ou
   o daemon zera o resto) e Tor pelo socket de controle (cookie em `/run/tor`, **`CookieAuthFile`
   não é opcional** — sem ele o cookie nasce em `/var/lib/tor` a 0700 e ninguém do grupo entra).
-  Nenhum dos dois sinaliza: uma thread pergunta a cada 10 s. **Condição de regra polkit com `&&` e
+  Nenhum dos dois sinaliza: uma thread pergunta a cada 10 s.
+  **E a unidade do Tor é um CHROOT**: o nixpkgs dá a ela `RootDirectory=/run/tor/root` com só
+  `/etc` e o store montados, então o `%include` de `/var/lib/ronoctua/tor` respondia *"Error reading
+  included configuration file or directory"* e o daemon **recusava subir** — toda a configuração que
+  a vista escreve era inerte numa máquina de verdade. O `RootDirectoryStartOnly=true` é o que deixava
+  isso mudo: o `ExecStartPre` roda FORA do chroot, então o `tor --verify-config` imprimia
+  "Configuration was valid" um décimo de segundo antes de o processo real falhar na mesma linha.
+  Conserta `serviceConfig.BindReadOnlyPaths = [ cfg.fragmentDirectory ]`, e quem achou foi o
+  `network-vm` — **teste de VM é o que enxerga sandbox de unidade; unitário nenhum vê**. **Condição de regra polkit com `&&` e
   `||` LEVA PARÊNTESES** — o `&&` liga mais forte, então `id && user && unit==a || unit==b` lê como
   `(id && user && unit==a) || unit==b`: tudo depois da primeira alternativa liberado para QUALQUER
   ação e QUALQUER sujeito. O `rescue.nix` foi assim por um commit, e nada via — o
   `polkit-rules-are-the-ones-we-know` lia id de ação e resultado, e os dois estavam na lista
   auditada; agora ele recusa a condição. **Tor não sobe no boot**, e a regra polkit dele é
-  `start`/`stop` de `tor.service` — uma ação, dois verbos, uma unidade, um usuário. **SETE módulos
+  `start`/`stop` de `tor.service` — uma ação, dois verbos, uma unidade, um usuário. **A seção do Tor
+  é desenhada com ele PARADO**, e isso é conserto e não novidade: ela vivia atrás de `if let
+  Some(scene)`, e o socket de controle só responde com o Tor de pé — então um Tor parado não tinha
+  título, nem linha, nem tecla, e o único interruptor que existia estava escrito `false`. Não havia
+  como ligá-lo em lugar nenhum do shell. Quem decide agora é `tor::Standing` (`LoadState` +
+  `ActiveState` numa chamada: `is-active` responde `inactive` tanto para parado quanto para
+  INEXISTENTE). **Subir com a sessão é preferência NOSSA** (`tor.json`), nunca `systemctl enable` —
+  o check proíbe um terceiro verbo, e `enable` sobrevive ao reboot. **E a CONFIGURAÇÃO é um
+  fragmento de torrc** que o módulo `%include` e a vista escreve, seguido de `SIGNAL RELOAD` pelo
+  socket — IPC, não systemd, então a regra não cresceu uma linha. O `%include` sai no TOPO do torrc
+  (o Nix ordena chaves e `%` vem antes das letras), logo **o que o flake declara vence**, e essas
+  linhas são desenhadas RECUSANDO. O `SOCKSPort` vem de `nix/tor.nix`, lido pelos dois lados: era
+  literal no crate contra um módulo que não o declarava, e os dois casavam por sorte. **SETE módulos
   nossos escrevem uma regra**, e o censo assinado é o `polkit-rules-are-the-ones-we-know`; cada uma
   ganha além dele um check próprio sobre QUAL unidade e QUAIS verbos (`tor-polkit-is-narrow`,
   `syncthing-polkit-is-narrow`, que leem a regra instalada e a constante do crate nos DOIS sentidos).
@@ -941,6 +961,64 @@ tests/checks.nix       todos os checks; m1..m8 trazem o critério como comentár
   transborda para cima da coluna vizinha. `ronoctua_render::layout::width` era uma SEGUNDA cópia
   e virou a função do protocolo. Medido: o ideograma anda **1,667 célula** das 2 reservadas (o
   hangul 1,533) — sobra vão, nada se sobrepõe; o check recusa só acima de 2,02.
+- **`LEADER c` é uma VISTA agora** (`clipboard_view.rs`), e era a única modal do rodapé que não
+  tinha módulo. Ela não tinha `OF_THE_VIEW` nem `hint()`, era o único braço `_ => None` do `match`
+  de dicas, e a tira de ações era refeita à mão a partir dos rótulos LONGOS `cmd-*`, numa cor só,
+  com o `·` escrito no fonte Rust. **E desenhava TRÊS LINHAS por número absoluto** (`end-3`,
+  `end-2`, `end-1`) sobre um `grid.lines` que vale **1** com o histórico vazio — então elas caíam no
+  minibuffer e na própria linha da lista. O dono fotografou. Valia para qualquer histórico com menos
+  de quatro itens, e **não havia um único teste de layout do clipboard**. Agora nada calcula linha:
+  a linha carrega as DUAS metades como campos (histórico à esquerda, fatos do item à direita, a
+  régua na costura), a dica sai do `chrome::hint_of` na linha do minibuffer com elisão e gaveta, e o
+  `Click::Candidate` — que roteava para o `M-x` e fazia clique em linha não fazer NADA — virou alvo
+  próprio. **E TODA tecla passa pela vista, as setas inclusive**: `<down>` era tratado no rodapé e
+  mexia no `clip_cursor`, que conta ENTRADAS, deixando o cursor da VISTA onde estava — três setas e
+  um `RET` copiavam a entrada ZERO, e tudo desenhado abaixo da lista (a seção inteira do
+  ClipCascade) não tinha caminho pelo teclado, só pelo mouse. O `Key::simple` ainda comia o shift,
+  então anel nenhum girava. Os seis ajustes do ClipCascade que são NOSSOS — imagens, aviso, tamanho,
+  sal, rodadas e a marca — são linhas dessa seção; preferência que ninguém alcança tem um valor só,
+  para sempre.
+- **UMA PORTA NÃO APRENDE A PRÓPRIA PRÉVIA DE VOLTA COMO ESCOLHA.** A prévia do tema ESCREVE o
+  `theme.json` (é o que a faz alcançar as outras portas), o rodapé vigia esse mesmo arquivo, e o
+  `theme_changed` movia `committed` para o que o arquivo dissesse — inclusive para a própria escrita,
+  um instante depois. Uma seta bastava: o `Esc` ficava sem nada para onde voltar e virava tecla que
+  não faz nada. Medido no `.#shots`, com o `sym: Esc` no journal e o arquivo idêntico antes e depois.
+  A vista guarda o par que MOSTROU (`previewing`/`previewed`), e só o que não for isso é escolha de
+  outro. **E foto sem asserção não prova nada**: o subteste do Tor passou DUAS vezes sobre a tela
+  errada — nove `TAB`s que caíram no Wi-Fi, depois um `fresh_at` procurando uma linha que máquina
+  sem Tor não desenha. A ficha é um NÍVEL, não uma linha (`fresh_on_the_tor_sheet`), e o subteste
+  agora compara a assinatura das duas imagens.
+- **`LEADER s h` é o HISTÓRICO DO SHELL** (`ronoctua-atuin` + `history.rs`): relance, a conta,
+  **o que sai desta máquina**, a busca, as teclas e a gaveta. Por anos a distro instalava e afinava
+  o `atuin` e não oferecia tela nenhuma — e o `home.nix` recusava a sincronização por escrito
+  (*"NO SYNC … every command, including the ones with a token in argv"*). O dono pediu o contrário,
+  e duas coisas que aquela frase não pesava são por que dá para oferecer sem o risco mudar: a
+  sincronização do Atuin é **ponta a ponta**, e com `ronoctua.atuin.server.enable` o servidor pode
+  ser desta casa. O que NÃO mudou é o comando com token no argv — e é por isso que o
+  `secrets_filter` e o `history_filter` são **linhas desenhadas** da seção que liga a
+  sincronização, nunca padrões dentro da gaveta: salvaguarda que ninguém lê não é salvaguarda.
+  **Nasce desligada.** O `config.toml` é SEMEADO uma vez (a forma do `~/.shellrc.local`) e a vista o
+  edita uma LINHA por vez — `programs.atuin.settings` do home-manager escreve um symlink do store,
+  read-only, e escolher entre dois modos de busca não é decisão do tamanho de um rebuild.
+  **A chave (`atuin key`) é MOSTRADA**, atrás de uma pergunta que abre no NÃO: ela é o que decifra o
+  histórico e a segunda máquina não sincroniza sem ela, então escondê-la mandaria a pessoa ao
+  terminal. E a thread só sobe na primeira abertura: `atuin status` é PROCESSO, não socket, e uma
+  máquina que nunca abre a vista não paga um fork a cada 30 s — mas a MODELINE não pode esperar por
+  isso, então o retrato nasce de `at_rest()`, que lê só ARQUIVOS (o `config.toml`, o `atuin.json` e
+  o token de sessão em `$XDG_DATA_HOME/atuin/session`) e não roda nada. Sem ele a marca ficava muda
+  até alguém abrir a vista, que é uma marca respondendo por ausência.
+- **O ANEL DAS TRÊS MARCAS SAI DO RETRATO, nunca de um campo lido na partida.** `clip_prefs` e
+  `atuin_prefs` eram cópias feitas uma vez: girar o anel gravava o arquivo e a modeline seguia
+  desenhando a resposta velha até o rodapé reiniciar. O arquivo é o broadcast — as duas portas
+  escrevem, e cada uma tem `Notice::on_file` sobre o seu, tomando **só a marca** (o resto do
+  retrato é da thread, e uma porta que o reconstruísse de um arquivo seria uma segunda leitura).
+- **O ClipCascade: o `salt` e o `hash_rounds` são da PESSOA, e nenhum endpoint os serve.** Medido no
+  upstream instalado (3.2.0): `core/config.py` os inicia em `""` e `664937`, o `cli/login.py` os
+  PERGUNTA, e toda máquina de uma instalação tem de receber os mesmos dois à mão. O `/max-size`
+  responde `{"maxsize": n}` e mais nada. Um cliente que os pedisse ao servidor derivaria uma chave
+  que não decifra nada, **e o único sintoma seria um clipboard vazio** — foi o que este crate fez
+  por uma entrega, acertando por acaso porque os dois valores lidos caíam nos padrões do upstream.
+  Os dois são linhas da vista, e `MOST_BY_DEFAULT` é 1 MiB porque é o fallback do upstream.
 - **O clipboard LÊ O QUE LHE OFERECEM** (`ronoctua_clipboard::decode`): UTF-16 nas duas ordens com
   e sem BOM, a assinatura UTF-8 (que sai), e `STRING` como Latin-1, que é a ICCCM e não um
   costume. Era `String::from_utf8` seco, e uma cópia de app Java ou Wine **sumia** — nem mojibake

@@ -121,6 +121,21 @@ pub struct View {
     /// the first preview: a machine that never chose must not be given a file
     /// by having looked at the list.
     chosen_before: bool,
+    /// The pair this door last SHOWED, while a preview is on.
+    ///
+    /// IT EXISTS BECAUSE A PREVIEW WRITES THE FILE, and this door watches that
+    /// file like every other. Its own write came back to it as a change and
+    /// `theme_changed` moved `committed` to it — so after one press of an
+    /// arrow there was nothing left to go back to, and `Esc` became a key that
+    /// did nothing. Measured in `.#shots`: the file said
+    /// `{"backdrop":"black","theme":"midnight"}` before `Esc` and the same
+    /// after it, with the key arriving in the journal.
+    ///
+    /// A door cannot tell its own write from anybody else's by looking at the
+    /// file, so it remembers. Anything the file says that is NOT this is
+    /// somebody else's choice and still wins, which is the promise the module
+    /// header makes.
+    previewed: Option<Choice>,
 }
 
 impl View {
@@ -141,6 +156,7 @@ impl View {
                 backdrop,
             },
             chosen_before,
+            previewed: None,
         }
     }
 
@@ -319,10 +335,26 @@ impl View {
         }
     }
 
+    /// This door has just SHOWN a pair everywhere, which wrote the file.
+    pub const fn previewing(&mut self, c: Choice) {
+        self.previewed = Some(c);
+    }
+
+    /// What this door last showed, if a preview is on.
+    #[must_use]
+    pub const fn previewed(&self) -> Option<Choice> {
+        self.previewed
+    }
+
     /// The pair under the cursors becomes the committed one: `theme-apply`
     /// ran and the file is written.
     pub fn commit(&mut self) {
         self.committed = self.focused_choice();
+        // THE PREVIEW IS OVER: what the file says is now a choice, and the
+        // event this write raises has to be allowed to move `committed` —
+        // it already holds the same pair, so it changes nothing, and leaving
+        // the mark set would make the NEXT external write be ignored.
+        self.previewed = None;
     }
 
     /// The file changed under the chooser: what is on disk is now the thing
@@ -574,5 +606,47 @@ mod tests {
             );
         }
         assert!(ronoctua_i18n::ALL_KEYS.contains(&ronoctua_i18n::key::THEME_OPTION_BACKDROP));
+    }
+
+    #[test]
+    fn a_preview_this_door_wrote_does_not_become_the_committed_pair() {
+        // `Esc` HAD NOTHING TO GO BACK TO. A preview writes the file, this
+        // door watches that file, and `theme_changed` moved `committed` to
+        // whatever the file said — including this door's own preview, a moment
+        // after it wrote it. One arrow was enough to make `Esc` a key that did
+        // nothing; measured in `.#shots`, where the file read the previewed
+        // pair both before and after the key.
+        let mut v = View::fresh_one(Backdrop::Theme, true);
+        let was = v.committed();
+        let previewed = Choice {
+            theme: was.theme,
+            backdrop: Backdrop::Black,
+        };
+        v.previewing(previewed);
+        // The watcher hands this door back what it just wrote.
+        if v.previewed() != Some(previewed) {
+            v.committed_became(previewed);
+        }
+        assert_eq!(
+            v.committed(),
+            was,
+            "this door learnt its own preview back as a choice"
+        );
+
+        // AND SOMEBODY ELSE'S WRITE STILL WINS, which is the promise the
+        // module header makes: what is on disk beats what is being tried.
+        let elsewhere = Choice {
+            theme: was.theme,
+            backdrop: Backdrop::Black,
+        };
+        let mut other = View::fresh_one(Backdrop::Theme, true);
+        if other.previewed() != Some(elsewhere) {
+            other.committed_became(elsewhere);
+        }
+        assert_eq!(
+            other.committed(),
+            elsewhere,
+            "an external write was ignored"
+        );
     }
 }

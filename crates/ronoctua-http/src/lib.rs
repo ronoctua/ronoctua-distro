@@ -13,12 +13,25 @@
 //!
 //! # Why not a client crate
 //!
-//! Every call this repository makes goes to the loopback or to a socket in
-//! `/run`: no TLS, no redirection, no proxy, no connection pool, no content
+//! Most calls this repository makes go to the loopback or to a socket in
+//! `/run`: no redirection, no proxy, no connection pool, no content
 //! negotiation. A real client would bring dozens of crates to solve problems
 //! that do not exist, and the project's cut is the same everywhere — the
-//! dependency comes in when its problem shows up. If one of these daemons ever
-//! moves to another machine, then yes.
+//! dependency comes in when its problem shows up.
+//!
+//! The sentence that used to end this paragraph was *"if one of these daemons
+//! ever moves to another machine, then yes"*, and two of them have. The world
+//! clock reaches two hosts on the internet, and ClipCascade's server is
+//! wherever the owner put it. So TLS is here now — but behind a FEATURE, so
+//! the three crates that will only ever open a loopback socket do not compile
+//! a TLS stack to get a chunk decoder. See the manifest.
+//!
+//! # The WebSocket lives here for the same reason the framer does
+//!
+//! It is an HTTP request that is answered `101` and then stops being HTTP.
+//! Putting it in `ronoctua-clipcascade` would have put a second request
+//! builder next to this one, in the crate least able to test it — and the
+//! whole argument of this file is that the second copy is the defect.
 //!
 //! # What it does answer for
 //!
@@ -45,6 +58,23 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(feature = "tls")]
+pub mod tls;
+#[cfg(feature = "ws")]
+pub mod ws;
+
+/// What a body is, when nobody says otherwise.
+///
+/// Every daemon on this machine speaks JSON, so it is the default and not a
+/// parameter six call sites would have to repeat. ClipCascade's login is the
+/// one thing in the tree that does not: Spring Security reads a FORM, and a
+/// JSON body reaches it as an empty request whose 401 says nothing about
+/// content types.
+pub const JSON: &str = "application/json";
+
+/// What an HTML login form posts.
+pub const FORM: &str = "application/x-www-form-urlencoded";
+
 /// How long a local daemon is given to answer an ordinary call.
 ///
 /// Two seconds: it is the loopback or a socket in `/run`, so either it answers
@@ -70,8 +100,10 @@ pub struct Call<'a> {
     pub host: &'a str,
     /// Anything else the daemon wants — an API key, most often.
     pub headers: &'a [(&'a str, &'a str)],
-    /// The body, which is always JSON here when there is one.
+    /// The body, when there is one.
     pub body: Option<&'a str>,
+    /// What the body is. [`JSON`] unless the caller says [`FORM`].
+    pub content_type: &'a str,
     /// How long to wait. [`PATIENCE`] unless the call is a long poll.
     pub patience: Duration,
 }
@@ -86,6 +118,7 @@ impl<'a> Call<'a> {
             host,
             headers: &[],
             body: None,
+            content_type: JSON,
             patience: PATIENCE,
         }
     }
@@ -101,6 +134,19 @@ impl<'a> Call<'a> {
     #[must_use]
     pub const fn with_body(mut self, body: &'a str) -> Self {
         self.body = Some(body);
+        self
+    }
+
+    /// The same, carrying this body as an HTML form.
+    ///
+    /// A separate constructor and not a `content_type` setter beside
+    /// [`Call::with_body`], because the two always travel together: a form
+    /// content type with a JSON body, or the reverse, is a request the server
+    /// answers with a refusal that names neither.
+    #[must_use]
+    pub const fn with_form(mut self, body: &'a str) -> Self {
+        self.body = Some(body);
+        self.content_type = FORM;
         self
     }
 
@@ -173,7 +219,7 @@ pub fn request_of(call: &Call<'_>) -> String {
     // A `POST` with no `Content-Length` makes some servers wait for a body
     // that never comes, and the call then dies on the deadline instead of on
     // an answer — a bug that reads as "the daemon is down".
-    out.push_str("Content-Type: application/json\r\n");
+    out.push_str(&format!("Content-Type: {}\r\n", call.content_type));
     out.push_str(&format!("Content-Length: {}\r\n\r\n", content.len()));
     out.push_str(content);
     out
@@ -269,7 +315,11 @@ pub fn over_tcp(address: SocketAddr, call: &Call<'_>) -> anyhow::Result<Answer> 
 }
 
 /// Write the request, read everything, frame it.
-fn exchange<S: std::io::Read + std::io::Write>(
+///
+/// `pub(crate)` so [`tls`] can reuse it: the TLS transport differs from the
+/// TCP one in how the bytes get there and in nothing else, and a second copy
+/// of these four lines is how the chunk decoder came to exist three times.
+pub(crate) fn exchange<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     call: &Call<'_>,
 ) -> anyhow::Result<Answer> {
@@ -341,6 +391,31 @@ mod tests {
         // THE LENGTH IS THE BODY'S, IN BYTES.
         assert!(text.contains("Content-Length: 20\r\n\r\n"), "{text}");
         assert!(text.ends_with(r#"{"natEnabled":false}"#), "{text}");
+    }
+
+    #[test]
+    fn a_form_says_it_is_a_form_and_json_is_still_the_default() {
+        // SPRING SECURITY READS A FORM. ClipCascade's `/login` is the one call
+        // in this tree that is not JSON, and a JSON body reaches it as an
+        // EMPTY request — the 401 that comes back says nothing about content
+        // types, so this would have been found by guessing.
+        let form = request_of(&Call::new("POST", "/login", "h").with_form("username=a&password=b"));
+        assert!(
+            form.contains("Content-Type: application/x-www-form-urlencoded\r\n"),
+            "{form}"
+        );
+        assert!(form.contains("Content-Length: 21\r\n\r\n"), "{form}");
+        // AND EVERY OTHER CALL IS UNCHANGED: the daemons on this machine speak
+        // JSON, and none of them had to be touched to make room for the one
+        // that does not.
+        let json = request_of(&Call::new("POST", "/rest/x", "h").with_body("{}"));
+        assert!(
+            json.contains("Content-Type: application/json\r\n"),
+            "{json}"
+        );
+        assert!(
+            request_of(&Call::new("GET", "/", "h")).contains("Content-Type: application/json\r\n")
+        );
     }
 
     #[test]

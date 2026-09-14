@@ -1,0 +1,36 @@
+[package]
+name = "ronoctua-atuin"
+description = "The boundary with Atuin: its CLI, its config.toml, and the one thing this system remembers about it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHY THIS WRAPS A CLI RATHER THAN SPEAKING A PROTOCOL
+#
+# Because Atuin's sync is END TO END ENCRYPTED and the key never leaves the
+# machine. Re-implementing it would mean re-implementing the key derivation,
+# the record store and the crypto — all to reach a server the `atuin` binary
+# already reaches, with a binary this distro installs anyway.
+#
+# The ClipCascade crate goes the other way for the opposite reason: its client
+# WATCHES THE CLIPBOARD, and a second watcher is a second history. `atuin`
+# watches nothing; it is asked.
+#
+# NO TOML CRATE, and the reason is `src/config.rs`: Atuin's settings are
+# scalars under flat sections, and what this needs is to change ONE line and
+# leave every other byte alone — which a parse-and-reserialise would not do. It
+# is the torrc fragment's shape, one file over.
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+ronoctua-options = { path = "../ronoctua-options" }
+ronoctua-store = { path = "../ronoctua-store" }
+
+[lints]
+workspace = true

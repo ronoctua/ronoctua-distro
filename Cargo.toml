@@ -17,6 +17,9 @@ members = [
   "crates/ronoctua-xdg",
   "crates/ronoctua-store",
   "crates/ronoctua-http",
+  "crates/ronoctua-options",
+  "crates/ronoctua-clipcascade",
+  "crates/ronoctua-atuin",
   "crates/ronoctua-syntax",
   "crates/ronoctua-protocol",
   "crates/ronoctua-design",
@@ -190,6 +193,22 @@ bytemuck = { version = "1", features = [ "derive" ] }
 pollster = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# --- TLS, and the cryptography the WebSocket handshake needs -----------
+# All four were ALREADY in the lock, underneath the world clock's rustls.
+# Naming them here is what lets `ronoctua-http` own the transport instead of
+# `ronoctua-world` owning a private copy of it: two TLS stacks in one workspace
+# is the defect `one-http-writer` exists to refuse, one layer up.
+#
+# `ring` and not `aws-lc-rs`: the default provider needs cmake and a Go
+# toolchain in the build closure. It is also where the WebSocket's SHA-1 and
+# ClipCascade's PBKDF2/AES-GCM come from, so the cryptography of this tree has
+# exactly one implementation behind it.
+rustls = { version = "0.23", default-features = false, features = [ "ring", "std", "tls12", "logging" ] }
+rustls-pki-types = "1"
+rustls-pemfile = "2"
+ring = "0.17"
+base64 = "0.22"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

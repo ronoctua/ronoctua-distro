@@ -22,21 +22,18 @@ serde_json.workspace = true
 # copy of it. The alternative was always a second chunked decoder, and the
 # first one exists because a chunk boundary inside a multi-byte character
 # panicked a thread and killed every tunnel key for a session.
-ronoctua-http = { path = "../ronoctua-http" }
+ronoctua-http = { path = "../ronoctua-http", features = [ "tls" ] }
 ronoctua-store = { path = "../ronoctua-store" }
 
-# TLS, AND THE FIRST IN THIS WORKSPACE.
+# TLS COMES THROUGH `ronoctua-http`, AND NO LONGER FROM HERE.
 #
-# `aria2.rs` refuses an HTTP client in writing — "it would bring tokio, hyper
-# and a TLS stack into a Cargo.lock every crate in the workspace shares" — and
-# that comment is still two thirds right: there is no tokio here and no hyper.
-# The stack is rustls over `std::net::TcpStream`, blocking, on a thread.
+# This crate had the first rustls in the workspace, and the reason was right:
+# `aria2` talks to `127.0.0.1` and this talks to somebody else's machine. But
+# ClipCascade's server is somebody else's machine too, and a second stack
+# beside this one is the defect `ronoctua-http` exists to refuse — so the
+# transport moved there, behind a feature, and this asks for the feature.
 #
-# `ring` and not `aws-lc-rs`: the default provider needs cmake and a Go
-# toolchain in the build closure, for a feature that fetches two numbers.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-rustls-pki-types = "1"
-rustls-pemfile = "2"
+# Nothing new enters the closure: it is the same rustls, in one place.
 
 [lints]
 workspace = true

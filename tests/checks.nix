@@ -70,6 +70,11 @@
   # The generated Syncthing option table, so `syncthing-options-have-text`
   # reads the list the generator DERIVED instead of a hand-written copy of it.
   syncthingOptionsRs,
+  # The Tor and Atuin tables, out of the SAME generator, so their own
+  # `…-options-have-text` checks read the list it derived rather than a
+  # hand-written copy of it.
+  torOptionsRs,
+  atuinOptionsRs,
   keyboardsRs,
   syntaxTable,
   mimeDb,
@@ -160,9 +165,15 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf;
-      # The theme list (the option's enum) and the solved palettes — base.nix
-      # and niri.nix read them.
-      inherit themes themed;
+      # The theme list (the option's enum), the solved palettes and the
+      # DEFAULT — base.nix and niri.nix read all three.
+      #
+      # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
+      # for its `default`: every VM test that imports `base.nix` failed to
+      # EVALUATE with "attribute 'defaultTheme' missing". It arrived when order
+      # and default became two facts in `assets/themes/themes.nix`, and it went
+      # unseen because these tests are in `most`, which had not been run since.
+      inherit themes themed defaultTheme;
       inherit (inputs) niri;
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1495,7 +1506,7 @@ let
     ronoctua-shell = rust.shell;
     ronoctua = {
       inherit fonts fontconfigConf;
-      inherit themes themed;
+      inherit themes themed defaultTheme;
       inherit (inputs) niri;
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1511,7 +1522,7 @@ let
     ronoctua-shell = rust.shell;
     ronoctua = {
       inherit fonts fontconfigConf;
-      inherit themes themed;
+      inherit themes themed defaultTheme;
       inherit (inputs) niri;
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1526,7 +1537,7 @@ let
     # the themes and the shell out of it.
     ronoctua = {
       inherit fonts fontconfigConf;
-      inherit themes themed;
+      inherit themes themed defaultTheme;
       inherit (inputs) niri;
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1541,7 +1552,7 @@ let
     # the themes and the shell out of it.
     ronoctua = {
       inherit fonts fontconfigConf;
-      inherit themes themed;
+      inherit themes themed defaultTheme;
       inherit (inputs) niri;
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
@@ -1974,6 +1985,12 @@ let
         # nothing here: a mark that is drawn is a mark that can be clicked, and
         # what it does has to be a door the keyboard already has.
         "syncthing",
+        # AND THE TWO THAT SYNC WHAT THIS MACHINE HOLDS. `clip` runs
+        # `clipboard-open`, which is `LEADER c`; `history` runs `atuin-open`,
+        # which is `LEADER s h h`. Both marks are a ring the owner chooses
+        # (`Never`/`WhenOff`/`WhenOn`), like Syncthing's, and for the same
+        # reason that changes nothing here.
+        "clip", "history",
     }
     if acted != agreed:
         gaps.append(
@@ -1981,6 +1998,11 @@ let
         )
     if '"notif-open"' not in clicked:
         gaps.append("clicking the bell does not open the manager")
+    # AND THE TWO NEW ONES REACH THE KEYBOARD'S OWN COMMANDS, by name: being
+    # in the set above says a mark may be clicked, and this says WHAT it does.
+    for mark, command in (("clip", "clipboard-open"), ("history", "atuin-open")):
+        if f'"{command}"' not in clicked:
+            gaps.append(f"clicking `{mark}` does not run `{command}`")
     # THE BATTERY AND THE PROFILE open the power view — `LEADER s p p`'s own
     # command, so the mouse reaches no door the keyboard lacks.
     if clicked.count('"power-open"') < 2:
@@ -6106,6 +6128,93 @@ let
   # absence is exactly what a unit test of the window cannot see — the same
   # argument `every-window-repeats` beside this one makes about a keyboard
   # that does not repeat. A fifth window would inherit the hole in silence.
+  # EVERY MODAL VIEW TEACHES ITS OWN KEYS.
+  #
+  # The hint line is the one place on the screen that says `f` forgets and `s`
+  # syncs — and a view that does not produce one has bare letters nobody can
+  # discover. There is a `match` in `surface.rs` that maps the showing view to
+  # its `hint()`, and it ends in `_ => None`.
+  #
+  # THE CLIPBOARD FELL THROUGH THAT ARM FOR ITS WHOLE LIFE. It had no module,
+  # so it had no `hint()` to call, so it painted its own action strip inside
+  # the region — from the LONG `cmd-…` labels, in one flat colour, with the
+  # separator written into the Rust. The owner photographed it: the strip cut
+  # off mid-word beside the row that says the history is empty.
+  #
+  # `_ => None` is not visible as a defect. It is the correct arm for the views
+  # that genuinely have no keys to teach, and this is what tells those apart
+  # from the ones that simply never got a line: the three below are named, with
+  # a reason each, and everything else the keyboard can be given owes an arm.
+  every-modal-view-has-a-hint = mkCheck "every-modal-view-has-a-hint" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    src = pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text()
+
+    def body_of(signature):
+        """One item, from its signature to the closing brace at its own depth."""
+        lines = src.splitlines()
+        start = next(
+            (i for i, l in enumerate(lines) if l.strip().startswith(signature)),
+            None,
+        )
+        if start is None:
+            sys.exit(f"ERROR: `{signature}` went away or changed shape")
+        depth, began = 0, False
+        for i in range(start, len(lines)):
+            depth += lines[i].count("{") - lines[i].count("}")
+            if not began and "{" in lines[i]:
+                began = True
+                continue
+            if began and depth <= 0:
+                return "\n".join(lines[start : i + 1])
+        sys.exit(f"ERROR: `{signature}` never closes")
+
+    # THE ENUM ITSELF, and not a list written here: a view added to it and
+    # forgotten everywhere else is exactly the shape this is for.
+    declared = re.findall(r"^\s{4}([A-Z]\w*),", body_of("enum ViewState"), re.M)
+    if len(declared) < 10:
+        sys.exit(f"ERROR: only {len(declared)} views were found; this is not reading the enum")
+
+    # THE THREE THAT OWE NOTHING, each for a reason that is about the view and
+    # not about the work:
+    #
+    #   NoneOf    the region is closed. There is nothing on screen to teach.
+    #   Leader    the which-key IS the teaching — a second line under a list of
+    #             keys would be a hint about a hint.
+    #   Commands  the `M-x` is a prompt, and its line is the prompt.
+    #   Manual    it is a list of every key in the system. A line teaching five
+    #             of them under it would be the smallest of its own rows.
+    #   Applications
+    #             the locator is a FILTER: what is on its line is what you
+    #             typed, and the one key it has beyond typing is `RET`. It is
+    #             the `M-x`'s case with a different list underneath.
+    owes_nothing = {"NoneOf", "Leader", "Commands", "Manual", "Applications"}
+
+    hint = body_of("let hint = move ||")
+    missing = [
+        v
+        for v in declared
+        if v not in owes_nothing and f"ViewState::{v}" not in hint
+    ]
+    if missing:
+        for v in missing:
+            print(
+                f"ERROR: `ViewState::{v}` has no arm in the hint match, so it "
+                "falls through to `_ => None` and teaches none of its keys",
+                file=sys.stderr,
+            )
+        print("", file=sys.stderr)
+        print("       That is what the clipboard did for its whole life, and", file=sys.stderr)
+        print("       what the owner photographed: a view with bare letters", file=sys.stderr)
+        print("       and no line on the screen that names one of them.", file=sys.stderr)
+        raise SystemExit(1)
+
+    taught = [v for v in declared if v not in owes_nothing]
+    print(f"OK: {len(taught)} modal views, every one of them with a hint")
+    END
+  '';
+
   every-list-window-has-a-bar = mkCheck "every-list-window-has-a-bar" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, sys
@@ -7263,7 +7372,13 @@ let
     import pathlib, re, sys
 
     crates = pathlib.Path("${../crates}")
-    framer = crates / "ronoctua-http" / "src" / "lib.rs"
+    # THE FRAMER IS A CRATE, not one file of it. It was `lib.rs` alone, and the
+    # day the crate grew `ws.rs` — the RFC 6455 handshake, which is an HTTP
+    # request and an HTTP answer — this check called the crate's own second
+    # file a second writer. What it is for is that nothing OUTSIDE
+    # `ronoctua-http` frames HTTP; inside it, that is the whole job.
+    framer = crates / "ronoctua-http"
+    heart = framer / "src" / "lib.rs"
     wrong = []
 
     # WHAT ONLY A FRAMER WRITES. Not "HTTP" — a comment says that, and so does
@@ -7272,7 +7387,7 @@ let
              "Connection: close")
 
     for f in sorted(crates.rglob("*.rs")):
-        if f == framer:
+        if framer in f.parents:
             continue
         text = f.read_text()
         cut = list(re.finditer(r"^#\[cfg\(test\)\]\s*\nmod tests", text, re.M))
@@ -7286,10 +7401,10 @@ let
                     "`ronoctua-http` is where that lives"
                 )
 
-    if not framer.exists():
+    if not heart.exists():
         wrong.append("crates/ronoctua-http/src/lib.rs is gone; what is this checking?")
     else:
-        body = framer.read_text()
+        body = heart.read_text()
         for name in ("fn dechunked", "fn status_of", "fn over_unix", "fn over_tcp"):
             if name not in body:
                 wrong.append(f"the framer no longer has `{name}` — has it moved?")
@@ -9286,9 +9401,15 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
-      # The theme list (the option's enum) and the solved palettes — base.nix
-      # and niri.nix read them.
-      inherit themes themed;
+      # The theme list (the option's enum), the solved palettes and the
+      # DEFAULT — base.nix and niri.nix read all three.
+      #
+      # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
+      # for its `default`: every VM test that imports `base.nix` failed to
+      # EVALUATE with "attribute 'defaultTheme' missing". It arrived when order
+      # and default became two facts in `assets/themes/themes.nix`, and it went
+      # unseen because these tests are in `most`, which had not been run since.
+      inherit themes themed defaultTheme;
       niri = inputs.niri;
       shell = rust.shell;
     };
@@ -9311,9 +9432,15 @@ let
     formatDisk = rust.formatDisk;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
-      # The theme list (the option's enum) and the solved palettes — base.nix
-      # and niri.nix read them.
-      inherit themes themed;
+      # The theme list (the option's enum), the solved palettes and the
+      # DEFAULT — base.nix and niri.nix read all three.
+      #
+      # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
+      # for its `default`: every VM test that imports `base.nix` failed to
+      # EVALUATE with "attribute 'defaultTheme' missing". It arrived when order
+      # and default became two facts in `assets/themes/themes.nix`, and it went
+      # unseen because these tests are in `most`, which had not been run since.
+      inherit themes themed defaultTheme;
       niri = inputs.niri;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
@@ -9324,9 +9451,15 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
-      # The theme list (the option's enum) and the solved palettes — base.nix
-      # and niri.nix read them.
-      inherit themes themed;
+      # The theme list (the option's enum), the solved palettes and the
+      # DEFAULT — base.nix and niri.nix read all three.
+      #
+      # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
+      # for its `default`: every VM test that imports `base.nix` failed to
+      # EVALUATE with "attribute 'defaultTheme' missing". It arrived when order
+      # and default became two facts in `assets/themes/themes.nix`, and it went
+      # unseen because these tests are in `most`, which had not been run since.
+      inherit themes themed defaultTheme;
       niri = inputs.niri;
       shell = rust.shell;
       filesRoot = rust.filesRoot;
@@ -9353,9 +9486,15 @@ let
     inherit pkgs lib;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
-      # The theme list (the option's enum) and the solved palettes — base.nix
-      # and niri.nix read them.
-      inherit themes themed;
+      # The theme list (the option's enum), the solved palettes and the
+      # DEFAULT — base.nix and niri.nix read all three.
+      #
+      # `defaultTheme` was missing here, and `ronoctua.theme`'s option reads it
+      # for its `default`: every VM test that imports `base.nix` failed to
+      # EVALUATE with "attribute 'defaultTheme' missing". It arrived when order
+      # and default became two facts in `assets/themes/themes.nix`, and it went
+      # unseen because these tests are in `most`, which had not been run since.
+      inherit themes themed defaultTheme;
       niri = inputs.niri;
       shell = rust.shell;
     };
@@ -14777,6 +14916,7 @@ let
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar
+      every-modal-view-has-a-hint
       labels-of-a-view-are-distinct
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
@@ -14838,6 +14978,7 @@ let
       every-window-repeats
       every-window-knows-its-scale
       every-list-window-has-a-bar
+      every-modal-view-has-a-hint
       labels-of-a-view-are-distinct
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key

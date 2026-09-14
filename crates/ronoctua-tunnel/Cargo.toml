@@ -11,6 +11,15 @@ publish.workspace = true
 # thread, the same way they do for the radio and the batteries.
 
 [dependencies]
+# THE SHARED ARITHMETIC OF A DECLARED SETTING — which word a ring turns to,
+# what step a number takes, what text key a word has. Four tables in this tree
+# come out of one generator, and without this they would be four copies of the
+# same fifty lines.
+ronoctua-options = { path = "../ronoctua-options" }
+# THE ONE TOR DECISION THAT IS OURS — whether it comes up with the session.
+# `systemctl enable` would need a third verb in the polkit rule, and the
+# check refuses one; see `src/prefs.rs`.
+ronoctua-store = { path = "../ronoctua-store" }
 anyhow.workspace = true
 # THE FRAMER IS NOT OURS ANY MORE. It was written here for Tailscale, and its
 # own first line said it was the shape `shell::syncthing` already had; the

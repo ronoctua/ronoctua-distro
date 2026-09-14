@@ -1,0 +1,22 @@
+[package]
+name = "ronoctua-options"
+description = "What a declared setting IS, and the arithmetic of turning one — shared by every table `gen-options.py` writes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO DEPENDENCIES AT ALL, and that is the point.
+#
+# A setting's VALUE is a string here — the text a torrc line, a TOML field or a
+# JSON field carries — because the three domains that use this store it three
+# different ways and none of them is worth making the other two import. What is
+# actually shared is the part that is fiddly and identical: which words a ring
+# turns through, what step a number takes over its range, and what a value
+# reads as on screen.
+
+[dependencies]
+
+[lints]
+workspace = true

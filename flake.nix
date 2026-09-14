@@ -290,13 +290,54 @@
         namesFile = ./assets/audio-names.nix;
       };
 
-      # EVERY OPTION SYNCTHING EXPOSES, declared once. 119 rows across four
-      # configuration objects; written by hand on the screen side that would be
-      # 119 decisions nobody could audit, and a rename upstream would be
-      # invisible. This makes the Rust table, the keys both languages owe, and
-      # the refusal of a duplicate id, a rangeless number or a ring of one.
-      syncthingOptionsRs = pkgs.callPackage ./nix/syncthing-options.nix {
+      # EVERY OPTION THESE FOUR SURFACES EXPOSE, declared once each.
+      #
+      # Written by hand on the screen side, each of these would be a few dozen
+      # to a few hundred decisions nobody could audit, and a rename upstream
+      # would be invisible. One derivation makes the Rust table, the keys both
+      # languages owe, and the refusal of a duplicate id, a rangeless number or
+      # a ring of one.
+      #
+      # THE SCOPES ARE ORDERED HERE, because the order is the order the screen
+      # draws in and an attribute set sorts alphabetically. See `nix/options.nix`.
+      syncthingOptionsRs = pkgs.callPackage ./nix/options.nix {
+        domain = "syncthing";
+        scopes = [
+          "folder"
+          "device"
+          "global"
+          "interface"
+        ];
         optionsFile = ./assets/syncthing-options.nix;
+      };
+
+      # ATUIN: what `LEADER s h` may write into `config.toml`. The `leaving`
+      # scope is the one this whole feature turns on — it holds the switch AND
+      # the filters that decide what is never recorded, which is the answer to
+      # the objection `nix/modules/home.nix` used to state.
+      atuinOptionsRs = pkgs.callPackage ./nix/options.nix {
+        domain = "atuin";
+        scopes = [
+          "leaving"
+          "search"
+          "keys"
+          "advanced"
+        ];
+        optionsFile = ./assets/atuin-options.nix;
+      };
+
+      # TOR: what the view may write into the torrc fragment. The flake-owned
+      # rows are in here too, drawn and refusing — see `assets/tor-options.nix`.
+      torOptionsRs = pkgs.callPackage ./nix/options.nix {
+        domain = "tor";
+        scopes = [
+          "service"
+          "path"
+          "bridges"
+          "onion"
+          "advanced"
+        ];
+        optionsFile = ./assets/tor-options.nix;
       };
 
       # WHAT A KEY CAN BE MADE INTO, and the leader's own rule. Two places read
@@ -401,6 +442,8 @@
           bluetoothProfilesRs
           audioNamesRs
           syncthingOptionsRs
+          torOptionsRs
+          atuinOptionsRs
           keyboardsRs
           updatesRs
           syntaxRs
@@ -671,6 +714,13 @@
         ./nix/modules/tailscale.nix
         ./nix/modules/tor.nix
         ./nix/modules/syncthing.nix
+        # THE TWO SYNCS THE OWNER ASKED FOR. Both install a CLIENT that costs
+        # nothing until it is told where a server is, and both offer a SERVER
+        # that is off by default — "a maioria dos computadores rodarão como
+        # cliente, mas haverão alguns poucos que também funcionarão como
+        # servidor".
+        ./nix/modules/atuin.nix
+        ./nix/modules/clipcascade.nix
         ./nix/modules/secrets.nix
         ./nix/modules/persist.nix
         ./nix/modules/home.nix
@@ -790,6 +840,8 @@
         bluetooth-profiles-rs = bluetoothProfilesRs;
         audio-names-rs = audioNamesRs;
         syncthing-options-rs = syncthingOptionsRs;
+        tor-options-rs = torOptionsRs;
+        atuin-options-rs = atuinOptionsRs;
         keyboards-rs = keyboardsRs;
         niri-actions = niriActions;
         # THE SEVEN COMPONENTS, each buildable on its own.
@@ -1040,6 +1092,8 @@
           bluetoothProfilesRs
           audioNamesRs
           syncthingOptionsRs
+          torOptionsRs
+          atuinOptionsRs
           keyboardsRs
           niriActions
           torrentShim
