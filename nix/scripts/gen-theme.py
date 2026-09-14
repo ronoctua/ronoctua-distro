@@ -70,8 +70,9 @@ import colorspace as cs  # noqa: E402
 
 #: Paint steps of a chromatic family: (name, ΔL from the chrome, relative chroma).
 #: Read from owl: `ground` is `brain.background` (ΔL 0.044, rel C 0.20),
-#: `element` is `surface.selection` (0.102, 0.39), `border` is
-#: `border.inactive` (0.178, 0.46). `border-strong` was on no screen: it is the
+#: `element` is `surface.selection` (0.102, 0.39), `border` is the step the
+#: window's inactive outline was read from when it was still a hand value
+#: (0.178, 0.46). `border-strong` was on no screen: it is the
 #: next rung at the neutral ladder's own spacing (rule.strong sits at 0.178
 #: above the chrome, so a family's strong border sits one step above its
 #: border), with the chroma continuing the row.
@@ -109,6 +110,23 @@ TEXT_STEPS = (
 #: The neutral family's paint steps above the chrome: (name, ΔL from the
 #: chrome). Owl's greys, byte for byte: the buffer window, the modeline, the
 #: hover row, the notification band, the rule and the strong rule.
+#: THE NEUTRAL STEPS THAT ARE A BACKGROUND, and not paint drawn ON one.
+#:
+#: They take the seed's `ground-tint` instead of its `tint`, and the division
+#: is the answer to a question the owner asked of `forest`: make the grounds
+#: greener — *"quero que esse tema seja mais verde nos backgrounds, como os
+#: das janelas dos app, minibuffer e modeline"*. One tint for the whole ramp
+#: cannot do it. In a theme whose greys and whose ACCENT share a hue (forest
+#: is 150° on both), chroma in the greys walks them straight at the accent,
+#: and the first thing to give is `surface.selection` against `surface.hover`
+#: and `rule.default` — measured, those two sit at ΔE 0.063 and 0.054 with a
+#: floor of 0.05, while the same band against `surface.chrome` has 0.115.
+#:
+#: Which is the palette telling us something true: a GROUND is where the theme
+#: is allowed to be the theme, and a BAND or a RULE is a signal drawn on top
+#: of it, so its colour has to stay its own. The tint falls off as the ladder
+#: climbs out of the background and into the signals.
+NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "chrome-raised", "chrome-loud"})
 NEUTRAL_PAINT = (
     ("window", 0.018),
     ("chrome-raised", 0.053),
@@ -264,7 +282,7 @@ class Theme:
         if self.chrome <= self.ground:
             raise Refusal(f"{source}: the chrome ({self.chrome}) has to be lighter than the ground ({self.ground}) — the ladder climbs from it")
         for group, fields in (
-            ("neutral", ("hue", "tint")),
+            ("neutral", ("hue", "tint", "ground-tint")),
             ("text", ("hue", "chroma")),
             ("backdrop", ("hue", "chroma", "step")),
         ):
@@ -272,6 +290,9 @@ class Theme:
                 raise Refusal(f"{source}: {group} must be an attribute set with exactly {list(fields)}")
         self.neutral_hue = _number(seed["neutral"]["hue"], f"{source}: neutral.hue", 0.0, 360.0) % 360.0
         self.tint = _number(seed["neutral"]["tint"], f"{source}: neutral.tint", 0.0, 1.0)
+        #: The tint of the steps a window, the footer and the modeline are
+        #: PAINTED ON — see `NEUTRAL_GROUNDS` for why it is a second number.
+        self.ground_tint = _number(seed["neutral"]["ground-tint"], f"{source}: neutral.ground-tint", 0.0, 1.0)
         self.text_hue = _number(seed["text"]["hue"], f"{source}: text.hue", 0.0, 360.0) % 360.0
         self.text_chroma = _number(seed["text"]["chroma"], f"{source}: text.chroma", 0.0, 1.0)
         self.backdrop_hue = _number(seed["backdrop"]["hue"], f"{source}: backdrop.hue", 0.0, 360.0) % 360.0
@@ -351,7 +372,8 @@ class Theme:
         return swatch
 
     def _neutral(self, step: str, scale: float) -> Swatch:
-        hue, tint = self.neutral_hue, self._rel(self.tint, scale)
+        hue = self.neutral_hue
+        tint = self._rel(self.ground_tint if step in NEUTRAL_GROUNDS else self.tint, scale)
         if step == "ground":
             lch, rgb8 = cs.screen_colour(self.ground, hue, tint)
             return Swatch(lch, rgb8, f"fixed L {self.ground}")
@@ -660,6 +682,28 @@ DISTANCE_GATES = (
     # group. The floor is low on purpose — this is meant to be the smallest
     # step there is, the `surface.shelf` register — but it is not zero.
     ("glance.ground", "glance.ground-alternate", 0.008, 0.012),
+    # THE ANSWER OF THE ROW UNDER THE CURSOR, in its two readings. The owner
+    # moved the cursor down a sheet and watched a door and a fact become one
+    # row; this is what says they cannot go back to being one in some theme
+    # nobody looked at. The floor is the one every "these two must be told
+    # apart" pair in this table carries.
+    ("text.here.acts", "text.here.read", 0.05, 0.06),
+    # THE WINDOW'S TWO OUTLINES. They are never on screen together on ONE
+    # window, but they are on screen together constantly — the focused window
+    # beside every other one — and telling them apart is the whole job of the
+    # pair. One rung of the paint ladder apart, which is what this measures.
+    ("border.active", "border.inactive", 0.05, 0.06),
+    # THE ANSWER OF A ROW ONE CAN ACT ON, AGAINST ORDINARY TEXT. `text.answer`
+    # is `text.primary`'s own primitive with its chroma multiplied, and the
+    # multiplier is ONE NUMBER FOR EVERY THEME — so how far it actually moves
+    # depends on how much chroma the theme's ramp had to begin with. A theme
+    # with a nearly colourless ramp multiplies nearly nothing, and the value
+    # of a row that answers a key goes back to wearing the body text's tone,
+    # which is the exact defect the token was added to remove.
+    #
+    # It is not hypothetical: `cyber` was drafted at a ramp chroma of 0.16 and
+    # landed at ΔE 0.010, while the three themes before it sat at 0.055.
+    ("text.answer", "text.primary", 0.035, 0.045),
 )
 #: Pairs reported but never gated: they are never drawn side by side.
 DISTANCE_NOTES = (
@@ -830,7 +874,7 @@ def write_fragments(directory: pathlib.Path, theme_id: str, tokens: dict[str, Re
     # field by field, the later value winning (`niri-config`, `MergeWith`).
     # `black` is spelled as the colour it names, not as `surface.base`: the
     # option is "black", and a theme whose ground is not black keeps it so.
-    (directory / "niri-border-active").write_text(hexes["state.accent"])
+    (directory / "niri-border-active").write_text(hexes["border.active"])
     (directory / "niri-border-inactive").write_text(hexes["border.inactive"])
     (directory / "niri-background").write_text(hexes["surface.base"])
     for name, desk in (("niri-black.kdl", BLACK), ("niri-backdrop.kdl", hexes["surface.backdrop"])):
@@ -839,7 +883,7 @@ def write_fragments(directory: pathlib.Path, theme_id: str, tokens: dict[str, Re
             "// Included by the system's niri config with `optional=true`; niri reloads it on change.\n"
             "window-rule {\n"
             "    border {\n"
-            f'        active-color "{hexes["state.accent"]}"\n'
+            f'        active-color "{hexes["border.active"]}"\n'
             f'        inactive-color "{hexes["border.inactive"]}"\n'
             "    }\n"
             "}\n"

@@ -18,6 +18,7 @@
   # theme's values when it measures a screenshot.
   themed,
   themes,
+  defaultTheme,
   ronoctua-shell,
   ronoctua-brain,
   fonts,
@@ -42,13 +43,27 @@ let
   # nothing here is read at evaluation (no import-from-derivation). The driver's
   # `token_hex` turns `0xRRGGBBAA` into the `RRGGBB` ImageMagick wants; the
   # alpha is always opaque where it is used.
-  palette = "${themed}/${builtins.head themes}.json";
+  palette = "${themed}/${defaultTheme}.json";
   # AND THE SECOND THEME'S, for the chooser's shots: a preview has to show a
   # colour the default does not have, and the assertion reads it from the
   # generator rather than from a number typed here.
   # With one theme declared the chooser's shots have nothing to prove and the
   # driver skips them (`THEMES > 1`); the path still has to exist.
-  second = if builtins.length themes > 1 then builtins.elemAt themes 1 else builtins.head themes;
+  #
+  # THE ONE A SINGLE `<down>` REACHES, which is the row below the DEFAULT and
+  # not the second in the list. Those were the same number while the first
+  # declared theme was also the default; they stopped being when the owner
+  # asked for the chooser's order and the system's default to be two
+  # declarations (`assets/themes/themes.nix`). It wraps at the end, exactly as
+  # the cursor does not — so if the default is ever last, this takes the first
+  # and the driver's `<down>` would not reach it. That is why the assertion
+  # below reads the FILE rather than assuming.
+  defaultAt = lib.lists.findFirstIndex (t: t == defaultTheme) 0 themes;
+  second =
+    if builtins.length themes > 1 then
+      builtins.elemAt themes (lib.mod (defaultAt + 1) (builtins.length themes))
+    else
+      builtins.head themes;
   secondPalette = "${themed}/${second}.json";
   # How many answers the desk option has, counted from the default language's
   # texts: one `theme-backdrop-<id>` key per answer, which the chooser's own
@@ -268,7 +283,7 @@ pkgs.testers.runNixOSTest {
         "--setenv=RONOCTUA_SWAPPY=${pkgs.swappy}/bin/swappy "
         # The theme's floor and the generator's fragments, as the module
         # exports them — the chooser's shots copy a fragment and assert it.
-        "--setenv=RONOCTUA_THEME=${builtins.head themes} "
+        "--setenv=RONOCTUA_THEME=${defaultTheme} "
         "--setenv=RONOCTUA_THEMES=${themed} "
         "${ronoctua-shell}/bin/ronoctua-shell"
     )
@@ -1282,12 +1297,20 @@ pkgs.testers.runNixOSTest {
             crop(upper, "/tmp/window-after.png")
             has_colour(second_accent, at_least=20, of="/tmp/window-after.png")
             lacks_colour(first_accent, of="/tmp/window-after.png")
+            second_desk_on_apply = "#" + token_hex("surface.backdrop", SECOND)
             # And the fragments beside the file, for the compositor and the terminal.
             machine.succeed("test -s /root/.config/ronoctua/niri-theme.kdl")
             machine.succeed("test -s /root/.config/ronoctua/ghostty-theme.conf")
             machine.succeed("grep -q 'active-color' /root/.config/ronoctua/niri-theme.kdl")
-            # A file that never said a desk is on black, and the fragment says so.
-            machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+            # A FILE THAT NEVER SAID A DESK IS ON THE THEME'S OWN, and the
+            # fragment says so. It was black until the owner made the theme's
+            # desk the default — every theme solves one and every gate holds
+            # it apart from the content's black, so a fresh machine shows it
+            # rather than having to be asked.
+            machine.succeed(
+                f"grep -q 'background-color \"{second_desk_on_apply}\"' "
+                "/root/.config/ronoctua/niri-theme.kdl"
+            )
 
             # THE SECOND COLUMN: the desk. `<right>` crosses to it, `<down>`
             # lands on the theme's own colour and the compositor is shown it
@@ -1298,15 +1321,20 @@ pkgs.testers.runNixOSTest {
             second_desk = "#" + token_hex("surface.backdrop", SECOND)
             control("theme-open")
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Right")
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
+            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Up")
             machine.sleep(1)
             shot("29-theme-desk", lines=2 + CHOOSER_ROWS)
-            machine.succeed(f"grep -q 'background-color \"{second_desk}\"' /root/.config/ronoctua/niri-theme.kdl")
-            machine.succeed("grep -q '\"black\"' /root/.config/ronoctua/theme.json || ! grep -q backdrop /root/.config/ronoctua/theme.json")
+            # THE MOVE IS UPWARDS NOW. The cursor opens on the answer in
+            # force, and that is the theme's own desk — so what this proves is
+            # the OTHER one: `<up>` lands on black, the compositor is shown it
+            # at once because the fragment IS the preview, and the file still
+            # says `theme` until `RET`.
+            machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
+            machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json || ! grep -q backdrop /root/.config/ronoctua/theme.json")
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
             machine.sleep(2)
-            machine.succeed("grep -q '\"backdrop\":\"theme\"' /root/.config/ronoctua/theme.json")
-            machine.succeed(f"grep -q 'background-color \"{second_desk}\"' /root/.config/ronoctua/niri-theme.kdl")
+            machine.succeed("grep -q '\"backdrop\":\"black\"' /root/.config/ronoctua/theme.json")
+            machine.succeed("grep -q 'background-color \"#000000\"' /root/.config/ronoctua/niri-theme.kdl")
 
   '';
 }

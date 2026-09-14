@@ -300,9 +300,12 @@
     # hue, `acts` is a row that answers `RET` and `fact` a row one can only
     # read.
     #
-    # The cursor keeps `state.accent` over both, and a row that is reachable
-    # and REFUSING keeps `text.dim` over both — neither of those is a kind of
-    # row, they are what is happening to one.
+    # A row that is reachable and REFUSING keeps `text.dim` over both: that is
+    # not a kind of row, it is what is happening to one. THE CURSOR IS NOT
+    # LIKE THAT, and this file claimed it was for a year — see `text.here`.
+    # Under the cursor the label takes the accent and the value keeps saying
+    # whether the answer can be changed, because the row being looked at is
+    # the row whose question is being asked.
     #
     # AND THE PAIR IS SOBER, at the owner's word. It went out loud the first
     # time — the family's `text-loud` step at `alternate`'s chroma — and a
@@ -339,6 +342,47 @@
       # list, and following it there would have put it at Lc 32 — under APCA's
       # floor for text of any size. See the `grey-listed` seed.
       weak = "grey-listed.text";
+    };
+
+    # THE ROW UNDER THE CURSOR — AND IT STILL SAYS WHAT KIND OF ROW IT IS.
+    #
+    # This file used to say the opposite, in as many words: *"the cursor keeps
+    # `state.accent` over both, and a row that is reachable and REFUSING keeps
+    # `text.dim` over both — neither of those is a kind of row, they are what
+    # is happening to one."* It reads well and it was wrong on the screen. The
+    # owner moved the cursor down a sheet and watched a door and a fact become
+    # the same row: everything the label column had been rebuilt to say went
+    # out the moment the row was the one being looked at — which is the moment
+    # the question is actually being asked.
+    #
+    # WHY THE DIFFERENCE GOES ON THE VALUE AND NOT THE LABEL. Because the
+    # LABEL has to carry "the keyboard is here", and it is the half that is
+    # always there. Neither window draws a band behind the cursor's row — the
+    # footer's band is the POINTER's — so the accent on the text is the only
+    # thing saying where the keyboard is, and a row whose value is empty would
+    # lose it entirely if the value carried it. So: the label is the accent on
+    # every focused row, and the value says whether the answer can be changed.
+    # It is the same sentence the resting row already tells, told in the one
+    # hue a focused row is allowed to wear.
+    #
+    # AND THE AXIS IS CHROMA, for the third time in this file and for the same
+    # reason each time (`label-read`, `read`): draining colour at a fixed
+    # luminance separates two things without making either of them the DIM
+    # one. `acts` is the accent whole; `read` is the accent with the colour
+    # taken out of it, still plainly the accent's own step, still plainly
+    # "here". A multiplier on one recipe, which is what `answer` above already
+    # does — no new family in any theme, and no frozen key moved.
+    #
+    # `acts` resolves to the same primitive `state.accent` does, and that is
+    # deliberate rather than a duplicate: what this token records is the
+    # DECISION that a focused answer one can change wears the focus colour
+    # whole. The gate that matters measures the pair, and the pair differs.
+    here = {
+      acts = "accent.solid";
+      read = {
+        of = "accent.solid";
+        chroma = 0.40;
+      };
     };
 
     # WHAT THE PERSON WROTE THEMSELVES.
@@ -389,19 +433,67 @@
   # Window border — drawn by the COMPOSITOR, with these colours
   # -------------------------------------------------------------------
   #
-  # The active one is `state.accent`: a single accent colour, and it marks
-  # focus.
+  # BOTH OF THEM ARE THE THEME'S OWN ACCENT, one rung apart on the paint
+  # ladder — and neither of them was, which is what the owner said in one
+  # line: *"não gosto nem um pouco das atuais cores de bordas das janelas;
+  # ambas as cores de foco e fora de foco devem ser alteradas de acordo com o
+  # tema, e podem ser mais discretas que as atuais."*
   #
-  # The INACTIVE one is dark red at the owner's request, and the reason is the
-  # moment the footer takes the keyboard: there no window is focused as far as
-  # the compositor is concerned, and the blue disappears. With the inactive
-  # one in grey, the outline looked SWITCHED OFF; with it here, it CHANGES
-  # COLOUR — which is what was asked for.
+  # WHAT THEY WERE. The active one was `accent.solid` — the brightest step the
+  # accent has, a colour solved to be READ AS TEXT and spent here on a
+  # two-pixel outline. The inactive one was the `error` family's border: a
+  # dark red, in a theme whose entire identity is green. Neither followed the
+  # theme; one of them was not even its hue.
   #
-  # Dark enough not to shout "error": it is the `error` family as a BORDER —
-  # its red dimmed until it becomes an outline, and not a warning.
+  # WHAT SURVIVES FROM THE OLD DECISION. The reason the inactive one was ever
+  # given a colour of its own: while the footer holds the keyboard, NO window
+  # is focused as far as the compositor is concerned, so whatever marks focus
+  # disappears at that instant for every window at once. With a grey there the
+  # outline read as SWITCHED OFF. So the inactive one still has to be a
+  # colour, and it still is — the same hue, one rung down. Pressing the leader
+  # now DIMS the outline instead of erasing it or turning it red.
+  #
+  # WHY A PAINT STEP AND NOT A SOLID. Because that is what these two are: an
+  # outline around a window, not a word to be read. The paint ladder is the
+  # register built for exactly that, and moving to it is the whole of "more
+  # discreet".
+  #
+  # AND THEN A RUNG LOWER AGAIN, with the pair spread wider — the owner asked
+  # for both at once: *"a diferença entre a janela em foco e a que não está em
+  # foco deve ser um pouco maior; e ambos, foco e fora de foco, devem ser um
+  # pouco mais discretos."*
+  #
+  # THE LADDER CAPS HOW MUCH OF THAT CAN BE LIGHTNESS. The rungs sit at 0.044,
+  # 0.102, 0.178 and 0.26 above the chrome, and the window's own ground is at
+  # 0.018 — so an inactive outline on the bottom rung is a couple of
+  # hundredths from the surface it is drawn around, and measured, it stops
+  # reading as an outline at all. The lowest pair that still frames a window
+  # is `border` over `element`, and that pair is NARROWER than the one it
+  # replaces. So the rest of the difference has to come from chroma.
+  #
+  # IT COMES OUT OF THE INACTIVE ONE, and not into the active one. Pushing the
+  # focused outline's chroma up widens the pair too — measured, it nearly
+  # doubles it in owl — but a more saturated outline is the opposite of what
+  # was asked for, and in forest it does nothing at all, because a green that
+  # dark is already against the edge of what sRGB can show. Draining the
+  # unfocused one moves the same distance in the direction the request
+  # points: quieter, not louder.
+  #
+  # WHAT IT KEEPS. Enough hue to not read as SWITCHED OFF, which is the
+  # constraint the inactive outline has carried since it was first given a
+  # colour of its own: while the footer holds the keyboard no window is
+  # focused, so every outline changes at once, and a grey there says the
+  # screen turned off rather than that the keyboard moved.
+  #
+  # `accent.border` is also `context.accent.border`, and that is one primitive
+  # under two names rather than an accident — the same arrangement
+  # `syntax.keyword` and `text.group` already have.
   border = {
-    inactive = "error.border";
+    active = "accent.border";
+    inactive = {
+      of = "accent.element";
+      chroma = 0.20;
+    };
   };
 
   # -------------------------------------------------------------------

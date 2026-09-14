@@ -66,6 +66,21 @@ pub enum DeskRow {
     Empty,
 }
 
+/// What row `i` of the FIRST column is — the themes' own list.
+///
+/// The mirror of [`DeskRow`], and it exists for the same reason: the row on
+/// screen and the item's index in its list stopped being the same number the
+/// day the column gained a title, and the two must not be confused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeRow {
+    /// The list's name, over the themes. Not a place for the cursor.
+    Header,
+    /// One theme, by its index in [`tokens::theme::all`].
+    Theme(usize),
+    /// Nothing: the right list is longer than the left one here.
+    Empty,
+}
+
 /// What moving the cursor changed.
 ///
 /// # Why both arms carry the whole PAIR now
@@ -141,10 +156,35 @@ impl View {
         theme::all().len()
     }
 
+    /// How many rows the LEFT list takes: a title and one row per theme.
+    #[must_use]
+    pub fn theme_rows() -> usize {
+        1 + Self::theme_count()
+    }
+
     /// How many rows the region shows: the longer of the two lists.
     #[must_use]
     pub fn rows() -> usize {
-        Self::theme_count().max(Self::DESK_ROWS)
+        Self::theme_rows().max(Self::DESK_ROWS)
+    }
+
+    /// What row `i` of the FIRST column is.
+    ///
+    /// # Why the themes gained a title
+    ///
+    /// Because only one of the two lists had one, and a column with no name
+    /// beside a column with one does not read as the other half of a pair —
+    /// it reads as the thing the named column is about. The owner said so of
+    /// this region in one line: it was not built to the shape the rest of the
+    /// system uses. Every other list in this distro opens with a title in
+    /// `text.group`, and now this one does too, on both sides of the rule.
+    #[must_use]
+    pub fn theme_row(i: usize) -> ThemeRow {
+        match i {
+            0 => ThemeRow::Header,
+            n if n <= Self::theme_count() => ThemeRow::Theme(n - 1),
+            _ => ThemeRow::Empty,
+        }
     }
 
     /// What row `i` of the second column is.
@@ -175,7 +215,7 @@ impl View {
     #[must_use]
     pub const fn row(&self) -> usize {
         match self.column {
-            Column::Themes => self.cursor,
+            Column::Themes => 1 + self.cursor,
             Column::Desk => 1 + self.desk_cursor,
         }
     }
@@ -253,6 +293,21 @@ impl View {
     /// Puts the focus on a row of the right column — what the pointer does
     /// there. `None` on the header or on nothing: the cursor did not move and
     /// there is nothing to preview.
+    /// The pointer landed on row `row` of the FIRST column.
+    ///
+    /// By ROW and not by theme index, which is what `focus_theme` takes: the
+    /// two differ by the title now, and a click that did not know it would
+    /// choose the theme one above the one under the pointer.
+    pub fn focus_theme_row(&mut self, row: usize) -> Option<Choice> {
+        match Self::theme_row(row) {
+            ThemeRow::Theme(n) => {
+                self.focus_theme(n);
+                Some(self.focused_choice())
+            }
+            ThemeRow::Header | ThemeRow::Empty => None,
+        }
+    }
+
     pub fn focus_desk_row(&mut self, row: usize) -> Option<Choice> {
         match Self::desk_row(row) {
             DeskRow::Answer(b) => {
@@ -373,11 +428,32 @@ mod tests {
         assert_eq!(v.focused_backdrop().position(), 0);
         assert_eq!(v.cross(-1), Column::Themes);
         assert_eq!(v.cross(-1), Column::Themes);
-        assert_eq!(v.row(), v.cursor());
+        // AND THE THEMES START UNDER THEIR OWN HEADER TOO. This line read
+        // `v.row() == v.cursor()` while the left list had no title; the two
+        // lists are now the same shape, and the drawing, the pointer and the
+        // scroll all count rows rather than items.
+        assert_eq!(v.row(), 1 + v.cursor());
     }
 
     #[test]
-    fn the_rows_cover_both_lists_and_the_header_takes_no_cursor() {
+    fn both_lists_open_with_a_header_and_neither_header_takes_a_cursor() {
+        // THE TWO LISTS ARE THE SAME SHAPE, which is what the owner asked for
+        // when they said this region was not built like the rest of the
+        // system: a title, then the items, on both sides of the rule.
+        assert_eq!(View::theme_row(0), ThemeRow::Header);
+        for i in 0..View::theme_count() {
+            assert_eq!(View::theme_row(i + 1), ThemeRow::Theme(i));
+        }
+        assert_eq!(View::theme_row(View::theme_rows()), ThemeRow::Empty);
+        assert!(View::rows() >= View::theme_rows());
+        let mut v = View::fresh_one(Backdrop::Black, true);
+        assert_eq!(v.focus_theme_row(0), None, "the title is not a row");
+        assert!(
+            v.focus_theme_row(1).is_some(),
+            "the first theme sits under its title"
+        );
+        assert_eq!(v.cursor(), 0, "row 1 is theme 0");
+
         assert!(View::rows() >= View::theme_count());
         assert!(View::rows() >= View::DESK_ROWS);
         assert_eq!(View::desk_row(0), DeskRow::Header);

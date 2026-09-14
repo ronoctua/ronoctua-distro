@@ -62,12 +62,18 @@ pub const FRAGMENTS_ENV: &str = "RONOCTUA_THEMES";
 /// offers in its second column. Two answers, by name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Backdrop {
-    /// The pixel switched off. What a machine that never chose is on, and
-    /// what the file means when it does not say.
-    #[default]
+    /// The pixel switched off.
     Black,
     /// The theme's own desk, `surface.backdrop`: the accent's hue one step
     /// below the footer's chrome, solved by the generator per theme.
+    ///
+    /// AND THE DEFAULT, at the owner's word. It was `Black` — a machine that
+    /// never chose showed the pixel switched off under its windows, and a
+    /// theme's own desk was something one had to go and ask for. Every theme
+    /// solves that desk and every gate holds it to being distinct from the
+    /// content's black, so making it what a fresh machine shows costs nothing
+    /// and stops the work being invisible by default.
+    #[default]
     Theme,
 }
 
@@ -649,22 +655,24 @@ mod tests {
     }
 
     #[test]
-    fn the_desk_is_black_unless_the_file_says_the_theme() {
+    fn the_desk_is_the_theme_unless_the_file_says_black() {
         let dir = scratch("desk");
         let owl = theme::default_one().id();
-        // No file, a file from before the field, an unknown answer: black —
-        // and only the unknown one is a complaint, because the other two are
-        // what every machine had.
-        assert_eq!(backdrop_in(Some(&dir)), (Backdrop::Black, Vec::new()));
+        // THE DEFAULT IS THE THEME'S OWN DESK NOW, at the owner's word, and
+        // this test read the other way round. No file, a file from before the
+        // field, an unknown answer: all three fall to the default, and only
+        // the unknown one is a complaint — the other two are what a machine
+        // that never chose looks like.
+        assert_eq!(backdrop_in(Some(&dir)), (Backdrop::Theme, Vec::new()));
         std::fs::write(dir.join(FILE), format!("{{\"theme\":\"{owl}\"}}")).unwrap();
-        assert_eq!(backdrop_in(Some(&dir)), (Backdrop::Black, Vec::new()));
+        assert_eq!(backdrop_in(Some(&dir)), (Backdrop::Theme, Vec::new()));
         std::fs::write(
             dir.join(FILE),
             format!("{{\"theme\":\"{owl}\",\"backdrop\":\"purple\"}}"),
         )
         .unwrap();
         let (b, complaints) = backdrop_in(Some(&dir));
-        assert_eq!(b, Backdrop::Black);
+        assert_eq!(b, Backdrop::Theme);
         assert!(complaints[0].contains("purple"), "{complaints:?}");
         std::fs::write(
             dir.join(FILE),
@@ -672,8 +680,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(backdrop_in(Some(&dir)), (Backdrop::Theme, Vec::new()));
-        // And nothing without a directory.
-        assert_eq!(backdrop_in(None).0, Backdrop::Black);
+        // AND THE OTHER ANSWER IS STILL REACHABLE, which is the half of this
+        // that the default's change does not cover: `black` in the file has
+        // to mean black, or the second column would offer a choice that does
+        // nothing.
+        std::fs::write(
+            dir.join(FILE),
+            format!("{{\"theme\":\"{owl}\",\"backdrop\":\"black\"}}"),
+        )
+        .unwrap();
+        assert_eq!(backdrop_in(Some(&dir)), (Backdrop::Black, Vec::new()));
+        // And the default without a directory.
+        assert_eq!(backdrop_in(None).0, Backdrop::Theme);
         for b in Backdrop::ALL {
             assert_eq!(Backdrop::by_id(b.id()), Some(b));
             assert_eq!(Backdrop::ALL[b.position()], b);

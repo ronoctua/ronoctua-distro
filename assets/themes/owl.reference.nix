@@ -103,5 +103,20 @@
       max = 0.04;
       reason = "the register's text-shift was measured on strong and applies to faint too; the hand faint sat 2.6 Lc higher, at a hue 16 degrees off the register";
     };
+    # THE FROZEN VALUE IS A RED, AND THE OWNER ASKED FOR IT NOT TO BE.
+    #
+    # This is the one kind of deviation this file exists to carry: not a
+    # ladder that could not reach a hand value, but a hand value the owner has
+    # since decided against — *"não gosto nem um pouco das atuais cores de
+    # bordas das janelas"*. The whole distance is the HUE: the reference is
+    # `error.border`, an outline in a family that means something went wrong,
+    # and the window's border now comes from the accent like everything else
+    # that marks focus. The `distance` gate is what proves the pair still
+    # reads as two; this one only records that the old value was left behind
+    # on purpose.
+    "border.inactive" = {
+      max = 0.12;
+      reason = "the frozen value is the error family's red; the owner asked for both window borders to follow the theme and then for the unfocused one to be quieter still, so this one is the accent's element rung with its chroma drained";
+    };
   };
 }

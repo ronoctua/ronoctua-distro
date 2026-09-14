@@ -1685,7 +1685,22 @@ impl Builder<'_> {
         // and the chevron they named is the drawer's.
         let acts = !matches!(target, Target::Nothing);
         let (label_colour, value_colour) = match (focused, disabled) {
-            (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
+            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
+            // halves here, so a door and a fact became one row at the very
+            // moment the cursor was on them — which is the moment the question
+            // is being asked. Now the label carries "the keyboard is here"
+            // (neither window draws a band behind the cursor, so the accent on
+            // the text is the only thing that says it) and the value goes on
+            // saying whether the answer can be changed. See `colors.nix`,
+            // `text.here`.
+            (true, disabled) => (
+                tokens::color::STATE_ACCENT,
+                if acts && !disabled {
+                    tokens::color::TEXT_HERE_ACTS
+                } else {
+                    tokens::color::TEXT_HERE_READ
+                },
+            ),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
             (false, false) => (
                 if acts {

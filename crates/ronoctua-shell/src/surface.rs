@@ -1737,6 +1737,16 @@ pub fn wheel_lines(left: &mut f64) -> i64 {
 /// of as loose text.
 pub const SEPARATOR_OF: &str = ":";
 
+/// The cell a check mark would have taken, when there is no check.
+///
+/// The theme chooser's right column carries its own mark inside the TEXT —
+/// the margin's icon column belongs to the left list — so every row of that
+/// column has to reserve the cell whether it is ticked or not, and so does
+/// the column's TITLE. It is a constant because that last one was missed:
+/// the title sat one cell left of the answers it named, which the owner read
+/// as two columns with no rule between them.
+pub const BLANK_MARK: &str = " ";
+
 /// The mark of a SUBMENU in the shortcut list.
 ///
 /// The convention comes from Doom, where `+file` says "this opens more keys"
@@ -9556,31 +9566,56 @@ impl Footer {
             // because that theme IS the process's while the cursor rests
             // there — the list is its own swatch. The desk has no swatch here:
             // its preview is the compositor's (`theme_chooser.rs`).
-            use crate::theme_chooser::{Column, DeskRow, View};
+            use crate::theme_chooser::{Column, DeskRow, ThemeRow, View};
             let committed = v.committed();
             let themes: Vec<tokens::theme::Theme> = tokens::theme::all().collect();
             return (0..View::rows())
                 .map(|i| {
-                    let theme = themes.get(i).copied();
-                    let theme_focus = v.column() == Column::Themes && i == v.cursor();
+                    // BOTH LISTS ARE A LIST, and both open with a title in the
+                    // colour every other list in this distro gives one. The
+                    // right one had a title in `text.dim` — the tone the
+                    // modeline gives to what dies first in the elision — and
+                    // the left one had none at all, which the owner read off
+                    // the screen as a region that was not built to the shape
+                    // of the rest.
+                    let row = View::theme_row(i);
+                    let theme = match row {
+                        ThemeRow::Theme(n) => themes.get(n).copied(),
+                        ThemeRow::Header | ThemeRow::Empty => None,
+                    };
+                    let theme_focus =
+                        v.column() == Column::Themes && row == ThemeRow::Theme(v.cursor());
+                    // THE CHECK IS PART OF THE TEXT in the right list, and its
+                    // cell is kept when it is absent, so the answers line up:
+                    // the margin's icon column belongs to the LEFT list, and
+                    // this column has to pay for its own mark.
+                    //
+                    // THE TITLE PAYS THE SAME CELL. It did not, and the owner
+                    // read the result off the screen: `Theme` sat over the
+                    // theme ids while `Background` sat over the CHECK, one
+                    // cell to the left of the answers it names — two titles
+                    // with no rule between them. Both now sit over the NAMES
+                    // of the things their list holds, and the two texts come
+                    // out of one expression so they cannot drift apart again.
+                    let marked = |mark: &str, label: &str| format!("{mark} {label}");
                     let (text, text_color) = match View::desk_row(i) {
                         DeskRow::Header => (
-                            self.texts.t(ronoctua_i18n::key::THEME_OPTION_BACKDROP),
-                            tokens::color::TEXT_DIM,
+                            marked(
+                                BLANK_MARK,
+                                &self.texts.t(ronoctua_i18n::key::THEME_OPTION_BACKDROP),
+                            ),
+                            tokens::color::TEXT_GROUP,
                         ),
                         DeskRow::Answer(b) => {
                             let under_cursor = b == v.focused_backdrop();
                             let focus = v.column() == Column::Desk && under_cursor;
-                            // THE CHECK IS PART OF THE TEXT, and its cell is kept
-                            // when it is absent, so the answers line up: the
-                            // margin's icon column belongs to the left list.
                             let mark = if b == committed.backdrop {
                                 tokens::icon::SUCCESS.to_string()
                             } else {
-                                " ".to_owned()
+                                BLANK_MARK.to_owned()
                             };
                             (
-                                format!("{mark} {}", self.texts.t(b.text_key())),
+                                marked(&mark, &self.texts.t(b.text_key())),
                                 if focus {
                                     tokens::color::STATE_ACCENT
                                 } else if under_cursor {
@@ -9592,22 +9627,26 @@ impl Footer {
                         }
                         DeskRow::Empty => (String::new(), tokens::color::TEXT_PRIMARY),
                     };
+                    let key = match row {
+                        ThemeRow::Header => self.texts.t(ronoctua_i18n::key::THEME_OPTION_THEME),
+                        ThemeRow::Theme(_) => theme.map_or_else(String::new, |t| t.id().to_owned()),
+                        ThemeRow::Empty => String::new(),
+                    };
                     ExpansionRow {
                         icon: theme
                             .filter(|t| *t == committed.theme)
                             .map(|_| tokens::icon::SUCCESS),
-                        key: theme.map_or_else(String::new, |t| t.id().to_owned()),
+                        key,
                         text,
                         key_flush_right: false,
                         separator: false,
                         aside: true,
                         click: Some(Click::Theme(i)),
-                        key_color: if theme_focus {
-                            tokens::color::STATE_ACCENT
-                        } else if i == v.cursor() {
-                            tokens::color::TEXT_PRIMARY
-                        } else {
-                            tokens::color::TEXT_SECONDARY
+                        key_color: match row {
+                            ThemeRow::Header => tokens::color::TEXT_GROUP,
+                            _ if theme_focus => tokens::color::STATE_ACCENT,
+                            ThemeRow::Theme(n) if n == v.cursor() => tokens::color::TEXT_PRIMARY,
+                            _ => tokens::color::TEXT_SECONDARY,
                         },
                         text_color,
                         ..ExpansionRow::empty_one()
@@ -11627,11 +11666,8 @@ impl Footer {
                     // wherever it landed. See the key branch above.
                     let moved = if on_the_right {
                         v.focus_desk_row(n).is_some()
-                    } else if n < crate::theme_chooser::View::theme_count() {
-                        v.focus_theme(n);
-                        true
                     } else {
-                        false
+                        v.focus_theme_row(n).is_some()
                     };
                     let shown = moved.then(|| {
                         let c = v.focused_choice();
@@ -13873,6 +13909,29 @@ impl Footer {
                     bottom,
                 ));
                 backgrounds.extend(qr_quads);
+            }
+
+            // AND THE ONE BETWEEN THE THEME CHOOSER'S TWO LISTS.
+            //
+            // Two lists side by side with nothing between them read as one
+            // list with a ragged right half, which is what the owner saw. The
+            // separation is a RULE, because a rule and whitespace are the only
+            // two this design admits (invariant 15) — and it comes out of
+            // `chrome`, because `separators-come-from-chrome` refuses a fourth
+            // answer to where a separator lives.
+            //
+            // AT THE SEAM THE GRID ALREADY DREW THEM ON EITHER SIDE OF. The
+            // key column ends at `colon` and the text column starts at
+            // `colon + 2`; the pointer decides which list it is in by the same
+            // number. Putting the rule anywhere else would make the line the
+            // eye sees and the line the mouse obeys two different places.
+            if self.view() == ViewState::Themes && self.theme_chooser.is_some() {
+                let cell = tokens::metrics::cell_width(tokens::text::size());
+                backgrounds.push(crate::chrome::divider(
+                    f32::from(grid.colon.saturating_add(1)) * cell,
+                    f32::from(first_of_expansion) * line_height,
+                    bottom,
+                ));
             }
 
             // AND THE ONE BETWEEN THE SIDEBAR AND THE LISTING, which is the

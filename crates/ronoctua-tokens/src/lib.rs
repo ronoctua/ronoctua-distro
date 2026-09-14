@@ -146,11 +146,17 @@ pub mod theme {
         (0..super::counts::THEMES).map(|index| Theme { index })
     }
 
-    /// The first declared theme: what a process starts in before anything
-    /// says otherwise.
+    /// What a process starts in before anything says otherwise.
+    ///
+    /// NOT the first declared theme, which it was until the owner asked for
+    /// the chooser's ORDER and the system's DEFAULT to stop being one fact —
+    /// see `assets/themes/themes.nix`. The index is generated from the name
+    /// declared over there.
     #[must_use]
     pub const fn default_one() -> Theme {
-        Theme { index: 0 }
+        Theme {
+            index: super::counts::DEFAULT_THEME,
+        }
     }
 
     /// The theme with this id, if it is declared.
@@ -444,9 +450,16 @@ mod tests {
     }
 
     #[test]
-    fn the_first_theme_is_the_default_and_every_id_round_trips() {
-        assert_eq!(theme::default_one(), theme::all().next().unwrap());
-        assert_eq!(theme::default_one().position(), 0);
+    fn the_declared_default_is_a_real_theme_and_every_id_round_trips() {
+        // THE DEFAULT IS NOT THE FIRST, and this assertion said it was. The
+        // chooser's order and the system's default are two declarations now
+        // (`assets/themes/themes.nix`), so what is left to guard is that the
+        // generated index names a theme that exists.
+        assert!(theme::default_one().position() < counts::THEMES);
+        assert_eq!(
+            theme::by_id(theme::default_one().id()),
+            Some(theme::default_one())
+        );
         for t in theme::all() {
             assert_eq!(theme::by_id(t.id()), Some(t), "{}", t.id());
         }

@@ -606,8 +606,12 @@ impl Builder<'_> {
                 } else {
                     tokens::color::TEXT_LABEL_FACT
                 },
+                // A FACT'S ANSWER IS NOT A DOOR, under the cursor either: the
+                // label takes the accent and says "here", and this half keeps
+                // saying there is nothing to change. See `colors.nix`,
+                // `text.here`.
                 if focused {
-                    tokens::color::STATE_ACCENT
+                    tokens::color::TEXT_HERE_READ
                 } else {
                     tokens::color::TEXT_READ_STRONG
                 },
@@ -636,7 +640,16 @@ impl Builder<'_> {
         );
         let focused = self.cursor == self.out.len();
         let (label_colour, value_colour) = match (focused, disabled) {
-            (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
+            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
+            // halves here, so a door and a fact became one row at the very
+            // moment the cursor was on them — which is the moment the question
+            // is being asked. Now the label carries "the keyboard is here"
+            // (neither window draws a band behind the cursor, so the accent on
+            // the text is the only thing that says it) and the value goes on
+            // saying whether the answer can be changed. See `colors.nix`,
+            // `text.here`.
+            (true, true) => (tokens::color::STATE_ACCENT, tokens::color::TEXT_HERE_READ),
+            (true, false) => (tokens::color::STATE_ACCENT, tokens::color::TEXT_HERE_ACTS),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
             (false, false) => (tokens::color::TEXT_LABEL_ACTS, tokens::color::TEXT_ANSWER),
         };

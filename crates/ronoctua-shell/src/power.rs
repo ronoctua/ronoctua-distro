@@ -1026,8 +1026,11 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         // A FACT IS A ROW ONE CANNOT ACT ON, so its value is grey — see
         // `colors.nix`, `text.read`.
+        // A FACT'S ANSWER IS NOT A DOOR, under the cursor either: the label
+        // below takes the accent and says "here", and this half keeps saying
+        // there is nothing to change. See `colors.nix`, `text.here`.
         let value_colour = colour.unwrap_or(if focused {
-            tokens::color::STATE_ACCENT
+            tokens::color::TEXT_HERE_READ
         } else {
             tokens::color::TEXT_READ_STRONG
         });
@@ -1065,7 +1068,22 @@ impl Builder<'_> {
         // which the owner refused: a chevron is what a tree uses to open and
         // close, and this row does neither.
         let (label_colour, value_colour) = match (focused, disabled) {
-            (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
+            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
+            // halves here, so a door and a fact became one row at the very
+            // moment the cursor was on them — which is the moment the question
+            // is being asked. Now the label carries "the keyboard is here"
+            // (neither window draws a band behind the cursor, so the accent on
+            // the text is the only thing that says it) and the value goes on
+            // saying whether the answer can be changed. See `colors.nix`,
+            // `text.here`.
+            (true, disabled) => (
+                tokens::color::STATE_ACCENT,
+                if disabled || target == Target::Nothing {
+                    tokens::color::TEXT_HERE_READ
+                } else {
+                    tokens::color::TEXT_HERE_ACTS
+                },
+            ),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
             (false, false) => (
                 if target == Target::Nothing {

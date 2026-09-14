@@ -19,6 +19,7 @@
   # the default theme's three colours (see `nix/themes.nix`).
   themed,
   themes,
+  defaultTheme,
   xwayland-satellite,
   ronoctua-shell,
   atRunTime,
@@ -55,7 +56,7 @@ let
   # LOOKS at the screen, and a colour different from production's would make the
   # working loop validate something nobody is going to see.
   # The SOLVED palette of the default theme, as files (see `nix/themes.nix`).
-  palette = "${themed}/${builtins.head themes}";
+  palette = "${themed}/${defaultTheme}";
   # The SAME layout as production: the nested loop is where one types to test, and
   # a different keyboard here would be testing something else.
   keyboard = import ./keyboard-xkb.nix;
@@ -486,7 +487,7 @@ let
       export RONOCTUA_ICONS="${iconSuperpack}/share/icons/noctua"
       # THE THEME the loop starts in, and where the generator's fragments are —
       # the same two variables `nix/modules/niri.nix` exports to the session.
-      export RONOCTUA_THEME="${builtins.head themes}"
+      export RONOCTUA_THEME="${defaultTheme}"
       export RONOCTUA_THEMES="${themed}"
       # AND THE EDITOR, for the same reason: it is out of the compilation so
       # that `ronoctua.editor.emacs = false` can really remove it, which means

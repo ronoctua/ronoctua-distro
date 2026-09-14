@@ -27,6 +27,11 @@
   neutral = {
     hue = 85;
     tint = 0.0;
+    # OWL'S GREYS ARE GREY, grounds included — the same number as `tint`, and
+    # the two are separate so that a theme which wants a coloured background
+    # can have one without tinting the bands and rules drawn on it. See
+    # `NEUTRAL_GROUNDS` in the generator.
+    ground-tint = 0.0;
   };
   text = {
     hue = 85;

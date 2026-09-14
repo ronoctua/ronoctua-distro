@@ -176,7 +176,7 @@ in
     # runtime is the shell's business.
     theme = lib.mkOption {
       type = lib.types.enum ronoctua.themes;
-      default = builtins.head ronoctua.themes;
+      default = ronoctua.defaultTheme;
       description = ''
         The colour theme the system is built with. The person can pick another
         at runtime with `LEADER s t`; this is what a fresh machine shows.

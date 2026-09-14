@@ -58,6 +58,9 @@
   # The themes: the list from `assets/themes/themes.nix`, and the derivation
   # that solved every palette (`nix/themes.nix`) with its gates' report.
   themes,
+  # And which of them a fresh machine shows. NOT the first any more; see that
+  # file for why the order and the default stopped being one fact.
+  defaultTheme,
   themed,
   # The notification catalogue, for the two checks that read it: the table's
   # own shape, and the text keys it demands of both languages.
@@ -12049,7 +12052,13 @@ let
         echo "ERROR: $r is a reference for a theme that is not declared." >&2; exit 1; }
     done
 
-    base=${builtins.head themes}
+    # THE DEFAULT IS DECLARED BY NAME, and it is no longer the first — see
+    # `assets/themes/themes.nix`. So it has to be checked: a name that is not
+    # in `order` would reach the NixOS option's enum as a default outside its
+    # own type, and the failure would name the option rather than the file.
+    base=${defaultTheme}
+    printf '%s\n' $declared | grep -qx "$base" || {
+      echo "ERROR: the default theme $base is not one of the declared ones." >&2; exit 1; }
     test -f ${../assets/themes}/$base.nix || {
       echo "ERROR: the default theme $base has no seed file" >&2; exit 1; }
 
@@ -12102,6 +12111,9 @@ let
   # table's fixture.
   themes-negative =
     let
+      # ANY declared seed will do — this one only needs a valid starting point
+      # to spoil. It takes the first because there always is one, and NOT
+      # because the first means anything: the default is declared by name now.
       base = import (../assets/themes + "/${builtins.head themes}.nix");
       bad = base // {
         families = base.families // {

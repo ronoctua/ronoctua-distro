@@ -1,9 +1,12 @@
 # FOREST — dark, and green where owl is blue.
 #
-# The greys carry a green tint (chroma is the lever, not hue: at 0.10 relative
-# chroma the footer reads as `#111311`, a green the eye registers without
-# naming), the text ramp is a cream leaning to green, and the accent is a green
-# at 150° — eight degrees below the 158–172° band where an accent collapses
+# The SURFACES are the green — a dark one, and the owner asked for it twice:
+# first for more green in the grounds, then for the green to be darker. Both
+# are the same two knobs, `chrome` and `neutral.ground-tint`, pulled in
+# opposite directions; the footer is `#061008` and a window `#08150A`. The
+# bands and the rules drawn ON those grounds keep a colour of their own, which
+# is what `neutral.tint` is for and why it is the smaller number. The text
+# ramp is a cream leaning to green, and the accent is a green at 150° — eight degrees below the 158–172° band where an accent collapses
 # onto red under protanopia, and twenty degrees from `success`, which moves to
 # a yellower green so the two stay two. `error` is pushed DOWN in lightness
 # (`shift` −4): under deuteranopia a green accent and a red sit close whatever
@@ -14,11 +17,36 @@
 # `gen-theme.py`'s and is the same for every theme.
 {
   ground = 0.0;
-  chrome = 0.182;
+  # LOWER THAN OWL'S 0.182, at the owner's word — every surface in this theme
+  # climbs from here, so this is the one number that makes the greens darker
+  # rather than merely different.
+  chrome = 0.160;
 
   neutral = {
     hue = 150;
-    tint = 0.10;
+    # THE BANDS AND THE RULES, and this is the number that cannot rise. Here
+    # the greys and the ACCENT are both at 150°, so chroma in the paint walks
+    # it straight at `surface.selection`, and that band against `rule.default`
+    # is the first thing to give. It came DOWN when the chrome did: a lower
+    # chrome leaves the band less room, and paying for it here — where almost
+    # nothing is drawn — is cheaper than paying for it in the grounds. A
+    # signal drawn on a ground has to keep a colour of its own.
+    tint = 0.05;
+    # THE GROUNDS, and they are the theme. The owner asked for this one to be
+    # greener where it is a BACKGROUND — *"mais verde nos backgrounds, como os
+    # das janelas dos app, minibuffer e modeline"* — and against those same
+    # grounds the selection band has room to spare, where against the paint it
+    # has almost none. So the tint falls off as the ladder climbs out of the
+    # background and into the signals; see `NEUTRAL_GROUNDS`.
+    #
+    # IT WENT UP WHEN THE CHROME WENT DOWN, and the two are one change: the
+    # owner asked for these surfaces to be a DARKER green, and darker on its
+    # own is just blacker. The chrome fell from 0.182 to 0.160 and the tint of
+    # the grounds rose, so the footer is both lower and greener than it was —
+    # and the theme came out with one warning FEWER than it had, because the
+    # paint's own tint fell at the same time and took the selection band's
+    # tightest pair with it.
+    ground-tint = 0.60;
   };
   text = {
     hue = 105;
@@ -32,7 +60,12 @@
   backdrop = {
     hue = 150;
     chroma = 0.85;
-    step = 0.018;
+    # AND IT HAD TO DROP WHEN THE CHROME WENT GREEN. The desk is a green a
+    # step below the footer, and it had only that step plus a little chroma to
+    # separate them; with `ground-tint` raised, the footer moved onto it and
+    # the pair fell under the gate. One more step of L is the whole of the
+    # answer, and it is the lever this seed exists for.
+    step = 0.030;
   };
 
   # A hair under owl's: the greys already carry chroma here, and solids at full

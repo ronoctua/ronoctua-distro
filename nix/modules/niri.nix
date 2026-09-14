@@ -98,20 +98,21 @@ let
               // `border` and not `focus-ring`: the border counts inside the
               // window's size, so the content does not end up underneath it.
               //
-              // THE INACTIVE ONE IS DARK RED, and the why is the owner's call.
+              // BOTH COLOURS ARE THE THEME'S ACCENT, one rung of the paint
+              // ladder apart, and both come from `colors.nix` — read the
+              // `border` block there for why they are what they are.
               //
-              // While the footer holds the keyboard (leader, locator, manual),
-              // NO window is focused as far as the compositor is concerned —
-              // and there is no way to ask otherwise: a window with no keyboard
-              // is not active, and that is what the border reports. So the blue
-              // ALWAYS disappears at that instant.
+              // The constraint this comment exists for still holds: while the
+              // footer holds the keyboard (leader, locator, manual) NO window
+              // is focused as far as the compositor is concerned, and there is
+              // no way to ask otherwise — a window with no keyboard is not
+              // active, and that is what the border reports. So whatever marks
+              // focus disappears at that instant, for every window at once.
               //
-              // What can be chosen is the color that takes its place. With
-              // `border.inactive` in dark red, pressing the leader *changes*
-              // the outline's color instead of erasing it, which is the effect
-              // asked for. The price: an unfocused window is dark red too,
-              // not grey. It is discreet enough not to shout "error", and the
-              // blue still marks exactly one window.
+              // What can be chosen is what takes its place, and a grey there
+              // read as SWITCHED OFF. One rung down in the same hue reads as
+              // dimmed instead, which is the effect that was asked for — and
+              // the strong rung still marks exactly one window.
               border {
                   width 2
                   active-color "@BORDER_ACTIVE@"

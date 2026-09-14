@@ -14,8 +14,11 @@
   glyphdb,
   # THE COLOURS, ALREADY SOLVED: `nix/themes.nix` runs the generator over
   # every theme and this only reads `themes.json` out of it — the ordered list
-  # of `{ id, colors }`, the first being the default.
+  # of `{ id, colors }`.
   themed,
+  # WHICH OF THEM A FRESH MACHINE SHOWS, by name. It is not the first any
+  # more: see `assets/themes/themes.nix`.
+  defaultTheme,
   typographyFile,
   spaceFile,
   trayTableFile,
@@ -50,6 +53,7 @@ stdenvNoCC.mkDerivation {
     mkdir -p $out
     python3 ${./scripts/gen-tokens.py} \
       --themes ${themed}/themes.json \
+      --default-theme ${defaultTheme} \
       --typography ${toJson "typography.json" typographyFile} \
       --space ${toJson "space.json" spaceFile} \
       --icons ${glyphdb.db}/icons.json \

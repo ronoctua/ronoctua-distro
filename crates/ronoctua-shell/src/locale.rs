@@ -1219,7 +1219,17 @@ impl Builder<'_> {
         let focused = self.cursor == self.out.len();
         // THE LABEL SAYS WHETHER THE ROW IS A DOOR, in a hue no value wears.
         let (label_colour, value_colour) = if focused {
-            (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT)
+            // AND UNDER THE CURSOR IT STILL SAYS SO — the label carries "the
+            // keyboard is here" and the value keeps saying whether the answer
+            // can be changed. See `colors.nix`, `text.here`.
+            (
+                tokens::color::STATE_ACCENT,
+                if target == Target::Nothing {
+                    tokens::color::TEXT_HERE_READ
+                } else {
+                    tokens::color::TEXT_HERE_ACTS
+                },
+            )
         } else {
             (
                 if target == Target::Nothing {

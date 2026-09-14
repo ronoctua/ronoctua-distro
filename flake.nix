@@ -245,7 +245,11 @@
       # THE THEMES, imported ONCE, like the languages. And the palettes, SOLVED
       # once for all of them: `assets/tokens/colors.nix` is recipes, and this
       # derivation is where they become values (section 7.6, one wall earlier).
-      themes = import ./assets/themes/themes.nix;
+      themeSpec = import ./assets/themes/themes.nix;
+      # THE ORDER AND THE DEFAULT ARE TWO FACTS — see that file. Nothing
+      # here may take `builtins.head themes` to mean "the default" again.
+      themes = themeSpec.order;
+      defaultTheme = themeSpec.default;
       themed = pkgs.callPackage ./nix/themes.nix {
         inherit themes;
         themesDir = ./assets/themes;
@@ -253,7 +257,7 @@
       };
 
       tokensRs = pkgs.callPackage ./nix/tokens.nix {
-        inherit glyphdb themed;
+        inherit glyphdb themed defaultTheme;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
         categoryTableFile = ./assets/icons/category-glyphs.nix;
         typographyFile = ./assets/tokens/typography.nix;
@@ -377,7 +381,7 @@
       extension = pkgs.callPackage ./nix/extension.nix {
         # The DEFAULT theme's palette, as a flat `key -> 0xRRGGBBAA` map. The
         # extension cannot see the person's choice, so it wears the default.
-        colorsJson = "${themed}/${builtins.head themes}.json";
+        colorsJson = "${themed}/${defaultTheme}.json";
         spaceFile = ./assets/tokens/space.nix;
         i18nDir = ./assets/i18n;
         inherit languages;
@@ -501,7 +505,7 @@
         # binary does not have. See `nix/dev.nix`'s `bakedExports`.
         inherit (rust) atRunTime generated;
         inherit fonts fontconfigConf iconSuperpack;
-        inherit themed themes;
+        inherit themed themes defaultTheme;
       };
 
       # Section 5.2's FRAME targets. Outside `nix flake check` on purpose:
@@ -687,7 +691,7 @@
               # THE THEMES: the list (the option's enum) and the solved
               # palettes (files the modules splice or point at; never read at
               # evaluation).
-              inherit themes themed;
+              inherit themes themed defaultTheme;
               # The shell's binary: the niri module generates the chord
               # binds from its command table.
               #
@@ -828,7 +832,12 @@
         # PNGs in the store — see `nix/shots.nix` for why it is a VM and not a
         # script on somebody's machine.
         shots = pkgs.callPackage ./nix/shots.nix {
-          inherit fonts themed themes;
+          inherit
+            fonts
+            themed
+            themes
+            defaultTheme
+            ;
           niri = inputs.niri.packages.${system}.niri;
           ronoctua-shell = rust.shell;
           # The daemon, so the brain's line can be photographed. It is the only
@@ -857,6 +866,7 @@
                   fontconfigConf
                   themes
                   themed
+                  defaultTheme
                   ;
                 # `rust.installer`, and NOT `rust.workspace`: the workspace
                 # derivation holds every binary, and a derivation references
@@ -994,7 +1004,12 @@
       # are stubs that pass, so the plumbing exists from day one.
       # =================================================================
       checks.${system} = import ./tests/checks.nix {
-        inherit languages themes themed;
+        inherit
+          languages
+          themes
+          themed
+          defaultTheme
+          ;
         inherit
           pkgs
           lib

@@ -141,6 +141,11 @@ def main() -> int:
         required=True,
         help="themes.json from nix/themes.nix: [{id, colors}], the first is the default",
     )
+    ap.add_argument(
+        "--default-theme",
+        required=True,
+        help="the id of the theme a fresh machine shows; see assets/themes/themes.nix",
+    )
     ap.add_argument("--typography", type=pathlib.Path, required=True)
     ap.add_argument("--space", type=pathlib.Path, required=True)
     ap.add_argument("--icons", type=pathlib.Path, required=True, help="icons.json from the glyphdb")
@@ -489,8 +494,19 @@ def main() -> int:
     # `[theme][role]`, in the order of `assets/themes/themes.nix` and the sorted
     # order of the roles above. Every theme has every role (`load_themes`
     # checked), so the table is rectangular by construction.
-    A("/// The themes' VALUES, in `assets/themes/themes.nix` order; the first is")
-    A("/// the default. Only `Color` reads the table.")
+    ids = [t["id"] for t in themes]
+    if args.default_theme not in ids:
+        raise SystemExit(
+            f"ERROR: --default-theme {args.default_theme!r} is not one of the declared themes: {ids}"
+        )
+    default_index = ids.index(args.default_theme)
+    A("/// The themes' VALUES, in `assets/themes/themes.nix` order. Only `Color`")
+    A("/// reads the table.")
+    A("///")
+    A("/// THE ORDER IS NOT THE DEFAULT. It was, for as long as the owner wanted")
+    A("/// the theme at the top of the chooser to be the one a fresh machine")
+    A("/// shows; the two are separate declarations now, and `DEFAULT` is the")
+    A("/// index of the one that is named `default` over there.")
     A("pub mod themes {")
     A("    /// The ids, in order.")
     A(f"    pub const IDS: [&str; {len(themes)}] = [{', '.join(repr(t['id']) for t in themes).replace(chr(39), chr(34))}];")
@@ -550,8 +566,13 @@ def main() -> int:
     A(f"    pub const SPACES: usize = {len(spaces)};")
     A(f"    /// The number of icon tokens.")
     A(f"    pub const ICONS: usize = {len(icons)};")
-    A("    /// The number of themes; the first is the default.")
+    A("    /// The number of themes.")
     A(f"    pub const THEMES: usize = {len(themes)};")
+    A("    /// The index of the theme a fresh machine shows.")
+    A("    ///")
+    A("    /// NOT nought. See `themes::IDS`, and `assets/themes/themes.nix` for")
+    A("    /// why the order and the default stopped being one fact.")
+    A(f"    pub const DEFAULT_THEME: usize = {default_index};")
     A("}")
     A("")
 

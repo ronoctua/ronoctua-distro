@@ -2303,6 +2303,7 @@ update-verdict-pending = still to come
 ## The theme chooser — LEADER s t. The themes are listed by id and have no
 ## key; these are the option beside them (the desk under the windows), its
 ## answers — one `theme-backdrop-<id>` per answer — and the hint.
+theme-option-theme = Theme
 theme-option-backdrop = Background
 theme-backdrop-black = Black
 theme-backdrop-theme = The theme's colour

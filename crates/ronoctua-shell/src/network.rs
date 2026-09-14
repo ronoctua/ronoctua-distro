@@ -2346,7 +2346,22 @@ impl Builder<'_> {
         let listed = self.shelf.is_some();
         let acts = target != Target::Nothing;
         let (label_colour, value_colour) = match (focused, disabled) {
-            (true, _) => (tokens::color::STATE_ACCENT, tokens::color::STATE_ACCENT),
+            // AND UNDER THE CURSOR IT STILL SAYS SO. The accent took BOTH
+            // halves here, so a door and a fact became one row at the very
+            // moment the cursor was on them — which is the moment the question
+            // is being asked. Now the label carries "the keyboard is here"
+            // (neither window draws a band behind the cursor, so the accent on
+            // the text is the only thing that says it) and the value goes on
+            // saying whether the answer can be changed. See `colors.nix`,
+            // `text.here`.
+            (true, disabled) => (
+                tokens::color::STATE_ACCENT,
+                if acts && !disabled {
+                    tokens::color::TEXT_HERE_ACTS
+                } else {
+                    tokens::color::TEXT_HERE_READ
+                },
+            ),
             (false, true) => (tokens::color::TEXT_DIM, tokens::color::TEXT_DIM),
             (false, false) => (
                 if acts {
@@ -3139,10 +3154,30 @@ mod tests {
         // cores para as labels e para os valores"*.
         for row in rows.iter().filter(|r| !r.heading && r.fields.len() == 2) {
             let (label, value) = (row.fields[0].color, row.fields[1].color);
-            if label == tokens::color::STATE_ACCENT || label == tokens::color::TEXT_DIM {
-                // The cursor and a refusing row take BOTH halves: they are not
-                // a kind of row, they are what is happening to one.
+            if label == tokens::color::TEXT_DIM {
+                // A REFUSING ROW TAKES BOTH HALVES: that is not a kind of row,
+                // it is what is happening to one.
                 assert_eq!(label, value);
+                continue;
+            }
+            if label == tokens::color::STATE_ACCENT {
+                // THE CURSOR IS NOT LIKE THAT, and this assertion said it was.
+                // The accent used to take both halves, so a door and a fact
+                // became one row at the moment the cursor was on them — which
+                // is the moment the question is being asked. The label says
+                // "the keyboard is here" and the value goes on saying whether
+                // the answer can be changed.
+                let acts = row.target != Target::Nothing && !row.disabled;
+                assert_eq!(
+                    value,
+                    if acts {
+                        tokens::color::TEXT_HERE_ACTS
+                    } else {
+                        tokens::color::TEXT_HERE_READ
+                    },
+                    "the focused row's answer does not say what kind of row it is: {:?}",
+                    row.fields
+                );
                 continue;
             }
             assert!(
