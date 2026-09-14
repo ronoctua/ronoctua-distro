@@ -354,6 +354,37 @@ pkgs.testers.runNixOSTest {
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
         machine.sleep(1)
 
+    with subtest("the shell history, and the row the keyboard is on"):
+        # -----------------------------------------------------------------
+        # WHAT THE OWNER READ ON THE SCREEN: nothing said which line the
+        # cursor was on. `Row::focused` is set by the view and read by NO door
+        # in this system — neither the footer nor the window draws a band
+        # behind the cursor — so the colour IS the cursor, and this view was
+        # the one that never set it. Nine others have carried it since
+        # `network.rs` arrived at the split: the label takes `state.accent`
+        # ("the keyboard is here") and the value goes on saying whether the
+        # answer can be changed.
+        #
+        # THE ASSERTION IS A COLOUR, because the report was. A count of rows
+        # or a word on screen would have passed the whole time the defect
+        # existed.
+        #
+        # `atuin` itself is a store path baked into the shell
+        # (`RONOCTUA_ATUIN`), so this machine has it without installing
+        # anything, and it is not logged in — which is the state a fresh
+        # machine is in and the one worth photographing.
+        # -----------------------------------------------------------------
+        control("atuin-open")
+        shot("32-shell-history", lines=12)
+        has_colour(
+            "#" + token_hex("state.accent"),
+            at_least=20,
+            of="/tmp/32-shell-history.png",
+        )
+        focus_niri()
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        machine.sleep(1)
+
     with subtest("Tor: the section exists with the daemon STOPPED"):
         # -----------------------------------------------------------------
         # THE OTHER HALF OF WHAT THE OWNER REPORTED: he could not find a way

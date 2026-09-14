@@ -1524,8 +1524,15 @@ fn draft_rows(d: &Draft, left: u16, room: u16, texts: &ronoctua_i18n::Texts) -> 
                     &texts.t(&label),
                     &value,
                     tone,
+                    // THE ACCENT TOOK BOTH HALVES HERE, which is the shape
+                    // `network.rs` left behind and wrote down why: a door and
+                    // a fact became one row at the very moment the cursor was
+                    // on them, which is the moment the question is asked. The
+                    // LABEL says "the keyboard is here" and the value goes on
+                    // saying whether the answer can be changed — every row of
+                    // this draft is turned by the arrows, so it is `.acts`.
                     if focused {
-                        tokens::color::STATE_ACCENT
+                        tokens::color::TEXT_HERE_ACTS
                     } else {
                         tokens::color::TEXT_ANSWER
                     },
@@ -2187,8 +2194,11 @@ impl View {
             } else {
                 tokens::color::TEXT_SECONDARY
             };
+            // AND THE VALUE SAYS THE OTHER HALF. Both were the accent, so the
+            // row stopped saying whether its answer moves exactly when
+            // somebody was looking at it; see the draft's rows above.
             let value = if focused {
-                tokens::color::STATE_ACCENT
+                tokens::color::TEXT_HERE_ACTS
             } else {
                 tokens::color::TEXT_ANSWER
             };
@@ -3136,6 +3146,52 @@ mod tests {
         assert_eq!(v.key(Press::Escape, &lists, &b, 200), Errand::Nothing);
         assert!(!v.in_sheet(), "Esc did not close the sheet");
         assert_eq!(v.key(Press::Escape, &lists, &b, 200), Errand::Close);
+    }
+
+    #[test]
+    fn the_sheets_row_says_where_the_keyboard_is_and_what_moves() {
+        // TWO HALVES, TWO ANSWERS. Both were `state.accent`, so a row stopped
+        // saying whether its value moves at the very moment somebody was
+        // looking at it — the shape `network.rs` left behind, with its reason
+        // written there.
+        //
+        // A TOKEN TEST AND NOT A PIXEL ONE, and that is measured: `state.accent`
+        // and `text.here.acts` are both `accent.solid` and resolve to the SAME
+        // tint (`0x5FB975FF` in the default theme), so a screenshot cannot tell
+        // the two halves apart. What the split buys is that the row says the
+        // right thing the day a theme separates them — `text.here.read`
+        // already differs — and that is a statement about tokens, which is
+        // where it can be held.
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let t = texts();
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        assert!(v.in_sheet(), "Enter did not open the sheet");
+        let rows = v.rows(&lists, &b, 200, &t);
+        let lit: Vec<&Row> = rows
+            .iter()
+            .filter(|r| {
+                r.fields
+                    .iter()
+                    .any(|f| f.color == tokens::color::STATE_ACCENT)
+            })
+            .collect();
+        assert_eq!(lit.len(), 1, "the sheet lights {} rows, not one", lit.len());
+        let row = lit[0];
+        assert_eq!(
+            row.fields[0].color,
+            tokens::color::STATE_ACCENT,
+            "the label does not say the keyboard is here"
+        );
+        assert!(
+            row.fields
+                .iter()
+                .skip(1)
+                .any(|f| f.color == tokens::color::TEXT_HERE_ACTS),
+            "the value wears the label's accent instead of saying it moves"
+        );
     }
 
     #[test]

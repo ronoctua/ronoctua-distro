@@ -242,11 +242,14 @@ impl View {
         self.jobs
             .iter()
             .enumerate()
-            .map(|(n, j)| Row {
-                fields: row_of(j, width, texts),
-                marked: false,
-                focused: Some(n) == focused,
-                foot: false,
+            .map(|(n, j)| {
+                let here = Some(n) == focused;
+                Row {
+                    fields: row_of(j, width, texts, here),
+                    marked: false,
+                    focused: here,
+                    foot: false,
+                }
             })
             .collect()
     }
@@ -309,7 +312,7 @@ pub fn of_the_view(t: Key) -> Option<&'static str> {
 /// right-hand columns take fixed widths from the edge inwards, and the label
 /// gets whatever is left. Nothing overflows because nothing is placed past what
 /// was subtracted first.
-fn row_of(job: &Job, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Field> {
+fn row_of(job: &Job, width: u16, texts: &ronoctua_i18n::Texts, focused: bool) -> Vec<Field> {
     let mut fields = Vec::with_capacity(5);
     let edge = width.saturating_sub(EDGE_RIGHT);
 
@@ -334,10 +337,26 @@ fn row_of(job: &Job, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Field> {
     ));
     let at = GUTTER + 2;
     let room = right.saturating_sub(at + 1);
+    // THE SENTENCE CARRIES THE CURSOR, and nothing else on the line does.
+    //
+    // `Row::focused` was set and drawn by NOBODY — no door in this system
+    // paints a band behind the cursor — so this panel had no way to say which
+    // job the keys were about. It is the defect the owner read on the shell
+    // history's screen, one view over.
+    //
+    // The NAME takes it, because the rest of the line is fact: the stage's
+    // glyph and its figure are coloured by what the job is DOING
+    // (`colour_of`), and recolouring those would trade one thing said for
+    // another. `text.here.acts` and not `text.here.read`, since every row here
+    // answers three keys — pause, cancel and forget.
     fields.push(plain(
         at,
         ronoctua_render::layout::elide_end(&sentence(job, texts), room),
-        tokens::color::TEXT_PRIMARY,
+        if focused {
+            tokens::color::TEXT_HERE_ACTS
+        } else {
+            tokens::color::TEXT_PRIMARY
+        },
     ));
     fields
 }

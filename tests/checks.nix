@@ -6302,6 +6302,148 @@ let
   #
   # SCOPED PER VIEW, and that is the whole rule: two views may both say `on`,
   # and they do. What may not happen is one list saying the same word twice.
+  # THE CURSOR IS A COLOUR, because nothing else in this system draws it.
+  #
+  # `files::Row` has a `focused` field, every view fills it in, and NO DOOR
+  # READS IT: neither the footer nor any window paints a band behind the
+  # cursor. So a view that sets the flag and stops has drawn a screen on which
+  # no line says the keyboard is on it — which is what the owner reported about
+  # `LEADER s h`. The sync section of `LEADER c` had the same, and writing this
+  # found a third in `LEADER t t`, where the job's name was `text.primary`
+  # whether the keys were about it or not.
+  #
+  # # What it demands, and why in two clauses
+  #
+  # A view is swept when one of its `files::Row`s carries a LIVE `focused` — a
+  # bound name, an expression, or the field's shorthand — and skipped when every
+  # one is the literal `false`. `theme_chooser.rs` is the only one skipped, and
+  # correctly: its two lists are drawn by `surface.rs`, which holds the cursor.
+  #
+  # A swept view passes by naming `TEXT_HERE_ACTS` or `TEXT_HERE_READ`. Those
+  # two exist for one purpose — `colors.nix` calls the family `text.here`, "the
+  # keyboard is here" — so naming one is already the whole statement, and
+  # nothing else in this tree has a reason to. Being a whole-module test is
+  # what lets the colour live in a HELPER: `history::View::accent` sits thirty
+  # lines from the `if focused` that calls it, and a first version of this
+  # measured in LINES failed the very fix it was written for.
+  #
+  # IT USED TO ACCEPT A SECOND SHAPE — `state.accent` in a function that also
+  # said "cursor" — because `notifications.rs` painted BOTH halves of its rows
+  # with the accent. That is the shape `network.rs` left behind, and the reason
+  # is in its comment: a door and a fact become one row at the very moment the
+  # cursor is on them. The owner asked for it to be fixed rather than tolerated,
+  # so the clause is gone and the check is the stronger for it: a loophole any
+  # view could fall into became a rule with one exception, named below.
+  #
+  # # The one exception, and it proves itself
+  #
+  # `files.rs` draws no cursor colour and is right not to: the manager's cursor
+  # is a BAND (`surface.selection`) with the focused panel's rule lit
+  # (`chrome::divider_lit`), which is the arrangement AGENTS.md records and the
+  # only one of the thirteen that has it. An exception nobody rechecks is a
+  # hole, so this one is not a name on a list — the check goes and READS the
+  # two doors that draw the manager, and fails if the band or the lit rule has
+  # gone. Then the exception would be a view with no cursor at all, wearing a
+  # reason that stopped being true.
+  #
+  # # What it does not catch
+  #
+  # A view that names `text.here` somewhere and paints the wrong row with it.
+  # Making that exact would mean building each view's rows twice and comparing
+  # the fields — thirteen constructors of glue. This is the cheap half, and
+  # what it catches is a view with NO cursor colour anywhere, which has now
+  # happened three times.
+  the-cursor-is-a-colour = mkCheck "the-cursor-is-a-colour" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+
+    # THE VIEWS ARE FOUND BY THEIR `struct View`, never by a list typed here.
+    # `labels-of-a-view-are-distinct` scanned a hand-written six while eight
+    # existed, and the two it never opened were the two with the defect.
+    VIEWS = sorted(
+        f.name
+        for f in shell.glob("*.rs")
+        if re.search(r"^(?:pub )?struct View\b", f.read_text(), re.M)
+    )
+    if len(VIEWS) < 12:
+        raise SystemExit(
+            f"ERROR: only {len(VIEWS)} views found ({VIEWS}); the sweep is not "
+            "finding them by their `struct View` any more"
+        )
+
+    HERE = re.compile(r"\bTEXT_HERE_[A-Z]+\b")
+
+    # THE MANAGER'S CURSOR IS A BAND, and this is where that is re-measured.
+    # `files.rs` is excused from naming a colour only for as long as its two
+    # doors go on drawing one.
+    BAND = "SURFACE_SELECTION"
+    LIT = "divider_lit"
+    EXCUSED = {
+        "files.rs": ("files_window.rs", "surface.rs"),
+    }
+    # A `focused` field that is not the literal `false`: `focused,` (shorthand),
+    # `focused: here`, `focused: n == at`. THE SHORTHAND IS NOT A DETAIL — both
+    # views the owner reported use it, so a pattern that wanted a colon would
+    # have swept every view except the two that were broken.
+    LIVE = re.compile(r"focused\s*(?:,|:\s*(?!false\b))")
+
+    wrong, swept, skipped = [], [], []
+    for name in VIEWS:
+        body = (shell / name).read_text()
+        # THE TRAILING TEST MODULE IS NOT THE SCREEN. A colour named in an
+        # assertion is a thing the test says, not a thing the view draws.
+        cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
+        code = body[: cut.start()] if cut else body
+        if not LIVE.search(code):
+            skipped.append(name)
+            continue
+        swept.append(name)
+        if HERE.search(code):
+            continue
+        if name in EXCUSED:
+            # THE REASON IS RE-MEASURED, never taken on trust. If the band and
+            # the lit rule have gone, the excuse has gone with them.
+            for door in EXCUSED[name]:
+                said = (shell / door).read_text()
+                for mark in (BAND, LIT):
+                    if mark not in said:
+                        wrong.append(
+                            f"{name} is excused because its cursor is a band, "
+                            f"and `{mark}` is no longer in {door}"
+                        )
+            continue
+        wrong.append(
+            f"{name} fills `Row::focused` and names no cursor colour "
+            "(`text.here.acts` / `text.here.read`)"
+        )
+
+    if len(swept) < 10:
+        wrong.append(
+            f"only {len(swept)} views were swept ({swept}); `Row::focused` is "
+            "not being recognised any more"
+        )
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        print("", file=sys.stderr)
+        print("       `Row::focused` is read by NO door in this system —", file=sys.stderr)
+        print("       neither the footer nor a window draws a band behind", file=sys.stderr)
+        print("       the cursor — so the COLOUR is the cursor. A view that", file=sys.stderr)
+        print("       only sets the flag draws a screen where no line says", file=sys.stderr)
+        print("       the keyboard is on it. The label takes `state.accent`", file=sys.stderr)
+        print("       and the value takes `text.here.acts`, or `.read` when", file=sys.stderr)
+        print("       the row refuses; see `network.rs` for the split.", file=sys.stderr)
+        raise SystemExit(1)
+    print(
+        f"OK: {len(swept)} views draw their cursor, {len(EXCUSED)} of them as a "
+        f"band; {len(skipped)} carry none ({skipped})"
+    )
+    END
+  '';
+
   labels-of-a-view-are-distinct = mkCheck "labels-of-a-view-are-distinct" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -14918,6 +15060,7 @@ let
       every-list-window-has-a-bar
       every-modal-view-has-a-hint
       labels-of-a-view-are-distinct
+      the-cursor-is-a-colour
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
       keys-are-never-text
@@ -14980,6 +15123,7 @@ let
       every-list-window-has-a-bar
       every-modal-view-has-a-hint
       labels-of-a-view-are-distinct
+      the-cursor-is-a-colour
       the-footer-draws-what-the-keyboard-drives
       run-command-handles-every-key
       keys-are-never-text

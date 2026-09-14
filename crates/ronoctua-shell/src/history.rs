@@ -202,13 +202,73 @@ impl View {
         built
             .into_iter()
             .enumerate()
-            .map(|(n, (fields, target))| Row {
-                fields,
-                marked: false,
-                focused: n == here && !matches!(target, Target::Nothing),
-                foot: false,
+            .map(|(n, (mut fields, target))| {
+                let focused = n == here && !matches!(target, Target::Nothing);
+                // THE CURSOR IS A COLOUR, because nothing else here could be
+                // one. `Row::focused` is read by NO door in this system —
+                // neither the footer nor the window draws a band behind the
+                // cursor — so a view that only set the flag drew a screen with
+                // no way to tell which line the keyboard was on. That is what
+                // the owner read on this one; the other nine views have
+                // carried the colour since `network.rs` arrived at the split.
+                if focused {
+                    Self::accent(&mut fields, &target);
+                }
+                Row {
+                    fields,
+                    marked: false,
+                    focused,
+                    foot: false,
+                }
             })
             .collect()
+    }
+
+    /// Paints the row the keyboard is on.
+    ///
+    /// TWO HALVES AND TWO ANSWERS, which is the split `network.rs` arrived at
+    /// and every view since repeats: the LABEL carries "the keyboard is here"
+    /// (`state.accent`), and the VALUE goes on saying whether the answer can
+    /// be changed. One accent over both made a door and a fact the same row at
+    /// the very moment the cursor was on them — which is the moment the
+    /// question is being asked.
+    ///
+    /// The drawer is the exception and takes the accent WHOLE: its chevron and
+    /// its word are one label, not a label and a value, and colouring them
+    /// apart would split a glyph from the noun it belongs to.
+    fn accent(fields: &mut [Field], target: &Target) {
+        if matches!(target, Target::Drawer) {
+            for field in fields.iter_mut() {
+                field.color = tokens::color::STATE_ACCENT;
+            }
+            return;
+        }
+        let answers = !Self::refuses(target);
+        let mut halves = fields.iter_mut();
+        if let Some(label) = halves.next() {
+            label.color = tokens::color::STATE_ACCENT;
+        }
+        for value in halves {
+            value.color = if answers {
+                tokens::color::TEXT_HERE_ACTS
+            } else {
+                tokens::color::TEXT_HERE_READ
+            };
+        }
+    }
+
+    /// Does the row this target names only SAY its value?
+    ///
+    /// A setting the flake owns is drawn, reachable and REFUSING (invariant 6)
+    /// — so under the cursor it has to go on saying that, which is
+    /// `text.here.read` and not `text.here.acts`. Everything else in this view
+    /// changes something.
+    fn refuses(target: &Target) -> bool {
+        match target {
+            Target::Setting(id) => options::by_id(id).is_some_and(|s| s.fixed),
+            Target::Nothing => true,
+            _ => false,
+        }
     }
 
     /// What every row is and what it does.

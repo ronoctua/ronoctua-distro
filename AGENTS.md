@@ -498,6 +498,17 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   sem valor perderia o sinal — e o valor segue dizendo se a resposta muda, no acento inteiro ou
   no acento drenado. A marca desenhada na frente foi RECUSADA pelo dono e a
   diferença é só cor — um comentário dizia que havia um `icon.row-acts`, e ele nunca existiu.
+  **E o `Row::focused` é lido por PORTA NENHUMA**: quem escreve uma vista nova o preenche achando
+  que desenhou o cursor, e não desenhou nada — a cor É o cursor. O `history.rs` nasceu assim e o
+  dono leu na tela ("não estão mostrando o item corrente selecionado em uma cor diferente"); a
+  seção de sincronização do `clipboard_view.rs` tinha o mesmo, e escrever o check achou um TERCEIRO
+  no `LEADER t t`. Cobra o `the-cursor-is-a-colour`: **vista sem `TEXT_HERE_*` é vista sem cursor**,
+  com UMA exceção — o gerenciador, cujo cursor é faixa (`surface.selection`) mais régua acesa —, e a
+  exceção **se prova**: o check lê as duas portas dele e cai se a faixa sumir. Ele chegou a aceitar
+  `state.accent` na função que monta a linha, para tolerar as notificações, que acentuavam as DUAS
+  metades; o dono mandou consertar em vez de tolerar, e a cláusula saiu. **E `state.accent` e
+  `text.here.acts` são o MESMO hex** (`accent.solid`): a divisão é sobre o que a linha DIZ, e só o
+  `text.here.read` muda pixel — asserção de foto ali passa dos dois jeitos.
   **Item de LISTA inverte os pesos** do fato: o nome da coisa é a metade forte. **Ar antes de todo
   título** (`chrome::AIR`, um `heading` sem campos), e o título recua para fora das linhas dele.
 - **Toda janela que rola desenha a barra dela** (`chrome::list_bar`, e o `on_the_list_bar` +

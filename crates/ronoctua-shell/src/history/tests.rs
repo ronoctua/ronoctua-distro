@@ -332,3 +332,113 @@ fn a_switch_says_on_or_off_and_never_what_the_service_is_doing() {
     }
     assert!(switches > 0, "no switch was drawn, so nothing was measured");
 }
+
+#[test]
+fn the_row_the_keyboard_is_on_is_drawn_in_another_colour() {
+    // WHAT THE OWNER READ ON THE SCREEN: nothing said which line the cursor
+    // was on. `Row::focused` was set and is read by NO door in this system —
+    // neither the footer nor the window draws a band behind the cursor — so
+    // the colour is the only thing that could say it, and this view was the
+    // one that never set it.
+    let t = texts();
+    let shot = ronoctua_atuin::Snapshot {
+        present: true,
+        logged_in: true,
+        ..ronoctua_atuin::Snapshot::default()
+    };
+    let facts = Facts { shot: &shot };
+    let mut v = View::fresh();
+    // Every row the cursor can stop on, one after another.
+    for _ in 0..200 {
+        let rows = v.rows(&facts, WIDE, &t);
+        let Some(here) = rows.iter().position(|r| r.focused) else {
+            panic!("no row was focused at all");
+        };
+        assert!(
+            rows[here]
+                .fields
+                .iter()
+                .any(|f| f.color == tokens::color::STATE_ACCENT),
+            "the focused row carries no accent: {:?}",
+            rows[here]
+                .fields
+                .iter()
+                .map(|f| &f.text)
+                .collect::<Vec<_>>()
+        );
+        // AND NOBODY ELSE WEARS IT. An accent on two rows says the keyboard is
+        // in two places, which is the same as saying nothing.
+        for (n, row) in rows.iter().enumerate() {
+            if n == here {
+                continue;
+            }
+            assert!(
+                !row.fields
+                    .iter()
+                    .any(|f| f.color == tokens::color::STATE_ACCENT),
+                "row {n} wears the cursor's accent and is not the cursor"
+            );
+        }
+        let before = v.cursor();
+        let _ = v.key(Press::Down, &facts, WIDE, &t);
+        if v.cursor() == before {
+            break;
+        }
+    }
+}
+
+#[test]
+fn a_row_the_flake_owns_keeps_saying_so_under_the_cursor() {
+    // THE VALUE'S HALF IS THE OTHER ANSWER. A setting the flake fixes is drawn
+    // and reachable and REFUSES (invariant 6), so the cursor may not make it
+    // look like something that changes: the label takes the accent and the
+    // value takes `text.here.read`, never `text.here.acts`.
+    let t = texts();
+    let Some(fixed) = crate::history::options::SETTINGS.iter().find(|s| s.fixed) else {
+        return;
+    };
+    let shot = ronoctua_atuin::Snapshot {
+        present: true,
+        logged_in: true,
+        ..ronoctua_atuin::Snapshot::default()
+    };
+    let facts = Facts { shot: &shot };
+    let mut v = View::fresh();
+    // THE DRAWER FIRST. What the flake owns is rarely touched by definition,
+    // so it is in there — a walk over the closed view never reaches it.
+    for _ in 0..200 {
+        if v.target_at(&facts, WIDE, &t) == Target::Drawer {
+            let _ = v.key(Press::Enter, &facts, WIDE, &t);
+            break;
+        }
+        let before = v.cursor();
+        let _ = v.key(Press::Down, &facts, WIDE, &t);
+        if v.cursor() == before {
+            break;
+        }
+    }
+    for _ in 0..200 {
+        if v.target_at(&facts, WIDE, &t) == Target::Setting(fixed.id) {
+            let rows = v.rows(&facts, WIDE, &t);
+            let here = rows.iter().position(|r| r.focused).expect("no cursor");
+            let colours: Vec<_> = rows[here].fields.iter().map(|f| f.color).collect();
+            assert!(
+                colours.contains(&tokens::color::TEXT_HERE_READ),
+                "`{}` is owned by the flake and reads as a row that answers",
+                fixed.id
+            );
+            assert!(
+                !colours.contains(&tokens::color::TEXT_HERE_ACTS),
+                "`{}` reads as a row that answers",
+                fixed.id
+            );
+            return;
+        }
+        let before = v.cursor();
+        let _ = v.key(Press::Down, &facts, WIDE, &t);
+        if v.cursor() == before {
+            break;
+        }
+    }
+    panic!("the flake-owned row was never reached, drawer open");
+}

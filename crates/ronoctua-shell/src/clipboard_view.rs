@@ -292,6 +292,10 @@ impl View {
                     fields.extend(side.iter().cloned());
                     target = *what;
                 }
+                // WHERE THE RIGHT HALF'S FIELDS BEGIN, which is what lets the
+                // cursor be painted on the half that OWNS the row.
+                let seam = fields.len();
+                let mut from_the_right = false;
                 if let Some(side) = detail.get(n) {
                     fields.extend(side.0.iter().cloned());
                     // THE RIGHT HALF ONLY ACTS WHERE THE LEFT HAS NOTHING.
@@ -300,12 +304,33 @@ impl View {
                     // two columns.
                     if matches!(target, Target::Nothing) {
                         target = side.1;
+                        from_the_right = true;
+                    }
+                }
+                let focused = n == here && !matches!(target, Target::Nothing);
+                // THE SYNC SECTION HAD NO CURSOR AT ALL. The entries colour
+                // themselves (see `entries`), and the rows on the right —
+                // where the server, the account and the six settings live —
+                // were drawn in the same two tones whether the keyboard was on
+                // them or not. `Row::focused` is read by no door in this
+                // system, so the colour is the only thing that could say it.
+                //
+                // Only the half that OWNS the row is painted: the other one is
+                // some other line's content sitting alongside, and accenting
+                // it would light a row the keyboard is not on.
+                if focused && from_the_right {
+                    let mut halves = fields[seam..].iter_mut();
+                    if let Some(label) = halves.next() {
+                        label.color = tokens::color::STATE_ACCENT;
+                    }
+                    for value in halves {
+                        value.color = tokens::color::TEXT_HERE_ACTS;
                     }
                 }
                 Row {
                     fields,
                     marked: false,
-                    focused: n == here && !matches!(target, Target::Nothing),
+                    focused,
                     foot: false,
                 }
             })
