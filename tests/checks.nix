@@ -4940,12 +4940,44 @@ let
         if "files-preview-playlist-unread =" not in text:
             bad.append(f"{name} cannot say why a spelling is not opened")
 
+    # --- AND ALL OF THEM DRAW THE SAME GLYPH -------------------------------
+    #
+    # A playlist has six spellings and five of them live under `audio/`, so the
+    # generic rule drew them as MUSIC — which says the file IS sound, and a
+    # playlist is a name for sound somebody else holds. The sixth fell to the
+    # application generic and came out a plain file.
+    #
+    # It matters more than tidiness because two of the six claim the SAME
+    # names: `audio/x-mpegurl` and `application/vnd.apple.mpegurl` both take
+    # `*.m3u` and `*.m3u8` at one weight, so which of them wins is decided by
+    # the bytes (`mime::of_path`). With one glyph for both, that decision stops
+    # being visible — and nobody looking at a listing can tell the two names
+    # apart anyway.
+    glyphs = pathlib.Path("${../assets/icons/mime-glyphs.nix}").read_text()
+    rows = dict(
+        re.findall(r'mime = "([^"]+)";\s*\n\s*token = "([^"]+)";', glyphs)
+    )
+    tokens = set()
+    for spelling in sorted(claimed):
+        if spelling not in rows:
+            bad.append(
+                f"{spelling} has no row in mime-glyphs.nix — it falls to its media "
+                "type's generic icon, and a playlist is not the thing it lists"
+            )
+        else:
+            tokens.add(rows[spelling])
+    if len(tokens) > 1:
+        bad.append(
+            f"the spellings draw {len(tokens)} different glyphs ({sorted(tokens)}); "
+            "which name wins is decided by the bytes, so the drawing must not depend on it"
+        )
+
     if bad:
         print("\n".join(bad))
         sys.exit(1)
     print(
         f"OK: {len(read)} spellings read, {len(refused)} refused by name, "
-        "and the row sits above the sound row"
+        f"the row sits above the sound row, and all {len(claimed)} draw one glyph"
     )
     END
     touch $out

@@ -3447,6 +3447,25 @@ de duzentas linhas usa; o conteúdo só é lido quando alguém pergunta. Fazer m
 duzentos `open` dentro do quadro que desenha — a forma de defeito que o localizador já pagou uma vez
 com ícones.
 
+**Mas há uma terceira resposta, e ignorá-la deu um defeito na tela: o EMPATE.** O `by_name` escolhia
+pelo peso do glob e descartava empates em silêncio, ficando com o primeiro da tabela. O dono
+fotografou uma listagem e perguntou por que um VÍDEO estava com o glifo de música: o arquivo é
+`big_buck_bunny_480p_stereo.ogg`, `audio/ogg` pelo nome e `video/x-theora+ogg` pelo conteúdo. Nenhuma
+das duas respostas estava errada — o que estava errado é que o nome nunca teve uma. **Quatro tipos
+reivindicam `*.ogg` no mesmo peso**, porque a extensão nomeia um CONTÊINER e o contêiner não diz o
+que tem dentro.
+
+Então `mime::named` devolve `Named { mime, sure }`, e `sure = false` é o nome dizendo que não sabe.
+Aí — e só aí — os bytes decidem, **entre os tipos que reivindicam aquele nome**: um arquivo cujo
+magic nomeia algo sem glob para ele é um arquivo mentindo sobre a extensão, e a extensão é o que a
+pessoa digitou. Medido na pasta do dono: **8 nomes de 64** empatam, todos contêiner de mídia ou
+playlist; todo `.jpg`, `.rs` e `.pdf` continua respondido sem tocar no arquivo.
+
+**E as seis grafias de playlist ganharam UM glifo** (`list`), o que não é arrumação: `audio/x-mpegurl`
+e `application/vnd.apple.mpegurl` reivindicam `*.m3u` e `*.m3u8` no mesmo peso, então qual delas
+vence é decidido pelos bytes — e isso não pode ser visível numa listagem, porque ninguém olhando
+distingue os dois nomes. Cobra o `playlist-formats-are-total`.
+
 **E o gerador recusa antes de gerar.** Cinco linhas da primeira tabela nomeavam tipos que não
 existem: `application/x-iso9660-image`, `application/x-sqlite3` e `text/x-rust` são nomes que
 qualquer um juraria certos, e a base os escreve `application/vnd.efi.iso`, `application/vnd.sqlite3`

@@ -1098,6 +1098,49 @@ pkgs.testers.runNixOSTest {
                 "scroll"
             )
 
+            # AND THE EXECUTE BIT COLOURS THE GLYPH, measured in BOTH states.
+            #
+            # The owner asked for the colour to move off the name and onto the
+            # type's glyph. One crop cannot say it: `state.success` is somewhere
+            # on a screen full of chrome, so what proves it is the SAME box
+            # answering nought and then something after a `chmod`.
+            #
+            # A DELTA AND NOT AN ABSENCE, and the reason is the palette itself:
+            # in the default theme `state.success` and `syntax.string` are the
+            # SAME INK (`0x6CD586`). Asked whether the green is on the screen at
+            # all, this box answers 134 pixels before anything is chmod-ed —
+            # the `.nix` in the preview, whose strings wear the other token.
+            # Two roles on one primitive is legal (they are never on one line);
+            # what it makes illegal is an absolute assertion about either.
+            #
+            # So what is measured is the SAME box answering more than it did.
+            # The whole window, because the listing's own edges are the
+            # manager's arithmetic and not this driver's.
+            w_x, h_x, x_x, y_x = niri_geometry()
+            listing = f"{w_x}x{h_x - 2 * LINE}+{x_x}+{y_x + 2 * LINE}"
+            green = "#" + token_hex("state.success")
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            crop(listing, "/tmp/before-chmod.png")
+            before = has_colour(green, at_least=0, of="/tmp/before-chmod.png")
+
+            machine.succeed("chmod +x /root/shots/code/sample.nix")
+            # THE FOLDER GIVES NOTICE, so no key is needed — `ronoctua_files::notice`
+            # is an inotify watch on the open directory. The sleep is the burst
+            # the watcher absorbs, not a guess.
+            machine.sleep(3)
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            crop(listing, "/tmp/after-chmod.png")
+            after = has_colour(green, at_least=0, of="/tmp/after-chmod.png")
+            assert after >= before + 8, (
+                f"the green went from {before} to {after} pixels after the chmod — "
+                "the glyph of a file that can be run is not marked"
+            )
+            shot("38-the-execute-bit-on-the-glyph")
+            # AND IT IS PUT BACK, because the scenes after this one read the
+            # same directory.
+            machine.succeed("chmod -x /root/shots/code/sample.nix")
+            machine.sleep(2)
+
     if wanted("document"):
         with subtest("a document: a zip of XML reaching the panel as words"):
             # THE DEFECT THE OWNER FOUND, in one sentence: his folder had eleven

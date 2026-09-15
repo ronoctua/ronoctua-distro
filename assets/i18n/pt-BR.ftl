@@ -1808,6 +1808,15 @@ files-column-modified = modificado
 # would have said and nothing else: a sentence around it would push the end of
 # a long name back off the edge, which is the thing this exists to undo.
 files-explain-name = { $name }
+# THE EXECUTE BIT, which is the one thing the type's glyph says besides the
+# type. The owner asked for the colour to move off the name and onto the
+# glyph, and a colour with no words is a legend nobody reads — so the pointer
+# resting on a green glyph says what the green MEANS.
+#
+# It names the bit and not what running it would do: this manager does not run
+# a file by pressing RET on it, and a sentence promising that would be a
+# sentence about another program.
+files-explain-executable = este arquivo tem o bit de execução — o sistema pode rodá-lo
 files-explain-owner = { $who } é o dono; clicar troca
 files-explain-group = o grupo é { $who }; clicar troca
 files-explain-size = { $bytes } bytes exatos

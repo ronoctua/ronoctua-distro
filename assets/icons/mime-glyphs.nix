@@ -160,6 +160,49 @@
       mime = "application/pdf";
       token = "pdf";
     }
+    # --- A LIST OF THINGS TO PLAY IS NOT A THING TO PLAY ----------------
+    #
+    # All six spellings, and they get ONE glyph on purpose. Five of them are
+    # under `audio/`, so the generic rule drew them as music — which says the
+    # file IS sound, and a playlist is a name for sound somebody else holds.
+    # The sixth, `application/xspf+xml`, fell to the application generic and
+    # came out as a plain file: two drawings for one kind of thing.
+    #
+    # AND THE `.m3u` PAIR IS WHY IT MATTERS. `audio/x-mpegurl` and
+    # `application/vnd.apple.mpegurl` both claim `*.m3u` and `*.m3u8` at the
+    # same weight, so which of them wins is decided by the bytes — see
+    # `mime::of_path`. With one glyph for both, that decision stops being
+    # visible, which is right: nobody looking at a listing can tell the two
+    # names apart and nobody should have to.
+    #
+    # `list` and not `music`: it is the only token in `icons.nix` that says
+    # "these are entries", and `ronoctua_inspect::playlist` makes the same
+    # argument in words — what decides is not what a file is made of but what
+    # it is FOR.
+    {
+      mime = "audio/x-mpegurl";
+      token = "list";
+    }
+    {
+      mime = "application/vnd.apple.mpegurl";
+      token = "list";
+    }
+    {
+      mime = "audio/x-scpls";
+      token = "list";
+    }
+    {
+      mime = "application/xspf+xml";
+      token = "list";
+    }
+    {
+      mime = "audio/x-ms-asx";
+      token = "list";
+    }
+    {
+      mime = "audio/x-iriver-pla";
+      token = "list";
+    }
     {
       mime = "application/x-executable";
       token = "executable";

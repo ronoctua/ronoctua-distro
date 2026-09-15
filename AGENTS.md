@@ -137,6 +137,18 @@ Flake apps, nunca justfile nem Makefile. Passo que precise de instrução escrit
   ARMADO e só existe enquanto um nome anda. **`..` é o primeiro renque** — nunca
   oculta, nunca marcável, e toda célula dela responde a saída. Permissão
   PERGUNTA nos DOIS caminhos. **Rótulo de `Choice` é TEXTO, não chave**; texto abre no `emacsclient`.
+  **O TIPO SAI DO NOME, e o EMPATE sai dos bytes** (`mime::named` → `Named::sure`): a base
+  reivindica `*.ogg` por QUATRO tipos no mesmo peso, porque a extensão nomeia um CONTÊINER, e o
+  `by_name` ficava com o primeiro da tabela — o dono fotografou um vídeo Theora com o glifo de
+  música. Empate é o nome dizendo que não sabe, e só os bytes sabem; o conteúdo só é aceito se
+  REIVINDICAR aquele nome (senão é arquivo mentindo sobre a extensão, e a extensão é o que a
+  pessoa digitou). O custo é uma leitura de 4 KiB por nome empatado — medido, 8 de 64 na pasta do
+  dono, e `.jpg`/`.rs`/`.pdf` continuam sem tocar no arquivo. **As SEIS grafias de playlist têm UM
+  glifo** (`list`), porque `audio/x-mpegurl` e `application/vnd.apple.mpegurl` reivindicam os mesmos
+  nomes: qual vence é decidido pelos bytes, e isso não pode aparecer na tela.
+  **O bit `x` colore o GLIFO e não o nome** (`glyph_colour_of`, a pedido do dono), com frase sob o
+  ponteiro (`files-explain-executable`) — cor sem palavra é legenda que ninguém lê. Medido: o verde
+  sobre a faixa da seleção dá 7,06:1 no pior tema, então não precisa do `lift_onto_a_band`.
   **A prévia ENCOLHE e nunca cresce** (`Area::centre`, que já existia para o navegador de ícones):
   o dono leu na tela no `sample-img.ico` dele, um ícone de 390 bytes esticado no painel inteiro —
   aumentar inventa pixel, e num ícone de 16 inventa todos menos 256. Filme e GIF não perdem nada:

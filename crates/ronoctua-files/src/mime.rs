@@ -55,14 +55,50 @@ pub const DIRECTORY: &str = "inode/directory";
 /// The type of a symlink.
 pub const SYMLINK: &str = "inode/symlink";
 
+/// What the NAME says, and whether it SETTLED it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Named {
+    /// The winning type.
+    pub mime: &'static str,
+    /// Whether it won alone.
+    ///
+    /// `false` when two or more DIFFERENT types tie at the top of the spec's
+    /// precedence — same weight, same literalness, same pattern length. The
+    /// database is full of these and they are not a defect in it: `*.ogg` is
+    /// claimed by `audio/ogg`, `video/ogg`, `audio/x-vorbis+ogg` and
+    /// `video/x-theora+ogg` at the same weight, because the extension names a
+    /// CONTAINER and the container does not say what is inside.
+    pub sure: bool,
+}
+
 /// The type suggested by the NAME alone.
 ///
 /// Follows the spec's precedence: the highest weight wins; among equals, a
 /// literal name beats a pattern; among those, the longest pattern.
 #[must_use]
 pub fn by_name(name: &str) -> Option<&'static str> {
+    named(name).map(|n| n.mime)
+}
+
+/// The same, with the TIE reported instead of dropped.
+///
+/// # The defect this exists for
+///
+/// The owner photographed a listing and asked why a VIDEO carried the music
+/// glyph. The file is `big_buck_bunny_480p_stereo.ogg`: by name it is
+/// `audio/ogg`, by content `video/x-theora+ogg`, and the listing resolves by
+/// name only. Nothing was wrong with either answer — what was wrong is that
+/// the name never had one. Four types claim `*.ogg` at the same weight and
+/// this function kept whichever the table happened to hold first.
+///
+/// A tie is not "the best guess": it is the NAME saying it cannot tell, and
+/// the only thing that can is the bytes. See [`of_path`], which is where that
+/// costs a read.
+#[must_use]
+pub fn named(name: &str) -> Option<Named> {
     let folded = name.to_lowercase();
     let mut best: Option<(&'static Glob, usize)> = None;
+    let mut tied = false;
     for g in &GLOBS {
         let against = if g.case_sensitive { name } else { &folded };
         // A case-insensitive row was lowercased by `update-mime-database`, so
@@ -71,18 +107,33 @@ pub fn by_name(name: &str) -> Option<&'static str> {
             continue;
         }
         let score = g.pattern.len();
-        let better = match best {
-            None => true,
+        let rank = (g.weight, is_literal(g.pattern), score);
+        match best {
+            None => best = Some((g, score)),
             Some((current, current_score)) => {
-                (g.weight, is_literal(g.pattern), score)
-                    > (current.weight, is_literal(current.pattern), current_score)
+                let theirs = (current.weight, is_literal(current.pattern), current_score);
+                if rank > theirs {
+                    best = Some((g, score));
+                    tied = false;
+                } else if rank == theirs && !same_type(g.mime, current.mime) {
+                    // TWO NAMES FOR ONE TYPE ARE NOT A TIE. An alias and its
+                    // canonical spelling both carry globs, and choosing
+                    // between them is choosing between two spellings of the
+                    // same answer.
+                    tied = true;
+                }
             }
-        };
-        if better {
-            best = Some((g, score));
         }
     }
-    best.map(|(g, _)| g.mime)
+    best.map(|(g, _)| Named {
+        mime: g.mime,
+        sure: !tied,
+    })
+}
+
+/// Whether two spellings name the same type.
+fn same_type(a: &str, b: &str) -> bool {
+    canonical(a) == canonical(b)
 }
 
 /// The type the CONTENT says it is.
@@ -96,11 +147,45 @@ pub fn by_content(head: &[u8]) -> Option<&'static str> {
     MAGIC.iter().find(|m| rule_matches(m, head)).map(|m| m.mime)
 }
 
-/// Everything known about a path's type, name first and content only if asked.
+/// Whether any glob of `mime` matches `name`.
+///
+/// What makes a content answer admissible when the name tied: the bytes are
+/// choosing between the types that claim this name, not overruling the name.
+/// A `.m3u` whose first line makes the magic say `application/vnd.apple.mpegurl`
+/// is a `.m3u` all the same — that type claims `*.m3u8` and nothing else.
+#[must_use]
+pub fn claims(mime: &str, name: &str) -> bool {
+    let folded = name.to_lowercase();
+    let wanted = canonical(mime);
+    GLOBS.iter().any(|g| {
+        canonical(g.mime) == wanted
+            && matches(g.pattern, if g.case_sensitive { name } else { &folded })
+    })
+}
+
+/// Everything known about a path's type.
 ///
 /// A directory and a symlink answer from their kind: no glob describes them,
 /// and reading the first bytes of a directory is an error rather than an
 /// answer.
+///
+/// # When the bytes are read, and why the flag does not cover it
+///
+/// `read_content` says whether a name that matches NOTHING may be looked into.
+/// It is `false` for the listing, deliberately: a folder of ten thousand files
+/// is ten thousand opens, and the listing is the one place that draws them all.
+///
+/// A name that TIES is a different question, and it is read either way. A tie
+/// is the name saying it cannot tell — `*.ogg` is claimed by four types at one
+/// weight, because the extension names a CONTAINER — and keeping whichever of
+/// them the table held first is not a cheaper answer, it is a wrong one. The
+/// owner photographed it: a Theora video in the listing with the music glyph.
+///
+/// The cost is bounded by how many names tie, which is a property of the
+/// DATABASE and not of the folder: measured over the owner's own directory,
+/// eight names of sixty-four, and every one of them a media container or a
+/// playlist. Everything else — every `.jpg`, `.rs`, `.pdf` — is still answered
+/// without touching the file.
 #[must_use]
 pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
     match kind {
@@ -112,8 +197,20 @@ pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if let Some(found) = by_name(&name) {
-        return found;
+    if let Some(found) = named(&name) {
+        if found.sure {
+            return found.mime;
+        }
+        // THE BYTES BREAK THE TIE, and only among the types that claim this
+        // name: a file whose magic names something with no glob for it is a
+        // file lying about its extension, and the extension is what the person
+        // typed.
+        if let Some(said) = read_head(path).as_deref().and_then(by_content)
+            && claims(said, &name)
+        {
+            return said;
+        }
+        return found.mime;
     }
     if !read_content {
         return UNKNOWN;
@@ -503,5 +600,72 @@ mod tests {
         assert_eq!(of_path(path, Kind::Symlink, false), SYMLINK);
         // And a regular file still answers by name, without touching the disk.
         assert_eq!(of_path(path, Kind::File, false), "image/png");
+    }
+
+    /// FAILS IF: a name that several types claim goes back to being answered
+    /// by whichever of them the table holds first.
+    #[test]
+    fn a_name_several_types_claim_says_it_did_not_settle_it() {
+        // AN EXTENSION THAT NAMES A CONTAINER cannot say what is inside, and
+        // the database is honest about it: four types claim `*.ogg` at one
+        // weight. A single claimant is a settled answer.
+        let tied = named("song.ogg").expect("the database knows `*.ogg`");
+        assert!(!tied.sure, "`*.ogg` came back as settled");
+        let sure = named("photo.png").expect("the database knows `*.png`");
+        assert!(sure.sure, "`*.png` came back as a tie");
+        assert_eq!(sure.mime, "image/png");
+        // AND `by_name` STILL ANSWERS, because most callers only want a type.
+        assert_eq!(by_name("photo.png"), Some("image/png"));
+    }
+
+    /// FAILS IF: the bytes stop breaking a tie, or start overruling a name
+    /// that settled one.
+    ///
+    /// THE DEFECT, photographed by the owner: a listing where a VIDEO carried
+    /// the music glyph. `big_buck_bunny_480p_stereo.ogg` is `audio/ogg` by
+    /// name and `video/x-theora+ogg` by content, and the listing resolves by
+    /// name alone.
+    #[test]
+    fn the_bytes_break_a_tie_and_only_a_tie() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-mime-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the test directory");
+
+        // A TIED NAME, and bytes that name one of its claimants: `OggS` plus
+        // the Theora identification header is what the database matches on.
+        let ogg = dir.join("clip.ogg");
+        let mut bytes = b"OggS\x00\x02".to_vec();
+        bytes.resize(28, 0);
+        bytes.extend_from_slice(b"\x80theora");
+        bytes.resize(4096, 0);
+        std::fs::write(&ogg, &bytes).expect("write the fixture");
+        assert_eq!(of_path(&ogg, Kind::File, false), "video/x-theora+ogg");
+
+        // A SETTLED NAME IS NOT OVERRULED. The same bytes under a name only
+        // one type claims stay what the name says — an extension is what the
+        // person typed, and a file that lies about it is still called that.
+        let png = dir.join("clip.png");
+        std::fs::write(&png, &bytes).expect("write the fixture");
+        assert_eq!(of_path(&png, Kind::File, false), "image/png");
+
+        // AND A CONTENT ANSWER THAT DOES NOT CLAIM THIS NAME IS NOT TAKEN.
+        let lying = dir.join("lying.ogg");
+        std::fs::write(&lying, b"\x89PNG\r\n\x1a\n").expect("write the fixture");
+        assert_eq!(
+            of_path(&lying, Kind::File, false),
+            by_name("lying.ogg").unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: `claims` starts answering for a type that has no glob for the
+    /// name — which is what admits a content answer when the name tied.
+    #[test]
+    fn a_type_claims_only_the_names_its_globs_match() {
+        assert!(claims("audio/x-mpegurl", "a.m3u"));
+        assert!(claims("application/vnd.apple.mpegurl", "a.m3u8"));
+        assert!(!claims("image/png", "a.m3u"));
+        // AND AN ALIAS IS THE SAME TYPE, so it claims the same names.
+        assert!(claims("image/png", "a.png"));
     }
 }

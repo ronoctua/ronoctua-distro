@@ -5260,9 +5260,11 @@ impl View {
                     fields.push(Field {
                         at: *at,
                         text: glyph.to_string(),
-                        color: ronoctua_tokens::color::TEXT_SECONDARY,
+                        // GREEN WHEN IT CAN BE RUN — see `glyph_colour_of`, and
+                        // `colour_of` for why the name stopped saying it.
+                        color: glyph_colour_of(entry),
                         hit: Hit::Mark(n),
-                        explain: None,
+                        explain: executable_hint(entry),
                     });
                 }
                 Column::Name => {
@@ -6336,9 +6338,22 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
 
 /// The colour a name is drawn in.
 ///
-/// By what it IS, and only three of them: a place, something that runs, and
-/// everything else — plus the broken link, which is the one state that must not
-/// look normal. More colours would be a legend nobody reads.
+/// By what it IS, and only two of them now: a place and everything else — plus
+/// the broken link, which is the one state that must not look normal. More
+/// colours would be a legend nobody reads.
+///
+/// # The execute bit LEFT this function, and the owner is why
+///
+/// It used to be a third answer here, and the name came out green. He asked
+/// for it on the GLYPH instead — *"em vez de mudar a cor do nome do arquivo
+/// quando tem o bit x, quero que mude a cor do glifo"* — and the move is
+/// right for a reason the old shape hid: a NAME is what the person typed, and
+/// nothing about it changes when a mode bit does. The glyph is already the
+/// column that says what a file IS, so a file that can be RUN is a fact about
+/// the same half of the row.
+///
+/// It also gets the fact a sentence: [`executable_hint`] is what the pointer
+/// resting on that glyph says, and a colour with no words is a legend again.
 ///
 /// # And FOCUS wins all of them
 ///
@@ -6359,9 +6374,38 @@ fn colour_of(entry: &Entry, focused: bool) -> Color {
     }
     match entry.opens_as() {
         Kind::Directory => ronoctua_tokens::color::TEXT_PRIMARY,
-        _ if entry.executable() => ronoctua_tokens::color::STATE_SUCCESS,
         _ => ronoctua_tokens::color::TEXT_SECONDARY,
     }
+}
+
+/// The colour the TYPE's glyph is drawn in.
+///
+/// One answer more than "the quiet register": a file with the execute bit set
+/// takes `state.success`, which is the tone the name used to take.
+///
+/// MEASURED against the band a selected row draws, because that is the one
+/// place a second colour can go quiet: `state.success` on `surface.selection`
+/// is 7.06:1 in the worst of the nine themes (industrial) and 9.24 in the best
+/// — well over the 3:1 floor that `lift_onto_a_band` exists for. It needs no
+/// lifting, and the fact does not disappear on the row one is looking at.
+fn glyph_colour_of(entry: &Entry) -> Color {
+    if entry.executable() {
+        ronoctua_tokens::color::STATE_SUCCESS
+    } else {
+        ronoctua_tokens::color::TEXT_SECONDARY
+    }
+}
+
+/// What the pointer resting on that glyph says, when there is something to say.
+///
+/// Only for the execute bit: the glyph's ordinary job — saying what kind of
+/// file this is — is done by the drawing, and a sentence repeating it would be
+/// on the message line for every row of every listing.
+fn executable_hint(entry: &Entry) -> Option<Explanation> {
+    entry.executable().then(|| Explanation {
+        key: ronoctua_i18n::key::FILES_EXPLAIN_EXECUTABLE,
+        args: Vec::new(),
+    })
 }
 
 /// Lifts a banded row's quietest text one register.
@@ -14636,6 +14680,70 @@ mod tests {
             rows[2].fields[0].text.is_empty(),
             "a line with no mark has a mark"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: the execute bit goes back to colouring the NAME, or the glyph
+    /// that carries it now says nothing about why it is green.
+    ///
+    /// THE OWNER ASKED FOR THE MOVE: *"em vez de mudar a cor do nome do
+    /// arquivo quando tem o bit x, quero que mude a cor do glifo, e ao passar o
+    /// cursor do mouse por cima de um desses glifos, deve mostrar um texto no
+    /// minibuffer explicando sobre essa permissão"*. A colour with no words is
+    /// a legend nobody reads, so the two halves are asserted together.
+    #[test]
+    fn the_execute_bit_colours_the_glyph_and_says_so() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // THREE FILES, because the cursor sits on the first entry and the focus
+        // wins every colour — comparing a focused row with an unfocused one
+        // measures the cursor and not the mode bit.
+        let root = scratch("runnable");
+        for n in ["a-focused.txt", "b-runnable.txt", "c-plain.txt"] {
+            std::fs::write(root.join(n), b"x").unwrap();
+        }
+        let runnable = root.join("b-runnable.txt");
+        let mut mode = std::fs::metadata(&runnable).unwrap().permissions();
+        mode.set_mode(0o755);
+        std::fs::set_permissions(&runnable, mode).unwrap();
+
+        let mut v = view_at(&root);
+        let l = layout_beside(120, 0, 0, true);
+        let icon_at = l.find(Column::Icon).unwrap().0;
+        let name_at = l.find(Column::Name).unwrap().0;
+        let rows = v.drawn(120, &bundle());
+        // ROW ZERO IS `..` AND ROW ONE HAS THE CURSOR; the two compared here
+        // are the ones after it, which sort by name.
+        let runs = &rows[2];
+        let plain = &rows[3];
+
+        // THE GLYPH CARRIES IT.
+        assert_eq!(
+            runs.field_at(icon_at).unwrap().color,
+            ronoctua_tokens::color::STATE_SUCCESS,
+            "the glyph of a file that can be run is not marked"
+        );
+        assert_eq!(
+            plain.field_at(icon_at).unwrap().color,
+            ronoctua_tokens::color::TEXT_SECONDARY,
+            "an ordinary file's glyph is marked"
+        );
+        // AND THE NAME NO LONGER DOES. Row two is not the focused one, so if
+        // the two names differ at all it is the execute bit talking.
+        assert_eq!(
+            runs.field_at(name_at).unwrap().color,
+            plain.field_at(name_at).unwrap().color,
+            "the name still changes colour with the execute bit"
+        );
+        // AND THE POINTER ON IT SAYS WHAT THE GREEN MEANS.
+        assert_eq!(
+            runs.field_at(icon_at).unwrap().explain,
+            Some(Explanation {
+                key: ronoctua_i18n::key::FILES_EXPLAIN_EXECUTABLE,
+                args: Vec::new(),
+            }),
+            "the green glyph explains nothing"
+        );
+        assert_eq!(plain.field_at(icon_at).unwrap().explain, None);
         let _ = std::fs::remove_dir_all(&root);
     }
 
